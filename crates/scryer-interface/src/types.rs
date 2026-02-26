@@ -69,6 +69,13 @@ pub struct CollectionPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+pub struct SetCollectionMonitoredPayload {
+    pub id: String,
+    pub monitored: bool,
+    pub episodes: Vec<EpisodePayload>,
+}
+
+#[derive(SimpleObject, Clone)]
 pub struct EpisodePayload {
     pub id: String,
     pub title_id: String,

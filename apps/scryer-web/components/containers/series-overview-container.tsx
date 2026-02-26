@@ -238,28 +238,26 @@ export function SeriesOverviewContainer({
 
   const handleSetCollectionMonitored = React.useCallback(
     async (collectionId: string, monitored: boolean) => {
-      const { error } = await client.mutation(
+      const { error, data } = await client.mutation(
         setCollectionMonitoredMutation,
         { input: { collectionId, monitored } },
       ).toPromise();
       if (error) throw error;
-      await refreshTitleDetail();
-      // Re-fetch episodes since the backend also updates episode monitored flags
-      const collectionIds = collections.map((c) => c.id);
-      const { query, variables } = buildCollectionEpisodesBatchQuery(collectionIds);
-      try {
-        const { data, error: batchError } = await client.query(query, variables, { requestPolicy: "network-only" }).toPromise();
-        if (batchError) throw batchError;
-        const result: Record<string, CollectionEpisode[]> = {};
-        for (let i = 0; i < collectionIds.length; i++) {
-          result[collectionIds[i]] = data[`c${i}`] ?? [];
-        }
-        setEpisodesByCollection(result);
-      } catch {
-        // Best-effort refresh
+      const payload = data?.setCollectionMonitored;
+      if (!payload) return;
+      // Update collection monitored flag from the mutation response.
+      setCollections((prev) =>
+        prev.map((c) => c.id === payload.id ? { ...c, monitored: payload.monitored } : c),
+      );
+      // Update episode monitored flags from the projected episodes.
+      if (payload.episodes) {
+        setEpisodesByCollection((prev) => ({
+          ...prev,
+          [collectionId]: payload.episodes,
+        }));
       }
     },
-    [client, refreshTitleDetail, collections],
+    [client],
   );
 
   const handleSetEpisodeMonitored = React.useCallback(
@@ -269,22 +267,23 @@ export function SeriesOverviewContainer({
         { input: { episodeId, monitored } },
       ).toPromise();
       if (error) throw error;
-      // Re-fetch episodes for all collections to reflect the change
-      const collectionIds = collections.map((c) => c.id);
-      const { query, variables } = buildCollectionEpisodesBatchQuery(collectionIds);
-      try {
-        const { data, error: batchError } = await client.query(query, variables, { requestPolicy: "network-only" }).toPromise();
-        if (batchError) throw batchError;
-        const result: Record<string, CollectionEpisode[]> = {};
-        for (let i = 0; i < collectionIds.length; i++) {
-          result[collectionIds[i]] = data[`c${i}`] ?? [];
+      // Update just this episode from the mutation response.
+      setEpisodesByCollection((prev) => {
+        for (const [cid, episodes] of Object.entries(prev)) {
+          const idx = episodes.findIndex((ep) => ep.id === episodeId);
+          if (idx !== -1) {
+            return {
+              ...prev,
+              [cid]: episodes.map((ep) =>
+                ep.id === episodeId ? { ...ep, monitored } : ep,
+              ),
+            };
+          }
         }
-        setEpisodesByCollection(result);
-      } catch {
-        // best-effort — keep existing episode data on failure
-      }
+        return prev;
+      });
     },
-    [client, collections],
+    [client],
   );
 
   const handleAutoSearchEpisode = React.useCallback(
@@ -351,6 +350,11 @@ export function SeriesOverviewContainer({
     [collections, refreshTitleDetail, client, title, t, setGlobalStatus],
   );
 
+  // Only re-fetch episodes when the set of collection IDs changes (add/remove),
+  // not when a property like `monitored` is updated on an existing collection.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const collectionIdKey = collections.map((c) => c.id).join("\0");
+
   React.useEffect(() => {
     if (collections.length === 0) {
       setEpisodesByCollection({});
@@ -383,7 +387,8 @@ export function SeriesOverviewContainer({
     return () => {
       cancelled = true;
     };
-  }, [collections, client]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collectionIdKey, client]);
 
   // Fetch completed downloads for this title (for manual import button)
   React.useEffect(() => {

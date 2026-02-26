@@ -235,7 +235,29 @@ export const deleteDownloadMutation = `mutation DeleteDownload($input: DeleteDow
 }`;
 
 export const setCollectionMonitoredMutation = `mutation SetCollectionMonitored($input: SetCollectionMonitoredInput!) {
-  setCollectionMonitored(input: $input) { id monitored }
+  setCollectionMonitored(input: $input) {
+    id
+    monitored
+    episodes {
+      id
+      titleId
+      collectionId
+      episodeType
+      episodeNumber
+      seasonNumber
+      episodeLabel
+      title
+      overview
+      airDate
+      durationSeconds
+      hasMultiAudio
+      hasSubtitle
+      isFiller
+      absoluteNumber
+      monitored
+      createdAt
+    }
+  }
 }`;
 
 export const setEpisodeMonitoredMutation = `mutation SetEpisodeMonitored($input: SetEpisodeMonitoredInput!) {
