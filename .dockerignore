@@ -1,0 +1,32 @@
+# Global build artifacts
+/target
+/tmp
+tmp
+tmp/**
+tmp/scryer-postgres
+tmp/scryer-postgres/**
+tmp/scryer-data
+tmp/scryer-data/**
+tmp/scryer-media
+tmp/scryer-media/**
+tmp/nzbget
+tmp/nzbget/**
+/.git
+/.idea
+/.vscode
+**/.DS_Store
+**/*.log
+**/*.tmp
+**/.next
+**/dist
+**/coverage
+**/target
+**/*.sqlite
+**/*.sqlite3
+
+# Optional local/config files
+**/*.env
+**/.env
+
+# Docker and node leftovers
+**/node_modules

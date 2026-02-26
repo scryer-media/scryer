@@ -1,0 +1,27 @@
+[package]
+name = "scryer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+scryer-application = { path = "../scryer-application" }
+scryer-domain = { path = "../scryer-domain" }
+scryer-interface = { path = "../scryer-interface" }
+scryer-infrastructure = { path = "../scryer-infrastructure" }
+async-graphql = { workspace = true }
+async-graphql-axum = { version = "7.0" }
+axum = { version = "0.8", features = ["macros", "http1", "http2", "json", "ws"] }
+futures-util = "0.3"
+axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+tower-http = { version = "0.6", features = ["compression-full"] }
+http = "1.1"
+dotenvy = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+percent-encoding = "2"
+toml = { workspace = true }

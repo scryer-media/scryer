@@ -1,0 +1,16 @@
+//! GraphQL API module boundaries.
+//!
+//! The monolithic `lib.rs` implementation was split into focused modules to align
+//! with the architecture guidance while preserving the same public schema and
+//! resolver behavior.
+
+pub mod context;
+pub mod mappers;
+pub mod mutation;
+pub mod query;
+pub mod quality_profiles;
+pub mod subscription;
+pub mod types;
+pub mod utils;
+
+pub use context::{build_schema, ApiContext, ApiSchema};

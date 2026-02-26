@@ -1,0 +1,15 @@
+[package]
+name = "scryer-interface"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+scryer-application = { path = "../scryer-application" }
+scryer-domain = { path = "../scryer-domain" }
+scryer-infrastructure = { path = "../scryer-infrastructure" }
+async-graphql = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

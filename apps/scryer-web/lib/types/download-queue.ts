@@ -1,0 +1,22 @@
+export type DownloadQueueItem = {
+  id: string;
+  titleId: string | null;
+  titleName: string;
+  facet: string | null;
+  isScryerOrigin: boolean;
+  clientId: string;
+  clientName: string;
+  clientType: string;
+  state: string;
+  progressPercent: number;
+  sizeBytes: string | null;
+  remainingSeconds: number | null;
+  queuedAt: string | null;
+  lastUpdatedAt: string | null;
+  attentionRequired: boolean;
+  attentionReason: string | null;
+  downloadClientItemId: string;
+  importStatus: string | null;
+  importErrorMessage: string | null;
+  importedAt: string | null;
+};

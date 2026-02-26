@@ -1,0 +1,207 @@
+name: scryer
+
+on:
+  push:
+    tags:
+      - "scryer-v*"
+
+concurrency:
+  group: scryer-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  web-build:
+    name: web-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/scryer-web/package-lock.json
+      - name: Install dependencies
+        working-directory: apps/scryer-web
+        run: npm ci
+      - name: Build web app
+        working-directory: apps/scryer-web
+        env:
+          SCRYER_GRAPHQL_URL: /graphql
+          SCRYER_METADATA_GATEWAY_GRAPHQL_URL: https://smg.scryer.media/graphql
+        run: npm run build
+      - name: Verify static output
+        run: test -f apps/scryer-web/dist/index.html
+      - name: Upload web artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scryer-web-out-${{ github.run_id }}
+          path: apps/scryer-web/dist
+          if-no-files-found: error
+          retention-days: 14
+
+  rust-test:
+    name: rust-test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run workspace tests
+        run: cargo test --workspace --locked
+
+  rust-package:
+    name: rust-package-${{ matrix.platform }}
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 45
+    needs: [web-build, rust-test]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            platform: linux-x86_64
+            runs_on: ubuntu-24.04
+          - target: aarch64-unknown-linux-musl
+            platform: linux-arm64
+            runs_on: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            platform: darwin-x86_64
+            runs_on: macos-15-intel
+          - target: aarch64-apple-darwin
+            platform: darwin-arm64
+            runs_on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+      - name: Install target
+        run: rustup target add ${{ matrix.target }}
+      - name: Install musl toolchain
+        if: contains(matrix.target, '-musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: false
+      - name: Download embedded web artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: scryer-web-out-${{ github.run_id }}
+          path: scryer-web-out
+      - name: Build release binary with embedded UI
+        env:
+          SCRYER_EMBED_UI_DIR: ${{ github.workspace }}/scryer-web-out
+        run: cargo build -p scryer --release --locked --target ${{ matrix.target }}
+      - name: Package tarball
+        run: |
+          mkdir -p dist/package
+          cp target/${{ matrix.target }}/release/scryer dist/package/scryer
+          tar -czf scryer-${{ matrix.platform }}.tar.gz -C dist/package .
+      - name: Upload release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: scryer-${{ matrix.platform }}-${{ github.run_id }}
+          path: scryer-${{ matrix.platform }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  docker-publish:
+    name: docker-publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    needs: [rust-package]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download linux-amd64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: scryer-linux-x86_64-${{ github.run_id }}
+          path: artifacts
+      - name: Download linux-arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: scryer-linux-arm64-${{ github.run_id }}
+          path: artifacts
+      - name: Prepare build context
+        run: |
+          mkdir -p docker-ctx/amd64 docker-ctx/arm64
+          tar -xzf artifacts/scryer-linux-x86_64.tar.gz -C docker-ctx/amd64
+          tar -xzf artifacts/scryer-linux-arm64.tar.gz -C docker-ctx/arm64
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/scryer
+          tags: |
+            type=raw,value=latest
+            type=sha
+            type=match,pattern=scryer-v(.*),group=1
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: docker-ctx
+          file: docker/scryer.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  release:
+    name: publish-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    needs: [rust-package, docker-publish]
+    permissions:
+      contents: write
+    if: ${{ github.ref_type == 'tag' && startsWith(github.ref_name, 'scryer-v') }}
+    steps:
+      - name: Resolve release tag
+        id: release_meta
+        run: |
+          RELEASE_TAG="${{ github.ref_name }}"
+          echo "tag_name=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          pattern: scryer-*-${{ github.run_id }}
+          merge-multiple: true
+      - name: Generate checksums
+        working-directory: release-artifacts
+        run: shasum -a 256 scryer-*.tar.gz > scryer-checksums.txt
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_meta.outputs.tag_name }}
+          name: ${{ steps.release_meta.outputs.tag_name }}
+          files: |
+            release-artifacts/scryer-*.tar.gz
+            release-artifacts/scryer-checksums.txt
+          fail_on_unmatched_files: true
+          generate_release_notes: true
