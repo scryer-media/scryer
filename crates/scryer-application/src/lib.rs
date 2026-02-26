@@ -46,8 +46,9 @@ pub use acquisition_policy::AcquisitionThresholds;
 pub use app_usecase_acquisition::start_background_acquisition_poller;
 pub use app_usecase_integration::start_download_queue_poller;
 pub use library_scan::{
-    AnimeMapping, EpisodeMetadata, LibraryFile, LibraryScanSummary, LibraryScanner, MetadataGateway,
-    MetadataSearchItem, MovieMetadata, SeasonMetadata, SeriesMetadata,
+    AnimeEpisodeMapping, AnimeMapping, EpisodeMetadata, LibraryFile, LibraryScanSummary,
+    LibraryScanner, MetadataGateway, MetadataSearchItem, MovieMetadata, SeasonMetadata,
+    SeriesMetadata,
 };
 pub use app_usecase_import::{
     execute_manual_import, preview_manual_import, try_import_completed_downloads,

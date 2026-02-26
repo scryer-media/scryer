@@ -3,8 +3,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use ring::digest;
 use scryer_application::{
-    AnimeMapping, AppError, AppResult, EpisodeMetadata, MetadataGateway, MetadataSearchItem,
-    MovieMetadata, SeasonMetadata, SeriesMetadata,
+    AnimeEpisodeMapping, AnimeMapping, AppError, AppResult, EpisodeMetadata, MetadataGateway,
+    MetadataSearchItem, MovieMetadata, SeasonMetadata, SeriesMetadata,
 };
 use reqwest::Client;
 use serde::Deserialize;
@@ -92,6 +92,11 @@ const GET_SERIES_QUERY: &str = r#"
           anime_media_type
           global_media_type
           status
+          episode_mappings {
+            tvdb_season
+            episode_start
+            episode_end
+          }
         }
       }
     }
@@ -462,6 +467,15 @@ struct AnimeMappingItem {
     anime_media_type: Option<String>,
     global_media_type: Option<String>,
     status: Option<String>,
+    #[serde(default)]
+    episode_mappings: Vec<AnimeEpisodeMappingItem>,
+}
+
+#[derive(Deserialize)]
+struct AnimeEpisodeMappingItem {
+    tvdb_season: i32,
+    episode_start: i32,
+    episode_end: i32,
 }
 
 #[async_trait]
@@ -588,6 +602,15 @@ impl MetadataGateway for MetadataGatewayClient {
                     anime_media_type: m.anime_media_type.unwrap_or_default(),
                     global_media_type: m.global_media_type.unwrap_or_default(),
                     status: m.status.unwrap_or_default(),
+                    episode_mappings: m
+                        .episode_mappings
+                        .into_iter()
+                        .map(|e| AnimeEpisodeMapping {
+                            tvdb_season: e.tvdb_season,
+                            episode_start: e.episode_start,
+                            episode_end: e.episode_end,
+                        })
+                        .collect(),
                 })
                 .collect(),
         })

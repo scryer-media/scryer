@@ -105,10 +105,10 @@ function isSpecialsCollection(collection: TitleCollection) {
 
 function seasonHeading(collection: TitleCollection) {
   if (collection.collectionType === "interstitial") {
-    return collection.label ?? "Movie";
+    return collection.label?.trim() || "Movie";
   }
   if (collection.collectionType === "specials") {
-    return collection.label ?? "Specials";
+    return collection.label?.trim() || "Specials";
   }
   const indexValue = collection.collectionIndex.trim();
   const normalizedIndex = indexValue.match(/^\d+$/)
@@ -959,23 +959,20 @@ function SeasonSection({
         className="flex w-full cursor-pointer flex-wrap items-center justify-between gap-3 bg-card/60 px-4 py-2 text-left transition hover:bg-accent/80"
       >
         <div className="flex items-center gap-2">
-          {seasonToggling ? (
-            <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
-          ) : (
-            <Checkbox
-              checked={seasonCheckedState}
-              aria-label={t("title.seasonMonitored")}
-              className="size-6 [&_svg]:size-4"
-              onCheckedChange={() => {
-                if (!onSetCollectionMonitored) return;
-                setSeasonToggling(true);
-                const nextMonitored = seasonCheckedState !== true;
-                onSetCollectionMonitored(collection.id, nextMonitored)
-                  .finally(() => setSeasonToggling(false));
-              }}
-              onClick={(e) => e.stopPropagation()}
-            />
-          )}
+          <Checkbox
+            checked={seasonCheckedState}
+            disabled={seasonToggling}
+            aria-label={t("title.seasonMonitored")}
+            className="size-6 [&_svg]:size-4"
+            onCheckedChange={() => {
+              if (!onSetCollectionMonitored) return;
+              setSeasonToggling(true);
+              const nextMonitored = seasonCheckedState !== true;
+              onSetCollectionMonitored(collection.id, nextMonitored)
+                .finally(() => setSeasonToggling(false));
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
           <Chevron className="h-4 w-4 shrink-0 text-muted-foreground" />
           <div>
             <p className="text-sm font-semibold text-foreground">
@@ -1042,27 +1039,24 @@ function SeasonSection({
                   <React.Fragment key={episode.id}>
                     <TableRow className={`cv-auto-row-sm${episode.monitored ? "" : " opacity-50"}`}>
                       <TableCell className="px-2 text-center align-middle">
-                        {episodeToggling.has(episode.id) ? (
-                          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                        ) : (
-                          <Checkbox
-                            checked={episode.monitored}
-                            aria-label={t("title.episodeMonitored")}
-                            className="size-6 [&_svg]:size-4"
-                            onCheckedChange={() => {
-                              if (!onSetEpisodeMonitored) return;
-                              setEpisodeToggling((prev) => new Set(prev).add(episode.id));
-                              onSetEpisodeMonitored(episode.id, !episode.monitored)
-                                .finally(() => {
-                                  setEpisodeToggling((prev) => {
-                                    const next = new Set(prev);
-                                    next.delete(episode.id);
-                                    return next;
-                                  });
+                        <Checkbox
+                          checked={episode.monitored}
+                          disabled={episodeToggling.has(episode.id)}
+                          aria-label={t("title.episodeMonitored")}
+                          className="size-6 [&_svg]:size-4"
+                          onCheckedChange={() => {
+                            if (!onSetEpisodeMonitored) return;
+                            setEpisodeToggling((prev) => new Set(prev).add(episode.id));
+                            onSetEpisodeMonitored(episode.id, !episode.monitored)
+                              .finally(() => {
+                                setEpisodeToggling((prev) => {
+                                  const next = new Set(prev);
+                                  next.delete(episode.id);
+                                  return next;
                                 });
-                            }}
-                          />
-                        )}
+                              });
+                          }}
+                        />
                       </TableCell>
                       <TableCell className="text-center align-middle font-mono text-sm text-card-foreground">
                         <div className="flex flex-col items-center gap-0.5">

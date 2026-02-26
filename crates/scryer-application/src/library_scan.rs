@@ -73,6 +73,14 @@ pub struct AnimeMapping {
     pub anime_media_type: String,
     pub global_media_type: String,
     pub status: String,
+    pub episode_mappings: Vec<AnimeEpisodeMapping>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AnimeEpisodeMapping {
+    pub tvdb_season: i32,
+    pub episode_start: i32,
+    pub episode_end: i32,
 }
 
 #[derive(Debug, Clone)]
