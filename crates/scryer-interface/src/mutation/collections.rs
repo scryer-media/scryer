@@ -73,14 +73,22 @@ impl CollectionMutations {
         &self,
         ctx: &Context<'_>,
         input: SetCollectionMonitoredInput,
-    ) -> GqlResult<CollectionPayload> {
+    ) -> GqlResult<SetCollectionMonitoredPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let collection = app
             .set_collection_monitored(&actor, &input.collection_id, input.monitored)
             .await
             .map_err(to_gql_error)?;
-        Ok(from_collection(collection))
+        let episodes = app
+            .list_episodes(&actor, &input.collection_id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(SetCollectionMonitoredPayload {
+            id: collection.id,
+            monitored: collection.monitored,
+            episodes: episodes.into_iter().map(from_episode).collect(),
+        })
     }
 
     async fn create_episode(
