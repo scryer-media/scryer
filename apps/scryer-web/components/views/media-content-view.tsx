@@ -2082,10 +2082,10 @@ export function MediaContentView({
 
         </div>
       ) : (
-        view === "movies" || view === "series" ? (
+        view === "movies" || view === "series" || view === "anime" ? (
           <Card>
             <CardHeader>
-              <CardTitle>{view === "movies" ? t("title.manageMovies") : t("nav.series")}</CardTitle>
+              <CardTitle>{view === "movies" ? t("title.manageMovies") : view === "anime" ? t("nav.anime") : t("nav.series")}</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="mb-3 flex gap-2">
@@ -2122,7 +2122,7 @@ export function MediaContentView({
                     </TableHeader>
                     <TableBody>
                       {monitoredTitles.map((item) => {
-                        const overviewTargetView = isMovieView ? "movies" : "series";
+                        const overviewTargetView = isMovieView ? "movies" : view === "anime" ? "anime" : "series";
                         const isPanelOpen = isMovieView && expandedMovieRows.has(item.id);
                         const interactiveSearchResults = interactiveSearchResultsByTitle[item.id] ?? [];
                         const interactiveSearchLoading = interactiveSearchLoadingByTitle[item.id] === true;

@@ -260,7 +260,7 @@ impl AppUseCase {
                     .ok()
                     .flatten()
                     .as_deref()
-                    != Some("false") // Default: true
+                    == Some("true") // Default: false
             }
         } else {
             false
@@ -281,11 +281,18 @@ impl AppUseCase {
             false
         };
 
+        // Seasons that have no episodes should not be auto-monitored.
+        let seasons_with_episodes: std::collections::HashSet<i32> = episodes
+            .iter()
+            .map(|ep| ep.season_number)
+            .collect();
+
         let mut season_number_to_collection: std::collections::HashMap<i32, String> =
             std::collections::HashMap::new();
 
         for season in best_season_by_number.values() {
-            let season_monitored = should_monitor_season(&monitor_type, season.number, monitor_specials);
+            let season_monitored = seasons_with_episodes.contains(&season.number)
+                && should_monitor_season(&monitor_type, season.number, monitor_specials);
             let collection_type = if season.number == 0 && title.facet == MediaFacet::Anime {
                 "specials".to_string()
             } else {
@@ -323,6 +330,11 @@ impl AppUseCase {
         // Create interstitial movie collections for anime titles.
         // Movies with global_media_type == "movie" and a thetvdb_season are positioned
         // narratively between seasons (e.g. Demon Slayer: Mugen Train between S1 and S2).
+        // Build a lookup from (season_number, episode_number) → collection_id so that
+        // episodes can be routed to the correct interstitial collection later.
+        let mut interstitial_episode_lookup: std::collections::HashMap<(i32, i32), String> =
+            std::collections::HashMap::new();
+
         if title.facet == MediaFacet::Anime && inter_season_movies && !anime_mappings.is_empty() {
             let movie_mappings: Vec<&AnimeMapping> = anime_mappings
                 .iter()
@@ -342,7 +354,7 @@ impl AppUseCase {
                 }
 
                 for (after_season, movies) in &movies_by_position {
-                    for (seq, _movie) in movies.iter().enumerate() {
+                    for (seq, movie) in movies.iter().enumerate() {
                         let narrative_order = format!("{}.{}", after_season, seq + 1);
                         let label = format!("Movie {}", seq + 1);
 
@@ -361,13 +373,23 @@ impl AppUseCase {
                         };
 
                         match self.services.shows.create_collection(collection).await {
-                            Ok(_) => {
+                            Ok(created) => {
                                 info!(
                                     title_id = %title.id,
                                     label = %label,
                                     narrative_order = %narrative_order,
                                     "created interstitial movie collection"
                                 );
+                                // Map episode ranges from this movie's episode_mappings
+                                // to this collection so episodes get routed correctly.
+                                for em in &movie.episode_mappings {
+                                    for ep_num in em.episode_start..=em.episode_end {
+                                        interstitial_episode_lookup.insert(
+                                            (em.tvdb_season, ep_num),
+                                            created.id.clone(),
+                                        );
+                                    }
+                                }
                             }
                             Err(err) => {
                                 warn!(
@@ -412,8 +434,41 @@ impl AppUseCase {
             false
         };
 
+        // Track which interstitial collections have had their label updated
+        // to the first episode's name (e.g. "Movie 1" → "Mugen Train").
+        let mut labeled_collections: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
         for ep in episodes {
-            let collection_id = season_number_to_collection.get(&ep.season_number).cloned();
+            // Check interstitial episode lookup first (routes movie episodes to their
+            // interstitial collections), then fall back to the season-based lookup.
+            let collection_id = interstitial_episode_lookup
+                .get(&(ep.season_number, ep.episode_number))
+                .cloned()
+                .or_else(|| season_number_to_collection.get(&ep.season_number).cloned());
+
+            // If this episode is routed to an interstitial collection, update the
+            // collection label to the episode's name (once per collection).
+            if let Some(ref cid) = collection_id {
+                if interstitial_episode_lookup
+                    .contains_key(&(ep.season_number, ep.episode_number))
+                    && !ep.name.is_empty()
+                    && labeled_collections.insert(cid.clone())
+                {
+                    if let Err(err) = self
+                        .services
+                        .shows
+                        .update_collection(cid, None, None, Some(ep.name.clone()), None, None, None, None)
+                        .await
+                    {
+                        warn!(
+                            collection_id = %cid,
+                            error = %err,
+                            "failed to update interstitial collection label"
+                        );
+                    }
+                }
+            }
 
             let air_date = if ep.aired.is_empty() { None } else { Some(ep.aired.clone()) };
             let episode_monitored = if (skip_filler && ep.is_filler) || (skip_recap && ep.is_recap) {
