@@ -1,0 +1,17 @@
+ALTER TABLE titles ADD COLUMN year INTEGER;
+ALTER TABLE titles ADD COLUMN overview TEXT;
+ALTER TABLE titles ADD COLUMN poster_url TEXT;
+ALTER TABLE titles ADD COLUMN sort_title TEXT;
+ALTER TABLE titles ADD COLUMN slug TEXT;
+ALTER TABLE titles ADD COLUMN imdb_id TEXT;
+ALTER TABLE titles ADD COLUMN runtime_minutes INTEGER;
+ALTER TABLE titles ADD COLUMN genres TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE titles ADD COLUMN content_status TEXT;
+ALTER TABLE titles ADD COLUMN language TEXT;
+ALTER TABLE titles ADD COLUMN first_aired TEXT;
+ALTER TABLE titles ADD COLUMN network TEXT;
+ALTER TABLE titles ADD COLUMN studio TEXT;
+ALTER TABLE titles ADD COLUMN country TEXT;
+ALTER TABLE titles ADD COLUMN aliases TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE titles ADD COLUMN metadata_language TEXT;
+ALTER TABLE titles ADD COLUMN metadata_fetched_at TEXT;

@@ -1,0 +1,139 @@
+services:
+  # postgres:
+  #   image: postgres:16-alpine
+  #   container_name: scryer-postgres
+  #   environment:
+  #     POSTGRES_DB: scryer_metadata
+  #     POSTGRES_USER: scryer
+  #     POSTGRES_PASSWORD: scryer
+  #   ports:
+  #     - "25432:5432"
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 12
+  #   command:
+  #     - postgres
+  #     - -c
+  #     - "wal_compression=on"
+  #   volumes:
+  #     - scryer-postgres-data:/var/lib/postgresql/data
+
+  nzbget:
+    build:
+      context: ./docker
+      dockerfile: scryer-nzbget-dev.Dockerfile
+    container_name: scryer-nzbget
+    ports:
+      - "6789:6789"
+    volumes:
+      - ./tmp/nzbget/config:/config
+      - ./tmp/scryer-media:/media
+    command: >
+      bash -lc '
+        mkdir -p /media/nzb /media/queue /media/tmp /media/inter /media/completed /media/logs
+        nzbget -s -o OutputMode=loggable -o WebDir=/usr/share/nzbget/webui -o ConfigTemplate=/usr/share/nzbget/webui/nzbget.conf -o MainDir=/media -o DestDir=/media/completed -o InterDir=/media/inter -o NzbDir=/media/nzb -o QueueDir=/media/queue -o TempDir=/media/tmp -o LogFile=/media/logs/nzbget.log -o CertStore=/etc/ssl/certs/ca-certificates.crt -c /config/nzbget.conf
+      '
+
+  # smg:
+  #   build:
+  #     context: ./apps/scryer-metadata-gateway
+  #     dockerfile: ../../docker/scryer-metadata-gateway.Dockerfile
+  #   container_name: scryer-metadata-gateway
+  #   depends_on:
+  #     - postgres
+  #   env_file:
+  #     - apps/scryer-metadata-gateway/.env
+  #   environment:
+  #     METADATA_GATEWAY_LISTEN_ADDR: 0.0.0.0:8090
+  #     METADATA_GATEWAY_DATABASE_DSN: postgres://scryer:scryer@postgres:5432/scryer_metadata?sslmode=disable
+  #     CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://0.0.0.0:3000,http://host.docker.internal:3000,http://nodejs:3000,http://localhost:8080,http://127.0.0.1:8080,http://0.0.0.0:8080,http://scryer:8080
+  #   ports:
+  #     - "8090:8090"
+
+  scryer:
+    build:
+      context: .
+      dockerfile: docker/scryer-dev-runtime.Dockerfile
+    container_name: scryer
+    working_dir: /workspace
+    depends_on:
+      - nzbget
+    env_file:
+      - crates/scryer/.env
+    environment:
+      SCRYER_BIND: 0.0.0.0:8080
+      SCRYER_DB_PATH: "sqlite://file::memory:?mode=memory&cache=shared"
+      SCRYER_WEB_UI_URL: http://nodejs:3000
+      SCRYER_CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://0.0.0.0:3000,http://host.docker.internal:3000,http://nodejs:3000
+      SCRYER_METADATA_GATEWAY_GRAPHQL_URL: https://smg.scryer.media/graphql
+      SCRYER_NZBGET_URL: http://nzbget:6789/
+      SCRYER_MOVIES_PATH: /media/movies
+      SCRYER_SERIES_PATH: /media/series
+      RUST_LOG: "info,scryer_infrastructure::metadata_gateway=debug"
+      SCRYER_DEV_AUTO_LOGIN: "true"
+    command: >
+      bash -c '
+        set -eu
+        cargo run --locked -p scryer
+      '
+    volumes:
+      - .:/workspace
+      - scryer-rust-target:/workspace/target
+      - scryer-cargo-registry:/usr/local/cargo/registry
+      - scryer-cargo-git:/usr/local/cargo/git
+      - ./tmp/scryer-data:/data
+      - ./tmp/scryer-media:/media
+    ports:
+      - "8080:8080"
+
+  nodejs:
+    image: node:22-alpine
+    container_name: scryer-nodejs
+    working_dir: /app
+    volumes:
+      - ./apps/scryer-web:/app
+      - scryer-node_modules:/app/node_modules
+    environment:
+      SCRYER_GRAPHQL_URL: /graphql
+      SCRYER_METADATA_GATEWAY_GRAPHQL_URL: https://smg.scryer.media/graphql
+    command: >
+      sh -c '
+        set -eu
+
+        lockfile="package-lock.json"
+        deps_stamp="node_modules/.deps-lock-sha"
+        current_hash="$$(sha256sum "$$lockfile" | cut -d" " -f1)"
+
+        if [ ! -f "$$deps_stamp" ] || [ "$$current_hash" != "$$(cat "$$deps_stamp" 2>/dev/null || true)" ]; then
+          npm ci --prefer-offline --no-audit --no-fund
+          echo "$$current_hash" > "$$deps_stamp"
+        fi
+
+        npm run dev
+      '
+    # No host port — access through the proxy instead
+    expose:
+      - "3000"
+
+  proxy:
+    image: nginx:alpine
+    container_name: scryer-proxy
+    depends_on:
+      - nodejs
+      - scryer
+    volumes:
+      - ./docker/nginx-dev-proxy.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "3000:80"
+
+networks:
+  default:
+    name: scryer-dev
+
+volumes:
+  scryer-node_modules:
+  scryer-rust-target:
+  scryer-cargo-registry:
+  scryer-cargo-git:

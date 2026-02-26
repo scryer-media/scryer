@@ -1,0 +1,153 @@
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use scryer_application::{
+    AppError, AppResult, IndexerClient, IndexerConfigRepository, IndexerSearchResult, SearchMode,
+};
+use scryer_domain::IndexerConfig;
+use tracing::{info, warn};
+
+use super::nzbgeek::NzbGeekSearchClient;
+
+#[derive(Clone)]
+pub struct MultiIndexerSearchClient {
+    indexer_configs: Arc<dyn IndexerConfigRepository>,
+    fallback_client: Arc<NzbGeekSearchClient>,
+}
+
+impl MultiIndexerSearchClient {
+    pub fn new(
+        indexer_configs: Arc<dyn IndexerConfigRepository>,
+        fallback_client: Arc<NzbGeekSearchClient>,
+    ) -> Self {
+        Self {
+            indexer_configs,
+            fallback_client,
+        }
+    }
+
+    fn client_from_config(config: &IndexerConfig) -> AppResult<Arc<dyn IndexerClient>> {
+        // All current indexer types (nzbgeek, dognzb) use the Newznab protocol.
+        // The NzbGeekSearchClient works for any Newznab indexer via from_indexer_config().
+        let provider = config.provider_type.trim().to_ascii_lowercase();
+        match provider.as_str() {
+            "nzbgeek" | "dognzb" | "newznab" => {
+                Ok(Arc::new(NzbGeekSearchClient::from_indexer_config(config)))
+            }
+            other => Err(AppError::Validation(format!(
+                "unsupported indexer provider: '{other}'"
+            ))),
+        }
+    }
+}
+
+#[async_trait]
+impl IndexerClient for MultiIndexerSearchClient {
+    async fn search(
+        &self,
+        query: String,
+        imdb_id: Option<String>,
+        tvdb_id: Option<String>,
+        category: Option<String>,
+        newznab_categories: Option<Vec<String>>,
+        limit: usize,
+        mode: SearchMode,
+    ) -> AppResult<Vec<IndexerSearchResult>> {
+        let configs = self.indexer_configs.list(None).await.unwrap_or_else(|err| {
+            warn!(error = %err, "failed to load indexer configs, falling back to env client");
+            vec![]
+        });
+
+        // Filter by is_enabled AND the appropriate search mode flag
+        let enabled: Vec<&IndexerConfig> = configs
+            .iter()
+            .filter(|c| {
+                c.is_enabled
+                    && match mode {
+                        SearchMode::Interactive => c.enable_interactive_search,
+                        SearchMode::Auto => c.enable_auto_search,
+                    }
+            })
+            .collect();
+
+        // If no DB configs match, delegate to the env-configured fallback client
+        if enabled.is_empty() {
+            info!(mode = ?mode, "no enabled indexer configs found, using fallback client");
+            return self
+                .fallback_client
+                .search(
+                    query,
+                    imdb_id,
+                    tvdb_id,
+                    category,
+                    newznab_categories,
+                    limit,
+                    mode,
+                )
+                .await;
+        }
+
+        info!(
+            mode = ?mode,
+            count = enabled.len(),
+            indexers = ?enabled.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            "dispatching search to indexers"
+        );
+
+        // Spawn parallel searches across all enabled indexers
+        let mut set = tokio::task::JoinSet::new();
+        for config in enabled {
+            let client = match Self::client_from_config(config) {
+                Ok(c) => c,
+                Err(err) => {
+                    warn!(
+                        indexer = config.name.as_str(),
+                        error = %err,
+                        "skipping indexer: unsupported provider"
+                    );
+                    continue;
+                }
+            };
+            let query = query.clone();
+            let imdb_id = imdb_id.clone();
+            let tvdb_id = tvdb_id.clone();
+            let category = category.clone();
+            let newznab_categories = newznab_categories.clone();
+            let indexer_name = config.name.clone();
+
+            set.spawn(async move {
+                let result = tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    client.search(query, imdb_id, tvdb_id, category, newznab_categories, limit, mode),
+                )
+                .await;
+
+                match result {
+                    Ok(inner) => (indexer_name, inner),
+                    Err(_) => (
+                        indexer_name,
+                        Err(AppError::Repository("indexer search timed out".into())),
+                    ),
+                }
+            });
+        }
+
+        let mut all_results: Vec<IndexerSearchResult> = Vec::new();
+        while let Some(join_result) = set.join_next().await {
+            match join_result {
+                Ok((name, Ok(mut items))) => {
+                    info!(indexer = name.as_str(), count = items.len(), "indexer returned results");
+                    all_results.append(&mut items);
+                }
+                Ok((name, Err(err))) => {
+                    warn!(indexer = name.as_str(), error = %err, "indexer search failed");
+                }
+                Err(err) => {
+                    warn!(error = %err, "indexer search task panicked");
+                }
+            }
+        }
+
+        Ok(all_results)
+    }
+}

@@ -1,0 +1,803 @@
+use async_graphql::{InputObject, SimpleObject};
+
+#[derive(InputObject)]
+pub struct LoginInput {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct LoginPayload {
+    pub token: String,
+    pub user: UserPayload,
+    pub expires_at: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct ExternalIdPayload {
+    pub source: String,
+    pub value: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct TitlePayload {
+    pub id: String,
+    pub name: String,
+    pub facet: String,
+    pub monitored: bool,
+    pub tags: Vec<String>,
+    pub external_ids: Vec<ExternalIdPayload>,
+    pub created_by: Option<String>,
+    pub created_at: String,
+    pub year: Option<i32>,
+    pub overview: Option<String>,
+    pub poster_url: Option<String>,
+    pub sort_title: Option<String>,
+    pub slug: Option<String>,
+    pub imdb_id: Option<String>,
+    pub runtime_minutes: Option<i32>,
+    pub genres: Vec<String>,
+    pub content_status: Option<String>,
+    pub language: Option<String>,
+    pub first_aired: Option<String>,
+    pub network: Option<String>,
+    pub studio: Option<String>,
+    pub country: Option<String>,
+    pub aliases: Vec<String>,
+    pub metadata_language: Option<String>,
+    pub metadata_fetched_at: Option<String>,
+    /// Primary collection label (quality tier), populated in list queries.
+    pub quality_tier: Option<String>,
+    /// Primary collection file size in bytes, populated in list queries.
+    pub size_bytes: Option<i64>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct CollectionPayload {
+    pub id: String,
+    pub title_id: String,
+    pub collection_type: String,
+    pub collection_index: String,
+    pub label: Option<String>,
+    pub ordered_path: Option<String>,
+    pub narrative_order: Option<String>,
+    pub file_size_bytes: Option<i64>,
+    pub first_episode_number: Option<String>,
+    pub last_episode_number: Option<String>,
+    pub monitored: bool,
+    pub created_at: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct EpisodePayload {
+    pub id: String,
+    pub title_id: String,
+    pub collection_id: Option<String>,
+    pub episode_type: String,
+    pub episode_number: Option<String>,
+    pub season_number: Option<String>,
+    pub episode_label: Option<String>,
+    pub title: Option<String>,
+    pub overview: Option<String>,
+    pub air_date: Option<String>,
+    pub duration_seconds: Option<i64>,
+    pub has_multi_audio: bool,
+    pub has_subtitle: bool,
+    pub is_filler: bool,
+    pub is_recap: bool,
+    pub absolute_number: Option<String>,
+    pub monitored: bool,
+    pub created_at: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct TitleMediaFilePayload {
+    pub id: String,
+    pub title_id: String,
+    pub episode_id: Option<String>,
+    pub file_path: String,
+    pub size_bytes: String,
+    pub quality_label: Option<String>,
+    pub scan_status: String,
+    pub created_at: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct SystemHealthPayload {
+    pub service_ready: bool,
+    pub db_path: String,
+    pub total_titles: i32,
+    pub monitored_titles: i32,
+    pub total_users: i32,
+    pub titles_movie: i32,
+    pub titles_tv: i32,
+    pub titles_anime: i32,
+    pub titles_other: i32,
+    pub recent_events: i32,
+    pub recent_event_preview: Vec<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct UserPayload {
+    pub id: String,
+    pub username: String,
+    pub entitlements: Vec<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct PolicyOutputPayload {
+    pub decision: bool,
+    pub score: f32,
+    pub reason_codes: Vec<String>,
+    pub explanation: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct EventPayload {
+    pub id: String,
+    pub event_type: String,
+    pub actor_user_id: Option<String>,
+    pub title_id: Option<String>,
+    pub message: String,
+    pub occurred_at: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct ActivityEventPayload {
+    pub id: String,
+    pub kind: String,
+    pub severity: String,
+    pub channels: Vec<String>,
+    pub actor_user_id: Option<String>,
+    pub title_id: Option<String>,
+    pub message: String,
+    pub occurred_at: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct TitleReleaseBlocklistEntryPayload {
+    pub source_hint: Option<String>,
+    pub source_title: Option<String>,
+    pub error_message: Option<String>,
+    pub attempted_at: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct IndexerSearchResultPayload {
+    pub source: String,
+    pub title: String,
+    pub link: Option<String>,
+    pub download_url: Option<String>,
+    pub size_bytes: Option<i64>,
+    pub published_at: Option<String>,
+    pub thumbs_up: Option<i32>,
+    pub thumbs_down: Option<i32>,
+    pub parsed_release: Option<ParsedReleasePayload>,
+    pub quality_profile_decision: Option<QualityProfileDecisionPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct ParsedEpisodePayload {
+    pub season: Option<i32>,
+    pub episode_numbers: Vec<i32>,
+    pub absolute_episode: Option<i32>,
+    pub raw: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct ParsedReleasePayload {
+    pub raw_title: String,
+    pub normalized_title: String,
+    pub release_group: Option<String>,
+    pub languages_audio: Vec<String>,
+    pub languages_subtitles: Vec<String>,
+    pub year: Option<i32>,
+    pub quality: Option<String>,
+    pub source: Option<String>,
+    pub video_codec: Option<String>,
+    pub video_encoding: Option<String>,
+    pub audio: Option<String>,
+    pub audio_channels: Option<String>,
+    pub is_dual_audio: bool,
+    pub is_atmos: bool,
+    pub is_dolby_vision: bool,
+    pub detected_hdr: bool,
+    pub fps: Option<f32>,
+    pub is_proper_upload: bool,
+    pub is_remux: bool,
+    pub is_bd_disk: bool,
+    pub parser_version: String,
+    pub parse_confidence: f32,
+    pub missing_fields: Vec<String>,
+    pub parse_hints: Vec<String>,
+    pub episode: Option<ParsedEpisodePayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct ScoringEntryPayload {
+    pub code: String,
+    pub delta: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct QualityProfileDecisionPayload {
+    pub allowed: bool,
+    pub block_codes: Vec<String>,
+    pub release_score: i32,
+    pub preference_score: i32,
+    pub scoring_log: Vec<ScoringEntryPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct IndexerConfigPayload {
+    pub id: String,
+    pub name: String,
+    pub provider_type: String,
+    pub base_url: String,
+    pub has_api_key: bool,
+    pub rate_limit_seconds: Option<i64>,
+    pub rate_limit_burst: Option<i64>,
+    pub disabled_until: Option<String>,
+    pub is_enabled: bool,
+    pub enable_interactive_search: bool,
+    pub enable_auto_search: bool,
+    pub last_health_status: Option<String>,
+    pub last_error_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct DownloadClientConfigPayload {
+    pub id: String,
+    pub name: String,
+    pub client_type: String,
+    pub base_url: Option<String>,
+    pub config_json: String,
+    pub is_enabled: bool,
+    pub status: String,
+    pub last_error: Option<String>,
+    pub last_seen_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct DownloadQueueItemPayload {
+    pub id: String,
+    pub title_id: Option<String>,
+    pub title_name: String,
+    pub facet: Option<String>,
+    pub is_scryer_origin: bool,
+    pub client_id: String,
+    pub client_name: String,
+    pub client_type: String,
+    pub state: String,
+    pub progress_percent: i32,
+    pub size_bytes: Option<String>,
+    pub remaining_seconds: Option<i32>,
+    pub queued_at: Option<String>,
+    pub last_updated_at: Option<String>,
+    pub attention_required: bool,
+    pub attention_reason: Option<String>,
+    pub download_client_item_id: String,
+    pub import_status: Option<String>,
+    pub import_error_message: Option<String>,
+    pub imported_at: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct ImportResultPayload {
+    pub import_id: String,
+    pub decision: String,
+    pub skip_reason: Option<String>,
+    pub title_id: Option<String>,
+    pub source_path: String,
+    pub dest_path: Option<String>,
+    pub file_size_bytes: Option<String>,
+    pub link_type: Option<String>,
+    pub error_message: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct ImportRecordPayload {
+    pub id: String,
+    pub source_system: String,
+    pub source_ref: String,
+    pub source_title: Option<String>,
+    pub import_type: String,
+    pub status: String,
+    pub error_message: Option<String>,
+    pub decision: Option<String>,
+    pub skip_reason: Option<String>,
+    pub title_id: Option<String>,
+    pub source_path: Option<String>,
+    pub dest_path: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(InputObject)]
+pub struct TriggerImportInput {
+    pub download_client_item_id: String,
+    pub title_id: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct AddTitleResult {
+    pub title: TitlePayload,
+    pub download_job_id: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct LibraryScanSummaryPayload {
+    pub scanned: i32,
+    pub matched: i32,
+    pub imported: i32,
+    pub skipped: i32,
+    pub unmatched: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct MediaRenamePlanItemPayload {
+    pub collection_id: Option<String>,
+    pub current_path: String,
+    pub proposed_path: Option<String>,
+    pub normalized_filename: Option<String>,
+    pub collision: bool,
+    pub reason_code: String,
+    pub write_action: String,
+    pub source_size_bytes: Option<String>,
+    pub source_mtime_unix_ms: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct MediaRenamePlanPayload {
+    pub facet: String,
+    pub title_id: Option<String>,
+    pub template: String,
+    pub collision_policy: String,
+    pub missing_metadata_policy: String,
+    pub fingerprint: String,
+    pub total: i32,
+    pub renamable: i32,
+    pub noop: i32,
+    pub conflicts: i32,
+    pub errors: i32,
+    pub items: Vec<MediaRenamePlanItemPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct MediaRenameApplyItemPayload {
+    pub collection_id: Option<String>,
+    pub current_path: String,
+    pub proposed_path: Option<String>,
+    pub final_path: Option<String>,
+    pub write_action: String,
+    pub status: String,
+    pub reason_code: String,
+    pub error_message: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct MediaRenameApplyPayload {
+    pub plan_fingerprint: String,
+    pub total: i32,
+    pub applied: i32,
+    pub skipped: i32,
+    pub failed: i32,
+    pub items: Vec<MediaRenameApplyItemPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct AdminSettingsItemPayload {
+    pub category: String,
+    pub scope: String,
+    pub key_name: String,
+    pub data_type: String,
+    pub default_value_json: String,
+    pub effective_value_json: Option<String>,
+    pub value_json: Option<String>,
+    pub source: Option<String>,
+    pub has_override: bool,
+    pub is_sensitive: bool,
+    pub validation_json: Option<String>,
+    pub scope_id: Option<String>,
+    pub updated_by_user_id: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct AdminSettingsPayload {
+    pub scope: String,
+    pub scope_id: Option<String>,
+    pub items: Vec<AdminSettingsItemPayload>,
+    pub quality_profiles: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct TvdbScanOperationPayload {
+    pub id: String,
+    pub operation_type: String,
+    pub status: String,
+    pub actor_user_id: Option<String>,
+    pub limit: i64,
+    pub source: String,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(InputObject, Clone)]
+pub struct ExternalIdInput {
+    pub source: String,
+    pub value: String,
+}
+
+#[derive(InputObject, Clone)]
+pub struct AddTitleInput {
+    pub name: String,
+    pub facet: String,
+    pub monitored: bool,
+    pub tags: Vec<String>,
+    pub external_ids: Option<Vec<ExternalIdInput>>,
+    pub source_hint: Option<String>,
+    pub source_title: Option<String>,
+}
+
+#[derive(InputObject)]
+pub struct PolicyInputPayload {
+    pub title_id: String,
+    pub facet: String,
+    pub has_existing_file: bool,
+    pub candidate_quality: Option<String>,
+    pub requested_mode: String,
+}
+
+#[derive(InputObject)]
+pub struct QueueDownloadInput {
+    pub title_id: String,
+    pub source_hint: Option<String>,
+    pub source_title: Option<String>,
+}
+
+#[derive(InputObject)]
+pub struct QueueManualImportInput {
+    pub title_id: Option<String>,
+    pub client_type: Option<String>,
+    pub download_client_item_id: String,
+}
+
+#[derive(InputObject, Clone)]
+pub struct MediaRenamePreviewInput {
+    pub facet: String,
+    pub title_id: Option<String>,
+    pub dry_run: Option<bool>,
+}
+
+#[derive(InputObject, Clone)]
+pub struct MediaRenameApplyInput {
+    pub facet: String,
+    pub title_id: String,
+    pub fingerprint: String,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(InputObject, Clone)]
+pub struct MediaRenameBulkApplyInput {
+    pub facet: String,
+    pub fingerprint: String,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(InputObject)]
+pub struct AdminSettingsUpdateItemInput {
+    pub key_name: String,
+    pub value: String,
+}
+
+#[derive(InputObject)]
+pub struct AdminSettingsUpdateInput {
+    pub scope: String,
+    pub scope_id: Option<String>,
+    pub items: Vec<AdminSettingsUpdateItemInput>,
+}
+
+#[derive(InputObject)]
+pub struct QueueTvdbMoviesScanInput {
+    pub limit: i64,
+    pub source: String,
+}
+
+#[derive(InputObject)]
+pub struct CreateIndexerConfigInput {
+    pub name: String,
+    pub provider_type: String,
+    pub base_url: String,
+    pub api_key: Option<String>,
+    pub rate_limit_seconds: Option<i64>,
+    pub rate_limit_burst: Option<i64>,
+    pub is_enabled: Option<bool>,
+    pub enable_interactive_search: Option<bool>,
+    pub enable_auto_search: Option<bool>,
+}
+
+#[derive(InputObject)]
+pub struct UpdateIndexerConfigInput {
+    pub id: String,
+    pub name: Option<String>,
+    pub provider_type: Option<String>,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub rate_limit_seconds: Option<i64>,
+    pub rate_limit_burst: Option<i64>,
+    pub is_enabled: Option<bool>,
+    pub enable_interactive_search: Option<bool>,
+    pub enable_auto_search: Option<bool>,
+}
+
+#[derive(InputObject)]
+pub struct DeleteIndexerConfigInput {
+    pub id: String,
+}
+
+#[derive(InputObject)]
+pub struct CreateDownloadClientConfigInput {
+    pub name: String,
+    pub client_type: String,
+    pub base_url: Option<String>,
+    pub config_json: String,
+    pub is_enabled: Option<bool>,
+}
+
+#[derive(InputObject)]
+pub struct UpdateDownloadClientConfigInput {
+    pub id: String,
+    pub name: Option<String>,
+    pub client_type: Option<String>,
+    pub base_url: Option<String>,
+    pub config_json: Option<String>,
+    pub is_enabled: Option<bool>,
+}
+
+#[derive(InputObject)]
+pub struct DeleteDownloadClientConfigInput {
+    pub id: String,
+}
+
+#[derive(InputObject)]
+pub struct TestDownloadClientConnectionInput {
+    pub client_type: String,
+    pub base_url: String,
+    pub config_json: String,
+}
+
+#[derive(InputObject)]
+pub struct DeleteTitleInput {
+    pub title_id: String,
+    pub delete_files_on_disk: Option<bool>,
+}
+
+#[derive(InputObject)]
+pub struct CreateUserInput {
+    pub username: String,
+    pub password: String,
+    pub entitlements: Vec<String>,
+}
+
+#[derive(InputObject)]
+pub struct SetUserPasswordInput {
+    pub user_id: String,
+    pub password: String,
+    pub current_password: Option<String>,
+}
+
+#[derive(InputObject)]
+pub struct SetTitleMonitoredInput {
+    pub title_id: String,
+    pub monitored: bool,
+}
+
+#[derive(InputObject)]
+pub struct UpdateTitleInput {
+    pub title_id: String,
+    pub name: Option<String>,
+    pub facet: Option<String>,
+    pub tags: Option<Vec<String>>,
+}
+
+#[derive(InputObject)]
+pub struct CreateCollectionInput {
+    pub title_id: String,
+    pub collection_type: String,
+    pub collection_index: String,
+    pub label: Option<String>,
+    pub ordered_path: Option<String>,
+    pub first_episode_number: Option<String>,
+    pub last_episode_number: Option<String>,
+}
+
+#[derive(InputObject)]
+pub struct CreateEpisodeInput {
+    pub title_id: String,
+    pub collection_id: Option<String>,
+    pub episode_type: String,
+    pub episode_number: Option<String>,
+    pub season_number: Option<String>,
+    pub episode_label: Option<String>,
+    pub title: Option<String>,
+    pub air_date: Option<String>,
+    pub duration_seconds: Option<i64>,
+    pub has_multi_audio: bool,
+    pub has_subtitle: bool,
+}
+
+#[derive(InputObject)]
+pub struct UpdateCollectionInput {
+    pub collection_id: String,
+    pub collection_type: Option<String>,
+    pub collection_index: Option<String>,
+    pub label: Option<String>,
+    pub ordered_path: Option<String>,
+    pub first_episode_number: Option<String>,
+    pub last_episode_number: Option<String>,
+    pub monitored: Option<bool>,
+}
+
+#[derive(InputObject)]
+pub struct UpdateEpisodeInput {
+    pub episode_id: String,
+    pub episode_type: Option<String>,
+    pub episode_number: Option<String>,
+    pub season_number: Option<String>,
+    pub episode_label: Option<String>,
+    pub title: Option<String>,
+    pub air_date: Option<String>,
+    pub duration_seconds: Option<i64>,
+    pub has_multi_audio: Option<bool>,
+    pub has_subtitle: Option<bool>,
+    pub monitored: Option<bool>,
+    pub collection_id: Option<String>,
+}
+
+#[derive(InputObject, Clone)]
+pub struct SetCollectionMonitoredInput {
+    pub collection_id: String,
+    pub monitored: bool,
+}
+
+#[derive(InputObject, Clone)]
+pub struct SetEpisodeMonitoredInput {
+    pub episode_id: String,
+    pub monitored: bool,
+}
+
+#[derive(InputObject)]
+pub struct SetUserEntitlementsInput {
+    pub user_id: String,
+    pub entitlements: Vec<String>,
+}
+
+#[derive(InputObject)]
+pub struct DeleteUserInput {
+    pub user_id: String,
+}
+
+#[derive(InputObject)]
+pub struct DeleteCollectionInput {
+    pub collection_id: String,
+}
+
+#[derive(InputObject)]
+pub struct DeleteEpisodeInput {
+    pub episode_id: String,
+}
+
+#[derive(InputObject)]
+pub struct PauseDownloadInput {
+    pub download_client_item_id: String,
+}
+
+#[derive(InputObject)]
+pub struct ResumeDownloadInput {
+    pub download_client_item_id: String,
+}
+
+#[derive(InputObject)]
+pub struct DeleteDownloadInput {
+    pub download_client_item_id: String,
+    pub is_history: bool,
+}
+
+// --- Manual Import ---
+
+#[derive(SimpleObject, Clone)]
+pub struct ManualImportFilePreviewPayload {
+    pub file_path: String,
+    pub file_name: String,
+    pub size_bytes: String,
+    pub quality: Option<String>,
+    pub parsed_season: Option<i32>,
+    pub parsed_episodes: Vec<i32>,
+    pub suggested_episode_id: Option<String>,
+    pub suggested_episode_label: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct ManualImportPreviewPayload {
+    pub files: Vec<ManualImportFilePreviewPayload>,
+    pub available_episodes: Vec<EpisodePayload>,
+}
+
+#[derive(InputObject)]
+pub struct ManualImportFileMappingInput {
+    pub file_path: String,
+    pub episode_id: String,
+    pub quality: Option<String>,
+}
+
+#[derive(InputObject)]
+pub struct ExecuteManualImportInput {
+    pub title_id: String,
+    pub files: Vec<ManualImportFileMappingInput>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct ManualImportFileResultPayload {
+    pub file_path: String,
+    pub episode_id: String,
+    pub success: bool,
+    pub dest_path: Option<String>,
+    pub error_message: Option<String>,
+}
+
+// --- Wanted Items / Acquisition ---
+
+#[derive(SimpleObject, Clone)]
+pub struct WantedItemPayload {
+    pub id: String,
+    pub title_id: String,
+    pub title_name: Option<String>,
+    pub episode_id: Option<String>,
+    pub media_type: String,
+    pub search_phase: String,
+    pub next_search_at: Option<String>,
+    pub last_search_at: Option<String>,
+    pub search_count: i64,
+    pub baseline_date: Option<String>,
+    pub status: String,
+    pub grabbed_release: Option<String>,
+    pub current_score: Option<i32>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct WantedItemsListPayload {
+    pub items: Vec<WantedItemPayload>,
+    pub total: i64,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct ReleaseDecisionPayload {
+    pub id: String,
+    pub wanted_item_id: String,
+    pub title_id: String,
+    pub release_title: String,
+    pub release_url: Option<String>,
+    pub release_size_bytes: Option<i64>,
+    pub decision_code: String,
+    pub candidate_score: i32,
+    pub current_score: Option<i32>,
+    pub score_delta: Option<i32>,
+    pub explanation_json: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(InputObject)]
+pub struct WantedItemIdInput {
+    pub wanted_item_id: String,
+}

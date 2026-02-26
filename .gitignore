@@ -1,0 +1,16 @@
+/target
+**/target
+**/*.rs.bk
+.idea
+.vscode
+/.env
+/.DS_Store
+apps/scryer-web/dist
+apps/scryer-web/node_modules
+crates/scryer/ui
+tmp
+.claude
+*.pem
+*.sqlite
+*.sqlite-*
+crates/scryer/dev-seed.toml

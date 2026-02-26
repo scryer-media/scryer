@@ -1,0 +1,476 @@
+use chrono::Utc;
+use scryer_application::{AppError, AppResult, ReleaseDownloadAttemptOutcome};
+use scryer_domain::{Id, ImportRecord};
+use sqlx::Row;
+use sqlx::SqlitePool;
+
+use crate::types::{
+    ReleaseDownloadFailureSignatureRecord, TitleReleaseBlocklistRecord, WorkflowOperationRecord,
+};
+
+pub(crate) async fn create_workflow_operation_query(
+    pool: &SqlitePool,
+    operation_type: String,
+    status: String,
+    actor_user_id: Option<String>,
+    progress_json: Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+) -> AppResult<WorkflowOperationRecord> {
+    let id = Id::new().0;
+    let now = Utc::now().to_rfc3339();
+    let started_at = started_at.unwrap_or_else(|| now.clone());
+
+    sqlx::query(
+        "INSERT INTO workflow_operations
+         (id, operation_type, status, actor_user_id, progress_json, started_at, completed_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&operation_type)
+    .bind(&status)
+    .bind(&actor_user_id)
+    .bind(&progress_json)
+    .bind(&started_at)
+    .bind(&completed_at)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(WorkflowOperationRecord {
+        id,
+        operation_type,
+        status,
+        actor_user_id,
+        title_id: None,
+        collection_id: None,
+        episode_id: None,
+        release_id: None,
+        media_file_id: None,
+        external_reference: None,
+        progress_json,
+        started_at: Some(started_at),
+        completed_at,
+        created_at: now.clone(),
+        updated_at: now,
+    })
+}
+
+pub(crate) async fn create_release_download_attempt_query(
+    pool: &SqlitePool,
+    title_id: Option<String>,
+    source_hint: Option<String>,
+    source_title: Option<String>,
+    outcome: ReleaseDownloadAttemptOutcome,
+    error_message: Option<String>,
+    source_password: Option<String>,
+) -> AppResult<()> {
+    let id = Id::new().0;
+    let now = Utc::now().to_rfc3339();
+
+    sqlx::query(
+        "INSERT INTO release_download_attempts
+         (id, title_id, source_hint, source_title, outcome, error_message, source_password, attempted_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&title_id)
+    .bind(&source_hint)
+    .bind(&source_title)
+    .bind(outcome.as_str())
+    .bind(&error_message)
+    .bind(&source_password)
+    .bind(&now)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(())
+}
+
+pub(crate) async fn get_latest_source_password_query(
+    pool: &SqlitePool,
+    title_id: Option<&str>,
+    source_hint: Option<&str>,
+    source_title: Option<&str>,
+) -> AppResult<Option<String>> {
+    let mut sql = String::from(
+        "SELECT source_password
+         FROM release_download_attempts
+         WHERE source_password IS NOT NULL",
+    );
+
+    let mut filters = Vec::new();
+    if title_id.is_some() {
+        filters.push("title_id = ?");
+    }
+    if source_hint.is_some() {
+        filters.push("source_hint = ?");
+    }
+    if source_title.is_some() {
+        filters.push("source_title = ?");
+    }
+
+    if !filters.is_empty() {
+        sql.push(' ');
+        sql.push_str("AND ");
+        sql.push_str(&filters.join(" AND "));
+    }
+
+    sql.push_str(" ORDER BY attempted_at DESC LIMIT 1");
+
+    let mut query = sqlx::query(&sql);
+    if let Some(title_id) = title_id {
+        query = query.bind(title_id);
+    }
+    if let Some(source_hint) = source_hint {
+        query = query.bind(source_hint);
+    }
+    if let Some(source_title) = source_title {
+        query = query.bind(source_title);
+    }
+
+    let row = query
+        .fetch_optional(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    match row {
+        Some(row) => Ok(row.try_get::<Option<String>, _>("source_password")
+            .map_err(|err| AppError::Repository(err.to_string()))?),
+        None => Ok(None),
+    }
+}
+
+pub(crate) async fn create_import_request_query(
+    pool: &SqlitePool,
+    source_system: String,
+    source_ref: String,
+    import_type: String,
+    payload_json: String,
+) -> AppResult<String> {
+    let id = Id::new().0;
+    let now = Utc::now().to_rfc3339();
+    let rename_plan_json = if import_type.starts_with("rename_") {
+        Some(payload_json.clone())
+    } else {
+        None
+    };
+
+    sqlx::query(
+        "INSERT INTO imports
+         (id, source_system, source_ref, import_type, status, payload_json, rename_plan_json, result_json, started_at, finished_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(source_system, source_ref, import_type) DO UPDATE SET
+            status = excluded.status,
+            payload_json = excluded.payload_json,
+            rename_plan_json = excluded.rename_plan_json,
+            result_json = NULL,
+            started_at = NULL,
+            finished_at = NULL,
+            updated_at = excluded.updated_at",
+    )
+    .bind(&id)
+    .bind(&source_system)
+    .bind(&source_ref)
+    .bind(&import_type)
+    .bind("queued")
+    .bind(&payload_json)
+    .bind(&rename_plan_json)
+    .bind(Option::<String>::None)
+    .bind(Option::<String>::None)
+    .bind(Option::<String>::None)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    let row = sqlx::query(
+        "SELECT id
+         FROM imports
+         WHERE source_system = ?
+           AND source_ref = ?
+           AND import_type = ?",
+    )
+    .bind(&source_system)
+    .bind(&source_ref)
+    .bind(&import_type)
+    .fetch_one(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    let persisted_id: String = row
+        .try_get("id")
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+    Ok(persisted_id)
+}
+
+pub(crate) async fn get_import_by_source_ref_query(
+    pool: &SqlitePool,
+    source_system: &str,
+    source_ref: &str,
+) -> AppResult<Option<ImportRecord>> {
+    let row = sqlx::query(
+        "SELECT id, source_system, source_ref, import_type, status,
+                payload_json, result_json, started_at, finished_at,
+                created_at, updated_at
+         FROM imports
+         WHERE source_system = ? AND source_ref = ?
+         LIMIT 1",
+    )
+    .bind(source_system)
+    .bind(source_ref)
+    .fetch_optional(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    match row {
+        Some(row) => Ok(Some(ImportRecord {
+            id: row.try_get("id").map_err(|e| AppError::Repository(e.to_string()))?,
+            source_system: row.try_get("source_system").map_err(|e| AppError::Repository(e.to_string()))?,
+            source_ref: row.try_get("source_ref").map_err(|e| AppError::Repository(e.to_string()))?,
+            import_type: row.try_get("import_type").map_err(|e| AppError::Repository(e.to_string()))?,
+            status: row.try_get("status").map_err(|e| AppError::Repository(e.to_string()))?,
+            payload_json: row.try_get("payload_json").map_err(|e| AppError::Repository(e.to_string()))?,
+            result_json: row.try_get("result_json").map_err(|e| AppError::Repository(e.to_string()))?,
+            started_at: row.try_get("started_at").map_err(|e| AppError::Repository(e.to_string()))?,
+            finished_at: row.try_get("finished_at").map_err(|e| AppError::Repository(e.to_string()))?,
+            created_at: row.try_get("created_at").map_err(|e| AppError::Repository(e.to_string()))?,
+            updated_at: row.try_get("updated_at").map_err(|e| AppError::Repository(e.to_string()))?,
+        })),
+        None => Ok(None),
+    }
+}
+
+pub(crate) async fn update_import_status_query(
+    pool: &SqlitePool,
+    import_id: &str,
+    status: &str,
+    result_json: Option<String>,
+) -> AppResult<()> {
+    let now = Utc::now().to_rfc3339();
+    let is_terminal = matches!(status, "completed" | "failed" | "skipped");
+
+    sqlx::query(
+        "UPDATE imports
+         SET status = ?,
+             result_json = ?,
+             started_at = CASE WHEN started_at IS NULL THEN ? ELSE started_at END,
+             finished_at = CASE WHEN ? THEN ? ELSE finished_at END,
+             updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(status)
+    .bind(&result_json)
+    .bind(&now)
+    .bind(is_terminal)
+    .bind(&now)
+    .bind(&now)
+    .bind(import_id)
+    .execute(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(())
+}
+
+pub(crate) async fn recover_stale_processing_imports_query(
+    pool: &SqlitePool,
+    stale_seconds: i64,
+) -> AppResult<u64> {
+    let now = Utc::now();
+    let cutoff = (now - chrono::Duration::seconds(stale_seconds)).to_rfc3339();
+    let now_str = now.to_rfc3339();
+
+    let result = sqlx::query(
+        "UPDATE imports
+         SET status = 'failed',
+             result_json = '{\"error\":\"stale processing recovery\"}',
+             finished_at = ?,
+             updated_at = ?
+         WHERE status = 'processing'
+           AND updated_at < ?",
+    )
+    .bind(&now_str)
+    .bind(&now_str)
+    .bind(&cutoff)
+    .execute(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(result.rows_affected())
+}
+
+pub(crate) async fn list_pending_imports_query(
+    pool: &SqlitePool,
+) -> AppResult<Vec<ImportRecord>> {
+    let rows = sqlx::query(
+        "SELECT id, source_system, source_ref, import_type, status,
+                payload_json, result_json, started_at, finished_at,
+                created_at, updated_at
+         FROM imports
+         WHERE status IN ('queued', 'processing')
+         ORDER BY created_at ASC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        out.push(ImportRecord {
+            id: row.try_get("id").map_err(|e| AppError::Repository(e.to_string()))?,
+            source_system: row.try_get("source_system").map_err(|e| AppError::Repository(e.to_string()))?,
+            source_ref: row.try_get("source_ref").map_err(|e| AppError::Repository(e.to_string()))?,
+            import_type: row.try_get("import_type").map_err(|e| AppError::Repository(e.to_string()))?,
+            status: row.try_get("status").map_err(|e| AppError::Repository(e.to_string()))?,
+            payload_json: row.try_get("payload_json").map_err(|e| AppError::Repository(e.to_string()))?,
+            result_json: row.try_get("result_json").map_err(|e| AppError::Repository(e.to_string()))?,
+            started_at: row.try_get("started_at").map_err(|e| AppError::Repository(e.to_string()))?,
+            finished_at: row.try_get("finished_at").map_err(|e| AppError::Repository(e.to_string()))?,
+            created_at: row.try_get("created_at").map_err(|e| AppError::Repository(e.to_string()))?,
+            updated_at: row.try_get("updated_at").map_err(|e| AppError::Repository(e.to_string()))?,
+        });
+    }
+
+    Ok(out)
+}
+
+pub(crate) async fn list_imports_query(
+    pool: &SqlitePool,
+    limit: i64,
+) -> AppResult<Vec<ImportRecord>> {
+    let limit = limit.clamp(1, 500);
+    let rows = sqlx::query(
+        "SELECT id, source_system, source_ref, import_type, status,
+                payload_json, result_json, started_at, finished_at,
+                created_at, updated_at
+         FROM imports
+         ORDER BY created_at DESC
+         LIMIT ?",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        out.push(ImportRecord {
+            id: row.try_get("id").map_err(|e| AppError::Repository(e.to_string()))?,
+            source_system: row.try_get("source_system").map_err(|e| AppError::Repository(e.to_string()))?,
+            source_ref: row.try_get("source_ref").map_err(|e| AppError::Repository(e.to_string()))?,
+            import_type: row.try_get("import_type").map_err(|e| AppError::Repository(e.to_string()))?,
+            status: row.try_get("status").map_err(|e| AppError::Repository(e.to_string()))?,
+            payload_json: row.try_get("payload_json").map_err(|e| AppError::Repository(e.to_string()))?,
+            result_json: row.try_get("result_json").map_err(|e| AppError::Repository(e.to_string()))?,
+            started_at: row.try_get("started_at").map_err(|e| AppError::Repository(e.to_string()))?,
+            finished_at: row.try_get("finished_at").map_err(|e| AppError::Repository(e.to_string()))?,
+            created_at: row.try_get("created_at").map_err(|e| AppError::Repository(e.to_string()))?,
+            updated_at: row.try_get("updated_at").map_err(|e| AppError::Repository(e.to_string()))?,
+        });
+    }
+
+    Ok(out)
+}
+
+pub(crate) async fn list_failed_release_download_attempts_query(
+    pool: &SqlitePool,
+    limit: i64,
+) -> AppResult<Vec<ReleaseDownloadFailureSignatureRecord>> {
+    let limit = limit.clamp(1, 20_000);
+    let rows = sqlx::query(
+        "SELECT source_hint, source_title
+         FROM (
+           SELECT source_hint, source_title, MAX(attempted_at) AS last_attempted_at
+           FROM release_download_attempts
+           WHERE outcome = 'failed'
+             AND (source_hint IS NOT NULL OR source_title IS NOT NULL)
+           GROUP BY source_hint, source_title
+         )
+         ORDER BY last_attempted_at DESC
+         LIMIT ?",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let source_hint: Option<String> = row
+            .try_get("source_hint")
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        let source_title: Option<String> = row
+            .try_get("source_title")
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        out.push(ReleaseDownloadFailureSignatureRecord {
+            source_hint,
+            source_title,
+        });
+    }
+
+    Ok(out)
+}
+
+pub(crate) async fn list_failed_release_download_attempts_for_title_query(
+    pool: &SqlitePool,
+    title_id: &str,
+    limit: i64,
+) -> AppResult<Vec<TitleReleaseBlocklistRecord>> {
+    let limit = limit.clamp(1, 1_000);
+    let rows = sqlx::query(
+        "SELECT source_hint, source_title, error_message, attempted_at
+         FROM (
+           SELECT source_hint,
+                  source_title,
+                  error_message,
+                  attempted_at,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY source_hint, source_title
+                    ORDER BY attempted_at DESC
+                  ) AS row_number
+           FROM release_download_attempts
+           WHERE outcome = 'failed'
+             AND title_id = ?
+             AND (source_hint IS NOT NULL OR source_title IS NOT NULL)
+         )
+         WHERE row_number = 1
+         ORDER BY attempted_at DESC
+         LIMIT ?",
+    )
+    .bind(title_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let source_hint: Option<String> = row
+            .try_get("source_hint")
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        let source_title: Option<String> = row
+            .try_get("source_title")
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        let error_message: Option<String> = row
+            .try_get("error_message")
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        let attempted_at: String = row
+            .try_get("attempted_at")
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        out.push(TitleReleaseBlocklistRecord {
+            source_hint,
+            source_title,
+            error_message,
+            attempted_at,
+        });
+    }
+
+    Ok(out)
+}

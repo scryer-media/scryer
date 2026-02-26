@@ -1,0 +1,40 @@
+pub(crate) mod commands;
+mod download_clients;
+mod newznab_rate_limiter;
+mod file_importer;
+mod library_scanner;
+mod library_renamer;
+mod metadata_gateway;
+mod migrations;
+mod queries;
+mod repositories;
+mod sqlite_services;
+mod types;
+pub mod encryption;
+pub mod jwt_keys;
+
+
+#[cfg(test)]
+mod tests;
+
+pub use file_importer::FsFileImporter;
+pub use download_clients::{
+    MultiIndexerSearchClient, NzbGeekSearchClient, NzbgetDownloadClient,
+    PrioritizedDownloadClientRouter, NZBGEEK_BASE_BACKOFF_SECONDS, NZBGEEK_MAX_BACKOFF_SECONDS,
+    NZBGEEK_MIN_REQUEST_INTERVAL_MS,
+};
+pub use newznab_rate_limiter::{
+    NewznabRateLimiter, NewznabRateLimiterConfig, NewznabApiLimits,
+    parse_newznab_apilimits_xml, parse_apilimits_from_headers,
+};
+pub use library_renamer::FileSystemLibraryRenamer;
+pub use library_scanner::FileSystemLibraryScanner;
+pub use metadata_gateway::MetadataGatewayClient;
+pub use migrations::{list_embedded_migration_keys, list_embedded_migrations};
+pub use encryption::EncryptionKey;
+pub use sqlite_services::SqliteServices;
+pub(crate) use types::sqlite_url_with_create;
+pub use types::{
+    EmbeddedMigrationDescriptor, MigrationMode, MigrationStatus, SettingDefinitionSeed,
+    SettingsDefinitionRecord, SettingsValueRecord, WorkflowOperationRecord,
+};

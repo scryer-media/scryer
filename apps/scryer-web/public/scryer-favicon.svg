@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc" fill="none">
+  <title id="title">scryer favicon</title>
+  <desc id="desc">Rust crab logo with a pirate patch over one eye</desc>
+  <defs>
+    <linearGradient id="shell" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#ff8a45"/>
+      <stop offset="100%" stop-color="#d44a24"/>
+    </linearGradient>
+    <linearGradient id="shell-glow" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#ffd1b6" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#ffd1b6" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <circle cx="32" cy="32" r="27" fill="url(#shell-glow)"/>
+  <ellipse cx="32" cy="34" rx="22" ry="18" fill="url(#shell)"/>
+  <ellipse cx="32" cy="34" rx="17" ry="12" fill="#ff7a3f" opacity="0.5"/>
+  <path d="M26 31c-2.6 0-4.7 2.1-4.7 4.7v5.3c0 2.6 2.1 4.7 4.7 4.7 1 0 1.8-.2 2.6-.7-1-1-1.6-2.3-1.6-3.8V31h-1z" fill="#ffd2b4"/>
+  <path d="M38 31v10.5c0 1.4-.6 2.8-1.6 3.8.8.5 1.7.7 2.6.7 2.6 0 4.7-2.1 4.7-4.7v-5.3c0-2.6-2.1-4.7-4.7-4.7h-1z" fill="#ffd2b4"/>
+  <path d="M26 34h12" stroke="#ca3f25" stroke-width="1.6" stroke-linecap="round"/>
+  <path d="M16 37c1.8-0.2 3.6 0.7 4.5 2.3M18 41c1.3-0.5 2.9-0.2 3.9 0.9" stroke="#c74a2b" stroke-width="1.4" stroke-linecap="round"/>
+  <path d="M48 37c-1.8-0.2-3.6 0.7-4.5 2.3M46 41c-1.3-0.5-2.9-0.2-3.9 0.9" stroke="#c74a2b" stroke-width="1.4" stroke-linecap="round"/>
+  <path d="M14.5 32h4M45.5 32h4" stroke="#c74a2b" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M44 48c-1-1.6-2.7-2.6-4.6-2.6H24.6C22.7 45.4 21 46.4 20 48M30 26c0.8-3.8 3.9-6.6 7.8-6.6S45.2 22.2 46 26" stroke="#7a2c14" stroke-width="1.2" stroke-linecap="round"/>
+  <ellipse cx="40" cy="22" rx="2.4" ry="2" fill="#f8fafc"/>
+  <circle cx="39.4" cy="21.6" r="0.6" fill="#0f172a"/>
+  <ellipse cx="24" cy="22" rx="2.4" ry="2" fill="#f8fafc"/>
+  <circle cx="24.6" cy="21.6" r="0.6" fill="#0f172a"/>
+  <ellipse cx="32" cy="26" rx="2.8" ry="1.6" fill="#f4f6ff"/>
+  <circle cx="31.5" cy="25.8" r="0.5" fill="#0f172a"/>
+  <path d="M38 26l2.8-2.8" stroke="#0f172a" stroke-width="1.4" stroke-linecap="round"/>
+  <path d="M26 26l-2.8-2.8" stroke="#0f172a" stroke-width="1.4" stroke-linecap="round"/>
+  <path d="M28 21l4-2 4 2" stroke="#8a3f2a" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M32 42c-3.3 0-6.1 2.4-6.9 5.6h13.8C38.1 44.4 35.3 42 32 42z" fill="#f2a08a" opacity="0.9"/>
+  <path d="M32 33c-3.4 0-6.2 2.3-6.2 5.1v2.5c0 2.8 2.8 5.1 6.2 5.1s6.2-2.3 6.2-5.1v-2.5C38.2 35.3 35.4 33 32 33z" fill="#ffb39b"/>
+  <path d="M25.8 39.7c1.2 0.8 2.7 1.3 4.4 1.3h3.6" stroke="#a64c36" stroke-width="1.3" stroke-linecap="round"/>
+  <circle cx="31.6" cy="21.1" r="4.2" fill="#111827"/>
+  <path d="M32.2 18.9l1.5 1.5" stroke="#f8fafc" stroke-width="1.1" stroke-linecap="round"/>
+  <path d="M35 18.1l-1.5 3" stroke="#f8fafc" stroke-width="1.1" stroke-linecap="round"/>
+</svg>

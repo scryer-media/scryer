@@ -1,0 +1,2 @@
+ALTER TABLE episodes ADD COLUMN is_filler INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE episodes ADD COLUMN absolute_number TEXT;
