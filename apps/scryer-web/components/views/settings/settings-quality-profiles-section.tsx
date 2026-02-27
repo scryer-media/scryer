@@ -134,6 +134,7 @@ type SettingsQualityProfilesSectionProps = {
   saveCategoryQualityProfile: (scopeId: ViewCategoryId, value: string) => Promise<void> | void;
   saveGlobalQualityProfile: (value: string) => Promise<void> | void;
   archivalQualityOptions: Array<{ value: string; label: string }>;
+  deleteQualityProfile: (profileId: string) => Promise<void>;
 };
 
 function ProfileListEditor({
@@ -379,6 +380,7 @@ export function SettingsQualityProfilesSection({
   saveCategoryQualityProfile,
   saveGlobalQualityProfile,
   archivalQualityOptions,
+  deleteQualityProfile,
 }: SettingsQualityProfilesSectionProps) {
   const [globalQualityProfileDraft, setGlobalQualityProfileDraft] = React.useState(
     globalQualityProfileId,
@@ -547,14 +549,32 @@ export function SettingsQualityProfilesSection({
                       />
                     </TableCell>
                     <TableCell>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => loadQualityProfileById(profile.id)}
-                      >
-                        {t("label.load")}
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => loadQualityProfileById(profile.id)}
+                        >
+                          {t("label.load")}
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="destructive"
+                          disabled={
+                            qualityProfilesSaving ||
+                            profile.id === globalQualityProfileId ||
+                            Object.values(categoryQualityProfileOverrides).some(
+                              (v) => v === profile.id,
+                            )
+                          }
+                          onClick={() => void deleteQualityProfile(profile.id)}
+                          aria-label={t("label.delete")}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))

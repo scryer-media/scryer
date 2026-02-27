@@ -84,7 +84,7 @@ export function MediaContentContainer({
   const [titleNameForQueue, setTitleNameForQueue] = React.useState("");
   const [monitoredForQueue, setMonitoredForQueue] = React.useState(true);
   const [seasonFoldersForQueue, setSeasonFoldersForQueue] = React.useState(true);
-  const [monitorSpecialsForQueue, setMonitorSpecialsForQueue] = React.useState(true);
+  const [monitorSpecialsForQueue, setMonitorSpecialsForQueue] = React.useState(false);
   const [interSeasonMoviesForQueue, setInterSeasonMoviesForQueue] = React.useState(true);
   const [preferredSubGroupForQueue, setPreferredSubGroupForQueue] = React.useState("");
   const [titleFilter, setTitleFilter] = React.useState("");
@@ -110,6 +110,7 @@ export function MediaContentContainer({
     mediaSettingsSaving,
     qualityProfiles,
     qualityProfileParseError,
+    globalQualityProfileId,
     categoryQualityProfileOverrides,
     setCategoryQualityProfileOverrides,
     categoryRenameTemplates,
@@ -581,6 +582,7 @@ export function MediaContentContainer({
           mediaSettingsLoading,
           qualityProfiles: qualityProfiles,
           qualityProfileParseError,
+          globalQualityProfileId,
           categoryQualityProfileOverrides,
           activeQualityScopeId,
           setCategoryQualityProfileOverrides,

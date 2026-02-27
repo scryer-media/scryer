@@ -145,6 +145,35 @@ pub(crate) async fn list_quality_profiles_query(
     Ok(out)
 }
 
+pub(crate) async fn delete_quality_profile_query(
+    pool: &SqlitePool,
+    profile_id: &str,
+) -> AppResult<()> {
+    let profile_id = profile_id.trim().to_string();
+    if profile_id.is_empty() {
+        return Err(AppError::Validation(
+            "profile_id is required to delete a quality profile".into(),
+        ));
+    }
+
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    clear_quality_profile_value_rows(&mut tx, &profile_id).await?;
+
+    sqlx::query("DELETE FROM quality_profiles WHERE id = ?")
+        .bind(&profile_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    tx.commit()
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))
+}
+
 pub(crate) async fn replace_quality_profiles_query(
     pool: &SqlitePool,
     scope: &str,

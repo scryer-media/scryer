@@ -158,9 +158,11 @@ impl AppUseCase {
                     );
                 }
 
-                // Build extra external IDs from anime mappings
+                // Build extra external IDs from the primary anime mapping only.
+                // Multi-season anime have one mapping per season (each with a
+                // different MAL/AniDB ID); we only want the primary entry.
                 let mut metadata_update = result.metadata_update;
-                for mapping in &result.anime_mappings {
+                if let Some(mapping) = result.anime_mappings.first() {
                     if let Some(mal_id) = mapping.mal_id {
                         metadata_update.extra_external_ids.push(ExternalId { source: "mal".to_string(), value: mal_id.to_string() });
                     }
@@ -328,10 +330,10 @@ impl AppUseCase {
         }
 
         // Create interstitial movie collections for anime titles.
-        // Movies with global_media_type == "movie" and a thetvdb_season are positioned
-        // narratively between seasons (e.g. Demon Slayer: Mugen Train between S1 and S2).
-        // Build a lookup from (season_number, episode_number) → collection_id so that
-        // episodes can be routed to the correct interstitial collection later.
+        // Movies (global_media_type == "movie") are positioned narratively between
+        // seasons using their episode aired dates (e.g. Demon Slayer: Mugen Train
+        // between S1 and S2). Build a lookup from (season_number, episode_number) →
+        // collection_id so that episodes get routed to the correct collection.
         let mut interstitial_episode_lookup: std::collections::HashMap<(i32, i32), String> =
             std::collections::HashMap::new();
 
@@ -339,17 +341,66 @@ impl AppUseCase {
             let movie_mappings: Vec<&AnimeMapping> = anime_mappings
                 .iter()
                 .filter(|m| m.global_media_type == "movie")
-                .filter(|m| m.thetvdb_season.is_some())
+                .filter(|m| !m.episode_mappings.is_empty())
                 .collect();
 
             if !movie_mappings.is_empty() {
-                // Group by the season they follow: a movie with thetvdb_season=N
-                // belongs narratively after season N-1 → narrative_order = "{N-1}.{seq}"
+                // Build last-aired date per regular season from the episode data so
+                // we can determine where each movie falls narratively.
+                let mut season_last_aired: std::collections::BTreeMap<i32, String> =
+                    std::collections::BTreeMap::new();
+                for ep in episodes.iter() {
+                    if ep.season_number > 0 && !ep.aired.is_empty() {
+                        season_last_aired
+                            .entry(ep.season_number)
+                            .and_modify(|d| {
+                                if ep.aired > *d {
+                                    *d = ep.aired.clone();
+                                }
+                            })
+                            .or_insert_with(|| ep.aired.clone());
+                    }
+                }
+
+                // For each movie, find its earliest episode aired date, then
+                // find the last regular season that ended on or before that date.
                 let mut movies_by_position: std::collections::BTreeMap<i32, Vec<&AnimeMapping>> =
                     std::collections::BTreeMap::new();
                 for m in &movie_mappings {
-                    let target_season = m.thetvdb_season.unwrap() as i32;
-                    let after_season = (target_season - 1).max(0);
+                    let movie_aired: Option<String> = m
+                        .episode_mappings
+                        .iter()
+                        .flat_map(|em| {
+                            episodes.iter().filter(move |ep| {
+                                ep.season_number == em.tvdb_season
+                                    && ep.episode_number >= em.episode_start
+                                    && ep.episode_number <= em.episode_end
+                            })
+                        })
+                        .filter(|ep| !ep.aired.is_empty())
+                        .map(|ep| ep.aired.clone())
+                        .min();
+
+                    let after_season = if let Some(aired) = &movie_aired {
+                        season_last_aired
+                            .iter()
+                            .filter(|(_, last)| last.as_str() <= aired.as_str())
+                            .max_by_key(|(&num, _)| num)
+                            .map(|(&num, _)| num)
+                            .unwrap_or(0)
+                    } else {
+                        0
+                    };
+
+                    info!(
+                        title_id = %title.id,
+                        movie_type = %m.global_media_type,
+                        thetvdb_season = ?m.thetvdb_season,
+                        movie_aired = ?movie_aired,
+                        after_season = after_season,
+                        "positioning interstitial movie"
+                    );
+
                     movies_by_position.entry(after_season).or_default().push(m);
                 }
 
@@ -380,8 +431,6 @@ impl AppUseCase {
                                     narrative_order = %narrative_order,
                                     "created interstitial movie collection"
                                 );
-                                // Map episode ranges from this movie's episode_mappings
-                                // to this collection so episodes get routed correctly.
                                 for em in &movie.episode_mappings {
                                     for ep_num in em.episode_start..=em.episode_end {
                                         interstitial_episode_lookup.insert(
@@ -414,22 +463,30 @@ impl AppUseCase {
         let today = Utc::now().format("%Y-%m-%d").to_string();
 
         let skip_filler = if title.facet == MediaFacet::Anime {
-            self.read_setting_string_value("anime.filler_policy", Some("anime"))
-                .await
-                .ok()
-                .flatten()
-                .as_deref()
-                == Some("skip_filler")
+            let effective = match extract_tag_string(&title.tags, "scryer:filler-policy:") {
+                Some(v) => v.to_string(),
+                None => self
+                    .read_setting_string_value("anime.filler_policy", Some("anime"))
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default(),
+            };
+            effective == "skip_filler"
         } else {
             false
         };
         let skip_recap = if title.facet == MediaFacet::Anime {
-            self.read_setting_string_value("anime.recap_policy", Some("anime"))
-                .await
-                .ok()
-                .flatten()
-                .as_deref()
-                == Some("skip_recap")
+            let effective = match extract_tag_string(&title.tags, "scryer:recap-policy:") {
+                Some(v) => v.to_string(),
+                None => self
+                    .read_setting_string_value("anime.recap_policy", Some("anime"))
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default(),
+            };
+            effective == "skip_recap"
         } else {
             false
         };
@@ -1340,6 +1397,20 @@ fn extract_tag_bool(tags: &[String], prefix: &str) -> Option<bool> {
     for tag in tags {
         if let Some(value) = tag.strip_prefix(prefix) {
             return Some(!value.trim().eq_ignore_ascii_case("false"));
+        }
+    }
+    None
+}
+
+/// Extract a string value from a `scryer:{prefix}:{value}` tag.
+/// Returns `None` when no matching tag exists (caller falls back to global setting).
+fn extract_tag_string<'a>(tags: &'a [String], prefix: &str) -> Option<&'a str> {
+    for tag in tags {
+        if let Some(value) = tag.strip_prefix(prefix) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed);
+            }
         }
     }
     None

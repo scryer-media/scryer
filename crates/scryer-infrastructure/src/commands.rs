@@ -287,6 +287,10 @@ pub(crate) enum DbCommand {
         profiles_json: Vec<QualityProfile>,
         reply: Sender<AppResult<()>>,
     },
+    DeleteQualityProfile {
+        profile_id: String,
+        reply: Sender<AppResult<()>>,
+    },
     ListAppliedMigrations {
         reply: Sender<AppResult<Vec<MigrationStatus>>>,
     },
@@ -855,6 +859,14 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 } => {
                     let _ = reply.send(
                         upsert_quality_profiles_query(&pool, &scope, scope_id, profiles_json).await,
+                    );
+                }
+                DbCommand::DeleteQualityProfile {
+                    profile_id,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        delete_quality_profile_query(&pool, &profile_id).await,
                     );
                 }
                 DbCommand::ListAppliedMigrations { reply } => {

@@ -514,6 +514,11 @@ pub struct AdminSettingsUpdateInput {
 }
 
 #[derive(InputObject)]
+pub struct DeleteQualityProfileInput {
+    pub profile_id: String,
+}
+
+#[derive(InputObject)]
 pub struct QueueTvdbMoviesScanInput {
     pub limit: i64,
     pub source: String,

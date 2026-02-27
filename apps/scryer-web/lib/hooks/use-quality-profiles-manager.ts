@@ -1,5 +1,5 @@
 import * as React from "react";
-import { saveAdminSettingsMutation } from "@/lib/graphql/mutations";
+import { deleteQualityProfileMutation, saveAdminSettingsMutation } from "@/lib/graphql/mutations";
 import { qualityProfilesInitQuery } from "@/lib/graphql/queries";
 import { useClient } from "urql";
 import type { Translate } from "@/components/root/types";
@@ -133,6 +133,7 @@ export type UseQualityProfilesManagerResult = {
   >;
   categoryQualityProfileSaving: Record<ViewCategoryId, boolean>;
   saveCategoryQualityProfile: (scopeId: ViewCategoryId, value: string) => Promise<void> | void;
+  deleteQualityProfile: (profileId: string) => Promise<void>;
   refreshQualityProfiles: () => Promise<void>;
   downloadClients: DownloadClientRecord[];
   toProfileOptions: typeof toProfileOptions;
@@ -330,6 +331,30 @@ export function useQualityProfilesManager({
       });
     },
     [t],
+  );
+
+  const deleteQualityProfile = React.useCallback(
+    async (profileId: string) => {
+      const trimmed = profileId.trim();
+      if (!trimmed) return;
+
+      setQualityProfilesSaving(true);
+      try {
+        const { data, error } = await client.mutation(
+          deleteQualityProfileMutation,
+          { input: { profileId: trimmed } },
+        ).toPromise();
+        if (error) throw error;
+
+        applyQualityProfileSettingsFromAdminPayload(data.deleteQualityProfile, []);
+        setGlobalStatus(t("settings.qualitySettingsSaved"));
+      } catch (error) {
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"));
+      } finally {
+        setQualityProfilesSaving(false);
+      }
+    },
+    [applyQualityProfileSettingsFromAdminPayload, client, setGlobalStatus, t],
   );
 
   const refreshQualityProfiles = React.useCallback(async () => {
@@ -729,6 +754,7 @@ export function useQualityProfilesManager({
     setCategoryQualityProfileOverrides,
     categoryQualityProfileSaving,
     saveCategoryQualityProfile,
+    deleteQualityProfile,
     refreshQualityProfiles,
     downloadClients,
     toProfileOptions,

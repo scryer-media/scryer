@@ -550,3 +550,7 @@ mod tests {
         assert!(admin.has_entitlement(&Entitlement::ViewHistory));
     }
 }
+
+#[cfg(test)]
+#[path = "domain_tests.rs"]
+mod domain_tests;

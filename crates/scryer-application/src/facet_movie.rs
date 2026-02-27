@@ -43,7 +43,7 @@ impl FacetHandler for MovieFacetHandler {
     }
 
     fn default_rename_template(&self) -> &str {
-        "{title} ({year}) - {quality}.{ext}"
+        "{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}"
     }
 
     fn default_library_path(&self) -> &str {

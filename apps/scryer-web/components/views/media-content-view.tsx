@@ -643,12 +643,34 @@ const RENAME_PREVIEW_SERIES_SAMPLE: Record<string, string> = {
   episode_title: "The One with the Embryos",
 };
 
+const RENAME_PREVIEW_ANIME_SAMPLE: Record<string, string> = {
+  title: "One Piece",
+  year: "1999",
+  quality: "1080p",
+  edition: "Director's Cut",
+  source: "WEB-DL",
+  video_codec: "x265",
+  audio_codec: "AAC",
+  audio_channels: "2.0",
+  group: "SubsPlease",
+  ext: "mkv",
+  season: "1",
+  season_order: "1",
+  episode: "1",
+  absolute_episode: "1",
+  episode_title: "Romance Dawn",
+};
+
 function applyRenameTemplate(template: string, scopeId: ViewCategoryId): string | null {
   if (!template.trim()) return null;
   let result = "";
   let i = 0;
   const sampleValues =
-    scopeId === "series" ? RENAME_PREVIEW_SERIES_SAMPLE : RENAME_PREVIEW_MOVIE_SAMPLE;
+    scopeId === "movie"
+      ? RENAME_PREVIEW_MOVIE_SAMPLE
+      : scopeId === "anime"
+        ? RENAME_PREVIEW_ANIME_SAMPLE
+        : RENAME_PREVIEW_SERIES_SAMPLE;
   while (i < template.length) {
     if (template[i] === "{") {
       const closeIndex = template.indexOf("}", i + 1);
@@ -1075,6 +1097,7 @@ export function MediaContentView({
     mediaSettingsLoading: boolean;
     qualityProfiles: ParsedQualityProfile[];
     qualityProfileParseError: string;
+    globalQualityProfileId: string;
     categoryQualityProfileOverrides: Record<ViewCategoryId, string>;
     activeQualityScopeId: ViewCategoryId;
     setCategoryQualityProfileOverrides: React.Dispatch<
@@ -1187,6 +1210,7 @@ export function MediaContentView({
     mediaSettingsLoading,
     qualityProfiles,
     qualityProfileParseError,
+    globalQualityProfileId,
     categoryQualityProfileOverrides,
     activeQualityScopeId,
     setCategoryQualityProfileOverrides,
@@ -1820,7 +1844,7 @@ export function MediaContentView({
                               </TableCell>
                               <TableCell className="text-center align-middle">
                                 <RenderBooleanIcon
-                                  value={routing.enabled}
+                                  value={indexer.isEnabled && routing.enabled}
                                   label={`${t("settings.indexerRoutingEnabled")}: ${indexer.name}`}
                                 />
                               </TableCell>
@@ -1843,7 +1867,7 @@ export function MediaContentView({
                                     onClick={() =>
                                       handleIndexerEnabledChange(indexer.id, !routing.enabled)
                                     }
-                                    disabled={indexerRoutingLoading || indexerRoutingSaving}
+                                    disabled={indexerRoutingLoading || indexerRoutingSaving || !indexer.isEnabled}
                                     className={
                                       routing.enabled
                                         ? "border-red-700/70 bg-red-900/60 text-red-200 hover:bg-red-900/80 hover:text-red-100"
@@ -2104,8 +2128,10 @@ export function MediaContentView({
                 const columnCount = isMovieView ? 6 : 5;
                 const resolvedProfileName = (() => {
                   const overrideId = categoryQualityProfileOverrides[activeQualityScopeId];
-                  if (!overrideId || overrideId === qualityProfileInheritValue) return null;
-                  return qualityProfiles.find((p) => p.id === overrideId)?.name ?? null;
+                  const effectiveId = (!overrideId || overrideId === qualityProfileInheritValue)
+                    ? globalQualityProfileId
+                    : overrideId;
+                  return qualityProfiles.find((p) => p.id === effectiveId)?.name ?? null;
                 })();
 
                 return (

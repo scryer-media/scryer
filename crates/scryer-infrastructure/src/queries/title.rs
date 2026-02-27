@@ -943,9 +943,11 @@ pub(crate) async fn update_title_hydrated_metadata_query(
             .unwrap_or_default();
 
         for eid in &metadata.extra_external_ids {
-            if !existing.iter().any(|e| e.source == eid.source && e.value == eid.value) {
-                existing.push(eid.clone());
-            }
+            // Replace any existing entry with the same source so that
+            // re-hydration converges to a single ID per source (e.g. one
+            // "mal" entry instead of one per anime season).
+            existing.retain(|e| e.source != eid.source);
+            existing.push(eid.clone());
         }
 
         let merged_json = serde_json::to_string(&existing)

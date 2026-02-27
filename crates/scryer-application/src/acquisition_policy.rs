@@ -317,3 +317,7 @@ mod tests {
         assert_eq!(schedule.search_phase, "primary");
     }
 }
+
+#[cfg(test)]
+#[path = "acquisition_policy_tests.rs"]
+mod acquisition_policy_tests;

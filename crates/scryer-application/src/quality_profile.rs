@@ -1121,3 +1121,7 @@ fn resolve_archival_quality(
             .or_else(|| Some("1080P".to_string())),
     }
 }
+
+#[cfg(test)]
+#[path = "quality_profile_tests.rs"]
+mod quality_profile_tests;

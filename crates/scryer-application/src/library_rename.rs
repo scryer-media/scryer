@@ -267,3 +267,7 @@ fn collapse_separators(raw: &str) -> String {
         .trim_matches(|value: char| value.is_whitespace() || matches!(value, '.' | '-' | '_'))
         .to_string()
 }
+
+#[cfg(test)]
+#[path = "library_rename_tests.rs"]
+mod library_rename_tests;
