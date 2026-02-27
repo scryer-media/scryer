@@ -60,6 +60,30 @@ fn main() {
         .write_all(output.as_bytes())
         .expect("write embedded asset index");
     println!("cargo:rerun-if-env-changed=SCRYER_EMBED_UI_DIR");
+
+    // SMG build-time secrets (registration secret + CA cert)
+    let smg_secret = env::var("SCRYER_SMG_REGISTRATION_SECRET").unwrap_or_default();
+    let smg_ca = env::var("SCRYER_SMG_CA_CERT").unwrap_or_default();
+
+    let smg_path = Path::new(&out_dir).join("smg_build_assets.rs");
+    let smg_secret_val = if smg_secret.is_empty() {
+        "None".to_string()
+    } else {
+        format!("Some({:?})", smg_secret)
+    };
+    let smg_ca_val = if smg_ca.is_empty() {
+        "None".to_string()
+    } else {
+        format!("Some({:?})", smg_ca)
+    };
+    let smg_code = format!(
+        "#[allow(dead_code)]\npub const SMG_REGISTRATION_SECRET: Option<&str> = {};\n\
+         #[allow(dead_code)]\npub const SMG_CA_CERT: Option<&str> = {};\n",
+        smg_secret_val, smg_ca_val
+    );
+    fs::write(&smg_path, smg_code).expect("write smg_build_assets.rs");
+    println!("cargo:rerun-if-env-changed=SCRYER_SMG_REGISTRATION_SECRET");
+    println!("cargo:rerun-if-env-changed=SCRYER_SMG_CA_CERT");
 }
 
 fn collect_files(root: &Path) -> Result<Vec<(String, PathBuf)>, io::Error> {

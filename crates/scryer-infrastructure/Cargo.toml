@@ -17,5 +17,8 @@ chrono = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "zstd"] }
 p256 = { workspace = true }
 rand_core = { workspace = true }
+rcgen = "0.13"
 ring = "0.17"
 tracing = { workspace = true }
+uuid = { workspace = true }
+x509-parser = "0.16"

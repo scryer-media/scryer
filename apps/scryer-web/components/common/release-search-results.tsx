@@ -219,8 +219,8 @@ function SearchResultRow({
             <div className="bg-background/80 px-3 py-2">
               <p className="mb-1 text-xs font-semibold text-muted-foreground">{t("nzb.scoringLog")}</p>
               <div className="space-y-0.5">
-                {decision.scoringLog.map((entry, i) => (
-                  <div key={i} className="flex justify-between gap-4 font-mono text-xs">
+                {decision.scoringLog.map((entry) => (
+                  <div key={entry.code} className="flex justify-between gap-4 font-mono text-xs">
                     <span className="text-muted-foreground">{entry.code}</span>
                     <span className={entry.delta < 0 ? "text-red-400" : "text-emerald-600 dark:text-emerald-400"}>
                       {entry.delta > 0 ? "+" : ""}

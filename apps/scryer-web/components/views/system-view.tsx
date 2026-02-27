@@ -29,6 +29,40 @@ type SystemHealth = {
   recentEventPreview: string[];
 };
 
+type DataSource = {
+  nameKey: string;
+  descriptionKey: string;
+  href: string;
+};
+
+const DATA_SOURCES: DataSource[] = [
+  {
+    nameKey: "system.sourceTvdbName",
+    descriptionKey: "system.sourceTvdbDescription",
+    href: "https://www.thetvdb.com/",
+  },
+  {
+    nameKey: "system.sourceTmdbName",
+    descriptionKey: "system.sourceTmdbDescription",
+    href: "https://www.themoviedb.org/",
+  },
+  {
+    nameKey: "system.sourceJikanName",
+    descriptionKey: "system.sourceJikanDescription",
+    href: "https://jikan.moe/",
+  },
+  {
+    nameKey: "system.sourceMalName",
+    descriptionKey: "system.sourceMalDescription",
+    href: "https://myanimelist.net/",
+  },
+  {
+    nameKey: "system.sourcePlexAniBridgeName",
+    descriptionKey: "system.sourcePlexAniBridgeDescription",
+    href: "https://github.com/eliasbenb/PlexAniBridge-Mappings",
+  },
+];
+
 export function SystemView({
   state,
 }: {
@@ -81,6 +115,27 @@ export function SystemView({
             </ul>
           </div>
         )}
+        <Separator className="my-4" />
+        <div className="space-y-2">
+          <p className="text-sm font-medium">{t("system.sourcesTitle")}</p>
+          <p className="text-sm text-muted-foreground">{t("system.sourcesSupport")}</p>
+          <ul className="space-y-2 text-sm">
+            {DATA_SOURCES.map((source) => (
+              <li key={source.href} className="rounded-xl border border-border bg-card p-3">
+                <p className="font-medium">{t(source.nameKey)}</p>
+                <p className="text-xs text-muted-foreground">{t(source.descriptionKey)}</p>
+                <a
+                  href={source.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs font-medium text-primary hover:underline"
+                >
+                  {source.href}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
       </CardContent>
     </Card>
   );

@@ -128,7 +128,7 @@ type SeriesOverviewContainerProps = {
   onBackToList?: () => void;
 };
 
-export function SeriesOverviewContainer({
+export const SeriesOverviewContainer = React.memo(function SeriesOverviewContainer({
   titleId,
   t,
   setGlobalStatus,
@@ -521,4 +521,4 @@ export function SeriesOverviewContainer({
       )}
     </>
   );
-}
+});

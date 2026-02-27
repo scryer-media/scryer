@@ -588,8 +588,8 @@ export function MovieOverviewView({
               <Loader2 className="h-8 w-8 animate-spin text-emerald-500" />
               <p className="text-sm text-muted-foreground">Searching indexers for releases&hellip;</p>
               <div className="w-full space-y-2">
-                {[1, 2, 3].map((i) => (
-                  <div key={i} className="h-12 animate-pulse rounded-lg bg-muted" style={{ animationDelay: `${i * 150}ms` }} />
+                {[1, 2, 3].map((n) => (
+                  <div key={n} className="h-12 animate-pulse rounded-lg bg-muted" style={{ animationDelay: `${n * 150}ms` }} />
                 ))}
               </div>
             </div>

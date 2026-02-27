@@ -1,5 +1,5 @@
 
-import { useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { useClient } from "urql";
 import { SystemView } from "@/components/views/system-view";
 import { systemHealthQuery } from "@/lib/graphql/queries";
@@ -10,7 +10,7 @@ type SystemContainerProps = {
   setGlobalStatus: (status: string) => void;
 };
 
-export function SystemContainer({
+export const SystemContainer = memo(function SystemContainer({
   t,
   setGlobalStatus,
 }: SystemContainerProps) {
@@ -46,4 +46,4 @@ export function SystemContainer({
       }}
     />
   );
-}
+});

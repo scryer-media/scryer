@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { useClient, useMutation } from "urql";
 import { WantedView } from "@/components/views/wanted-view";
 import { wantedItemsQuery, releaseDecisionsQuery } from "@/lib/graphql/queries";
@@ -16,7 +16,7 @@ type WantedContainerProps = {
   setGlobalStatus: (status: string) => void;
 };
 
-export function WantedContainer({ t, setGlobalStatus }: WantedContainerProps) {
+export const WantedContainer = memo(function WantedContainer({ t, setGlobalStatus }: WantedContainerProps) {
   const client = useClient();
   const [items, setItems] = useState<WantedItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -159,4 +159,4 @@ export function WantedContainer({ t, setGlobalStatus }: WantedContainerProps) {
       }}
     />
   );
-}
+});
