@@ -60,7 +60,7 @@ function renderMetadataResultKey(section: string, tvdbId: string, name: string, 
   return `${section}-${tvdbId}-${name}-${year ?? ""}`;
 }
 
-export function RootHeader({
+export const RootHeader = React.memo(function RootHeader({
   t,
   globalSearch,
   onGlobalSearchChange,
@@ -686,4 +686,4 @@ export function RootHeader({
       ) : null}
     </>
   );
-}
+});

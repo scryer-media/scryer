@@ -1,4 +1,5 @@
 
+import { memo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SettingsOverviewContainer } from "@/components/containers/settings/settings-overview-container";
 import { SettingsUsersContainer } from "@/components/containers/settings/settings-users-container";
@@ -22,7 +23,7 @@ type SettingsContainerProps = {
   onSelectLanguage: (code: string) => void;
 };
 
-export function SettingsContainer({
+export const SettingsContainer = memo(function SettingsContainer({
   settingsSection,
   t,
   setGlobalStatus,
@@ -101,4 +102,4 @@ export function SettingsContainer({
       </CardContent>
     </Card>
   );
-}
+});

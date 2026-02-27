@@ -20,11 +20,12 @@ import { toProfileOptions } from "@/lib/utils/quality-profiles";
 import { useDownloadClientRouting } from "@/lib/hooks/use-download-client-routing";
 import { useIndexerRouting } from "@/lib/hooks/use-indexer-routing";
 import { useMediaSettings } from "@/lib/hooks/use-media-settings";
+import { useQueueFormState } from "@/lib/hooks/use-queue-form-state";
+import { useTitleManagementState } from "@/lib/hooks/use-title-management-state";
 import type {
   Release,
   Facet,
   TitleRecord,
-  LibraryScanSummary,
 } from "@/lib/types";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
@@ -59,7 +60,7 @@ type MediaContentContainerProps = {
   onOpenOverview: (targetView: ViewId, titleId: string) => void;
 };
 
-export function MediaContentContainer({
+export const MediaContentContainer = React.memo(function MediaContentContainer({
   t,
   view,
   contentSettingsSection,
@@ -81,25 +82,26 @@ export function MediaContentContainer({
   const activeFacet = viewToFacet[view as keyof typeof viewToFacet] ?? "movie";
   const activeQualityScopeId = CATEGORY_SCOPE_MAP[view as keyof typeof CATEGORY_SCOPE_MAP] ?? "movie";
 
-  const [titleNameForQueue, setTitleNameForQueue] = React.useState("");
-  const [monitoredForQueue, setMonitoredForQueue] = React.useState(true);
-  const [seasonFoldersForQueue, setSeasonFoldersForQueue] = React.useState(true);
-  const [monitorSpecialsForQueue, setMonitorSpecialsForQueue] = React.useState(false);
-  const [interSeasonMoviesForQueue, setInterSeasonMoviesForQueue] = React.useState(true);
-  const [preferredSubGroupForQueue, setPreferredSubGroupForQueue] = React.useState("");
-  const [titleFilter, setTitleFilter] = React.useState("");
-  const [monitoredTitles, setMonitoredTitles] = React.useState<TitleRecord[]>([]);
-  const [titleLoading, setTitleLoading] = React.useState(false);
-  const [titleStatus, setTitleStatus] = React.useState("");
-  const [titleToDelete, setTitleToDelete] = React.useState<TitleRecord | null>(null);
-  const [deleteFilesOnDisk, setDeleteFilesOnDisk] = React.useState(false);
-  const [deleteTitleLoadingById, setDeleteTitleLoadingById] = React.useState<
-    Record<string, boolean>
-  >({});
-  const [libraryScanLoading, setLibraryScanLoading] = React.useState(false);
-  const [libraryScanSummary, setLibraryScanSummary] = React.useState<LibraryScanSummary | null>(
-    null,
-  );
+  const {
+    titleNameForQueue, setTitleNameForQueue,
+    monitoredForQueue, setMonitoredForQueue,
+    seasonFoldersForQueue, setSeasonFoldersForQueue,
+    monitorSpecialsForQueue, setMonitorSpecialsForQueue,
+    interSeasonMoviesForQueue, setInterSeasonMoviesForQueue,
+    preferredSubGroupForQueue, setPreferredSubGroupForQueue,
+  } = useQueueFormState();
+
+  const {
+    titleFilter, setTitleFilter,
+    monitoredTitles, setMonitoredTitles,
+    titleLoading, setTitleLoading,
+    titleStatus, setTitleStatus,
+    titleToDelete, setTitleToDelete,
+    deleteFilesOnDisk, setDeleteFilesOnDisk,
+    deleteTitleLoadingById, setDeleteTitleLoadingById,
+    libraryScanLoading, setLibraryScanLoading,
+    libraryScanSummary, setLibraryScanSummary,
+  } = useTitleManagementState();
 
   const {
     moviesPath,
@@ -687,4 +689,4 @@ export function MediaContentContainer({
       </ConfirmDialog>
     </>
   );
-}
+});

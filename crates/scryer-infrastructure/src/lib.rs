@@ -12,6 +12,7 @@ mod sqlite_services;
 mod types;
 pub mod encryption;
 pub mod jwt_keys;
+pub mod smg_enrollment;
 
 
 #[cfg(test)]
@@ -29,7 +30,7 @@ pub use newznab_rate_limiter::{
 };
 pub use library_renamer::FileSystemLibraryRenamer;
 pub use library_scanner::FileSystemLibraryScanner;
-pub use metadata_gateway::MetadataGatewayClient;
+pub use metadata_gateway::{MetadataGatewayClient, SmgEnrollmentConfig};
 pub use migrations::{list_embedded_migration_keys, list_embedded_migrations};
 pub use encryption::EncryptionKey;
 pub use sqlite_services::SqliteServices;

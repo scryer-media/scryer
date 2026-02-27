@@ -21,8 +21,8 @@ use tokio_util::sync::CancellationToken;
 use scryer_infrastructure::{
     FileSystemLibraryRenamer, FileSystemLibraryScanner, MetadataGatewayClient, MigrationMode,
     MultiIndexerSearchClient, NzbGeekSearchClient, NzbgetDownloadClient,
-    PrioritizedDownloadClientRouter, SqliteServices, NZBGEEK_BASE_BACKOFF_SECONDS,
-    NZBGEEK_MAX_BACKOFF_SECONDS, NZBGEEK_MIN_REQUEST_INTERVAL_MS,
+    PrioritizedDownloadClientRouter, SmgEnrollmentConfig, SqliteServices,
+    NZBGEEK_BASE_BACKOFF_SECONDS, NZBGEEK_MAX_BACKOFF_SECONDS, NZBGEEK_MIN_REQUEST_INTERVAL_MS,
 };
 use scryer_interface::build_schema;
 use tokio::net::TcpListener;
@@ -43,6 +43,8 @@ use settings_bootstrap::{
     MOVIES_PATH_KEY, SERIES_PATH_KEY,
 };
 use ui_assets::{ui_asset_mode, ui_fallback, UiAssetMode};
+
+include!(concat!(env!("OUT_DIR"), "/smg_build_assets.rs"));
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -237,9 +239,22 @@ async fn main() {
     let metadata_gateway_insecure = std::env::var("SCRYER_METADATA_GATEWAY_INSECURE")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
+    let smg_registration_secret = SMG_REGISTRATION_SECRET
+        .map(String::from)
+        .or_else(|| std::env::var("SCRYER_SMG_REGISTRATION_SECRET").ok())
+        .filter(|s| !s.is_empty());
+    let smg_ca_cert = SMG_CA_CERT
+        .map(String::from)
+        .or_else(|| std::env::var("SCRYER_SMG_CA_CERT").ok())
+        .filter(|s| !s.is_empty());
     let metadata_gateway = Arc::new(MetadataGatewayClient::new(
         metadata_gateway_url,
         metadata_gateway_insecure,
+        db.clone(),
+        SmgEnrollmentConfig {
+            registration_secret: smg_registration_secret,
+            ca_cert: smg_ca_cert,
+        },
     ));
     let library_scanner = Arc::new(FileSystemLibraryScanner::new());
     let library_renamer = Arc::new(FileSystemLibraryRenamer::new());

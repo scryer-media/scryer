@@ -122,7 +122,7 @@ type MovieOverviewContainerProps = {
   onBackToList?: () => void;
 };
 
-export function MovieOverviewContainer({
+export const MovieOverviewContainer = React.memo(function MovieOverviewContainer({
   titleId,
   t,
   setGlobalStatus,
@@ -444,4 +444,4 @@ export function MovieOverviewContainer({
       blocklistEntries={blocklistEntries}
     />
   );
-}
+});

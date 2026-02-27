@@ -11,6 +11,8 @@ use serde::Deserialize;
 use serde_json::json;
 use tracing::{debug, warn};
 
+use crate::smg_enrollment;
+
 const SEARCH_TVDB_QUERY: &str = r#"
   query SearchTvdb($query: String!, $type: String, $limit: Int) {
     searchTvdb(query: $query, type: $type, limit: $limit) {
@@ -119,18 +121,31 @@ fn apq_hash(query: &str) -> String {
     sha256_hex(query)
 }
 
-#[derive(Clone)]
+/// Configuration for SMG enrollment (mTLS client certificates).
+pub struct SmgEnrollmentConfig {
+    pub registration_secret: Option<String>,
+    pub ca_cert: Option<String>,
+}
+
 pub struct MetadataGatewayClient {
     http: Client,
     endpoint: String,
+    registration_url: String,
+    enrollment_config: SmgEnrollmentConfig,
+    db: crate::SqliteServices,
+    mtls_client: tokio::sync::RwLock<Option<Client>>,
     search_hash: String,
     movie_hash: String,
     series_hash: String,
 }
 
 impl MetadataGatewayClient {
-    // TODO: Remove `accept_invalid_certs` once the metadata gateway has proper TLS certificates.
-    pub fn new(endpoint: String, accept_invalid_certs: bool) -> Self {
+    pub fn new(
+        endpoint: String,
+        accept_invalid_certs: bool,
+        db: crate::SqliteServices,
+        enrollment_config: SmgEnrollmentConfig,
+    ) -> Self {
         if accept_invalid_certs {
             warn!("metadata gateway client: TLS certificate verification DISABLED");
         }
@@ -139,9 +154,17 @@ impl MetadataGatewayClient {
         let movie_hash = apq_hash(GET_MOVIE_QUERY);
         let series_hash = apq_hash(GET_SERIES_QUERY);
 
+        // Derive registration URL from GraphQL endpoint
+        let registration_url = if endpoint.ends_with("/graphql") {
+            format!("{}/api/register", &endpoint[..endpoint.len() - "/graphql".len()])
+        } else {
+            format!("{}/api/register", endpoint.trim_end_matches('/'))
+        };
+
         debug!(
             endpoint = %endpoint,
             accept_invalid_certs,
+            has_registration_secret = enrollment_config.registration_secret.is_some(),
             %search_hash,
             %movie_hash,
             %series_hash,
@@ -155,10 +178,72 @@ impl MetadataGatewayClient {
                 .build()
                 .expect("failed to build HTTP client"),
             endpoint,
+            registration_url,
+            enrollment_config,
+            db,
+            mtls_client: tokio::sync::RwLock::new(None),
             search_hash,
             movie_hash,
             series_hash,
         }
+    }
+
+    /// Get the best available HTTP client (mTLS if enrolled, plain otherwise).
+    ///
+    /// Enrollment happens lazily on first call when a registration secret is configured.
+    /// On enrollment failure, falls back to the plain HTTP client.
+    async fn get_http_client(&self) -> Client {
+        let secret = match &self.enrollment_config.registration_secret {
+            Some(s) => s,
+            None => return self.http.clone(),
+        };
+
+        // Fast path: already have an mTLS client cached
+        {
+            let guard = self.mtls_client.read().await;
+            if let Some(client) = guard.as_ref() {
+                return client.clone();
+            }
+        }
+
+        // Slow path: need to enroll and build mTLS client
+        let mut guard = self.mtls_client.write().await;
+        // Double-check after acquiring write lock
+        if let Some(client) = guard.as_ref() {
+            return client.clone();
+        }
+
+        match self.try_build_mtls_client(secret).await {
+            Ok(client) => {
+                let result = client.clone();
+                *guard = Some(client);
+                result
+            }
+            Err(e) => {
+                warn!(error = %e, "SMG enrollment failed, using plain HTTP");
+                self.http.clone()
+            }
+        }
+    }
+
+    async fn try_build_mtls_client(&self, registration_secret: &str) -> Result<Client, String> {
+        let state = smg_enrollment::ensure_enrolled(
+            &self.db,
+            &self.registration_url,
+            registration_secret,
+            self.enrollment_config.ca_cert.as_deref(),
+        )
+        .await?;
+
+        let identity = smg_enrollment::build_mtls_identity(&state)?;
+        let ca_cert = smg_enrollment::build_ca_certificate(&state)?;
+
+        Client::builder()
+            .timeout(Duration::from_secs(10))
+            .identity(identity)
+            .add_root_certificate(ca_cert)
+            .build()
+            .map_err(|e| format!("failed to build mTLS client: {e}"))
     }
 
     /// Execute a GraphQL query using APQ (Automatic Persisted Queries).
@@ -187,8 +272,8 @@ impl MetadataGatewayClient {
         let extensions_str = serde_json::to_string(&extensions)
             .map_err(|e| AppError::Repository(format!("failed to serialize extensions: {e}")))?;
 
-        let get_result = self
-            .http
+        let client = self.get_http_client().await;
+        let get_result = client
             .get(&self.endpoint)
             .query(&[("extensions", &extensions_str), ("variables", &variables_str)])
             .send()
@@ -297,8 +382,8 @@ impl MetadataGatewayClient {
         &self,
         payload: &serde_json::Value,
     ) -> AppResult<reqwest::Response> {
-        let result = self
-            .http
+        let client = self.get_http_client().await;
+        let result = client
             .post(&self.endpoint)
             .json(payload)
             .send()
@@ -313,7 +398,7 @@ impl MetadataGatewayClient {
                     "metadata gateway returned server error, retrying in 1s"
                 );
                 tokio::time::sleep(Duration::from_secs(1)).await;
-                self.http
+                client
                     .post(&self.endpoint)
                     .json(payload)
                     .send()
@@ -326,7 +411,7 @@ impl MetadataGatewayClient {
                     "metadata gateway request failed (transient), retrying in 1s"
                 );
                 tokio::time::sleep(Duration::from_secs(1)).await;
-                self.http
+                client
                     .post(&self.endpoint)
                     .json(payload)
                     .send()

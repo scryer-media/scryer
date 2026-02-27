@@ -106,7 +106,7 @@ function getMediaSectionChildren(
   ];
 }
 
-export function RootSidebar({
+export const RootSidebar = React.memo(function RootSidebar({
   t,
   topNav,
   view,
@@ -237,4 +237,4 @@ export function RootSidebar({
       </SidebarInset>
     </SidebarProvider>
   );
-}
+});

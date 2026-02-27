@@ -1,5 +1,5 @@
 
-import { useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { useClient, useMutation } from "urql";
 
 import { ActivityView } from "@/components/views/activity-view";
@@ -22,7 +22,7 @@ type ActivityContainerProps = {
 const HISTORY_STATES = new Set(["completed", "failed", "import_pending", "importpending"]);
 type QueueMode = "scryer" | "all" | "history";
 
-export function ActivityContainer({ t, setGlobalStatus }: ActivityContainerProps) {
+export const ActivityContainer = memo(function ActivityContainer({ t, setGlobalStatus }: ActivityContainerProps) {
   const client = useClient();
   const [, executeTriggerImport] = useMutation(triggerImportMutation);
   const [, executePauseDownload] = useMutation(pauseDownloadMutation);
@@ -151,4 +151,4 @@ export function ActivityContainer({ t, setGlobalStatus }: ActivityContainerProps
       }}
     />
   );
-}
+});

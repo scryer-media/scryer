@@ -56,6 +56,11 @@ import type {
   TitleReleaseBlocklistEntry,
 } from "@/components/containers/series-overview-container";
 import type { DownloadQueueItem } from "@/lib/types/download-queue";
+import {
+  episodePanelReducer,
+  initialEpisodePanelState,
+  type EpisodePanelTab,
+} from "@/components/views/series-overview/episode-panel-reducer";
 
 function formatDate(iso: string | null | undefined) {
   if (!iso) {
@@ -82,6 +87,13 @@ function formatRuntimeFromMinutes(runtimeMinutes: number | null | undefined) {
     return `${minutes}m`;
   }
   return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+}
+
+function formatRuntimeFromSeconds(runtimeSeconds: number | null | undefined) {
+  if (!runtimeSeconds || runtimeSeconds <= 0) {
+    return null;
+  }
+  return formatRuntimeFromMinutes(Math.floor(runtimeSeconds / 60));
 }
 
 function getImdbUrl(imdbId: string | null | undefined) {
@@ -134,8 +146,6 @@ function formatFileSize(bytes: number) {
   const val = bytes / Math.pow(1024, i);
   return `${val.toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
 }
-
-type EpisodePanelTab = "details" | "search" | "blocklist";
 
 function parseSeasonSortValue(collection: TitleCollection) {
   const key = collection.narrativeOrder ?? collection.collectionIndex ?? "";
@@ -578,28 +588,13 @@ export function SeriesOverviewView({
     });
   }, []);
 
-  const [expandedEpisodeRows, setExpandedEpisodeRows] = React.useState<Set<string>>(new Set());
-  const [episodeActiveTab, setEpisodeActiveTab] = React.useState<Record<string, EpisodePanelTab>>({});
-  const [searchResultsByEpisode, setSearchResultsByEpisode] = React.useState<Record<string, Release[]>>({});
-  const [searchLoadingByEpisode, setSearchLoadingByEpisode] = React.useState<Record<string, boolean>>({});
-  const [autoSearchLoadingByEpisode, setAutoSearchLoadingByEpisode] = React.useState<
-    Record<string, boolean>
-  >({});
-  const [interstitialMovieMetadataByCollection, setInterstitialMovieMetadataByCollection] = React.useState<
-    Record<string, MetadataTvdbSearchItem | null>
-  >({});
-  const [interstitialMovieMetadataLoadedByCollection, setInterstitialMovieMetadataLoadedByCollection] = React.useState<
-    Record<string, boolean>
-  >({});
-  const [interstitialMovieMetadataLoadingByCollection, setInterstitialMovieMetadataLoadingByCollection] = React.useState<
-    Record<string, boolean>
-  >({});
+  const [episodePanel, dispatchEpisodePanel] = React.useReducer(episodePanelReducer, initialEpisodePanelState);
 
   const handleRunEpisodeSearch = React.useCallback(
     (episode: CollectionEpisode) => {
       if (!title) return;
       const episodeId = episode.id;
-      setSearchLoadingByEpisode((prev) => ({ ...prev, [episodeId]: true }));
+      dispatchEpisodePanel({ type: "SET_SEARCH_LOADING", episodeId, loading: true });
 
       const tvdbId =
         title.externalIds
@@ -621,23 +616,17 @@ export function SeriesOverviewView({
       }).toPromise()
         .then(({ data, error: queryError }) => {
           if (queryError) throw queryError;
-          setSearchResultsByEpisode((prev) => ({
-            ...prev,
-            [episodeId]: data.searchIndexersEpisode ?? [],
-          }));
+          dispatchEpisodePanel({
+            type: "SET_SEARCH_RESULTS",
+            episodeId,
+            results: data.searchIndexersEpisode ?? [],
+          });
         })
         .catch(() => {
-          setSearchResultsByEpisode((prev) => ({
-            ...prev,
-            [episodeId]: [],
-          }));
+          dispatchEpisodePanel({ type: "SET_SEARCH_RESULTS", episodeId, results: [] });
         })
         .finally(() => {
-          setSearchLoadingByEpisode((prev) => {
-            const next = { ...prev };
-            delete next[episodeId];
-            return next;
-          });
+          dispatchEpisodePanel({ type: "SET_SEARCH_LOADING", episodeId, loading: false });
         });
     },
     [client, title, collections],
@@ -646,54 +635,50 @@ export function SeriesOverviewView({
   const handleToggleEpisodeSearch = React.useCallback(
     (episode: CollectionEpisode) => {
       const episodeId = episode.id;
-      const isOpen = expandedEpisodeRows.has(episodeId);
-      const currentTab = episodeActiveTab[episodeId] ?? "details";
+      const isOpen = episodePanel.expandedEpisodeRows.has(episodeId);
+      const currentTab = episodePanel.episodeActiveTab[episodeId] ?? "details";
 
       if (isOpen && currentTab === "search") {
-        setExpandedEpisodeRows((prev) => {
-          const next = new Set(prev);
-          next.delete(episodeId);
-          return next;
-        });
+        dispatchEpisodePanel({ type: "TOGGLE_EPISODE_ROW", episodeId });
       } else {
-        setExpandedEpisodeRows((prev) => new Set(prev).add(episodeId));
-        setEpisodeActiveTab((prev) => ({ ...prev, [episodeId]: "search" }));
-        if (!Object.prototype.hasOwnProperty.call(searchResultsByEpisode, episodeId)) {
+        if (!isOpen) {
+          dispatchEpisodePanel({ type: "TOGGLE_EPISODE_ROW", episodeId });
+        }
+        dispatchEpisodePanel({ type: "SET_EPISODE_TAB", episodeId, tab: "search" });
+        if (!Object.prototype.hasOwnProperty.call(episodePanel.searchResultsByEpisode, episodeId)) {
           handleRunEpisodeSearch(episode);
         }
       }
     },
-    [expandedEpisodeRows, episodeActiveTab, handleRunEpisodeSearch, searchResultsByEpisode],
+    [episodePanel.expandedEpisodeRows, episodePanel.episodeActiveTab, handleRunEpisodeSearch, episodePanel.searchResultsByEpisode],
   );
 
   const handleToggleEpisodeDetails = React.useCallback(
     (episode: CollectionEpisode) => {
       const episodeId = episode.id;
-      const isOpen = expandedEpisodeRows.has(episodeId);
-      const currentTab = episodeActiveTab[episodeId] ?? "details";
+      const isOpen = episodePanel.expandedEpisodeRows.has(episodeId);
+      const currentTab = episodePanel.episodeActiveTab[episodeId] ?? "details";
 
       if (isOpen && currentTab === "details") {
-        setExpandedEpisodeRows((prev) => {
-          const next = new Set(prev);
-          next.delete(episodeId);
-          return next;
-        });
+        dispatchEpisodePanel({ type: "TOGGLE_EPISODE_ROW", episodeId });
       } else {
-        setExpandedEpisodeRows((prev) => new Set(prev).add(episodeId));
-        setEpisodeActiveTab((prev) => ({ ...prev, [episodeId]: "details" }));
+        if (!isOpen) {
+          dispatchEpisodePanel({ type: "TOGGLE_EPISODE_ROW", episodeId });
+        }
+        dispatchEpisodePanel({ type: "SET_EPISODE_TAB", episodeId, tab: "details" });
       }
     },
-    [expandedEpisodeRows, episodeActiveTab],
+    [episodePanel.expandedEpisodeRows, episodePanel.episodeActiveTab],
   );
 
   const handleEpisodeTabChange = React.useCallback(
     (episodeId: string, tab: EpisodePanelTab, episode: CollectionEpisode) => {
-      setEpisodeActiveTab((prev) => ({ ...prev, [episodeId]: tab }));
-      if (tab === "search" && !Object.prototype.hasOwnProperty.call(searchResultsByEpisode, episodeId)) {
+      dispatchEpisodePanel({ type: "SET_EPISODE_TAB", episodeId, tab });
+      if (tab === "search" && !Object.prototype.hasOwnProperty.call(episodePanel.searchResultsByEpisode, episodeId)) {
         handleRunEpisodeSearch(episode);
       }
     },
-    [handleRunEpisodeSearch, searchResultsByEpisode],
+    [handleRunEpisodeSearch, episodePanel.searchResultsByEpisode],
   );
 
   const handleQueueFromEpisodeSearch = React.useCallback(
@@ -735,17 +720,13 @@ export function SeriesOverviewView({
     (episode: CollectionEpisode) => {
       if (!onAutoSearchEpisode) return;
       const episodeId = episode.id;
-      setAutoSearchLoadingByEpisode((prev) => ({ ...prev, [episodeId]: true }));
+      dispatchEpisodePanel({ type: "SET_AUTO_SEARCH_LOADING", episodeId, loading: true });
       Promise.resolve(onAutoSearchEpisode(episode))
         .catch((error: unknown) => {
           setGlobalStatus(error instanceof Error ? error.message : t("status.queueFailed"));
         })
         .finally(() => {
-          setAutoSearchLoadingByEpisode((prev) => {
-            const next = { ...prev };
-            delete next[episodeId];
-            return next;
-          });
+          dispatchEpisodePanel({ type: "SET_AUTO_SEARCH_LOADING", episodeId, loading: false });
         });
     },
     [onAutoSearchEpisode, setGlobalStatus, t],
@@ -753,8 +734,8 @@ export function SeriesOverviewView({
 
   const handleLoadInterstitialMovieMetadata = React.useCallback((collectionId: string, candidates: string[]) => {
     if (
-      interstitialMovieMetadataLoadedByCollection[collectionId] ||
-      interstitialMovieMetadataLoadingByCollection[collectionId]
+      episodePanel.interstitialMovieMetadataLoadedByCollection[collectionId] ||
+      episodePanel.interstitialMovieMetadataLoadingByCollection[collectionId]
     ) {
       return;
     }
@@ -771,12 +752,12 @@ export function SeriesOverviewView({
     }
     const searchQuery = searchCandidates[0];
     if (!searchQuery) {
-      setInterstitialMovieMetadataLoadedByCollection((prev) => ({ ...prev, [collectionId]: true }));
-      setInterstitialMovieMetadataByCollection((prev) => ({ ...prev, [collectionId]: null }));
+      dispatchEpisodePanel({ type: "SET_INTERSTITIAL_LOADED", collectionId });
+      dispatchEpisodePanel({ type: "SET_INTERSTITIAL_METADATA", collectionId, metadata: null });
       return;
     }
 
-    setInterstitialMovieMetadataLoadingByCollection((prev) => ({ ...prev, [collectionId]: true }));
+    dispatchEpisodePanel({ type: "SET_INTERSTITIAL_LOADING", collectionId, loading: true });
     const metadataLanguage = title?.metadataLanguage?.trim() || "eng";
     const query = searchQuery;
 
@@ -793,20 +774,16 @@ export function SeriesOverviewView({
           throw result.error;
         }
         const found = result.data?.searchTvdb?.results?.[0] ?? null;
-        setInterstitialMovieMetadataByCollection((prev) => ({ ...prev, [collectionId]: found }));
+        dispatchEpisodePanel({ type: "SET_INTERSTITIAL_METADATA", collectionId, metadata: found });
       })
       .catch(() => {
-        setInterstitialMovieMetadataByCollection((prev) => ({ ...prev, [collectionId]: null }));
+        dispatchEpisodePanel({ type: "SET_INTERSTITIAL_METADATA", collectionId, metadata: null });
       })
       .finally(() => {
-        setInterstitialMovieMetadataLoadingByCollection((prev) => {
-          const next = { ...prev };
-          delete next[collectionId];
-          return next;
-        });
-        setInterstitialMovieMetadataLoadedByCollection((prev) => ({ ...prev, [collectionId]: true }));
+        dispatchEpisodePanel({ type: "SET_INTERSTITIAL_LOADING", collectionId, loading: false });
+        dispatchEpisodePanel({ type: "SET_INTERSTITIAL_LOADED", collectionId });
       });
-  }, [title, interstitialMovieMetadataLoadedByCollection, interstitialMovieMetadataLoadingByCollection]);
+  }, [title, episodePanel.interstitialMovieMetadataLoadedByCollection, episodePanel.interstitialMovieMetadataLoadingByCollection]);
 
   if (loading) {
     return (
@@ -836,8 +813,6 @@ export function SeriesOverviewView({
       </div>
     );
   }
-
-  const runtime = formatRuntimeFromMinutes(title.runtimeMinutes);
 
   return (
     <div className="space-y-4">
@@ -892,12 +867,6 @@ export function SeriesOverviewView({
                 {title.contentStatus ? (
                   <span className="inline-flex items-center rounded-full border border-border px-2.5 py-0.5 text-xs font-medium capitalize text-muted-foreground">
                     {title.contentStatus}
-                  </span>
-                ) : null}
-                {runtime ? (
-                  <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                    <Clock3 className="h-3.5 w-3.5" />
-                    {runtime}
                   </span>
                 ) : null}
                 {title.network ? (
@@ -994,16 +963,16 @@ export function SeriesOverviewView({
                   expanded={expandedKeys.has(key)}
                   onToggle={() => toggleKey(key)}
                   onLoadInterstitialMovieMetadata={handleLoadInterstitialMovieMetadata}
-                  interstitialMovieMetadata={interstitialMovieMetadataByCollection[collection.id] ?? null}
-                  interstitialMovieMetadataLoaded={interstitialMovieMetadataLoadedByCollection[collection.id] ?? false}
-                  interstitialMovieMetadataLoading={interstitialMovieMetadataLoadingByCollection[collection.id] ?? false}
-                  expandedEpisodeRows={expandedEpisodeRows}
-                  episodeActiveTab={episodeActiveTab}
+                  interstitialMovieMetadata={episodePanel.interstitialMovieMetadataByCollection[collection.id] ?? null}
+                  interstitialMovieMetadataLoaded={episodePanel.interstitialMovieMetadataLoadedByCollection[collection.id] ?? false}
+                  interstitialMovieMetadataLoading={episodePanel.interstitialMovieMetadataLoadingByCollection[collection.id] ?? false}
+                  expandedEpisodeRows={episodePanel.expandedEpisodeRows}
+                  episodeActiveTab={episodePanel.episodeActiveTab}
                   mediaFilesByEpisode={mediaFilesByEpisode}
                   releaseBlocklistEntries={releaseBlocklistEntries}
-                  searchResultsByEpisode={searchResultsByEpisode}
-                  searchLoadingByEpisode={searchLoadingByEpisode}
-                  autoSearchLoadingByEpisode={autoSearchLoadingByEpisode}
+                  searchResultsByEpisode={episodePanel.searchResultsByEpisode}
+                  searchLoadingByEpisode={episodePanel.searchLoadingByEpisode}
+                  autoSearchLoadingByEpisode={episodePanel.autoSearchLoadingByEpisode}
                   onToggleEpisodeSearch={handleToggleEpisodeSearch}
                   onToggleEpisodeDetails={handleToggleEpisodeDetails}
                   onEpisodeTabChange={handleEpisodeTabChange}
@@ -1252,7 +1221,8 @@ function SeasonSection({
                 const episodeResults = searchResultsByEpisode[episode.id] ?? [];
                 const episodeLoading = searchLoadingByEpisode[episode.id] === true;
                 const autoSearching = autoSearchLoadingByEpisode[episode.id] === true;
-                const episodeFiles = mediaFilesByEpisode[episode.id] ?? [];
+                      const episodeFiles = mediaFilesByEpisode[episode.id] ?? [];
+                      const episodeRuntime = formatRuntimeFromSeconds(episode.durationSeconds);
 
                 return (
                   <React.Fragment key={episode.id}>
@@ -1326,6 +1296,12 @@ function SeasonSection({
                             </span>
                           ) : null}
                         </div>
+                        {episodeRuntime ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+                            <Clock3 className="h-3 w-3" />
+                            {episodeRuntime}
+                          </span>
+                        ) : null}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         <span className="inline-flex items-center gap-1">

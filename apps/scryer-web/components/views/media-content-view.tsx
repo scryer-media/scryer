@@ -1,10 +1,9 @@
 
 import * as React from "react";
-import { createPortal } from "react-dom";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { Button } from "@/components/ui/button";
-import { RenderBooleanIcon } from "@/components/common/boolean-icon";
 import { InfoHelp } from "@/components/common/info-help";
-import { ChevronDown, ChevronUp, Loader2, Power, PowerOff, Search, Trash2, Zap } from "lucide-react";
+import { Loader2, Search, Trash2, Zap } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -18,7 +17,6 @@ import {
 } from "@/components/ui/hover-card";
 import type { ViewId } from "@/components/root/types";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
-import { getDefaultIndexerRouting } from "@/lib/constants/indexers";
 import type {
   DownloadClientRecord,
   IndexerCategoryRoutingSettings,
@@ -36,6 +34,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import type { ViewCategoryId } from "./media-content/indexer-category-picker";
+import { MediaLibrarySettingsPanel } from "./media-content/media-library-settings-panel";
+import { IndexerRoutingPanel } from "./media-content/indexer-routing-panel";
+import { DownloadClientRoutingPanel } from "./media-content/download-client-routing-panel";
 
 type Translate = (
   key: string,
@@ -44,469 +46,16 @@ type Translate = (
 
 type Facet = "movie" | "tv" | "anime";
 type ContentSettingsSection = "overview" | "settings";
-type ViewCategoryId = "movie" | "series" | "anime";
 
 type ParsedQualityProfile = {
   id: string;
   name: string;
 };
 
-type IndexerCategoryDefinition = {
-  code: string;
-  labelKey: keyof typeof indexerCategoryLabelMap;
-};
-
-type IndexerCategoryGroupDefinition = {
-  labelKey: keyof typeof indexerCategoryGroupLabelMap;
-  code: string;
-  categories: IndexerCategoryDefinition[];
-};
-
-function parseTagsInput(raw: string): string[] {
-  return raw
-    .split(",")
-    .map((value) => value.trim())
-    .map((value) => (value.length === 0 ? "" : value));
-}
-
-function formatTagsInput(tags: string[]): string {
-  return tags.join(", ");
-}
-
-function sortCategoryCodes(values: string[]): string[] {
-  return [...values].sort((left, right) => {
-    const leftNumber = Number.parseInt(left, 10);
-    const rightNumber = Number.parseInt(right, 10);
-
-    if (Number.isNaN(leftNumber) || Number.isNaN(rightNumber)) {
-      if (Number.isNaN(leftNumber) && Number.isNaN(rightNumber)) {
-        return left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
-      }
-      return Number.isNaN(leftNumber) ? 1 : -1;
-    }
-
-    return leftNumber === rightNumber
-      ? left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" })
-      : leftNumber - rightNumber;
-  });
-}
-
-const indexerCategoryGroupLabelMap = {
-  tv: "settings.indexerCategoryTv",
-  movies: "settings.indexerCategoryMovies",
-  other: "settings.indexerCategoryOther",
-  foreign: "settings.indexerCategoryForeign",
-  sd: "settings.indexerCategorySd",
-  hd: "settings.indexerCategoryHd",
-  uhd: "settings.indexerCategoryUhd",
-  anime: "settings.indexerCategoryAnime",
-  documentary: "settings.indexerCategoryDocumentary",
-  sport: "settings.indexerCategorySport",
-  bluRay: "settings.indexerCategoryBluRay",
-  threeD: "settings.indexerCategoryThreeD",
-  misc: "settings.indexerCategoryMisc",
-} as const;
-
-const indexerCategoryLabelMap: Record<string, string> = {
-  "5020": "settings.indexerCategoryForeign",
-  "5030": "settings.indexerCategorySd",
-  "5040": "settings.indexerCategoryHd",
-  "5045": "settings.indexerCategoryUhd",
-  "5050": "settings.indexerCategoryOther",
-  "5060": "settings.indexerCategorySport",
-  "5070": "settings.indexerCategoryAnime",
-  "5080": "settings.indexerCategoryDocumentary",
-  "8010": "settings.indexerCategoryMisc",
-  "2010": "settings.indexerCategoryForeign",
-  "2020": "settings.indexerCategoryOther",
-  "2030": "settings.indexerCategorySd",
-  "2040": "settings.indexerCategoryHd",
-  "2045": "settings.indexerCategoryUhd",
-  "2050": "settings.indexerCategoryBluRay",
-  "2060": "settings.indexerCategoryThreeD",
-};
-
-const INDEXER_CATEGORY_DEFINITIONS: Record<string, IndexerCategoryGroupDefinition> = {
-  tv: {
-    labelKey: "tv",
-    code: "5000",
-    categories: [
-      { code: "5020", labelKey: "settings.indexerCategoryForeign" },
-      { code: "5030", labelKey: "settings.indexerCategorySd" },
-      { code: "5040", labelKey: "settings.indexerCategoryHd" },
-      { code: "5045", labelKey: "settings.indexerCategoryUhd" },
-      { code: "5050", labelKey: "settings.indexerCategoryOther" },
-      { code: "5060", labelKey: "settings.indexerCategorySport" },
-      { code: "5070", labelKey: "settings.indexerCategoryAnime" },
-      { code: "5080", labelKey: "settings.indexerCategoryDocumentary" },
-    ],
-  },
-  movies: {
-    labelKey: "movies",
-    code: "2000",
-    categories: [
-      { code: "2010", labelKey: "settings.indexerCategoryForeign" },
-      { code: "2020", labelKey: "settings.indexerCategoryOther" },
-      { code: "2030", labelKey: "settings.indexerCategorySd" },
-      { code: "2040", labelKey: "settings.indexerCategoryHd" },
-      { code: "2045", labelKey: "settings.indexerCategoryUhd" },
-      { code: "2050", labelKey: "settings.indexerCategoryBluRay" },
-      { code: "2060", labelKey: "settings.indexerCategoryThreeD" },
-    ],
-  },
-  other: {
-    labelKey: "other",
-    code: "8000",
-    categories: [
-      { code: "8010", labelKey: "settings.indexerCategoryMisc" },
-    ],
-  },
-};
-
-const INDEXER_CATEGORY_GROUPS_BY_SCOPE: Record<
-  ViewCategoryId,
-  Array<"movies" | "tv" | "other">
-> = {
-  movie: ["movies", "other"],
-  series: ["tv", "other"],
-  anime: ["tv", "other"],
-};
-
-function normalizeCategoryCodes(values: string[]): string[] {
-  const seen = new Set<string>();
-  const next: string[] = [];
-  for (const value of values) {
-    const normalized = value.trim();
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    next.push(normalized);
-  }
-  return next;
-}
-
-function formatCategoryCodeList(codes: string[]): string {
-  return formatTagsInput(sortCategoryCodes(normalizeCategoryCodes(codes)));
-}
-
-function getSortedCategoryCodesByScope(scope: ViewCategoryId, values: string[]) {
-  const normalized = normalizeCategoryCodes(values);
-  const scopeGroups = INDEXER_CATEGORY_GROUPS_BY_SCOPE[scope]
-    .map((groupKey) => {
-      const group = INDEXER_CATEGORY_DEFINITIONS[groupKey];
-      return [group.code, ...group.categories.map((category) => category.code)];
-    })
-    .flat();
-  const orderedKnownCodes = scopeGroups.filter((code) => normalized.includes(code));
-  const unknownCodes = normalized.filter((code) => !scopeGroups.includes(code));
-  return [...orderedKnownCodes, ...unknownCodes];
-}
-
-function IndexerCategoryPicker({
-  t,
-  value,
-  scope,
-  disabled,
-  onChange,
-  categoriesLabel,
-}: {
-  t: Translate;
-  value: string[];
-  scope: ViewCategoryId;
-  disabled: boolean;
-  categoriesLabel?: string;
-  onChange: (categories: string[]) => void;
-}) {
-  const pickerRef = React.useRef<HTMLDivElement>(null);
-  const floatingPanelRef = React.useRef<HTMLDivElement>(null);
-  const [isOpen, setIsOpen] = React.useState(false);
-  const [draftCategories, setDraftCategories] = React.useState<string[]>(() =>
-    getSortedCategoryCodesByScope(scope, value),
-  );
-  const [pickerRect, setPickerRect] = React.useState<DOMRect | null>(null);
-
-  React.useEffect(() => {
-    if (!isOpen) {
-      setDraftCategories(getSortedCategoryCodesByScope(scope, value));
-      return;
-    }
-    if (pickerRef.current && typeof window !== "undefined") {
-      setPickerRect(pickerRef.current.getBoundingClientRect());
-    }
-  }, [isOpen, scope, value]);
-
-  React.useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-    const handlePointerDown = (event: MouseEvent) => {
-      if (!pickerRef.current) {
-        return;
-      }
-      if (
-        !pickerRef.current?.contains(event.target as Node) &&
-        !floatingPanelRef.current?.contains(event.target as Node)
-      ) {
-        setIsOpen(false);
-      }
-    };
-
-    const handleScrollOrResize = () => {
-      if (!pickerRef.current || typeof window === "undefined") {
-        return;
-      }
-      setPickerRect(pickerRef.current.getBoundingClientRect());
-    };
-
-    document.addEventListener("mousedown", handlePointerDown);
-    window.addEventListener("scroll", handleScrollOrResize, true);
-    window.addEventListener("resize", handleScrollOrResize, true);
-    return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
-      window.removeEventListener("scroll", handleScrollOrResize, true);
-      window.removeEventListener("resize", handleScrollOrResize, true);
-    };
-  }, [isOpen]);
-
-  const selectedSet = React.useMemo(
-    () => new Set<string>(normalizeCategoryCodes(draftCategories)),
-    [draftCategories],
-  );
-
-  const toggleCategory = (code: string) => {
-    setDraftCategories((previous) => {
-      const current = new Set(previous.map((entry) => entry.trim()));
-      if (current.has(code)) {
-        current.delete(code);
-      } else {
-        current.add(code);
-      }
-      const sorted = getSortedCategoryCodesByScope(scope, Array.from(current));
-      onChange(sorted);
-      return sorted;
-    });
-  };
-
-  const toggleCategoryHeader = (groupKey: "movies" | "tv" | "other") => {
-    const groupCode = INDEXER_CATEGORY_DEFINITIONS[groupKey].code;
-    setDraftCategories((previous) => {
-      const next = new Set(previous.map((entry) => entry.trim()));
-      if (next.has(groupCode)) {
-        next.delete(groupCode);
-      } else {
-        next.add(groupCode);
-      }
-      const sorted = getSortedCategoryCodesByScope(scope, Array.from(next));
-      onChange(sorted);
-      return sorted;
-    });
-  };
-
-  const floatingPanel = isOpen && pickerRect && !disabled
-    ? createPortal(
-        <div
-          ref={floatingPanelRef}
-          className="z-50 max-h-80 overflow-y-auto rounded-xl border border-border bg-popover p-2 shadow-lg"
-          style={{
-            position: "fixed",
-            top: pickerRect.bottom + 4,
-            left: pickerRect.left,
-            width: Math.max(260, Math.round(pickerRect.width)),
-          }}
-        >
-          {INDEXER_CATEGORY_GROUPS_BY_SCOPE[scope].map((groupKey) => {
-            const group = INDEXER_CATEGORY_DEFINITIONS[groupKey];
-            return (
-              <div key={groupKey} className="mb-2 last:mb-0">
-                <label className="mb-1 flex items-center justify-between rounded-md px-2 py-1 text-sm capitalize text-foreground hover:bg-accent/60">
-                  <span className="flex items-center gap-2">
-                    <Checkbox
-                      checked={selectedSet.has(group.code)}
-                      onCheckedChange={() => toggleCategoryHeader(groupKey)}
-                      aria-label={`${t("indexerCategory.labelCategory")}: ${t(group.labelKey)} ${group.code}`}
-                      disabled={disabled}
-                    />
-                    {t(group.labelKey)}
-                  </span>
-                  <span className="text-xs font-mono text-muted-foreground">{group.code}</span>
-                </label>
-                <div className="space-y-1 pl-3">
-                  {group.categories.map((category) => (
-                    <label
-                      key={category.code}
-                      className="flex items-center justify-between gap-3 rounded-md px-2 py-1 text-sm capitalize text-foreground hover:bg-accent/60"
-                    >
-                      <span className="flex items-center gap-2 text-foreground">
-                        <Checkbox
-                          checked={selectedSet.has(category.code)}
-                          onCheckedChange={() => toggleCategory(category.code)}
-                          aria-label={`${t("indexerCategory.labelCategory")}: ${t(category.labelKey)} ${category.code}`}
-                          disabled={disabled}
-                        />
-                        {t(category.labelKey)}
-                      </span>
-                      <span className="text-xs font-mono text-muted-foreground">{category.code}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>,
-        document.body,
-      )
-    : null;
-
-  return (
-    <div ref={pickerRef} className="relative inline-block w-full">
-      <Button
-        type="button"
-        variant="secondary"
-        className="h-auto w-full justify-between gap-2 border border-input bg-field px-3 py-2 text-sm"
-        onClick={() => setIsOpen((previous) => !previous)}
-        disabled={disabled}
-        aria-label={categoriesLabel || t("settings.indexerRoutingCategories")}
-      >
-        <span
-          className={`truncate text-left ${formatCategoryCodeList(draftCategories) ? "text-card-foreground" : "text-muted-foreground"}`}
-        >
-          {formatCategoryCodeList(draftCategories) || t("settings.indexerRoutingCategoriesPlaceholder")}
-        </span>
-        <ChevronDown className={`h-4 w-4 transition-transform ${isOpen ? "rotate-180" : ""}`} />
-      </Button>
-      {floatingPanel}
-    </div>
-  );
-}
-
-type DownloadClientTypeOption = {
-  value: string;
-  icon: (props: React.ComponentPropsWithoutRef<"svg">) => React.JSX.Element;
-};
-
-const NzbgetIcon = (props: React.ComponentPropsWithoutRef<"svg">) => (
-  <svg
-    xmlns="http://www.w3.org/2000/svg"
-    viewBox="182.47 40.33 528 528"
-    fill="none"
-    {...props}
-  >
-    <ellipse cx="446.47417" cy="304.33312" rx="264" ry="263.99999" fill="#fafafa" />
-    <ellipse cx="445.47418" cy="304.99977" rx="239.8589" ry="239.66666" fill="#333733" />
-    <ellipse cx="445.33311" cy="303.33311" rx="226" ry="226" fill="#37d134" />
-    <path
-      d="m330.34323,434.81804l116.49998,-116.66662l116.49998,116.66662l-232.99996,0z"
-      fill="#000000"
-      transform="rotate(-180 446.843 376.485)"
-    />
-    <rect x="398.66641" y="266.66647" width="94.66664" height="51.33332" fill="#000000" />
-    <path d="m399.33309,215.33316l92.66665,0l0,33.33332l-92.66665,0l0,-33.33332z" fill="#000000" />
-    <path d="m399.33309,163.99984l92.66664,0l0,33.33332l-92.66664,0l0,-33.33332z" fill="#000000" />
-  </svg>
-);
-
-const QBitTorrentIcon = (props: React.ComponentPropsWithoutRef<"svg">) => (
-  <svg
-    xmlns="http://www.w3.org/2000/svg"
-    viewBox="0 0 1024 1024"
-    fill="none"
-    {...props}
-  >
-    <circle
-      cx="512"
-      cy="512"
-      r="496"
-      fill="#72b4f5"
-      stroke="#daefff"
-      strokeWidth="32"
-    />
-    <path
-      d="M712.9 332.4c44.4 0 78.9 15.2 103.4 45.7 24.7 30.2 37 73.1 37 128.7 0 55.5-12.4 98.8-37.3 129.6-24.7 30.7-59 46-103.1 46-22 0-42.2-4-60.5-12-18.1-8.2-33.3-20.8-45.7-37.6H603l-10.8 43.5h-36.7V196h51.2v116.6c0 26.1-.8 49.6-2.5 70.4h2.5c23.9-33.7 59.3-50.6 106.2-50.6m-7.4 42.9c-35 0-60.2 10.1-75.6 30.2-15.4 20-23.1 53.7-23.1 101.2s7.9 81.6 23.8 102.1c15.8 20.4 41.2 30.5 76.2 30.5 31.5 0 54.9-11.4 70.4-34.3 15.4-23 23.1-56.1 23.1-99.1q0-66-23.1-98.4c-15.5-21.4-39.4-32.2-71.7-32.2"
-      fill="#ffffff"
-    />
-    <path
-      d="M317.3 639.5c34.2 0 59-9.2 74.7-27.5 15.6-18.3 24-49.2 25-92.6V508c0-47.3-8-81.4-24.1-102.1-16-20.8-41.5-31.2-76.2-31.2-30 0-53.1 11.7-69.1 35.2-15.8 23.2-23.8 56.2-23.8 98.8s7.8 75.1 23.5 97.5c15.8 22.1 39.1 33.2 70 33.3m-7.7 42.8c-43.6 0-77.7-15.3-102.1-46-24.5-30.7-36.7-73.4-36.7-128.4 0-55.3 12.3-98.5 37-129.6s59-46.6 103.1-46.6q69.45 0 106.8 52.5h2.8l7.4-46.3h40.4v490h-51.2V683.3c0-20.6 1.1-38.1 3.4-52.5h-4c-23.8 34.4-59.4 51.5-106.9 51.5"
-      fill="#c8e8ff"
-    />
-  </svg>
-);
-
-const SabnzbdIcon = (props: React.ComponentPropsWithoutRef<"svg">) => (
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" fill="none" {...props}>
-    <path
-      fill="none"
-      stroke="#f5f5f5"
-      strokeLinejoin="round"
-      strokeWidth="74"
-      d="M200.4 39.3h598.1v437.8h161l-460.1 483L39.4 477h161z"
-    />
-    <path fill="#ffb300" fillRule="evenodd" d="M200.4 39.3h598.1v437.8h161l-460.1 483-460-483h161z" />
-    <path fill="#ffca28" fillRule="evenodd" d="M499.4 960.2 201.1 39.4h596.7z" />
-    <path
-      fill="none"
-      stroke="#f5f5f5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="74"
-      d="M329.2 843.5H83v-51.8h146.1v-45.9H83V596.9h246.2v51.5H183.1v45.9h146.1zm292.2 0H375.2V694.3h146.1v-45.9H375.2v-51.5h246.2zm-146.1-97.8h46v46h-46zm192.1 97.8v-344h100.1v97.4h146.1v246.6zm100.1-195.2h46v143.4h-46z"
-    />
-    <path
-      fill="#0f0f0f"
-      fillRule="evenodd"
-      d="M329.2 843.5H83v-51.8h146.1v-45.9H83V596.9h246.2v51.5H183.1v45.9h146.1zm292.2 0H375.2V694.3h146.1v-45.9H375.2v-51.5h246.2zm-146.1-51.8h46v-46h-46zm192.1 51.9v-344h100.1V597h146.1v246.6zm100.1-51.9h46V648.4h-46z"
-    />
-  </svg>
-);
-
-const DOWNLOAD_CLIENT_TYPE_OPTIONS: DownloadClientTypeOption[] = [
-  {
-    value: "nzbget",
-    icon: NzbgetIcon,
-  },
-  {
-    value: "sabnzbd",
-    icon: SabnzbdIcon,
-  },
-  {
-    value: "qbittorrent",
-    icon: QBitTorrentIcon,
-  },
-];
-
-function getDownloadClientTypeOption(typeValue: string) {
-  const normalizedType = typeValue.trim().toLowerCase();
-  return (
-    DOWNLOAD_CLIENT_TYPE_OPTIONS.find((option) => option.value === normalizedType) ??
-    DOWNLOAD_CLIENT_TYPE_OPTIONS[0]
-  );
-}
-
-function DownloadClientTypeLogo({
-  typeValue,
-  className = "h-4 w-4",
-}: {
-  typeValue: string;
-  className?: string;
-}) {
-  const option = getDownloadClientTypeOption(typeValue);
-  const FallbackIcon = option.icon;
-  return <FallbackIcon className={`${className} object-contain`} aria-hidden="true" role="img" />;
-}
-
 type QualityProfileOption = {
   value: string;
   label: string;
 };
-
-const DOWNLOAD_PRIORITY_OPTIONS = [
-  { value: "force", label: "settings.downloadClientPriorityForce" },
-  { value: "very high", label: "settings.downloadClientPriorityVeryHigh" },
-  { value: "high", label: "settings.downloadClientPriorityHigh" },
-  { value: "normal", label: "settings.downloadClientPriorityNormal" },
-  { value: "low", label: "settings.downloadClientPriorityLow" },
-  { value: "very low", label: "settings.downloadClientPriorityVeryLow" },
-];
 
 const RENAME_COLLISION_POLICY_OPTIONS = [
   { value: "skip", label: "settings.renameCollisionPolicySkip" },
@@ -695,36 +244,6 @@ function applyRenameTemplate(template: string, scopeId: ViewCategoryId): string 
     }
   }
   return result;
-}
-
-const PRIORITY_VALUES = new Set(DOWNLOAD_PRIORITY_OPTIONS.map((item) => item.value));
-
-function normalizePriorityValue(rawValue: string): string {
-  const normalized = rawValue.trim().toLowerCase();
-  if (!normalized) {
-    return "normal";
-  }
-
-  if (PRIORITY_VALUES.has(normalized)) {
-    return normalized;
-  }
-
-  const aliased = normalized.replace(/_/g, " ");
-  return PRIORITY_VALUES.has(aliased) ? aliased : "normal";
-}
-
-function normalizePriorityValueForSave(rawValue: string): string {
-  const normalized = rawValue.trim().toLowerCase();
-  if (!normalized) {
-    return "normal";
-  }
-
-  if (PRIORITY_VALUES.has(normalized)) {
-    return normalized;
-  }
-
-  const aliased = normalized.replace(/_/g, " ");
-  return PRIORITY_VALUES.has(aliased) ? aliased : "normal";
 }
 
 type TvdbSearchItem = MetadataTvdbSearchItem;
@@ -1305,31 +824,16 @@ export function MediaContentView({
   >({});
   const [autoQueueLoadingByTitle, setAutoQueueLoadingByTitle] = React.useState<Record<string, boolean>>({});
 
-  const clientById = React.useMemo(
-    () => Object.fromEntries(downloadClients.map((client) => [client.id, client])),
-    [downloadClients],
-  );
-  const orderedDownloadClientIds = React.useMemo(() => {
-    const configuredIds = activeScopeRoutingOrder.filter((clientId) => clientById[clientId]);
-    const configuredIdSet = new Set(configuredIds);
-    const missingIds = downloadClients
-      .map((client) => client.id)
-      .filter((clientId) => !configuredIdSet.has(clientId));
-    return [...configuredIds, ...missingIds];
-  }, [activeScopeRoutingOrder, clientById, downloadClients]);
-
-  const indexerById = React.useMemo(
-    () => Object.fromEntries(indexers.map((indexer) => [indexer.id, indexer])),
-    [indexers],
-  );
-  const orderedIndexerIds = React.useMemo(() => {
-    const configuredIds = activeScopeIndexerRoutingOrder.filter((indexerId) => indexerById[indexerId]);
-    const configuredIdSet = new Set(configuredIds);
-    const missingIds = indexers
-      .map((indexer) => indexer.id)
-      .filter((indexerId) => !configuredIdSet.has(indexerId));
-    return [...configuredIds, ...missingIds];
-  }, [activeScopeIndexerRoutingOrder, indexerById, indexers]);
+  const titleTableScrollRef = React.useRef<HTMLDivElement>(null);
+  const useVirtualTable = monitoredTitles.length > 50;
+  const titleVirtualizer = useVirtualizer({
+    count: monitoredTitles.length,
+    getScrollElement: () => titleTableScrollRef.current,
+    estimateSize: () => 64,
+    overscan: 5,
+    measureElement: useVirtualTable ? (element) => element.getBoundingClientRect().height : undefined,
+    enabled: useVirtualTable,
+  });
 
   const handleMoviesPathChange = React.useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1475,82 +979,6 @@ export function MediaContentView({
       moveIndexerInScope(indexerId, "down");
     },
     [moveIndexerInScope],
-  );
-
-  const handleDownloadClientRoutingSubmit = React.useCallback(
-    (event: React.FormEvent<HTMLFormElement>) => {
-      event.preventDefault();
-      void saveDownloadClientRouting();
-    },
-    [saveDownloadClientRouting],
-  );
-
-  const handleRoutingCategoryChange = React.useCallback(
-    (clientId: string, value: string) => {
-      updateDownloadClientRoutingForScope(clientId, {
-        category: value,
-      });
-    },
-    [updateDownloadClientRoutingForScope],
-  );
-
-  const handleRoutingTagsChange = React.useCallback(
-    (clientId: string, value: string) => {
-      updateDownloadClientRoutingForScope(clientId, {
-        tags: parseTagsInput(value),
-      });
-    },
-    [updateDownloadClientRoutingForScope],
-  );
-
-  const handleRoutingRecentPriorityChange = React.useCallback(
-    (clientId: string, value: string) => {
-      updateDownloadClientRoutingForScope(clientId, {
-        recentPriority: normalizePriorityValueForSave(value),
-      });
-    },
-    [updateDownloadClientRoutingForScope],
-  );
-
-  const handleRoutingOlderPriorityChange = React.useCallback(
-    (clientId: string, value: string) => {
-      updateDownloadClientRoutingForScope(clientId, {
-        olderPriority: normalizePriorityValueForSave(value),
-      });
-    },
-    [updateDownloadClientRoutingForScope],
-  );
-
-  const handleRoutingRemoveCompletedChange = React.useCallback(
-    (clientId: string, checked: boolean) => {
-      updateDownloadClientRoutingForScope(clientId, {
-        removeCompleted: checked,
-      });
-    },
-    [updateDownloadClientRoutingForScope],
-  );
-
-  const handleRoutingRemoveFailedChange = React.useCallback(
-    (clientId: string, checked: boolean) => {
-      updateDownloadClientRoutingForScope(clientId, {
-        removeFailed: checked,
-      });
-    },
-    [updateDownloadClientRoutingForScope],
-  );
-
-  const moveClientUp = React.useCallback(
-    (clientId: string) => {
-      moveDownloadClientInScope(clientId, "up");
-    },
-    [moveDownloadClientInScope],
-  );
-
-  const moveClientDown = React.useCallback(
-    (clientId: string) => {
-      moveDownloadClientInScope(clientId, "down");
-    },
-    [moveDownloadClientInScope],
   );
 
   const handleTitleNameChange = React.useCallback(
@@ -1701,56 +1129,20 @@ export function MediaContentView({
       {contentSettingsSection === "settings" ? (
         <div className="space-y-4">
           {view === "movies" || view === "series" ? (
-            <>
-              <Card>
-                <CardHeader>
-                  <CardTitle>{mediaLibrarySettingsTitle}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <label>
-                    <Label className="mb-2 block">{mediaLibraryPathLabel}</Label>
-                    <Input
-                      value={mediaLibraryPathValue}
-                      onChange={mediaLibraryPathChangeHandler}
-                      placeholder={mediaLibraryPathPlaceholder}
-                      required={view === "movies" || view === "series"}
-                      disabled={mediaSettingsLoading}
-                    />
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {mediaSettingsLoading ? t("label.loading") : mediaLibraryPathHelp}
-                    </p>
-                  </label>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader>
-                  <CardTitle>{t("settings.libraryScanTitle")}</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <p className="text-sm text-muted-foreground">{t("settings.libraryScanHelp")}</p>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <Button
-                      type="button"
-                      onClick={handleLibraryScan}
-                      disabled={libraryScanLoading}
-                    >
-                      {libraryScanLoading
-                        ? t("settings.libraryScanRunning")
-                        : t("settings.libraryScanButton")}
-                    </Button>
-                    {libraryScanSummary ? (
-                      <span className="text-xs text-muted-foreground">
-                        {t("settings.libraryScanSummary", {
-                          imported: libraryScanSummary.imported,
-                          skipped: libraryScanSummary.skipped,
-                          unmatched: libraryScanSummary.unmatched,
-                        })}
-                      </span>
-                    ) : null}
-                  </div>
-                </CardContent>
-              </Card>
-            </>
+            <MediaLibrarySettingsPanel
+              t={t}
+              settingsTitle={mediaLibrarySettingsTitle}
+              pathLabel={mediaLibraryPathLabel}
+              pathValue={mediaLibraryPathValue}
+              pathPlaceholder={mediaLibraryPathPlaceholder}
+              pathHelp={mediaLibraryPathHelp}
+              pathRequired={view === "movies" || view === "series"}
+              onPathChange={mediaLibraryPathChangeHandler}
+              loading={mediaSettingsLoading}
+              scanLoading={libraryScanLoading}
+              scanSummary={libraryScanSummary}
+              onScan={handleLibraryScan}
+            />
           ) : null}
 
           <RenameSettingsForm
@@ -1784,325 +1176,33 @@ export function MediaContentView({
             mediaSettingsSaving={mediaSettingsSaving}
           />
 
-          <div>
-            <Card>
-              <CardHeader>
-                <CardTitle>
-                  {t("settings.indexerRoutingScope", {
-                    scope: scopeLabel,
-                  })}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto rounded border border-border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                    <TableHead>{t("settings.indexerRoutingPriority")}</TableHead>
-                        <TableHead>{t("settings.indexerName")}</TableHead>
-                        <TableHead>{t("settings.indexerRoutingCategories")}</TableHead>
-                        <TableHead className="text-center">{t("settings.indexerRoutingGloballyEnabled")}</TableHead>
-                        <TableHead className="text-center">{t("settings.indexerRoutingEnabled")}</TableHead>
-                        <TableHead className="text-right">{t("label.actions")}</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {orderedIndexerIds.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={6} className="text-muted-foreground">
-                            {t("settings.indexerRoutingNoIndexers")}
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        orderedIndexerIds.map((indexerId, index) => {
-                          const indexer = indexerById[indexerId];
-                          if (!indexer) {
-                            return null;
-                          }
-                          const routing = activeScopeIndexerRouting[indexer.id] ?? getDefaultIndexerRouting(activeQualityScopeId);
-                          return (
-                            <TableRow key={indexer.id}>
-                              <TableCell>{index + 1}</TableCell>
-                              <TableCell>{indexer.name}</TableCell>
-                              <TableCell className="w-[30rem] min-w-[30rem] max-w-[30rem]">
-                                <IndexerCategoryPicker
-                                  t={t}
-                                  value={routing.categories}
-                                  scope={activeQualityScopeId}
-                                  disabled={indexerRoutingLoading}
-                                  categoriesLabel={`${t("settings.indexerRoutingCategories")} (${indexer.name})`}
-                                  onChange={(categories) =>
-                                    handleIndexerCategoriesChange(indexer.id, categories)
-                                  }
-                                  />
-                              </TableCell>
-                              <TableCell className="text-center align-middle">
-                                <RenderBooleanIcon
-                                  value={indexer.isEnabled}
-                                  label={`${t("settings.indexerRoutingGloballyEnabled")}: ${indexer.name}`}
-                                />
-                              </TableCell>
-                              <TableCell className="text-center align-middle">
-                                <RenderBooleanIcon
-                                  value={indexer.isEnabled && routing.enabled}
-                                  label={`${t("settings.indexerRoutingEnabled")}: ${indexer.name}`}
-                                />
-                              </TableCell>
-                              <TableCell className="text-right">
-                                <div className="flex items-center justify-end gap-1">
-                                  <Button
-                                    variant="secondary"
-                                    size="icon-sm"
-                                    type="button"
-                                    aria-label={
-                                      routing.enabled
-                                        ? t("label.disabled")
-                                        : t("label.enabled")
-                                    }
-                                    title={
-                                      routing.enabled
-                                        ? t("label.disabled")
-                                        : t("label.enabled")
-                                    }
-                                    onClick={() =>
-                                      handleIndexerEnabledChange(indexer.id, !routing.enabled)
-                                    }
-                                    disabled={indexerRoutingLoading || indexerRoutingSaving || !indexer.isEnabled}
-                                    className={
-                                      routing.enabled
-                                        ? "border-red-700/70 bg-red-900/60 text-red-200 hover:bg-red-900/80 hover:text-red-100"
-                                        : "border-emerald-300/70 dark:border-emerald-700/70 bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-100 hover:bg-emerald-200 dark:hover:bg-emerald-800/80"
-                                    }
-                                  >
-                                    {routing.enabled ? (
-                                      <PowerOff className="h-3.5 w-3.5" />
-                                    ) : (
-                                      <Power className="h-3.5 w-3.5" />
-                                    )}
-                                    <span className="sr-only">
-                                      {routing.enabled
-                                        ? t("label.disabled")
-                                        : t("label.enabled")}
-                                    </span>
-                                  </Button>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    type="button"
-                                    className="border border-border bg-card/80 hover:bg-accent"
-                                    aria-label={`${t("label.moveUp")} ${indexer.name}`}
-                                    onClick={() => moveIndexerUp(indexer.id)}
-                                    disabled={
-                                      indexerRoutingLoading ||
-                                      indexerRoutingSaving ||
-                                      index === 0
-                                    }
-                                  >
-                                    <ChevronUp className="h-4 w-4" />
-                                  </Button>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    type="button"
-                                    className="border border-border bg-card/80 hover:bg-accent"
-                                    aria-label={`${t("label.moveDown")} ${indexer.name}`}
-                                    onClick={() => moveIndexerDown(indexer.id)}
-                                    disabled={
-                                      indexerRoutingLoading ||
-                                      indexerRoutingSaving ||
-                                      index >= orderedIndexerIds.length - 1
-                                    }
-                                  >
-                                    <ChevronDown className="h-4 w-4" />
-                                  </Button>
-                                </div>
-                              </TableCell>
-                            </TableRow>
-                          );
-                        })
-                      )}
-                    </TableBody>
-                  </Table>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+          <IndexerRoutingPanel
+            t={t}
+            scopeLabel={scopeLabel}
+            activeQualityScopeId={activeQualityScopeId}
+            indexers={indexers}
+            activeScopeIndexerRouting={activeScopeIndexerRouting}
+            activeScopeIndexerRoutingOrder={activeScopeIndexerRoutingOrder}
+            indexerRoutingLoading={indexerRoutingLoading}
+            indexerRoutingSaving={indexerRoutingSaving}
+            onEnabledChange={handleIndexerEnabledChange}
+            onCategoriesChange={handleIndexerCategoriesChange}
+            onMoveUp={moveIndexerUp}
+            onMoveDown={moveIndexerDown}
+          />
 
-          <form
-            onSubmit={handleDownloadClientRoutingSubmit}
-          >
-            <Card>
-              <CardHeader>
-                <CardTitle>
-                  {t("settings.downloadClientRoutingScope", {
-                    scope: scopeLabel,
-                  })}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto rounded border border-border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>{t("settings.downloadClientPriority")}</TableHead>
-                        <TableHead>{t("settings.downloadClientName")}</TableHead>
-                        <TableHead>{t("settings.downloadClientType")}</TableHead>
-                        <TableHead>{t("settings.downloadClientCategory")}</TableHead>
-                        <TableHead>{t("settings.downloadClientTags")}</TableHead>
-                        <TableHead>{t("settings.downloadClientRecentPriority")}</TableHead>
-                        <TableHead>{t("settings.downloadClientOlderPriority")}</TableHead>
-                        <TableHead className="text-center">{t("settings.downloadClientRemoveCompleted")}</TableHead>
-                        <TableHead className="text-center">{t("settings.downloadClientRemoveFailed")}</TableHead>
-                        <TableHead className="text-right">{t("label.actions")}</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {orderedDownloadClientIds.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={10} className="text-muted-foreground">
-                            {t("settings.noDownloadClientsFound")}
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        orderedDownloadClientIds.map((clientId, index) => {
-                          const client = clientById[clientId];
-                          if (!client) {
-                            return null;
-                          }
-                          const routing = activeScopeRouting[client.id] ?? {
-                            category: "",
-                            recentPriority: "",
-                            olderPriority: "",
-                            tags: [],
-                            removeCompleted: false,
-                            removeFailed: false,
-                          };
-                          return (
-                            <TableRow key={client.id}>
-                              <TableCell>{index + 1}</TableCell>
-                              <TableCell>{client.name}</TableCell>
-                              <TableCell className="text-center">
-                                <span className="inline-flex items-center justify-center">
-                                  <DownloadClientTypeLogo typeValue={client.clientType} />
-                                  <span className="sr-only">{client.clientType}</span>
-                                </span>
-                              </TableCell>
-                              <TableCell>
-                                <Input
-                                  value={routing.category}
-                                  onChange={(event) =>
-                                    handleRoutingCategoryChange(client.id, event.target.value)
-                                  }
-                                  disabled={downloadClientRoutingLoading}
-                                  placeholder={t("settings.downloadClientCategoryPlaceholder")}
-                                />
-                              </TableCell>
-                              <TableCell>
-                                <Input
-                                  value={formatTagsInput(routing.tags)}
-                                  onChange={(event) => handleRoutingTagsChange(client.id, event.target.value)}
-                                  disabled={downloadClientRoutingLoading}
-                                  placeholder={t("settings.downloadClientTagsPlaceholder")}
-                                />
-                              </TableCell>
-                              <TableCell>
-                                <Select value={normalizePriorityValue(routing.recentPriority)} onValueChange={(v) => handleRoutingRecentPriorityChange(client.id, v)} disabled={downloadClientRoutingLoading}>
-                                  <SelectTrigger className="w-full">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {DOWNLOAD_PRIORITY_OPTIONS.map((option) => (
-                                      <SelectItem key={option.value} value={option.value}>{t(option.label)}</SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </TableCell>
-                              <TableCell>
-                                <Select value={normalizePriorityValue(routing.olderPriority)} onValueChange={(v) => handleRoutingOlderPriorityChange(client.id, v)} disabled={downloadClientRoutingLoading}>
-                                  <SelectTrigger className="w-full">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {DOWNLOAD_PRIORITY_OPTIONS.map((option) => (
-                                      <SelectItem key={option.value} value={option.value}>{t(option.label)}</SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </TableCell>
-                              <TableCell className="text-center">
-                                <Checkbox
-                                  checked={routing.removeCompleted}
-                                  onCheckedChange={(checked) =>
-                                    handleRoutingRemoveCompletedChange(client.id, checked === true)
-                                  }
-                                  disabled={downloadClientRoutingLoading}
-                                />
-                              </TableCell>
-                              <TableCell className="text-center">
-                                <Checkbox
-                                  checked={routing.removeFailed}
-                                  onCheckedChange={(checked) =>
-                                    handleRoutingRemoveFailedChange(client.id, checked === true)
-                                  }
-                                  disabled={downloadClientRoutingLoading}
-                                />
-                              </TableCell>
-                              <TableCell className="text-right">
-                                <div className="flex items-center justify-end gap-1">
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    type="button"
-                                    className="border border-border bg-card/80 hover:bg-accent"
-                                    aria-label={`${t("label.moveUp")} ${client.name}`}
-                                    onClick={() => moveClientUp(client.id)}
-                                    disabled={
-                                      downloadClientRoutingLoading ||
-                                      downloadClientRoutingSaving ||
-                                      index === 0
-                                    }
-                                  >
-                                    <ChevronUp className="h-4 w-4" />
-                                  </Button>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    type="button"
-                                    className="border border-border bg-card/80 hover:bg-accent"
-                                    aria-label={`${t("label.moveDown")} ${client.name}`}
-                                    onClick={() => moveClientDown(client.id)}
-                                    disabled={
-                                      downloadClientRoutingLoading ||
-                                      downloadClientRoutingSaving ||
-                                      index >= orderedDownloadClientIds.length - 1
-                                    }
-                                  >
-                                    <ChevronDown className="h-4 w-4" />
-                                  </Button>
-                                </div>
-                              </TableCell>
-                            </TableRow>
-                          );
-                        })
-                      )}
-                    </TableBody>
-                  </Table>
-                </div>
-                <div className="mt-3 flex justify-end">
-                  <Button
-                    type="submit"
-                    disabled={
-                      downloadClientRoutingLoading ||
-                      downloadClientRoutingSaving ||
-                      orderedDownloadClientIds.length === 0
-                    }
-                  >
-                    {downloadClientRoutingSaving ? t("label.saving") : t("label.save")}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          </form>
+          <DownloadClientRoutingPanel
+            t={t}
+            scopeLabel={scopeLabel}
+            downloadClients={downloadClients}
+            activeScopeRouting={activeScopeRouting}
+            activeScopeRoutingOrder={activeScopeRoutingOrder}
+            downloadClientRoutingLoading={downloadClientRoutingLoading}
+            downloadClientRoutingSaving={downloadClientRoutingSaving}
+            updateDownloadClientRoutingForScope={updateDownloadClientRoutingForScope}
+            moveDownloadClientInScope={moveDownloadClientInScope}
+            saveDownloadClientRouting={saveDownloadClientRouting}
+          />
 
         </div>
       ) : (
@@ -2134,183 +1234,256 @@ export function MediaContentView({
                   return qualityProfiles.find((p) => p.id === effectiveId)?.name ?? null;
                 })();
 
-                return (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-14">{t("title.table.poster")}</TableHead>
-                        <TableHead>{t("title.table.name")}</TableHead>
-                        <TableHead>{t("title.table.qualityTier")}</TableHead>
-                        {isMovieView ? <TableHead>{t("title.table.size")}</TableHead> : null}
-                        <TableHead>{t("title.table.monitored")}</TableHead>
-                        <TableHead className="text-right">{t("title.table.actions")}</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {monitoredTitles.map((item) => {
-                        const overviewTargetView = isMovieView ? "movies" : view === "anime" ? "anime" : "series";
-                        const isPanelOpen = isMovieView && expandedMovieRows.has(item.id);
-                        const interactiveSearchResults = interactiveSearchResultsByTitle[item.id] ?? [];
-                        const interactiveSearchLoading = interactiveSearchLoadingByTitle[item.id] === true;
-                        const autoQueueLoading = autoQueueLoadingByTitle[item.id] === true;
-                        const deleteLoading = isDeletingCatalogTitleById[item.id] === true;
+                const titleTableHeader = (
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-14">{t("title.table.poster")}</TableHead>
+                      <TableHead>{t("title.table.name")}</TableHead>
+                      <TableHead>{t("title.table.qualityTier")}</TableHead>
+                      {isMovieView ? <TableHead>{t("title.table.size")}</TableHead> : null}
+                      <TableHead>{t("title.table.monitored")}</TableHead>
+                      <TableHead className="text-right">{t("title.table.actions")}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                );
 
-                        return (
-                          <React.Fragment key={item.id}>
-                            <TableRow className="h-24 cv-auto-row">
-                              <TableCell className="align-middle">
-                                <button
-                                  type="button"
-                                  onClick={() => onOpenOverview(overviewTargetView, item.id)}
-                                  className="inline-block text-left"
-                                  aria-label={t("media.posterAlt", { name: item.name })}
-                                >
-                                  <div className="h-20 w-14 overflow-hidden rounded border border-border bg-muted">
-                                    {item.posterUrl ? (
-                                      <img
-                                        src={item.posterUrl}
-                                        alt={t("media.posterAlt", { name: item.name })}
-                                        className="h-full w-full object-cover"
-                                        loading="lazy"
-                                      />
-                                    ) : (
-                                      <div className="flex h-full w-full items-center justify-center text-[10px] text-muted-foreground">
-                                        {t("label.noArt")}
-                                      </div>
-                                    )}
-                                  </div>
-                                </button>
-                              </TableCell>
-                              <TableCell className="align-middle">
-                                <button
-                                  type="button"
-                                  onClick={() => onOpenOverview(overviewTargetView, item.id)}
-                                  className="inline-flex text-xl font-bold hover:text-foreground hover:underline"
-                                >
-                                  {item.name}
-                                </button>
-                              </TableCell>
-                              <TableCell className="align-middle">
-                                {isMovieView
-                                  ? (item.qualityTier || t("label.unknown"))
-                                  : (resolvedProfileName || t("label.default"))}
-                              </TableCell>
-                              {isMovieView ? <TableCell className="align-middle">{bytesToReadable(item.sizeBytes)}</TableCell> : null}
-                              <TableCell className="align-middle">{item.monitored ? t("label.yes") : t("label.no")}</TableCell>
-                              <TableCell className="text-right align-middle">
-                                <div className="inline-flex items-center justify-end gap-2">
-                                  {isMovieView ? (
-                                    <>
-                                      <HoverCard openDelay={3000} closeDelay={75}>
-                                        <HoverCardTrigger asChild>
-                                          <Button
-                                            variant="ghost"
-                                            size="sm"
-                                            aria-label={t("label.search")}
-                                            onClick={() => handleQueueExisting(item)}
-                                            disabled={autoQueueLoading}
-                                          >
-                                            {autoQueueLoading ? (
-                                              <Loader2 className="h-4 w-4 animate-spin text-emerald-500" />
-                                            ) : (
-                                              <Zap className="h-4 w-4" />
-                                            )}
-                                          </Button>
-                                        </HoverCardTrigger>
-                                        <HoverCardContent>
-                                          <p className="max-w-[18rem] whitespace-normal break-words text-sm">
-                                            {t("help.autoSearchTooltip")}
-                                          </p>
-                                        </HoverCardContent>
-                                      </HoverCard>
-                                      <HoverCard openDelay={3000} closeDelay={75}>
-                                        <HoverCardTrigger asChild>
-                                          <Button
-                                            variant="ghost"
-                                            size="sm"
-                                            aria-label={t("label.interactiveSearch")}
-                                            onClick={() => handleToggleInteractiveSearch(item)}
-                                          >
-                                            <Search className="h-4 w-4" />
-                                          </Button>
-                                        </HoverCardTrigger>
-                                        <HoverCardContent>
-                                          <p className="max-w-[18rem] whitespace-normal break-words text-sm">
-                                            {t("help.interactiveSearchTooltip")}
-                                          </p>
-                                        </HoverCardContent>
-                                      </HoverCard>
-                                    </>
-                                  ) : null}
-                                  <Button
-                                    variant="destructive"
-                                    size="sm"
-                                    type="button"
-                                    aria-label={t("label.delete")}
-                                    onClick={() => handleDeleteCatalogTitle(item)}
-                                    disabled={deleteLoading}
-                                  >
-                                    {deleteLoading ? (
-                                      <Loader2 className="h-4 w-4 animate-spin" />
-                                    ) : (
-                                      <Trash2 className="h-4 w-4" />
-                                    )}
-                                  </Button>
+                const renderTitleRow = (item: TitleRecord) => {
+                  const overviewTargetView = isMovieView ? "movies" : view === "anime" ? "anime" : "series";
+                  const isPanelOpen = isMovieView && expandedMovieRows.has(item.id);
+                  const interactiveSearchResults = interactiveSearchResultsByTitle[item.id] ?? [];
+                  const interactiveSearchLoading = interactiveSearchLoadingByTitle[item.id] === true;
+                  const autoQueueLoading = autoQueueLoadingByTitle[item.id] === true;
+                  const deleteLoading = isDeletingCatalogTitleById[item.id] === true;
+
+                  return (
+                    <React.Fragment key={item.id}>
+                      <TableRow className="h-24 cv-auto-row">
+                        <TableCell className="align-middle">
+                          <button
+                            type="button"
+                            onClick={() => onOpenOverview(overviewTargetView, item.id)}
+                            className="inline-block text-left"
+                            aria-label={t("media.posterAlt", { name: item.name })}
+                          >
+                            <div className="h-20 w-14 overflow-hidden rounded border border-border bg-muted">
+                              {item.posterUrl ? (
+                                <img
+                                  src={item.posterUrl}
+                                  alt={t("media.posterAlt", { name: item.name })}
+                                  className="h-full w-full object-cover"
+                                  loading="lazy"
+                                />
+                              ) : (
+                                <div className="flex h-full w-full items-center justify-center text-[10px] text-muted-foreground">
+                                  {t("label.noArt")}
                                 </div>
-                              </TableCell>
-                            </TableRow>
-                            {isPanelOpen ? (
-                              <TableRow>
-                                <TableCell colSpan={columnCount} className="border-t border-border bg-popover/40 p-0">
-                                  <div className="px-4 py-3">
-                                    <div className="mb-2 flex items-center justify-between gap-3">
-                                      <p className="text-sm text-card-foreground">
-                                        {t("nzb.searchResultsFor", { name: item.name })}
-                                      </p>
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={() => handleRunInteractiveSearch(item)}
-                                        disabled={interactiveSearchLoading}
-                                        aria-label={t("label.search")}
-                                      >
-                                        <Search className="h-4 w-4" />
-                                        <span className="ml-1">
-                                          {interactiveSearchLoading ? t("label.searching") : t("label.refresh")}
-                                        </span>
-                                      </Button>
-                                    </div>
-                                    {interactiveSearchLoading ? (
-                                      <div className="flex items-center gap-3 py-3">
-                                        <Loader2 className="h-5 w-5 animate-spin text-emerald-500" />
-                                        <p className="text-sm text-muted-foreground">{t("label.searching")}</p>
-                                      </div>
-                                    ) : interactiveSearchResults.length === 0 ? (
-                                      <p className="text-sm text-muted-foreground">{t("nzb.noResultsYet")}</p>
-                                    ) : (
-                                      <SearchResultBuckets
-                                        results={interactiveSearchResults}
-                                        onQueue={(release) => handleQueueExistingFromInteractive(item, release)}
-                                        t={t}
-                                      />
-                                    )}
-                                  </div>
-                                </TableCell>
-                              </TableRow>
+                              )}
+                            </div>
+                          </button>
+                        </TableCell>
+                        <TableCell className="align-middle">
+                          <button
+                            type="button"
+                            onClick={() => onOpenOverview(overviewTargetView, item.id)}
+                            className="inline-flex text-xl font-bold hover:text-foreground hover:underline"
+                          >
+                            {item.name}
+                          </button>
+                        </TableCell>
+                        <TableCell className="align-middle">
+                          {isMovieView
+                            ? (item.qualityTier || t("label.unknown"))
+                            : (resolvedProfileName || t("label.default"))}
+                        </TableCell>
+                        {isMovieView ? <TableCell className="align-middle">{bytesToReadable(item.sizeBytes)}</TableCell> : null}
+                        <TableCell className="align-middle">{item.monitored ? t("label.yes") : t("label.no")}</TableCell>
+                        <TableCell className="text-right align-middle">
+                          <div className="inline-flex items-center justify-end gap-2">
+                            {isMovieView ? (
+                              <>
+                                <HoverCard openDelay={3000} closeDelay={75}>
+                                  <HoverCardTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      aria-label={t("label.search")}
+                                      onClick={() => handleQueueExisting(item)}
+                                      disabled={autoQueueLoading}
+                                    >
+                                      {autoQueueLoading ? (
+                                        <Loader2 className="h-4 w-4 animate-spin text-emerald-500" />
+                                      ) : (
+                                        <Zap className="h-4 w-4" />
+                                      )}
+                                    </Button>
+                                  </HoverCardTrigger>
+                                  <HoverCardContent>
+                                    <p className="max-w-[18rem] whitespace-normal break-words text-sm">
+                                      {t("help.autoSearchTooltip")}
+                                    </p>
+                                  </HoverCardContent>
+                                </HoverCard>
+                                <HoverCard openDelay={3000} closeDelay={75}>
+                                  <HoverCardTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      aria-label={t("label.interactiveSearch")}
+                                      onClick={() => handleToggleInteractiveSearch(item)}
+                                    >
+                                      <Search className="h-4 w-4" />
+                                    </Button>
+                                  </HoverCardTrigger>
+                                  <HoverCardContent>
+                                    <p className="max-w-[18rem] whitespace-normal break-words text-sm">
+                                      {t("help.interactiveSearchTooltip")}
+                                    </p>
+                                  </HoverCardContent>
+                                </HoverCard>
+                              </>
                             ) : null}
-                          </React.Fragment>
-                        );
-                      })}
-                      {monitoredTitles.length === 0 && !titleLoading ? (
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              type="button"
+                              aria-label={t("label.delete")}
+                              onClick={() => handleDeleteCatalogTitle(item)}
+                              disabled={deleteLoading}
+                            >
+                              {deleteLoading ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                      {isPanelOpen ? (
                         <TableRow>
-                          <TableCell colSpan={columnCount} className="text-muted-foreground">
-                            {t("title.noManaged")}
+                          <TableCell colSpan={columnCount} className="border-t border-border bg-popover/40 p-0">
+                            <div className="px-4 py-3">
+                              <div className="mb-2 flex items-center justify-between gap-3">
+                                <p className="text-sm text-card-foreground">
+                                  {t("nzb.searchResultsFor", { name: item.name })}
+                                </p>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleRunInteractiveSearch(item)}
+                                  disabled={interactiveSearchLoading}
+                                  aria-label={t("label.search")}
+                                >
+                                  <Search className="h-4 w-4" />
+                                  <span className="ml-1">
+                                    {interactiveSearchLoading ? t("label.searching") : t("label.refresh")}
+                                  </span>
+                                </Button>
+                              </div>
+                              {interactiveSearchLoading ? (
+                                <div className="flex items-center gap-3 py-3">
+                                  <Loader2 className="h-5 w-5 animate-spin text-emerald-500" />
+                                  <p className="text-sm text-muted-foreground">{t("label.searching")}</p>
+                                </div>
+                              ) : interactiveSearchResults.length === 0 ? (
+                                <p className="text-sm text-muted-foreground">{t("nzb.noResultsYet")}</p>
+                              ) : (
+                                <SearchResultBuckets
+                                  results={interactiveSearchResults}
+                                  onQueue={(release) => handleQueueExistingFromInteractive(item, release)}
+                                  t={t}
+                                />
+                              )}
+                            </div>
                           </TableCell>
                         </TableRow>
                       ) : null}
-                    </TableBody>
-                  </Table>
+                    </React.Fragment>
+                  );
+                };
+
+                if (!useVirtualTable) {
+                  return (
+                    <Table>
+                      {titleTableHeader}
+                      <TableBody>
+                        {monitoredTitles.map(renderTitleRow)}
+                        {monitoredTitles.length === 0 && !titleLoading ? (
+                          <TableRow>
+                            <TableCell colSpan={columnCount} className="text-muted-foreground">
+                              {t("title.noManaged")}
+                            </TableCell>
+                          </TableRow>
+                        ) : null}
+                      </TableBody>
+                    </Table>
+                  );
+                }
+
+                const virtualItems = titleVirtualizer.getVirtualItems();
+
+                return (
+                  <div
+                    ref={titleTableScrollRef}
+                    className="relative w-full"
+                    style={{ maxHeight: "70vh", overflow: "auto" }}
+                  >
+                    <table className="w-full caption-bottom text-sm">
+                      <thead className="[&_tr]:border-b sticky top-0 z-10 bg-background">
+                        <TableRow>
+                          <TableHead className="w-14">{t("title.table.poster")}</TableHead>
+                          <TableHead>{t("title.table.name")}</TableHead>
+                          <TableHead>{t("title.table.qualityTier")}</TableHead>
+                          {isMovieView ? <TableHead>{t("title.table.size")}</TableHead> : null}
+                          <TableHead>{t("title.table.monitored")}</TableHead>
+                          <TableHead className="text-right">{t("title.table.actions")}</TableHead>
+                        </TableRow>
+                      </thead>
+                      {virtualItems.length > 0 ? (
+                        <>
+                          {virtualItems[0].start > 0 ? (
+                            <tbody aria-hidden>
+                              <tr><td style={{ height: virtualItems[0].start, padding: 0 }} /></tr>
+                            </tbody>
+                          ) : null}
+                          {virtualItems.map((virtualRow) => {
+                            const item = monitoredTitles[virtualRow.index];
+                            return (
+                              <tbody
+                                key={virtualRow.key}
+                                ref={titleVirtualizer.measureElement}
+                                data-index={virtualRow.index}
+                                className="[&_tr:last-child]:border-0"
+                              >
+                                {renderTitleRow(item)}
+                              </tbody>
+                            );
+                          })}
+                          {virtualItems[virtualItems.length - 1].end < titleVirtualizer.getTotalSize() ? (
+                            <tbody aria-hidden>
+                              <tr>
+                                <td
+                                  style={{
+                                    height: titleVirtualizer.getTotalSize() - virtualItems[virtualItems.length - 1].end,
+                                    padding: 0,
+                                  }}
+                                />
+                              </tr>
+                            </tbody>
+                          ) : null}
+                        </>
+                      ) : !titleLoading ? (
+                        <TableBody>
+                          <TableRow>
+                            <TableCell colSpan={columnCount} className="text-muted-foreground">
+                              {t("title.noManaged")}
+                            </TableCell>
+                          </TableRow>
+                        </TableBody>
+                      ) : null}
+                    </table>
+                  </div>
                 );
               })()}
             </CardContent>

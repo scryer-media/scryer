@@ -8,7 +8,6 @@ import { RootSidebar } from "@/components/root/root-sidebar";
 import { ViewLoadingFallback } from "@/components/common/view-loading-fallback";
 import { buildRouteCommands } from "@/components/root/route-commands";
 
-import { useGlobalSearch } from "@/lib/hooks/use-global-search";
 import { useGlobalStatusToast } from "@/lib/hooks/use-global-status-toast";
 import { useLanguage } from "@/lib/hooks/use-language";
 import { ScryerGraphqlProvider } from "@/lib/graphql/urql-provider";
@@ -16,6 +15,7 @@ import { useOnlineStatus } from "@/lib/hooks/use-online-status";
 import { useInstallPrompt } from "@/lib/hooks/use-install-prompt";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
 import type { ViewId, SettingsSection, ContentSettingsSection } from "@/components/root/types";
+import type { UseGlobalSearchResult } from "@/lib/hooks/use-global-search";
 import type {
   HomePageRouteState,
   Facet,
@@ -27,6 +27,7 @@ import {
   URL_PARAM_VIEW_DEPRECATED,
 } from "@/lib/constants/settings";
 import { AVAILABLE_LANGUAGES } from "@/lib/i18n";
+import type { LocaleCode, LanguageOption } from "@/lib/i18n";
 
 import {
   buildViewPath,
@@ -64,12 +65,151 @@ const WantedContainer = lazy(() =>
   import("@/components/containers/wanted-container").then((m) => ({ default: m.WantedContainer })),
 );
 
+const GlobalSearchProvider = lazy(() =>
+  import("@/components/root/global-search-provider").then((m) => ({ default: m.GlobalSearchProvider })),
+);
+
 function OverviewContainerForView({ view, ...props }: { view: ViewId; titleId: string; t: any; setGlobalStatus: (s: string) => void; onBackToList: () => void; onTitleNotFound: () => void }) {
   const facet = facetForView(view);
   if (facet?.hasEpisodes) {
     return <SeriesOverviewContainer {...props} />;
   }
   return <MovieOverviewContainer {...props} />;
+}
+
+/**
+ * Synchronises the active facet (derived from the current view) with the search
+ * state that lives inside the lazy-loaded GlobalSearchProvider.  Extracted into
+ * its own component so that the useEffect can reference the search-state setters
+ * that are only available inside the provider's render-prop.
+ */
+function ActiveFacetSync({
+  activeFacet,
+  setQueueFacet,
+  setTvdbCandidates,
+  setSearchResults,
+  setSelectedTvdbId,
+}: {
+  activeFacet: Facet;
+  setQueueFacet: (f: Facet) => void;
+  setTvdbCandidates: UseGlobalSearchResult["setTvdbCandidates"];
+  setSearchResults: UseGlobalSearchResult["setSearchResults"];
+  setSelectedTvdbId: UseGlobalSearchResult["setSelectedTvdbId"];
+}) {
+  useEffect(() => {
+    setQueueFacet(activeFacet);
+    setTvdbCandidates([]);
+    setSearchResults([]);
+    setSelectedTvdbId(null);
+  }, [activeFacet, setQueueFacet, setTvdbCandidates, setSearchResults, setSelectedTvdbId]);
+
+  return null;
+}
+
+/**
+ * Renders the main content area.  Extracted so that views needing search state
+ * (MediaContentContainer) can receive it via the searchState prop which comes
+ * from the GlobalSearchProvider render-prop, while non-search views are
+ * unaffected.
+ */
+function MainContent({
+  view,
+  t,
+  setGlobalStatus,
+  overviewTitleId,
+  handleBackToList,
+  handleTitleNotFound,
+  settingsSection,
+  userId,
+  username,
+  selectedLanguage,
+  uiLanguage,
+  setLanguagePreferenceFromShell,
+  contentSettingsSection,
+  queueFacet,
+  setQueueFacet,
+  searchState,
+  handleOpenOverview,
+  catalogChangeSignal,
+}: {
+  view: ViewId;
+  t: (key: string, values?: Record<string, string | number | boolean | null | undefined>) => string;
+  setGlobalStatus: (status: string) => void;
+  overviewTitleId: string | null;
+  handleBackToList: () => void;
+  handleTitleNotFound: () => void;
+  settingsSection: SettingsSection;
+  userId: string | undefined;
+  username: string | undefined;
+  selectedLanguage: LanguageOption;
+  uiLanguage: LocaleCode;
+  setLanguagePreferenceFromShell: (code: string) => void;
+  contentSettingsSection: ContentSettingsSection;
+  queueFacet: Facet;
+  setQueueFacet: (f: Facet) => void;
+  searchState: UseGlobalSearchResult;
+  handleOpenOverview: (targetView: ViewId, titleId: string) => void;
+  catalogChangeSignal: number;
+}) {
+  if (view === "activity") {
+    return <ActivityContainer key="activity" t={t} setGlobalStatus={setGlobalStatus} />;
+  }
+  if (view === "wanted") {
+    return <WantedContainer key="wanted" t={t} setGlobalStatus={setGlobalStatus} />;
+  }
+  if (view === "system") {
+    return <SystemContainer key="system" t={t} setGlobalStatus={setGlobalStatus} />;
+  }
+  if (isMediaView(view) && overviewTitleId) {
+    return (
+      <OverviewContainerForView
+        key={`${view}-overview-${overviewTitleId}`}
+        view={view}
+        titleId={overviewTitleId}
+        t={t}
+        setGlobalStatus={setGlobalStatus}
+        onBackToList={handleBackToList}
+        onTitleNotFound={handleTitleNotFound}
+      />
+    );
+  }
+  if (view === "settings") {
+    return (
+      <SettingsContainer
+        key="settings"
+        settingsSection={settingsSection}
+        t={t}
+        setGlobalStatus={setGlobalStatus}
+        userId={userId}
+        username={username}
+        availableLanguages={AVAILABLE_LANGUAGES}
+        selectedLanguage={selectedLanguage}
+        uiLanguage={uiLanguage}
+        onSelectLanguage={setLanguagePreferenceFromShell}
+      />
+    );
+  }
+  return (
+    <MediaContentContainer
+      key={`${view}-${contentSettingsSection}`}
+      t={t}
+      view={view}
+      contentSettingsSection={contentSettingsSection}
+      setGlobalStatus={setGlobalStatus}
+      queueFacet={queueFacet}
+      setQueueFacet={setQueueFacet}
+      runTvdbSearch={searchState.runTvdbSearch}
+      runSearch={searchState.runSearch}
+      searchNzbForSelectedTvdb={searchState.searchNzbForSelectedTvdb}
+      selectedTvdb={searchState.selectedTvdb}
+      tvdbCandidates={searchState.tvdbCandidates}
+      selectedTvdbId={searchState.selectedTvdbId}
+      selectTvdbCandidate={searchState.selectTvdbCandidate}
+      searchResults={searchState.searchResults}
+      onOpenOverview={handleOpenOverview}
+      catalogChangeSignal={catalogChangeSignal}
+    />
+  );
 }
 
 export default function HomePage({
@@ -244,7 +384,7 @@ function AuthenticatedHomePage({
     getLanguageLabel,
   } = useLanguage(searchParams);
 
-  const [globalStatus, setGlobalStatusRaw] = useState("");
+  const [globalStatus, setGlobalStatusRaw] = useState(() => t("label.ready"));
   const setGlobalStatus = useGlobalStatusToast(setGlobalStatusRaw);
 
   const setLanguagePreferenceFromShell = useCallback(
@@ -259,53 +399,9 @@ function AuthenticatedHomePage({
   const [catalogChangeSignal, setCatalogChangeSignal] = useState(0);
   const [installBannerDismissed, setInstallBannerDismissed] = useState(false);
 
-  const {
-    globalSearch,
-    setGlobalSearch,
-    globalSearchInputRef,
-    searching,
-    searchResults,
-    tvdbCandidates,
-    selectedTvdbId,
-    selectedTvdb,
-    runTvdbSearch,
-    selectTvdbCandidate,
-    searchNzbForSelectedTvdb,
-    runSearch,
-    setTvdbCandidates,
-    setSearchResults,
-    setSelectedTvdbId,
-    catalogSearchResults,
-    metadataSearchResults,
-    isGlobalSearchPanelOpen,
-    openGlobalSearchPanel,
-    closeGlobalSearchPanel,
-    catalogQualityProfileOptions,
-    resolveDefaultQualityProfileIdForFacet,
-    addMetadataSearchResultToCatalog,
-    isMetadataSearchResultInCatalog,
-  } = useGlobalSearch({
-    t,
-    setGlobalStatus,
-    queueFacet,
-    uiLanguage,
-    onCatalogChanged: useCallback(() => setCatalogChangeSignal((v) => v + 1), []),
-  });
+  const onCatalogChanged = useCallback(() => setCatalogChangeSignal((v) => v + 1), []);
 
   const activeFacet = useMemo<Facet>(() => facetForView(view)?.id ?? "movie", [view]);
-
-  useEffect(() => {
-    setQueueFacet(activeFacet);
-    setTvdbCandidates([]);
-    setSearchResults([]);
-    setSelectedTvdbId(null);
-  }, [activeFacet, setSearchResults, setSelectedTvdbId, setTvdbCandidates]);
-
-  useEffect(() => {
-    if (!globalStatus) {
-      setGlobalStatus(t("label.ready"));
-    }
-  }, [globalStatus, t]);
 
   const navigateTo = useCallback(
     (
@@ -410,126 +506,127 @@ function AuthenticatedHomePage({
     [routeCommandPalette, t],
   );
 
-  const mainContent = view === "activity" ? (
-    <ActivityContainer key="activity" t={t} setGlobalStatus={setGlobalStatus} />
-  ) : view === "wanted" ? (
-    <WantedContainer key="wanted" t={t} setGlobalStatus={setGlobalStatus} />
-  ) : view === "system" ? (
-    <SystemContainer key="system" t={t} setGlobalStatus={setGlobalStatus} />
-  ) : isMediaView(view) && overviewTitleId ? (
-    <OverviewContainerForView
-      key={`${view}-overview-${overviewTitleId}`}
-      view={view}
-      titleId={overviewTitleId}
-      t={t}
-      setGlobalStatus={setGlobalStatus}
-      onBackToList={() => navigateTo(view, undefined, "overview")}
-      onTitleNotFound={() => navigateTo(view, undefined, "overview")}
-    />
-  ) : view === "settings" ? (
-    <SettingsContainer
-      key="settings"
-      settingsSection={settingsSection}
-      t={t}
-      setGlobalStatus={setGlobalStatus}
-      userId={user?.id}
-      username={user?.username}
-      availableLanguages={AVAILABLE_LANGUAGES}
-      selectedLanguage={selectedLanguage}
-      uiLanguage={uiLanguage}
-      onSelectLanguage={setLanguagePreferenceFromShell}
-    />
-  ) : (
-    <MediaContentContainer
-      key={`${view}-${contentSettingsSection}`}
-      t={t}
-      view={view}
-      contentSettingsSection={contentSettingsSection}
-           setGlobalStatus={setGlobalStatus}
-      queueFacet={queueFacet}
-      setQueueFacet={setQueueFacet}
-      runTvdbSearch={runTvdbSearch}
-      runSearch={runSearch}
-      searchNzbForSelectedTvdb={searchNzbForSelectedTvdb}
-      selectedTvdb={selectedTvdb}
-      tvdbCandidates={tvdbCandidates}
-      selectedTvdbId={selectedTvdbId}
-      selectTvdbCandidate={selectTvdbCandidate}
-      searchResults={searchResults}
-      onOpenOverview={handleOpenOverview}
-      catalogChangeSignal={catalogChangeSignal}
-    />
+  const entitlements = useMemo(() => user?.entitlements ?? [], [user?.entitlements]);
+
+  const handleBackToList = useCallback(
+    () => navigateTo(view, undefined, "overview"),
+    [navigateTo, view],
+  );
+
+  const handleTitleNotFound = useCallback(
+    () => navigateTo(view, undefined, "overview"),
+    [navigateTo, view],
   );
 
   return (
     <ScryerGraphqlProvider language={uiLanguage}>
     <div className="min-h-screen bg-background text-foreground">
-      <RootHeader
-        t={t}
-        globalSearch={globalSearch}
-        onGlobalSearchChange={setGlobalSearch}
-        routeCommandPalette={routeCommandPaletteConfig}
-        catalogSearchResults={catalogSearchResults}
-        metadataSearchResults={metadataSearchResults}
-        isGlobalSearchPanelOpen={isGlobalSearchPanelOpen}
-        onOpenGlobalSearchPanel={openGlobalSearchPanel}
-        onCloseGlobalSearchPanel={closeGlobalSearchPanel}
-        catalogQualityProfileOptions={catalogQualityProfileOptions}
-        resolveDefaultQualityProfileIdForFacet={resolveDefaultQualityProfileIdForFacet}
-        onAddMetadataSearchResultToCatalog={addMetadataSearchResultToCatalog}
-        isMetadataSearchResultInCatalog={isMetadataSearchResultInCatalog}
-        searching={searching}
-        globalSearchInputRef={globalSearchInputRef}
-        globalStatus={globalStatus}
-        onOpenOverview={handleOpenOverview}
-      />
-
-      {!isOnline ? (
-        <div className="flex items-center justify-center gap-2 bg-amber-900/80 px-4 py-2 text-sm text-amber-100">
-          <WifiOff className="h-4 w-4 flex-none" />
-          <span>{t("pwa.offline")}</span>
-        </div>
-      ) : null}
-
-      {isMobile && canPrompt && !isInstalled && !installBannerDismissed ? (
-        <div className="flex items-center justify-center gap-3 bg-emerald-100 dark:bg-emerald-900/60 px-4 py-2 text-sm text-emerald-800 dark:text-emerald-100">
-          <Download className="h-4 w-4 flex-none" />
-          <span>{t("pwa.installApp")}</span>
-          <button
-            type="button"
-            onClick={() => void promptInstall()}
-            className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-medium text-foreground hover:bg-emerald-500"
-          >
-            {t("pwa.installApp")}
-          </button>
-          <button
-            type="button"
-            onClick={() => setInstallBannerDismissed(true)}
-            className="ml-auto text-emerald-700 dark:text-emerald-300 hover:text-foreground"
-            aria-label={t("label.dismiss")}
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      ) : null}
-
-      <div className="mx-auto w-full max-w-[1480px] px-3 pb-10 pt-4">
-        <RootSidebar
+      <Suspense fallback={<ViewLoadingFallback />}>
+        <GlobalSearchProvider
           t={t}
-          topNav={topNav}
-          view={view}
-          settingsSection={settingsSection}
-          contentSettingsSection={contentSettingsSection}
-          entitlements={user?.entitlements ?? []}
-          onNavigate={navigateTo}
+          setGlobalStatus={setGlobalStatus}
+          queueFacet={queueFacet}
+          uiLanguage={uiLanguage}
+          onCatalogChanged={onCatalogChanged}
         >
-          <main className="min-h-[70vh]">
-            <Suspense fallback={<ViewLoadingFallback />}>
-              {mainContent}
-            </Suspense>
-          </main>
-        </RootSidebar>
-      </div>
+          {(searchState) => (
+            <>
+              <ActiveFacetSync
+                activeFacet={activeFacet}
+                setQueueFacet={setQueueFacet}
+                setTvdbCandidates={searchState.setTvdbCandidates}
+                setSearchResults={searchState.setSearchResults}
+                setSelectedTvdbId={searchState.setSelectedTvdbId}
+              />
+              <RootHeader
+                t={t}
+                globalSearch={searchState.globalSearch}
+                onGlobalSearchChange={searchState.setGlobalSearch}
+                routeCommandPalette={routeCommandPaletteConfig}
+                catalogSearchResults={searchState.catalogSearchResults}
+                metadataSearchResults={searchState.metadataSearchResults}
+                isGlobalSearchPanelOpen={searchState.isGlobalSearchPanelOpen}
+                onOpenGlobalSearchPanel={searchState.openGlobalSearchPanel}
+                onCloseGlobalSearchPanel={searchState.closeGlobalSearchPanel}
+                catalogQualityProfileOptions={searchState.catalogQualityProfileOptions}
+                resolveDefaultQualityProfileIdForFacet={searchState.resolveDefaultQualityProfileIdForFacet}
+                onAddMetadataSearchResultToCatalog={searchState.addMetadataSearchResultToCatalog}
+                isMetadataSearchResultInCatalog={searchState.isMetadataSearchResultInCatalog}
+                searching={searchState.searching}
+                globalSearchInputRef={searchState.globalSearchInputRef}
+                globalStatus={globalStatus}
+                onOpenOverview={handleOpenOverview}
+              />
+
+              {!isOnline ? (
+                <div className="flex items-center justify-center gap-2 bg-amber-900/80 px-4 py-2 text-sm text-amber-100">
+                  <WifiOff className="h-4 w-4 flex-none" />
+                  <span>{t("pwa.offline")}</span>
+                </div>
+              ) : null}
+
+              {isMobile && canPrompt && !isInstalled && !installBannerDismissed ? (
+                <div className="flex items-center justify-center gap-3 bg-emerald-100 dark:bg-emerald-900/60 px-4 py-2 text-sm text-emerald-800 dark:text-emerald-100">
+                  <Download className="h-4 w-4 flex-none" />
+                  <span>{t("pwa.installApp")}</span>
+                  <button
+                    type="button"
+                    onClick={() => void promptInstall()}
+                    className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-medium text-foreground hover:bg-emerald-500"
+                  >
+                    {t("pwa.installApp")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setInstallBannerDismissed(true)}
+                    className="ml-auto text-emerald-700 dark:text-emerald-300 hover:text-foreground"
+                    aria-label={t("label.dismiss")}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : null}
+
+              <div className="mx-auto w-full max-w-[1480px] px-3 pb-10 pt-4">
+                <RootSidebar
+                  t={t}
+                  topNav={topNav}
+                  view={view}
+                  settingsSection={settingsSection}
+                  contentSettingsSection={contentSettingsSection}
+                  entitlements={entitlements}
+                  onNavigate={navigateTo}
+                >
+                  <main className="min-h-[70vh]">
+                    <Suspense fallback={<ViewLoadingFallback />}>
+                      <MainContent
+                        view={view}
+                        t={t}
+                        setGlobalStatus={setGlobalStatus}
+                        overviewTitleId={overviewTitleId}
+                        handleBackToList={handleBackToList}
+                        handleTitleNotFound={handleTitleNotFound}
+                        settingsSection={settingsSection}
+                        userId={user?.id}
+                        username={user?.username}
+                        selectedLanguage={selectedLanguage}
+                        uiLanguage={uiLanguage}
+                        setLanguagePreferenceFromShell={setLanguagePreferenceFromShell}
+                        contentSettingsSection={contentSettingsSection}
+                        queueFacet={queueFacet}
+                        setQueueFacet={setQueueFacet}
+                        searchState={searchState}
+                        handleOpenOverview={handleOpenOverview}
+                        catalogChangeSignal={catalogChangeSignal}
+                      />
+                    </Suspense>
+                  </main>
+                </RootSidebar>
+              </div>
+            </>
+          )}
+        </GlobalSearchProvider>
+      </Suspense>
     </div>
     </ScryerGraphqlProvider>
   );
