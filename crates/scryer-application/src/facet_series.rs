@@ -68,8 +68,7 @@ impl FacetHandler for SeriesFacetHandler {
 
     fn default_rename_template(&self) -> &str {
         match self.media_facet {
-            MediaFacet::Anime => "{title} - {absolute_episode} - {quality}.{ext}",
-            _ => "{title} - S{season:2}E{episode:2} - {quality}.{ext}",
+            _ => "{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}",
         }
     }
 

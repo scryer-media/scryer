@@ -29,10 +29,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SearchResultBuckets } from "@/components/common/release-search-results";
 import { searchSeriesEpisodeQuery } from "@/lib/graphql/queries";
 import { queueExistingMutation } from "@/lib/graphql/mutations";
+import { smgClient } from "@/lib/graphql/urql-client";
+import {
+  SMG_SEARCH_QUERY,
+  type MetadataTvdbSearchItem,
+} from "@/lib/graphql/smg-queries";
 import {
   QUALITY_PROFILE_PREFIX,
   ROOT_FOLDER_PREFIX,
   SEASON_FOLDER_PREFIX,
+  FILLER_POLICY_PREFIX,
+  RECAP_POLICY_PREFIX,
   getTagValue,
   setTagValue,
   removeTagByPrefix,
@@ -48,7 +55,6 @@ import type {
   TitleEvent,
   TitleReleaseBlocklistEntry,
 } from "@/components/containers/series-overview-container";
-import { AnimeMetadataPanel } from "@/components/views/anime-metadata-panel";
 import type { DownloadQueueItem } from "@/lib/types/download-queue";
 
 function formatDate(iso: string | null | undefined) {
@@ -76,6 +82,49 @@ function formatRuntimeFromMinutes(runtimeMinutes: number | null | undefined) {
     return `${minutes}m`;
   }
   return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+}
+
+function getImdbUrl(imdbId: string | null | undefined) {
+  if (!imdbId) return null;
+  const trimmed = imdbId.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("tt")) {
+    return `https://www.imdb.com/title/${trimmed}`;
+  }
+  return `https://www.imdb.com/find?q=${encodeURIComponent(trimmed)}&s=tt`;
+}
+
+function getTvdbMovieUrl(metadata: MetadataTvdbSearchItem) {
+  const tvdbId = String(metadata.tvdb_id).trim();
+  if (!tvdbId) return null;
+  const slug = metadata.slug?.trim();
+  const base = "https://www.thetvdb.com";
+  if (slug) {
+    const segment = metadata.type?.toLowerCase() === "movie" ? "movies" : "series";
+    return `${base}/${segment}/${tvdbId}-${encodeURIComponent(slug)}`;
+  }
+  return `${base}/?id=${encodeURIComponent(tvdbId)}`;
+}
+
+function normalizeMovieCollectionLabel(label: string | null | undefined) {
+  if (!label) return null;
+  const trimmed = label.trim();
+  if (!trimmed) return null;
+  return /^movie\s+\d+$/i.test(trimmed) ? null : trimmed;
+}
+
+function dedupeInsensitive(values: string[]) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(trimmed);
+  }
+  return result;
 }
 
 function formatFileSize(bytes: number) {
@@ -251,6 +300,8 @@ function TitleSettingsPanel({
   const currentProfileId = getTagValue(title.tags, QUALITY_PROFILE_PREFIX) ?? INHERIT_VALUE;
   const currentRootFolder = getTagValue(title.tags, ROOT_FOLDER_PREFIX) ?? "";
   const currentSeasonFolder = getTagValue(title.tags, SEASON_FOLDER_PREFIX) ?? "enabled";
+  const currentFillerPolicy = getTagValue(title.tags, FILLER_POLICY_PREFIX) ?? INHERIT_VALUE;
+  const currentRecapPolicy = getTagValue(title.tags, RECAP_POLICY_PREFIX) ?? INHERIT_VALUE;
   const [rootFolderDraft, setRootFolderDraft] = React.useState(currentRootFolder || defaultRootFolder);
   const [saving, setSaving] = React.useState(false);
 
@@ -294,6 +345,32 @@ function TitleSettingsPanel({
     setSaving(true);
     try {
       await onUpdateTitleTags(setTagValue(title.tags, SEASON_FOLDER_PREFIX, value));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleFillerPolicyChange = async (value: string) => {
+    setSaving(true);
+    try {
+      const newTags =
+        value === INHERIT_VALUE
+          ? removeTagByPrefix(title.tags, FILLER_POLICY_PREFIX)
+          : setTagValue(title.tags, FILLER_POLICY_PREFIX, value);
+      await onUpdateTitleTags(newTags);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRecapPolicyChange = async (value: string) => {
+    setSaving(true);
+    try {
+      const newTags =
+        value === INHERIT_VALUE
+          ? removeTagByPrefix(title.tags, RECAP_POLICY_PREFIX)
+          : setTagValue(title.tags, RECAP_POLICY_PREFIX, value);
+      await onUpdateTitleTags(newTags);
     } finally {
       setSaving(false);
     }
@@ -372,6 +449,50 @@ function TitleSettingsPanel({
             </SelectContent>
           </Select>
         </div>
+
+        {title.facet === "anime" ? (
+          <>
+            <div className="min-w-[180px]">
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                {t("settings.fillerPolicyLabel")}
+              </label>
+              <Select
+                value={currentFillerPolicy}
+                onValueChange={(v) => void handleFillerPolicyChange(v)}
+                disabled={saving}
+              >
+                <SelectTrigger className="h-9 w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={INHERIT_VALUE}>{t("title.inheritDefault")}</SelectItem>
+                  <SelectItem value="download_all">{t("settings.fillerPolicyDownloadAll")}</SelectItem>
+                  <SelectItem value="skip_filler">{t("settings.fillerPolicySkipFiller")}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="min-w-[180px]">
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                {t("settings.recapPolicyLabel")}
+              </label>
+              <Select
+                value={currentRecapPolicy}
+                onValueChange={(v) => void handleRecapPolicyChange(v)}
+                disabled={saving}
+              >
+                <SelectTrigger className="h-9 w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={INHERIT_VALUE}>{t("title.inheritDefault")}</SelectItem>
+                  <SelectItem value="download_all">{t("settings.recapPolicyDownloadAll")}</SelectItem>
+                  <SelectItem value="skip_recap">{t("settings.recapPolicySkipRecap")}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </>
+        ) : null}
       </div>
     </div>
   );
@@ -462,6 +583,15 @@ export function SeriesOverviewView({
   const [searchResultsByEpisode, setSearchResultsByEpisode] = React.useState<Record<string, Release[]>>({});
   const [searchLoadingByEpisode, setSearchLoadingByEpisode] = React.useState<Record<string, boolean>>({});
   const [autoSearchLoadingByEpisode, setAutoSearchLoadingByEpisode] = React.useState<
+    Record<string, boolean>
+  >({});
+  const [interstitialMovieMetadataByCollection, setInterstitialMovieMetadataByCollection] = React.useState<
+    Record<string, MetadataTvdbSearchItem | null>
+  >({});
+  const [interstitialMovieMetadataLoadedByCollection, setInterstitialMovieMetadataLoadedByCollection] = React.useState<
+    Record<string, boolean>
+  >({});
+  const [interstitialMovieMetadataLoadingByCollection, setInterstitialMovieMetadataLoadingByCollection] = React.useState<
     Record<string, boolean>
   >({});
 
@@ -621,6 +751,63 @@ export function SeriesOverviewView({
     [onAutoSearchEpisode, setGlobalStatus, t],
   );
 
+  const handleLoadInterstitialMovieMetadata = React.useCallback((collectionId: string, candidates: string[]) => {
+    if (
+      interstitialMovieMetadataLoadedByCollection[collectionId] ||
+      interstitialMovieMetadataLoadingByCollection[collectionId]
+    ) {
+      return;
+    }
+
+    const searchCandidates = dedupeInsensitive(
+      candidates
+        .map((candidate) => candidate.replace(/\s+/g, " "))
+        .filter((candidate) => candidate.trim().length > 0)
+        .map((candidate) => normalizeMovieCollectionLabel(candidate))
+        .filter((candidate): candidate is string => candidate != null),
+    );
+    if (title?.name) {
+      searchCandidates.push(title.name.trim());
+    }
+    const searchQuery = searchCandidates[0];
+    if (!searchQuery) {
+      setInterstitialMovieMetadataLoadedByCollection((prev) => ({ ...prev, [collectionId]: true }));
+      setInterstitialMovieMetadataByCollection((prev) => ({ ...prev, [collectionId]: null }));
+      return;
+    }
+
+    setInterstitialMovieMetadataLoadingByCollection((prev) => ({ ...prev, [collectionId]: true }));
+    const metadataLanguage = title?.metadataLanguage?.trim() || "eng";
+    const query = searchQuery;
+
+    smgClient
+      .query(SMG_SEARCH_QUERY, {
+        query,
+        type: "movie",
+        limit: 6,
+        language: metadataLanguage,
+      })
+      .toPromise()
+      .then((result) => {
+        if (result.error) {
+          throw result.error;
+        }
+        const found = result.data?.searchTvdb?.results?.[0] ?? null;
+        setInterstitialMovieMetadataByCollection((prev) => ({ ...prev, [collectionId]: found }));
+      })
+      .catch(() => {
+        setInterstitialMovieMetadataByCollection((prev) => ({ ...prev, [collectionId]: null }));
+      })
+      .finally(() => {
+        setInterstitialMovieMetadataLoadingByCollection((prev) => {
+          const next = { ...prev };
+          delete next[collectionId];
+          return next;
+        });
+        setInterstitialMovieMetadataLoadedByCollection((prev) => ({ ...prev, [collectionId]: true }));
+      });
+  }, [title, interstitialMovieMetadataLoadedByCollection, interstitialMovieMetadataLoadingByCollection]);
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -770,14 +957,6 @@ export function SeriesOverviewView({
         </CardContent>
       </Card>
 
-      {title.facet === "anime" ? (
-        <AnimeMetadataPanel
-          tags={title.tags}
-          episodesByCollection={episodesByCollection}
-          t={t}
-        />
-      ) : null}
-
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -806,13 +985,18 @@ export function SeriesOverviewView({
               ].sort((left, right) => episodeSortValue(right) - episodeSortValue(left));
 
               return (
-                <SeasonSection
+                  <SeasonSection
                   key={key}
                   collection={collection}
                   episodes={sortedEpisodes}
+                  titleName={title.name}
                   facet={title.facet}
                   expanded={expandedKeys.has(key)}
                   onToggle={() => toggleKey(key)}
+                  onLoadInterstitialMovieMetadata={handleLoadInterstitialMovieMetadata}
+                  interstitialMovieMetadata={interstitialMovieMetadataByCollection[collection.id] ?? null}
+                  interstitialMovieMetadataLoaded={interstitialMovieMetadataLoadedByCollection[collection.id] ?? false}
+                  interstitialMovieMetadataLoading={interstitialMovieMetadataLoadingByCollection[collection.id] ?? false}
                   expandedEpisodeRows={expandedEpisodeRows}
                   episodeActiveTab={episodeActiveTab}
                   mediaFilesByEpisode={mediaFilesByEpisode}
@@ -889,6 +1073,7 @@ export function SeriesOverviewView({
 function SeasonSection({
   collection,
   episodes,
+  titleName,
   expanded,
   facet,
   onToggle,
@@ -907,11 +1092,16 @@ function SeasonSection({
   onAutoSearchEpisode,
   onSetCollectionMonitored,
   onSetEpisodeMonitored,
+  onLoadInterstitialMovieMetadata,
+  interstitialMovieMetadata,
+  interstitialMovieMetadataLoaded,
+  interstitialMovieMetadataLoading,
   t,
 }: {
   collection: TitleCollection;
   facet: string;
   episodes: CollectionEpisode[];
+  titleName: string;
   expanded: boolean;
   onToggle: () => void;
   expandedEpisodeRows: Set<string>;
@@ -929,6 +1119,10 @@ function SeasonSection({
   onAutoSearchEpisode?: (episode: CollectionEpisode) => void;
   onSetCollectionMonitored?: (collectionId: string, monitored: boolean) => Promise<void>;
   onSetEpisodeMonitored?: (episodeId: string, monitored: boolean) => Promise<void>;
+  onLoadInterstitialMovieMetadata: (collectionId: string, candidates: string[]) => void;
+  interstitialMovieMetadata: MetadataTvdbSearchItem | null;
+  interstitialMovieMetadataLoaded: boolean;
+  interstitialMovieMetadataLoading: boolean;
   t: Translate;
 }) {
   const Chevron = expanded ? ChevronDown : ChevronRight;
@@ -942,6 +1136,18 @@ function SeasonSection({
     if (monitoredCount === episodes.length) return true;
     return "indeterminate";
   }, [episodes, collection.monitored]);
+
+  React.useEffect(() => {
+    if (!expanded || collection.collectionType !== "interstitial") return;
+    const candidates = dedupeInsensitive([
+      ...episodes
+        .map((episode) => episode.title?.trim() ?? episode.episodeLabel?.trim() ?? "")
+        .filter((candidate): candidate is string => candidate.length > 0),
+      normalizeMovieCollectionLabel(collection.label) ?? "",
+      titleName,
+    ]);
+    onLoadInterstitialMovieMetadata(collection.id, candidates);
+  }, [collection.collectionType, collection.id, collection.label, episodes, expanded, titleName, onLoadInterstitialMovieMetadata]);
 
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-background/40">
@@ -1008,7 +1214,20 @@ function SeasonSection({
       {expanded ? (
         collection.collectionType === "interstitial" ? (
           <div className="border-t border-border px-4 py-3 text-sm text-muted-foreground">
-            Canon movie installment. Positioned in narrative viewing order.
+            {interstitialMovieMetadataLoading ? (
+              <div className="flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin text-emerald-500" />
+                <span>Loading movie metadata…</span>
+              </div>
+            ) : interstitialMovieMetadataLoaded ? (
+              interstitialMovieMetadata ? (
+                <InterstitialMoviePanel movie={interstitialMovieMetadata} />
+              ) : (
+                <p>No metadata found for this movie in the catalog.</p>
+              )
+            ) : (
+              <p>Unable to identify a movie title to look up metadata.</p>
+            )}
           </div>
         ) : episodes.length === 0 ? (
           <div className="border-t border-border px-4 py-3 text-sm text-muted-foreground">
@@ -1094,6 +1313,11 @@ function SeasonSection({
                           {episode.isFiller ? (
                             <span className="rounded border border-orange-500/30 bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-medium text-orange-700 dark:text-orange-300">
                               {t("episode.filler")}
+                            </span>
+                          ) : null}
+                          {episode.isRecap ? (
+                            <span className="rounded border border-amber-500/30 bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                              {t("episode.recap")}
                             </span>
                           ) : null}
                           {episode.hasMultiAudio ? (
@@ -1272,6 +1496,75 @@ function EpisodeDetailsPanel({
         ) : (
           <p className="text-sm italic text-muted-foreground/60">{t("episode.noFile")}</p>
         )}
+      </div>
+    </div>
+  );
+}
+
+function InterstitialMoviePanel({ movie }: { movie: MetadataTvdbSearchItem }) {
+  const imdbUrl = getImdbUrl(movie.imdb_id);
+  const tvdbUrl = getTvdbMovieUrl(movie);
+  const runtime = formatRuntimeFromMinutes(movie.runtime_minutes);
+
+  return (
+    <div className="flex items-start gap-4">
+      <div className="shrink-0">
+        {movie.poster_url ? (
+          <img
+            src={movie.poster_url}
+            alt={movie.name}
+            className="h-auto w-[140px] rounded-lg object-cover shadow-md"
+          />
+        ) : (
+          <div className="flex h-[210px] w-[140px] items-center justify-center rounded-lg bg-muted text-sm text-muted-foreground/60">
+            No Poster
+          </div>
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold text-card-foreground">{movie.name}</p>
+        <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
+          {movie.year ? (
+            <span>{movie.year}</span>
+          ) : null}
+          {runtime ? (
+            <span>{runtime}</span>
+          ) : null}
+          {movie.status ? (
+            <span className="capitalize">{movie.status}</span>
+          ) : null}
+        </div>
+        {movie.overview ? (
+          <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{movie.overview}</p>
+        ) : (
+          <p className="mt-3 text-sm italic text-muted-foreground/60">No description available.</p>
+        )}
+        <div className="mt-3 flex flex-wrap gap-2 text-sm">
+          {imdbUrl ? (
+            <a
+              href={imdbUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex h-10 items-center gap-2 rounded-md border border-border bg-card/45 px-3 py-2 text-xs text-card-foreground hover:bg-muted"
+              aria-label="Open on IMDb"
+            >
+              <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
+              IMDb
+            </a>
+          ) : null}
+          {tvdbUrl ? (
+            <a
+              href={tvdbUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex h-10 items-center gap-2 rounded-md border border-border bg-card/45 px-3 py-2 text-xs text-card-foreground hover:bg-muted"
+              aria-label="Open on TVDB"
+            >
+              <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
+              TVDB
+            </a>
+          ) : null}
+        </div>
       </div>
     </div>
   );

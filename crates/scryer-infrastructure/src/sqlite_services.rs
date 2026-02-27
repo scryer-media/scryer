@@ -495,6 +495,24 @@ impl SqliteServices {
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
+    pub async fn delete_quality_profile(
+        &self,
+        profile_id: impl Into<String>,
+    ) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::DeleteQualityProfile {
+                profile_id: profile_id.into(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
     pub async fn get_import_by_source_ref(
         &self,
         source_system: &str,

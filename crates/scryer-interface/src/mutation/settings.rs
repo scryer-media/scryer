@@ -1,6 +1,6 @@
 use async_graphql::{Context, Error, Object, Result as GqlResult};
 use chrono::Utc;
-use scryer_application::QUALITY_PROFILE_CATALOG_KEY;
+use scryer_application::{QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY};
 use scryer_domain::Entitlement;
 use serde_json::json;
 
@@ -136,6 +136,126 @@ impl SettingsMutations {
             scope_id: input.scope_id,
             items,
             quality_profiles: quality_profiles_json,
+        })
+    }
+
+    async fn delete_quality_profile(
+        &self,
+        ctx: &Context<'_>,
+        input: DeleteQualityProfileInput,
+    ) -> GqlResult<AdminSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let db = settings_db_from_ctx(ctx)?;
+
+        let profile_id = input.profile_id.trim().to_string();
+        if profile_id.is_empty() {
+            return Err(Error::new("profile_id is required"));
+        }
+
+        // Check if this profile is the global default.
+        let global_setting = db
+            .get_setting_with_defaults(
+                "system".to_string(),
+                QUALITY_PROFILE_ID_KEY.to_string(),
+                None::<String>,
+            )
+            .await
+            .map_err(to_gql_error)?;
+        if let Some(record) = &global_setting {
+            let effective: String = serde_json::from_str(&record.effective_value_json)
+                .unwrap_or_default();
+            if effective.trim() == profile_id {
+                return Err(Error::new(
+                    "cannot delete this profile because it is set as the global default quality profile",
+                ));
+            }
+        }
+
+        // Check if this profile is a category override.
+        for scope_id in &["movie", "series", "anime"] {
+            let category_setting = db
+                .get_setting_with_defaults(
+                    "system".to_string(),
+                    QUALITY_PROFILE_ID_KEY.to_string(),
+                    Some(scope_id.to_string()),
+                )
+                .await
+                .map_err(to_gql_error)?;
+            if let Some(record) = &category_setting {
+                if record.value_json.is_none() {
+                    continue;
+                }
+                let value: String = serde_json::from_str(
+                    record.value_json.as_deref().unwrap_or("\"\""),
+                )
+                .unwrap_or_default();
+                if value.trim() == profile_id {
+                    return Err(Error::new(format!(
+                        "cannot delete this profile because it is set as the quality profile override for {scope_id}",
+                    )));
+                }
+            }
+        }
+
+        // Delete the profile from the DB.
+        db.delete_quality_profile(&profile_id)
+            .await
+            .map_err(to_gql_error)?;
+
+        // Rebuild the catalog text from remaining profiles and persist it.
+        let remaining_profiles = app
+            .services
+            .quality_profiles
+            .list_quality_profiles("system", None)
+            .await
+            .map_err(to_gql_error)?;
+        let catalog_text = serde_json::to_string(&remaining_profiles).map_err(|error| {
+            Error::new(format!("failed to encode quality profiles: {error}"))
+        })?;
+        db.upsert_setting_value(
+            "system".to_string(),
+            QUALITY_PROFILE_CATALOG_KEY.to_string(),
+            None,
+            catalog_text,
+            "admin_graphql",
+            Some(actor.id.clone()),
+        )
+        .await
+        .map_err(to_gql_error)?;
+
+        let _ = app
+            .services
+            .record_activity_event(
+                Some(actor.id.clone()),
+                None,
+                scryer_application::ActivityKind::SettingSaved,
+                format!("quality profile '{profile_id}' deleted"),
+                scryer_application::ActivitySeverity::Success,
+                vec![
+                    scryer_application::ActivityChannel::Toast,
+                    scryer_application::ActivityChannel::WebUi,
+                ],
+            )
+            .await;
+
+        // Return refreshed system settings.
+        let items = db
+            .list_settings_with_defaults("system".to_string(), None)
+            .await
+            .map_err(to_gql_error)?
+            .into_iter()
+            .map(map_admin_setting)
+            .collect();
+
+        Ok(AdminSettingsPayload {
+            scope: "system".to_string(),
+            scope_id: None,
+            items,
+            quality_profiles: None,
         })
     }
 

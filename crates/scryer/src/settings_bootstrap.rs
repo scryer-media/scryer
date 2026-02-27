@@ -104,7 +104,7 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             scope: SETTINGS_SCOPE_SYSTEM,
             key_name: RENAME_TEMPLATE_MOVIE_GLOBAL_KEY,
             data_type: "string",
-            default_value_json: "\"{title} ({year}) - {quality}.{ext}\"",
+            default_value_json: "\"{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}\"",
             is_sensitive: false,
         },
         ServiceSettingSeed {
@@ -112,7 +112,7 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             scope: SETTINGS_SCOPE_SYSTEM,
             key_name: RENAME_TEMPLATE_SERIES_GLOBAL_KEY,
             data_type: "string",
-            default_value_json: "\"{title} - S{season:2}E{episode:2} - {quality}.{ext}\"",
+            default_value_json: "\"{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}\"",
             is_sensitive: false,
         },
         ServiceSettingSeed {
@@ -120,7 +120,7 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             scope: SETTINGS_SCOPE_SYSTEM,
             key_name: RENAME_TEMPLATE_ANIME_GLOBAL_KEY,
             data_type: "string",
-            default_value_json: "\"{title} - {absolute_episode} - {quality}.{ext}\"",
+            default_value_json: "\"{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}\"",
             is_sensitive: false,
         },
         ServiceSettingSeed {
@@ -305,7 +305,7 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             scope: SETTINGS_SCOPE_SYSTEM,
             key_name: "anime.monitor_specials",
             data_type: "string",
-            default_value_json: "\"true\"",
+            default_value_json: "\"false\"",
             is_sensitive: false,
         },
         ServiceSettingSeed {

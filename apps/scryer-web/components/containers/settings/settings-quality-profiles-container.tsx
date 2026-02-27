@@ -48,6 +48,7 @@ export function SettingsQualityProfilesContainer({
     categoryQualityProfileOverrides,
     setCategoryQualityProfileOverrides,
     categoryQualityProfileSaving,
+    deleteQualityProfile,
     saveCategoryQualityProfile,
     toProfileOptions,
   } = useQualityProfilesManager({ setGlobalStatus, t });
@@ -92,6 +93,7 @@ export function SettingsQualityProfilesContainer({
     categoryQualityProfileSaving={categoryQualityProfileSaving}
     saveCategoryQualityProfile={saveCategoryQualityProfile}
     archivalQualityOptions={archivalQualityOptions}
+    deleteQualityProfile={deleteQualityProfile}
   />
   );
 }

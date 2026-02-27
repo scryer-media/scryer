@@ -136,6 +136,7 @@ const COLLECTION_EPISODE_FIELDS = `
     hasMultiAudio
     hasSubtitle
     isFiller
+    isRecap
     absoluteNumber
     monitored
     createdAt`;
@@ -284,6 +285,8 @@ export const collectionEpisodesQuery = `query CollectionEpisodes($collectionId: 
     durationSeconds
     hasMultiAudio
     hasSubtitle
+    isFiller
+    isRecap
     monitored
     createdAt
   }

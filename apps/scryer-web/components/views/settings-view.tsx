@@ -86,6 +86,7 @@ export function SettingsView({
     categoryQualityProfileSaving,
     saveCategoryQualityProfile,
     saveGlobalQualityProfile,
+    deleteQualityProfile,
     settingsIndexerFilter,
     setSettingsIndexerFilter,
     indexerDraft,
@@ -190,6 +191,7 @@ export function SettingsView({
             saveCategoryQualityProfile={saveCategoryQualityProfile}
             archivalQualityOptions={archivalQualityOptions}
             initialLoadComplete={initialLoadComplete ?? true}
+            deleteQualityProfile={deleteQualityProfile as (profileId: string) => Promise<void>}
           />
         ) : settingsSection === "downloadClients" ? (
           <SettingsDownloadClientsSection

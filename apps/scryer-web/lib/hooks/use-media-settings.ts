@@ -56,6 +56,7 @@ export type UseMediaSettingsResult = {
   mediaSettingsSaving: boolean;
   qualityProfiles: SearchableQualityProfileBody[];
   qualityProfileParseError: string;
+  globalQualityProfileId: string;
   categoryQualityProfileOverrides: Record<ViewCategoryId, string>;
   setCategoryQualityProfileOverrides: React.Dispatch<
     React.SetStateAction<Record<ViewCategoryId, string>>
@@ -105,6 +106,8 @@ const ALLOWED_RENAME_MISSING_METADATA_POLICIES = new Set(["skip", "fallback_titl
 const ALLOWED_FILLER_POLICIES = new Set(["download_all", "skip_filler"]);
 const DEFAULT_RECAP_POLICY = "download_all";
 const ALLOWED_RECAP_POLICIES = new Set(["download_all", "skip_recap"]);
+const DEFAULT_RENAME_TEMPLATE =
+  "{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}";
 
 export function useMediaSettings({
   activeQualityScopeId,
@@ -119,6 +122,7 @@ export function useMediaSettings({
   const [mediaSettingsSaving, setMediaSettingsSaving] = React.useState(false);
   const [qualityProfiles, setQualityProfiles] = React.useState<SearchableQualityProfileBody[]>([]);
   const [qualityProfileParseError, setQualityProfileParseError] = React.useState("");
+  const [globalQualityProfileId, setGlobalQualityProfileId] = React.useState("");
   const [categoryQualityProfileOverrides, setCategoryQualityProfileOverrides] = React.useState<
     Record<ViewCategoryId, string>
   >({
@@ -129,9 +133,9 @@ export function useMediaSettings({
   const [categoryRenameTemplates, setCategoryRenameTemplates] = React.useState<
     Record<ViewCategoryId, string>
   >({
-    movie: "",
-    series: "",
-    anime: "",
+    movie: DEFAULT_RENAME_TEMPLATE,
+    series: DEFAULT_RENAME_TEMPLATE,
+    anime: DEFAULT_RENAME_TEMPLATE,
   });
   const [categoryRenameCollisionPolicies, setCategoryRenameCollisionPolicies] = React.useState<
     Record<ViewCategoryId, string>
@@ -165,7 +169,7 @@ export function useMediaSettings({
   >({
     movie: "true",
     series: "true",
-    anime: "true",
+    anime: "false",
   });
   const [categoryInterSeasonMovies, setCategoryInterSeasonMovies] = React.useState<
     Record<ViewCategoryId, string>
@@ -264,6 +268,18 @@ export function useMediaSettings({
       const nextProfileText = payload.qualityProfiles ?? getSettingDisplayValue(profileCatalogRecord);
       const nextProfiles = normalizeQualityProfiles(nextProfileText);
 
+      const globalProfileRecord = payload.items.find(
+        (item) => item.keyName === QUALITY_PROFILE_ID_KEY,
+      );
+      const rawGlobalProfileId = getSettingDisplayValue(globalProfileRecord).trim();
+      const resolvedGlobalId =
+        rawGlobalProfileId && nextProfiles.some((p) => p.id === rawGlobalProfileId)
+          ? rawGlobalProfileId
+          : (nextProfiles[0]?.id ?? "");
+      setGlobalQualityProfileId((current) =>
+        current === resolvedGlobalId ? current : resolvedGlobalId,
+      );
+
       setQualityProfiles((currentProfiles) =>
         currentProfiles.length === nextProfiles.length &&
         currentProfiles.every((profile, index) =>
@@ -317,7 +333,7 @@ export function useMediaSettings({
           const scopedTemplate = getSettingDisplayValue(categoryTemplateRecord).trim();
           const globalTemplateRecord = systemItemsByKey[RENAME_TEMPLATE_GLOBAL_KEYS[scopeId]];
           const globalTemplate = getSettingDisplayValue(globalTemplateRecord).trim();
-          const nextTemplate = scopedTemplate || globalTemplate;
+          const nextTemplate = scopedTemplate || globalTemplate || DEFAULT_RENAME_TEMPLATE;
 
           if (next[scopeId] !== nextTemplate) {
             next[scopeId] = nextTemplate;
@@ -426,7 +442,7 @@ export function useMediaSettings({
           (item) => item.keyName === ANIME_MONITOR_SPECIALS_KEY,
         );
         const rawValue = getSettingDisplayValue(monitorRecord).trim().toLowerCase();
-        const nextValue = rawValue === "false" ? "false" : "true";
+        const nextValue = rawValue === "true" ? "true" : "false";
         if (previous.anime === nextValue) return previous;
         return { ...previous, anime: nextValue };
       });
@@ -662,7 +678,7 @@ export function useMediaSettings({
           const rawMonitor = getSettingDisplayValue(persistedMonitorSpecialsRecord).trim().toLowerCase();
           setCategoryMonitorSpecials((previous) => ({
             ...previous,
-            anime: rawMonitor === "false" ? "false" : "true",
+            anime: rawMonitor === "true" ? "true" : "false",
           }));
 
           const persistedInterSeasonMoviesRecord = categoryResponse.saveAdminSettings.items.find(
@@ -765,6 +781,7 @@ export function useMediaSettings({
     mediaSettingsSaving,
     qualityProfiles,
     qualityProfileParseError,
+    globalQualityProfileId,
     categoryQualityProfileOverrides,
     setCategoryQualityProfileOverrides,
     categoryRenameTemplates,

@@ -103,6 +103,7 @@ export type CollectionEpisode = {
   hasMultiAudio: boolean;
   hasSubtitle: boolean;
   isFiller: boolean;
+  isRecap: boolean;
   absoluteNumber: string | null;
   monitored: boolean;
   createdAt: string;

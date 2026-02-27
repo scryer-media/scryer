@@ -214,6 +214,30 @@ export const saveAdminSettingsMutation = `mutation SaveAdminSettings($input: Adm
   }
 }`;
 
+export const deleteQualityProfileMutation = `mutation DeleteQualityProfile($input: DeleteQualityProfileInput!) {
+  deleteQualityProfile(input: $input) {
+    scope
+    scopeId
+    items {
+      category
+      scope
+      keyName
+      dataType
+      defaultValueJson
+      effectiveValueJson
+      valueJson
+      source
+      hasOverride
+      isSensitive
+      validationJson
+      scopeId
+      updatedByUserId
+      createdAt
+      updatedAt
+    }
+  }
+}`;
+
 export const queueExistingMutation = `mutation QueueExisting($input: QueueDownloadInput!) {
   queueExistingTitleDownload(input: $input)
 }`;

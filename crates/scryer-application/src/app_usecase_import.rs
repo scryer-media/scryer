@@ -768,7 +768,10 @@ async fn resolve_import_paths(
     let media_root_key = handler.map(|h| h.library_path_key()).unwrap_or(SERIES_PATH_KEY);
     let rename_template_key = handler.map(|h| h.rename_template_key()).unwrap_or(RENAME_TEMPLATE_SERIES_GLOBAL_KEY);
     let media_root_default = handler.map(|h| h.default_library_path()).unwrap_or("/media/series");
-    let rename_template_default = handler.map(|h| h.default_rename_template()).unwrap_or("{title} - S{season:2}E{episode:2} - {quality}.{ext}");
+    let rename_template_default =
+        handler
+            .map(|h| h.default_rename_template())
+            .unwrap_or("{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}");
 
     let media_root = {
         let default_root = app
@@ -1333,3 +1336,7 @@ pub async fn execute_manual_import(
 
     Ok(results)
 }
+
+#[cfg(test)]
+#[path = "app_usecase_import_tests.rs"]
+mod app_usecase_import_tests;
