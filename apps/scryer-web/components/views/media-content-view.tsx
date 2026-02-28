@@ -3,7 +3,7 @@ import * as React from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Button } from "@/components/ui/button";
 import { InfoHelp } from "@/components/common/info-help";
-import { Loader2, Search, Trash2, Zap } from "lucide-react";
+import { LayoutGrid, LayoutList, Loader2, Search, Trash2, Zap } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -38,6 +38,10 @@ import type { ViewCategoryId } from "./media-content/indexer-category-picker";
 import { MediaLibrarySettingsPanel } from "./media-content/media-library-settings-panel";
 import { IndexerRoutingPanel } from "./media-content/indexer-routing-panel";
 import { DownloadClientRoutingPanel } from "./media-content/download-client-routing-panel";
+import { RulesRoutingPanel } from "./media-content/rules-routing-panel";
+import { PosterGrid } from "./media-content/poster-grid";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import type { RuleSetRecord } from "@/lib/types/rule-sets";
 
 type Translate = (
   key: string,
@@ -294,6 +298,10 @@ function RenameSettingsForm({
   handleInterSeasonMoviesChange,
   categoryPreferredSubGroup,
   handlePreferredSubGroupChange,
+  nfoWriteOnImport,
+  handleNfoWriteChange,
+  plexmatchWriteOnImport,
+  handlePlexmatchWriteChange,
   updateCategoryMediaProfileSettings,
   mediaSettingsSaving,
 }: {
@@ -323,6 +331,10 @@ function RenameSettingsForm({
   handleInterSeasonMoviesChange: (checked: boolean) => void;
   categoryPreferredSubGroup: Record<ViewCategoryId, string>;
   handlePreferredSubGroupChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  nfoWriteOnImport: Record<ViewCategoryId, string>;
+  handleNfoWriteChange: (checked: boolean) => void;
+  plexmatchWriteOnImport: Record<ViewCategoryId, string>;
+  handlePlexmatchWriteChange: (checked: boolean) => void;
   updateCategoryMediaProfileSettings: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
   mediaSettingsSaving: boolean;
 }) {
@@ -590,6 +602,51 @@ function RenameSettingsForm({
             </div>
           )}
 
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label className="text-sm text-card-foreground">
+                {t("settings.nfoWriteOnImportLabel")}
+              </Label>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={nfoWriteOnImport[activeQualityScopeId] === "true"}
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${nfoWriteOnImport[activeQualityScopeId] === "true" ? "bg-primary" : "bg-muted"}`}
+                  onClick={() => handleNfoWriteChange(nfoWriteOnImport[activeQualityScopeId] !== "true")}
+                  disabled={mediaSettingsLoading}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-background shadow-lg transition-transform ${nfoWriteOnImport[activeQualityScopeId] === "true" ? "translate-x-5" : "translate-x-0"}`}
+                  />
+                </button>
+                <span className="text-xs text-muted-foreground">{t("settings.nfoWriteOnImportDescription")}</span>
+              </div>
+            </div>
+            {(activeQualityScopeId === "series" || activeQualityScopeId === "anime") && (
+              <div className="space-y-2">
+                <Label className="text-sm text-card-foreground">
+                  {t("settings.plexmatchWriteOnImportLabel")}
+                </Label>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={plexmatchWriteOnImport[activeQualityScopeId] === "true"}
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${plexmatchWriteOnImport[activeQualityScopeId] === "true" ? "bg-primary" : "bg-muted"}`}
+                    onClick={() => handlePlexmatchWriteChange(plexmatchWriteOnImport[activeQualityScopeId] !== "true")}
+                    disabled={mediaSettingsLoading}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-background shadow-lg transition-transform ${plexmatchWriteOnImport[activeQualityScopeId] === "true" ? "translate-x-5" : "translate-x-0"}`}
+                    />
+                  </button>
+                  <span className="text-xs text-muted-foreground">{t("settings.plexmatchWriteOnImportDescription")}</span>
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="flex justify-end">
             <Button type="submit" disabled={mediaSettingsSaving || renameValidationError !== null}>
               {mediaSettingsSaving ? t("label.saving") : t("label.save")}
@@ -654,6 +711,14 @@ export function MediaContentView({
     setCategoryPreferredSubGroup: React.Dispatch<
       React.SetStateAction<Record<ViewCategoryId, string>>
     >;
+    nfoWriteOnImport: Record<ViewCategoryId, string>;
+    setNfoWriteOnImport: React.Dispatch<
+      React.SetStateAction<Record<ViewCategoryId, string>>
+    >;
+    plexmatchWriteOnImport: Record<ViewCategoryId, string>;
+    setPlexmatchWriteOnImport: React.Dispatch<
+      React.SetStateAction<Record<ViewCategoryId, string>>
+    >;
     qualityProfileInheritValue: string;
     toProfileOptions: (profiles: ParsedQualityProfile[]) => QualityProfileOption[];
     updateCategoryMediaProfileSettings: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
@@ -672,6 +737,8 @@ export function MediaContentView({
     setInterSeasonMoviesForQueue: (value: boolean) => void;
     preferredSubGroupForQueue: string;
     setPreferredSubGroupForQueue: (value: string) => void;
+    minAvailabilityForQueue: string;
+    setMinAvailabilityForQueue: (value: string) => void;
     selectedTvdb: TvdbSearchItem | null;
     tvdbCandidates: TvdbSearchItem[];
     selectedTvdbId: string | null;
@@ -709,6 +776,10 @@ export function MediaContentView({
       nextValue: Partial<IndexerCategoryRoutingSettings>,
     ) => Promise<void> | void;
     moveIndexerInScope: (indexerId: string, direction: "up" | "down") => void;
+    ruleSets: RuleSetRecord[];
+    rulesLoading: boolean;
+    rulesSaving: boolean;
+    onToggleRuleFacet: (ruleSetId: string, enabled: boolean) => void;
     libraryScanLoading: boolean;
     libraryScanSummary: LibraryScanSummary | null;
     scanMovieLibrary: () => Promise<void> | void;
@@ -749,6 +820,10 @@ export function MediaContentView({
     setCategoryInterSeasonMovies,
     categoryPreferredSubGroup,
     setCategoryPreferredSubGroup,
+    nfoWriteOnImport,
+    setNfoWriteOnImport,
+    plexmatchWriteOnImport,
+    setPlexmatchWriteOnImport,
     qualityProfileInheritValue,
     toProfileOptions,
     updateCategoryMediaProfileSettings,
@@ -767,6 +842,8 @@ export function MediaContentView({
     setInterSeasonMoviesForQueue,
     preferredSubGroupForQueue,
     setPreferredSubGroupForQueue,
+    minAvailabilityForQueue,
+    setMinAvailabilityForQueue,
     selectedTvdb,
     tvdbCandidates,
     selectedTvdbId,
@@ -801,6 +878,10 @@ export function MediaContentView({
     setIndexerEnabledForScope,
     updateIndexerRoutingForScope,
     moveIndexerInScope,
+    ruleSets,
+    rulesLoading,
+    rulesSaving,
+    onToggleRuleFacet,
     libraryScanLoading,
     libraryScanSummary,
     scanMovieLibrary,
@@ -823,6 +904,19 @@ export function MediaContentView({
     Record<string, boolean>
   >({});
   const [autoQueueLoadingByTitle, setAutoQueueLoadingByTitle] = React.useState<Record<string, boolean>>({});
+
+  type ContentViewMode = "table" | "poster";
+  const [viewMode, setViewMode] = React.useState<ContentViewMode>(() => {
+    try {
+      const stored = localStorage.getItem("scryer:content-view-mode");
+      return stored === "poster" ? "poster" : "table";
+    } catch {
+      return "table";
+    }
+  });
+  React.useEffect(() => {
+    try { localStorage.setItem("scryer:content-view-mode", viewMode); } catch { /* noop */ }
+  }, [viewMode]);
 
   const titleTableScrollRef = React.useRef<HTMLDivElement>(null);
   const useVirtualTable = monitoredTitles.length > 50;
@@ -949,6 +1043,26 @@ export function MediaContentView({
       }));
     },
     [activeQualityScopeId, setCategoryPreferredSubGroup],
+  );
+
+  const handleNfoWriteChange = React.useCallback(
+    (checked: boolean) => {
+      setNfoWriteOnImport((previous) => ({
+        ...previous,
+        [activeQualityScopeId]: checked ? "true" : "false",
+      }));
+    },
+    [activeQualityScopeId, setNfoWriteOnImport],
+  );
+
+  const handlePlexmatchWriteChange = React.useCallback(
+    (checked: boolean) => {
+      setPlexmatchWriteOnImport((previous) => ({
+        ...previous,
+        [activeQualityScopeId]: checked ? "true" : "false",
+      }));
+    },
+    [activeQualityScopeId, setPlexmatchWriteOnImport],
   );
 
   const handleIndexerCategoriesChange = React.useCallback(
@@ -1172,6 +1286,10 @@ export function MediaContentView({
             handleInterSeasonMoviesChange={handleInterSeasonMoviesChange}
             categoryPreferredSubGroup={categoryPreferredSubGroup}
             handlePreferredSubGroupChange={handlePreferredSubGroupChange}
+            nfoWriteOnImport={nfoWriteOnImport}
+            handleNfoWriteChange={handleNfoWriteChange}
+            plexmatchWriteOnImport={plexmatchWriteOnImport}
+            handlePlexmatchWriteChange={handlePlexmatchWriteChange}
             updateCategoryMediaProfileSettings={updateCategoryMediaProfileSettings}
             mediaSettingsSaving={mediaSettingsSaving}
           />
@@ -1204,6 +1322,15 @@ export function MediaContentView({
             saveDownloadClientRouting={saveDownloadClientRouting}
           />
 
+          <RulesRoutingPanel
+            t={t}
+            facet={activeQualityScopeId}
+            ruleSets={ruleSets}
+            loading={rulesLoading}
+            saving={rulesSaving}
+            onToggleFacet={onToggleRuleFacet}
+          />
+
         </div>
       ) : (
         view === "movies" || view === "series" || view === "anime" ? (
@@ -1212,12 +1339,29 @@ export function MediaContentView({
               <CardTitle>{view === "movies" ? t("title.manageMovies") : view === "anime" ? t("nav.anime") : t("nav.series")}</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="mb-3 flex gap-2">
+              <div className="mb-3 flex items-center gap-2">
                 <Input
                   placeholder={t("title.filterPlaceholder")}
                   value={titleFilter}
                   onChange={handleTitleFilterChange}
+                  className="flex-1"
                 />
+                <ToggleGroup
+                  type="single"
+                  value={viewMode}
+                  onValueChange={(v) => {
+                    if (v === "table" || v === "poster") setViewMode(v);
+                  }}
+                  size="sm"
+                  aria-label={t("title.viewModeToggle")}
+                >
+                  <ToggleGroupItem value="table" size="sm" aria-label={t("title.viewModeTable")}>
+                    <LayoutList className="h-4 w-4" />
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="poster" size="sm" aria-label={t("title.viewModePoster")}>
+                    <LayoutGrid className="h-4 w-4" />
+                  </ToggleGroupItem>
+                </ToggleGroup>
                 <Button variant="secondary" onClick={handleRefreshTitles} disabled={titleLoading}>
                   {titleLoading ? t("label.refreshing") : t("label.refresh")}
                 </Button>
@@ -1225,7 +1369,7 @@ export function MediaContentView({
               <p className="mb-2 text-sm text-muted-foreground">{titleStatus}</p>
               {(() => {
                 const isMovieView = view === "movies";
-                const columnCount = isMovieView ? 6 : 5;
+                const overviewTargetView = isMovieView ? "movies" as const : view === "anime" ? "anime" as const : "series" as const;
                 const resolvedProfileName = (() => {
                   const overrideId = categoryQualityProfileOverrides[activeQualityScopeId];
                   const effectiveId = (!overrideId || overrideId === qualityProfileInheritValue)
@@ -1233,6 +1377,25 @@ export function MediaContentView({
                     : overrideId;
                   return qualityProfiles.find((p) => p.id === effectiveId)?.name ?? null;
                 })();
+
+                if (viewMode === "poster") {
+                  return (
+                    <PosterGrid
+                      t={t}
+                      titles={monitoredTitles}
+                      isMovieView={isMovieView}
+                      resolvedProfileName={resolvedProfileName}
+                      onOpenOverview={onOpenOverview}
+                      onDelete={handleDeleteCatalogTitle}
+                      onAutoQueue={handleQueueExisting}
+                      isDeletingById={isDeletingCatalogTitleById}
+                      isAutoQueueLoadingById={autoQueueLoadingByTitle}
+                      overviewTargetView={overviewTargetView}
+                    />
+                  );
+                }
+
+                const columnCount = isMovieView ? 6 : 5;
 
                 const titleTableHeader = (
                   <TableHeader>
@@ -1528,6 +1691,21 @@ export function MediaContentView({
                     />
                     <span className="text-sm">{t("title.monitored")}</span>
                   </label>
+                  {queueFacet === "movie" && (
+                    <label>
+                      <Label className="mb-2 block">{t("settings.minAvailabilityLabel")}</Label>
+                      <Select value={minAvailabilityForQueue} onValueChange={setMinAvailabilityForQueue}>
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="announced">{t("settings.minAvailability.announced")}</SelectItem>
+                          <SelectItem value="in_cinemas">{t("settings.minAvailability.in_cinemas")}</SelectItem>
+                          <SelectItem value="released">{t("settings.minAvailability.released")}</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </label>
+                  )}
                   {queueFacet !== "movie" && (
                     <label className="flex items-center gap-2 pt-7">
                       <Checkbox

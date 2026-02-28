@@ -7,6 +7,7 @@ export function useQueueFormState() {
   const [monitorSpecialsForQueue, setMonitorSpecialsForQueue] = useState(false);
   const [interSeasonMoviesForQueue, setInterSeasonMoviesForQueue] = useState(true);
   const [preferredSubGroupForQueue, setPreferredSubGroupForQueue] = useState("");
+  const [minAvailabilityForQueue, setMinAvailabilityForQueue] = useState("announced");
 
   return {
     titleNameForQueue,
@@ -21,5 +22,7 @@ export function useQueueFormState() {
     setInterSeasonMoviesForQueue,
     preferredSubGroupForQueue,
     setPreferredSubGroupForQueue,
+    minAvailabilityForQueue,
+    setMinAvailabilityForQueue,
   };
 }

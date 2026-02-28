@@ -28,6 +28,7 @@ pub(crate) fn map_add_input(input: AddTitleInput) -> NewTitle {
                 value: item.value,
             })
             .collect(),
+        min_availability: input.min_availability,
     }
 }
 

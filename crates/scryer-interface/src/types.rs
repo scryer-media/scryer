@@ -46,6 +46,8 @@ pub struct TitlePayload {
     pub aliases: Vec<String>,
     pub metadata_language: Option<String>,
     pub metadata_fetched_at: Option<String>,
+    pub min_availability: Option<String>,
+    pub digital_release_date: Option<String>,
     /// Primary collection label (quality tier), populated in list queries.
     pub quality_tier: Option<String>,
     /// Primary collection file size in bytes, populated in list queries.
@@ -122,6 +124,25 @@ pub struct SystemHealthPayload {
     pub titles_other: i32,
     pub recent_events: i32,
     pub recent_event_preview: Vec<String>,
+    pub db_migration_version: Option<String>,
+    pub db_pending_migrations: i32,
+    pub smg_cert_expires_at: Option<String>,
+    pub smg_cert_days_remaining: Option<i32>,
+    pub indexer_stats: Vec<IndexerQueryStatsPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct IndexerQueryStatsPayload {
+    pub indexer_id: String,
+    pub indexer_name: String,
+    pub queries_last_24h: i32,
+    pub successful_last_24h: i32,
+    pub failed_last_24h: i32,
+    pub last_query_at: Option<String>,
+    pub api_current: Option<i32>,
+    pub api_max: Option<i32>,
+    pub grab_current: Option<i32>,
+    pub grab_max: Option<i32>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -137,6 +158,7 @@ pub struct PolicyOutputPayload {
     pub score: f32,
     pub reason_codes: Vec<String>,
     pub explanation: String,
+    pub scoring_log: Vec<ScoringEntryPayload>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -224,6 +246,7 @@ pub struct ParsedReleasePayload {
 pub struct ScoringEntryPayload {
     pub code: String,
     pub delta: i32,
+    pub source: String,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -453,6 +476,7 @@ pub struct AddTitleInput {
     pub external_ids: Option<Vec<ExternalIdInput>>,
     pub source_hint: Option<String>,
     pub source_title: Option<String>,
+    pub min_availability: Option<String>,
 }
 
 #[derive(InputObject)]
@@ -812,4 +836,56 @@ pub struct ReleaseDecisionPayload {
 #[derive(InputObject)]
 pub struct WantedItemIdInput {
     pub wanted_item_id: String,
+}
+
+// ── Rule Sets ──────────────────────────────────────────────────────────────
+
+#[derive(SimpleObject, Clone)]
+pub struct RuleSetPayload {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub rego_source: String,
+    pub enabled: bool,
+    pub priority: i32,
+    pub applied_facets: Vec<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct RuleValidationResultPayload {
+    pub valid: bool,
+    pub errors: Vec<String>,
+}
+
+#[derive(InputObject)]
+pub struct CreateRuleSetInput {
+    pub name: String,
+    pub description: Option<String>,
+    pub rego_source: String,
+    pub applied_facets: Option<Vec<String>>,
+    pub priority: Option<i32>,
+}
+
+#[derive(InputObject)]
+pub struct UpdateRuleSetInput {
+    pub id: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub rego_source: Option<String>,
+    pub applied_facets: Option<Vec<String>>,
+    pub priority: Option<i32>,
+}
+
+#[derive(InputObject)]
+pub struct ToggleRuleSetInput {
+    pub id: String,
+    pub enabled: bool,
+}
+
+#[derive(InputObject)]
+pub struct ValidateRuleSetInput {
+    pub rego_source: String,
+    pub rule_set_id: Option<String>,
 }

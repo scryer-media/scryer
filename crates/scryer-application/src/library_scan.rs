@@ -6,6 +6,9 @@ use crate::{AppError, AppResult};
 pub struct LibraryFile {
     pub path: String,
     pub display_name: String,
+    /// Absolute path to the companion `.nfo` sidecar file, if one was found
+    /// alongside this video file during scanning.
+    pub nfo_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -39,6 +42,7 @@ pub struct MovieMetadata {
     pub imdb_id: String,
     pub genres: Vec<String>,
     pub studio: String,
+    pub tmdb_release_date: Option<String>,
 }
 
 #[derive(Debug, Clone)]

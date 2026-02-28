@@ -8,7 +8,7 @@ use super::common::parse_utc_datetime;
 const TITLE_COLUMNS: &str = "id, name, facet, monitored, tags, external_ids, created_by, created_at, \
     year, overview, poster_url, sort_title, slug, imdb_id, runtime_minutes, genres, \
     content_status, language, first_aired, network, studio, country, aliases, \
-    metadata_language, metadata_fetched_at";
+    metadata_language, metadata_fetched_at, min_availability, digital_release_date";
 
 fn parse_facet(raw: &str) -> MediaFacet {
     match raw.to_lowercase().as_str() {
@@ -124,6 +124,8 @@ fn row_to_title(row: &sqlx::sqlite::SqliteRow) -> AppResult<Title> {
     let aliases_json: String = row.try_get("aliases").unwrap_or_else(|_| "[]".to_string());
     let metadata_language: Option<String> = row.try_get("metadata_language").unwrap_or(None);
     let metadata_fetched_at_raw: Option<String> = row.try_get("metadata_fetched_at").unwrap_or(None);
+    let min_availability: Option<String> = row.try_get("min_availability").unwrap_or(None);
+    let digital_release_date: Option<String> = row.try_get("digital_release_date").unwrap_or(None);
 
     let genres: Vec<String> =
         serde_json::from_str(&genres_json).map_err(|err| AppError::Repository(err.to_string()))?;
@@ -160,6 +162,8 @@ fn row_to_title(row: &sqlx::sqlite::SqliteRow) -> AppResult<Title> {
         aliases,
         metadata_language,
         metadata_fetched_at,
+        min_availability,
+        digital_release_date,
     })
 }
 
@@ -902,7 +906,8 @@ pub(crate) async fn update_title_hydrated_metadata_query(
             year = ?, overview = ?, poster_url = ?, sort_title = ?, slug = ?,
             imdb_id = ?, runtime_minutes = ?, genres = ?, content_status = ?,
             language = ?, first_aired = ?, network = ?, studio = ?, country = ?,
-            aliases = ?, metadata_language = ?, metadata_fetched_at = ?
+            aliases = ?, metadata_language = ?, metadata_fetched_at = ?,
+            digital_release_date = ?
          WHERE id = ?",
     )
     .bind(metadata.year)
@@ -922,6 +927,7 @@ pub(crate) async fn update_title_hydrated_metadata_query(
     .bind(&aliases_json)
     .bind(&metadata.metadata_language)
     .bind(&metadata.metadata_fetched_at)
+    .bind(&metadata.digital_release_date)
     .bind(id)
     .execute(pool)
     .await

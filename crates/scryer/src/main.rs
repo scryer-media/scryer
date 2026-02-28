@@ -1,8 +1,10 @@
 mod admin_routes;
 mod dev_seed;
 mod init;
+mod log_buffer;
 mod middleware;
 mod settings_bootstrap;
+mod splash;
 mod ui_assets;
 
 use std::net::SocketAddr;
@@ -17,6 +19,7 @@ use scryer_application::{
     AppServices, AppUseCase, FacetRegistry, MovieFacetHandler, SeriesFacetHandler,
     start_background_acquisition_poller, start_download_queue_poller,
 };
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use scryer_infrastructure::{
     FileSystemLibraryRenamer, FileSystemLibraryScanner, MetadataGatewayClient, MigrationMode,
@@ -42,6 +45,7 @@ use settings_bootstrap::{
     seed_service_setting_definitions, seed_service_settings_from_environment,
     MOVIES_PATH_KEY, SERIES_PATH_KEY,
 };
+use splash::{BootstrapStatus, SplashState, build_splash_router};
 use ui_assets::{ui_asset_mode, ui_fallback, UiAssetMode};
 
 include!(concat!(env!("OUT_DIR"), "/smg_build_assets.rs"));
@@ -86,59 +90,171 @@ async fn main() {
     let migration_mode = parse_migration_mode(std::env::var("SCRYER_DB_MIGRATION_MODE").ok());
     let bind = std::env::var("SCRYER_BIND").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    let log_ring_buffer = log_buffer::LogRingBuffer::with_default_capacity();
+
+    {
+        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::util::SubscriberInitExt;
+
+        let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+
+        let stdout_layer = tracing_subscriber::fmt::layer();
+        let buffer_layer = tracing_subscriber::fmt::layer()
+            .with_writer(log_buffer::LogBufferWriter::new(log_ring_buffer.clone()))
+            .with_ansi(false);
+
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(stdout_layer)
+            .with(buffer_layer)
+            .init();
+    }
 
     tracing::info!(version = VERSION, "starting scryer");
 
-    let bootstrap_start = std::time::Instant::now();
-
-    let t = std::time::Instant::now();
-    let db = match SqliteServices::new_with_mode(db_path.clone(), migration_mode).await {
-        Ok(db) => db,
-        Err(error) => {
-            if matches!(migration_mode, MigrationMode::ValidateOnly) {
-                let message = error.to_string();
-                if let Some(pending) = extract_pending_migration_ids(&message) {
-                    for migration_id in pending {
-                        eprintln!("{migration_id}");
-                    }
-                } else {
-                    eprintln!("{error}");
-                }
-                std::process::exit(1);
-            }
-            panic!("failed to initialize sqlite services: {error}");
-        }
-    };
-    tracing::info!(elapsed_ms = %t.elapsed().as_millis(), "database initialized");
-
+    // ValidateOnly mode: check for pending migrations and exit immediately (no server).
     if matches!(migration_mode, MigrationMode::ValidateOnly) {
+        run_validate_only(&db_path, migration_mode).await;
         return;
     }
 
-    let t = std::time::Instant::now();
-    if let Err(error) = seed_service_setting_definitions(&db).await {
-        panic!("failed to seed service setting definitions: {error}");
+    // Read TLS config from env vars (available before DB bootstrap).
+    let tls_cert_path = normalize_env_option("SCRYER_TLS_CERT");
+    let tls_key_path = normalize_env_option("SCRYER_TLS_KEY");
+
+    // Create the watch channel for bootstrap status communication.
+    let (status_tx, status_rx) = watch::channel(BootstrapStatus::Migrating);
+    let splash_state = SplashState { status_rx };
+    let cors = CorsConfig::from_env();
+    let splash_app = build_splash_router(splash_state, cors.clone());
+
+    let cors_allow_all = cors.allow_all || cors.allowed_origins.iter().any(|origin| origin == "*");
+    if cors_allow_all {
+        tracing::warn!("CORS configured with wildcard origin(s)");
+    } else {
+        tracing::info!(origins = ?cors.allowed_origins, "CORS configured with explicit origin list");
     }
+
+    let addr: SocketAddr = bind.parse().expect("invalid bind address");
+    let shutdown_token = CancellationToken::new();
+
+    // Spawn the full application bootstrap in the background.
+    let bootstrap_shutdown = shutdown_token.clone();
+    let bootstrap_bind = bind.clone();
+    tokio::spawn(async move {
+        match bootstrap_application(
+            db_path,
+            migration_mode,
+            jwt_issuer,
+            jwt_access_ttl_seconds,
+            bootstrap_bind,
+            cors,
+            bootstrap_shutdown,
+            log_ring_buffer,
+        )
+        .await
+        {
+            Ok(router) => {
+                let _ = status_tx.send(BootstrapStatus::Ready(router));
+            }
+            Err(error) => {
+                tracing::error!(error = %error, "application bootstrap failed");
+                let _ = status_tx.send(BootstrapStatus::Failed(error.to_string()));
+            }
+        }
+    });
+
+    // Start serving immediately — splash handlers delegate to the full app once ready.
+    match (tls_cert_path, tls_key_path) {
+        (Some(cert_path), Some(key_path)) => {
+            let rustls_config =
+                axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert_path, &key_path)
+                    .await
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "failed to load TLS certificates (cert={}, key={}): {error}",
+                            cert_path, key_path
+                        );
+                    });
+            let handle = axum_server::Handle::new();
+            let shutdown_handle = handle.clone();
+            let shutdown_token_tls = shutdown_token.clone();
+            tokio::spawn(async move {
+                shutdown_signal(shutdown_token_tls).await;
+                shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
+            });
+            tracing::info!("scryer service listening on {addr} with TLS");
+            tracing::info!("open the web UI at https://{addr}/");
+            if let Err(error) = axum_server::bind_rustls(addr, rustls_config)
+                .handle(handle)
+                .serve(splash_app.into_make_service())
+                .await
+            {
+                tracing::error!(error = %error, "TLS server failed");
+                std::process::exit(1);
+            }
+        }
+        (Some(_), None) | (None, Some(_)) => {
+            panic!("both SCRYER_TLS_CERT and SCRYER_TLS_KEY must be set for TLS, or neither");
+        }
+        (None, None) => {
+            let listener = TcpListener::bind(addr)
+                .await
+                .expect("failed to bind address");
+            tracing::info!(
+                "scryer service listening on {}",
+                listener.local_addr().expect("bound addr")
+            );
+            tracing::info!("open the web UI at http://{addr}/");
+            if let Err(error) = axum::serve(listener, splash_app)
+                .with_graceful_shutdown(shutdown_signal(shutdown_token.clone()))
+                .await
+            {
+                tracing::error!(error = %error, "server failed");
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
+/// Runs the full application bootstrap: DB init, migrations, service construction, and router
+/// building. Returns the fully-constructed Axum router or an error.
+async fn bootstrap_application(
+    db_path: String,
+    migration_mode: MigrationMode,
+    jwt_issuer: String,
+    jwt_access_ttl_seconds: u64,
+    bind: String,
+    cors: CorsConfig,
+    shutdown_token: CancellationToken,
+    log_ring_buffer: log_buffer::LogRingBuffer,
+) -> Result<Router, Box<dyn std::error::Error + Send + Sync>> {
+    let bootstrap_start = std::time::Instant::now();
+
+    let t = std::time::Instant::now();
+    let db = SqliteServices::new_with_mode(db_path.clone(), migration_mode)
+        .await
+        .map_err(|e| format!("failed to initialize sqlite services: {e}"))?;
+    tracing::info!(elapsed_ms = %t.elapsed().as_millis(), "database initialized");
+
+    let t = std::time::Instant::now();
+    seed_service_setting_definitions(&db)
+        .await
+        .map_err(|e| format!("failed to seed service setting definitions: {e}"))?;
     tracing::info!(elapsed_ms = %t.elapsed().as_millis(), "setting definitions seeded");
 
     // Bootstrap encryption master key (env > DB > auto-generate).
     // This runs before set_encryption_key so the master key itself is stored unencrypted.
     let t = std::time::Instant::now();
-    let encryption_key = match scryer_infrastructure::encryption::ensure_encryption_key(&db).await {
-        Ok(key) => key,
-        Err(error) => panic!("failed to ensure encryption master key: {error}"),
-    };
+    let encryption_key = scryer_infrastructure::encryption::ensure_encryption_key(&db)
+        .await
+        .map_err(|e| format!("failed to ensure encryption master key: {e}"))?;
 
     // Activate encryption for all subsequent DB operations
-    if let Err(error) = db.set_encryption_key(encryption_key).await {
-        panic!("failed to set encryption key on DB worker: {error}");
-    }
+    db.set_encryption_key(encryption_key)
+        .await
+        .map_err(|e| format!("failed to set encryption key on DB worker: {e}"))?;
     tracing::info!(elapsed_ms = %t.elapsed().as_millis(), "encryption bootstrapped");
 
     // Detect version upgrades by comparing with last-run version stored in DB
@@ -187,19 +303,15 @@ async fn main() {
     let t = std::time::Instant::now();
     let env_jwt_pem = normalize_env_option("SCRYER_JWT_EC_PRIVATE_PEM");
     let (jwt_ec_private_pem, jwt_ec_public_pem) =
-        match scryer_infrastructure::jwt_keys::ensure_jwt_keys(&db, env_jwt_pem).await {
-            Ok(pair) => pair,
-            Err(error) => panic!("failed to ensure JWT EC key pair: {error}"),
-        };
+        scryer_infrastructure::jwt_keys::ensure_jwt_keys(&db, env_jwt_pem)
+            .await
+            .map_err(|e| format!("failed to ensure JWT EC key pair: {e}"))?;
     tracing::info!(elapsed_ms = %t.elapsed().as_millis(), "JWT keys bootstrapped");
 
     let t = std::time::Instant::now();
-    let runtime_settings = match load_service_runtime_settings(&db).await {
-        Ok(settings) => settings,
-        Err(error) => {
-            panic!("failed to load service runtime settings: {error}");
-        }
-    };
+    let runtime_settings = load_service_runtime_settings(&db)
+        .await
+        .map_err(|e| format!("failed to load service runtime settings: {e}"))?;
     tracing::info!(elapsed_ms = %t.elapsed().as_millis(), "runtime settings loaded");
 
     tracing::info!(elapsed_ms = %bootstrap_start.elapsed().as_millis(), "bootstrap complete");
@@ -229,9 +341,12 @@ async fn main() {
         NZBGEEK_BASE_BACKOFF_SECONDS,
         NZBGEEK_MAX_BACKOFF_SECONDS,
     ));
+    let indexer_stats: Arc<dyn scryer_application::IndexerStatsTracker> =
+        Arc::new(scryer_infrastructure::InMemoryIndexerStatsTracker::new());
     let indexer_client = Arc::new(MultiIndexerSearchClient::new(
         indexer_configs.clone(),
         fallback_indexer,
+        indexer_stats.clone(),
     ));
     let metadata_gateway_url = std::env::var("SCRYER_METADATA_GATEWAY_GRAPHQL_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:8090/graphql".to_string());
@@ -280,6 +395,39 @@ async fn main() {
     services.file_importer = Arc::new(scryer_infrastructure::FsFileImporter::new());
     services.media_files = Arc::new(db.clone());
     services.wanted_items = Arc::new(db.clone());
+    services.rule_sets = Arc::new(db.clone());
+    services.system_info = Arc::new(db.clone());
+    services.indexer_stats = indexer_stats;
+
+    // Bootstrap user rules engine from persisted rule sets.
+    {
+        let enabled = services.rule_sets.list_enabled_rule_sets().await.unwrap_or_default();
+        if !enabled.is_empty() {
+            let policies: Vec<scryer_rules::UserPolicy> = enabled
+                .iter()
+                .map(|rs| scryer_rules::UserPolicy {
+                    id: rs.id.clone(),
+                    rego_source: rs.rego_source.clone(),
+                    applied_facets: rs
+                        .applied_facets
+                        .iter()
+                        .map(|f| format!("{:?}", f).to_lowercase())
+                        .collect(),
+                })
+                .collect();
+            match scryer_rules::UserRulesEngine::build(&policies) {
+                Ok(engine) => {
+                    let count = engine.rule_count();
+                    *services.user_rules.write().unwrap() = engine;
+                    tracing::info!(rule_count = count, "user rules engine bootstrapped");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to bootstrap user rules engine, starting with empty");
+                }
+            }
+        }
+    }
+
     let app_use_case = AppUseCase::new(
         services,
         scryer_application::JwtAuthConfig {
@@ -293,7 +441,6 @@ async fn main() {
     let dev_auto_login = std::env::var("SCRYER_DEV_AUTO_LOGIN")
         .as_deref() == Ok("true");
     let schema = build_schema(app_use_case.clone(), db.clone(), dev_auto_login);
-    let shutdown_token = CancellationToken::new();
     tokio::spawn(start_download_queue_poller(app_use_case.clone(), shutdown_token.child_token()));
     tokio::spawn(start_background_acquisition_poller(app_use_case.clone(), shutdown_token.child_token()));
 
@@ -307,11 +454,12 @@ async fn main() {
     if dev_auto_login {
         let addr: SocketAddr = bind.parse().expect("invalid bind address");
         if !addr.ip().is_loopback() && !addr.ip().is_unspecified() {
-            panic!(
+            return Err(format!(
                 "SCRYER_DEV_AUTO_LOGIN=true is only allowed on loopback or unspecified \
                  (0.0.0.0 / ::) addresses, but SCRYER_BIND={bind}. Refusing to start \
                  with auth bypass on a routable address."
-            );
+            )
+            .into());
         }
         tracing::warn!("SCRYER_DEV_AUTO_LOGIN=true: all GraphQL requests bypass authentication");
     } else {
@@ -324,12 +472,11 @@ async fn main() {
         dev_auto_login,
     };
 
-    let cors = CorsConfig::from_env();
-    let cors_allow_all = cors.allow_all || cors.allowed_origins.iter().any(|origin| origin == "*");
     let cors_for_layer = cors.clone();
     let admin_migrations_db = db.clone();
     let admin_settings_db = db.clone();
     let admin_settings_app = app_use_case.clone();
+    let logs_state = (log_ring_buffer.clone(), app_use_case.clone());
 
     let ws_auth_state = auth_state.clone();
 
@@ -362,6 +509,10 @@ async fn main() {
                 },
             ),
         )
+        .route(
+            "/api/logs",
+            get(log_buffer::logs_handler).with_state(logs_state),
+        )
         .fallback(get(ui_fallback))
         .layer(CompressionLayer::new().zstd(true).br(true).gzip(true));
 
@@ -370,12 +521,6 @@ async fn main() {
         .layer(axum::middleware::from_fn(move |request, next| {
             cors_handler(request, next, cors_for_layer.clone())
         }));
-
-    if cors_allow_all {
-        tracing::warn!("CORS configured with wildcard origin(s)");
-    } else {
-        tracing::info!(origins = ?cors.allowed_origins, "CORS configured with explicit origin list");
-    }
 
     match ui_asset_mode() {
         UiAssetMode::Filesystem(dist_dir) => {
@@ -398,58 +543,23 @@ async fn main() {
         }
     }
 
-    let addr: SocketAddr = bind.parse().expect("invalid bind address");
+    Ok(app)
+}
 
-    let tls_cert_path = runtime_settings.tls_cert_path;
-    let tls_key_path = runtime_settings.tls_key_path;
-
-    match (tls_cert_path, tls_key_path) {
-        (Some(cert_path), Some(key_path)) => {
-            let rustls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert_path, &key_path)
-                .await
-                .unwrap_or_else(|error| {
-                    panic!(
-                        "failed to load TLS certificates (cert={}, key={}): {error}",
-                        cert_path, key_path
-                    );
-                });
-            let handle = axum_server::Handle::new();
-            let shutdown_handle = handle.clone();
-            let shutdown_token_tls = shutdown_token.clone();
-            tokio::spawn(async move {
-                shutdown_signal(shutdown_token_tls).await;
-                shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
-            });
-            tracing::info!("scryer service listening on {addr} with TLS");
-            tracing::info!("open the web UI at https://{addr}/");
-            if let Err(error) = axum_server::bind_rustls(addr, rustls_config)
-                .handle(handle)
-                .serve(app.into_make_service())
-                .await
-            {
-                tracing::error!(error = %error, "TLS server failed");
-                std::process::exit(1);
+/// ValidateOnly mode: check for pending migrations and exit.
+async fn run_validate_only(db_path: &str, migration_mode: MigrationMode) {
+    match SqliteServices::new_with_mode(db_path, migration_mode).await {
+        Ok(_) => {}
+        Err(error) => {
+            let message = error.to_string();
+            if let Some(pending) = extract_pending_migration_ids(&message) {
+                for migration_id in pending {
+                    eprintln!("{migration_id}");
+                }
+            } else {
+                eprintln!("{error}");
             }
-        }
-        (Some(_), None) | (None, Some(_)) => {
-            panic!("both SCRYER_TLS_CERT and SCRYER_TLS_KEY must be set for TLS, or neither");
-        }
-        (None, None) => {
-            let listener = TcpListener::bind(addr)
-                .await
-                .expect("failed to bind address");
-            tracing::info!(
-                "scryer service listening on {}",
-                listener.local_addr().expect("bound addr")
-            );
-            tracing::info!("open the web UI at http://{addr}/");
-            if let Err(error) = axum::serve(listener, app)
-                .with_graceful_shutdown(shutdown_signal(shutdown_token.clone()))
-                .await
-            {
-                tracing::error!(error = %error, "server failed");
-                std::process::exit(1);
-            }
+            std::process::exit(1);
         }
     }
 }

@@ -164,6 +164,10 @@ h6 {
   content-visibility: auto;
   contain-intrinsic-size: auto 44px; /* compact text-only episode rows */
 }
+.cv-auto-poster {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 300px; /* poster card approximate height */
+}
 
 /* PWA safe area utilities for standalone mode on notched devices */
 @supports (padding: env(safe-area-inset-top)) {

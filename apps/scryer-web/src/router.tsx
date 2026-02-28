@@ -66,6 +66,10 @@ export const router = createBrowserRouter([
         path: "/settings/acquisition",
         element: <ShellRoute initialView="settings" initialSettingsSection="acquisition" />,
       },
+      {
+        path: "/settings/rules",
+        element: <ShellRoute initialView="settings" initialSettingsSection="rules" />,
+      },
       { path: "/system", element: <ShellRoute initialView="system" /> },
       { path: "*", element: <ShellRoute /> },
     ],

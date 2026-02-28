@@ -4,6 +4,22 @@ use tokio::fs;
 use std::collections::HashSet;
 use std::io::ErrorKind;
 
+/// Extract the first non-empty `category` value from a `nzbget.client_routing` JSON
+/// blob, which has the shape `{ "client_id": { "category": "Movies", ... }, ... }`.
+fn extract_first_nzbget_category(raw_json: &str) -> Option<String> {
+    let parsed: serde_json::Value = serde_json::from_str(raw_json).ok()?;
+    let obj = parsed.as_object()?;
+    for (_client_id, config) in obj {
+        if let Some(cat) = config.get("category").and_then(|v| v.as_str()) {
+            let trimmed = cat.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
 impl AppUseCase {
     pub async fn list_titles(
         &self,
@@ -62,6 +78,8 @@ impl AppUseCase {
             aliases: vec![],
             metadata_language: None,
             metadata_fetched_at: None,
+            min_availability: request.min_availability,
+            digital_release_date: None,
         };
 
         let title = self.services.titles.create(title).await?;
@@ -615,7 +633,7 @@ impl AppUseCase {
             )
             .await;
 
-        let category = self.derive_download_category(&title.facet);
+        let category = self.derive_download_category(&title.facet).await;
         let job_result = self
             .services
             .download_client
@@ -719,7 +737,7 @@ impl AppUseCase {
             )
             .await;
 
-        let category = self.derive_download_category(&title.facet);
+        let category = self.derive_download_category(&title.facet).await;
         let job_result = self
             .services
             .download_client
@@ -791,7 +809,39 @@ impl AppUseCase {
         Ok(job_id)
     }
 
-    fn derive_download_category(&self, facet: &MediaFacet) -> String {
+    /// Resolve the NZBGet download category for a facet.
+    /// Reads the per-facet `nzbget.client_routing` setting first (which stores
+    /// per-client per-scope routing with a `category` field), falling back to the
+    /// hardcoded `FacetHandler::download_category()` value.
+    pub(crate) async fn derive_download_category(&self, facet: &MediaFacet) -> String {
+        let scope_id = match facet {
+            MediaFacet::Movie => "movie",
+            MediaFacet::Tv => "series",
+            MediaFacet::Anime => "anime",
+            _ => "other",
+        };
+
+        // Try the per-client routing config first (set via the download client routing UI)
+        if let Ok(Some(raw_json)) = self
+            .read_setting_string_value("nzbget.client_routing", Some(scope_id))
+            .await
+        {
+            if let Some(cat) = extract_first_nzbget_category(&raw_json) {
+                return cat;
+            }
+        }
+
+        // Fall back to the legacy nzbget.category setting
+        if let Ok(Some(configured)) = self
+            .read_setting_string_value("nzbget.category", Some(scope_id))
+            .await
+        {
+            let trimmed = configured.trim().to_string();
+            if !trimmed.is_empty() {
+                return trimmed;
+            }
+        }
+
         self.facet_registry
             .get(facet)
             .map(|h| h.download_category().to_string())

@@ -1,4 +1,5 @@
 use crate::{
+    nfo::{render_episode_nfo, render_movie_nfo, render_plexmatch, render_tvshow_nfo},
     parse_release_metadata, render_rename_template, require, ActivityChannel, ActivityKind,
     ActivitySeverity, AppError, AppResult, AppUseCase,
 };
@@ -406,6 +407,29 @@ async fn import_movie_download(
         .import_file(&source_video, &dest_path)
         .await?;
 
+    // Write NFO sidecar (non-fatal, opt-in)
+    {
+        let nfo_enabled = app
+            .read_setting_string_value("nfo.write_on_import.movie", None)
+            .await
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("true");
+
+        if nfo_enabled {
+            let nfo_path = dest_path.with_extension("nfo");
+            let nfo_content = render_movie_nfo(title);
+            if let Err(err) = tokio::fs::write(&nfo_path, nfo_content.as_bytes()).await {
+                tracing::warn!(
+                    error = %err,
+                    path = %nfo_path.display(),
+                    "failed to write movie NFO sidecar"
+                );
+            }
+        }
+    }
+
     // Record media file
     let quality_label = parsed.quality.clone();
     if let Err(err) = app
@@ -506,6 +530,73 @@ async fn import_series_download(
         resolve_import_paths(app, title).await?;
     let title_folder = title.name.clone();
 
+    // Check NFO write setting (non-fatal, opt-in)
+    let nfo_key = match title.facet {
+        scryer_domain::MediaFacet::Anime => "nfo.write_on_import.anime",
+        _ => "nfo.write_on_import.series",
+    };
+    let nfo_enabled = app
+        .read_setting_string_value(nfo_key, None)
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("true");
+
+    // Write tvshow.nfo once per series (write-once: skip if already exists)
+    if nfo_enabled {
+        let tvshow_nfo_path = PathBuf::from(&media_root)
+            .join(&title_folder)
+            .join("tvshow.nfo");
+        if !tvshow_nfo_path.exists() {
+            if let Some(parent) = tvshow_nfo_path.parent() {
+                let _ = tokio::fs::create_dir_all(parent).await;
+            }
+            let nfo_content = render_tvshow_nfo(title);
+            if let Err(err) = tokio::fs::write(&tvshow_nfo_path, nfo_content.as_bytes()).await {
+                tracing::warn!(
+                    error = %err,
+                    path = %tvshow_nfo_path.display(),
+                    "failed to write tvshow NFO sidecar"
+                );
+            }
+        }
+    }
+
+    // Write .plexmatch hint file (non-fatal, opt-in, write-once)
+    {
+        let plexmatch_key = match title.facet {
+            scryer_domain::MediaFacet::Anime => "plexmatch.write_on_import.anime",
+            _ => "plexmatch.write_on_import.series",
+        };
+        let plexmatch_enabled = app
+            .read_setting_string_value(plexmatch_key, None)
+            .await
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("true");
+
+        if plexmatch_enabled {
+            let plexmatch_path = PathBuf::from(&media_root)
+                .join(&title_folder)
+                .join(".plexmatch");
+            if !plexmatch_path.exists() {
+                if let Some(parent) = plexmatch_path.parent() {
+                    let _ = tokio::fs::create_dir_all(parent).await;
+                }
+                let content = render_plexmatch(title);
+                if let Err(err) = tokio::fs::write(&plexmatch_path, content.as_bytes()).await {
+                    tracing::warn!(
+                        error = %err,
+                        path = %plexmatch_path.display(),
+                        "failed to write .plexmatch hint file"
+                    );
+                }
+            }
+        }
+    }
+
     let mut imported_count: usize = 0;
     let mut skipped_count: usize = 0;
     let mut failed_count: usize = 0;
@@ -513,7 +604,7 @@ async fn import_series_download(
 
     for source_video in video_files {
         match import_single_episode_file(
-            app, title, &media_root, &rename_template, &title_folder, source_video,
+            app, title, &media_root, &rename_template, &title_folder, source_video, nfo_enabled,
         )
         .await
         {
@@ -596,6 +687,7 @@ async fn import_single_episode_file(
     rename_template: &str,
     title_folder: &str,
     source_video: &Path,
+    nfo_enabled: bool,
 ) -> AppResult<bool> {
     let source_size = std::fs::metadata(source_video)
         .map(|m| m.len() as i64)
@@ -670,6 +762,38 @@ async fn import_single_episode_file(
         .file_importer
         .import_file(source_video, &dest_path)
         .await?;
+
+    // Write episode NFO sidecar (non-fatal, opt-in)
+    if nfo_enabled {
+        let nfo_path = dest_path.with_extension("nfo");
+        let episode = if let Some(ep_num) = ep_meta.episode_numbers.first() {
+            app.services
+                .shows
+                .find_episode_by_title_and_numbers(&title.id, &season_str, &ep_num.to_string())
+                .await
+                .ok()
+                .flatten()
+        } else if let Some(abs) = ep_meta.absolute_episode {
+            app.services
+                .shows
+                .find_episode_by_title_and_absolute_number(&title.id, &abs.to_string())
+                .await
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+        if let Some(ref episode) = episode {
+            let nfo_content = render_episode_nfo(title, episode);
+            if let Err(err) = tokio::fs::write(&nfo_path, nfo_content.as_bytes()).await {
+                tracing::warn!(
+                    error = %err,
+                    path = %nfo_path.display(),
+                    "failed to write episode NFO sidecar"
+                );
+            }
+        }
+    }
 
     // Record media file
     let quality_label = parsed.quality.clone();

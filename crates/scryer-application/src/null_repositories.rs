@@ -4,10 +4,12 @@ use async_trait::async_trait;
 use scryer_domain::ImportFileResult;
 use scryer_domain::ImportRecord;
 
+use scryer_domain::RuleSet;
+
 use crate::{
-    AppError, AppResult, FileImporter, ImportRepository, MediaFileRepository,
-    ReleaseDecision, TitleMediaFile,
-    WantedItem, WantedItemRepository,
+    AppError, AppResult, FileImporter, ImportRepository, IndexerQueryStats,
+    IndexerStatsTracker, MediaFileRepository, ReleaseDecision, RuleSetRepository,
+    SystemInfoProvider, TitleMediaFile, WantedItem, WantedItemRepository,
 };
 
 #[derive(Default)]
@@ -139,4 +141,55 @@ impl WantedItemRepository for NullWantedItemRepository {
     ) -> AppResult<Vec<ReleaseDecision>> {
         Ok(vec![])
     }
+}
+
+#[derive(Default)]
+pub struct NullRuleSetRepository;
+
+#[async_trait]
+impl RuleSetRepository for NullRuleSetRepository {
+    async fn list_rule_sets(&self) -> AppResult<Vec<RuleSet>> { Ok(vec![]) }
+    async fn list_enabled_rule_sets(&self) -> AppResult<Vec<RuleSet>> { Ok(vec![]) }
+    async fn get_rule_set(&self, _id: &str) -> AppResult<Option<RuleSet>> { Ok(None) }
+    async fn create_rule_set(&self, _rule_set: &RuleSet) -> AppResult<()> {
+        Err(AppError::Repository("rule set repository is not configured".to_string()))
+    }
+    async fn update_rule_set(&self, _rule_set: &RuleSet) -> AppResult<()> {
+        Err(AppError::Repository("rule set repository is not configured".to_string()))
+    }
+    async fn delete_rule_set(&self, _id: &str) -> AppResult<()> {
+        Err(AppError::Repository("rule set repository is not configured".to_string()))
+    }
+    async fn record_rule_set_history(
+        &self, _rule_set_id: &str, _action: &str,
+        _rego_source: Option<&str>, _actor_id: Option<&str>,
+    ) -> AppResult<()> { Ok(()) }
+}
+
+#[derive(Default)]
+pub struct NullSystemInfoProvider;
+
+#[async_trait]
+impl SystemInfoProvider for NullSystemInfoProvider {
+    async fn current_migration_version(&self) -> AppResult<Option<String>> {
+        Ok(None)
+    }
+    async fn pending_migration_count(&self) -> AppResult<usize> {
+        Ok(0)
+    }
+    async fn smg_cert_expires_at(&self) -> AppResult<Option<String>> {
+        Ok(None)
+    }
+}
+
+#[derive(Default)]
+pub struct NullIndexerStatsTracker;
+
+impl IndexerStatsTracker for NullIndexerStatsTracker {
+    fn record_query(&self, _indexer_id: &str, _indexer_name: &str, _success: bool) {}
+    fn record_api_limits(
+        &self, _indexer_id: &str, _api_current: Option<u32>, _api_max: Option<u32>,
+        _grab_current: Option<u32>, _grab_max: Option<u32>,
+    ) {}
+    fn all_stats(&self) -> Vec<IndexerQueryStats> { vec![] }
 }

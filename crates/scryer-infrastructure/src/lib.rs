@@ -2,6 +2,7 @@ pub(crate) mod commands;
 mod download_clients;
 mod newznab_rate_limiter;
 mod file_importer;
+mod indexer_stats;
 mod library_scanner;
 mod library_renamer;
 mod metadata_gateway;
@@ -19,6 +20,7 @@ pub mod smg_enrollment;
 mod tests;
 
 pub use file_importer::FsFileImporter;
+pub use indexer_stats::InMemoryIndexerStatsTracker;
 pub use download_clients::{
     MultiIndexerSearchClient, NzbGeekSearchClient, NzbgetDownloadClient,
     PrioritizedDownloadClientRouter, NZBGEEK_BASE_BACKOFF_SECONDS, NZBGEEK_MAX_BACKOFF_SECONDS,

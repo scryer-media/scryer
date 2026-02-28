@@ -59,6 +59,7 @@ export type MetadataCatalogAddOptions = {
   qualityProfileId: string;
   seasonFolder: boolean;
   monitorType: MetadataCatalogMonitorType;
+  minAvailability?: string;
 };
 
 function isMetadataEmpty(results: MetadataSearchResults): boolean {
@@ -745,6 +746,7 @@ export function useGlobalSearch({
             monitored,
             tags,
             externalIds,
+            ...(facet === "movie" && options.minAvailability ? { minAvailability: options.minAvailability } : {}),
           },
         }).toPromise();
         if (addError) throw addError;

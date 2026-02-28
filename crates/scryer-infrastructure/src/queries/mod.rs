@@ -4,6 +4,7 @@ pub mod event;
 pub mod indexer;
 pub mod media_file;
 pub mod quality;
+pub mod rule_set;
 pub mod settings;
 pub mod title;
 pub mod user;

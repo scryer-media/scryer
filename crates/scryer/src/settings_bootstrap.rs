@@ -430,6 +430,49 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             default_value_json: "50",
             is_sensitive: false,
         },
+        // NFO sidecar writing on import
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "nfo.write_on_import.movie",
+            data_type: "boolean",
+            default_value_json: "\"false\"",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "nfo.write_on_import.series",
+            data_type: "boolean",
+            default_value_json: "\"false\"",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "nfo.write_on_import.anime",
+            data_type: "boolean",
+            default_value_json: "\"false\"",
+            is_sensitive: false,
+        },
+        // Plexmatch hint writing on import (series/anime only — Plex does not
+        // support .plexmatch for movies)
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "plexmatch.write_on_import.series",
+            data_type: "boolean",
+            default_value_json: "\"false\"",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "plexmatch.write_on_import.anime",
+            data_type: "boolean",
+            default_value_json: "\"false\"",
+            is_sensitive: false,
+        },
     ]
 }
 
@@ -553,6 +596,11 @@ pub(crate) async fn normalize_quality_profile_settings(database: &SqliteServices
 
     for scope_id in scope_ids {
         normalize_quality_profile_id_setting(database, Some(scope_id), &profile_ids).await?;
+    }
+
+    // Anime defaults to 1080p (not 4K) when the user hasn't chosen a profile
+    if profile_ids.iter().any(|id| id == "1080p") {
+        seed_scope_default_if_unset(database, "anime", "1080p").await?;
     }
 
     sync_quality_profile_catalog_setting(database, &final_profiles).await?;
@@ -718,6 +766,34 @@ pub(crate) async fn normalize_quality_profile_id_setting(
     }
 
     upsert_quality_profile_setting(database, scope_id.map(str::to_string), &next_profile).await
+}
+
+async fn seed_scope_default_if_unset(
+    database: &SqliteServices,
+    scope_id: &str,
+    default_profile_id: &str,
+) -> Result<(), String> {
+    let record = database
+        .get_setting_with_defaults(
+            SETTINGS_SCOPE_SYSTEM,
+            QUALITY_PROFILE_ID_KEY,
+            Some(scope_id.to_string()),
+        )
+        .await
+        .map_err(|error| {
+            format!("failed to read {QUALITY_PROFILE_ID_KEY} for scope {scope_id}: {error}")
+        })?;
+
+    if record.as_ref().is_none_or(|r| r.value_json.is_none()) {
+        upsert_quality_profile_setting(
+            database,
+            Some(scope_id.to_string()),
+            default_profile_id,
+        )
+        .await?;
+    }
+
+    Ok(())
 }
 
 pub(crate) async fn upsert_quality_profile_setting(

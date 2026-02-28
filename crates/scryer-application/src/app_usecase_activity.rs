@@ -27,6 +27,7 @@ impl AppUseCase {
                 "policy evaluation for title {} in {} mode",
                 input.title_id, input.requested_mode
             ),
+            scoring_log: vec![],
         })
     }
 

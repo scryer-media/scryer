@@ -5,6 +5,7 @@ mod quality_profile;
 mod release_parser;
 mod library_scan;
 mod library_rename;
+pub(crate) mod nfo;
 mod null_repositories;
 mod types;
 pub(crate) mod facet_handler;
@@ -13,6 +14,7 @@ mod facet_series;
 mod facet_registry;
 mod app_usecase_activity;
 mod app_usecase_admin;
+mod app_usecase_rules;
 mod app_usecase_catalog;
 pub(crate) mod app_usecase_library;
 mod app_usecase_discovery;
@@ -29,7 +31,7 @@ use scryer_domain::{
     Collection, CompletedDownload, DownloadClientConfig, DownloadQueueItem, DownloadQueueState,
     Entitlement, Episode, EventType, ExternalId, HistoryEvent, Id, ImportFileResult, ImportRecord,
     IndexerConfig, MediaFacet, NewDownloadClientConfig, NewIndexerConfig, NewTitle, PolicyInput,
-    PolicyOutput, Title, User,
+    PolicyOutput, RuleSet, Title, User,
 };
 use std::path::Path;
 use rand_core::OsRng;
@@ -65,17 +67,17 @@ pub use quality_profile::{
     apply_age_scoring, default_quality_profile_1080p_for_search,
     default_quality_profile_for_search, evaluate_against_profile,
     parse_profile_catalog_from_json, QualityProfile,
-    QualityProfileCriteria, QualityProfileDecision, ScoringEntry, BLOCK_SCORE,
+    QualityProfileCriteria, QualityProfileDecision, ScoringEntry, ScoringSource, BLOCK_SCORE,
     QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY,
 };
 pub use release_parser::{parse_release_metadata, ParsedEpisodeMetadata, ParsedReleaseMetadata};
 pub use null_repositories::{
-    NullFileImporter, NullImportRepository, NullMediaFileRepository,
-    NullWantedItemRepository,
+    NullFileImporter, NullImportRepository, NullIndexerStatsTracker, NullMediaFileRepository,
+    NullRuleSetRepository, NullSystemInfoProvider, NullWantedItemRepository,
 };
 pub use types::{
-    IndexerSearchResult, JwtAuthConfig, PrimaryCollectionSummary, ReleaseDecision,
-    ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature, SystemHealth,
+    IndexerQueryStats, IndexerSearchResult, JwtAuthConfig, PrimaryCollectionSummary,
+    ReleaseDecision, ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature, SystemHealth,
     TitleMediaFile, TitleMetadataUpdate, TitleReleaseBlocklistEntry, WantedItem,
 };
 pub(crate) use types::JwtClaims;
@@ -125,6 +127,10 @@ pub struct AppServices {
     pub settings: Arc<dyn SettingsRepository>,
     pub quality_profiles: Arc<dyn QualityProfileRepository>,
     pub wanted_items: Arc<dyn WantedItemRepository>,
+    pub rule_sets: Arc<dyn RuleSetRepository>,
+    pub system_info: Arc<dyn SystemInfoProvider>,
+    pub indexer_stats: Arc<dyn IndexerStatsTracker>,
+    pub user_rules: Arc<std::sync::RwLock<scryer_rules::UserRulesEngine>>,
     pub db_path: String,
     pub activity_stream: ActivityStream,
     pub event_broadcast: broadcast::Sender<HistoryEvent>,
@@ -170,6 +176,10 @@ impl AppServices {
             settings,
             quality_profiles,
             wanted_items: Arc::new(NullWantedItemRepository),
+            rule_sets: Arc::new(NullRuleSetRepository),
+            system_info: Arc::new(NullSystemInfoProvider),
+            indexer_stats: Arc::new(NullIndexerStatsTracker),
+            user_rules: Arc::new(std::sync::RwLock::new(scryer_rules::UserRulesEngine::empty())),
             db_path,
             activity_stream: ActivityStream::new(),
             event_broadcast: tx,
@@ -386,6 +396,27 @@ pub trait SettingsRepository: Send + Sync {
 }
 
 #[async_trait]
+pub trait SystemInfoProvider: Send + Sync {
+    async fn current_migration_version(&self) -> AppResult<Option<String>>;
+    async fn pending_migration_count(&self) -> AppResult<usize>;
+    async fn smg_cert_expires_at(&self) -> AppResult<Option<String>>;
+}
+
+/// Tracks per-indexer query counts and API quota information in memory.
+pub trait IndexerStatsTracker: Send + Sync {
+    fn record_query(&self, indexer_id: &str, indexer_name: &str, success: bool);
+    fn record_api_limits(
+        &self,
+        indexer_id: &str,
+        api_current: Option<u32>,
+        api_max: Option<u32>,
+        grab_current: Option<u32>,
+        grab_max: Option<u32>,
+    );
+    fn all_stats(&self) -> Vec<IndexerQueryStats>;
+}
+
+#[async_trait]
 pub trait QualityProfileRepository: Send + Sync {
     async fn list_quality_profiles(
         &self,
@@ -540,10 +571,42 @@ pub trait WantedItemRepository: Send + Sync {
     ) -> AppResult<Vec<ReleaseDecision>>;
 }
 
+#[async_trait]
+pub trait RuleSetRepository: Send + Sync {
+    async fn list_rule_sets(&self) -> AppResult<Vec<RuleSet>>;
+    async fn list_enabled_rule_sets(&self) -> AppResult<Vec<RuleSet>>;
+    async fn get_rule_set(&self, id: &str) -> AppResult<Option<RuleSet>>;
+    async fn create_rule_set(&self, rule_set: &RuleSet) -> AppResult<()>;
+    async fn update_rule_set(&self, rule_set: &RuleSet) -> AppResult<()>;
+    async fn delete_rule_set(&self, id: &str) -> AppResult<()>;
+    async fn record_rule_set_history(
+        &self,
+        rule_set_id: &str,
+        action: &str,
+        rego_source: Option<&str>,
+        actor_id: Option<&str>,
+    ) -> AppResult<()>;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchMode {
     Interactive,
     Auto,
+}
+
+/// Per-indexer routing entry resolved from the `indexer.routing:<scope>` setting.
+#[derive(Clone, Debug)]
+pub struct IndexerRoutingEntry {
+    pub enabled: bool,
+    pub categories: Vec<String>,
+}
+
+/// Per-indexer routing plan for a given facet scope.
+/// When `Some`, indexers not in the map use default behavior; indexers
+/// with `enabled: false` are skipped entirely for this scope.
+#[derive(Clone, Debug)]
+pub struct IndexerRoutingPlan {
+    pub entries: std::collections::HashMap<String, IndexerRoutingEntry>,
 }
 
 #[async_trait]
@@ -555,6 +618,7 @@ pub trait IndexerClient: Send + Sync {
         tvdb_id: Option<String>,
         category: Option<String>,
         newznab_categories: Option<Vec<String>>,
+        indexer_routing: Option<IndexerRoutingPlan>,
         limit: usize,
         mode: SearchMode,
     ) -> AppResult<Vec<IndexerSearchResult>>;
@@ -1216,6 +1280,7 @@ mod tests {
             tvdb_id: Option<String>,
             category: Option<String>,
             _newznab_categories: Option<Vec<String>>,
+            _indexer_routing: Option<IndexerRoutingPlan>,
             _limit: usize,
             _mode: SearchMode,
         ) -> AppResult<Vec<IndexerSearchResult>> {
@@ -1609,6 +1674,7 @@ mod tests {
                     monitored: true,
                     tags: vec![],
                     external_ids: vec![],
+                    min_availability: None,
                 },
                 None,
                 None,
@@ -1631,6 +1697,7 @@ mod tests {
                 monitored: true,
                 tags: vec![],
                 external_ids: vec![],
+                min_availability: None,
             },
         )
         .await
@@ -1644,6 +1711,7 @@ mod tests {
                 monitored: true,
                 tags: vec![],
                 external_ids: vec![],
+                min_availability: None,
             },
         )
         .await
@@ -1747,6 +1815,7 @@ mod tests {
                     monitored: false,
                     tags: vec![],
                     external_ids: vec![],
+                    min_availability: None,
                 },
             )
             .await
@@ -1850,6 +1919,7 @@ mod tests {
                     monitored: true,
                     tags: vec!["SciFi".into()],
                     external_ids: vec![],
+                    min_availability: None,
                 },
             )
             .await
@@ -1885,6 +1955,7 @@ mod tests {
                     monitored: true,
                     tags: vec![],
                     external_ids: vec![],
+                    min_availability: None,
                 },
             )
             .await
@@ -1949,6 +2020,7 @@ mod tests {
                     monitored: true,
                     tags: vec![],
                     external_ids: vec![],
+                    min_availability: None,
                 },
             )
             .await
@@ -1990,6 +2062,7 @@ mod tests {
                     monitored: true,
                     tags: vec![],
                     external_ids: vec![],
+                    min_availability: None,
                 },
             )
             .await
@@ -2049,6 +2122,7 @@ mod tests {
                     monitored: true,
                     tags: vec![],
                     external_ids: vec![],
+                    min_availability: None,
                 },
             )
             .await
@@ -2091,6 +2165,7 @@ mod tests {
                     monitored: true,
                     tags: vec![],
                     external_ids: vec![],
+                    min_availability: None,
                 },
             )
             .await
@@ -2151,6 +2226,7 @@ mod tests {
                     monitored: true,
                     tags: vec![],
                     external_ids: vec![],
+                    min_availability: None,
                 },
             )
             .await
@@ -2204,6 +2280,7 @@ mod tests {
                     monitored: true,
                     tags: vec![],
                     external_ids: vec![],
+                    min_availability: None,
                 },
             )
             .await

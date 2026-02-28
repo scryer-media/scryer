@@ -322,6 +322,8 @@ async fn sqlite_show_queries_roundtrip() {
         aliases: vec![],
         metadata_language: None,
         metadata_fetched_at: None,
+        min_availability: None,
+        digital_release_date: None,
     };
     <SqliteServices as scryer_application::TitleRepository>::create(&services, title.clone())
         .await

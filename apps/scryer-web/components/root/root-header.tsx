@@ -118,6 +118,7 @@ export const RootHeader = React.memo(function RootHeader({
       qualityProfileId: resolveDefaultQualityProfileIdForFacet(facet),
       seasonFolder: facet !== "movie",
       monitorType: defaultMonitorTypeForFacet(facet),
+      ...(facet === "movie" ? { minAvailability: "announced" } : {}),
     }),
     [resolveDefaultQualityProfileIdForFacet],
   );
@@ -149,7 +150,8 @@ export const RootHeader = React.memo(function RootHeader({
         if (
           current.qualityProfileId === next.qualityProfileId &&
           current.seasonFolder === next.seasonFolder &&
-          current.monitorType === next.monitorType
+          current.monitorType === next.monitorType &&
+          current.minAvailability === next.minAvailability
         ) {
           return previous;
         }
@@ -454,23 +456,48 @@ export const RootHeader = React.memo(function RootHeader({
                   </label>
                 ) : null}
                 {facet === "movie" ? (
-                  <label className="space-y-1">
-                    <span className="block text-xs font-medium text-card-foreground">
-                      {t("title.monitored")}
-                    </span>
-                    <div className="flex min-h-9 w-full items-center">
-                      <Checkbox
-                        className="h-8 w-8"
-                        checked={draft.monitorType === "monitored"}
-                        onCheckedChange={(checked) =>
+                  <>
+                    <label className="space-y-1">
+                      <span className="block text-xs font-medium text-card-foreground">
+                        {t("title.monitored")}
+                      </span>
+                      <div className="flex min-h-9 w-full items-center">
+                        <Checkbox
+                          className="h-8 w-8"
+                          checked={draft.monitorType === "monitored"}
+                          onCheckedChange={(checked) =>
+                            updateMetadataAddDraft(cardKey, facet, {
+                              monitorType: checked ? "monitored" : "unmonitored",
+                            })
+                          }
+                          disabled={isAdding}
+                        />
+                      </div>
+                    </label>
+                    <label className="space-y-1">
+                      <span className="block text-xs font-medium text-card-foreground">
+                        {t("settings.minAvailabilityLabel")}
+                      </span>
+                      <Select
+                        value={draft.minAvailability ?? "announced"}
+                        onValueChange={(v) =>
                           updateMetadataAddDraft(cardKey, facet, {
-                            monitorType: checked ? "monitored" : "unmonitored",
+                            minAvailability: v,
                           })
                         }
                         disabled={isAdding}
-                      />
-                    </div>
-                  </label>
+                      >
+                        <SelectTrigger className="h-9 w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="announced">{t("settings.minAvailability.announced")}</SelectItem>
+                          <SelectItem value="in_cinemas">{t("settings.minAvailability.in_cinemas")}</SelectItem>
+                          <SelectItem value="released">{t("settings.minAvailability.released")}</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </label>
+                  </>
                 ) : (
                   <label className="space-y-1">
                     <span className="block text-xs font-medium text-card-foreground">

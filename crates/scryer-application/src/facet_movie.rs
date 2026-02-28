@@ -91,6 +91,7 @@ impl FacetHandler for MovieFacetHandler {
             aliases: vec![],
             metadata_language: Some(language.to_string()),
             metadata_fetched_at: Some(Utc::now().to_rfc3339()),
+            digital_release_date: movie.tmdb_release_date,
             ..Default::default()
         };
         Ok(HydrationResult {

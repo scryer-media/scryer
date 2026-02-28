@@ -79,6 +79,11 @@ const settingsEntries: Array<{
     label: (t) => t("settings.indexers"),
     requiredEntitlement: "manage_config",
   },
+  {
+    id: "rules",
+    label: (t) => t("settings.rules"),
+    requiredEntitlement: "manage_config",
+  },
 ];
 
 function getMediaSectionChildren(

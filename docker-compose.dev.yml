@@ -1,6 +1,6 @@
 services:
   # postgres:
-  #   image: postgres:16-alpine
+  #   image: postgres:18-alpine
   #   container_name: scryer-postgres
   #   environment:
   #     POSTGRES_DB: scryer_metadata
