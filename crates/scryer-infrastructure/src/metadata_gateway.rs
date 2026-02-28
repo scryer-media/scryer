@@ -42,6 +42,7 @@ const GET_MOVIE_QUERY: &str = r#"
         imdb_id
         genres
         studio
+        tmdb_release_date
       }
     }
   }
@@ -482,6 +483,7 @@ struct MovieItem {
     imdb_id: String,
     genres: Vec<String>,
     studio: String,
+    tmdb_release_date: Option<String>,
 }
 
 // --- Series types ---
@@ -617,6 +619,7 @@ impl MetadataGateway for MetadataGatewayClient {
             imdb_id: m.imdb_id,
             genres: m.genres,
             studio: m.studio,
+            tmdb_release_date: m.tmdb_release_date,
         })
     }
 

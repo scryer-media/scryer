@@ -1,4 +1,5 @@
 use super::*;
+use crate::quality_profile::ScoringSource;
 use serde_json::Value;
 use tracing::{info, warn};
 use tokio::task::JoinSet;
@@ -77,6 +78,7 @@ impl AppUseCase {
         limit: usize,
         caller_label: &str,
         mode: SearchMode,
+        runtime_minutes: Option<i32>,
     ) -> AppResult<Vec<IndexerSearchResult>> {
         let quality_profile = self
             .resolve_quality_profile(
@@ -92,12 +94,14 @@ impl AppUseCase {
             tvdb_id.as_deref(),
             category.as_deref(),
         );
-        let newznab_categories = self
-            .resolve_indexer_routing_categories(scope_id.as_deref())
+        let indexer_routing = self
+            .resolve_indexer_routing(scope_id.as_deref())
             .await;
 
-        if let Some(ref cats) = newznab_categories {
-            if cats.is_empty() {
+        // If routing exists and every indexer is disabled, skip the search entirely.
+        if let Some(ref plan) = indexer_routing {
+            let any_enabled = plan.entries.values().any(|e| e.enabled);
+            if !any_enabled {
                 info!(
                     caller = caller_label,
                     scope_id = scope_id.as_deref().unwrap_or("none"),
@@ -121,11 +125,11 @@ impl AppUseCase {
             let imdb_id = imdb_id.clone();
             let tvdb_id = tvdb_id.clone();
             let category = category.clone();
-            let newznab_categories = newznab_categories.clone();
+            let indexer_routing = indexer_routing.clone();
 
             set.spawn(async move {
                 indexer_client
-                    .search(query, imdb_id, tvdb_id, category, newznab_categories, limit, mode)
+                    .search(query, imdb_id, tvdb_id, category, None, indexer_routing, limit, mode)
                     .await
             });
         }
@@ -190,6 +194,15 @@ impl AppUseCase {
             })
             .collect();
 
+        // Clone the user rules engine for this batch (cheap Arc clone).
+        let user_rules_engine = self
+            .services
+            .user_rules
+            .read()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| scryer_rules::UserRulesEngine::empty());
+        let mut user_evaluator = user_rules_engine.evaluator();
+
         let mut deduped = Vec::new();
         let mut seen = std::collections::HashSet::new();
 
@@ -214,12 +227,48 @@ impl AppUseCase {
                 &parsed_release_metadata,
                 result.size_bytes,
                 category.as_deref(),
+                runtime_minutes,
             );
             crate::quality_profile::apply_nzbgeek_vote_scoring(
                 &mut decision,
                 thumbs_up,
                 thumbs_down,
             );
+
+            // ── User rules (additive, after all built-in scoring) ───────
+            if !user_rules_engine.is_empty() {
+                let user_input = crate::app_usecase_discovery::build_user_rule_input(
+                    &parsed_release_metadata,
+                    &quality_profile,
+                    &result,
+                    &decision,
+                    category.as_deref(),
+                    title_tags,
+                    runtime_minutes,
+                );
+                let facet = category.as_deref().unwrap_or("movie");
+                match user_evaluator.evaluate(&user_input, facet) {
+                    Ok(eval_result) => {
+                        for entry in eval_result.entries {
+                            decision.log_with_source(
+                                &entry.code,
+                                entry.delta,
+                                ScoringSource::UserRule(entry.rule_set_id),
+                            );
+                        }
+                        for err in eval_result.errors {
+                            decision.log_with_source(
+                                "user_rule_error",
+                                0,
+                                ScoringSource::UserRule(err.rule_set_id),
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "user rule evaluation failed for release");
+                    }
+                }
+            }
 
             deduped.push(IndexerSearchResult {
                 parsed_release_metadata: Some(parsed_release_metadata),
@@ -278,7 +327,7 @@ impl AppUseCase {
     ) -> AppResult<Vec<IndexerSearchResult>> {
         self.search_and_score_releases(
             queries, imdb_id, tvdb_id, category,
-            &[], limit, &actor.id, SearchMode::Interactive,
+            &[], limit, &actor.id, SearchMode::Interactive, None,
         ).await
     }
 
@@ -681,10 +730,10 @@ impl AppUseCase {
     /// Returns `None` if no routing is configured (caller falls back to
     /// hardcoded defaults). Returns `Some(vec![])` if all indexers are
     /// disabled for this scope (caller should skip search).
-    async fn resolve_indexer_routing_categories(
+    async fn resolve_indexer_routing(
         &self,
         scope_id: Option<&str>,
-    ) -> Option<Vec<String>> {
+    ) -> Option<IndexerRoutingPlan> {
         let scope_id = scope_id?;
 
         let raw_json = match self
@@ -713,46 +762,126 @@ impl AppUseCase {
             return None;
         }
 
-        let mut all_categories: Vec<String> = Vec::new();
-        let mut has_any_enabled = false;
+        let mut entries = std::collections::HashMap::new();
 
-        for (_indexer_id, config) in obj {
+        for (indexer_id, config) in obj {
             let enabled = config
                 .get("enabled")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true);
 
-            if !enabled {
-                continue;
-            }
-
-            has_any_enabled = true;
-
+            let mut categories: Vec<String> = Vec::new();
             if let Some(cats) = config.get("categories").and_then(|v| v.as_array()) {
                 for cat in cats {
                     if let Some(cat_str) = cat.as_str() {
                         let trimmed = cat_str.trim();
-                        if !trimmed.is_empty() && !all_categories.contains(&trimmed.to_string()) {
-                            all_categories.push(trimmed.to_string());
+                        if !trimmed.is_empty() {
+                            categories.push(trimmed.to_string());
                         }
                     }
                 }
             }
-        }
 
-        if !has_any_enabled {
-            return Some(Vec::new());
-        }
-
-        if all_categories.is_empty() {
-            return None;
+            entries.insert(
+                indexer_id.clone(),
+                IndexerRoutingEntry { enabled, categories },
+            );
         }
 
         info!(
             scope_id = scope_id,
-            categories = ?all_categories,
-            "resolved indexer routing categories"
+            indexer_count = entries.len(),
+            "resolved per-indexer routing plan"
         );
-        Some(all_categories)
+        Some(IndexerRoutingPlan { entries })
+    }
+}
+
+fn build_user_rule_input(
+    parsed: &ParsedReleaseMetadata,
+    profile: &QualityProfile,
+    result: &IndexerSearchResult,
+    decision: &QualityProfileDecision,
+    category: Option<&str>,
+    title_tags: &[String],
+    runtime_minutes: Option<i32>,
+) -> scryer_rules::UserRuleInput {
+    use scryer_rules::*;
+
+    let is_anime = title_tags.iter().any(|t| t.eq_ignore_ascii_case("anime"))
+        || category.map_or(false, |c| c.eq_ignore_ascii_case("anime"));
+
+    UserRuleInput {
+        release: ReleaseDoc {
+            raw_title: parsed.raw_title.clone(),
+            quality: parsed.quality.clone(),
+            source: parsed.source.clone(),
+            video_codec: parsed.video_codec.clone(),
+            audio: parsed.audio.clone(),
+            audio_codecs: parsed.audio_codecs.clone(),
+            audio_channels: parsed.audio_channels.clone(),
+            languages_audio: parsed.languages_audio.clone(),
+            languages_subtitles: parsed.languages_subtitles.clone(),
+            is_dual_audio: parsed.is_dual_audio,
+            is_atmos: parsed.is_atmos,
+            is_dolby_vision: parsed.is_dolby_vision,
+            detected_hdr: parsed.detected_hdr,
+            is_remux: parsed.is_remux,
+            is_bd_disk: parsed.is_bd_disk,
+            is_proper_upload: parsed.is_proper_upload,
+            release_group: parsed.release_group.clone(),
+            year: parsed.year,
+            parse_confidence: parsed.parse_confidence,
+            size_bytes: result.size_bytes,
+            age_days: result
+                .published_at
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| (chrono::Utc::now() - dt.with_timezone(&chrono::Utc)).num_days()),
+            thumbs_up: result.thumbs_up,
+            thumbs_down: result.thumbs_down,
+        },
+        profile: ProfileDoc {
+            id: profile.id.clone(),
+            name: profile.name.clone(),
+            quality_tiers: profile.criteria.quality_tiers.clone(),
+            archival_quality: profile.criteria.archival_quality.clone(),
+            allow_unknown_quality: profile.criteria.allow_unknown_quality,
+            source_allowlist: profile.criteria.source_allowlist.clone(),
+            source_blocklist: profile.criteria.source_blocklist.clone(),
+            video_codec_allowlist: profile.criteria.video_codec_allowlist.clone(),
+            video_codec_blocklist: profile.criteria.video_codec_blocklist.clone(),
+            audio_codec_allowlist: profile.criteria.audio_codec_allowlist.clone(),
+            audio_codec_blocklist: profile.criteria.audio_codec_blocklist.clone(),
+            atmos_preferred: profile.criteria.atmos_preferred,
+            dolby_vision_allowed: profile.criteria.dolby_vision_allowed,
+            detected_hdr_allowed: profile.criteria.detected_hdr_allowed,
+            prefer_remux: profile.criteria.prefer_remux,
+            allow_bd_disk: profile.criteria.allow_bd_disk,
+            allow_upgrades: profile.criteria.allow_upgrades,
+            prefer_dual_audio: profile.criteria.prefer_dual_audio,
+            required_audio_languages: profile.criteria.required_audio_languages.clone(),
+        },
+        context: ContextDoc {
+            title_id: None,
+            media_type: category.unwrap_or("unknown").to_string(),
+            category: category.unwrap_or("unknown").to_string(),
+            tags: title_tags.to_vec(),
+            has_existing_file: false,
+            existing_score: None,
+            search_mode: "auto".to_string(),
+            runtime_minutes,
+            is_anime,
+            is_filler: false,
+        },
+        builtin_score: BuiltinScoreDoc {
+            total: decision.release_score,
+            blocked: !decision.allowed,
+            codes: decision
+                .scoring_log
+                .iter()
+                .map(|e| e.code.clone())
+                .collect(),
+        },
     }
 }

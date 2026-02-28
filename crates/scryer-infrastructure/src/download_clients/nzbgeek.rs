@@ -2,7 +2,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use scryer_application::{AppError, AppResult, IndexerClient, IndexerSearchResult, SearchMode};
+use scryer_application::{AppError, AppResult, IndexerClient, IndexerSearchResult, IndexerStatsTracker, SearchMode};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -20,6 +20,7 @@ pub struct NzbGeekSearchClient {
     user_agent: String,
     http_client: Client,
     rate_limiter: crate::newznab_rate_limiter::NewznabRateLimiter,
+    stats_tracker: Option<(String, std::sync::Arc<dyn IndexerStatsTracker>)>,
 }
 
 impl NzbGeekSearchClient {
@@ -53,6 +54,7 @@ impl NzbGeekSearchClient {
             user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36".to_string(),
             http_client: Client::new(),
             rate_limiter,
+            stats_tracker: None,
         }
     }
 
@@ -69,7 +71,17 @@ impl NzbGeekSearchClient {
             user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36".to_string(),
             http_client: Client::new(),
             rate_limiter,
+            stats_tracker: None,
         }
+    }
+
+    pub fn with_stats_tracker(
+        mut self,
+        indexer_id: String,
+        tracker: std::sync::Arc<dyn IndexerStatsTracker>,
+    ) -> Self {
+        self.stats_tracker = Some((indexer_id, tracker));
+        self
     }
 
     fn endpoint(&self) -> String {
@@ -143,6 +155,7 @@ impl IndexerClient for NzbGeekSearchClient {
         tvdb_id: Option<String>,
         category: Option<String>,
         newznab_categories: Option<Vec<String>>,
+        _indexer_routing: Option<scryer_application::IndexerRoutingPlan>,
         limit: usize,
         _mode: SearchMode,
     ) -> AppResult<Vec<IndexerSearchResult>> {
@@ -305,7 +318,8 @@ impl IndexerClient for NzbGeekSearchClient {
 
         let status_text = status.to_string();
         let parsed_error = parse_nzbgeek_error_json(&body);
-        let api_limits = crate::newznab_rate_limiter::parse_apilimits_from_headers(&headers);
+        let api_limits = crate::newznab_rate_limiter::parse_apilimits_from_headers(&headers)
+            .or_else(|| crate::newznab_rate_limiter::parse_newznab_apilimits_xml(&body));
         self.rate_limiter.record_response(
             Some(status),
             parsed_error.as_ref().map(|(code, _)| code.as_str()),
@@ -314,7 +328,23 @@ impl IndexerClient for NzbGeekSearchClient {
         )
         .await?;
 
+        // Report API limits and query to the stats tracker
+        if let Some((ref indexer_id, ref tracker)) = self.stats_tracker {
+            if let Some(ref limits) = api_limits {
+                tracker.record_api_limits(
+                    indexer_id,
+                    limits.api_current,
+                    limits.api_max,
+                    limits.grab_current,
+                    limits.grab_max,
+                );
+            }
+        }
+
         if !status.is_success() {
+            if let Some((ref indexer_id, ref tracker)) = self.stats_tracker {
+                tracker.record_query(indexer_id, &self.source_label, false);
+            }
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
                 warn!(
                     endpoint = endpoint.as_str(),
@@ -337,6 +367,9 @@ impl IndexerClient for NzbGeekSearchClient {
         }
 
         if let Some((code, description)) = parsed_error {
+            if let Some((ref indexer_id, ref tracker)) = self.stats_tracker {
+                tracker.record_query(indexer_id, &self.source_label, false);
+            }
             warn!(
                 endpoint = endpoint.as_str(),
                 code = code.as_str(),
@@ -350,6 +383,9 @@ impl IndexerClient for NzbGeekSearchClient {
         }
 
         let parsed = parse_newznab_json(&body, params.limit, &self.source_label);
+        if let Some((ref indexer_id, ref tracker)) = self.stats_tracker {
+            tracker.record_query(indexer_id, &self.source_label, true);
+        }
         info!(
             endpoint = endpoint.as_str(),
             source = self.source_label.as_str(),

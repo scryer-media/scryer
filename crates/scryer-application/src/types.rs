@@ -23,6 +23,7 @@ pub struct TitleMetadataUpdate {
     pub aliases: Vec<String>,
     pub metadata_language: Option<String>,
     pub metadata_fetched_at: Option<String>,
+    pub digital_release_date: Option<String>,
     /// Additional external IDs to merge onto the title (e.g. MAL, AniList from anime mappings).
     pub extra_external_ids: Vec<ExternalId>,
     /// Additional tags to merge onto the title (e.g. MAL score, anime media type).
@@ -167,4 +168,23 @@ pub struct SystemHealth {
     pub titles_other: usize,
     pub recent_events: usize,
     pub recent_event_preview: Vec<String>,
+    pub db_migration_version: Option<String>,
+    pub db_pending_migrations: usize,
+    pub smg_cert_expires_at: Option<String>,
+    pub smg_cert_days_remaining: Option<i64>,
+    pub indexer_stats: Vec<IndexerQueryStats>,
+}
+
+#[derive(Clone, Debug)]
+pub struct IndexerQueryStats {
+    pub indexer_id: String,
+    pub indexer_name: String,
+    pub queries_last_24h: u32,
+    pub successful_last_24h: u32,
+    pub failed_last_24h: u32,
+    pub last_query_at: Option<String>,
+    pub api_current: Option<u32>,
+    pub api_max: Option<u32>,
+    pub grab_current: Option<u32>,
+    pub grab_max: Option<u32>,
 }

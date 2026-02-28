@@ -35,12 +35,20 @@ pub struct QualityProfileCriteria {
 /// always sort below considered ones regardless of other bonuses.
 pub const BLOCK_SCORE: i32 = -10_000;
 
+/// Distinguishes built-in scoring entries from user-rule entries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScoringSource {
+    Builtin,
+    UserRule(String),
+}
+
 /// A single entry in the scoring log. Every decision point — blocking or preferential —
 /// produces one entry so callers can inspect exactly why a release scored the way it did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScoringEntry {
     pub code: String,
     pub delta: i32,
+    pub source: ScoringSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,17 +78,21 @@ impl QualityProfileDecision {
 
     /// Record a decision point and keep the derived fields consistent.
     fn log(&mut self, code: &str, delta: i32) {
+        self.log_with_source(code, delta, ScoringSource::Builtin);
+    }
+
+    /// Record a decision point with an explicit source.
+    pub fn log_with_source(&mut self, code: &str, delta: i32, source: ScoringSource) {
         self.scoring_log.push(ScoringEntry {
             code: code.to_string(),
             delta,
+            source,
         });
         self.release_score += delta;
         if delta == BLOCK_SCORE {
             self.allowed = false;
             self.block_codes.push(code.to_string());
         }
-        // Keep preference_score in sync so the existing sort in the search handler
-        // continues to work without modification.
         self.preference_score = self.release_score;
     }
 }
@@ -711,12 +723,15 @@ fn expected_size_gib_for_quality(
 /// Apply category-aware size scoring.
 ///
 /// Movies, series, and anime have different expected payload sizes at the same
-/// quality tier, so thresholds are tuned per category.
+/// quality tier, so thresholds are tuned per category.  When `runtime_minutes`
+/// is provided the baseline expectation is scaled proportionally (e.g. a 3-hour
+/// movie is expected to be ~1.5× the size of a 2-hour movie).
 pub fn apply_size_scoring_for_category(
     decision: &mut QualityProfileDecision,
     release: &ParsedReleaseMetadata,
     size_bytes: Option<i64>,
     category_hint: Option<&str>,
+    runtime_minutes: Option<i32>,
 ) {
     let Some(raw_size_bytes) = size_bytes else {
         return;
@@ -749,9 +764,23 @@ pub fn apply_size_scoring_for_category(
         expected_gib *= 0.8;
     }
 
+    // Scale by actual runtime relative to category baseline
+    if let Some(runtime) = runtime_minutes {
+        if runtime > 0 {
+            let baseline = match media_category {
+                MediaSizeCategory::Movie => 120.0,
+                MediaSizeCategory::Series => 45.0,
+                MediaSizeCategory::Anime => 24.0,
+            };
+            expected_gib *= (runtime as f64) / baseline;
+        }
+    }
+
     let ratio = size_gib / expected_gib.max(0.5);
 
     let (code, delta) = match ratio {
+        r if r >= 8.0 => ("size_implausible_for_quality", BLOCK_SCORE),
+        r if r >= 4.0 => ("size_excessive_for_quality", 0),
         r if r >= 2.4 => ("size_massive_for_quality", 550),
         r if r >= 1.8 => ("size_very_large_for_quality", 380),
         r if r >= 1.35 => ("size_large_for_quality", 240),
@@ -1049,10 +1078,10 @@ mod tests {
         let release = parse_release_metadata("Movie.2021.2160p.BluRay.Remux.H.265.DTSHD.Atmos");
 
         let mut small = evaluate_against_profile(&profile, &release, false);
-        apply_size_scoring_for_category(&mut small, &release, Some(7 * 1024 * 1024 * 1024), None);
+        apply_size_scoring_for_category(&mut small, &release, Some(7 * 1024 * 1024 * 1024), None, None);
 
         let mut large = evaluate_against_profile(&profile, &release, false);
-        apply_size_scoring_for_category(&mut large, &release, Some(45 * 1024 * 1024 * 1024), None);
+        apply_size_scoring_for_category(&mut large, &release, Some(45 * 1024 * 1024 * 1024), None, None);
 
         assert!(large.preference_score > small.preference_score);
         assert!(large.preference_score - small.preference_score >= 900);
@@ -1069,6 +1098,7 @@ mod tests {
             &tiny_uhd,
             Some(5 * 1024 * 1024 * 1024),
             None,
+            None,
         );
 
         let strong_1080 = parse_release_metadata("Movie.2021.1080p.BluRay.H.264.DTS");
@@ -1077,6 +1107,7 @@ mod tests {
             &mut strong_1080_decision,
             &strong_1080,
             Some(18 * 1024 * 1024 * 1024),
+            None,
             None,
         );
 
@@ -1094,6 +1125,7 @@ mod tests {
             &plausible_uhd,
             Some(35 * 1024 * 1024 * 1024),
             None,
+            None,
         );
 
         let strong_1080 = parse_release_metadata("Movie.2021.1080p.BluRay.H.264.DTS");
@@ -1102,6 +1134,7 @@ mod tests {
             &mut strong_1080_decision,
             &strong_1080,
             Some(18 * 1024 * 1024 * 1024),
+            None,
             None,
         );
 

@@ -108,6 +108,7 @@ export function MobileSearchOverlay({
       qualityProfileId: resolveDefaultQualityProfileIdForFacet(facet),
       seasonFolder: facet !== "movie",
       monitorType: defaultMonitorTypeForFacet(facet),
+      ...(facet === "movie" ? { minAvailability: "announced" } : {}),
     }),
     [resolveDefaultQualityProfileIdForFacet],
   );
@@ -131,7 +132,8 @@ export function MobileSearchOverlay({
         if (
           current.qualityProfileId === next.qualityProfileId &&
           current.seasonFolder === next.seasonFolder &&
-          current.monitorType === next.monitorType
+          current.monitorType === next.monitorType &&
+          current.minAvailability === next.minAvailability
         )
           return previous;
         return { ...previous, [cardKey]: next };
@@ -336,19 +338,42 @@ export function MobileSearchOverlay({
               ) : null}
 
               {facet === "movie" ? (
-                <label className="space-y-1">
-                  <span className="block text-xs font-medium text-card-foreground">{t("title.monitored")}</span>
-                  <div className="flex min-h-10 w-full items-center">
-                    <Checkbox
-                      className="h-8 w-8"
-                      checked={draft.monitorType === "monitored"}
-                      onCheckedChange={(checked) =>
-                        updateMetadataAddDraft(cardKey, facet, { monitorType: checked ? "monitored" : "unmonitored" })
+                <>
+                  <label className="space-y-1">
+                    <span className="block text-xs font-medium text-card-foreground">{t("title.monitored")}</span>
+                    <div className="flex min-h-10 w-full items-center">
+                      <Checkbox
+                        className="h-8 w-8"
+                        checked={draft.monitorType === "monitored"}
+                        onCheckedChange={(checked) =>
+                          updateMetadataAddDraft(cardKey, facet, { monitorType: checked ? "monitored" : "unmonitored" })
+                        }
+                        disabled={isAdding}
+                      />
+                    </div>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="block text-xs font-medium text-card-foreground">
+                      {t("settings.minAvailabilityLabel")}
+                    </span>
+                    <Select
+                      value={draft.minAvailability ?? "announced"}
+                      onValueChange={(v) =>
+                        updateMetadataAddDraft(cardKey, facet, { minAvailability: v })
                       }
                       disabled={isAdding}
-                    />
-                  </div>
-                </label>
+                    >
+                      <SelectTrigger className="h-10 w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="announced">{t("settings.minAvailability.announced")}</SelectItem>
+                        <SelectItem value="in_cinemas">{t("settings.minAvailability.in_cinemas")}</SelectItem>
+                        <SelectItem value="released">{t("settings.minAvailability.released")}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </label>
+                </>
               ) : (
                 <label className="space-y-1">
                   <span className="block text-xs font-medium text-card-foreground">

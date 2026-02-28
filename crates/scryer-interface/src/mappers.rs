@@ -1,10 +1,10 @@
 use scryer_application::{
     ActivityChannel, ActivityEvent, IndexerSearchResult, LibraryScanSummary, ParsedEpisodeMetadata,
     ParsedReleaseMetadata, QualityProfileDecision, RenameApplyItemResult, RenameApplyResult,
-    RenamePlan, RenamePlanItem, ScoringEntry, SystemHealth, TitleReleaseBlocklistEntry,
+    RenamePlan, RenamePlanItem, ScoringEntry, ScoringSource, SystemHealth, TitleReleaseBlocklistEntry,
 };
 use scryer_domain::{
-    DownloadQueueItem, PolicyOutput,
+    DownloadQueueItem, PolicyOutput, RuleSet,
     Collection, DownloadClientConfig, Episode, HistoryEvent, IndexerConfig, Title, User,
 };
 use scryer_infrastructure::{SettingsValueRecord, WorkflowOperationRecord};
@@ -104,6 +104,10 @@ pub(crate) fn from_quality_profile_decision(
             .map(|e: ScoringEntry| ScoringEntryPayload {
                 code: e.code,
                 delta: e.delta,
+                source: match e.source {
+                    ScoringSource::Builtin => "builtin".to_string(),
+                    ScoringSource::UserRule(id) => format!("user:{id}"),
+                },
             })
             .collect(),
     }
@@ -256,6 +260,8 @@ pub(crate) fn from_title(title: Title) -> TitlePayload {
         aliases: title.aliases,
         metadata_language: title.metadata_language,
         metadata_fetched_at: title.metadata_fetched_at.map(|dt| dt.to_rfc3339()),
+        min_availability: title.min_availability,
+        digital_release_date: title.digital_release_date,
         quality_tier: None,
         size_bytes: None,
     }
@@ -495,6 +501,15 @@ pub(crate) fn from_policy(policy: PolicyOutput) -> PolicyOutputPayload {
         score: policy.score,
         reason_codes: policy.reason_codes,
         explanation: policy.explanation,
+        scoring_log: policy
+            .scoring_log
+            .into_iter()
+            .map(|e| ScoringEntryPayload {
+                code: e.code,
+                delta: e.delta,
+                source: e.source,
+            })
+            .collect(),
     }
 }
 
@@ -550,5 +565,43 @@ pub(crate) fn from_system_health(health: SystemHealth) -> SystemHealthPayload {
         titles_other: health.titles_other as i32,
         recent_events: health.recent_events as i32,
         recent_event_preview: health.recent_event_preview,
+        db_migration_version: health.db_migration_version,
+        db_pending_migrations: health.db_pending_migrations as i32,
+        smg_cert_expires_at: health.smg_cert_expires_at,
+        smg_cert_days_remaining: health.smg_cert_days_remaining.map(|d| d as i32),
+        indexer_stats: health
+            .indexer_stats
+            .into_iter()
+            .map(|s| IndexerQueryStatsPayload {
+                indexer_id: s.indexer_id,
+                indexer_name: s.indexer_name,
+                queries_last_24h: s.queries_last_24h as i32,
+                successful_last_24h: s.successful_last_24h as i32,
+                failed_last_24h: s.failed_last_24h as i32,
+                last_query_at: s.last_query_at,
+                api_current: s.api_current.map(|v| v as i32),
+                api_max: s.api_max.map(|v| v as i32),
+                grab_current: s.grab_current.map(|v| v as i32),
+                grab_max: s.grab_max.map(|v| v as i32),
+            })
+            .collect(),
+    }
+}
+
+pub(crate) fn from_rule_set(rs: RuleSet) -> RuleSetPayload {
+    RuleSetPayload {
+        id: rs.id,
+        name: rs.name,
+        description: rs.description,
+        rego_source: rs.rego_source,
+        enabled: rs.enabled,
+        priority: rs.priority,
+        applied_facets: rs
+            .applied_facets
+            .iter()
+            .map(|f| format!("{:?}", f).to_lowercase())
+            .collect(),
+        created_at: rs.created_at.to_rfc3339(),
+        updated_at: rs.updated_at.to_rfc3339(),
     }
 }

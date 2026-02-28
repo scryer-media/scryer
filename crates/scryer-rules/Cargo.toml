@@ -1,0 +1,11 @@
+[package]
+name = "scryer-rules"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+regorus = { version = "0.9", default-features = false, features = ["arc", "std", "rego-extensions", "regex"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

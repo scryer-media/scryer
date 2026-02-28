@@ -12,6 +12,11 @@ import {
   DEFAULT_MOVIE_LIBRARY_PATH,
   DEFAULT_SERIES_LIBRARY_PATH,
   MOVIE_FOLDER_KEY,
+  NFO_WRITE_ON_IMPORT_ANIME_KEY,
+  NFO_WRITE_ON_IMPORT_MOVIE_KEY,
+  NFO_WRITE_ON_IMPORT_SERIES_KEY,
+  PLEXMATCH_WRITE_ON_IMPORT_ANIME_KEY,
+  PLEXMATCH_WRITE_ON_IMPORT_SERIES_KEY,
   SERIES_FOLDER_KEY,
   QUALITY_PROFILE_CATALOG_KEY,
   QUALITY_PROFILE_ID_KEY,
@@ -93,6 +98,14 @@ export type UseMediaSettingsResult = {
   setCategoryPreferredSubGroup: React.Dispatch<
     React.SetStateAction<Record<ViewCategoryId, string>>
   >;
+  nfoWriteOnImport: Record<ViewCategoryId, string>;
+  setNfoWriteOnImport: React.Dispatch<
+    React.SetStateAction<Record<ViewCategoryId, string>>
+  >;
+  plexmatchWriteOnImport: Record<ViewCategoryId, string>;
+  setPlexmatchWriteOnImport: React.Dispatch<
+    React.SetStateAction<Record<ViewCategoryId, string>>
+  >;
   updateCategoryMediaProfileSettings: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
   refreshMediaSettings: () => Promise<void>;
   refreshCategoryValidation: () => void;
@@ -108,6 +121,17 @@ const DEFAULT_RECAP_POLICY = "download_all";
 const ALLOWED_RECAP_POLICIES = new Set(["download_all", "skip_recap"]);
 const DEFAULT_RENAME_TEMPLATE =
   "{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}";
+
+const NFO_WRITE_KEYS: Record<ViewCategoryId, string> = {
+  movie: NFO_WRITE_ON_IMPORT_MOVIE_KEY,
+  series: NFO_WRITE_ON_IMPORT_SERIES_KEY,
+  anime: NFO_WRITE_ON_IMPORT_ANIME_KEY,
+};
+
+const PLEXMATCH_WRITE_KEYS: Partial<Record<ViewCategoryId, string>> = {
+  series: PLEXMATCH_WRITE_ON_IMPORT_SERIES_KEY,
+  anime: PLEXMATCH_WRITE_ON_IMPORT_ANIME_KEY,
+};
 
 export function useMediaSettings({
   activeQualityScopeId,
@@ -184,6 +208,20 @@ export function useMediaSettings({
     movie: "",
     series: "",
     anime: "",
+  });
+  const [nfoWriteOnImport, setNfoWriteOnImport] = React.useState<
+    Record<ViewCategoryId, string>
+  >({
+    movie: "false",
+    series: "false",
+    anime: "false",
+  });
+  const [plexmatchWriteOnImport, setPlexmatchWriteOnImport] = React.useState<
+    Record<ViewCategoryId, string>
+  >({
+    movie: "false",
+    series: "false",
+    anime: "false",
   });
 
   const normalizeQualityProfiles = React.useCallback(
@@ -475,6 +513,36 @@ export function useMediaSettings({
         if (previous.anime === next) return previous;
         return { ...previous, anime: next };
       });
+
+      // NFO write-on-import (system-scoped, keyed per facet)
+      setNfoWriteOnImport((previous) => {
+        let hasUpdate = false;
+        const next = { ...previous };
+        for (const [scopeId, key] of Object.entries(NFO_WRITE_KEYS)) {
+          const raw = getSettingDisplayValue(systemItemsByKey[key]).trim().toLowerCase();
+          const val = raw === "true" ? "true" : "false";
+          if (next[scopeId as ViewCategoryId] !== val) {
+            next[scopeId as ViewCategoryId] = val;
+            hasUpdate = true;
+          }
+        }
+        return hasUpdate ? next : previous;
+      });
+
+      // Plexmatch write-on-import (system-scoped, series + anime only)
+      setPlexmatchWriteOnImport((previous) => {
+        let hasUpdate = false;
+        const next = { ...previous };
+        for (const [scopeId, key] of Object.entries(PLEXMATCH_WRITE_KEYS)) {
+          const raw = getSettingDisplayValue(systemItemsByKey[key]).trim().toLowerCase();
+          const val = raw === "true" ? "true" : "false";
+          if (next[scopeId as ViewCategoryId] !== val) {
+            next[scopeId as ViewCategoryId] = val;
+            hasUpdate = true;
+          }
+        }
+        return hasUpdate ? next : previous;
+      });
     },
     [
       normalizeQualityProfiles,
@@ -699,6 +767,26 @@ export function useMediaSettings({
           }));
         }
 
+        // Save NFO/plexmatch sidecar settings (system scope, no scopeId)
+        {
+          const sidecarItems: Array<{ keyName: string; value: string }> = [];
+          const nfoKey = NFO_WRITE_KEYS[activeQualityScopeId];
+          if (nfoKey) {
+            sidecarItems.push({ keyName: nfoKey, value: nfoWriteOnImport[activeQualityScopeId] });
+          }
+          const plexKey = PLEXMATCH_WRITE_KEYS[activeQualityScopeId];
+          if (plexKey) {
+            sidecarItems.push({ keyName: plexKey, value: plexmatchWriteOnImport[activeQualityScopeId] });
+          }
+          if (sidecarItems.length > 0) {
+            const { error: sidecarError } = await client.mutation(
+              saveAdminSettingsMutation,
+              { input: { scope: "system", items: sidecarItems } },
+            ).toPromise();
+            if (sidecarError) throw sidecarError;
+          }
+        }
+
         const successMessage =
           view === "movies"
             ? t("settings.movieSettingsSaved")
@@ -723,6 +811,8 @@ export function useMediaSettings({
       categoryRenameCollisionPolicies,
       categoryRenameMissingMetadataPolicies,
       categoryRenameTemplates,
+      nfoWriteOnImport,
+      plexmatchWriteOnImport,
       normalizeFillerPolicy,
       normalizeRecapPolicy,
       normalizeRenameCollisionPolicy,
@@ -800,6 +890,10 @@ export function useMediaSettings({
     setCategoryInterSeasonMovies,
     categoryPreferredSubGroup,
     setCategoryPreferredSubGroup,
+    nfoWriteOnImport,
+    setNfoWriteOnImport,
+    plexmatchWriteOnImport,
+    setPlexmatchWriteOnImport,
     updateCategoryMediaProfileSettings,
     refreshMediaSettings,
     refreshCategoryValidation,

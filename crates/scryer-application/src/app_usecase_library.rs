@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use super::*;
+use crate::nfo::parse_nfo;
 use tracing::info;
 
 const MOVIES_PATH_KEY: &str = "movies.path";
@@ -391,7 +392,76 @@ impl AppUseCase {
         for file in files {
             summary.scanned += 1;
 
-            let (query, year_hint) = extract_library_query(&file.path, &library_path);
+            // Parse companion NFO sidecar if present (non-fatal).
+            let nfo_meta = file
+                .nfo_path
+                .as_deref()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .map(|content| parse_nfo(&content));
+
+            // --- Fast path: NFO provides a TVDB ID, skip gateway search ---
+            if let Some(tvdb_id) = nfo_meta.as_ref().and_then(|m| m.tvdb_id.as_deref()) {
+                let title = if let Some(existing) = existing_titles_by_tvdb_id.get(tvdb_id).cloned() {
+                    existing
+                } else {
+                    let (fallback_query, _) = extract_library_query(&file.path, &library_path);
+                    let name = nfo_meta
+                        .as_ref()
+                        .and_then(|m| m.title.clone())
+                        .unwrap_or(fallback_query);
+
+                    let mut external_ids = vec![ExternalId {
+                        source: "tvdb".into(),
+                        value: tvdb_id.to_string(),
+                    }];
+                    if let Some(ref imdb) = nfo_meta.as_ref().and_then(|m| m.imdb_id.clone()) {
+                        external_ids.push(ExternalId {
+                            source: "imdb".into(),
+                            value: imdb.clone(),
+                        });
+                    }
+                    if let Some(ref tmdb) = nfo_meta.as_ref().and_then(|m| m.tmdb_id.clone()) {
+                        external_ids.push(ExternalId {
+                            source: "tmdb".into(),
+                            value: tmdb.clone(),
+                        });
+                    }
+
+                    let new_title = NewTitle {
+                        name,
+                        facet: MediaFacet::Movie,
+                        monitored: true,
+                        tags: vec![],
+                        external_ids,
+                        min_availability: None,
+                    };
+
+                    let created = self.add_title(actor, new_title).await?;
+                    let key = normalize_title_key(&created.name);
+                    existing_titles_by_name.insert(key, created.clone());
+                    existing_titles_by_tvdb_id.insert(tvdb_id.to_string(), created.clone());
+                    created
+                };
+
+                summary.matched += 1;
+                self.track_movie_file_in_collection(&title, &file, &mut summary).await;
+                continue;
+            }
+
+            // --- Normal path: search metadata gateway ---
+            // Use NFO title/year if available, otherwise folder/filename heuristics.
+            let (query, year_hint) = if let Some(ref meta) = nfo_meta {
+                let title_str = meta.title.clone().unwrap_or_else(|| {
+                    extract_library_query(&file.path, &library_path).0
+                });
+                let year = meta.year.map(|y| y as u32).or_else(|| {
+                    extract_library_query(&file.path, &library_path).1
+                });
+                (title_str, year)
+            } else {
+                extract_library_query(&file.path, &library_path)
+            };
+
             if query.is_empty() {
                 summary.skipped += 1;
                 continue;
@@ -428,6 +498,7 @@ impl AppUseCase {
                         source: "tvdb".into(),
                         value: selected.tvdb_id.clone(),
                     }],
+                    min_availability: None,
                 };
 
                 let title = self.add_title(actor, new_title).await?;
@@ -436,61 +507,7 @@ impl AppUseCase {
                 title
             };
 
-            let collections = self
-                .services
-                .shows
-                .list_collections_for_title(&title.id)
-                .await?;
-            let already_tracked = collections.iter().any(|collection| {
-                collection
-                    .ordered_path
-                    .as_deref()
-                    .is_some_and(|path| path == file.path)
-            });
-
-            if already_tracked {
-                summary.skipped += 1;
-                continue;
-            }
-
-            let next_collection_index = collections
-                .iter()
-                .filter_map(|collection| collection.collection_index.parse::<u32>().ok())
-                .max()
-                .map_or(1, |max| max + 1);
-
-            // Create a collection for the file found on disk
-            let file_stem = Path::new(&file.path)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default();
-            let parsed = parse_release_metadata(file_stem);
-            let quality_label = parsed.quality.as_ref().filter(|q| !q.is_empty()).cloned();
-
-            let collection = Collection {
-                id: Id::new().0,
-                title_id: title.id.clone(),
-                collection_type: "movie".to_string(),
-                collection_index: next_collection_index.to_string(),
-                label: quality_label,
-                ordered_path: Some(file.path.clone()),
-                narrative_order: None,
-                first_episode_number: None,
-                last_episode_number: None,
-                monitored: true,
-                created_at: Utc::now(),
-            };
-
-            if let Err(err) = self.services.shows.create_collection(collection).await {
-                info!(
-                    title_id = %title.id,
-                    path = %file.path,
-                    error = %err,
-                    "failed to create collection for library file"
-                );
-            }
-
-            summary.imported += 1;
+            self.track_movie_file_in_collection(&title, &file, &mut summary).await;
         }
 
         info!(
@@ -503,6 +520,79 @@ impl AppUseCase {
         );
 
         Ok(summary)
+    }
+
+    /// Track a discovered movie file as a collection entry for the given title.
+    /// Skips if the file path is already tracked. Increments `summary.imported` or
+    /// `summary.skipped` accordingly.
+    async fn track_movie_file_in_collection(
+        &self,
+        title: &Title,
+        file: &LibraryFile,
+        summary: &mut LibraryScanSummary,
+    ) {
+        let collections = match self
+            .services
+            .shows
+            .list_collections_for_title(&title.id)
+            .await
+        {
+            Ok(c) => c,
+            Err(err) => {
+                info!(title_id = %title.id, error = %err, "failed to list collections during scan");
+                return;
+            }
+        };
+
+        let already_tracked = collections.iter().any(|collection| {
+            collection
+                .ordered_path
+                .as_deref()
+                .is_some_and(|path| path == file.path)
+        });
+
+        if already_tracked {
+            summary.skipped += 1;
+            return;
+        }
+
+        let next_collection_index = collections
+            .iter()
+            .filter_map(|collection| collection.collection_index.parse::<u32>().ok())
+            .max()
+            .map_or(1, |max| max + 1);
+
+        let file_stem = Path::new(&file.path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+        let parsed = parse_release_metadata(file_stem);
+        let quality_label = parsed.quality.as_ref().filter(|q| !q.is_empty()).cloned();
+
+        let collection = Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: "movie".to_string(),
+            collection_index: next_collection_index.to_string(),
+            label: quality_label,
+            ordered_path: Some(file.path.clone()),
+            narrative_order: None,
+            first_episode_number: None,
+            last_episode_number: None,
+            monitored: true,
+            created_at: Utc::now(),
+        };
+
+        if let Err(err) = self.services.shows.create_collection(collection).await {
+            info!(
+                title_id = %title.id,
+                path = %file.path,
+                error = %err,
+                "failed to create collection for library file"
+            );
+        }
+
+        summary.imported += 1;
     }
 
     async fn read_rename_template(&self, handler: &dyn crate::FacetHandler) -> AppResult<String> {

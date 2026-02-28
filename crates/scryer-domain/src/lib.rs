@@ -11,6 +11,12 @@ impl Id {
     pub fn new() -> Self {
         Self(Uuid::new_v4().to_string())
     }
+
+    /// Generate an ID safe for use as a Rego package segment.
+    /// Format: `r` + 32 hex chars (UUID without hyphens).
+    pub fn new_rego_safe() -> Self {
+        Self(format!("r{}", Uuid::new_v4().to_string().replace('-', "")))
+    }
 }
 
 impl Default for Id {
@@ -62,6 +68,8 @@ pub struct Title {
     pub aliases: Vec<String>,
     pub metadata_language: Option<String>,
     pub metadata_fetched_at: Option<DateTime<Utc>>,
+    pub min_availability: Option<String>,
+    pub digital_release_date: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -349,6 +357,8 @@ pub struct NewTitle {
     pub monitored: bool,
     pub tags: Vec<String>,
     pub external_ids: Vec<ExternalId>,
+    #[serde(default)]
+    pub min_availability: Option<String>,
 }
 
 impl NewTitle {
@@ -359,6 +369,7 @@ impl NewTitle {
             monitored: true,
             tags: vec![],
             external_ids: vec![],
+            min_availability: None,
         }
     }
 }
@@ -391,6 +402,11 @@ pub struct PolicyInput {
     pub has_existing_file: bool,
     pub candidate_quality: Option<String>,
     pub requested_mode: String,
+    pub release_title: Option<String>,
+    pub quality_profile_id: Option<String>,
+    pub category: Option<String>,
+    pub tags: Vec<String>,
+    pub is_anime: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -399,6 +415,29 @@ pub struct PolicyOutput {
     pub score: f32,
     pub reason_codes: Vec<String>,
     pub explanation: String,
+    pub scoring_log: Vec<PolicyScoringEntry>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PolicyScoringEntry {
+    pub code: String,
+    pub delta: i32,
+    pub source: String,
+}
+
+/// A user-authored rule set definition.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuleSet {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub rego_source: String,
+    pub enabled: bool,
+    pub priority: i32,
+    /// Facets this rule applies to. Empty = all facets.
+    pub applied_facets: Vec<MediaFacet>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]

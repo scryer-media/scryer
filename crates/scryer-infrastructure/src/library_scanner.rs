@@ -87,9 +87,25 @@ impl LibraryScanner for FileSystemLibraryScanner {
                     continue;
                 }
 
+                // Discover companion .nfo sidecar file.
+                // Priority: <stem>.nfo, then movie.nfo in the same directory.
+                let nfo_path = {
+                    let nfo_same_stem = path.with_extension("nfo");
+                    let nfo_canonical = path.parent().map(|p| p.join("movie.nfo"));
+
+                    if nfo_same_stem.is_file() {
+                        Some(nfo_same_stem.to_string_lossy().to_string())
+                    } else if nfo_canonical.as_ref().is_some_and(|p| p.is_file()) {
+                        Some(nfo_canonical.unwrap().to_string_lossy().to_string())
+                    } else {
+                        None
+                    }
+                };
+
                 results.push(LibraryFile {
                     path: path.to_string_lossy().to_string(),
                     display_name,
+                    nfo_path,
                 });
             }
         }

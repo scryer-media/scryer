@@ -1,5 +1,5 @@
 use scryer_application::{AppResult, PrimaryCollectionSummary, ReleaseDecision, ReleaseDownloadAttemptOutcome, TitleMetadataUpdate, WantedItem};
-use scryer_domain::{Collection, DownloadClientConfig, Episode, HistoryEvent, ImportRecord, IndexerConfig, MediaFacet, Title, User};
+use scryer_domain::{Collection, DownloadClientConfig, Episode, HistoryEvent, ImportRecord, IndexerConfig, MediaFacet, RuleSet, Title, User};
 use scryer_application::QualityProfile;
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
@@ -11,7 +11,7 @@ use crate::types::{
 use crate::{
     migrations,
     queries::{
-        download_client::*, event::*, indexer::*, quality::*, settings::*,
+        download_client::*, event::*, indexer::*, quality::*, rule_set::*, settings::*,
         title::*, user::*, workflow::*,
     },
 };
@@ -442,6 +442,37 @@ pub(crate) enum DbCommand {
         wanted_item_id: String,
         limit: i64,
         reply: Sender<AppResult<Vec<ReleaseDecision>>>,
+    },
+    // ── Rule Sets ──────────────────────────────────────────────────────
+    ListRuleSets {
+        reply: Sender<AppResult<Vec<RuleSet>>>,
+    },
+    ListEnabledRuleSets {
+        reply: Sender<AppResult<Vec<RuleSet>>>,
+    },
+    GetRuleSet {
+        id: String,
+        reply: Sender<AppResult<Option<RuleSet>>>,
+    },
+    CreateRuleSet {
+        rule_set: RuleSet,
+        reply: Sender<AppResult<()>>,
+    },
+    UpdateRuleSet {
+        rule_set: RuleSet,
+        reply: Sender<AppResult<()>>,
+    },
+    DeleteRuleSet {
+        id: String,
+        reply: Sender<AppResult<()>>,
+    },
+    RecordRuleSetHistory {
+        id: String,
+        rule_set_id: String,
+        action: String,
+        rego_source: Option<String>,
+        actor_id: Option<String>,
+        reply: Sender<AppResult<()>>,
     },
 }
 
@@ -1132,6 +1163,33 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     let _ = reply.send(
                         crate::queries::wanted::list_release_decisions_for_wanted_item_query(
                             &pool, &wanted_item_id, limit,
+                        ).await,
+                    );
+                }
+                // ── Rule Sets ──────────────────────────────────────────────
+                DbCommand::ListRuleSets { reply } => {
+                    let _ = reply.send(list_rule_sets_query(&pool).await);
+                }
+                DbCommand::ListEnabledRuleSets { reply } => {
+                    let _ = reply.send(list_enabled_rule_sets_query(&pool).await);
+                }
+                DbCommand::GetRuleSet { id, reply } => {
+                    let _ = reply.send(get_rule_set_by_id_query(&pool, &id).await);
+                }
+                DbCommand::CreateRuleSet { rule_set, reply } => {
+                    let _ = reply.send(insert_rule_set_query(&pool, &rule_set).await);
+                }
+                DbCommand::UpdateRuleSet { rule_set, reply } => {
+                    let _ = reply.send(update_rule_set_query(&pool, &rule_set).await);
+                }
+                DbCommand::DeleteRuleSet { id, reply } => {
+                    let _ = reply.send(delete_rule_set_query(&pool, &id).await);
+                }
+                DbCommand::RecordRuleSetHistory { id, rule_set_id, action, rego_source, actor_id, reply } => {
+                    let _ = reply.send(
+                        insert_rule_set_history_query(
+                            &pool, &id, &rule_set_id, &action,
+                            rego_source.as_deref(), actor_id.as_deref(),
                         ).await,
                     );
                 }

@@ -195,6 +195,7 @@ export const searchQuery = `query SearchIndexers($query: String!, $imdbId: Strin
       scoringLog {
         code
         delta
+        source
       }
     }
   }
@@ -235,6 +236,7 @@ export const searchSeriesEpisodeQuery = `query SearchIndexersEpisode($title: Str
       scoringLog {
         code
         delta
+        source
       }
     }
   }
@@ -625,6 +627,22 @@ export const systemHealthQuery = `query SystemHealth {
     titlesOther
     recentEvents
     recentEventPreview
+    dbMigrationVersion
+    dbPendingMigrations
+    smgCertExpiresAt
+    smgCertDaysRemaining
+    indexerStats {
+      indexerId
+      indexerName
+      queriesLast24h
+      successfulLast24h
+      failedLast24h
+      lastQueryAt
+      apiCurrent
+      apiMax
+      grabCurrent
+      grabMax
+    }
   }
 }`;
 
@@ -692,5 +710,19 @@ export const releaseDecisionsQuery = `query ReleaseDecisions($wantedItemId: Stri
     scoreDelta
     explanationJson
     createdAt
+  }
+}`;
+
+export const ruleSetsQuery = `query RuleSets {
+  ruleSets {
+    id
+    name
+    description
+    regoSource
+    enabled
+    priority
+    appliedFacets
+    createdAt
+    updatedAt
   }
 }`;

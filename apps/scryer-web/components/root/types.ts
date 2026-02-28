@@ -6,7 +6,8 @@ export type SettingsSection =
   | "indexers"
   | "downloadClients"
   | "qualityProfiles"
-  | "acquisition";
+  | "acquisition"
+  | "rules";
 export type ContentSettingsSection = "overview" | "settings";
 
 export type Translate = (
@@ -26,6 +27,19 @@ export type ActivityEvent = {
   occurredAt?: string | null;
 };
 
+export type IndexerQueryStats = {
+  indexerId: string;
+  indexerName: string;
+  queriesLast24h: number;
+  successfulLast24h: number;
+  failedLast24h: number;
+  lastQueryAt: string | null;
+  apiCurrent: number | null;
+  apiMax: number | null;
+  grabCurrent: number | null;
+  grabMax: number | null;
+};
+
 export type SystemHealth = {
   serviceReady: boolean;
   dbPath: string;
@@ -38,4 +52,9 @@ export type SystemHealth = {
   titlesOther: number;
   recentEvents: number;
   recentEventPreview: string[];
+  dbMigrationVersion: string | null;
+  dbPendingMigrations: number;
+  smgCertExpiresAt: string | null;
+  smgCertDaysRemaining: number | null;
+  indexerStats: IndexerQueryStats[];
 };

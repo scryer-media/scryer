@@ -442,7 +442,7 @@ fn default_1080p_profile_has_two_tiers() {
 fn size_scoring_no_size_is_noop() {
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.H.265");
     let mut d = QualityProfileDecision::new();
-    apply_size_scoring_for_category(&mut d, &release, None, None);
+    apply_size_scoring_for_category(&mut d, &release, None, None, None);
     assert!(d.scoring_log.is_empty());
 }
 
@@ -450,7 +450,7 @@ fn size_scoring_no_size_is_noop() {
 fn size_scoring_zero_bytes_is_noop() {
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.H.265");
     let mut d = QualityProfileDecision::new();
-    apply_size_scoring_for_category(&mut d, &release, Some(0), None);
+    apply_size_scoring_for_category(&mut d, &release, Some(0), None, None);
     assert!(d.scoring_log.is_empty());
 }
 
@@ -460,13 +460,83 @@ fn size_scoring_anime_expects_smaller() {
     let size_2gb = 2 * 1024 * 1024 * 1024_i64;
 
     let mut d_anime = QualityProfileDecision::new();
-    apply_size_scoring_for_category(&mut d_anime, &release, Some(size_2gb), Some("anime"));
+    apply_size_scoring_for_category(&mut d_anime, &release, Some(size_2gb), Some("anime"), None);
 
     let mut d_movie = QualityProfileDecision::new();
-    apply_size_scoring_for_category(&mut d_movie, &release, Some(size_2gb), None);
+    apply_size_scoring_for_category(&mut d_movie, &release, Some(size_2gb), None, None);
 
     // 2GB for anime 1080p is expected; for movie 1080p it's small
     assert!(d_anime.release_score > d_movie.release_score);
+}
+
+#[test]
+fn size_scoring_scales_with_runtime() {
+    let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.H.265");
+    let size_12gb = 12 * 1024 * 1024 * 1024_i64;
+
+    // 12 GB for a standard 2-hour movie (baseline 120 min) → ~1.5× expected (8 GiB × 0.8 WEB)
+    let mut d_standard = QualityProfileDecision::new();
+    apply_size_scoring_for_category(&mut d_standard, &release, Some(size_12gb), None, Some(120));
+
+    // 12 GB for a 3-hour movie → expected is scaled up by 180/120 = 1.5×
+    let mut d_long = QualityProfileDecision::new();
+    apply_size_scoring_for_category(&mut d_long, &release, Some(size_12gb), None, Some(180));
+
+    // The long movie should score higher because 12 GB is more "expected" for 3 hours
+    assert!(d_long.release_score <= d_standard.release_score);
+}
+
+#[test]
+fn size_scoring_anime_ova_runtime_scales_expectation() {
+    let release = parse_release_metadata("Anime.2024.1080p.WEB-DL.H.265");
+    let size_3gb = 3 * 1024 * 1024 * 1024_i64;
+
+    // 3 GB for a standard 24-min anime episode → quite large
+    let mut d_standard = QualityProfileDecision::new();
+    apply_size_scoring_for_category(&mut d_standard, &release, Some(size_3gb), Some("anime"), Some(24));
+
+    // 3 GB for a 50-min OVA → more expected
+    let mut d_ova = QualityProfileDecision::new();
+    apply_size_scoring_for_category(&mut d_ova, &release, Some(size_3gb), Some("anime"), Some(50));
+
+    // OVA should score the same or lower because 3 GB is more "normal" for 50 min
+    assert!(d_ova.release_score <= d_standard.release_score);
+}
+
+#[test]
+fn size_implausible_blocks_wildly_oversized() {
+    // 300 GB claiming to be a 720p anime episode — ratio ~400×, clearly mislabeled
+    let release = parse_release_metadata("Anime.2024.720p.WEB-DL.H.265");
+    let size_300gb = 300 * 1024 * 1024 * 1024_i64;
+
+    let mut d = QualityProfileDecision::new();
+    apply_size_scoring_for_category(&mut d, &release, Some(size_300gb), Some("anime"), None);
+    assert!(!d.allowed);
+    assert!(d.block_codes.contains(&"size_implausible_for_quality".to_string()));
+}
+
+#[test]
+fn size_excessive_stops_rewarding_oversized() {
+    // 3 GB for a 720p anime Blu-ray episode (expected ~1.0 GiB) → ratio ~3× → not blocked
+    // but 5 GB → ratio ~5× → excessive band, scores 0 (no bonus, no penalty)
+    let release = parse_release_metadata("Anime.2024.720p.BluRay.H.265");
+    let size_5gb = 5 * 1024 * 1024 * 1024_i64;
+
+    let mut d = QualityProfileDecision::new();
+    apply_size_scoring_for_category(&mut d, &release, Some(size_5gb), Some("anime"), None);
+    assert!(d.allowed);
+    assert_eq!(d.release_score, 0);
+}
+
+#[test]
+fn size_plausible_bluray_remux_not_penalized() {
+    // 50 GB for a 2160P Blu-ray Remux movie is normal (expected ~43 GiB)
+    let release = parse_release_metadata("Movie.2024.2160p.BluRay.Remux.H.265.DTS-HD");
+    let size_50gb = 50 * 1024 * 1024 * 1024_i64;
+
+    let mut d = QualityProfileDecision::new();
+    apply_size_scoring_for_category(&mut d, &release, Some(size_50gb), None, None);
+    assert!(d.release_score > 0);
 }
 
 // ── QualityProfileDecision::log ───────────────────────────────────────────

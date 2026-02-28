@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use scryer_application::{
     AppError, AppResult, DownloadClientConfigRepository, EventRepository, IndexerConfigRepository,
     ImportRepository, MediaFileRepository, PrimaryCollectionSummary,
-    ReleaseDecision, TitleMediaFile, WantedItem, WantedItemRepository,
+    ReleaseDecision, RuleSetRepository, SystemInfoProvider, TitleMediaFile, WantedItem, WantedItemRepository,
     QualityProfile as ApplicationQualityProfile, QualityProfileRepository,
     ReleaseAttemptRepository, ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature,
     TitleReleaseBlocklistEntry,
@@ -10,7 +10,7 @@ use scryer_application::{
 };
 use scryer_domain::{
     Collection, DownloadClientConfig, Entitlement, Episode, HistoryEvent, ImportRecord,
-    IndexerConfig, MediaFacet, Title, User,
+    IndexerConfig, MediaFacet, RuleSet, Title, User,
 };
 use tokio::sync::oneshot;
 
@@ -693,6 +693,57 @@ impl SettingsRepository for SqliteServices {
 }
 
 #[async_trait]
+impl SystemInfoProvider for SqliteServices {
+    async fn current_migration_version(&self) -> AppResult<Option<String>> {
+        let applied = self.list_applied_migrations().await?;
+        let latest = applied
+            .iter()
+            .filter(|m| m.success)
+            .max_by_key(|m| {
+                m.migration_key
+                    .split('_')
+                    .next()
+                    .and_then(|v| v.parse::<i64>().ok())
+                    .unwrap_or(-1)
+            })
+            .map(|m| m.migration_key.clone());
+        Ok(latest)
+    }
+
+    async fn pending_migration_count(&self) -> AppResult<usize> {
+        let applied = self.list_applied_migrations().await?;
+        let applied_keys: std::collections::HashSet<String> = applied
+            .iter()
+            .filter(|m| m.success)
+            .map(|m| m.migration_key.clone())
+            .collect();
+        let embedded = crate::list_embedded_migrations()?;
+        let pending = embedded
+            .iter()
+            .filter(|m| !applied_keys.contains(&m.key))
+            .count();
+        Ok(pending)
+    }
+
+    async fn smg_cert_expires_at(&self) -> AppResult<Option<String>> {
+        match self
+            .get_setting_with_defaults("system", "smg.cert_expires_at", None)
+            .await?
+        {
+            Some(record) => {
+                let value = record.effective_value_json.trim_matches('"').to_string();
+                if value.is_empty() || value == "null" {
+                    Ok(None)
+                } else {
+                    Ok(Some(value))
+                }
+            }
+            None => Ok(None),
+        }
+    }
+}
+
+#[async_trait]
 impl DownloadClientConfigRepository for SqliteServices {
     async fn list(&self, client_type: Option<String>) -> AppResult<Vec<DownloadClientConfig>> {
         self.list_download_client_configs(client_type).await
@@ -968,5 +1019,96 @@ impl WantedItemRepository for SqliteServices {
         limit: i64,
     ) -> AppResult<Vec<ReleaseDecision>> {
         self.list_release_decisions_for_wanted_item(wanted_item_id, limit).await
+    }
+}
+
+#[async_trait]
+impl RuleSetRepository for SqliteServices {
+    async fn list_rule_sets(&self) -> AppResult<Vec<RuleSet>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::ListRuleSets { reply: reply_tx })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn list_enabled_rule_sets(&self) -> AppResult<Vec<RuleSet>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::ListEnabledRuleSets { reply: reply_tx })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn get_rule_set(&self, id: &str) -> AppResult<Option<RuleSet>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::GetRuleSet {
+                id: id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn create_rule_set(&self, rule_set: &RuleSet) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::CreateRuleSet {
+                rule_set: rule_set.clone(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn update_rule_set(&self, rule_set: &RuleSet) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::UpdateRuleSet {
+                rule_set: rule_set.clone(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn delete_rule_set(&self, id: &str) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::DeleteRuleSet {
+                id: id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn record_rule_set_history(
+        &self,
+        rule_set_id: &str,
+        action: &str,
+        rego_source: Option<&str>,
+        actor_id: Option<&str>,
+    ) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::RecordRuleSetHistory {
+                id: scryer_domain::Id::new().0,
+                rule_set_id: rule_set_id.to_string(),
+                action: action.to_string(),
+                rego_source: rego_source.map(|s| s.to_string()),
+                actor_id: actor_id.map(|s| s.to_string()),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
     }
 }

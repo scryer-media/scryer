@@ -21,6 +21,15 @@ export const ANIME_MONITOR_SPECIALS_KEY = "anime.monitor_specials";
 export const ANIME_INTER_SEASON_MOVIES_KEY = "anime.inter_season_movies";
 export const ANIME_PREFERRED_SUB_GROUP_KEY = "anime.preferred_sub_group";
 
+// NFO sidecar writing on import (per facet)
+export const NFO_WRITE_ON_IMPORT_MOVIE_KEY = "nfo.write_on_import.movie";
+export const NFO_WRITE_ON_IMPORT_SERIES_KEY = "nfo.write_on_import.series";
+export const NFO_WRITE_ON_IMPORT_ANIME_KEY = "nfo.write_on_import.anime";
+
+// Plexmatch hint writing on import (series/anime only)
+export const PLEXMATCH_WRITE_ON_IMPORT_SERIES_KEY = "plexmatch.write_on_import.series";
+export const PLEXMATCH_WRITE_ON_IMPORT_ANIME_KEY = "plexmatch.write_on_import.anime";
+
 // --- Derived from registry ---
 
 export const MOVIE_FOLDER_KEY = FACET_REGISTRY.find((f) => f.id === "movie")!.folderSettingKey;

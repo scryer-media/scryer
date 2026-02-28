@@ -4,6 +4,7 @@ members = [
     "crates/scryer-application",
     "crates/scryer-infrastructure",
     "crates/scryer-interface",
+    "crates/scryer-rules",
     "crates/scryer",
 ]
 resolver = "2"

@@ -8,6 +8,7 @@ import { SettingsDownloadClientsContainer } from "@/components/containers/settin
 import { SettingsQualityProfilesContainer } from "@/components/containers/settings/settings-quality-profiles-container";
 import { SettingsAcquisitionContainer } from "@/components/containers/settings/settings-acquisition-container";
 import { SettingsProfileContainer } from "@/components/containers/settings/settings-profile-container";
+import { SettingsRulesContainer } from "@/components/containers/settings/settings-rules-container";
 import type { SettingsSection, Translate } from "@/components/root/types";
 import type { LocaleCode, LanguageOption } from "@/lib/i18n";
 
@@ -52,6 +53,8 @@ export const SettingsContainer = memo(function SettingsContainer({
                   ? t("settings.downloadClients")
                 : settingsSection === "acquisition"
                   ? t("settings.acquisition")
+                : settingsSection === "rules"
+                  ? t("settings.rules")
                     : t("settings.qualityProfiles"),
           })}
         </CardTitle>
@@ -90,6 +93,11 @@ export const SettingsContainer = memo(function SettingsContainer({
           />
         ) : settingsSection === "acquisition" ? (
           <SettingsAcquisitionContainer
+            t={t}
+            setGlobalStatus={setGlobalStatus}
+          />
+        ) : settingsSection === "rules" ? (
+          <SettingsRulesContainer
             t={t}
             setGlobalStatus={setGlobalStatus}
           />

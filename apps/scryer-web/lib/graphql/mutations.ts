@@ -128,7 +128,7 @@ export const deleteDownloadClientMutation = `mutation DeleteDownloadClient($inpu
 
 export const addTitleMutation = `mutation AddTitle($input: AddTitleInput!) {
   addTitle(input: $input) {
-    title { id name facet }
+    title { id name facet minAvailability }
     downloadJobId
   }
 }`;
@@ -330,4 +330,57 @@ export const resumeWantedItemMutation = `mutation ResumeWantedItem($input: Wante
 
 export const resetWantedItemMutation = `mutation ResetWantedItem($input: WantedItemIdInput!) {
   resetWantedItem(input: $input)
+}`;
+
+export const createRuleSetMutation = `mutation CreateRuleSet($input: CreateRuleSetInput!) {
+  createRuleSet(input: $input) {
+    id
+    name
+    description
+    regoSource
+    enabled
+    priority
+    appliedFacets
+    createdAt
+    updatedAt
+  }
+}`;
+
+export const updateRuleSetMutation = `mutation UpdateRuleSet($input: UpdateRuleSetInput!) {
+  updateRuleSet(input: $input) {
+    id
+    name
+    description
+    regoSource
+    enabled
+    priority
+    appliedFacets
+    createdAt
+    updatedAt
+  }
+}`;
+
+export const deleteRuleSetMutation = `mutation DeleteRuleSet($id: String!) {
+  deleteRuleSet(id: $id)
+}`;
+
+export const toggleRuleSetMutation = `mutation ToggleRuleSet($input: ToggleRuleSetInput!) {
+  toggleRuleSet(input: $input) {
+    id
+    name
+    description
+    regoSource
+    enabled
+    priority
+    appliedFacets
+    createdAt
+    updatedAt
+  }
+}`;
+
+export const validateRuleSetMutation = `mutation ValidateRuleSet($input: ValidateRuleSetInput!) {
+  validateRuleSet(input: $input) {
+    valid
+    errors
+  }
 }`;

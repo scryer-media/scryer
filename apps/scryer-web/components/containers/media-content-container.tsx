@@ -7,8 +7,9 @@ import {
   queueExistingMutation,
   scanMovieLibraryMutation,
   deleteTitleMutation,
+  updateRuleSetMutation,
 } from "@/lib/graphql/mutations";
-import { titlesQuery } from "@/lib/graphql/queries";
+import { titlesQuery, ruleSetsQuery } from "@/lib/graphql/queries";
 import {
   CATEGORY_SCOPE_MAP,
   QUALITY_PROFILE_INHERIT_VALUE,
@@ -26,6 +27,7 @@ import type {
   Release,
   Facet,
   TitleRecord,
+  RuleSetRecord,
 } from "@/lib/types";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
@@ -89,6 +91,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     monitorSpecialsForQueue, setMonitorSpecialsForQueue,
     interSeasonMoviesForQueue, setInterSeasonMoviesForQueue,
     preferredSubGroupForQueue, setPreferredSubGroupForQueue,
+    minAvailabilityForQueue, setMinAvailabilityForQueue,
   } = useQueueFormState();
 
   const {
@@ -131,6 +134,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     setCategoryInterSeasonMovies,
     categoryPreferredSubGroup,
     setCategoryPreferredSubGroup,
+    nfoWriteOnImport,
+    setNfoWriteOnImport,
+    plexmatchWriteOnImport,
+    setPlexmatchWriteOnImport,
     updateCategoryMediaProfileSettings,
     refreshMediaSettings,
   } = useMediaSettings({
@@ -176,6 +183,63 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     setGlobalStatus,
     t,
   });
+
+  const [ruleSets, setRuleSets] = React.useState<RuleSetRecord[]>([]);
+  const [rulesLoading, setRulesLoading] = React.useState(true);
+  const [rulesSaving, setRulesSaving] = React.useState(false);
+
+  const refreshRuleSets = React.useCallback(async () => {
+    setRulesLoading(true);
+    try {
+      const { data, error } = await client.query(ruleSetsQuery, {}).toPromise();
+      if (error) throw error;
+      setRuleSets(data.ruleSets || []);
+    } catch {
+      // silent — rules panel is non-critical
+    } finally {
+      setRulesLoading(false);
+    }
+  }, [client]);
+
+  const onToggleRuleFacet = React.useCallback(
+    async (ruleSetId: string, enabled: boolean) => {
+      const rule = ruleSets.find((r) => r.id === ruleSetId);
+      if (!rule) return;
+
+      const nextFacets = enabled
+        ? [...rule.appliedFacets, activeFacet]
+        : rule.appliedFacets.filter((f) => f !== activeFacet);
+
+      setRulesSaving(true);
+      try {
+        const { error } = await client
+          .mutation(updateRuleSetMutation, {
+            input: {
+              id: ruleSetId,
+              name: rule.name,
+              description: rule.description,
+              regoSource: rule.regoSource,
+              priority: rule.priority,
+              appliedFacets: nextFacets,
+            },
+          })
+          .toPromise();
+        if (error) throw error;
+        setGlobalStatus(
+          t("status.ruleToggled", {
+            name: rule.name,
+            state: enabled ? t("label.enabled") : t("label.disabled"),
+          }),
+        );
+        await refreshRuleSets();
+      } catch (error) {
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      } finally {
+        setRulesSaving(false);
+      }
+    },
+    [activeFacet, client, refreshRuleSets, ruleSets, setGlobalStatus, t],
+  );
 
   React.useEffect(() => {
     setMonitorSpecialsForQueue(categoryMonitorSpecials.anime !== "false");
@@ -270,6 +334,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
             monitored: monitoredForQueue,
             tags,
             externalIds,
+            ...(queueFacet === "movie" ? { minAvailability: minAvailabilityForQueue } : {}),
           },
         }).toPromise();
         if (error) throw error;
@@ -287,7 +352,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         setGlobalStatus(error instanceof Error ? error.message : t("status.queueFailed"));
       }
     },
-    [interSeasonMoviesForQueue, monitorSpecialsForQueue, monitoredForQueue, preferredSubGroupForQueue, queueFacet, refreshTitles, client, setGlobalStatus, t],
+    [interSeasonMoviesForQueue, minAvailabilityForQueue, monitorSpecialsForQueue, monitoredForQueue, preferredSubGroupForQueue, queueFacet, refreshTitles, client, setGlobalStatus, t],
   );
 
   const queueFromSearch = React.useCallback(
@@ -348,6 +413,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
               ],
               sourceHint,
               sourceTitle: release.title,
+              ...(queueFacet === "movie" ? { minAvailability: minAvailabilityForQueue } : {}),
             },
           },
         ).toPromise();
@@ -362,6 +428,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     },
     [
       interSeasonMoviesForQueue,
+      minAvailabilityForQueue,
       monitorSpecialsForQueue,
       monitoredForQueue,
       preferredSubGroupForQueue,
@@ -559,12 +626,14 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       void refreshMediaSettings();
       void refreshDownloadClientRouting();
       void refreshIndexerRouting();
+      void refreshRuleSets();
     }
   }, [
     contentSettingsSection,
     refreshDownloadClientRouting,
     refreshIndexerRouting,
     refreshMediaSettings,
+    refreshRuleSets,
     refreshTitles,
     view,
   ]);
@@ -604,6 +673,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           setCategoryInterSeasonMovies,
           categoryPreferredSubGroup,
           setCategoryPreferredSubGroup,
+          nfoWriteOnImport,
+          setNfoWriteOnImport,
+          plexmatchWriteOnImport,
+          setPlexmatchWriteOnImport,
           qualityProfileInheritValue: QUALITY_PROFILE_INHERIT_VALUE,
           toProfileOptions,
           updateCategoryMediaProfileSettings,
@@ -623,6 +696,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           setInterSeasonMoviesForQueue,
           preferredSubGroupForQueue,
           setPreferredSubGroupForQueue,
+          minAvailabilityForQueue,
+          setMinAvailabilityForQueue,
           selectedTvdb,
           tvdbCandidates,
           selectedTvdbId,
@@ -656,6 +731,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           setIndexerEnabledForScope,
           updateIndexerRoutingForScope,
           moveIndexerInScope,
+          ruleSets,
+          rulesLoading,
+          rulesSaving,
+          onToggleRuleFacet,
           libraryScanLoading,
           libraryScanSummary,
           onOpenOverview,

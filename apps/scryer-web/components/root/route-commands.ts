@@ -113,6 +113,14 @@ export function buildRouteCommands({ t, onNavigate }: BuildRouteCommandsArgs): R
       onSelect: buildNavigate(onNavigate, "settings", "indexers"),
     },
     {
+      id: "settings-rules",
+      label: t("settings.rules"),
+      description: t("settings.rules"),
+      keywords: ["settings", "rules", "rego", "opa", "scoring", "custom"],
+      icon: Settings,
+      onSelect: buildNavigate(onNavigate, "settings", "rules"),
+    },
+    {
       id: "system",
       label: t("nav.system"),
       description: t("nav.system"),

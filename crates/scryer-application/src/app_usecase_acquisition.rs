@@ -46,6 +46,53 @@ impl AppUseCase {
             return;
         }
 
+        // Minimum availability gate: skip search if the movie hasn't reached the
+        // configured availability threshold yet.
+        let availability = title.min_availability.as_deref().unwrap_or("announced");
+        match availability {
+            "in_cinemas" => {
+                if let Some(ref first_aired) = title.first_aired {
+                    if let Ok(date) = chrono::NaiveDate::parse_from_str(first_aired, "%Y-%m-%d") {
+                        if date > now.date_naive() {
+                            info!(
+                                title_id = title.id.as_str(),
+                                min_availability = availability,
+                                first_aired = first_aired.as_str(),
+                                "skipping movie: not yet in cinemas"
+                            );
+                            return;
+                        }
+                    }
+                }
+            }
+            "released" => {
+                let is_released = if let Some(ref digital) = title.digital_release_date {
+                    chrono::NaiveDate::parse_from_str(digital, "%Y-%m-%d")
+                        .map(|d| d <= now.date_naive())
+                        .unwrap_or(false)
+                } else if let Some(ref first_aired) = title.first_aired {
+                    // Fallback: first_aired + 90 days
+                    chrono::NaiveDate::parse_from_str(first_aired, "%Y-%m-%d")
+                        .map(|d| d + chrono::Duration::days(90) <= now.date_naive())
+                        .unwrap_or(false)
+                } else {
+                    false
+                };
+                if !is_released {
+                    info!(
+                        title_id = title.id.as_str(),
+                        min_availability = availability,
+                        digital_release_date = title.digital_release_date.as_deref().unwrap_or("none"),
+                        first_aired = title.first_aired.as_deref().unwrap_or("none"),
+                        "skipping movie: not yet released"
+                    );
+                    return;
+                }
+            }
+            // "announced" or anything else: always search
+            _ => {}
+        }
+
         // Determine baseline date for search scheduling
         let baseline_date = title.first_aired.clone();
 
@@ -375,6 +422,11 @@ async fn process_single_wanted_item(
     // Build search queries based on media type
     let (queries, imdb_id, tvdb_id, category) = build_search_queries(&title, item, episode.as_ref(), &app.facet_registry);
 
+    // Derive the download client category separately — search_category ("series")
+    // is for Newznab query type, download_category ("tv") is for NZBGet routing.
+    // Uses the configurable per-facet nzbget.category setting with hardcoded fallback.
+    let download_cat = app.derive_download_category(&title.facet).await;
+
     if queries.is_empty() {
         info!(
             title_id = title.id.as_str(),
@@ -395,6 +447,13 @@ async fn process_single_wanted_item(
         "background acquisition: searching indexers"
     );
 
+    // Resolve per-item runtime for size scoring
+    let runtime_minutes = episode
+        .as_ref()
+        .and_then(|ep| ep.duration_seconds)
+        .map(|s| (s / 60) as i32)
+        .or(title.runtime_minutes);
+
     // Search and score releases
     let results = match app.search_and_score_releases(
         queries,
@@ -405,6 +464,7 @@ async fn process_single_wanted_item(
         200,
         "background_acquisition",
         SearchMode::Auto,
+        runtime_minutes,
     ).await {
         Ok(r) => r,
         Err(err) => {
@@ -663,7 +723,7 @@ async fn process_single_wanted_item(
             source_hint.clone(),
             source_title.clone(),
             source_password.clone(),
-            Some(category.clone()),
+            Some(download_cat.clone()),
         )
         .await;
 

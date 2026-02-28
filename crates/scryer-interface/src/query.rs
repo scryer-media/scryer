@@ -223,6 +223,11 @@ impl QueryRoot {
                     has_existing_file: input.has_existing_file,
                     candidate_quality: input.candidate_quality,
                     requested_mode: input.requested_mode,
+                    release_title: None,
+                    quality_profile_id: None,
+                    category: None,
+                    tags: vec![],
+                    is_anime: false,
                 },
             )
             .await
@@ -606,6 +611,34 @@ impl QueryRoot {
             .await
             .map_err(to_gql_error)?;
         Ok(decisions.into_iter().map(from_release_decision).collect())
+    }
+
+    // ── Rule Sets ──────────────────────────────────────────────────────
+
+    async fn rule_sets(&self, ctx: &Context<'_>) -> GqlResult<Vec<RuleSetPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let rule_sets = app.list_rule_sets(&actor).await.map_err(to_gql_error)?;
+        Ok(rule_sets
+            .into_iter()
+            .map(crate::mappers::from_rule_set)
+            .collect())
+    }
+
+    async fn rule_set(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+    ) -> GqlResult<Option<RuleSetPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let rule_set = app
+            .get_rule_set(&actor, &id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(rule_set.map(crate::mappers::from_rule_set))
     }
 }
 

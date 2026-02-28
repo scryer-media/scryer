@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use scryer_application::{
-    AppError, AppResult, IndexerClient, IndexerConfigRepository, IndexerSearchResult, SearchMode,
+    AppError, AppResult, IndexerClient, IndexerConfigRepository, IndexerRoutingPlan,
+    IndexerSearchResult, IndexerStatsTracker, SearchMode,
 };
 use scryer_domain::IndexerConfig;
 use tracing::{info, warn};
@@ -13,27 +14,34 @@ use super::nzbgeek::NzbGeekSearchClient;
 pub struct MultiIndexerSearchClient {
     indexer_configs: Arc<dyn IndexerConfigRepository>,
     fallback_client: Arc<NzbGeekSearchClient>,
+    stats_tracker: Arc<dyn IndexerStatsTracker>,
 }
 
 impl MultiIndexerSearchClient {
     pub fn new(
         indexer_configs: Arc<dyn IndexerConfigRepository>,
         fallback_client: Arc<NzbGeekSearchClient>,
+        stats_tracker: Arc<dyn IndexerStatsTracker>,
     ) -> Self {
         Self {
             indexer_configs,
             fallback_client,
+            stats_tracker,
         }
     }
 
-    fn client_from_config(config: &IndexerConfig) -> AppResult<Arc<dyn IndexerClient>> {
+    fn client_from_config(
+        config: &IndexerConfig,
+        stats_tracker: Arc<dyn IndexerStatsTracker>,
+    ) -> AppResult<Arc<dyn IndexerClient>> {
         // All current indexer types (nzbgeek, dognzb) use the Newznab protocol.
         // The NzbGeekSearchClient works for any Newznab indexer via from_indexer_config().
+        let _ = stats_tracker; // TODO: wire stats tracker into search clients
         let provider = config.provider_type.trim().to_ascii_lowercase();
         match provider.as_str() {
-            "nzbgeek" | "dognzb" | "newznab" => {
-                Ok(Arc::new(NzbGeekSearchClient::from_indexer_config(config)))
-            }
+            "nzbgeek" | "dognzb" | "newznab" => Ok(Arc::new(
+                NzbGeekSearchClient::from_indexer_config(config),
+            )),
             other => Err(AppError::Validation(format!(
                 "unsupported indexer provider: '{other}'"
             ))),
@@ -50,6 +58,7 @@ impl IndexerClient for MultiIndexerSearchClient {
         tvdb_id: Option<String>,
         category: Option<String>,
         newznab_categories: Option<Vec<String>>,
+        indexer_routing: Option<IndexerRoutingPlan>,
         limit: usize,
         mode: SearchMode,
     ) -> AppResult<Vec<IndexerSearchResult>> {
@@ -81,6 +90,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                     tvdb_id,
                     category,
                     newznab_categories,
+                    None,
                     limit,
                     mode,
                 )
@@ -94,10 +104,38 @@ impl IndexerClient for MultiIndexerSearchClient {
             "dispatching search to indexers"
         );
 
-        // Spawn parallel searches across all enabled indexers
+        // Spawn parallel searches across enabled indexers, applying per-indexer routing
         let mut set = tokio::task::JoinSet::new();
         for config in enabled {
-            let client = match Self::client_from_config(config) {
+            // Apply per-indexer facet scoping: if routing is configured and this
+            // indexer is disabled for the current scope, skip it entirely.
+            let routing_entry = indexer_routing
+                .as_ref()
+                .and_then(|plan| plan.entries.get(&config.id));
+
+            if let Some(entry) = routing_entry {
+                if !entry.enabled {
+                    info!(
+                        indexer = config.name.as_str(),
+                        "skipping indexer: disabled for scope via routing config"
+                    );
+                    continue;
+                }
+            }
+
+            // Use per-indexer categories from routing if available, otherwise fall
+            // back to the caller-provided newznab_categories.
+            let per_indexer_categories = routing_entry
+                .map(|entry| {
+                    if entry.categories.is_empty() {
+                        newznab_categories.clone()
+                    } else {
+                        Some(entry.categories.clone())
+                    }
+                })
+                .unwrap_or_else(|| newznab_categories.clone());
+
+            let client = match Self::client_from_config(config, self.stats_tracker.clone()) {
                 Ok(c) => c,
                 Err(err) => {
                     warn!(
@@ -112,13 +150,12 @@ impl IndexerClient for MultiIndexerSearchClient {
             let imdb_id = imdb_id.clone();
             let tvdb_id = tvdb_id.clone();
             let category = category.clone();
-            let newznab_categories = newznab_categories.clone();
             let indexer_name = config.name.clone();
 
             set.spawn(async move {
                 let result = tokio::time::timeout(
                     std::time::Duration::from_secs(30),
-                    client.search(query, imdb_id, tvdb_id, category, newznab_categories, limit, mode),
+                    client.search(query, imdb_id, tvdb_id, category, per_indexer_categories, None, limit, mode),
                 )
                 .await;
 

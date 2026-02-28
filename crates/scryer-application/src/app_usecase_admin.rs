@@ -32,6 +32,17 @@ impl AppUseCase {
             recent_event_preview.push(event.message.clone());
         }
 
+        let db_migration_version = self.services.system_info.current_migration_version().await.ok().flatten();
+        let db_pending_migrations = self.services.system_info.pending_migration_count().await.unwrap_or(0);
+        let smg_cert_expires_at = self.services.system_info.smg_cert_expires_at().await.ok().flatten();
+        let smg_cert_days_remaining = smg_cert_expires_at.as_deref().and_then(|expires_str| {
+            chrono::DateTime::parse_from_rfc3339(expires_str)
+                .ok()
+                .map(|expires| (expires.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_days())
+        });
+
+        let indexer_stats = self.services.indexer_stats.all_stats();
+
         Ok(SystemHealth {
             service_ready: true,
             db_path: self.services.db_path.clone(),
@@ -44,6 +55,11 @@ impl AppUseCase {
             titles_other,
             recent_events: recent_events.len(),
             recent_event_preview,
+            db_migration_version,
+            db_pending_migrations,
+            smg_cert_expires_at,
+            smg_cert_days_remaining,
+            indexer_stats,
         })
     }
 
