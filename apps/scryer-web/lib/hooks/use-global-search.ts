@@ -138,7 +138,7 @@ export function useGlobalSearch({
     const q = query.trim().toLowerCase();
 
     function score(item: MetadataTvdbSearchItem): number {
-      const name = (item.sortTitle || item.name || "").toLowerCase();
+      const name = (item.name || "").toLowerCase();
       const pop = Math.max(item.popularity ?? 0, 1);
       if (name === q) return 1e9 + pop;
       if (name.startsWith(q)) return pop * 5;
@@ -149,10 +149,8 @@ export function useGlobalSearch({
     return [...results].sort((left, right) => {
       const ls = score(left);
       const rs = score(right);
-      if (ls === rs) {
-        return String(left.sortTitle || left.name).localeCompare(String(right.sortTitle || right.name));
-      }
-      return rs - ls;
+      if (ls !== rs) return rs - ls;
+      return (right.year ?? 0) - (left.year ?? 0);
     });
   }, []);
 

@@ -233,7 +233,7 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
         );
     setRowActionBusy((current) => {
       if (!busy) {
-        const { [rowId]: removed, ...next } = current;
+        const { [rowId]: _removed, ...next } = current;
         return next;
       }
       if (current[rowId]) {

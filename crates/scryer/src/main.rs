@@ -388,7 +388,14 @@ async fn bootstrap_application(
         Arc::new(db.clone()),
         db_path.clone(),
     );
-    services.metadata_gateway = metadata_gateway;
+    services.metadata_gateway = metadata_gateway.clone();
+
+    // Fire-and-forget: warm up SMG enrollment so the mTLS client is ready before
+    // the first real metadata query, rather than paying the cost at query time.
+    tokio::spawn(async move {
+        metadata_gateway.warm_enrollment().await;
+    });
+
     services.library_scanner = library_scanner;
     services.library_renamer = library_renamer;
     services.imports = Arc::new(db.clone());

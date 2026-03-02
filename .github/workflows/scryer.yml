@@ -13,10 +13,44 @@ permissions:
   contents: read
 
 jobs:
+  web-lint:
+    name: web-lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/scryer-web/package-lock.json
+      - name: Install dependencies
+        working-directory: apps/scryer-web
+        run: npm ci
+      - name: Lint
+        working-directory: apps/scryer-web
+        run: npm run lint
+
+  rust-clippy:
+    name: rust-clippy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Run clippy
+        run: cargo clippy --workspace -- -D warnings
+
   web-build:
     name: web-build
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    needs: [web-lint]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,6 +84,7 @@ jobs:
     name: rust-test
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    needs: [rust-clippy]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -65,7 +100,7 @@ jobs:
     name: rust-package-${{ matrix.platform }}
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 45
-    needs: [web-build, rust-test]
+    needs: [web-build, rust-test, rust-clippy]
     strategy:
       fail-fast: false
       matrix:

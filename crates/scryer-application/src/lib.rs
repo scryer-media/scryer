@@ -53,9 +53,9 @@ pub use library_scan::{
     SeasonMetadata, SeriesMetadata,
 };
 pub use app_usecase_import::{
-    execute_manual_import, preview_manual_import, try_import_completed_downloads,
-    ManualImportFileMapping, ManualImportFilePreview, ManualImportFileResult,
-    ManualImportPreview,
+    execute_manual_import, import_completed_download, preview_manual_import,
+    try_import_completed_downloads, ManualImportFileMapping, ManualImportFilePreview,
+    ManualImportFileResult, ManualImportPreview,
 };
 pub use library_rename::{
     build_rename_plan_fingerprint, render_rename_template, LibraryRenamer,
@@ -684,77 +684,22 @@ pub struct AppUseCase {
     pub facet_registry: Arc<FacetRegistry>,
 }
 
-
-#[allow(dead_code)]
-fn is_release_blocklisted(
-    result: &IndexerSearchResult,
-    failed_source_hints: &std::collections::HashSet<String>,
-    failed_source_titles: &std::collections::HashSet<String>,
-) -> bool {
-    if let Some(download_url) = normalize_release_attempt_hint(result.download_url.as_deref()) {
-        if failed_source_hints.contains(&download_url) {
-            return true;
-        }
-    }
-
-    if let Some(link) = normalize_release_attempt_hint(result.link.as_deref()) {
-        if failed_source_hints.contains(&link) {
-            return true;
-        }
-    }
-
-    if let Some(title) = normalize_release_attempt_title(Some(result.title.as_str())) {
-        if failed_source_titles.contains(&title) {
-            return true;
-        }
-    }
-
-    false
-}
-
-#[allow(dead_code)]
-fn normalize_release_attempt_hint(raw: Option<&str>) -> Option<String> {
+pub(crate) fn normalize_release_attempt_hint(raw: Option<&str>) -> Option<String> {
     raw.map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
 }
 
-#[allow(dead_code)]
-fn normalize_release_attempt_title(raw: Option<&str>) -> Option<String> {
+pub(crate) fn normalize_release_attempt_title(raw: Option<&str>) -> Option<String> {
     raw.map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.to_ascii_lowercase())
 }
 
-#[allow(dead_code)]
-fn normalize_release_password(raw: Option<&str>) -> Option<String> {
+pub(crate) fn normalize_release_password(raw: Option<&str>) -> Option<String> {
     raw.map(str::trim)
         .filter(|value| !value.is_empty() && *value != "0")
         .map(str::to_string)
-}
-
-#[allow(dead_code)]
-async fn lookup_latest_source_password(
-    release_attempts: &dyn ReleaseAttemptRepository,
-    title_id: Option<&str>,
-    source_hint: Option<&str>,
-    source_title: Option<&str>,
-) -> Option<String> {
-    if let Some(title_id) = title_id {
-        if let Ok(Some(password)) = release_attempts
-            .get_latest_source_password(Some(title_id), source_hint, source_title)
-            .await
-        {
-            return normalize_release_password(Some(password.as_str()));
-        }
-    }
-
-    let password = release_attempts
-        .get_latest_source_password(None, source_hint, source_title)
-        .await
-        .ok()
-        .flatten();
-    normalize_release_password(password.as_deref())
 }
 
 pub(crate) fn require(actor: &User, entitlement: &Entitlement) -> AppResult<()> {
@@ -813,14 +758,6 @@ fn normalize_tags(raw: &[String]) -> Vec<String> {
         }
     }
     out
-}
-
-#[allow(dead_code)]
-fn normalize_release_attempt_value(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
 }
 
 fn sanitize_ids(ids: Vec<ExternalId>) -> Vec<ExternalId> {
@@ -1688,6 +1625,9 @@ mod tests {
                     tags: vec![],
                     external_ids: vec![],
                     min_availability: None,
+                
+                    ..Default::default()
+                
                 },
                 None,
                 None,
@@ -1711,6 +1651,9 @@ mod tests {
                 tags: vec![],
                 external_ids: vec![],
                 min_availability: None,
+            
+                ..Default::default()
+            
             },
         )
         .await
@@ -1725,6 +1668,9 @@ mod tests {
                 tags: vec![],
                 external_ids: vec![],
                 min_availability: None,
+            
+                ..Default::default()
+            
             },
         )
         .await
@@ -1829,6 +1775,9 @@ mod tests {
                     tags: vec![],
                     external_ids: vec![],
                     min_availability: None,
+                
+                    ..Default::default()
+                
                 },
             )
             .await
@@ -1933,6 +1882,9 @@ mod tests {
                     tags: vec!["SciFi".into()],
                     external_ids: vec![],
                     min_availability: None,
+                
+                    ..Default::default()
+                
                 },
             )
             .await
@@ -1969,6 +1921,9 @@ mod tests {
                     tags: vec![],
                     external_ids: vec![],
                     min_availability: None,
+                
+                    ..Default::default()
+                
                 },
             )
             .await
@@ -2034,6 +1989,9 @@ mod tests {
                     tags: vec![],
                     external_ids: vec![],
                     min_availability: None,
+                
+                    ..Default::default()
+                
                 },
             )
             .await
@@ -2076,6 +2034,9 @@ mod tests {
                     tags: vec![],
                     external_ids: vec![],
                     min_availability: None,
+                
+                    ..Default::default()
+                
                 },
             )
             .await
@@ -2136,6 +2097,9 @@ mod tests {
                     tags: vec![],
                     external_ids: vec![],
                     min_availability: None,
+                
+                    ..Default::default()
+                
                 },
             )
             .await
@@ -2179,6 +2143,9 @@ mod tests {
                     tags: vec![],
                     external_ids: vec![],
                     min_availability: None,
+                
+                    ..Default::default()
+                
                 },
             )
             .await
@@ -2240,6 +2207,9 @@ mod tests {
                     tags: vec![],
                     external_ids: vec![],
                     min_availability: None,
+                
+                    ..Default::default()
+                
                 },
             )
             .await
@@ -2294,6 +2264,9 @@ mod tests {
                     tags: vec![],
                     external_ids: vec![],
                     min_availability: None,
+                
+                    ..Default::default()
+                
                 },
             )
             .await
@@ -2393,5 +2366,126 @@ mod tests {
         assert!(!app
             .validate_password("wrong", &v1_hash)
             .expect("v1 should reject wrong password"));
+    }
+
+    // ── password edge cases ───────────────────────────────────────────────────
+
+    #[test]
+    fn hash_password_empty_returns_error() {
+        let (app, _) = bootstrap();
+        assert!(app.hash_password("").is_err());
+        assert!(app.hash_password("   ").is_err());
+    }
+
+    #[test]
+    fn validate_password_v1_malformed_no_salt_separator() {
+        let (app, _) = bootstrap();
+        // Only "v1" prefix, no $ after it
+        let bad_hash = "v1nope";
+        let result = app.validate_password("anything", bad_hash);
+        assert!(result.is_err(), "malformed v1 hash (no $) should return Err");
+    }
+
+    #[test]
+    fn validate_password_v1_malformed_no_hash_component() {
+        let (app, _) = bootstrap();
+        // Has v1$salt but no third segment
+        let bad_hash = "v1$somesalt";
+        let result = app.validate_password("anything", bad_hash);
+        assert!(result.is_err(), "malformed v1 hash (no hash segment) should return Err");
+    }
+
+    #[test]
+    fn validate_password_unknown_version_returns_error() {
+        let (app, _) = bootstrap();
+        let result = app.validate_password("pass", "v99$somehash");
+        assert!(result.is_err(), "unknown hash version should return Err");
+    }
+
+    // ── JWT round-trip ────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn issue_and_authenticate_token_round_trips() {
+        let (app, _) = bootstrap();
+        let user = User {
+            id: "user-jwt-1".to_string(),
+            username: "jwt_user".to_string(),
+            password_hash: None,
+            entitlements: vec![Entitlement::ViewCatalog],
+        };
+        let token = app.issue_access_token(&user).expect("issue token");
+        let decoded = app.authenticate_token(&token).await.expect("authenticate token");
+        assert_eq!(decoded.id, user.id);
+        assert_eq!(decoded.username, user.username);
+    }
+
+    #[tokio::test]
+    async fn entitlements_survive_token_round_trip() {
+        let (app, _) = bootstrap();
+        let user = User {
+            id: "user-jwt-2".to_string(),
+            username: "ent_user".to_string(),
+            password_hash: None,
+            entitlements: vec![Entitlement::ViewCatalog, Entitlement::ManageTitle],
+        };
+        let token = app.issue_access_token(&user).expect("issue token");
+        let decoded = app.authenticate_token(&token).await.expect("authenticate token");
+        assert!(decoded.entitlements.contains(&Entitlement::ViewCatalog));
+        assert!(decoded.entitlements.contains(&Entitlement::ManageTitle));
+    }
+
+    #[tokio::test]
+    async fn expired_token_returns_unauthorized() {
+        let (app, _) = bootstrap();
+        let user = User {
+            id: "user-jwt-3".to_string(),
+            username: "exp_user".to_string(),
+            password_hash: None,
+            entitlements: vec![],
+        };
+        // Encode a token with an exp 100 seconds in the past
+        let claims = JwtClaims {
+            sub: user.id.clone(),
+            exp: Utc::now().timestamp() - 100,
+            iat: Utc::now().timestamp() - 200,
+            iss: app.auth.issuer.clone(),
+            username: user.username.clone(),
+            entitlements: vec![],
+        };
+        let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256);
+        let key = jsonwebtoken::EncodingKey::from_ec_pem(
+            app.auth.jwt_ec_private_pem.as_bytes(),
+        )
+        .expect("encoding key");
+        let expired_token = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
+        let result = app.authenticate_token(&expired_token).await;
+        assert!(result.is_err(), "expired token should be rejected");
+    }
+
+    #[tokio::test]
+    async fn wrong_issuer_token_returns_unauthorized() {
+        let (app, _) = bootstrap();
+        let user = User {
+            id: "user-jwt-4".to_string(),
+            username: "iss_user".to_string(),
+            password_hash: None,
+            entitlements: vec![Entitlement::ViewCatalog],
+        };
+        let claims = JwtClaims {
+            sub: user.id.clone(),
+            exp: Utc::now().timestamp() + 3600,
+            iat: Utc::now().timestamp(),
+            iss: "wrong-issuer".to_string(),
+            username: user.username.clone(),
+            entitlements: vec!["view_catalog".to_string()],
+        };
+        let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256);
+        let key = jsonwebtoken::EncodingKey::from_ec_pem(
+            app.auth.jwt_ec_private_pem.as_bytes(),
+        )
+        .expect("encoding key");
+        let bad_token = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
+        let result = app.authenticate_token(&bad_token).await;
+        assert!(result.is_err(), "token with wrong issuer should be rejected");
     }
 }

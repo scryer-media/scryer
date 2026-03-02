@@ -166,3 +166,7 @@ impl ActivityStream {
             .collect()
     }
 }
+
+#[cfg(test)]
+#[path = "activity_tests.rs"]
+mod activity_tests;

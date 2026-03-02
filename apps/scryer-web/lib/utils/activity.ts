@@ -1,10 +1,10 @@
 import type { ActivityEvent } from "@/lib/types";
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
+function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function toActivityEventCandidates(input: unknown): unknown[] {
+function toActivityEventCandidates(input: unknown): unknown[] {
   if (Array.isArray(input)) {
     return input;
   }
@@ -16,7 +16,7 @@ export function toActivityEventCandidates(input: unknown): unknown[] {
   return [];
 }
 
-export function isActivityEventShape(value: unknown): value is Record<string, unknown> {
+function isActivityEventShape(value: unknown): value is Record<string, unknown> {
   if (!isRecord(value)) {
     return false;
   }
@@ -103,7 +103,3 @@ export function normalizeActivityEvent(input: Partial<ActivityEvent>): ActivityE
   };
 }
 
-export function shouldDisplayAsToast(event: ActivityEvent): boolean {
-  const channelSet = new Set(event.channels?.map((channel) => channel.toLowerCase()));
-  return channelSet.has("toast");
-}

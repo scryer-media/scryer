@@ -100,6 +100,7 @@ export function SettingsView({
     deleteIndexer,
     archivalQualityOptions,
     initialLoadComplete,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } = state as Record<string, any>;
 
   return (

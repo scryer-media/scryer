@@ -16,10 +16,6 @@ export function setGraphqlLanguage(lang: string) {
   currentLanguage = lang;
 }
 
-export function getGraphqlLanguage(): string {
-  return currentLanguage;
-}
-
 // ---------------------------------------------------------------------------
 // Backend restart detection — when the backend returns HTML (upgrade splash)
 // instead of JSON, trigger a global callback so the shell can show the splash

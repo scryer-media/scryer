@@ -49,48 +49,13 @@ impl AppUseCase {
         // Minimum availability gate: skip search if the movie hasn't reached the
         // configured availability threshold yet.
         let availability = title.min_availability.as_deref().unwrap_or("announced");
-        match availability {
-            "in_cinemas" => {
-                if let Some(ref first_aired) = title.first_aired {
-                    if let Ok(date) = chrono::NaiveDate::parse_from_str(first_aired, "%Y-%m-%d") {
-                        if date > now.date_naive() {
-                            info!(
-                                title_id = title.id.as_str(),
-                                min_availability = availability,
-                                first_aired = first_aired.as_str(),
-                                "skipping movie: not yet in cinemas"
-                            );
-                            return;
-                        }
-                    }
-                }
-            }
-            "released" => {
-                let is_released = if let Some(ref digital) = title.digital_release_date {
-                    chrono::NaiveDate::parse_from_str(digital, "%Y-%m-%d")
-                        .map(|d| d <= now.date_naive())
-                        .unwrap_or(false)
-                } else if let Some(ref first_aired) = title.first_aired {
-                    // Fallback: first_aired + 90 days
-                    chrono::NaiveDate::parse_from_str(first_aired, "%Y-%m-%d")
-                        .map(|d| d + chrono::Duration::days(90) <= now.date_naive())
-                        .unwrap_or(false)
-                } else {
-                    false
-                };
-                if !is_released {
-                    info!(
-                        title_id = title.id.as_str(),
-                        min_availability = availability,
-                        digital_release_date = title.digital_release_date.as_deref().unwrap_or("none"),
-                        first_aired = title.first_aired.as_deref().unwrap_or("none"),
-                        "skipping movie: not yet released"
-                    );
-                    return;
-                }
-            }
-            // "announced" or anything else: always search
-            _ => {}
+        if !is_movie_available_for_acquisition(title, availability, now) {
+            info!(
+                title_id = title.id.as_str(),
+                min_availability = availability,
+                "skipping movie: availability threshold not reached"
+            );
+            return;
         }
 
         // Determine baseline date for search scheduling
@@ -1118,3 +1083,44 @@ pub async fn start_background_acquisition_poller(
         }
     }
 }
+
+/// Determine whether a movie has reached its configured availability threshold.
+///
+/// Returns `true` if the movie should be included in acquisition searches,
+/// `false` if it should be skipped because its release dates haven't passed yet.
+pub(crate) fn is_movie_available_for_acquisition(
+    title: &Title,
+    availability: &str,
+    now: &DateTime<Utc>,
+) -> bool {
+    match availability {
+        "in_cinemas" => {
+            title
+                .first_aired
+                .as_deref()
+                .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+                .map(|date| date <= now.date_naive())
+                .unwrap_or(false)
+        }
+        "released" => {
+            if let Some(ref digital) = title.digital_release_date {
+                chrono::NaiveDate::parse_from_str(digital, "%Y-%m-%d")
+                    .map(|d| d <= now.date_naive())
+                    .unwrap_or(false)
+            } else if let Some(ref first_aired) = title.first_aired {
+                // Fallback: first_aired + 90 days
+                chrono::NaiveDate::parse_from_str(first_aired, "%Y-%m-%d")
+                    .map(|d| d + chrono::Duration::days(90) <= now.date_naive())
+                    .unwrap_or(false)
+            } else {
+                false
+            }
+        }
+        // "announced" or anything else: always search
+        _ => true,
+    }
+}
+
+#[cfg(test)]
+#[path = "app_usecase_acquisition_tests.rs"]
+mod app_usecase_acquisition_tests;

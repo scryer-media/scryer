@@ -141,7 +141,7 @@ function LogViewer() {
   const unsubRef = useRef<(() => void) | null>(null);
   const teardownTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  pausedRef.current = paused;
+  useEffect(() => { pausedRef.current = paused; });
 
   // Initial load via query
   useEffect(() => {

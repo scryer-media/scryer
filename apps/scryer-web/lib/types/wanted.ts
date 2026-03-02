@@ -16,11 +16,6 @@ export type WantedItem = {
   updatedAt: string;
 };
 
-export type WantedItemsList = {
-  items: WantedItem[];
-  total: number;
-};
-
 export type ReleaseDecisionItem = {
   id: string;
   wantedItemId: string;

@@ -921,7 +921,7 @@ async fn resolve_import_paths(
 
 /// Check whether the title's tags request season-folder organisation.
 /// Defaults to `true` (use season folders) when the tag is absent.
-fn use_season_folders(title: &scryer_domain::Title) -> bool {
+pub(crate) fn use_season_folders(title: &scryer_domain::Title) -> bool {
     title
         .tags
         .iter()
@@ -934,7 +934,7 @@ fn use_season_folders(title: &scryer_domain::Title) -> bool {
 }
 
 /// Build the common rename token map from parsed release metadata.
-fn build_rename_tokens(
+pub(crate) fn build_rename_tokens(
     title: &scryer_domain::Title,
     parsed: &crate::ParsedReleaseMetadata,
     ext: &str,
@@ -1025,7 +1025,7 @@ fn normalize_imdb_id(raw_imdb_id: &str) -> Option<String> {
 }
 
 /// Recursively find all video files under `dir`, optionally filtering out samples.
-fn find_video_files(dir: &Path, filter_samples: bool) -> AppResult<Vec<PathBuf>> {
+pub(crate) fn find_video_files(dir: &Path, filter_samples: bool) -> AppResult<Vec<PathBuf>> {
     let mut video_files = Vec::new();
     let mut dirs_to_visit = vec![dir.to_path_buf()];
 
@@ -1059,7 +1059,7 @@ fn find_video_files(dir: &Path, filter_samples: bool) -> AppResult<Vec<PathBuf>>
 
 const SAMPLE_SIZE_THRESHOLD: u64 = 50 * 1024 * 1024; // 50 MB
 
-fn is_sample_file(path: &Path) -> bool {
+pub(crate) fn is_sample_file(path: &Path) -> bool {
     let filename = path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -1076,7 +1076,7 @@ fn is_sample_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn pick_largest_file(files: &[PathBuf]) -> AppResult<PathBuf> {
+pub(crate) fn pick_largest_file(files: &[PathBuf]) -> AppResult<PathBuf> {
     files
         .iter()
         .max_by_key(|f| std::fs::metadata(f).map(|m| m.len()).unwrap_or(0))

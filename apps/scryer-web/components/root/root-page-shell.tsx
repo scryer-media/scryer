@@ -70,6 +70,7 @@ const GlobalSearchProvider = lazy(() =>
   import("@/components/root/global-search-provider").then((m) => ({ default: m.GlobalSearchProvider })),
 );
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function OverviewContainerForView({ view, initialEpisodeId, ...props }: { view: ViewId; titleId: string; t: any; setGlobalStatus: (s: string) => void; onBackToList: () => void; onTitleNotFound: () => void; initialEpisodeId?: string | null }) {
   const facet = facetForView(view);
   if (facet?.hasEpisodes) {
