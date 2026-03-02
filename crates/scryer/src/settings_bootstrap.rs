@@ -1004,6 +1004,8 @@ pub(crate) struct ServiceRuntimeSettings {
     pub(crate) nzbget_username: Option<String>,
     pub(crate) nzbget_password: Option<String>,
     pub(crate) nzbget_dupe_mode: String,
+    #[allow(dead_code)]
     pub(crate) tls_cert_path: Option<String>,
+    #[allow(dead_code)]
     pub(crate) tls_key_path: Option<String>,
 }

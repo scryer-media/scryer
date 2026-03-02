@@ -220,6 +220,7 @@ async fn main() {
 
 /// Runs the full application bootstrap: DB init, migrations, service construction, and router
 /// building. Returns the fully-constructed Axum router or an error.
+#[allow(clippy::too_many_arguments)]
 async fn bootstrap_application(
     db_path: String,
     migration_mode: MigrationMode,
