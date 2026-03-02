@@ -90,6 +90,13 @@ fi
 
 ok "Pre-flight OK"
 
+# ── Rust clippy (before cargo update so failures don't dirty Cargo.lock) ───────
+step "Running cargo clippy (--workspace -D warnings)"
+
+cargo clippy --workspace -- -D warnings 2>&1 || die "Clippy errors — fix before releasing"
+
+ok "Clippy passed"
+
 # ── cargo update (bump Cargo.lock to latest compatible deps) ───────────────────
 step "Updating Cargo.lock (cargo update)"
 
@@ -106,13 +113,6 @@ else
     cargo audit 2>&1 || die "cargo audit found vulnerabilities — fix before releasing"
     ok "cargo audit passed"
 fi
-
-# ── Rust clippy ────────────────────────────────────────────────────────────────
-step "Running cargo clippy (--workspace -D warnings)"
-
-cargo clippy --workspace -- -D warnings 2>&1 || die "Clippy errors — fix before releasing"
-
-ok "Clippy passed"
 
 # ── Rust tests ─────────────────────────────────────────────────────────────────
 step "Running Rust tests (cargo test --workspace)"
@@ -187,8 +187,10 @@ CHANGED_FILES=()
 for toml in "${WORKSPACE_TOMLS[@]}"; do
     [[ -n "$(git diff --name-only "$toml")" ]] && CHANGED_FILES+=("$toml")
 done
-LOCKFILE="$WEB_DIR/package-lock.json"
-[[ -n "$(git diff --name-only "$LOCKFILE")" ]] && CHANGED_FILES+=("$LOCKFILE")
+CARGO_LOCK="$REPO_ROOT/Cargo.lock"
+[[ -n "$(git diff --name-only "$CARGO_LOCK")" ]] && CHANGED_FILES+=("$CARGO_LOCK")
+NPM_LOCK="$WEB_DIR/package-lock.json"
+[[ -n "$(git diff --name-only "$NPM_LOCK")" ]] && CHANGED_FILES+=("$NPM_LOCK")
 
 if [[ ${#CHANGED_FILES[@]} -gt 0 ]]; then
     git add "${CHANGED_FILES[@]}"
