@@ -1,0 +1,43 @@
+{
+  "data": {
+    "searchTvdbMulti": {
+      "query": "test",
+      "generated_at": "2024-01-01T00:00:00Z",
+      "movies": [
+        {
+          "tvdb_id": 123456,
+          "name": "Test Movie Title",
+          "imdb_id": "tt1234567",
+          "slug": "test-movie-title",
+          "type": "movie",
+          "year": 2024,
+          "status": "Released",
+          "overview": "A gripping tale of testing integration.",
+          "popularity": 85.5,
+          "poster_url": "https://artworks.thetvdb.com/banners/movies/123456/posters/test.jpg",
+          "language": "eng",
+          "runtime_minutes": 142,
+          "sort_title": "Test Movie Title"
+        }
+      ],
+      "series": [
+        {
+          "tvdb_id": 789012,
+          "name": "Test Series Title",
+          "imdb_id": "tt7890123",
+          "slug": "test-series-title",
+          "type": "series",
+          "year": 2022,
+          "status": "Continuing",
+          "overview": "A compelling series about integration testing.",
+          "popularity": 72.3,
+          "poster_url": "https://artworks.thetvdb.com/banners/series/789012/posters/test.jpg",
+          "language": "eng",
+          "runtime_minutes": 45,
+          "sort_title": "Test Series Title"
+        }
+      ],
+      "anime": []
+    }
+  }
+}

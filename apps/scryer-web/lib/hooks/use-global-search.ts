@@ -9,7 +9,7 @@ import {
   mediaSettingsInitQuery,
   metadataMovieQuery,
   metadataSeriesQuery,
-  searchMetadataAllQuery,
+  searchMetadataMultiQuery,
   searchMetadataQuery,
   searchQuery,
   titlesQuery,
@@ -508,26 +508,27 @@ export function useGlobalSearch({
         );
       });
 
-      const metadataPromise = client.query(searchMetadataAllQuery, {
+      const metadataPromise = client.query(searchMetadataMultiQuery, {
         query: trimmed,
         limit: AUTOCOMPLETE_LIMIT,
         language: uiLanguage,
       }).toPromise().then(({ data, error }) => {
         if (error) throw error;
         if (requestId !== autocompleteRequestId.current) return;
+        const multi = data.searchMetadataMulti ?? { movies: [], series: [], anime: [] };
         const movieResults = sortByRelevance(
-          filterMetadataSearchResults("movie", (data.movieResults || []) as MetadataTvdbSearchItem[]),
+          filterMetadataSearchResults("movie", (multi.movies || []) as MetadataTvdbSearchItem[]),
           trimmed,
         );
         const animeResults = sortByRelevance(
-          filterMetadataSearchResults("anime", (data.animeResults || []) as MetadataTvdbSearchItem[]),
+          filterMetadataSearchResults("anime", (multi.anime || []) as MetadataTvdbSearchItem[]),
           trimmed,
         );
         const animeTvdbIds = new Set(
           animeResults.map((item) => String(item.tvdbId).trim()),
         );
         const seriesResults = sortByRelevance(
-          filterMetadataSearchResults("tv", (data.seriesResults || []) as MetadataTvdbSearchItem[]).filter(
+          filterMetadataSearchResults("tv", (multi.series || []) as MetadataTvdbSearchItem[]).filter(
             (item) => !animeTvdbIds.has(String(item.tvdbId).trim()),
           ),
           trimmed,

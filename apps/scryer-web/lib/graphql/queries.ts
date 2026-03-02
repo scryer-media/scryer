@@ -760,12 +760,14 @@ export const searchMetadataQuery = `query SearchMetadata($query: String!, $type:
   }
 }`;
 
-export const searchMetadataAllQuery = `query SearchMetadataAll($query: String!, $limit: Int, $language: String) {
-  movieResults: searchMetadata(query: $query, type: "movie", limit: $limit, language: $language) {${METADATA_SEARCH_FIELDS}
-  }
-  seriesResults: searchMetadata(query: $query, type: "series", limit: $limit, language: $language) {${METADATA_SEARCH_FIELDS}
-  }
-  animeResults: searchMetadata(query: $query, type: "anime", limit: $limit, language: $language) {${METADATA_SEARCH_FIELDS}
+export const searchMetadataMultiQuery = `query SearchMetadataMulti($query: String!, $limit: Int, $language: String) {
+  searchMetadataMulti(query: $query, limit: $limit, language: $language) {
+    movies {${METADATA_SEARCH_FIELDS}
+    }
+    series {${METADATA_SEARCH_FIELDS}
+    }
+    anime {${METADATA_SEARCH_FIELDS}
+    }
   }
 }`;
 

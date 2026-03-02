@@ -929,6 +929,13 @@ pub struct MetadataSearchItemPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+pub struct MetadataSearchMultiPayload {
+    pub movies: Vec<MetadataSearchItemPayload>,
+    pub series: Vec<MetadataSearchItemPayload>,
+    pub anime: Vec<MetadataSearchItemPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
 pub struct MetadataMoviePayload {
     pub tvdb_id: String,
     pub name: String,
