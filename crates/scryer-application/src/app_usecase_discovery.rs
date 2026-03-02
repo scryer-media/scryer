@@ -797,7 +797,7 @@ fn build_user_rule_input(
     use scryer_rules::*;
 
     let is_anime = title_tags.iter().any(|t| t.eq_ignore_ascii_case("anime"))
-        || category.map_or(false, |c| c.eq_ignore_ascii_case("anime"));
+        || category.is_some_and(|c| c.eq_ignore_ascii_case("anime"));
 
     UserRuleInput {
         release: ReleaseDoc {
