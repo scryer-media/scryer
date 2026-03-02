@@ -481,94 +481,63 @@ export function useGlobalSearch({
 
       const requestId = ++autocompleteRequestId.current;
       setSearching(true);
-      try {
-        const catalogPromise = client.query(titlesQuery, {
-          query: trimmed,
-          facet: null,
-        }).toPromise().then(({ data, error }) => {
-          if (error) throw error;
-          return data;
-        });
-        const metadataPromise = client.query(searchMetadataAllQuery, {
-          query: trimmed,
-          limit: AUTOCOMPLETE_LIMIT,
-          language: uiLanguage,
-        }).toPromise().then(({ data, error }) => {
-          if (error) throw error;
-          return {
-            movie: (data.movieResults || []) as MetadataTvdbSearchItem[],
-            series: (data.seriesResults || []) as MetadataTvdbSearchItem[],
-            anime: (data.animeResults || []) as MetadataTvdbSearchItem[],
-          };
-        });
 
-        const [catalogResponse, metadataResponse] = await Promise.allSettled([
-          catalogPromise,
-          metadataPromise,
-        ]);
+      // Fire both queries in parallel but render each result as it arrives
+      // so the fast catalog query populates immediately while the metadata
+      // spinner keeps spinning.
 
-        if (requestId !== autocompleteRequestId.current) {
-          return;
-        }
-
-        const catalogEntries =
-          catalogResponse.status === "fulfilled" ? catalogResponse.value.titles || [] : [];
-        const enrichedCatalogEntries = await Promise.all(
+      const catalogPromise = client.query(titlesQuery, {
+        query: trimmed,
+        facet: null,
+      }).toPromise().then(async ({ data, error }) => {
+        if (error) throw error;
+        if (requestId !== autocompleteRequestId.current) return;
+        const catalogEntries = data.titles || [];
+        const enriched = await Promise.all(
           catalogEntries.map((title: TitleRecord) => resolveCatalogPosterUrl(title)),
         );
-        const metadataMovieResults =
-          metadataResponse.status === "fulfilled"
-            ? sortByRelevance(
-                filterMetadataSearchResults("movie", metadataResponse.value.movie),
-                trimmed,
-              )
-            : [];
-        const metadataAnimeResults =
-          metadataResponse.status === "fulfilled"
-            ? sortByRelevance(
-                filterMetadataSearchResults("anime", metadataResponse.value.anime),
-                trimmed,
-              )
-            : [];
-        const animeTvdbIds = new Set(
-          metadataAnimeResults.map((item) => String(item.tvdbId).trim()),
-        );
-        const metadataSeriesResults =
-          metadataResponse.status === "fulfilled"
-            ? sortByRelevance(
-                filterMetadataSearchResults("tv", metadataResponse.value.series).filter(
-                  (item) => !animeTvdbIds.has(String(item.tvdbId).trim()),
-                ),
-                trimmed,
-              )
-            : [];
-        const anyFailure = catalogResponse.status === "rejected" || metadataResponse.status === "rejected";
-        if (anyFailure) {
-          const message =
-            metadataResponse.status === "rejected"
-              ? (metadataResponse.reason instanceof Error ? metadataResponse.reason.message : t("status.apiError"))
-              : catalogResponse.status === "rejected"
-                ? (catalogResponse.reason instanceof Error ? catalogResponse.reason.message : t("status.apiError"))
-                : null;
-          if (message) {
-            setGlobalStatus(message);
-          }
-        }
-        const nextCatalogResults = enrichedCatalogEntries.slice(0, AUTOCOMPLETE_LIMIT);
+        if (requestId !== autocompleteRequestId.current) return;
+        const next = enriched.slice(0, AUTOCOMPLETE_LIMIT);
         setCatalogSearchResults((previous) =>
-          previous.length === nextCatalogResults.length &&
+          previous.length === next.length &&
           previous.every(
             (item, index) =>
-              item.id === nextCatalogResults[index]?.id &&
-              (item.posterUrl ?? null) === (nextCatalogResults[index]?.posterUrl ?? null),
+              item.id === next[index]?.id &&
+              (item.posterUrl ?? null) === (next[index]?.posterUrl ?? null),
           )
             ? previous
-            : nextCatalogResults,
+            : next,
+        );
+      });
+
+      const metadataPromise = client.query(searchMetadataAllQuery, {
+        query: trimmed,
+        limit: AUTOCOMPLETE_LIMIT,
+        language: uiLanguage,
+      }).toPromise().then(({ data, error }) => {
+        if (error) throw error;
+        if (requestId !== autocompleteRequestId.current) return;
+        const movieResults = sortByRelevance(
+          filterMetadataSearchResults("movie", (data.movieResults || []) as MetadataTvdbSearchItem[]),
+          trimmed,
+        );
+        const animeResults = sortByRelevance(
+          filterMetadataSearchResults("anime", (data.animeResults || []) as MetadataTvdbSearchItem[]),
+          trimmed,
+        );
+        const animeTvdbIds = new Set(
+          animeResults.map((item) => String(item.tvdbId).trim()),
+        );
+        const seriesResults = sortByRelevance(
+          filterMetadataSearchResults("tv", (data.seriesResults || []) as MetadataTvdbSearchItem[]).filter(
+            (item) => !animeTvdbIds.has(String(item.tvdbId).trim()),
+          ),
+          trimmed,
         );
         const nextMetadata: MetadataSearchResults = {
-          movie: metadataMovieResults,
-          series: metadataSeriesResults,
-          anime: metadataAnimeResults,
+          movie: movieResults,
+          series: seriesResults,
+          anime: animeResults,
         };
         setMetadataSearchResults((previous) => {
           const unchanged = Object.keys(nextMetadata).every((key) => {
@@ -578,23 +547,28 @@ export function useGlobalSearch({
           });
           return unchanged ? previous : nextMetadata;
         });
-      } catch (error) {
-        if (requestId !== autocompleteRequestId.current) {
-          return;
-        }
-        setCatalogSearchResults((previous) => (previous.length === 0 ? previous : []));
-        setMetadataSearchResults((previous) => {
-          if (isMetadataEmpty(previous)) {
-            return previous;
-          }
-          return emptyMetadataSearchResults;
-        });
-        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
-      } finally {
-        if (requestId === autocompleteRequestId.current) {
-          setSearching(false);
-        }
+      });
+
+      const [catalogResult, metadataResult] = await Promise.allSettled([
+        catalogPromise,
+        metadataPromise,
+      ]);
+
+      if (requestId !== autocompleteRequestId.current) return;
+
+      // Surface errors from either leg
+      if (catalogResult.status === "rejected") {
+        const msg = catalogResult.reason instanceof Error ? catalogResult.reason.message : t("status.apiError");
+        setGlobalStatus(msg);
+        setCatalogSearchResults((prev) => (prev.length === 0 ? prev : []));
       }
+      if (metadataResult.status === "rejected") {
+        const msg = metadataResult.reason instanceof Error ? metadataResult.reason.message : t("status.apiError");
+        setGlobalStatus(msg);
+        setMetadataSearchResults((prev) => (isMetadataEmpty(prev) ? prev : emptyMetadataSearchResults));
+      }
+
+      setSearching(false);
     },
     [
       filterMetadataSearchResults,

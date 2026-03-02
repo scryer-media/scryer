@@ -199,7 +199,7 @@ impl MetadataGatewayClient {
 
         Self {
             http: Client::builder()
-                .timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(100))
                 .danger_accept_invalid_certs(accept_invalid_certs)
                 .build()
                 .expect("failed to build HTTP client"),
@@ -267,7 +267,7 @@ impl MetadataGatewayClient {
         let ca_cert = smg_enrollment::build_ca_certificate(&state)?;
 
         Client::builder()
-            .timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(100))
             .identity(identity)
             .add_root_certificate(ca_cert)
             .build()
