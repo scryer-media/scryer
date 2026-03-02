@@ -42,7 +42,7 @@ export function SeriesOverviewShell() {
 
   const { uiLanguage, t } = useLanguage(searchParams);
 
-  const [globalStatus, setGlobalStatusRaw] = useState("");
+  const [, setGlobalStatusRaw] = useState("");
   const setGlobalStatus = useGlobalStatusToast(setGlobalStatusRaw);
 
   const topNav = useMemo(
@@ -121,7 +121,6 @@ export function SeriesOverviewShell() {
         resolveDefaultQualityProfileIdForFacet={() => ""}
         onAddMetadataSearchResultToCatalog={async () => null}
         isMetadataSearchResultInCatalog={() => false}
-        globalStatus={globalStatus}
       />
 
       <div className="mx-auto w-full max-w-[1480px] px-3 pb-10 pt-4">

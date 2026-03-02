@@ -6,6 +6,7 @@ members = [
     "crates/scryer-interface",
     "crates/scryer-rules",
     "crates/scryer",
+    "crates/scryer-mock-apis",
 ]
 resolver = "2"
 
@@ -29,3 +30,4 @@ argon2 = "0.5"
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem", "arithmetic"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 toml = "0.8"
+wiremock = "0.6"

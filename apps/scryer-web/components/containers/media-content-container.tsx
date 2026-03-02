@@ -302,8 +302,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         return;
       }
 
-      const tvdbId = String(candidate.tvdb_id).trim();
-      const imdbId = candidate.imdb_id?.trim();
+      const tvdbId = String(candidate.tvdbId).trim();
+      const imdbId = candidate.imdbId?.trim();
       const externalIds = [
         { source: "tvdb", value: tvdbId },
         ...(imdbId ? [{ source: "imdb", value: imdbId }] : []),
@@ -405,10 +405,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
               tags: queueTags,
               externalIds: [
                 ...(selectedTvdb
-                  ? [{ source: "tvdb", value: String(selectedTvdb.tvdb_id) }]
+                  ? [{ source: "tvdb", value: String(selectedTvdb.tvdbId) }]
                   : []),
-                ...(selectedTvdb?.imdb_id
-                  ? [{ source: "imdb", value: selectedTvdb.imdb_id.trim() }]
+                ...(selectedTvdb?.imdbId
+                  ? [{ source: "imdb", value: selectedTvdb.imdbId.trim() }]
                   : []),
               ],
               sourceHint,

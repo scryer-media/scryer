@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use ring::digest;
 use scryer_application::{
     AnimeEpisodeMapping, AnimeMapping, AppError, AppResult, EpisodeMetadata, MetadataGateway,
-    MetadataSearchItem, MovieMetadata, SeasonMetadata, SeriesMetadata,
+    MetadataSearchItem, MovieMetadata, RichMetadataSearchItem, SeasonMetadata, SeriesMetadata,
 };
 use reqwest::Client;
 use serde::Deserialize;
@@ -20,6 +20,28 @@ const SEARCH_TVDB_QUERY: &str = r#"
         tvdb_id
         name
         year
+      }
+    }
+  }
+"#;
+
+const SEARCH_TVDB_RICH_QUERY: &str = r#"
+  query SearchTvdbRich($query: String!, $type: String, $limit: Int, $language: String) {
+    searchTvdb(query: $query, type: $type, limit: $limit, language: $language) {
+      results {
+        tvdb_id
+        name
+        imdb_id
+        slug
+        type
+        year
+        status
+        overview
+        popularity
+        poster_url
+        language
+        runtime_minutes
+        sort_title
       }
     }
   }
@@ -136,6 +158,7 @@ pub struct MetadataGatewayClient {
     db: crate::SqliteServices,
     mtls_client: tokio::sync::RwLock<Option<Client>>,
     search_hash: String,
+    search_rich_hash: String,
     movie_hash: String,
     series_hash: String,
 }
@@ -152,6 +175,7 @@ impl MetadataGatewayClient {
         }
 
         let search_hash = apq_hash(SEARCH_TVDB_QUERY);
+        let search_rich_hash = apq_hash(SEARCH_TVDB_RICH_QUERY);
         let movie_hash = apq_hash(GET_MOVIE_QUERY);
         let series_hash = apq_hash(GET_SERIES_QUERY);
 
@@ -167,6 +191,7 @@ impl MetadataGatewayClient {
             accept_invalid_certs,
             has_registration_secret = enrollment_config.registration_secret.is_some(),
             %search_hash,
+            %search_rich_hash,
             %movie_hash,
             %series_hash,
             "metadata gateway client initialized (APQ enabled)"
@@ -184,6 +209,7 @@ impl MetadataGatewayClient {
             db,
             mtls_client: tokio::sync::RwLock::new(None),
             search_hash,
+            search_rich_hash,
             movie_hash,
             series_hash,
         }
@@ -456,6 +482,35 @@ struct SearchTvdbItem {
     year: Option<i32>,
 }
 
+#[derive(Deserialize)]
+struct SearchTvdbRichItem {
+    tvdb_id: i64,
+    name: String,
+    imdb_id: Option<String>,
+    slug: Option<String>,
+    #[serde(rename = "type")]
+    type_hint: Option<String>,
+    year: Option<i32>,
+    status: Option<String>,
+    overview: Option<String>,
+    popularity: Option<f64>,
+    poster_url: Option<String>,
+    language: Option<String>,
+    runtime_minutes: Option<i32>,
+    sort_title: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SearchTvdbRichResponse {
+    #[serde(rename = "searchTvdb")]
+    search_tvdb: SearchTvdbRichResult,
+}
+
+#[derive(Deserialize)]
+struct SearchTvdbRichResult {
+    results: Vec<SearchTvdbRichItem>,
+}
+
 // --- Movie types ---
 
 #[derive(Deserialize)]
@@ -590,6 +645,46 @@ impl MetadataGateway for MetadataGatewayClient {
                 tvdb_id: item.tvdb_id.to_string(),
                 name: item.name,
                 year: item.year,
+            })
+            .collect())
+    }
+
+    async fn search_tvdb_rich(
+        &self,
+        query: &str,
+        type_hint: &str,
+        limit: i32,
+        language: &str,
+    ) -> AppResult<Vec<RichMetadataSearchItem>> {
+        let variables = json!({
+            "query": query,
+            "type": type_hint,
+            "limit": limit,
+            "language": language,
+        });
+
+        let data: SearchTvdbRichResponse = self
+            .execute_graphql_apq(SEARCH_TVDB_RICH_QUERY, &self.search_rich_hash, variables)
+            .await?;
+
+        Ok(data
+            .search_tvdb
+            .results
+            .into_iter()
+            .map(|item| RichMetadataSearchItem {
+                tvdb_id: item.tvdb_id.to_string(),
+                name: item.name,
+                imdb_id: item.imdb_id,
+                slug: item.slug,
+                type_hint: item.type_hint,
+                year: item.year,
+                status: item.status,
+                overview: item.overview,
+                popularity: item.popularity,
+                poster_url: item.poster_url,
+                language: item.language,
+                runtime_minutes: item.runtime_minutes,
+                sort_title: item.sort_title,
             })
             .collect())
     }

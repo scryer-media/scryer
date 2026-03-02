@@ -1,5 +1,5 @@
 use scryer_application::{AppResult, PrimaryCollectionSummary, ReleaseDecision, ReleaseDownloadAttemptOutcome, TitleMetadataUpdate, WantedItem};
-use scryer_domain::{Collection, DownloadClientConfig, Episode, HistoryEvent, ImportRecord, IndexerConfig, MediaFacet, RuleSet, Title, User};
+use scryer_domain::{CalendarEpisode, Collection, DownloadClientConfig, Episode, HistoryEvent, ImportRecord, IndexerConfig, MediaFacet, RuleSet, Title, User};
 use scryer_application::QualityProfile;
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
@@ -382,6 +382,11 @@ pub(crate) enum DbCommand {
         title_id: String,
         absolute_number: String,
         reply: Sender<AppResult<Option<scryer_domain::Episode>>>,
+    },
+    ListEpisodesInDateRange {
+        start_date: String,
+        end_date: String,
+        reply: Sender<AppResult<Vec<CalendarEpisode>>>,
     },
     UpsertWantedItem {
         item: WantedItem,
@@ -1090,6 +1095,11 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                             &pool, &title_id, &absolute_number,
                         )
                         .await,
+                    );
+                }
+                DbCommand::ListEpisodesInDateRange { start_date, end_date, reply } => {
+                    let _ = reply.send(
+                        list_episodes_in_date_range_query(&pool, &start_date, &end_date).await,
                     );
                 }
                 DbCommand::UpsertWantedItem { item, reply } => {

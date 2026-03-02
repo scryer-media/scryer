@@ -634,9 +634,9 @@ export const systemHealthQuery = `query SystemHealth {
     indexerStats {
       indexerId
       indexerName
-      queriesLast24h
-      successfulLast24h
-      failedLast24h
+      queriesLast24H
+      successfulLast24H
+      failedLast24H
       lastQueryAt
       apiCurrent
       apiMax
@@ -646,6 +646,17 @@ export const systemHealthQuery = `query SystemHealth {
   }
 }`;
 
+export const serviceLogsQuery = `query ServiceLogs($limit: Int) {
+  serviceLogs(limit: $limit) {
+    generatedAt
+    lines
+    count
+  }
+}`;
+
+export const serviceLogLinesSubscription = `subscription ServiceLogLines {
+  serviceLogLines
+}`;
 
 export const previewManualImportQuery = `query PreviewManualImport($downloadClientItemId: String!, $titleId: String!) {
   previewManualImport(downloadClientItemId: $downloadClientItemId, titleId: $titleId) {
@@ -724,5 +735,103 @@ export const ruleSetsQuery = `query RuleSets {
     appliedFacets
     createdAt
     updatedAt
+  }
+}`;
+
+// ── Metadata Gateway (proxied through backend) ────────────────────────
+
+const METADATA_SEARCH_FIELDS = `
+    tvdbId
+    name
+    imdbId
+    slug
+    type
+    year
+    status
+    overview
+    popularity
+    posterUrl
+    language
+    runtimeMinutes
+    sortTitle`;
+
+export const searchMetadataQuery = `query SearchMetadata($query: String!, $type: String!, $limit: Int, $language: String) {
+  searchMetadata(query: $query, type: $type, limit: $limit, language: $language) {${METADATA_SEARCH_FIELDS}
+  }
+}`;
+
+export const searchMetadataAllQuery = `query SearchMetadataAll($query: String!, $limit: Int, $language: String) {
+  movieResults: searchMetadata(query: $query, type: "movie", limit: $limit, language: $language) {${METADATA_SEARCH_FIELDS}
+  }
+  seriesResults: searchMetadata(query: $query, type: "series", limit: $limit, language: $language) {${METADATA_SEARCH_FIELDS}
+  }
+  animeResults: searchMetadata(query: $query, type: "anime", limit: $limit, language: $language) {${METADATA_SEARCH_FIELDS}
+  }
+}`;
+
+export const metadataMovieQuery = `query MetadataMovie($tvdbId: Int!, $language: String) {
+  metadataMovie(tvdbId: $tvdbId, language: $language) {
+    tvdbId
+    name
+    slug
+    year
+    status
+    overview
+    posterUrl
+    language
+    runtimeMinutes
+    sortTitle
+    imdbId
+    genres
+    studio
+    tmdbReleaseDate
+  }
+}`;
+
+export const metadataSeriesQuery = `query MetadataSeries($id: String!, $includeEpisodes: Boolean, $language: String) {
+  metadataSeries(id: $id, includeEpisodes: $includeEpisodes, language: $language) {
+    tvdbId
+    name
+    sortName
+    slug
+    year
+    status
+    firstAired
+    overview
+    network
+    runtimeMinutes
+    posterUrl
+    country
+    genres
+    aliases
+    seasons {
+      tvdbId
+      number
+      label
+      episodeType
+    }
+    episodes {
+      tvdbId
+      episodeNumber
+      seasonNumber
+      name
+      aired
+      runtimeMinutes
+      isFiller
+    }
+  }
+}`;
+
+export const calendarEpisodesQuery = `query CalendarEpisodes($startDate: String!, $endDate: String!) {
+  calendarEpisodes(startDate: $startDate, endDate: $endDate) {
+    id
+    titleId
+    titleName
+    titleFacet
+    seasonNumber
+    episodeNumber
+    episodeTitle
+    airDate
+    monitored
   }
 }`;

@@ -27,7 +27,7 @@ use scryer_infrastructure::{
     PrioritizedDownloadClientRouter, SmgEnrollmentConfig, SqliteServices,
     NZBGEEK_BASE_BACKOFF_SECONDS, NZBGEEK_MAX_BACKOFF_SECONDS, NZBGEEK_MIN_REQUEST_INTERVAL_MS,
 };
-use scryer_interface::build_schema;
+use scryer_interface::{build_schema_with_log_buffer, LogBuffer};
 use tokio::net::TcpListener;
 use tower_http::compression::CompressionLayer;
 
@@ -440,7 +440,17 @@ async fn bootstrap_application(
     );
     let dev_auto_login = std::env::var("SCRYER_DEV_AUTO_LOGIN")
         .as_deref() == Ok("true");
-    let schema = build_schema(app_use_case.clone(), db.clone(), dev_auto_login);
+    let log_buf_snapshot = log_ring_buffer.clone();
+    let log_buf_subscribe = log_ring_buffer.clone();
+    let schema = build_schema_with_log_buffer(
+        app_use_case.clone(),
+        db.clone(),
+        dev_auto_login,
+        Some(LogBuffer::new(
+            move |limit| log_buf_snapshot.snapshot(limit),
+            move || log_buf_subscribe.subscribe(),
+        )),
+    );
     tokio::spawn(start_download_queue_poller(app_use_case.clone(), shutdown_token.child_token()));
     tokio::spawn(start_background_acquisition_poller(app_use_case.clone(), shutdown_token.child_token()));
 
@@ -476,8 +486,6 @@ async fn bootstrap_application(
     let admin_migrations_db = db.clone();
     let admin_settings_db = db.clone();
     let admin_settings_app = app_use_case.clone();
-    let logs_state = (log_ring_buffer.clone(), app_use_case.clone());
-
     let ws_auth_state = auth_state.clone();
 
     // WebSocket route must be outside CompressionLayer — compression wraps the
@@ -508,10 +516,6 @@ async fn bootstrap_application(
                     )
                 },
             ),
-        )
-        .route(
-            "/api/logs",
-            get(log_buffer::logs_handler).with_state(logs_state),
         )
         .fallback(get(ui_fallback))
         .layer(CompressionLayer::new().zstd(true).br(true).gzip(true));

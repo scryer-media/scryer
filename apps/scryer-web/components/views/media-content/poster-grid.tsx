@@ -1,3 +1,4 @@
+import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Loader2, Trash2, Zap } from "lucide-react";
 import type { ViewId } from "@/components/root/types";
@@ -17,7 +18,6 @@ type PosterGridProps = {
   onDelete: (title: TitleRecord) => void;
   onAutoQueue: (title: TitleRecord) => void;
   isDeletingById: Record<string, boolean>;
-  isAutoQueueLoadingById: Record<string, boolean>;
   overviewTargetView: ViewId;
 };
 
@@ -30,9 +30,26 @@ export function PosterGrid({
   onDelete,
   onAutoQueue,
   isDeletingById,
-  isAutoQueueLoadingById,
   overviewTargetView,
 }: PosterGridProps) {
+  const [autoQueueLoadingById, setAutoQueueLoadingById] = React.useState<Record<string, boolean>>({});
+
+  const handleAutoQueue = React.useCallback(
+    (title: TitleRecord) => {
+      const titleId = title.id;
+      setAutoQueueLoadingById((prev) => ({ ...prev, [titleId]: true }));
+      void Promise.resolve(onAutoQueue(title)).finally(() => {
+        setAutoQueueLoadingById((prev) => {
+          if (!prev[titleId]) return prev;
+          const next = { ...prev };
+          delete next[titleId];
+          return next;
+        });
+      });
+    },
+    [onAutoQueue],
+  );
+
   if (titles.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">{t("title.noManaged")}</p>
@@ -50,9 +67,9 @@ export function PosterGrid({
           resolvedProfileName={resolvedProfileName}
           onOpenOverview={onOpenOverview}
           onDelete={onDelete}
-          onAutoQueue={onAutoQueue}
+          onAutoQueue={handleAutoQueue}
           deleteLoading={isDeletingById[title.id] === true}
-          autoQueueLoading={isAutoQueueLoadingById[title.id] === true}
+          autoQueueLoading={autoQueueLoadingById[title.id] === true}
           overviewTargetView={overviewTargetView}
         />
       ))}

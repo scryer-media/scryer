@@ -28,10 +28,10 @@ use crate::activity::ActivityStream;
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use scryer_domain::{
-    Collection, CompletedDownload, DownloadClientConfig, DownloadQueueItem, DownloadQueueState,
-    Entitlement, Episode, EventType, ExternalId, HistoryEvent, Id, ImportFileResult, ImportRecord,
-    IndexerConfig, MediaFacet, NewDownloadClientConfig, NewIndexerConfig, NewTitle, PolicyInput,
-    PolicyOutput, RuleSet, Title, User,
+    CalendarEpisode, Collection, CompletedDownload, DownloadClientConfig, DownloadQueueItem,
+    DownloadQueueState, Entitlement, Episode, EventType, ExternalId, HistoryEvent, Id,
+    ImportFileResult, ImportRecord, IndexerConfig, MediaFacet, NewDownloadClientConfig,
+    NewIndexerConfig, NewTitle, PolicyInput, PolicyOutput, RuleSet, Title, User,
 };
 use std::path::Path;
 use rand_core::OsRng;
@@ -49,8 +49,8 @@ pub use app_usecase_acquisition::start_background_acquisition_poller;
 pub use app_usecase_integration::start_download_queue_poller;
 pub use library_scan::{
     AnimeEpisodeMapping, AnimeMapping, EpisodeMetadata, LibraryFile, LibraryScanSummary,
-    LibraryScanner, MetadataGateway, MetadataSearchItem, MovieMetadata, SeasonMetadata,
-    SeriesMetadata,
+    LibraryScanner, MetadataGateway, MetadataSearchItem, MovieMetadata, RichMetadataSearchItem,
+    SeasonMetadata, SeriesMetadata,
 };
 pub use app_usecase_import::{
     execute_manual_import, preview_manual_import, try_import_completed_downloads,
@@ -318,6 +318,11 @@ pub trait ShowRepository: Send + Sync {
         &self,
         title_ids: &[String],
     ) -> AppResult<Vec<PrimaryCollectionSummary>>;
+    async fn list_episodes_in_date_range(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> AppResult<Vec<CalendarEpisode>>;
 }
 
 #[async_trait]
@@ -1265,6 +1270,14 @@ mod tests {
                 }
             }
             Ok(out)
+        }
+
+        async fn list_episodes_in_date_range(
+            &self,
+            _start_date: &str,
+            _end_date: &str,
+        ) -> AppResult<Vec<CalendarEpisode>> {
+            Ok(vec![])
         }
     }
 

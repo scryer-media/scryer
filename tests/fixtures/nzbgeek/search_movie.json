@@ -1,0 +1,49 @@
+{
+  "channel": {
+    "title": "api.nzbgeek.info",
+    "item": [
+      {
+        "title": "Movie.Title.2024.2160p.UHD.BluRay.REMUX.DV.HDR.DTS-HD.MA.7.1.HEVC-GROUP",
+        "link": "https://api.nzbgeek.info/details/abc123",
+        "pubDate": "Wed, 15 Jan 2025 12:00:00 +0000",
+        "enclosure": {
+          "@attributes": {
+            "url": "https://api.nzbgeek.info/api?t=get&id=abc123&apikey=testkey",
+            "length": "53687091200",
+            "type": "application/x-nzb"
+          }
+        },
+        "attr": [
+          { "@attributes": { "name": "size", "value": "53687091200" } },
+          { "@attributes": { "name": "guid", "value": "abc123" } },
+          { "@attributes": { "name": "grabs", "value": "342" } },
+          { "@attributes": { "name": "thumbsup", "value": "28" } },
+          { "@attributes": { "name": "thumbsdown", "value": "1" } },
+          { "@attributes": { "name": "language", "value": "English" } },
+          { "@attributes": { "name": "password", "value": "0" } }
+        ]
+      },
+      {
+        "title": "Movie.Title.2024.1080p.WEB-DL.DDP5.1.H.264-GROUP2",
+        "link": "https://api.nzbgeek.info/details/def456",
+        "pubDate": "Tue, 14 Jan 2025 18:30:00 +0000",
+        "enclosure": {
+          "@attributes": {
+            "url": "https://api.nzbgeek.info/api?t=get&id=def456&apikey=testkey",
+            "length": "4294967296",
+            "type": "application/x-nzb"
+          }
+        },
+        "attr": [
+          { "@attributes": { "name": "size", "value": "4294967296" } },
+          { "@attributes": { "name": "guid", "value": "def456" } },
+          { "@attributes": { "name": "grabs", "value": "1205" } },
+          { "@attributes": { "name": "thumbsup", "value": "45" } },
+          { "@attributes": { "name": "thumbsdown", "value": "2" } },
+          { "@attributes": { "name": "language", "value": "English" } },
+          { "@attributes": { "name": "password", "value": "0" } }
+        ]
+      }
+    ]
+  }
+}

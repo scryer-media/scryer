@@ -9,6 +9,7 @@ use crate::context::{actor_from_ctx, app_from_ctx};
 use crate::mappers::from_activity_event;
 use crate::mappers::from_download_queue_item;
 use crate::types::{ActivityEventPayload, DownloadQueueItemPayload};
+use crate::context::LogBuffer;
 
 pub struct SubscriptionRoot;
 
@@ -144,6 +145,51 @@ impl SubscriptionRoot {
                     }
                     Err(RecvError::Closed) => {
                         tracing::debug!("download_queue sub: broadcast channel closed");
+                        return None;
+                    }
+                }
+            }
+        });
+
+        Box::pin(stream)
+    }
+
+    async fn service_log_lines(&self, ctx: &Context<'_>) -> BoxStream<'static, String> {
+        let empty_stream = || -> BoxStream<'static, String> { Box::pin(stream::empty()) };
+
+        let actor = match actor_from_ctx(ctx) {
+            Ok(actor) => actor,
+            Err(e) => {
+                tracing::warn!("service_log_lines: actor_from_ctx failed: {e:?}");
+                return empty_stream();
+            }
+        };
+
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {
+            tracing::warn!("service_log_lines: insufficient entitlements");
+            return empty_stream();
+        }
+
+        let receiver = match ctx.data_opt::<LogBuffer>() {
+            Some(buf) => buf.subscribe(),
+            None => {
+                tracing::warn!("service_log_lines: no LogBuffer in context");
+                return empty_stream();
+            }
+        };
+
+        tracing::debug!("service_log_lines: subscription started for user {}", actor.id);
+
+        let stream = unfold(receiver, move |mut receiver| async move {
+            loop {
+                match receiver.recv().await {
+                    Ok(line) => return Some((line, receiver)),
+                    Err(RecvError::Lagged(n)) => {
+                        tracing::debug!("service_log_lines: receiver lagged, skipped {n} messages");
+                        continue;
+                    }
+                    Err(RecvError::Closed) => {
+                        tracing::debug!("service_log_lines: broadcast channel closed");
                         return None;
                     }
                 }

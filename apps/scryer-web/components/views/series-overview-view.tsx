@@ -29,11 +29,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SearchResultBuckets } from "@/components/common/release-search-results";
 import { searchSeriesEpisodeQuery } from "@/lib/graphql/queries";
 import { queueExistingMutation } from "@/lib/graphql/mutations";
-import { smgClient } from "@/lib/graphql/urql-client";
-import {
-  SMG_SEARCH_QUERY,
-  type MetadataTvdbSearchItem,
-} from "@/lib/graphql/smg-queries";
+import { type MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
+import { searchMetadataQuery } from "@/lib/graphql/queries";
 import {
   QUALITY_PROFILE_PREFIX,
   ROOT_FOLDER_PREFIX,
@@ -107,7 +104,7 @@ function getImdbUrl(imdbId: string | null | undefined) {
 }
 
 function getTvdbMovieUrl(metadata: MetadataTvdbSearchItem) {
-  const tvdbId = String(metadata.tvdb_id).trim();
+  const tvdbId = String(metadata.tvdbId).trim();
   if (!tvdbId) return null;
   const slug = metadata.slug?.trim();
   const base = "https://www.thetvdb.com";
@@ -530,6 +527,7 @@ type Props = {
   onUpdateTitleTags?: (newTags: string[]) => Promise<void>;
   completedDownloads?: DownloadQueueItem[];
   onOpenManualImport?: (item: DownloadQueueItem) => void;
+  initialEpisodeId?: string | null;
 };
 
 export function SeriesOverviewView({
@@ -552,6 +550,7 @@ export function SeriesOverviewView({
   onUpdateTitleTags,
   completedDownloads,
   onOpenManualImport,
+  initialEpisodeId,
 }: Props) {
   const client = useClient();
   const sortedCollections = React.useMemo(
@@ -565,16 +564,36 @@ export function SeriesOverviewView({
   );
 
   const [expandedKeys, setExpandedKeys] = React.useState<Set<string>>(new Set());
+  const [episodePanel, dispatchEpisodePanel] = React.useReducer(episodePanelReducer, initialEpisodePanelState);
 
   // Initialize expanded state when data arrives
   const initializedRef = React.useRef(false);
   React.useEffect(() => {
     if (initializedRef.current) return;
+
+    // If we have an initialEpisodeId, find which collection it belongs to and expand that
+    if (initialEpisodeId && Object.keys(episodesByCollection).length > 0) {
+      for (const [collectionId, episodes] of Object.entries(episodesByCollection)) {
+        const match = episodes.find((ep) => ep.id === initialEpisodeId);
+        if (match) {
+          initializedRef.current = true;
+          setExpandedKeys(new Set([`s-${collectionId}`]));
+          dispatchEpisodePanel({ type: "TOGGLE_EPISODE_ROW", episodeId: initialEpisodeId });
+          // Scroll to the episode row after DOM updates
+          requestAnimationFrame(() => {
+            const el = document.querySelector(`[data-episode-id="${initialEpisodeId}"]`);
+            el?.scrollIntoView({ behavior: "smooth", block: "center" });
+          });
+          return;
+        }
+      }
+    }
+
     if (latestKey) {
       initializedRef.current = true;
       setExpandedKeys(new Set([latestKey]));
     }
-  }, [latestKey]);
+  }, [latestKey, initialEpisodeId, episodesByCollection]);
 
   const toggleKey = React.useCallback((key: string) => {
     setExpandedKeys((prev) => {
@@ -587,8 +606,6 @@ export function SeriesOverviewView({
       return next;
     });
   }, []);
-
-  const [episodePanel, dispatchEpisodePanel] = React.useReducer(episodePanelReducer, initialEpisodePanelState);
 
   const handleRunEpisodeSearch = React.useCallback(
     (episode: CollectionEpisode) => {
@@ -761,8 +778,8 @@ export function SeriesOverviewView({
     const metadataLanguage = title?.metadataLanguage?.trim() || "eng";
     const query = searchQuery;
 
-    smgClient
-      .query(SMG_SEARCH_QUERY, {
+    client
+      .query(searchMetadataQuery, {
         query,
         type: "movie",
         limit: 6,
@@ -773,7 +790,7 @@ export function SeriesOverviewView({
         if (result.error) {
           throw result.error;
         }
-        const found = result.data?.searchTvdb?.results?.[0] ?? null;
+        const found = result.data?.searchMetadata?.[0] ?? null;
         dispatchEpisodePanel({ type: "SET_INTERSTITIAL_METADATA", collectionId, metadata: found });
       })
       .catch(() => {
@@ -1226,7 +1243,7 @@ function SeasonSection({
 
                 return (
                   <React.Fragment key={episode.id}>
-                    <TableRow className={`cv-auto-row-sm${episode.monitored ? "" : " opacity-50"}`}>
+                    <TableRow data-episode-id={episode.id} className={`cv-auto-row-sm${episode.monitored ? "" : " opacity-50"}`}>
                       <TableCell className="px-2 text-center align-middle">
                         <Checkbox
                           checked={episode.monitored}
@@ -1478,16 +1495,16 @@ function EpisodeDetailsPanel({
 }
 
 function InterstitialMoviePanel({ movie }: { movie: MetadataTvdbSearchItem }) {
-  const imdbUrl = getImdbUrl(movie.imdb_id);
+  const imdbUrl = getImdbUrl(movie.imdbId);
   const tvdbUrl = getTvdbMovieUrl(movie);
-  const runtime = formatRuntimeFromMinutes(movie.runtime_minutes);
+  const runtime = formatRuntimeFromMinutes(movie.runtimeMinutes);
 
   return (
     <div className="flex items-start gap-4">
       <div className="shrink-0">
-        {movie.poster_url ? (
+        {movie.posterUrl ? (
           <img
-            src={movie.poster_url}
+            src={movie.posterUrl}
             alt={movie.name}
             className="h-auto w-[140px] rounded-lg object-cover shadow-md"
           />

@@ -1,20 +1,9 @@
-import { createContext, useContext, useEffect, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { Provider } from "urql";
-import { backendClient, smgClient, setGraphqlLanguage } from "@/lib/graphql/urql-client";
-import type { Client } from "@urql/core";
+import { backendClient, setGraphqlLanguage } from "@/lib/graphql/urql-client";
 
 // ---------------------------------------------------------------------------
-// SMG client context — secondary client for metadata gateway queries
-// ---------------------------------------------------------------------------
-
-const SmgClientContext = createContext<Client>(smgClient);
-
-export function useSmgClient(): Client {
-  return useContext(SmgClientContext);
-}
-
-// ---------------------------------------------------------------------------
-// Combined provider — provides both backend + SMG clients
+// Combined provider — provides the backend GraphQL client
 // ---------------------------------------------------------------------------
 
 export function ScryerGraphqlProvider({
@@ -28,11 +17,5 @@ export function ScryerGraphqlProvider({
     setGraphqlLanguage(language);
   }, [language]);
 
-  return (
-    <Provider value={backendClient}>
-      <SmgClientContext.Provider value={smgClient}>
-        {children}
-      </SmgClientContext.Provider>
-    </Provider>
-  );
+  return <Provider value={backendClient}>{children}</Provider>;
 }

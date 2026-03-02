@@ -69,10 +69,10 @@ const GlobalSearchProvider = lazy(() =>
   import("@/components/root/global-search-provider").then((m) => ({ default: m.GlobalSearchProvider })),
 );
 
-function OverviewContainerForView({ view, ...props }: { view: ViewId; titleId: string; t: any; setGlobalStatus: (s: string) => void; onBackToList: () => void; onTitleNotFound: () => void }) {
+function OverviewContainerForView({ view, initialEpisodeId, ...props }: { view: ViewId; titleId: string; t: any; setGlobalStatus: (s: string) => void; onBackToList: () => void; onTitleNotFound: () => void; initialEpisodeId?: string | null }) {
   const facet = facetForView(view);
   if (facet?.hasEpisodes) {
-    return <SeriesOverviewContainer {...props} />;
+    return <SeriesOverviewContainer {...props} initialEpisodeId={initialEpisodeId} />;
   }
   return <MovieOverviewContainer {...props} />;
 }
@@ -117,6 +117,7 @@ function MainContent({
   t,
   setGlobalStatus,
   overviewTitleId,
+  overviewEpisodeId,
   handleBackToList,
   handleTitleNotFound,
   settingsSection,
@@ -136,6 +137,7 @@ function MainContent({
   t: (key: string, values?: Record<string, string | number | boolean | null | undefined>) => string;
   setGlobalStatus: (status: string) => void;
   overviewTitleId: string | null;
+  overviewEpisodeId: string | null;
   handleBackToList: () => void;
   handleTitleNotFound: () => void;
   settingsSection: SettingsSection;
@@ -148,14 +150,14 @@ function MainContent({
   queueFacet: Facet;
   setQueueFacet: (f: Facet) => void;
   searchState: UseGlobalSearchResult;
-  handleOpenOverview: (targetView: ViewId, titleId: string) => void;
+  handleOpenOverview: (targetView: ViewId, titleId: string, episodeId?: string) => void;
   catalogChangeSignal: number;
 }) {
   if (view === "activity") {
     return <ActivityContainer key="activity" t={t} setGlobalStatus={setGlobalStatus} />;
   }
   if (view === "wanted") {
-    return <WantedContainer key="wanted" t={t} setGlobalStatus={setGlobalStatus} />;
+    return <WantedContainer key="wanted" t={t} setGlobalStatus={setGlobalStatus} onOpenOverview={handleOpenOverview} />;
   }
   if (view === "system") {
     return <SystemContainer key="system" t={t} setGlobalStatus={setGlobalStatus} />;
@@ -166,6 +168,7 @@ function MainContent({
         key={`${view}-overview-${overviewTitleId}`}
         view={view}
         titleId={overviewTitleId}
+        initialEpisodeId={overviewEpisodeId}
         t={t}
         setGlobalStatus={setGlobalStatus}
         onBackToList={handleBackToList}
@@ -323,6 +326,7 @@ function AuthenticatedHomePage({
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(initialResolvedSettingsSection);
   const [contentSettingsSection, setContentSettingsSection] = useState<ContentSettingsSection>(initialResolvedContentSection);
   const [overviewTitleId, setOverviewTitleId] = useState<string | null>(initialResolvedOverviewTitleId);
+  const [overviewEpisodeId, setOverviewEpisodeId] = useState<string | null>(null);
 
   const parseOverviewTitleId = useCallback(
     (
@@ -384,8 +388,11 @@ function AuthenticatedHomePage({
     getLanguageLabel,
   } = useLanguage(searchParams);
 
-  const [globalStatus, setGlobalStatusRaw] = useState(() => t("label.ready"));
-  const setGlobalStatus = useGlobalStatusToast(setGlobalStatusRaw);
+  const [, setGlobalStatusRaw] = useState("");
+  const [serviceRestarting, setServiceRestarting] = useState(false);
+  const setGlobalStatus = useGlobalStatusToast(setGlobalStatusRaw, {
+    onServiceRestarting: useCallback(() => setServiceRestarting(true), []),
+  });
 
   const setLanguagePreferenceFromShell = useCallback(
     (code: string) => {
@@ -409,6 +416,7 @@ function AuthenticatedHomePage({
       nextSettingsSection?: SettingsSection,
       nextContentSection?: ContentSettingsSection,
       nextOverviewTitleId?: string | null,
+      nextEpisodeId?: string | null,
     ) => {
       const isMedia = isMediaView(nextView);
       const targetPath = buildViewPath(
@@ -433,6 +441,11 @@ function AuthenticatedHomePage({
           ? normalizedOverviewTitleId
           : null,
       );
+      setOverviewEpisodeId(
+        normalizedContentSection === "overview" && isMedia && normalizedOverviewTitleId
+          ? (nextEpisodeId ?? null)
+          : null,
+      );
 
       if (typeof window === "undefined") {
         return;
@@ -452,6 +465,11 @@ function AuthenticatedHomePage({
       } else {
         nextParams.delete("id");
       }
+      if (nextEpisodeId) {
+        nextParams.set("episodeId", nextEpisodeId);
+      } else {
+        nextParams.delete("episodeId");
+      }
 
       const nextQuery = nextParams.toString();
       const nextPathWithQuery = `${targetPath}${nextQuery ? `?${nextQuery}` : ""}`;
@@ -465,12 +483,12 @@ function AuthenticatedHomePage({
   );
 
   const handleOpenOverview = useCallback(
-    (targetView: ViewId, titleId: string) => {
+    (targetView: ViewId, titleId: string, episodeId?: string) => {
       if (!isMediaView(targetView)) {
         return;
       }
 
-      navigateTo(targetView, undefined, "overview", titleId);
+      navigateTo(targetView, undefined, "overview", titleId, episodeId);
     },
     [navigateTo],
   );
@@ -518,9 +536,41 @@ function AuthenticatedHomePage({
     [navigateTo, view],
   );
 
+  // Poll /health when backend is restarting; reload when it's back
+  useEffect(() => {
+    if (!serviceRestarting) return;
+    const id = setInterval(async () => {
+      try {
+        const res = await fetch("/health");
+        const data = await res.json();
+        if (data.status === "ok") {
+          setServiceRestarting(false);
+          window.location.reload();
+        }
+      } catch {
+        // still down, keep polling
+      }
+    }, 1000);
+    return () => clearInterval(id);
+  }, [serviceRestarting]);
+
   return (
     <ScryerGraphqlProvider language={uiLanguage}>
     <div className="min-h-screen bg-background text-foreground">
+      {serviceRestarting && (
+        <div className="fixed inset-0 z-[9999] grid place-items-center bg-[#070b18]">
+          <div className="text-center">
+            <h1
+              className="mb-8 text-3xl font-bold tracking-tight text-[#dbe5ff]"
+              style={{ fontFamily: "'Space Grotesk', Inter, ui-sans-serif, system-ui, sans-serif" }}
+            >
+              scryer
+            </h1>
+            <Loader2 className="mx-auto mb-6 size-7 animate-spin text-[#5b64ff]" />
+            <p className="text-sm text-[#8b96b9]">Service is restarting&hellip;</p>
+          </div>
+        </div>
+      )}
       <Suspense fallback={<ViewLoadingFallback />}>
         <GlobalSearchProvider
           t={t}
@@ -554,7 +604,6 @@ function AuthenticatedHomePage({
                 isMetadataSearchResultInCatalog={searchState.isMetadataSearchResultInCatalog}
                 searching={searchState.searching}
                 globalSearchInputRef={searchState.globalSearchInputRef}
-                globalStatus={globalStatus}
                 onOpenOverview={handleOpenOverview}
               />
 
@@ -604,6 +653,7 @@ function AuthenticatedHomePage({
                         t={t}
                         setGlobalStatus={setGlobalStatus}
                         overviewTitleId={overviewTitleId}
+                        overviewEpisodeId={overviewEpisodeId}
                         handleBackToList={handleBackToList}
                         handleTitleNotFound={handleTitleNotFound}
                         settingsSection={settingsSection}

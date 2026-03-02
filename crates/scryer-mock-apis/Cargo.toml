@@ -1,0 +1,17 @@
+[package]
+name = "scryer-mock-apis"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "scryer-mock-apis"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.8", features = ["json"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio-util = { workspace = true }

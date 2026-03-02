@@ -30,9 +30,9 @@ export type ActivityEvent = {
 export type IndexerQueryStats = {
   indexerId: string;
   indexerName: string;
-  queriesLast24h: number;
-  successfulLast24h: number;
-  failedLast24h: number;
+  queriesLast24H: number;
+  successfulLast24H: number;
+  failedLast24H: number;
   lastQueryAt: string | null;
   apiCurrent: number | null;
   apiMax: number | null;

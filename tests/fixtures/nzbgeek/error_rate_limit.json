@@ -1,0 +1,8 @@
+{
+  "error": {
+    "@attributes": {
+      "code": "500",
+      "description": "Request limit reached (5/5)"
+    }
+  }
+}

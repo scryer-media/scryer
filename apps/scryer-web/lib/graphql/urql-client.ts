@@ -3,7 +3,6 @@ import {
   fetchExchange,
   subscriptionExchange,
 } from "@urql/core";
-import { persistedExchange } from "@urql/exchange-persisted";
 import { getAuthToken } from "@/lib/hooks/use-auth";
 import { wsClient } from "@/lib/graphql/ws-client";
 
@@ -52,27 +51,4 @@ export const backendClient = new Client({
     }
     return { headers };
   },
-});
-
-// ---------------------------------------------------------------------------
-// SMG (Scryer Metadata Gateway) client — APQ + GET via persistedExchange
-// ---------------------------------------------------------------------------
-
-const smgUrl =
-  import.meta.env.SCRYER_METADATA_GATEWAY_GRAPHQL_URL ??
-  "http://127.0.0.1:8090/graphql";
-
-export const smgClient = new Client({
-  url: smgUrl,
-  exchanges: [
-    persistedExchange({
-      preferGetForPersistedQueries: "within-url-limit",
-    }),
-    fetchExchange,
-  ],
-  fetchOptions: () => ({
-    headers: {
-      "x-scryer-language": currentLanguage,
-    },
-  }),
 });

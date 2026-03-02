@@ -434,6 +434,7 @@ impl AppUseCase {
                         tags: vec![],
                         external_ids,
                         min_availability: None,
+                        ..Default::default()
                     };
 
                     let created = self.add_title(actor, new_title).await?;
@@ -499,6 +500,7 @@ impl AppUseCase {
                         value: selected.tvdb_id.clone(),
                     }],
                     min_availability: None,
+                    ..Default::default()
                 };
 
                 let title = self.add_title(actor, new_title).await?;

@@ -14,6 +14,7 @@ export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
   downloadClients: "download-clients",
   qualityProfiles: "quality-profiles",
   acquisition: "acquisition",
+  rules: "rules",
 };
 
 export const CONTENT_SECTION_PATH: Record<ContentSettingsSection, string> = {

@@ -27,7 +27,6 @@ type MobileSearchOverlayProps = {
   globalSearch: string;
   onGlobalSearchChange: (value: string) => void;
   searching: boolean;
-  globalStatus: string;
   catalogSearchResults: TitleRecord[];
   metadataSearchResults: MetadataSearchResults;
   onClose: () => void;
@@ -55,7 +54,6 @@ export function MobileSearchOverlay({
   globalSearch,
   onGlobalSearchChange,
   searching,
-  globalStatus,
   catalogSearchResults,
   metadataSearchResults,
   onClose,
@@ -220,7 +218,7 @@ export function MobileSearchOverlay({
 
   const renderMetadataItem = React.useCallback(
     (result: MetadataTvdbSearchItem, facet: "movie" | "tv" | "anime", section: keyof MetadataSearchResults) => {
-      const tvdbId = String(result.tvdb_id).trim();
+      const tvdbId = String(result.tvdbId).trim();
       const isInCatalog = isMetadataSearchResultInCatalog(facet, result);
       const cardKey = renderMetadataResultKey(section, tvdbId, result.name, result.year);
       const draft = metadataAddDrafts[cardKey] ?? defaultAddOptionsForFacet(facet);
@@ -245,9 +243,9 @@ export function MobileSearchOverlay({
         <div key={cardKey} className="rounded-lg border border-border bg-card/60 p-3">
           <div className="flex min-h-[44px] items-center gap-3">
             <div className="h-16 w-11 flex-none overflow-hidden rounded-md border border-border bg-muted">
-              {result.poster_url ? (
+              {result.posterUrl ? (
                 <img
-                  src={result.poster_url}
+                  src={result.posterUrl}
                   alt={t("media.posterAlt", { name: result.name })}
                   className="h-full w-full object-cover"
                   loading="lazy"
@@ -498,10 +496,6 @@ export function MobileSearchOverlay({
         </div>
       </div>
 
-      {/* Status line */}
-      <div className="border-b border-border px-4 py-1 text-xs text-muted-foreground">
-        {t("search.globalStatusPrefix")}: {globalStatus}
-      </div>
 
       {/* Scrollable results */}
       <div className="flex-1 overflow-y-auto px-3 py-4 pb-safe">

@@ -1,0 +1,18 @@
+{
+  "data": {
+    "searchTvdb": {
+      "results": [
+        {
+          "tvdb_id": 123456,
+          "name": "Test Movie Title",
+          "year": 2024
+        },
+        {
+          "tvdb_id": 789012,
+          "name": "Test Movie Title: Sequel",
+          "year": 2025
+        }
+      ]
+    }
+  }
+}

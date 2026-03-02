@@ -1,5 +1,5 @@
 use scryer_application::{AppError, AppResult, PrimaryCollectionSummary, TitleMetadataUpdate};
-use scryer_domain::{Collection, Episode, ExternalId, MediaFacet, Title};
+use scryer_domain::{CalendarEpisode, Collection, Episode, ExternalId, MediaFacet, Title};
 use serde_json;
 use sqlx::{Row, SqlitePool};
 
@@ -636,6 +636,44 @@ pub(crate) async fn find_episode_by_title_and_absolute_number_query(
     }
 }
 
+pub(crate) async fn list_episodes_in_date_range_query(
+    pool: &SqlitePool,
+    start_date: &str,
+    end_date: &str,
+) -> AppResult<Vec<CalendarEpisode>> {
+    let rows = sqlx::query(
+        "SELECT e.id, e.title_id, t.name AS title_name, t.facet AS title_facet,
+                e.season_number, e.episode_number, e.title AS episode_title,
+                e.air_date, e.monitored
+         FROM episodes e
+         JOIN titles t ON e.title_id = t.id
+         WHERE e.air_date IS NOT NULL AND e.air_date != ''
+           AND e.air_date >= ? AND e.air_date <= ?
+         ORDER BY e.air_date ASC",
+    )
+    .bind(start_date)
+    .bind(end_date)
+    .fetch_all(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        out.push(CalendarEpisode {
+            id: row.get("id"),
+            title_id: row.get("title_id"),
+            title_name: row.get("title_name"),
+            title_facet: row.get("title_facet"),
+            season_number: row.get("season_number"),
+            episode_number: row.get("episode_number"),
+            episode_title: row.get("episode_title"),
+            air_date: row.get("air_date"),
+            monitored: row.get::<i64, _>("monitored") != 0,
+        });
+    }
+    Ok(out)
+}
+
 pub(crate) async fn set_collection_episodes_monitored_query(
     pool: &SqlitePool,
     collection_id: &str,
@@ -792,10 +830,18 @@ pub(crate) async fn create_title_query(pool: &SqlitePool, title: &Title) -> AppR
         serde_json::to_string(&title.tags).map_err(|err| AppError::Repository(err.to_string()))?;
     let ext_json = serde_json::to_string(&title.external_ids)
         .map_err(|err| AppError::Repository(err.to_string()))?;
+    let genres_json =
+        serde_json::to_string(&title.genres).map_err(|err| AppError::Repository(err.to_string()))?;
+    let aliases_json =
+        serde_json::to_string(&title.aliases).map_err(|err| AppError::Repository(err.to_string()))?;
 
     sqlx::query(
-        "INSERT INTO titles (id, name, facet, monitored, tags, external_ids, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO titles (
+            id, name, facet, monitored, tags, external_ids, created_by, created_at,
+            year, overview, poster_url, sort_title, slug, runtime_minutes,
+            genres, content_status, language, min_availability, aliases
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&title.id)
     .bind(&title.name)
@@ -805,6 +851,17 @@ pub(crate) async fn create_title_query(pool: &SqlitePool, title: &Title) -> AppR
     .bind(&ext_json)
     .bind(&title.created_by)
     .bind(title.created_at.to_rfc3339())
+    .bind(title.year)
+    .bind(&title.overview)
+    .bind(&title.poster_url)
+    .bind(&title.sort_title)
+    .bind(&title.slug)
+    .bind(title.runtime_minutes)
+    .bind(&genres_json)
+    .bind(&title.content_status)
+    .bind(&title.language)
+    .bind(&title.min_availability)
+    .bind(&aliases_json)
     .execute(pool)
     .await
     .map_err(|err| AppError::Repository(err.to_string()))?;
@@ -903,11 +960,24 @@ pub(crate) async fn update_title_hydrated_metadata_query(
 
     let result = sqlx::query(
         "UPDATE titles SET
-            year = ?, overview = ?, poster_url = ?, sort_title = ?, slug = ?,
-            imdb_id = ?, runtime_minutes = ?, genres = ?, content_status = ?,
-            language = ?, first_aired = ?, network = ?, studio = ?, country = ?,
-            aliases = ?, metadata_language = ?, metadata_fetched_at = ?,
-            digital_release_date = ?
+            year = COALESCE(?, year),
+            overview = COALESCE(NULLIF(?, ''), overview),
+            poster_url = COALESCE(NULLIF(?, ''), poster_url),
+            sort_title = COALESCE(NULLIF(?, ''), sort_title),
+            slug = COALESCE(NULLIF(?, ''), slug),
+            imdb_id = COALESCE(NULLIF(?, ''), imdb_id),
+            runtime_minutes = COALESCE(?, runtime_minutes),
+            genres = CASE WHEN NULLIF(?, '[]') IS NOT NULL THEN ? ELSE genres END,
+            content_status = COALESCE(NULLIF(?, ''), content_status),
+            language = COALESCE(NULLIF(?, ''), language),
+            first_aired = COALESCE(NULLIF(?, ''), first_aired),
+            network = COALESCE(NULLIF(?, ''), network),
+            studio = COALESCE(NULLIF(?, ''), studio),
+            country = COALESCE(NULLIF(?, ''), country),
+            aliases = CASE WHEN NULLIF(?, '[]') IS NOT NULL THEN ? ELSE aliases END,
+            metadata_language = COALESCE(NULLIF(?, ''), metadata_language),
+            metadata_fetched_at = COALESCE(NULLIF(?, ''), metadata_fetched_at),
+            digital_release_date = COALESCE(NULLIF(?, ''), digital_release_date)
          WHERE id = ?",
     )
     .bind(metadata.year)
@@ -918,12 +988,14 @@ pub(crate) async fn update_title_hydrated_metadata_query(
     .bind(&metadata.imdb_id)
     .bind(metadata.runtime_minutes)
     .bind(&genres_json)
+    .bind(&genres_json)
     .bind(&metadata.content_status)
     .bind(&metadata.language)
     .bind(&metadata.first_aired)
     .bind(&metadata.network)
     .bind(&metadata.studio)
     .bind(&metadata.country)
+    .bind(&aliases_json)
     .bind(&aliases_json)
     .bind(&metadata.metadata_language)
     .bind(&metadata.metadata_fetched_at)

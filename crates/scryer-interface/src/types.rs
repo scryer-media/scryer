@@ -477,6 +477,17 @@ pub struct AddTitleInput {
     pub source_hint: Option<String>,
     pub source_title: Option<String>,
     pub min_availability: Option<String>,
+    // Metadata fields the frontend can supply from the search result so the
+    // title is created with rich data immediately, without relying on a
+    // separate hydration round-trip to the metadata gateway.
+    pub poster_url: Option<String>,
+    pub year: Option<i32>,
+    pub overview: Option<String>,
+    pub sort_title: Option<String>,
+    pub slug: Option<String>,
+    pub runtime_minutes: Option<i32>,
+    pub language: Option<String>,
+    pub content_status: Option<String>,
 }
 
 #[derive(InputObject)]
@@ -888,4 +899,101 @@ pub struct ToggleRuleSetInput {
 pub struct ValidateRuleSetInput {
     pub rego_source: String,
     pub rule_set_id: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct ServiceLogsPayload {
+    pub generated_at: String,
+    pub lines: Vec<String>,
+    pub count: i32,
+}
+
+// ── Metadata Gateway (proxied from SMG) ────────────────────────────────────
+
+#[derive(SimpleObject, Clone)]
+pub struct MetadataSearchItemPayload {
+    pub tvdb_id: String,
+    pub name: String,
+    pub imdb_id: Option<String>,
+    pub slug: Option<String>,
+    #[graphql(name = "type")]
+    pub type_hint: Option<String>,
+    pub year: Option<i32>,
+    pub status: Option<String>,
+    pub overview: Option<String>,
+    pub popularity: Option<f64>,
+    pub poster_url: Option<String>,
+    pub language: Option<String>,
+    pub runtime_minutes: Option<i32>,
+    pub sort_title: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct MetadataMoviePayload {
+    pub tvdb_id: String,
+    pub name: String,
+    pub slug: String,
+    pub year: Option<i32>,
+    pub status: String,
+    pub overview: String,
+    pub poster_url: String,
+    pub language: String,
+    pub runtime_minutes: i32,
+    pub sort_title: String,
+    pub imdb_id: String,
+    pub genres: Vec<String>,
+    pub studio: String,
+    pub tmdb_release_date: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct MetadataSeriesPayload {
+    pub tvdb_id: String,
+    pub name: String,
+    pub sort_name: String,
+    pub slug: String,
+    pub year: Option<i32>,
+    pub status: String,
+    pub first_aired: String,
+    pub overview: String,
+    pub network: String,
+    pub runtime_minutes: i32,
+    pub poster_url: String,
+    pub country: String,
+    pub genres: Vec<String>,
+    pub aliases: Vec<String>,
+    pub seasons: Vec<MetadataSeasonPayload>,
+    pub episodes: Vec<MetadataEpisodePayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct MetadataSeasonPayload {
+    pub tvdb_id: String,
+    pub number: i32,
+    pub label: String,
+    pub episode_type: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct MetadataEpisodePayload {
+    pub tvdb_id: String,
+    pub episode_number: i32,
+    pub season_number: i32,
+    pub name: String,
+    pub aired: String,
+    pub runtime_minutes: i32,
+    pub is_filler: bool,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct CalendarEpisodePayload {
+    pub id: String,
+    pub title_id: String,
+    pub title_name: String,
+    pub title_facet: String,
+    pub season_number: Option<String>,
+    pub episode_number: Option<String>,
+    pub episode_title: Option<String>,
+    pub air_date: Option<String>,
+    pub monitored: bool,
 }

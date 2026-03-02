@@ -1085,10 +1085,12 @@ pub async fn start_background_acquisition_poller(
 
     let mut poll_interval = tokio::time::interval(std::time::Duration::from_secs(60));
     let mut sync_interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+    let mut metadata_refresh_interval = tokio::time::interval(std::time::Duration::from_secs(43200)); // 12h
 
     // Consume the first tick immediately
     poll_interval.tick().await;
     sync_interval.tick().await;
+    metadata_refresh_interval.tick().await;
 
     let wake = app.services.acquisition_wake.clone();
 
@@ -1108,6 +1110,10 @@ pub async fn start_background_acquisition_poller(
                 if let Err(err) = app.sync_wanted_state().await {
                     warn!(error = %err, "periodic wanted state sync failed");
                 }
+            }
+            _ = metadata_refresh_interval.tick() => {
+                info!("starting periodic metadata refresh for monitored series");
+                app.refresh_monitored_series_metadata().await;
             }
         }
     }

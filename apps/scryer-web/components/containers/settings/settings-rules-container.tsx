@@ -21,7 +21,7 @@ type SettingsRulesContainerProps = {
 const RULE_SET_INITIAL_DRAFT: RuleSetDraft = {
   name: "",
   description: "",
-  regoSource: 'import rego.v1\n\nscore_entry["my_bonus"] := 500 if {\n    input.release.is_dual_audio\n}\n',
+  regoSource: 'import rego.v1\n\nscore_entry["size_guard"] := scryer.block_score() if {\n    scryer.size_gib(input.release.size_bytes) > 100\n}\n',
   enabled: true,
   priority: 0,
   appliedFacets: [],

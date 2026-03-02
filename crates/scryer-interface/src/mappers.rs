@@ -4,7 +4,7 @@ use scryer_application::{
     RenamePlan, RenamePlanItem, ScoringEntry, ScoringSource, SystemHealth, TitleReleaseBlocklistEntry,
 };
 use scryer_domain::{
-    DownloadQueueItem, PolicyOutput, RuleSet,
+    CalendarEpisode, DownloadQueueItem, PolicyOutput, RuleSet,
     Collection, DownloadClientConfig, Episode, HistoryEvent, IndexerConfig, Title, User,
 };
 use scryer_infrastructure::{SettingsValueRecord, WorkflowOperationRecord};
@@ -387,6 +387,20 @@ pub(crate) fn from_episode(episode: Episode) -> EpisodePayload {
         absolute_number: episode.absolute_number,
         monitored: episode.monitored,
         created_at: episode.created_at.to_rfc3339(),
+    }
+}
+
+pub(crate) fn from_calendar_episode(ep: CalendarEpisode) -> CalendarEpisodePayload {
+    CalendarEpisodePayload {
+        id: ep.id,
+        title_id: ep.title_id,
+        title_name: ep.title_name,
+        title_facet: ep.title_facet,
+        season_number: ep.season_number,
+        episode_number: ep.episode_number,
+        episode_title: ep.episode_title,
+        air_date: ep.air_date,
+        monitored: ep.monitored,
     }
 }
 
