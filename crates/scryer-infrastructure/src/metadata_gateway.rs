@@ -9,7 +9,7 @@ use scryer_application::{
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::smg_enrollment;
 
@@ -242,6 +242,7 @@ impl MetadataGatewayClient {
 
         match self.try_build_mtls_client(secret).await {
             Ok(client) => {
+                info!("SMG mTLS enrollment successful, using mutual TLS for metadata requests");
                 let result = client.clone();
                 *guard = Some(client);
                 result
