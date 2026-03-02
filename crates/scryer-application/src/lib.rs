@@ -49,8 +49,8 @@ pub use app_usecase_acquisition::start_background_acquisition_poller;
 pub use app_usecase_integration::start_download_queue_poller;
 pub use library_scan::{
     AnimeEpisodeMapping, AnimeMapping, EpisodeMetadata, LibraryFile, LibraryScanSummary,
-    LibraryScanner, MetadataGateway, MetadataSearchItem, MovieMetadata, RichMetadataSearchItem,
-    SeasonMetadata, SeriesMetadata,
+    LibraryScanner, MetadataGateway, MetadataSearchItem, MovieMetadata, MultiMetadataSearchResult,
+    RichMetadataSearchItem, SeasonMetadata, SeriesMetadata,
 };
 pub use app_usecase_import::{
     execute_manual_import, import_completed_download, preview_manual_import,

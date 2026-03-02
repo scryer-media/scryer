@@ -44,13 +44,19 @@ async fn graphql_post_handler(
     tracing::debug!(scenario = %scenario, query_len = query.len(), "smg graphql POST");
 
     // Detect query type from the query string
-    if query.contains("series") || query.contains("getSeries") {
+    if query.contains("searchTvdbMulti") {
+        let fixture = load_fixture("smg/search_tvdb_multi.json");
+        let parsed: Value = serde_json::from_str(&fixture).expect("valid fixture");
+        return Json(parsed);
+    }
+
+    if query.contains("getSeries") || (query.contains("series") && !query.contains("searchTvdb")) {
         let fixture = load_fixture("smg/get_series.json");
         let parsed: Value = serde_json::from_str(&fixture).expect("valid fixture");
         return Json(parsed);
     }
 
-    if query.contains("movie") || query.contains("getMovie") {
+    if query.contains("getMovie") || (query.contains("movie") && !query.contains("searchTvdb")) {
         let fixture = load_fixture("smg/get_movie.json");
         let parsed: Value = serde_json::from_str(&fixture).expect("valid fixture");
         return Json(parsed);

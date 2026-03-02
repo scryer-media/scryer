@@ -683,6 +683,52 @@ impl QueryRoot {
             .collect())
     }
 
+    async fn search_metadata_multi(
+        &self,
+        ctx: &Context<'_>,
+        query: String,
+        #[graphql(default = 25)] limit: i32,
+        #[graphql(default_with = "\"eng\".to_string()")] language: String,
+    ) -> GqlResult<MetadataSearchMultiPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ViewCatalog) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let limit = limit.clamp(1, 100);
+        let result = app
+            .services
+            .metadata_gateway
+            .search_tvdb_multi(&query, limit, &language)
+            .await
+            .map_err(to_gql_error)?;
+        let convert = |items: Vec<scryer_application::RichMetadataSearchItem>| {
+            items
+                .into_iter()
+                .map(|item| MetadataSearchItemPayload {
+                    tvdb_id: item.tvdb_id,
+                    name: item.name,
+                    imdb_id: item.imdb_id,
+                    slug: item.slug,
+                    type_hint: item.type_hint,
+                    year: item.year,
+                    status: item.status,
+                    overview: item.overview,
+                    popularity: item.popularity,
+                    poster_url: item.poster_url,
+                    language: item.language,
+                    runtime_minutes: item.runtime_minutes,
+                    sort_title: item.sort_title,
+                })
+                .collect()
+        };
+        Ok(MetadataSearchMultiPayload {
+            movies: convert(result.movies),
+            series: convert(result.series),
+            anime: convert(result.anime),
+        })
+    }
+
     async fn metadata_movie(
         &self,
         ctx: &Context<'_>,

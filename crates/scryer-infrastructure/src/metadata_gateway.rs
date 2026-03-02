@@ -4,7 +4,8 @@ use async_trait::async_trait;
 use ring::digest;
 use scryer_application::{
     AnimeEpisodeMapping, AnimeMapping, AppError, AppResult, EpisodeMetadata, MetadataGateway,
-    MetadataSearchItem, MovieMetadata, RichMetadataSearchItem, SeasonMetadata, SeriesMetadata,
+    MetadataSearchItem, MovieMetadata, MultiMetadataSearchResult, RichMetadataSearchItem,
+    SeasonMetadata, SeriesMetadata,
 };
 use reqwest::Client;
 use serde::Deserialize;
@@ -42,6 +43,25 @@ const SEARCH_TVDB_RICH_QUERY: &str = r#"
         language
         runtime_minutes
         sort_title
+      }
+    }
+  }
+"#;
+
+const SEARCH_TVDB_MULTI_QUERY: &str = r#"
+  query SearchTvdbMulti($query: String!, $limit: Int, $language: String) {
+    searchTvdbMulti(query: $query, limit: $limit, language: $language) {
+      movies {
+        tvdb_id name imdb_id slug type year status overview
+        popularity poster_url language runtime_minutes sort_title
+      }
+      series {
+        tvdb_id name imdb_id slug type year status overview
+        popularity poster_url language runtime_minutes sort_title
+      }
+      anime {
+        tvdb_id name imdb_id slug type year status overview
+        popularity poster_url language runtime_minutes sort_title
       }
     }
   }
@@ -103,7 +123,6 @@ const GET_SERIES_QUERY: &str = r#"
           runtime_minutes
           is_filler
           is_recap
-          language
           overview
           absolute_number
         }
@@ -159,6 +178,7 @@ pub struct MetadataGatewayClient {
     mtls_client: tokio::sync::RwLock<Option<Client>>,
     search_hash: String,
     search_rich_hash: String,
+    search_multi_hash: String,
     movie_hash: String,
     series_hash: String,
 }
@@ -176,6 +196,7 @@ impl MetadataGatewayClient {
 
         let search_hash = apq_hash(SEARCH_TVDB_QUERY);
         let search_rich_hash = apq_hash(SEARCH_TVDB_RICH_QUERY);
+        let search_multi_hash = apq_hash(SEARCH_TVDB_MULTI_QUERY);
         let movie_hash = apq_hash(GET_MOVIE_QUERY);
         let series_hash = apq_hash(GET_SERIES_QUERY);
 
@@ -192,6 +213,7 @@ impl MetadataGatewayClient {
             has_registration_secret = enrollment_config.registration_secret.is_some(),
             %search_hash,
             %search_rich_hash,
+            %search_multi_hash,
             %movie_hash,
             %series_hash,
             "metadata gateway client initialized (APQ enabled)"
@@ -210,6 +232,7 @@ impl MetadataGatewayClient {
             mtls_client: tokio::sync::RwLock::new(None),
             search_hash,
             search_rich_hash,
+            search_multi_hash,
             movie_hash,
             series_hash,
         }
@@ -519,6 +542,21 @@ struct SearchTvdbRichResult {
     results: Vec<SearchTvdbRichItem>,
 }
 
+// --- Multi-search types ---
+
+#[derive(Deserialize)]
+struct SearchTvdbMultiResponse {
+    #[serde(rename = "searchTvdbMulti")]
+    search_tvdb_multi: SearchTvdbMultiResult,
+}
+
+#[derive(Deserialize)]
+struct SearchTvdbMultiResult {
+    movies: Vec<SearchTvdbRichItem>,
+    series: Vec<SearchTvdbRichItem>,
+    anime: Vec<SearchTvdbRichItem>,
+}
+
 // --- Movie types ---
 
 #[derive(Deserialize)]
@@ -601,7 +639,6 @@ struct SeriesEpisodeItem {
     runtime_minutes: i32,
     is_filler: bool,
     is_recap: bool,
-    language: String,
     overview: String,
     absolute_number: String,
 }
@@ -697,6 +734,50 @@ impl MetadataGateway for MetadataGatewayClient {
             .collect())
     }
 
+    async fn search_tvdb_multi(
+        &self,
+        query: &str,
+        limit: i32,
+        language: &str,
+    ) -> AppResult<MultiMetadataSearchResult> {
+        let variables = json!({
+            "query": query,
+            "limit": limit,
+            "language": language,
+        });
+
+        let data: SearchTvdbMultiResponse = self
+            .execute_graphql_apq(SEARCH_TVDB_MULTI_QUERY, &self.search_multi_hash, variables)
+            .await?;
+
+        let convert = |items: Vec<SearchTvdbRichItem>| -> Vec<RichMetadataSearchItem> {
+            items
+                .into_iter()
+                .map(|item| RichMetadataSearchItem {
+                    tvdb_id: item.tvdb_id.to_string(),
+                    name: item.name,
+                    imdb_id: item.imdb_id,
+                    slug: item.slug,
+                    type_hint: item.type_hint,
+                    year: item.year,
+                    status: item.status,
+                    overview: item.overview,
+                    popularity: item.popularity,
+                    poster_url: item.poster_url,
+                    language: item.language,
+                    runtime_minutes: item.runtime_minutes,
+                    sort_title: item.sort_title,
+                })
+                .collect()
+        };
+
+        Ok(MultiMetadataSearchResult {
+            movies: convert(data.search_tvdb_multi.movies),
+            series: convert(data.search_tvdb_multi.series),
+            anime: convert(data.search_tvdb_multi.anime),
+        })
+    }
+
     async fn get_movie(&self, tvdb_id: i64, language: &str) -> AppResult<MovieMetadata> {
         let variables = json!({
             "tvdbId": tvdb_id,
@@ -774,7 +855,6 @@ impl MetadataGateway for MetadataGatewayClient {
                     runtime_minutes: ep.runtime_minutes,
                     is_filler: ep.is_filler,
                     is_recap: ep.is_recap,
-                    language: ep.language,
                     overview: ep.overview,
                     absolute_number: ep.absolute_number,
                     season_number: ep.season_number,
