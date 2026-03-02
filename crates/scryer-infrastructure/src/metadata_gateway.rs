@@ -274,6 +274,13 @@ impl MetadataGatewayClient {
             .map_err(|e| format!("failed to build mTLS client: {e}"))
     }
 
+    /// Eagerly trigger enrollment in a background task so the mTLS client is ready before
+    /// the first real metadata query arrives. Call this once after construction; it is
+    /// safe to call concurrently with any other method.
+    pub async fn warm_enrollment(&self) {
+        self.get_http_client().await;
+    }
+
     /// Execute a GraphQL query using APQ (Automatic Persisted Queries).
     ///
     /// 1. Send GET with hash only (no query body) — cache-friendly.

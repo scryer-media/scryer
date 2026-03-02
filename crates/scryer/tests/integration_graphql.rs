@@ -6,6 +6,22 @@ use wiremock::{Mock, ResponseTemplate};
 
 use common::{load_fixture, TestContext};
 
+/// Execute a GraphQL operation directly against the schema, without going
+/// through the HTTP test server.  This gives full control over what data
+/// (e.g. `User`) is attached to the request.
+async fn schema_exec(
+    ctx: &TestContext,
+    query: &str,
+    user: Option<scryer_domain::User>,
+) -> Value {
+    let mut req = async_graphql::Request::new(query);
+    if let Some(u) = user {
+        req = req.data(u);
+    }
+    let resp = ctx.schema.execute(req).await;
+    serde_json::to_value(&resp).expect("serialize gql response")
+}
+
 /// Helper to execute a GraphQL query and return the parsed JSON body.
 async fn gql(ctx: &TestContext, query: &str, variables: Value) -> Value {
     let client = ctx.http_client();
@@ -633,4 +649,223 @@ async fn graphql_batch_request_not_supported_via_single() {
     // Verify single requests work (batch is handled at the middleware level)
     let body = gql(&ctx, "{ titles { id } }", json!({})).await;
     assert_no_errors(&body);
+}
+
+// ---------------------------------------------------------------------------
+// Authentication flow
+// ---------------------------------------------------------------------------
+
+/// The login mutation is available without a pre-existing session.
+/// After providing valid credentials, the server returns a non-empty JWT.
+///
+/// Note: the migration-seeded "admin" user has a NULL password_hash (it is
+/// intended for dev-mode auto-login, not credential-based login).  We
+/// therefore create a fresh user with an explicit password to exercise the
+/// full login path.
+#[tokio::test]
+async fn login_with_valid_credentials_returns_token() {
+    let ctx = TestContext::new().await;
+
+    // Need an actor to create the test user — admin has all entitlements.
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    ctx.app
+        .create_user(
+            &admin,
+            "logintest".to_string(),
+            "s3cr3t!".to_string(),
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    let body = schema_exec(
+        &ctx,
+        r#"mutation { login(input: { username: "logintest", password: "s3cr3t!" }) { token expiresAt user { username } } }"#,
+        None,
+    )
+    .await;
+
+    assert!(
+        body["errors"].is_null(),
+        "login should not return errors: {body}"
+    );
+    let token = body["data"]["login"]["token"].as_str().unwrap();
+    assert!(!token.is_empty(), "JWT token should not be empty");
+    assert_eq!(body["data"]["login"]["user"]["username"], "logintest");
+}
+
+/// Providing the wrong password must produce a GraphQL error — never a token.
+#[tokio::test]
+async fn login_with_wrong_password_returns_error() {
+    let ctx = TestContext::new().await;
+
+    // Create a user with a known password so we can test wrong-password rejection.
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    ctx.app
+        .create_user(
+            &admin,
+            "wrongpasstest".to_string(),
+            "correct_horse".to_string(),
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    let body = schema_exec(
+        &ctx,
+        r#"mutation { login(input: { username: "wrongpasstest", password: "wrong_password" }) { token } }"#,
+        None,
+    )
+    .await;
+
+    assert!(
+        !body["errors"].is_null()
+            && body["errors"]
+                .as_array()
+                .map(|a| !a.is_empty())
+                .unwrap_or(false),
+        "wrong password should return a GraphQL error: {body}"
+    );
+    // Verify the error indicates bad credentials, not a server error.
+    let error_msg = body["errors"][0]["message"].as_str().unwrap_or("");
+    assert!(
+        error_msg.to_ascii_lowercase().contains("credentials")
+            || error_msg.to_ascii_lowercase().contains("invalid"),
+        "error should indicate bad credentials: {error_msg}"
+    );
+}
+
+/// Most queries require a user in the request context.  Executing one via the
+/// schema directly (without injecting a User) must return an authentication
+/// error rather than leaking data.
+#[tokio::test]
+async fn unauthenticated_request_returns_error() {
+    let ctx = TestContext::new().await;
+
+    // `titles` calls actor_from_ctx — must fail without a user in context.
+    let body = schema_exec(&ctx, "{ titles { id } }", None).await;
+
+    let errors = body["errors"].as_array().expect("should have errors");
+    assert!(
+        !errors.is_empty(),
+        "unauthenticated request should return errors"
+    );
+    let messages: Vec<&str> = errors
+        .iter()
+        .filter_map(|e| e["message"].as_str())
+        .collect();
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.to_ascii_lowercase().contains("auth")),
+        "error message should mention authentication: {messages:?}"
+    );
+}
+
+/// After obtaining a JWT via the login mutation, the caller can authenticate
+/// that token to retrieve the User and use it on a protected query.
+#[tokio::test]
+async fn authenticated_request_with_valid_token_succeeds() {
+    let ctx = TestContext::new().await;
+
+    // Create a user with an explicit password and ViewCatalog so the
+    // protected `titles` query can succeed.
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    ctx.app
+        .create_user(
+            &admin,
+            "authtest".to_string(),
+            "s3cr3t!".to_string(),
+            vec![scryer_domain::Entitlement::ViewCatalog],
+        )
+        .await
+        .unwrap();
+
+    // Step 1: log in and capture the token.
+    let login_body = schema_exec(
+        &ctx,
+        r#"mutation { login(input: { username: "authtest", password: "s3cr3t!" }) { token } }"#,
+        None,
+    )
+    .await;
+    assert!(
+        login_body["errors"].is_null(),
+        "login should succeed: {login_body}"
+    );
+    let token = login_body["data"]["login"]["token"]
+        .as_str()
+        .expect("token should be a string")
+        .to_string();
+
+    // Step 2: validate the token to recover the User.
+    let user = ctx
+        .app
+        .authenticate_token(&token)
+        .await
+        .expect("token should be valid");
+
+    // Step 3: execute a protected query with the authenticated user attached.
+    let body = schema_exec(&ctx, "{ titles { id } }", Some(user)).await;
+    assert!(
+        body["errors"].is_null(),
+        "authenticated query should not error: {body}"
+    );
+    assert!(body["data"]["titles"].is_array());
+}
+
+/// A token issued for a different issuer (or an arbitrary tampered token)
+/// must be rejected by `authenticate_token` — not by a GraphQL error but as
+/// a hard application-level failure.
+#[tokio::test]
+async fn tampered_token_is_rejected_by_authenticate_token() {
+    let ctx = TestContext::new().await;
+
+    // Craft a syntactically valid-looking but unsigned JWT (three base64 parts).
+    let fake_token = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJoYWNrZXIifQ.invalidsig";
+
+    let result = ctx.app.authenticate_token(fake_token).await;
+    assert!(
+        result.is_err(),
+        "tampered/unsigned token must not be accepted"
+    );
+}
+
+/// Creating a user with `createUser` and then logging in as that user must
+/// succeed end-to-end — confirming that the password is stored and validated
+/// consistently.
+#[tokio::test]
+async fn newly_created_user_can_login() {
+    let ctx = TestContext::new().await;
+
+    // The admin user must exist before we can create another user
+    // (createUser requires ManageConfig entitlement).
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+
+    // Create a new user as admin.
+    let create_body = schema_exec(
+        &ctx,
+        r#"mutation { createUser(input: { username: "newuser", password: "s3cr3t!", entitlements: [] }) { id username } }"#,
+        Some(admin),
+    )
+    .await;
+    assert!(
+        create_body["errors"].is_null(),
+        "createUser should succeed: {create_body}"
+    );
+    assert_eq!(create_body["data"]["createUser"]["username"], "newuser");
+
+    // Log in as the newly created user.
+    let login_body = schema_exec(
+        &ctx,
+        r#"mutation { login(input: { username: "newuser", password: "s3cr3t!" }) { token user { username } } }"#,
+        None,
+    )
+    .await;
+    assert!(
+        login_body["errors"].is_null(),
+        "new user login should succeed: {login_body}"
+    );
+    let token = login_body["data"]["login"]["token"].as_str().unwrap();
+    assert!(!token.is_empty());
+    assert_eq!(login_body["data"]["login"]["user"]["username"], "newuser");
 }

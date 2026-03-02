@@ -125,11 +125,6 @@ fn normalize_language_token(token: &str) -> Option<&'static str> {
     }
 }
 
-#[allow(dead_code)]
-fn is_episode_anchor_token(token: &str) -> bool {
-    matches!(token, "E" | "EP" | "EPISODE" | "EPISODES" | "CHAPTER")
-}
-
 fn parse_named_season_token(token: &str) -> Option<u32> {
     if let Some(rest) = token.strip_prefix("SEASON") {
         if rest.is_empty() {

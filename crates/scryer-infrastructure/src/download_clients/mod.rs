@@ -38,7 +38,6 @@ fn read_config_string(config: &Value, keys: &[&str]) -> Option<String> {
     None
 }
 
-#[allow(dead_code)]
 fn read_config_bool(config: &Value, keys: &[&str], default_value: bool) -> bool {
     for key in keys {
         if let Some(value) = config.get(*key) {

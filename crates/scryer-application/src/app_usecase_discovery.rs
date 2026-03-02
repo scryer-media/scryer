@@ -6,7 +6,7 @@ use tokio::task::JoinSet;
 
 const INDEXER_ROUTING_KEY: &str = "indexer.routing";
 
-fn extract_http_status_from_message(message: &str) -> Option<u16> {
+pub(crate) fn extract_http_status_from_message(message: &str) -> Option<u16> {
     let marker = "status ";
     let lowered = message.to_ascii_lowercase();
     let marker_position = lowered.find(marker)?;
@@ -23,7 +23,7 @@ fn extract_http_status_from_message(message: &str) -> Option<u16> {
     digits.parse::<u16>().ok()
 }
 
-fn is_4xx_or_5xx_status(status: u16) -> bool {
+pub(crate) fn is_4xx_or_5xx_status(status: u16) -> bool {
     (400..=599).contains(&status)
 }
 
@@ -34,7 +34,7 @@ fn extract_indexer_http_status(error: &AppError) -> Option<u16> {
     }
 }
 
-fn is_indexer_http_error(error: &AppError) -> bool {
+pub(crate) fn is_indexer_http_error(error: &AppError) -> bool {
     extract_indexer_http_status(error).is_some_and(is_4xx_or_5xx_status)
 }
 
@@ -542,18 +542,6 @@ fn is_release_blocklisted(
     false
 }
 
-fn normalize_release_attempt_hint(raw: Option<&str>) -> Option<String> {
-    raw.map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
-fn normalize_release_attempt_title(raw: Option<&str>) -> Option<String> {
-    raw.map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_ascii_lowercase())
-}
-
 fn normalize_imdb_id(raw: Option<String>) -> Option<String> {
     let value = raw.map(|value| value.trim().to_string()).filter(|value| !value.is_empty())?;
 
@@ -885,3 +873,7 @@ fn build_user_rule_input(
         },
     }
 }
+
+#[cfg(test)]
+#[path = "app_usecase_discovery_tests.rs"]
+mod app_usecase_discovery_tests;

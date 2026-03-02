@@ -1,11 +1,15 @@
 mod common;
 
+use std::sync::Arc;
+
 use serde_json::json;
 use wiremock::matchers::{body_json_string, method, path};
-use wiremock::{Mock, ResponseTemplate};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use common::{load_fixture, TestContext};
-use scryer_application::DownloadClient;
+use scryer_application::{DownloadClient, DownloadClientConfigRepository};
+use scryer_domain::DownloadClientConfig;
+use scryer_infrastructure::{NzbgetDownloadClient, PrioritizedDownloadClientRouter};
 
 fn new_nzbget_client(uri: &str) -> scryer_infrastructure::NzbgetDownloadClient {
     scryer_infrastructure::NzbgetDownloadClient::new(
@@ -573,4 +577,243 @@ async fn nzbget_endpoint_strips_trailing_slash() {
         "SCORE".to_string(),
     );
     assert_eq!(client.endpoint(), "http://localhost:6789/jsonrpc");
+}
+
+// ---------------------------------------------------------------------------
+// PrioritizedDownloadClientRouter
+// ---------------------------------------------------------------------------
+
+/// Build a minimal enabled DownloadClientConfig pointing at `base_url`.
+fn router_config(id: &str, base_url: &str, priority: i64, enabled: bool) -> DownloadClientConfig {
+    DownloadClientConfig {
+        id: id.to_string(),
+        name: format!("test-{id}"),
+        client_type: "nzbget".to_string(),
+        base_url: Some(base_url.to_string()),
+        config_json: "{}".to_string(),
+        client_priority: priority,
+        is_enabled: enabled,
+        status: "ok".to_string(),
+        last_error: None,
+        last_seen_at: None,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    }
+}
+
+/// Mount the listgroups + postqueue mocks needed for list_queue() to succeed.
+async fn mount_list_queue_mocks(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/jsonrpc"))
+        .and(body_json_string(
+            r#"{"version":"2.0","method":"listgroups","params":[],"id":"scryer-rpc"}"#,
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(load_fixture("nzbget/listgroups.json")),
+        )
+        .mount(server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/jsonrpc"))
+        .and(body_json_string(
+            r#"{"version":"2.0","method":"postqueue","params":[],"id":"scryer-rpc"}"#,
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(load_fixture("nzbget/postqueue.json")),
+        )
+        .mount(server)
+        .await;
+}
+
+/// Create a router backed by the test DB, with `fallback_uri` as the fallback client.
+fn build_router(ctx: &TestContext, fallback_uri: String) -> PrioritizedDownloadClientRouter {
+    let fallback = NzbgetDownloadClient::new(fallback_uri, None, None, "SCORE".to_string());
+    PrioritizedDownloadClientRouter::new(Arc::new(ctx.db.clone()), Arc::new(fallback))
+}
+
+#[tokio::test]
+async fn router_routes_to_highest_priority_client() {
+    let ctx = TestContext::new().await;
+    let second_server = MockServer::start().await;
+
+    // Only the priority-1 server is mocked to succeed.
+    mount_list_queue_mocks(&ctx.nzbget_server).await;
+    // second_server has no mocks — any request there would fail.
+
+    // Insert configs out-of-order to confirm priority ordering beats insertion order.
+    ctx.db
+        .create(router_config("c2", &second_server.uri(), 2, true))
+        .await
+        .unwrap();
+    ctx.db
+        .create(router_config("c1", &ctx.nzbget_server.uri(), 1, true))
+        .await
+        .unwrap();
+
+    let router = build_router(&ctx, "http://127.0.0.1:1".to_string());
+    let items = router
+        .list_queue()
+        .await
+        .expect("priority-1 client should succeed");
+
+    assert_eq!(items.len(), 2, "should return items from the primary client");
+    assert!(
+        second_server.received_requests().await.unwrap().is_empty(),
+        "secondary client should not have been contacted"
+    );
+}
+
+#[tokio::test]
+async fn router_falls_back_to_next_client_on_primary_failure() {
+    let ctx = TestContext::new().await;
+    let second_server = MockServer::start().await;
+
+    // Primary (priority 1) has no mocks — wiremock returns 404 for unmatched requests.
+    // Secondary (priority 2) is mocked to succeed.
+    mount_list_queue_mocks(&second_server).await;
+
+    ctx.db
+        .create(router_config("c1", &ctx.nzbget_server.uri(), 1, true))
+        .await
+        .unwrap();
+    ctx.db
+        .create(router_config("c2", &second_server.uri(), 2, true))
+        .await
+        .unwrap();
+
+    let router = build_router(&ctx, "http://127.0.0.1:1".to_string());
+    let items = router
+        .list_queue()
+        .await
+        .expect("secondary client should succeed after primary fails");
+
+    assert_eq!(items.len(), 2, "should return items from the secondary client");
+    assert!(
+        !second_server.received_requests().await.unwrap().is_empty(),
+        "secondary client should have been contacted"
+    );
+}
+
+#[tokio::test]
+async fn router_uses_fallback_when_no_clients_configured() {
+    let ctx = TestContext::new().await;
+
+    // No configs in DB — the fallback client is the only option.
+    mount_list_queue_mocks(&ctx.nzbget_server).await;
+
+    // The fallback is pointed at the only mocked server.
+    let fallback =
+        NzbgetDownloadClient::new(ctx.nzbget_server.uri(), None, None, "SCORE".to_string());
+    let router =
+        PrioritizedDownloadClientRouter::new(Arc::new(ctx.db.clone()), Arc::new(fallback));
+
+    let items = router
+        .list_queue()
+        .await
+        .expect("fallback client should be used when no configs exist");
+
+    assert_eq!(items.len(), 2);
+}
+
+#[tokio::test]
+async fn router_skips_client_with_unknown_type() {
+    let ctx = TestContext::new().await;
+
+    // Priority 1: unknown type — client_from_config returns Validation error, skipped.
+    let bad_config = DownloadClientConfig {
+        id: "bad".to_string(),
+        name: "bad-client".to_string(),
+        client_type: "sabnzbd".to_string(),
+        base_url: Some(ctx.nzbget_server.uri()),
+        config_json: "{}".to_string(),
+        client_priority: 1,
+        is_enabled: true,
+        status: "ok".to_string(),
+        last_error: None,
+        last_seen_at: None,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+    ctx.db.create(bad_config).await.unwrap();
+
+    // Priority 2: valid nzbget client, mocked to succeed.
+    let second_server = MockServer::start().await;
+    mount_list_queue_mocks(&second_server).await;
+    ctx.db
+        .create(router_config("good", &second_server.uri(), 2, true))
+        .await
+        .unwrap();
+
+    let router = build_router(&ctx, "http://127.0.0.1:1".to_string());
+    let items = router
+        .list_queue()
+        .await
+        .expect("valid nzbget client should be used after skipping unknown type");
+
+    assert_eq!(items.len(), 2);
+}
+
+#[tokio::test]
+async fn router_skips_client_missing_base_url() {
+    let ctx = TestContext::new().await;
+
+    // Priority 1: no base_url, empty JSON config — resolve_download_client_base_url returns None.
+    let no_url_config = DownloadClientConfig {
+        id: "no-url".to_string(),
+        name: "no-url-client".to_string(),
+        client_type: "nzbget".to_string(),
+        base_url: None,
+        config_json: "{}".to_string(),
+        client_priority: 1,
+        is_enabled: true,
+        status: "ok".to_string(),
+        last_error: None,
+        last_seen_at: None,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+    ctx.db.create(no_url_config).await.unwrap();
+
+    // Priority 2: valid config.
+    mount_list_queue_mocks(&ctx.nzbget_server).await;
+    ctx.db
+        .create(router_config("valid", &ctx.nzbget_server.uri(), 2, true))
+        .await
+        .unwrap();
+
+    let router = build_router(&ctx, "http://127.0.0.1:1".to_string());
+    let items = router
+        .list_queue()
+        .await
+        .expect("valid client should succeed after skipping the no-url client");
+
+    assert_eq!(items.len(), 2);
+}
+
+#[tokio::test]
+async fn router_disabled_clients_are_not_used() {
+    let ctx = TestContext::new().await;
+
+    // Disabled client at priority 1 — should be filtered out.
+    ctx.db
+        .create(router_config("disabled", &ctx.nzbget_server.uri(), 1, false))
+        .await
+        .unwrap();
+
+    // No enabled clients → fallback is used.
+    let fallback_server = MockServer::start().await;
+    mount_list_queue_mocks(&fallback_server).await;
+    let fallback =
+        NzbgetDownloadClient::new(fallback_server.uri(), None, None, "SCORE".to_string());
+    let router =
+        PrioritizedDownloadClientRouter::new(Arc::new(ctx.db.clone()), Arc::new(fallback));
+
+    let items = router
+        .list_queue()
+        .await
+        .expect("fallback should be used when only client is disabled");
+
+    assert_eq!(items.len(), 2);
+    // Disabled client's server received no requests.
+    assert!(ctx.nzbget_server.received_requests().await.unwrap().is_empty());
 }

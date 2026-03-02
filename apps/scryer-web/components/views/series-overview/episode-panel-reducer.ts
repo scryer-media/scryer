@@ -78,7 +78,7 @@ export function episodePanelReducer(
           },
         };
       }
-      const { [action.episodeId]: _, ...rest } = state.searchLoadingByEpisode;
+      const { [action.episodeId]: _removed, ...rest } = state.searchLoadingByEpisode;
       return { ...state, searchLoadingByEpisode: rest };
     }
 
@@ -92,7 +92,7 @@ export function episodePanelReducer(
           },
         };
       }
-      const { [action.episodeId]: _, ...rest } = state.autoSearchLoadingByEpisode;
+      const { [action.episodeId]: _removed, ...rest } = state.autoSearchLoadingByEpisode;
       return { ...state, autoSearchLoadingByEpisode: rest };
     }
 
@@ -124,7 +124,7 @@ export function episodePanelReducer(
           },
         };
       }
-      const { [action.collectionId]: _, ...rest } = state.interstitialMovieMetadataLoadingByCollection;
+      const { [action.collectionId]: _removed, ...rest } = state.interstitialMovieMetadataLoadingByCollection;
       return { ...state, interstitialMovieMetadataLoadingByCollection: rest };
     }
 

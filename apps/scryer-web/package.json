@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit && eslint 'src/**/*.{ts,tsx}' 'components/**/*.{ts,tsx}' 'lib/**/*.{ts,tsx}'"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.2",
@@ -42,13 +42,17 @@
     "urql": "^5.0.1"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.15.14",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.4",
+    "eslint": "^10.0.2",
+    "eslint-plugin-react-hooks": "^7.0.1",
     "shadcn": "^3.8.5",
     "tw-animate-css": "^1.4.0",
     "typescript": "^5.8.4",
+    "typescript-eslint": "^8.56.1",
     "vite": "^7.3.1"
   }
 }

@@ -1,7 +1,6 @@
 use crate::release_parser::ParsedReleaseMetadata;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct QualityProfile {
@@ -149,24 +148,11 @@ fn default_true() -> bool {
     true
 }
 
-#[allow(dead_code)]
-pub fn parse_profile_catalog_from_settings_value(
-    raw_value: &Value,
-) -> Result<Vec<QualityProfile>, serde_json::Error> {
-    let raw_json = raw_value.to_string();
-    parse_profile_catalog_from_json(&raw_json)
-}
-
 pub fn parse_profile_catalog_from_json(
     raw_json: &str,
 ) -> Result<Vec<QualityProfile>, serde_json::Error> {
     let profiles = serde_json::from_str::<Vec<RawQualityProfile>>(raw_json)?;
     Ok(profiles.into_iter().map(quality_profile_from_raw).collect())
-}
-
-#[allow(dead_code)]
-pub fn serialize_profile_catalog(profiles: &[QualityProfile]) -> Result<String, serde_json::Error> {
-    serde_json::to_string_pretty(profiles)
 }
 
 pub fn default_quality_profile_for_search() -> QualityProfile {
@@ -219,11 +205,6 @@ pub fn default_quality_profile_1080p_for_search() -> QualityProfile {
             required_audio_languages: vec![],
         },
     }
-}
-
-#[allow(dead_code)]
-pub fn find_profile_by_id(profiles: &[QualityProfile], id: &str) -> Option<QualityProfile> {
-    profiles.iter().find(|profile| profile.id == id).cloned()
 }
 
 fn quality_profile_from_raw(raw: RawQualityProfile) -> QualityProfile {
@@ -815,14 +796,6 @@ pub fn apply_nzbgeek_vote_scoring(
     let capped_extra = extra.min(10);
     let penalty = -2400 - (capped_extra * 300);
     decision.log("nzbgeek_thumbs_down_penalty", penalty);
-}
-
-#[allow(dead_code)]
-pub fn parse_profile_from_settings_value(
-    raw_value: &Value,
-) -> Result<QualityProfile, serde_json::Error> {
-    let raw_json = raw_value.to_string();
-    QualityProfile::parse(&raw_json)
 }
 
 #[cfg(test)]

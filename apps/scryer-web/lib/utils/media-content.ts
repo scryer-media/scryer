@@ -25,22 +25,6 @@ export function getDefaultRoutingOrder(): NzbgetRoutingOrder {
   };
 }
 
-export function areQualityProfilesEqual(
-  left: SearchableQualityProfileBody[],
-  right: SearchableQualityProfileBody[],
-) {
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  for (let index = 0; index < left.length; index += 1) {
-    if (left[index].id !== right[index].id || left[index].name !== right[index].name) {
-      return false;
-    }
-  }
-
-  return true;
-}
 
 export function areNzbgetRoutingSettingsEqual(
   left: NzbgetCategoryRoutingSettings,

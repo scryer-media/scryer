@@ -1,0 +1,216 @@
+#!/usr/bin/env bash
+#
+# release.sh — pre-release validation and tagging script
+#
+# Validates: cargo clippy · cargo test · tsc --noEmit
+# Then:      bumps crates/scryer version · signed tag · push
+#
+# Usage:
+#   ./scripts/release.sh              # auto-increment patch (0.0.2 → 0.0.3)
+#   ./scripts/release.sh --minor      # increment minor
+#   ./scripts/release.sh --major      # increment major
+#   ./scripts/release.sh 0.1.0        # explicit version
+#   ./scripts/release.sh --dry-run    # validate only, no commit/tag/push
+#
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRYER_CRATE_TOML="$REPO_ROOT/crates/scryer/Cargo.toml"
+WEB_DIR="$REPO_ROOT/apps/scryer-web"
+
+# ── Colors ─────────────────────────────────────────────────────────────────────
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+BLUE='\033[0;34m'; BOLD='\033[1m'; RESET='\033[0m'
+
+step() { echo -e "\n${BLUE}${BOLD}▶  $*${RESET}"; }
+ok()   { echo -e "   ${GREEN}✓  $*${RESET}"; }
+warn() { echo -e "   ${YELLOW}⚠  $*${RESET}"; }
+die()  { echo -e "\n${RED}${BOLD}✗  $*${RESET}" >&2; exit 1; }
+
+# ── Argument parsing ───────────────────────────────────────────────────────────
+BUMP="patch"
+EXPLICIT_VERSION=""
+DRY_RUN=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --major)   BUMP="major" ;;
+        --minor)   BUMP="minor" ;;
+        --patch)   BUMP="patch" ;;
+        --dry-run) DRY_RUN=true ;;
+        v[0-9]*.[0-9]*.[0-9]*) EXPLICIT_VERSION="${arg#v}" ;;
+        [0-9]*.[0-9]*.[0-9]*)  EXPLICIT_VERSION="$arg" ;;
+        *) die "Unknown argument: $arg" ;;
+    esac
+done
+
+# ── Determine next version ─────────────────────────────────────────────────────
+step "Determining next version"
+
+cd "$REPO_ROOT"
+
+LATEST_TAG="$(git tag --sort=-version:refname | grep '^scryer-v' | head -1 || true)"
+CURRENT_VERSION="${LATEST_TAG#scryer-v}"
+CURRENT_VERSION="${CURRENT_VERSION:-0.0.0}"
+
+if [[ -n "$EXPLICIT_VERSION" ]]; then
+    NEXT_VERSION="$EXPLICIT_VERSION"
+else
+    IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+    case "$BUMP" in
+        major) NEXT_VERSION="$((MAJOR + 1)).0.0" ;;
+        minor) NEXT_VERSION="${MAJOR}.$((MINOR + 1)).0" ;;
+        patch) NEXT_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+    esac
+fi
+
+TAG_NAME="scryer-v${NEXT_VERSION}"
+
+echo "   Latest tag : ${LATEST_TAG:-none}"
+echo "   Next tag   : ${TAG_NAME}"
+$DRY_RUN && echo -e "   ${YELLOW}(dry run — no commits, tags, or pushes)${RESET}"
+
+# ── Pre-flight checks ──────────────────────────────────────────────────────────
+step "Pre-flight checks"
+
+if git tag | grep -qx "$TAG_NAME"; then
+    die "Tag $TAG_NAME already exists"
+fi
+
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+echo "   Branch: $BRANCH"
+
+if [[ -n "$(git status --porcelain)" ]]; then
+    warn "Working tree has uncommitted changes:"
+    git status --short | sed 's/^/     /'
+    echo ""
+    read -r -p "   Continue anyway? [y/N] " REPLY
+    [[ "$REPLY" =~ ^[Yy]$ ]] || die "Aborted"
+fi
+
+ok "Pre-flight OK"
+
+# ── cargo update (bump Cargo.lock to latest compatible deps) ───────────────────
+step "Updating Cargo.lock (cargo update)"
+
+cd "$REPO_ROOT"
+cargo update 2>&1
+ok "Cargo.lock updated"
+
+# ── cargo audit (RustSec vulnerability check) ──────────────────────────────────
+step "Running cargo audit"
+
+if ! command -v cargo-audit &>/dev/null; then
+    warn "cargo-audit not installed — skipping (run: cargo install cargo-audit)"
+else
+    cargo audit 2>&1 || die "cargo audit found vulnerabilities — fix before releasing"
+    ok "cargo audit passed"
+fi
+
+# ── Rust clippy ────────────────────────────────────────────────────────────────
+step "Running cargo clippy (--workspace -D warnings)"
+
+cargo clippy --workspace -- -D warnings 2>&1 || die "Clippy errors — fix before releasing"
+
+ok "Clippy passed"
+
+# ── Rust tests ─────────────────────────────────────────────────────────────────
+step "Running Rust tests (cargo test --workspace)"
+
+cargo test --workspace 2>&1 || die "Rust tests failed — fix before releasing"
+
+ok "Rust tests passed"
+
+# ── npm audit fix ─────────────────────────────────────────────────────────────
+step "Running npm audit fix"
+
+cd "$WEB_DIR"
+npm audit fix 2>&1
+ok "npm audit fix complete"
+
+# ── TypeScript type check ──────────────────────────────────────────────────────
+step "Running TypeScript type check"
+
+npm run lint 2>&1 || die "TypeScript type check failed — fix before releasing"
+
+ok "TypeScript type check passed"
+
+# ── Bump all workspace crate versions ──────────────────────────────────────────
+step "Updating all workspace crate versions to $NEXT_VERSION"
+
+cd "$REPO_ROOT"
+
+# Collect all member Cargo.toml files from the workspace
+WORKSPACE_TOMLS=()
+while IFS= read -r member; do
+    toml="$REPO_ROOT/$member/Cargo.toml"
+    [[ -f "$toml" ]] && WORKSPACE_TOMLS+=("$toml")
+done < <(grep '^\s*"' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+
+[[ ${#WORKSPACE_TOMLS[@]} -eq 0 ]] && die "No workspace member Cargo.toml files found"
+
+for toml in "${WORKSPACE_TOMLS[@]}"; do
+    sed -i '' 's/^version = "[^"]*"/version = "'"$NEXT_VERSION"'"/' "$toml"
+    name="$(basename "$(dirname "$toml")")"
+    echo "   bumped: $name → $NEXT_VERSION"
+done
+
+# Verify the main binary got updated
+WRITTEN_VERSION="$(grep -m1 '^version = ' "$SCRYER_CRATE_TOML" | sed 's/.*"\(.*\)".*/\1/')"
+[[ "$WRITTEN_VERSION" == "$NEXT_VERSION" ]] \
+    || die "Version write failed — $SCRYER_CRATE_TOML shows: $WRITTEN_VERSION"
+
+ok "${#WORKSPACE_TOMLS[@]} crates updated to $NEXT_VERSION"
+
+# ── Verify build after bump ────────────────────────────────────────────────────
+step "Running cargo check after version bump"
+
+cargo check 2>&1 || die "cargo check failed after version bump"
+
+ok "cargo check passed"
+
+# ── From here on nothing destructive happens in dry-run mode ──────────────────
+if $DRY_RUN; then
+    echo ""
+    echo -e "${YELLOW}${BOLD}Dry run complete — stopping before commit/tag/push.${RESET}"
+    echo -e "  Version $NEXT_VERSION validated OK."
+    # Restore any changes so the working tree is clean
+    git checkout -- "${WORKSPACE_TOMLS[@]}"
+    git checkout -- "$WEB_DIR/package-lock.json" 2>/dev/null || true
+    exit 0
+fi
+
+# ── Commit version bump ────────────────────────────────────────────────────────
+step "Committing version bump"
+
+CHANGED_FILES=()
+for toml in "${WORKSPACE_TOMLS[@]}"; do
+    [[ -n "$(git diff --name-only "$toml")" ]] && CHANGED_FILES+=("$toml")
+done
+LOCKFILE="$WEB_DIR/package-lock.json"
+[[ -n "$(git diff --name-only "$LOCKFILE")" ]] && CHANGED_FILES+=("$LOCKFILE")
+
+if [[ ${#CHANGED_FILES[@]} -gt 0 ]]; then
+    git add "${CHANGED_FILES[@]}"
+    git commit -m "release: bump scryer to $NEXT_VERSION"
+    ok "Committed: ${CHANGED_FILES[*]##*/}"
+else
+    ok "Nothing to commit"
+fi
+
+# ── Create signed tag ──────────────────────────────────────────────────────────
+step "Creating signed tag $TAG_NAME"
+
+git tag -s "$TAG_NAME" -m "Release $TAG_NAME"
+ok "Tag $TAG_NAME created"
+
+# ── Push ───────────────────────────────────────────────────────────────────────
+step "Pushing to origin"
+
+git push origin "$BRANCH"
+git push origin "$TAG_NAME"
+ok "Pushed $BRANCH and tag $TAG_NAME"
+
+# ── Done ───────────────────────────────────────────────────────────────────────
+echo ""
+echo -e "${GREEN}${BOLD}🚀  Released $TAG_NAME${RESET}"

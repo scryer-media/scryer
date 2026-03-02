@@ -10,20 +10,3 @@ export type ActivityEvent = {
   occurredAt?: string | null;
 };
 
-export type GraphQLErrorShape = {
-  message?: string;
-  extensions?: {
-    message?: string;
-    details?: string;
-    reason?: string;
-    error?: string;
-    [key: string]: unknown;
-  };
-  extensionsMessage?: string;
-  detail?: string;
-};
-
-export type GraphQLResponseShape<T> = {
-  data?: T;
-  errors?: GraphQLErrorShape[];
-};
