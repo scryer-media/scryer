@@ -11,6 +11,7 @@ import { buildRouteCommands } from "@/components/root/route-commands";
 import { useGlobalStatusToast } from "@/lib/hooks/use-global-status-toast";
 import { useLanguage } from "@/lib/hooks/use-language";
 import { ScryerGraphqlProvider } from "@/lib/graphql/urql-provider";
+import { setOnBackendRestarting } from "@/lib/graphql/urql-client";
 import { useOnlineStatus } from "@/lib/hooks/use-online-status";
 import { useInstallPrompt } from "@/lib/hooks/use-install-prompt";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
@@ -393,6 +394,13 @@ function AuthenticatedHomePage({
   const setGlobalStatus = useGlobalStatusToast(setGlobalStatusRaw, {
     onServiceRestarting: useCallback(() => setServiceRestarting(true), []),
   });
+
+  // Register the fetch-level restart detector so ANY GraphQL request that
+  // returns HTML (backend upgrade splash) triggers the overlay immediately.
+  useEffect(() => {
+    setOnBackendRestarting(() => setServiceRestarting(true));
+    return () => setOnBackendRestarting(null);
+  }, []);
 
   const setLanguagePreferenceFromShell = useCallback(
     (code: string) => {

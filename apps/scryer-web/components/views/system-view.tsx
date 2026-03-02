@@ -275,7 +275,7 @@ function LogViewer() {
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="h-[560px] overflow-auto rounded-lg border border-border bg-[#0a0e1a] text-xs leading-5"
+        className="h-[calc(100vh-320px)] min-h-[400px] overflow-y-auto rounded-lg border border-border bg-[#0a0e1a] text-xs leading-5"
         style={{ fontFamily: "'Fira Code', 'Fira Mono', 'JetBrains Mono', 'Source Code Pro', 'Cascadia Code', 'Consolas', monospace" }}
       >
         {filteredLines.length === 0 ? (
@@ -289,7 +289,7 @@ function LogViewer() {
                   <span className="mr-3 select-none text-right text-zinc-600" style={{ minWidth: "3ch" }}>
                     {i + 1}
                   </span>
-                  <span className={LOG_LEVEL_COLORS[lvl] ?? "text-zinc-300"}>{line}</span>
+                  <span className={`break-all ${LOG_LEVEL_COLORS[lvl] ?? "text-zinc-300"}`}>{line}</span>
                 </div>
               );
             })}

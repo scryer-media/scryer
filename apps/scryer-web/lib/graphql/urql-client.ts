@@ -21,16 +21,23 @@ export function getGraphqlLanguage(): string {
 }
 
 // ---------------------------------------------------------------------------
-// Custom fetch — detects HTML responses (backend upgrade/restart splash) and
-// re-throws with the body so the global-status-toast regex can catch it.
+// Backend restart detection — when the backend returns HTML (upgrade splash)
+// instead of JSON, trigger a global callback so the shell can show the splash
+// overlay immediately, regardless of which component made the request.
 // ---------------------------------------------------------------------------
+
+let onBackendRestarting: (() => void) | null = null;
+
+export function setOnBackendRestarting(cb: (() => void) | null) {
+  onBackendRestarting = cb;
+}
 
 const scryerFetch: typeof fetch = async (input, init) => {
   const response = await fetch(input, init);
   const ct = response.headers.get("content-type") ?? "";
   if (ct.includes("text/html")) {
-    const body = await response.text();
-    throw new TypeError(body);
+    onBackendRestarting?.();
+    throw new TypeError("Service is restarting");
   }
   return response;
 };
