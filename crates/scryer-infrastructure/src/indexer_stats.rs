@@ -20,6 +20,12 @@ pub struct InMemoryIndexerStatsTracker {
     entries: std::sync::Arc<Mutex<HashMap<String, IndexerEntry>>>,
 }
 
+impl Default for InMemoryIndexerStatsTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InMemoryIndexerStatsTracker {
     pub fn new() -> Self {
         Self {
