@@ -119,6 +119,7 @@ impl TestContext {
             ":memory:".to_string(),
         );
         services.metadata_gateway = Arc::new(metadata_gateway);
+        services.rule_sets = Arc::new(db.clone());
 
         // Facet registry with all built-in facets
         let mut registry = FacetRegistry::new();
