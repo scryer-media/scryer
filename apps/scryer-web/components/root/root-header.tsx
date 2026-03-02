@@ -270,7 +270,7 @@ export const RootHeader = React.memo(function RootHeader({
               onCloseGlobalSearchPanel();
               onOpenOverview?.(targetView, title.id);
             }}
-            className="block rounded-lg border border-border bg-card/60 p-3 hover:bg-accent/80"
+            className="block w-full rounded-lg border border-border bg-card/60 p-3 text-left hover:bg-accent/80"
             aria-label={title.name}
           >
             <div className="mb-2 flex min-h-20 items-start gap-3">

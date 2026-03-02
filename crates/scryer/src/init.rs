@@ -125,7 +125,7 @@ fn generate_compose(movies_path: &str, series_path: &str) -> String {
       SCRYER_SERIES_PATH: /media/series
 
       # ── Metadata gateway ──────────────────────────────────────────
-      SCRYER_METADATA_GATEWAY_GRAPHQL_URL: https://smg.scryer.media/graphql
+      SCRYER_METADATA_GATEWAY_GRAPHQL_URL: https://smg2.scryer.media/graphql
 
     # ── Upgrade procedure ───────────────────────────────────────────
     # 1. docker compose pull
