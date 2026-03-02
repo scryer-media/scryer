@@ -107,6 +107,7 @@ jobs:
       - name: Build release binary with embedded UI
         env:
           SCRYER_EMBED_UI_DIR: ${{ github.workspace }}/scryer-web-out
+          SCRYER_SMG_REGISTRATION_SECRET: ${{ secrets.SMG_REGISTRATION_SECRET }}
         run: cargo build -p scryer --release --locked --target ${{ matrix.target }}
       - name: Package tarball
         run: |
