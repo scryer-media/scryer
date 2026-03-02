@@ -1,4 +1,4 @@
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 
 /// Flat polling interval for movies without a baseline date.
 const MOVIE_FALLBACK_INTERVAL_HOURS: i64 = 12;
@@ -112,9 +112,18 @@ pub fn compute_search_schedule(
     current_phase: &str,
     now: &DateTime<Utc>,
 ) -> SearchSchedule {
-    let baseline = baseline_date
-        .and_then(|d| DateTime::parse_from_rfc3339(d).ok())
-        .map(|dt| dt.with_timezone(&Utc));
+    let baseline = baseline_date.and_then(|d| {
+        // Try RFC 3339 first, then fall back to "YYYY-MM-DD" (midnight UTC).
+        DateTime::parse_from_rfc3339(d)
+            .map(|dt| dt.with_timezone(&Utc))
+            .ok()
+            .or_else(|| {
+                NaiveDate::parse_from_str(d, "%Y-%m-%d")
+                    .ok()
+                    .and_then(|nd| nd.and_hms_opt(0, 0, 0))
+                    .map(|ndt| ndt.and_utc())
+            })
+    });
 
     match media_type {
         "movie" => compute_movie_schedule(baseline, current_phase, now),

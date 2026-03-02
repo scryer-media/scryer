@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -15,6 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   ChevronDown,
   ChevronRight,
@@ -24,12 +26,33 @@ import {
   RotateCcw,
   Search,
 } from "lucide-react";
+import { CutoffUnmetView } from "@/components/views/cutoff-unmet-view";
+import type { CutoffUnmetItem } from "@/components/views/cutoff-unmet-view";
 import type { WantedItem, ReleaseDecisionItem } from "@/lib/types";
+import type { WantedTab } from "@/components/containers/wanted-container";
+
+const CalendarView = lazy(() =>
+  import("@/components/views/calendar-view").then((m) => ({ default: m.CalendarView })),
+);
 
 type Translate = (
   key: string,
   values?: Record<string, string | number | boolean | null | undefined>,
 ) => string;
+
+type CutoffUnmetViewState = {
+  t: Translate;
+  items: CutoffUnmetItem[];
+  loading: boolean;
+  facetFilter: string | undefined;
+  setFacetFilter: (v: string | undefined) => void;
+  searchingId: string | null;
+  bulkSearching: boolean;
+  bulkProgress: { current: number; total: number } | null;
+  triggerSearch: (item: CutoffUnmetItem) => Promise<void>;
+  triggerBulkSearch: () => void;
+  cancelBulkSearch: () => void;
+};
 
 type WantedViewState = {
   t: Translate;
@@ -125,7 +148,92 @@ function formatBytes(bytes: number | null) {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-export function WantedView({ state }: { state: WantedViewState }) {
+type CalendarEpisodeItem = {
+  id: string;
+  titleId: string;
+  titleName: string;
+  titleFacet: string;
+  seasonNumber: string | null;
+  episodeNumber: string | null;
+  episodeTitle: string | null;
+  airDate: string | null;
+  monitored: boolean;
+};
+
+type CalendarViewState = {
+  t: Translate;
+  episodes: CalendarEpisodeItem[];
+  loading: boolean;
+  onDateRangeChange: (start: string, end: string) => void;
+  onEpisodeClick?: (episode: CalendarEpisodeItem) => void;
+};
+
+type WantedViewProps = {
+  tab: WantedTab;
+  onTabChange: (tab: WantedTab) => void;
+  wantedState: WantedViewState;
+  cutoffState: CutoffUnmetViewState;
+  calendarState: CalendarViewState;
+};
+
+const TOGGLE_ITEM_CLASS =
+  "h-full min-w-36 rounded-none px-6 text-base font-semibold first:rounded-l-xl last:rounded-r-xl data-[state=off]:bg-accent/80 data-[state=off]:text-foreground data-[state=off]:hover:bg-accent/80 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground data-[state=on]:border-0 data-[state=on]:shadow-none";
+
+export function WantedView({ tab, onTabChange, wantedState, cutoffState, calendarState }: WantedViewProps) {
+  const { t } = wantedState;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-center">
+        <ToggleGroup
+          type="single"
+          value={tab}
+          onValueChange={(v) => {
+            if (v) onTabChange(v as WantedTab);
+          }}
+          size="lg"
+          className="h-14 rounded-xl border-0 bg-card/80 overflow-hidden divide-x divide-border/40"
+        >
+          <ToggleGroupItem value="wanted" size="lg" className={TOGGLE_ITEM_CLASS}>
+            {t("wanted.tabWanted")}
+          </ToggleGroupItem>
+          <ToggleGroupItem value="cutoff" size="lg" className={TOGGLE_ITEM_CLASS}>
+            {t("wanted.tabCutoff")}
+          </ToggleGroupItem>
+          <ToggleGroupItem value="calendar" size="lg" className={TOGGLE_ITEM_CLASS}>
+            {t("wanted.tabCalendar")}
+          </ToggleGroupItem>
+        </ToggleGroup>
+      </div>
+
+      {tab === "calendar" ? (
+        <Suspense
+          fallback={
+            <Card>
+              <CardContent className="p-8 text-center text-muted-foreground">
+                {t("label.loading")}
+              </CardContent>
+            </Card>
+          }
+        >
+          <CalendarView
+            episodes={calendarState.episodes}
+            loading={calendarState.loading}
+            onDateRangeChange={calendarState.onDateRangeChange}
+            onEpisodeClick={calendarState.onEpisodeClick}
+            t={calendarState.t}
+          />
+        </Suspense>
+      ) : tab === "cutoff" ? (
+        <CutoffUnmetView state={cutoffState} />
+      ) : (
+        <WantedItemsCard state={wantedState} />
+      )}
+    </div>
+  );
+}
+
+function WantedItemsCard({ state }: { state: WantedViewState }) {
   const {
     t,
     items,

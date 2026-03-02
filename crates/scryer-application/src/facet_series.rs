@@ -10,6 +10,10 @@ use crate::{
     RenameMissingMetadataPolicy, RenamePlanItem, TitleMetadataUpdate,
 };
 
+fn non_empty(s: String) -> Option<String> {
+    if s.trim().is_empty() { None } else { Some(s) }
+}
+
 /// Handles both TV and Anime facets (they share series behavior
 /// with different scope IDs and rename templates).
 pub struct SeriesFacetHandler {
@@ -68,7 +72,8 @@ impl FacetHandler for SeriesFacetHandler {
 
     fn default_rename_template(&self) -> &str {
         match self.media_facet {
-            _ => "{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}",
+            MediaFacet::Anime => "{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}",
+            _ => "{title} - S{season:2}E{episode:2} - {quality}.{ext}",
         }
     }
 
@@ -106,20 +111,20 @@ impl FacetHandler for SeriesFacetHandler {
     ) -> AppResult<HydrationResult> {
         let series = gateway.get_series(tvdb_id, language).await?;
         let update = TitleMetadataUpdate {
-            year: series.year,
-            overview: Some(series.overview),
-            poster_url: Some(series.poster_url),
-            sort_title: Some(series.sort_name),
-            slug: Some(series.slug),
+            year: series.year.filter(|&y| y > 0),
+            overview: non_empty(series.overview),
+            poster_url: non_empty(series.poster_url),
+            sort_title: non_empty(series.sort_name),
+            slug: non_empty(series.slug),
             imdb_id: None,
-            runtime_minutes: Some(series.runtime_minutes),
+            runtime_minutes: if series.runtime_minutes > 0 { Some(series.runtime_minutes) } else { None },
             genres: series.genres,
-            content_status: Some(series.content_status),
+            content_status: non_empty(series.content_status),
             language: None,
-            first_aired: Some(series.first_aired),
-            network: Some(series.network),
+            first_aired: non_empty(series.first_aired),
+            network: non_empty(series.network),
             studio: None,
-            country: Some(series.country),
+            country: non_empty(series.country),
             aliases: series.aliases,
             metadata_language: Some(language.to_string()),
             metadata_fetched_at: Some(Utc::now().to_rfc3339()),

@@ -10,6 +10,10 @@ use crate::{
     RenameMissingMetadataPolicy, RenamePlanItem, TitleMetadataUpdate,
 };
 
+fn non_empty(s: String) -> Option<String> {
+    if s.trim().is_empty() { None } else { Some(s) }
+}
+
 pub struct MovieFacetHandler;
 
 #[async_trait]
@@ -43,7 +47,7 @@ impl FacetHandler for MovieFacetHandler {
     }
 
     fn default_rename_template(&self) -> &str {
-        "{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}"
+        "{title} ({year}) - {quality}.{ext}"
     }
 
     fn default_library_path(&self) -> &str {
@@ -74,19 +78,19 @@ impl FacetHandler for MovieFacetHandler {
     ) -> AppResult<HydrationResult> {
         let movie = gateway.get_movie(tvdb_id, language).await?;
         let update = TitleMetadataUpdate {
-            year: movie.year,
-            overview: Some(movie.overview),
-            poster_url: Some(movie.poster_url),
-            sort_title: Some(movie.sort_title),
-            slug: Some(movie.slug),
-            imdb_id: Some(movie.imdb_id),
-            runtime_minutes: Some(movie.runtime_minutes),
+            year: movie.year.filter(|&y| y > 0),
+            overview: non_empty(movie.overview),
+            poster_url: non_empty(movie.poster_url),
+            sort_title: non_empty(movie.sort_title),
+            slug: non_empty(movie.slug),
+            imdb_id: non_empty(movie.imdb_id),
+            runtime_minutes: if movie.runtime_minutes > 0 { Some(movie.runtime_minutes) } else { None },
             genres: movie.genres,
-            content_status: Some(movie.content_status),
-            language: Some(movie.language),
+            content_status: non_empty(movie.content_status),
+            language: non_empty(movie.language),
             first_aired: None,
             network: None,
-            studio: Some(movie.studio),
+            studio: non_empty(movie.studio),
             country: None,
             aliases: vec![],
             metadata_language: Some(language.to_string()),

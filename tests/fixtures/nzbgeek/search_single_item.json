@@ -1,0 +1,21 @@
+{
+  "channel": {
+    "item": {
+      "title": "Test.Movie.2024.2160p.UHD.BluRay.x265-GROUP",
+      "pubDate": "Mon, 15 Jan 2024 12:00:00 +0000",
+      "enclosure": {
+        "@attributes": {
+          "url": "https://api.nzbgeek.info/getnzb/abc123.nzb&i=12345&r=test-api-key",
+          "length": "15728640000"
+        }
+      },
+      "attr": [
+        { "@attributes": { "name": "thumbsup", "value": "42" } },
+        { "@attributes": { "name": "thumbsdown", "value": "3" } },
+        { "@attributes": { "name": "language", "value": "English" } },
+        { "@attributes": { "name": "grabs", "value": "128" } },
+        { "@attributes": { "name": "password", "value": "0" } }
+      ]
+    }
+  }
+}

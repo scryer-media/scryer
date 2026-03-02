@@ -29,6 +29,14 @@ pub(crate) fn map_add_input(input: AddTitleInput) -> NewTitle {
             })
             .collect(),
         min_availability: input.min_availability,
+        poster_url: input.poster_url,
+        year: input.year,
+        overview: input.overview,
+        sort_title: input.sort_title,
+        slug: input.slug,
+        runtime_minutes: input.runtime_minutes,
+        language: input.language,
+        content_status: input.content_status,
     }
 }
 

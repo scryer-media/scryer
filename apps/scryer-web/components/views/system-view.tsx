@@ -1,9 +1,20 @@
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useClient } from "urql";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { LazyLog, ScrollFollow } from "@melloware/react-logviewer";
+import { serviceLogsQuery, serviceLogLinesSubscription } from "@/lib/graphql/queries";
+import { wsClient } from "@/lib/graphql/ws-client";
 
 type Translate = (
   key: string,
@@ -20,9 +31,9 @@ type SystemViewState = {
 type IndexerQueryStats = {
   indexerId: string;
   indexerName: string;
-  queriesLast24h: number;
-  successfulLast24h: number;
-  failedLast24h: number;
+  queriesLast24H: number;
+  successfulLast24H: number;
+  failedLast24H: number;
   lastQueryAt: string | null;
   apiCurrent: number | null;
   apiMax: number | null;
@@ -77,9 +88,9 @@ const DATA_SOURCES: DataSource[] = [
     href: "https://myanimelist.net/",
   },
   {
-    nameKey: "system.sourcePlexAniBridgeName",
-    descriptionKey: "system.sourcePlexAniBridgeDescription",
-    href: "https://github.com/eliasbenb/PlexAniBridge-Mappings",
+    nameKey: "system.sourceAniBridgeName",
+    descriptionKey: "system.sourceAniBridgeDescription",
+    href: "https://github.com/anibridge/anibridge",
   },
 ];
 
@@ -107,119 +118,187 @@ function quotaBadgeClass(current: number | null, max: number | null): string {
   return "text-green-400";
 }
 
+const LOG_LEVEL_COLORS: Record<string, string> = {
+  error: "text-red-400",
+  warn: "text-yellow-400",
+  info: "text-blue-400",
+  debug: "text-emerald-400",
+  trace: "text-zinc-500",
+};
+
+const MAX_BUFFER = 2000;
+
 function LogViewer() {
-  const [limit, setLimit] = useState("2000");
+  const client = useClient();
   const [search, setSearch] = useState("");
-  const [level, setLevel] = useState("");
+  const [level, setLevel] = useState("all");
   const [paused, setPaused] = useState(false);
   const [lines, setLines] = useState<string[]>([]);
-  const [status, setStatus] = useState("Loading...");
+  const [connected, setConnected] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const autoScrollRef = useRef(true);
+  const pausedRef = useRef(paused);
+  const unsubRef = useRef<(() => void) | null>(null);
+  const teardownTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const refreshLogs = useCallback(async () => {
-    const parsedLimit = Number(limit || 250);
-    const safeLimit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 20), 2000) : 250;
-    const resp = await fetch(`/api/logs?limit=${safeLimit}`, { credentials: "same-origin" });
-    if (!resp.ok) {
-      setStatus(`Error: ${resp.status} ${resp.statusText}`);
+  pausedRef.current = paused;
+
+  // Initial load via query
+  useEffect(() => {
+    client.query(serviceLogsQuery, { limit: MAX_BUFFER }).toPromise().then(({ data }) => {
+      const initial: string[] = Array.isArray(data?.serviceLogs?.lines) ? data.serviceLogs.lines : [];
+      setLines(initial);
+    });
+  }, [client]);
+
+  // Subscribe to live log lines via WebSocket
+  useEffect(() => {
+    // StrictMode re-run: cancel the pending teardown
+    if (teardownTimer.current) {
+      clearTimeout(teardownTimer.current);
+      teardownTimer.current = null;
       return;
     }
-    const result = await resp.json();
-    const nextLines: string[] = Array.isArray(result.lines) ? result.lines : [];
-    setLines((prev) => {
-      if (prev.length === nextLines.length && prev.every((line, i) => line === nextLines[i])) return prev;
-      return nextLines;
-    });
-    setStatus(`${result.count ?? 0} entries at ${result.generated_at ?? "unknown"}`);
-  }, [limit]);
 
+    const unsubscribe = wsClient.subscribe(
+      { query: serviceLogLinesSubscription },
+      {
+        next(result) {
+          const line = result.data?.serviceLogLines as string | undefined;
+          if (line && !pausedRef.current) {
+            setLines((prev) => {
+              const next = [...prev, line];
+              return next.length > MAX_BUFFER ? next.slice(next.length - MAX_BUFFER) : next;
+            });
+          }
+          setConnected(true);
+        },
+        error(err) {
+          console.error("[service-logs] subscription error:", err);
+          setConnected(false);
+        },
+        complete() {
+          unsubRef.current = null;
+          setConnected(false);
+        },
+      },
+    );
+
+    unsubRef.current = unsubscribe;
+    setConnected(true);
+
+    return () => {
+      teardownTimer.current = setTimeout(() => {
+        teardownTimer.current = null;
+        unsubscribe();
+        unsubRef.current = null;
+        setConnected(false);
+      }, 200);
+    };
+  }, []);
+
+  // Auto-scroll when new lines arrive
   useEffect(() => {
-    refreshLogs().catch((err) => setStatus(`Refresh failed: ${err instanceof Error ? err.message : String(err)}`));
-  }, [refreshLogs]);
+    if (autoScrollRef.current && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [lines]);
 
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      if (paused) return;
-      refreshLogs().catch((err) => setStatus(`Refresh failed: ${err instanceof Error ? err.message : String(err)}`));
-    }, 2500);
-    return () => window.clearInterval(id);
-  }, [paused, refreshLogs]);
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    autoScrollRef.current = atBottom;
+  }, []);
 
-  const filteredText = useMemo(() => {
+  const filteredLines = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return lines
-      .filter((line) => {
-        const raw = String(line);
-        if (query && !raw.toLowerCase().includes(query)) return false;
-        if (level && detectLogLevel(raw) !== level) return false;
-        return true;
-      })
-      .join("\n");
+    return lines.filter((line) => {
+      if (query && !line.toLowerCase().includes(query)) return false;
+      if (level !== "all" && detectLogLevel(line) !== level) return false;
+      return true;
+    });
   }, [level, lines, search]);
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-end gap-3">
-        <label className="space-y-1 text-sm">
-          <span className="text-muted-foreground">Max lines</span>
-          <input
-            type="number"
-            min={20}
-            max={2000}
-            value={limit}
-            onChange={(e) => setLimit(e.target.value)}
-            className="block w-24 rounded-md border border-border bg-background px-2 py-1 text-sm"
-          />
-        </label>
-        <label className="space-y-1 text-sm">
-          <span className="text-muted-foreground">Level</span>
-          <select
-            value={level}
-            onChange={(e) => setLevel(e.target.value)}
-            className="block rounded-md border border-border bg-background px-2 py-1 text-sm"
-          >
-            <option value="">All</option>
-            <option value="error">Error</option>
-            <option value="warn">Warn</option>
-            <option value="info">Info</option>
-            <option value="debug">Debug</option>
-            <option value="trace">Trace</option>
-          </select>
-        </label>
-        <label className="space-y-1 text-sm">
-          <span className="text-muted-foreground">Search</span>
-          <input
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="space-y-1">
+          <Label className="text-xs text-muted-foreground">Level</Label>
+          <Select value={level} onValueChange={setLevel}>
+            <SelectTrigger size="sm" className="w-[100px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All</SelectItem>
+              <SelectItem value="error">Error</SelectItem>
+              <SelectItem value="warn">Warn</SelectItem>
+              <SelectItem value="info">Info</SelectItem>
+              <SelectItem value="debug">Debug</SelectItem>
+              <SelectItem value="trace">Trace</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs text-muted-foreground">Search</Label>
+          <Input
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="filter..."
-            className="block w-48 rounded-md border border-border bg-background px-2 py-1 text-sm"
+            className="h-8 w-48 text-sm"
           />
-        </label>
-        <Button size="sm" variant="secondary" onClick={() => void refreshLogs()}>
-          Refresh
-        </Button>
-        <Button size="sm" variant="secondary" onClick={() => setPaused((p) => !p)}>
-          {paused ? "Resume" : "Pause"}
-        </Button>
+        </div>
+        <div className="flex items-end gap-2 self-end">
+          <Button size="sm" variant="secondary" onClick={() => setPaused((p) => !p)}>
+            {paused ? "Resume" : "Pause"}
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => {
+              setLines([]);
+              autoScrollRef.current = true;
+            }}
+          >
+            Clear
+          </Button>
+        </div>
+        <div className="ml-auto flex items-center gap-1.5 self-end text-xs text-muted-foreground">
+          <span
+            className={`inline-block size-2 rounded-full ${connected ? "bg-green-400" : "bg-red-400"}`}
+          />
+          {connected ? "Live" : "Disconnected"}
+          {paused && <span className="text-yellow-400">(paused)</span>}
+        </div>
       </div>
-      <div className="overflow-hidden rounded-lg border border-border">
-        <ScrollFollow
-          startFollowing
-          render={({ follow, onScroll }) => (
-            <LazyLog
-              text={filteredText || "No logs available yet."}
-              follow={follow && !paused}
-              onScroll={onScroll}
-              enableSearch
-              caseInsensitive
-              selectableLines
-              extraLines={1}
-              height={560}
-            />
-          )}
-        />
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="h-[560px] overflow-auto rounded-lg border border-border bg-[#0a0e1a] text-xs leading-5"
+        style={{ fontFamily: "'Fira Code', 'Fira Mono', 'JetBrains Mono', 'Source Code Pro', 'Cascadia Code', 'Consolas', monospace" }}
+      >
+        {filteredLines.length === 0 ? (
+          <p className="p-4 text-muted-foreground">No logs available yet.</p>
+        ) : (
+          <div className="p-2">
+            {filteredLines.map((line, i) => {
+              const lvl = detectLogLevel(line);
+              return (
+                <div key={i} className="flex hover:bg-white/5">
+                  <span className="mr-3 select-none text-right text-zinc-600" style={{ minWidth: "3ch" }}>
+                    {i + 1}
+                  </span>
+                  <span className={LOG_LEVEL_COLORS[lvl] ?? "text-zinc-300"}>{line}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
-      <p className="text-xs text-muted-foreground">{status}</p>
+      <p className="text-xs text-muted-foreground">
+        {filteredLines.length} lines{level !== "all" ? ` (${level})` : ""}{search ? ` matching "${search}"` : ""}
+      </p>
     </div>
   );
 }
@@ -351,9 +430,9 @@ export function SystemView({
                   <div className="mt-1 grid gap-x-6 gap-y-1 text-xs sm:grid-cols-2 lg:grid-cols-3">
                     <p>
                       <span className="text-muted-foreground">Queries:</span>{" "}
-                      {stat.queriesLast24h}
-                      {stat.failedLast24h > 0 && (
-                        <span className="text-red-400"> ({stat.failedLast24h} failed)</span>
+                      {stat.queriesLast24H}
+                      {stat.failedLast24H > 0 && (
+                        <span className="text-red-400"> ({stat.failedLast24H} failed)</span>
                       )}
                     </p>
                     {stat.apiMax !== null && (

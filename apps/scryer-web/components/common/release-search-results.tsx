@@ -172,14 +172,14 @@ function SearchResultRow({
             hasLog ? (
               <button
                 type="button"
-                className="text-sm font-mono text-emerald-700 dark:text-emerald-300 underline-offset-2 hover:underline"
+                className={`text-sm font-mono underline-offset-2 hover:underline ${decision.releaseScore < 0 ? "text-red-400" : "text-emerald-700 dark:text-emerald-300"}`}
                 onClick={() => setExpanded((prev) => !prev)}
                 aria-label={expanded ? t("nzb.hideScoringLog") : t("nzb.showScoringLog")}
               >
                 {getScoreText(decision.releaseScore)}
               </button>
             ) : (
-              <span className="text-sm font-mono text-emerald-700 dark:text-emerald-300">{getScoreText(decision.releaseScore)}</span>
+              <span className={`text-sm font-mono ${decision.releaseScore < 0 ? "text-red-400" : "text-emerald-700 dark:text-emerald-300"}`}>{getScoreText(decision.releaseScore)}</span>
             )
           ) : (
             <span className="text-sm font-mono text-muted-foreground">{getScoreText(undefined)}</span>

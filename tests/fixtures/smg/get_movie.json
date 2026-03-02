@@ -1,0 +1,22 @@
+{
+  "data": {
+    "movie": {
+      "movie": {
+        "tvdb_id": 123456,
+        "name": "Test Movie Title",
+        "slug": "test-movie-title",
+        "year": 2024,
+        "status": "Released",
+        "overview": "A gripping tale of testing integration.",
+        "poster_url": "https://artworks.thetvdb.com/banners/movies/123456/posters/test.jpg",
+        "language": "eng",
+        "runtime_minutes": 142,
+        "sort_title": "Test Movie Title",
+        "imdb_id": "tt1234567",
+        "genres": ["Action", "Thriller"],
+        "studio": "Test Studios",
+        "tmdb_release_date": "2024-06-15"
+      }
+    }
+  }
+}

@@ -126,6 +126,7 @@ type SeriesOverviewContainerProps = {
   setGlobalStatus: (status: string) => void;
   onTitleNotFound?: () => void;
   onBackToList?: () => void;
+  initialEpisodeId?: string | null;
 };
 
 export const SeriesOverviewContainer = React.memo(function SeriesOverviewContainer({
@@ -134,6 +135,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   setGlobalStatus,
   onTitleNotFound,
   onBackToList,
+  initialEpisodeId,
 }: SeriesOverviewContainerProps) {
   const client = useClient();
   const [title, setTitle] = React.useState<TitleDetail | null>(null);
@@ -508,6 +510,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         onUpdateTitleTags={handleUpdateTitleTags}
         completedDownloads={completedDownloads}
         onOpenManualImport={handleOpenManualImport}
+        initialEpisodeId={initialEpisodeId}
       />
       {manualImportItem && title && (
         <ManualImportDialog

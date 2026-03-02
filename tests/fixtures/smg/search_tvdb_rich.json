@@ -1,0 +1,23 @@
+{
+  "data": {
+    "searchTvdb": {
+      "results": [
+        {
+          "tvdb_id": 123456,
+          "name": "Test Movie Title",
+          "imdb_id": "tt1234567",
+          "slug": "test-movie-title",
+          "type": "movie",
+          "year": 2024,
+          "status": "Released",
+          "overview": "A gripping tale of testing integration.",
+          "popularity": 85.5,
+          "poster_url": "https://artworks.thetvdb.com/banners/movies/123456/posters/test.jpg",
+          "language": "eng",
+          "runtime_minutes": 142,
+          "sort_title": "Test Movie Title"
+        }
+      ]
+    }
+  }
+}

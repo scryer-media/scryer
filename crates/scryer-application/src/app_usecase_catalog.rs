@@ -61,16 +61,16 @@ impl AppUseCase {
             external_ids: sanitize_ids(request.external_ids),
             created_by: Some(actor.id.clone()),
             created_at: Utc::now(),
-            year: None,
-            overview: None,
-            poster_url: None,
-            sort_title: None,
-            slug: None,
+            year: request.year,
+            overview: request.overview,
+            poster_url: request.poster_url,
+            sort_title: request.sort_title,
+            slug: request.slug,
             imdb_id: None,
-            runtime_minutes: None,
+            runtime_minutes: request.runtime_minutes,
             genres: vec![],
-            content_status: None,
-            language: None,
+            content_status: request.content_status,
+            language: request.language,
             first_aired: None,
             network: None,
             studio: None,
@@ -1415,6 +1415,55 @@ impl AppUseCase {
     pub async fn get_episode(&self, actor: &User, episode_id: &str) -> AppResult<Option<Episode>> {
         require(actor, &Entitlement::ViewCatalog)?;
         self.services.shows.get_episode_by_id(episode_id).await
+    }
+
+    pub async fn list_calendar_episodes(
+        &self,
+        actor: &User,
+        start_date: &str,
+        end_date: &str,
+    ) -> AppResult<Vec<CalendarEpisode>> {
+        require(actor, &Entitlement::ViewCatalog)?;
+        self.services
+            .shows
+            .list_episodes_in_date_range(start_date, end_date)
+            .await
+    }
+
+    /// Re-fetch metadata from SMG for all monitored series/anime titles.
+    /// This updates episode air dates (TBA → actual), adds newly announced
+    /// episodes, and refreshes other metadata fields.
+    pub(crate) async fn refresh_monitored_series_metadata(&self) {
+        let titles = match self.services.titles.list(None, None).await {
+            Ok(t) => t,
+            Err(err) => {
+                warn!(error = %err, "metadata refresh: failed to list titles");
+                return;
+            }
+        };
+
+        let mut refreshed = 0u32;
+        for title in titles {
+            if !title.monitored {
+                continue;
+            }
+            let Some(handler) = self.facet_registry.get(&title.facet) else {
+                continue;
+            };
+            if !handler.has_episodes() {
+                continue;
+            }
+
+            self.hydrate_title_metadata(title).await;
+            refreshed += 1;
+
+            // Small delay between titles to avoid hammering SMG
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+
+        if refreshed > 0 {
+            info!(count = refreshed, "periodic metadata refresh completed");
+        }
     }
 }
 

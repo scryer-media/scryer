@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nzb PUBLIC "-//newzBin//DTD NZB 1.1//EN" "http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd">
+<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">
+  <head>
+    <meta type="title">Movie.Title.2024.1080p.WEB-DL.DDP5.1.H.264-GROUP</meta>
+  </head>
+  <file poster="poster@example.com" date="1706745600" subject="Movie.Title.2024.1080p.WEB-DL - [01/50] &quot;movie.par2&quot; (1/1)">
+    <groups><group>alt.binaries.movies</group></groups>
+    <segments>
+      <segment bytes="524288" number="1">test-segment-id@example.com</segment>
+    </segments>
+  </file>
+</nzb>

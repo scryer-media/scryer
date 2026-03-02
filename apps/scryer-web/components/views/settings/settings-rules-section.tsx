@@ -416,7 +416,7 @@ export function SettingsRulesSection({
                   onChange={(e) =>
                     setRuleSetDraft((prev) => ({ ...prev, description: e.target.value }))
                   }
-                  placeholder="Boost dual audio releases"
+                  placeholder="Block releases over 100 GiB"
                 />
               </label>
               <label>

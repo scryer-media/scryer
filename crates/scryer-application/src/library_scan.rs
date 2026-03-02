@@ -28,6 +28,23 @@ pub struct MetadataSearchItem {
 }
 
 #[derive(Debug, Clone)]
+pub struct RichMetadataSearchItem {
+    pub tvdb_id: String,
+    pub name: String,
+    pub imdb_id: Option<String>,
+    pub slug: Option<String>,
+    pub type_hint: Option<String>,
+    pub year: Option<i32>,
+    pub status: Option<String>,
+    pub overview: Option<String>,
+    pub popularity: Option<f64>,
+    pub poster_url: Option<String>,
+    pub language: Option<String>,
+    pub runtime_minutes: Option<i32>,
+    pub sort_title: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct MovieMetadata {
     pub tvdb_id: i64,
     pub name: String,
@@ -118,6 +135,14 @@ pub trait MetadataGateway: Send + Sync {
         type_hint: &str,
     ) -> AppResult<Vec<MetadataSearchItem>>;
 
+    async fn search_tvdb_rich(
+        &self,
+        query: &str,
+        type_hint: &str,
+        limit: i32,
+        language: &str,
+    ) -> AppResult<Vec<RichMetadataSearchItem>>;
+
     async fn get_movie(&self, tvdb_id: i64, language: &str) -> AppResult<MovieMetadata>;
 
     async fn get_series(&self, tvdb_id: i64, language: &str) -> AppResult<SeriesMetadata>;
@@ -150,6 +175,18 @@ impl MetadataGateway for NullMetadataGateway {
         _query: &str,
         _type_hint: &str,
     ) -> AppResult<Vec<MetadataSearchItem>> {
+        Err(AppError::Repository(
+            "metadata gateway is not configured".into(),
+        ))
+    }
+
+    async fn search_tvdb_rich(
+        &self,
+        _query: &str,
+        _type_hint: &str,
+        _limit: i32,
+        _language: &str,
+    ) -> AppResult<Vec<RichMetadataSearchItem>> {
         Err(AppError::Repository(
             "metadata gateway is not configured".into(),
         ))

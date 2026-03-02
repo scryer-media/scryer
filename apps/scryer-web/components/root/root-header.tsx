@@ -34,7 +34,6 @@ type RootHeaderProps = {
   onGlobalSearchChange: (value: string) => void;
   searching: boolean;
   globalSearchInputRef: React.RefObject<HTMLInputElement | null>;
-  globalStatus: string;
   catalogSearchResults: TitleRecord[];
   metadataSearchResults: MetadataSearchResults;
   routeCommandPalette?: RouteCommandPaletteConfig;
@@ -66,7 +65,6 @@ export const RootHeader = React.memo(function RootHeader({
   onGlobalSearchChange,
   searching,
   globalSearchInputRef,
-  globalStatus,
   catalogSearchResults,
   metadataSearchResults,
   routeCommandPalette,
@@ -319,7 +317,7 @@ export const RootHeader = React.memo(function RootHeader({
   const renderMetadataSection = React.useCallback(
     (items: MetadataTvdbSearchItem[], facet: Facet, section: string) => {
       return items.map((result) => {
-        const tvdbId = String(result.tvdb_id).trim();
+        const tvdbId = String(result.tvdbId).trim();
         const isInCatalog = isMetadataSearchResultInCatalog(facet, result);
         const cardKey = renderMetadataResultKey(section, tvdbId, result.name, result.year);
         const draft = metadataAddDrafts[cardKey] ?? defaultAddOptionsForFacet(facet);
@@ -351,9 +349,9 @@ export const RootHeader = React.memo(function RootHeader({
             <div className="mb-2 flex items-start justify-between gap-3">
               <div className="flex min-h-20 gap-3">
                 <div className="h-20 w-14 flex-none overflow-hidden rounded-md border border-border bg-muted">
-                  {result.poster_url ? (
+                  {result.posterUrl ? (
                     <img
-                      src={result.poster_url}
+                      src={result.posterUrl}
                       alt={t("media.posterAlt", { name: result.name })}
                       className="h-full w-full object-cover"
                       loading="lazy"
@@ -679,13 +677,6 @@ export const RootHeader = React.memo(function RootHeader({
             <div className="mt-3 h-9 w-9" />
           )}
         </div>
-        <div className="border-t border-border px-4 py-1 text-xs text-muted-foreground">
-          <div className="mx-auto flex max-w-[1480px] items-center justify-between gap-2">
-            <span>
-              {t("search.globalStatusPrefix")}: {globalStatus}
-            </span>
-          </div>
-        </div>
       </header>
       {isGlobalSearchPanelOpen && !isMobile ? (
         <div
@@ -700,7 +691,6 @@ export const RootHeader = React.memo(function RootHeader({
           globalSearch={globalSearch}
           onGlobalSearchChange={onGlobalSearchChange}
           searching={searching}
-          globalStatus={globalStatus}
           catalogSearchResults={catalogSearchResults}
           metadataSearchResults={metadataSearchResults}
           onClose={onCloseGlobalSearchPanel}

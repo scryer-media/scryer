@@ -1,0 +1,50 @@
+{
+  "channel": {
+    "title": "api.nzbgeek.info",
+    "item": [
+      {
+        "title": "Show.Name.S01E01.Pilot.1080p.AMZN.WEB-DL.DDP5.1.H.264-GROUP",
+        "link": "https://api.nzbgeek.info/details/tv001",
+        "pubDate": "Mon, 13 Jan 2025 08:00:00 +0000",
+        "enclosure": {
+          "@attributes": {
+            "url": "https://api.nzbgeek.info/api?t=get&id=tv001&apikey=testkey",
+            "length": "2147483648",
+            "type": "application/x-nzb"
+          }
+        },
+        "attr": [
+          { "@attributes": { "name": "size", "value": "2147483648" } },
+          { "@attributes": { "name": "guid", "value": "tv001" } },
+          { "@attributes": { "name": "grabs", "value": "89" } },
+          { "@attributes": { "name": "thumbsup", "value": "15" } },
+          { "@attributes": { "name": "thumbsdown", "value": "0" } },
+          { "@attributes": { "name": "language", "value": "English" } },
+          { "@attributes": { "name": "subs", "value": "English - Spanish" } },
+          { "@attributes": { "name": "password", "value": "0" } }
+        ]
+      },
+      {
+        "title": "Show.Name.S01E01.720p.HDTV.x264-FLEET",
+        "link": "https://api.nzbgeek.info/details/tv002",
+        "pubDate": "Mon, 13 Jan 2025 06:00:00 +0000",
+        "enclosure": {
+          "@attributes": {
+            "url": "https://api.nzbgeek.info/api?t=get&id=tv002&apikey=testkey",
+            "length": "734003200",
+            "type": "application/x-nzb"
+          }
+        },
+        "attr": [
+          { "@attributes": { "name": "size", "value": "734003200" } },
+          { "@attributes": { "name": "guid", "value": "tv002" } },
+          { "@attributes": { "name": "grabs", "value": "203" } },
+          { "@attributes": { "name": "thumbsup", "value": "8" } },
+          { "@attributes": { "name": "thumbsdown", "value": "1" } },
+          { "@attributes": { "name": "language", "value": "English" } },
+          { "@attributes": { "name": "password", "value": "0" } }
+        ]
+      }
+    ]
+  }
+}

@@ -188,3 +188,35 @@ h6 {
     padding-right: env(safe-area-inset-right);
   }
 }
+
+/* FullCalendar dark theme overrides */
+.fc-scryer {
+  --fc-border-color: var(--border);
+  --fc-page-bg-color: transparent;
+  --fc-neutral-bg-color: var(--muted);
+  --fc-today-bg-color: hsl(var(--primary) / 0.08);
+  --fc-event-border-color: transparent;
+  --fc-button-bg-color: var(--secondary);
+  --fc-button-border-color: var(--border);
+  --fc-button-text-color: var(--foreground);
+  --fc-button-hover-bg-color: var(--accent);
+  --fc-button-hover-border-color: var(--border);
+  --fc-button-active-bg-color: hsl(var(--primary));
+  --fc-button-active-border-color: hsl(var(--primary));
+}
+.fc-scryer .fc-col-header-cell {
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+.fc-scryer .fc-daygrid-day-number {
+  color: var(--foreground);
+}
+.fc-scryer .fc-toolbar-title {
+  color: var(--foreground);
+}
+.fc-scryer .fc-daygrid-day-frame {
+  min-height: 120px;
+}
+.fc-scryer .fc-event {
+  cursor: pointer;
+}

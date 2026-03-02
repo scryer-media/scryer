@@ -2,24 +2,16 @@ use std::collections::VecDeque;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
-use axum::extract::{Query, State};
-use axum::http::HeaderMap;
-use axum::response::{IntoResponse, Response};
-use axum::Json;
-use scryer_application::AppUseCase;
-use scryer_domain::Entitlement;
-use serde::{Deserialize, Serialize};
-
-use crate::middleware::resolve_actor_with_entitlement;
+use tokio::sync::broadcast;
 
 const DEFAULT_CAPACITY: usize = 1000;
-const DEFAULT_LIMIT: usize = 250;
-const MAX_LIMIT: usize = 2000;
+const BROADCAST_CAPACITY: usize = 256;
 
 /// Thread-safe ring buffer that captures log lines.
 #[derive(Clone)]
-pub(crate) struct LogRingBuffer {
+pub struct LogRingBuffer {
     inner: Arc<Mutex<RingBufferInner>>,
+    tx: broadcast::Sender<String>,
 }
 
 struct RingBufferInner {
@@ -31,12 +23,14 @@ struct RingBufferInner {
 
 impl LogRingBuffer {
     pub fn new(capacity: usize) -> Self {
+        let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         Self {
             inner: Arc::new(Mutex::new(RingBufferInner {
                 lines: VecDeque::with_capacity(capacity),
                 capacity,
                 partial: String::new(),
             })),
+            tx,
         }
     }
 
@@ -54,6 +48,10 @@ impl LogRingBuffer {
             .cloned()
             .collect()
     }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<String> {
+        self.tx.subscribe()
+    }
 }
 
 impl Write for LogRingBuffer {
@@ -61,6 +59,7 @@ impl Write for LogRingBuffer {
         let text = String::from_utf8_lossy(buf);
         let mut inner = self.inner.lock().unwrap();
 
+        let mut new_lines = Vec::new();
         for ch in text.chars() {
             if ch == '\n' {
                 if !inner.partial.is_empty() {
@@ -68,11 +67,16 @@ impl Write for LogRingBuffer {
                     if inner.lines.len() >= inner.capacity {
                         inner.lines.pop_front();
                     }
-                    inner.lines.push_back(line);
+                    inner.lines.push_back(line.clone());
+                    new_lines.push(line);
                 }
             } else {
                 inner.partial.push(ch);
             }
+        }
+        drop(inner);
+        for line in new_lines {
+            let _ = self.tx.send(line);
         }
 
         Ok(buf.len())
@@ -105,42 +109,3 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBufferWriter {
     }
 }
 
-// --- REST endpoint ---
-
-#[derive(Deserialize)]
-pub(crate) struct LogsQuery {
-    limit: Option<usize>,
-}
-
-#[derive(Serialize)]
-struct LogsResponse {
-    generated_at: String,
-    lines: Vec<String>,
-    count: usize,
-}
-
-pub(crate) async fn logs_handler(
-    State((buffer, app)): State<(LogRingBuffer, AppUseCase)>,
-    headers: HeaderMap,
-    Query(query): Query<LogsQuery>,
-) -> Response {
-    if let Err(error) =
-        resolve_actor_with_entitlement(&app, &headers, Entitlement::ManageConfig).await
-    {
-        return crate::middleware::map_app_error(error);
-    }
-
-    let limit = query
-        .limit
-        .unwrap_or(DEFAULT_LIMIT)
-        .clamp(1, MAX_LIMIT);
-    let lines = buffer.snapshot(limit);
-    let count = lines.len();
-
-    Json(LogsResponse {
-        generated_at: chrono::Utc::now().to_rfc3339(),
-        lines,
-        count,
-    })
-    .into_response()
-}

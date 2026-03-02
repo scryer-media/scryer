@@ -7,11 +7,11 @@ use serde_json::json;
 
 use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_error};
 use crate::mappers::{
-    from_activity_event, from_collection, from_download_client_config, from_episode,
-    from_download_queue_item, from_event, from_indexer_config, from_media_rename_plan,
-    from_release_decision, from_system_health, from_title, from_title_media_file,
-    from_title_release_blocklist_entry, from_wanted_item, map_admin_setting, from_user,
-    file_size_bytes_for_path,
+    from_activity_event, from_calendar_episode, from_collection, from_download_client_config,
+    from_episode, from_download_queue_item, from_event, from_indexer_config,
+    from_media_rename_plan, from_release_decision, from_system_health, from_title,
+    from_title_media_file, from_title_release_blocklist_entry, from_wanted_item,
+    map_admin_setting, from_user, file_size_bytes_for_path,
 };
 use crate::types::*;
 use crate::utils::parse_facet;
@@ -639,6 +639,188 @@ impl QueryRoot {
             .await
             .map_err(to_gql_error)?;
         Ok(rule_set.map(crate::mappers::from_rule_set))
+    }
+
+    // ── Metadata Gateway (proxied from SMG) ──────────────────────────────
+
+    async fn search_metadata(
+        &self,
+        ctx: &Context<'_>,
+        query: String,
+        #[graphql(name = "type")] type_hint: String,
+        #[graphql(default = 25)] limit: i32,
+        #[graphql(default_with = "\"eng\".to_string()")] language: String,
+    ) -> GqlResult<Vec<MetadataSearchItemPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ViewCatalog) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let limit = limit.clamp(1, 100);
+        let results = app
+            .services
+            .metadata_gateway
+            .search_tvdb_rich(&query, &type_hint, limit, &language)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(results
+            .into_iter()
+            .map(|item| MetadataSearchItemPayload {
+                tvdb_id: item.tvdb_id,
+                name: item.name,
+                imdb_id: item.imdb_id,
+                slug: item.slug,
+                type_hint: item.type_hint,
+                year: item.year,
+                status: item.status,
+                overview: item.overview,
+                popularity: item.popularity,
+                poster_url: item.poster_url,
+                language: item.language,
+                runtime_minutes: item.runtime_minutes,
+                sort_title: item.sort_title,
+            })
+            .collect())
+    }
+
+    async fn metadata_movie(
+        &self,
+        ctx: &Context<'_>,
+        tvdb_id: i32,
+        #[graphql(default_with = "\"eng\".to_string()")] language: String,
+    ) -> GqlResult<MetadataMoviePayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ViewCatalog) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let movie = app
+            .services
+            .metadata_gateway
+            .get_movie(tvdb_id as i64, &language)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(MetadataMoviePayload {
+            tvdb_id: movie.tvdb_id.to_string(),
+            name: movie.name,
+            slug: movie.slug,
+            year: movie.year,
+            status: movie.content_status,
+            overview: movie.overview,
+            poster_url: movie.poster_url,
+            language: movie.language,
+            runtime_minutes: movie.runtime_minutes,
+            sort_title: movie.sort_title,
+            imdb_id: movie.imdb_id,
+            genres: movie.genres,
+            studio: movie.studio,
+            tmdb_release_date: movie.tmdb_release_date,
+        })
+    }
+
+    async fn metadata_series(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+        #[graphql(default = true)] include_episodes: bool,
+        #[graphql(default_with = "\"eng\".to_string()")] language: String,
+    ) -> GqlResult<MetadataSeriesPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ViewCatalog) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let tvdb_id: i64 = id.parse().map_err(|_| Error::new("invalid tvdb id"))?;
+        let series = app
+            .services
+            .metadata_gateway
+            .get_series(tvdb_id, &language)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(MetadataSeriesPayload {
+            tvdb_id: series.tvdb_id.to_string(),
+            name: series.name,
+            sort_name: series.sort_name,
+            slug: series.slug,
+            year: series.year,
+            status: series.content_status,
+            first_aired: series.first_aired,
+            overview: series.overview,
+            network: series.network,
+            runtime_minutes: series.runtime_minutes,
+            poster_url: series.poster_url,
+            country: series.country,
+            genres: series.genres,
+            aliases: series.aliases,
+            seasons: series
+                .seasons
+                .into_iter()
+                .map(|s| MetadataSeasonPayload {
+                    tvdb_id: s.tvdb_id.to_string(),
+                    number: s.number,
+                    label: s.label,
+                    episode_type: s.episode_type,
+                })
+                .collect(),
+            episodes: if include_episodes {
+                series
+                    .episodes
+                    .into_iter()
+                    .map(|e| MetadataEpisodePayload {
+                        tvdb_id: e.tvdb_id.to_string(),
+                        episode_number: e.episode_number,
+                        season_number: e.season_number,
+                        name: e.name,
+                        aired: e.aired,
+                        runtime_minutes: e.runtime_minutes,
+                        is_filler: e.is_filler,
+                    })
+                    .collect()
+            } else {
+                vec![]
+            },
+        })
+    }
+
+    // ── Calendar ──────────────────────────────────────────────────────
+
+    async fn calendar_episodes(
+        &self,
+        ctx: &Context<'_>,
+        start_date: String,
+        end_date: String,
+    ) -> GqlResult<Vec<CalendarEpisodePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let episodes = app
+            .list_calendar_episodes(&actor, &start_date, &end_date)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(episodes.into_iter().map(from_calendar_episode).collect())
+    }
+
+    // ── Service Logs ────────────────────────────────────────────────────
+
+    async fn service_logs(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default = 250)] limit: i32,
+    ) -> GqlResult<ServiceLogsPayload> {
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let safe_limit = (limit.clamp(1, 2000)) as usize;
+        let lines = match ctx.data_opt::<crate::context::LogBuffer>() {
+            Some(buf) => buf.snapshot(safe_limit),
+            None => vec![],
+        };
+        let count = lines.len() as i32;
+        Ok(ServiceLogsPayload {
+            generated_at: Utc::now().to_rfc3339(),
+            lines,
+            count,
+        })
     }
 }
 

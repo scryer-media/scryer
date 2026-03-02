@@ -1,0 +1,78 @@
+{
+  "data": {
+    "series": {
+      "series": {
+        "tvdb_id": 345678,
+        "name": "Test Show Name",
+        "sort_name": "Test Show Name",
+        "slug": "test-show-name",
+        "status": "Continuing",
+        "year": 2023,
+        "first_aired": "2023-09-15",
+        "overview": "A compelling drama about software testing.",
+        "network": "Test Network",
+        "runtime_minutes": 45,
+        "poster_url": "https://artworks.thetvdb.com/banners/series/345678/posters/test.jpg",
+        "country": "usa",
+        "genres": ["Drama", "Thriller"],
+        "aliases": ["Testing Show", "QA Chronicles"],
+        "seasons": [
+          {
+            "tvdb_id": 1000001,
+            "number": 1,
+            "label": "Season 1",
+            "episode_type": "default"
+          },
+          {
+            "tvdb_id": 1000002,
+            "number": 2,
+            "label": "Season 2",
+            "episode_type": "default"
+          }
+        ],
+        "episodes": [
+          {
+            "tvdb_id": 2000001,
+            "episode_number": 1,
+            "season_number": 1,
+            "name": "Pilot",
+            "aired": "2023-09-15",
+            "runtime_minutes": 60,
+            "is_filler": false,
+            "is_recap": false,
+            "language": "eng",
+            "overview": "The team assembles.",
+            "absolute_number": "1"
+          },
+          {
+            "tvdb_id": 2000002,
+            "episode_number": 2,
+            "season_number": 1,
+            "name": "Integration",
+            "aired": "2023-09-22",
+            "runtime_minutes": 45,
+            "is_filler": false,
+            "is_recap": false,
+            "language": "eng",
+            "overview": "Systems are tested under pressure.",
+            "absolute_number": "2"
+          },
+          {
+            "tvdb_id": 2000003,
+            "episode_number": 1,
+            "season_number": 2,
+            "name": "Regression",
+            "aired": "2024-09-15",
+            "runtime_minutes": 45,
+            "is_filler": false,
+            "is_recap": false,
+            "language": "eng",
+            "overview": "Old bugs resurface.",
+            "absolute_number": "3"
+          }
+        ],
+        "anime_mappings": []
+      }
+    }
+  }
+}

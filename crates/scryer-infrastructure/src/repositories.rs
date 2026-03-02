@@ -9,8 +9,8 @@ use scryer_application::{
     SettingsRepository, ShowRepository, TitleMetadataUpdate, TitleRepository, UserRepository,
 };
 use scryer_domain::{
-    Collection, DownloadClientConfig, Entitlement, Episode, HistoryEvent, ImportRecord,
-    IndexerConfig, MediaFacet, RuleSet, Title, User,
+    CalendarEpisode, Collection, DownloadClientConfig, Entitlement, Episode, HistoryEvent,
+    ImportRecord, IndexerConfig, MediaFacet, RuleSet, Title, User,
 };
 use tokio::sync::oneshot;
 
@@ -401,6 +401,26 @@ impl ShowRepository for SqliteServices {
     ) -> AppResult<Option<Episode>> {
         self.find_episode_by_title_and_absolute_number(title_id, absolute_number)
             .await
+    }
+
+    async fn list_episodes_in_date_range(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> AppResult<Vec<CalendarEpisode>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::ListEpisodesInDateRange {
+                start_date: start_date.to_string(),
+                end_date: end_date.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 }
 

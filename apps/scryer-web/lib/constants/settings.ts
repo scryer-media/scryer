@@ -82,6 +82,7 @@ export const SETTINGS_SECTION_PATH_TO_ID: Record<string, SettingsSection> = {
   "quality-profiles": "qualityProfiles",
   qualityProfiles: "qualityProfiles",
   acquisition: "acquisition",
+  rules: "rules",
 };
 
 export const CONTENT_SECTION_PATH_TO_ID: Record<string, ContentSettingsSection> = {

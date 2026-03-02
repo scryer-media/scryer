@@ -25,9 +25,10 @@ impl Default for Id {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum MediaFacet {
+    #[default]
     Movie,
     Tv,
     Anime,
@@ -107,6 +108,19 @@ pub struct Episode {
     pub overview: Option<String>,
     pub monitored: bool,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CalendarEpisode {
+    pub id: String,
+    pub title_id: String,
+    pub title_name: String,
+    pub title_facet: String,
+    pub season_number: Option<String>,
+    pub episode_number: Option<String>,
+    pub episode_title: Option<String>,
+    pub air_date: Option<String>,
+    pub monitored: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -350,7 +364,7 @@ pub struct ImportFileResult {
     pub size_bytes: u64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NewTitle {
     pub name: String,
     pub facet: MediaFacet,
@@ -359,6 +373,22 @@ pub struct NewTitle {
     pub external_ids: Vec<ExternalId>,
     #[serde(default)]
     pub min_availability: Option<String>,
+    #[serde(default)]
+    pub poster_url: Option<String>,
+    #[serde(default)]
+    pub year: Option<i32>,
+    #[serde(default)]
+    pub overview: Option<String>,
+    #[serde(default)]
+    pub sort_title: Option<String>,
+    #[serde(default)]
+    pub slug: Option<String>,
+    #[serde(default)]
+    pub runtime_minutes: Option<i32>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub content_status: Option<String>,
 }
 
 impl NewTitle {
@@ -370,6 +400,14 @@ impl NewTitle {
             tags: vec![],
             external_ids: vec![],
             min_availability: None,
+            poster_url: None,
+            year: None,
+            overview: None,
+            sort_title: None,
+            slug: None,
+            runtime_minutes: None,
+            language: None,
+            content_status: None,
         }
     }
 }

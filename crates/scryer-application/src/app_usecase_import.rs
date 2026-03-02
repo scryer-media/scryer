@@ -895,7 +895,7 @@ async fn resolve_import_paths(
     let rename_template_default =
         handler
             .map(|h| h.default_rename_template())
-            .unwrap_or("{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}");
+            .unwrap_or("{title} - S{season:2}E{episode:2} - {quality}.{ext}");
 
     let media_root = {
         let default_root = app
