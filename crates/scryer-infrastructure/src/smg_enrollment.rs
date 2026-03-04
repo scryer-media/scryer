@@ -41,7 +41,7 @@ pub async fn ensure_instance_id(db: &crate::SqliteServices) -> Result<String, St
 
 /// Load existing enrollment from DB, or enroll with SMG if missing/expired.
 ///
-/// Follows the same ensure pattern as `jwt_keys::ensure_jwt_keys`.
+/// Follows the same ensure pattern as `jwt_keys::ensure_jwt_hmac_secret`.
 pub async fn ensure_enrolled(
     db: &crate::SqliteServices,
     registration_url: &str,
