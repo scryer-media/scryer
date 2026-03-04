@@ -15,6 +15,7 @@ export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
   qualityProfiles: "quality-profiles",
   acquisition: "acquisition",
   rules: "rules",
+  plugins: "plugins",
 };
 
 export const CONTENT_SECTION_PATH: Record<ContentSettingsSection, string> = {

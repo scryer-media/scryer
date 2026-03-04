@@ -4,8 +4,8 @@ import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { SettingsIndexersSection } from "@/components/views/settings/settings-indexers-section";
 import { useClient } from "urql";
 import type { Translate } from "@/components/root/types";
-import type { IndexerRecord } from "@/lib/types";
-import { indexersQuery } from "@/lib/graphql/queries";
+import type { IndexerRecord, ProviderTypeInfo } from "@/lib/types";
+import { indexersQuery, indexerProviderTypesQuery } from "@/lib/graphql/queries";
 import {
   createIndexerMutation,
   deleteIndexerMutation,
@@ -27,7 +27,24 @@ const INDEXER_INITIAL_DRAFT = {
   isEnabled: true,
   enableInteractiveSearch: true,
   enableAutoSearch: true,
+  configValues: {} as Record<string, string>,
 };
+
+function serializeConfigJson(configValues: Record<string, string>): string | undefined {
+  const nonEmpty = Object.fromEntries(
+    Object.entries(configValues).filter(([, v]) => v !== ""),
+  );
+  return Object.keys(nonEmpty).length > 0 ? JSON.stringify(nonEmpty) : undefined;
+}
+
+function parseConfigJson(configJson: string | null): Record<string, string> {
+  if (!configJson) return {};
+  try {
+    return JSON.parse(configJson) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
 
 export function SettingsIndexersContainer({
   t,
@@ -39,6 +56,7 @@ export function SettingsIndexersContainer({
   const [mutatingIndexerId, setMutatingIndexerId] = useState<string | null>(null);
   const [editingIndexerId, setEditingIndexerId] = useState<string | null>(null);
   const [pendingDeleteIndexer, setPendingDeleteIndexer] = useState<IndexerRecord | null>(null);
+  const [providerTypes, setProviderTypes] = useState<ProviderTypeInfo[]>([]);
   const [indexerDraft, setIndexerDraft] = useState<SettingsIndexersSectionProps["indexerDraft"]>(
     () => ({ ...INDEXER_INITIAL_DRAFT }),
   );
@@ -64,6 +82,15 @@ export function SettingsIndexersContainer({
     void refreshIndexers();
   }, [refreshIndexers]);
 
+  // Fetch available provider types from loaded plugins
+  useEffect(() => {
+    client.query(indexerProviderTypesQuery, {}).toPromise().then(({ data }) => {
+      if (data?.indexerProviderTypes) {
+        setProviderTypes(data.indexerProviderTypes);
+      }
+    }).catch(() => { /* ignore — provider types are optional */ });
+  }, [client]);
+
   const submitIndexer = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const payload = {
@@ -74,6 +101,7 @@ export function SettingsIndexersContainer({
       isEnabled: indexerDraft.isEnabled,
       enableInteractiveSearch: indexerDraft.enableInteractiveSearch,
       enableAutoSearch: indexerDraft.enableAutoSearch,
+      configJson: serializeConfigJson(indexerDraft.configValues),
     };
 
     if (!payload.name || !payload.providerType || !payload.baseUrl) {
@@ -94,6 +122,7 @@ export function SettingsIndexersContainer({
             isEnabled: payload.isEnabled,
             enableInteractiveSearch: payload.enableInteractiveSearch,
             enableAutoSearch: payload.enableAutoSearch,
+            configJson: payload.configJson,
           },
         }).toPromise();
         if (error) throw error;
@@ -108,6 +137,7 @@ export function SettingsIndexersContainer({
             isEnabled: payload.isEnabled,
             enableInteractiveSearch: payload.enableInteractiveSearch,
             enableAutoSearch: payload.enableAutoSearch,
+            configJson: payload.configJson,
           },
         }).toPromise();
         if (error) throw error;
@@ -132,6 +162,7 @@ export function SettingsIndexersContainer({
       isEnabled: indexer.isEnabled,
       enableInteractiveSearch: indexer.enableInteractiveSearch,
       enableAutoSearch: indexer.enableAutoSearch,
+      configValues: parseConfigJson(indexer.configJson),
     });
     setGlobalStatus(t("status.editingIndexer", { name: indexer.name }));
   };
@@ -200,6 +231,7 @@ export function SettingsIndexersContainer({
         editIndexer={editIndexer}
         toggleIndexerEnabled={toggleIndexerEnabled}
         deleteIndexer={deleteIndexer}
+        providerTypes={providerTypes}
       />
       <ConfirmDialog
         open={pendingDeleteIndexer !== null}

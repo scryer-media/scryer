@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use scryer_domain::ExternalId;
 
@@ -124,14 +126,18 @@ pub struct IndexerSearchResult {
     pub nzbgeek_password_protected: Option<String>,
     pub parsed_release_metadata: Option<ParsedReleaseMetadata>,
     pub quality_profile_decision: Option<QualityProfileDecision>,
+    /// Arbitrary indexer-specific metadata from WASM plugins.
+    /// Passed through to OPA scoring as `input.release.extra`.
+    pub extra: HashMap<String, serde_json::Value>,
+    pub guid: Option<String>,
+    pub info_url: Option<String>,
 }
 
 #[derive(Clone, Debug)]
 pub struct JwtAuthConfig {
     pub issuer: String,
     pub access_ttl_seconds: usize,
-    pub jwt_ec_private_pem: String,
-    pub jwt_ec_public_pem: String,
+    pub jwt_hmac_secret: String,
 }
 
 #[derive(Serialize, Deserialize)]

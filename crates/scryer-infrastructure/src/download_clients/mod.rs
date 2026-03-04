@@ -1,20 +1,16 @@
 mod multi_indexer;
 mod nzbget;
-mod nzbgeek;
 mod router;
+mod sabnzbd;
 
 use scryer_application::{AppError, AppResult};
 use scryer_domain::DownloadClientConfig;
 use serde_json::{json, Value};
 
 pub use multi_indexer::MultiIndexerSearchClient;
-pub use nzbgeek::{
-    NzbGeekSearchClient, NZBGEEK_BASE_BACKOFF_SECONDS, NZBGEEK_MAX_BACKOFF_SECONDS,
-    NZBGEEK_MIN_REQUEST_INTERVAL_MS,
-};
-pub(crate) use nzbgeek::parse_retry_after;
 pub use nzbget::NzbgetDownloadClient;
 pub use router::PrioritizedDownloadClientRouter;
+pub use sabnzbd::SabnzbdDownloadClient;
 
 fn parse_download_client_config_json(raw: &str) -> AppResult<Value> {
     let trimmed = raw.trim();
@@ -96,4 +92,98 @@ fn resolve_download_client_base_url(config: &DownloadClientConfig, json_config: 
     }
 
     Some(value)
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers used by multiple download client implementations
+// ---------------------------------------------------------------------------
+
+pub(crate) fn extract_i64_value(value: Option<&Value>) -> Option<i64> {
+    value.and_then(|value| {
+        value.as_i64().or_else(|| {
+            value
+                .as_str()
+                .and_then(|raw| raw.trim().parse::<i64>().ok())
+        })
+    })
+}
+
+pub(crate) fn extract_f64_value(value: Option<&Value>) -> Option<f64> {
+    value.and_then(|value| {
+        value.as_f64().or_else(|| {
+            value
+                .as_str()
+                .and_then(|raw| raw.trim().parse::<f64>().ok())
+        })
+    })
+}
+
+pub(crate) fn size_to_bytes(size_mb: f64) -> Option<i64> {
+    if !size_mb.is_finite() {
+        return None;
+    }
+    if size_mb <= 0.0 {
+        return Some(0);
+    }
+    let bytes = (size_mb * 1_048_576f64).round() as i64;
+    Some(bytes.max(0))
+}
+
+pub(crate) fn progress_percent_from_sizes(size_mb: f64, remaining_mb: f64) -> u8 {
+    if size_mb <= 0.0 || !size_mb.is_finite() || !remaining_mb.is_finite() {
+        return 0;
+    }
+
+    let completed_mb = (size_mb - remaining_mb).clamp(0.0, size_mb);
+    if completed_mb <= 0.0 {
+        return 0;
+    }
+
+    let percent = ((completed_mb / size_mb) * 100.0).round();
+    let clamped = if percent.is_nan() {
+        0.0
+    } else {
+        percent.clamp(0.0, 100.0)
+    };
+    clamped as u8
+}
+
+pub(crate) fn parse_duration_seconds(raw: &str) -> Option<i64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Ok(seconds) = trimmed.parse::<i64>() {
+        return Some(seconds.max(0));
+    }
+
+    let mut parts = trimmed.split(':');
+    let first = parts.next()?;
+    let second = parts.next()?;
+    let third = parts.next();
+    if parts.next().is_some() {
+        return None;
+    }
+
+    let (hours, minutes, seconds) = if let Some(third_part) = third {
+        let hours = first.parse::<i64>().ok()?;
+        let minutes = second.parse::<i64>().ok()?;
+        let seconds = third_part.parse::<i64>().ok()?;
+        (hours, minutes, seconds)
+    } else {
+        let minutes = first.parse::<i64>().ok()?;
+        let seconds = second.parse::<i64>().ok()?;
+        (0, minutes, seconds)
+    };
+
+    if hours < 0 || minutes < 0 || seconds < 0 || minutes >= 60 || seconds >= 60 {
+        return None;
+    }
+
+    Some(hours * 3600 + minutes * 60 + seconds)
+}
+
+pub(crate) fn is_http_url(value: &str) -> bool {
+    value.starts_with("http://") || value.starts_with("https://")
 }

@@ -58,6 +58,22 @@ fn row_to_indexer_config(
     let updated_at_raw: String = row
         .try_get("updated_at")
         .map_err(|err| AppError::Repository(err.to_string()))?;
+    let config_json_raw: Option<String> = row
+        .try_get("config_json")
+        .unwrap_or(None);
+
+    // Decrypt config_json if encrypted
+    let config_json = match config_json_raw {
+        Some(v) if crate::encryption::is_encrypted(&v) => {
+            if let Some(key) = encryption_key {
+                Some(crate::encryption::decrypt_value(key, &v)
+                    .map_err(|e| AppError::Repository(format!("failed to decrypt config_json: {e}")))?)
+            } else {
+                Some(v)
+            }
+        }
+        other => other,
+    };
 
     // Decrypt api_key_encrypted if it's encrypted
     let api_key_encrypted = match api_key_encrypted {
@@ -86,9 +102,25 @@ fn row_to_indexer_config(
         enable_auto_search: enable_auto_search != 0,
         last_health_status,
         last_error_at,
+        config_json,
         created_at: parse_utc_datetime(&created_at_raw)?,
         updated_at: parse_utc_datetime(&updated_at_raw)?,
     })
+}
+
+fn maybe_encrypt_config_json(
+    key: Option<&EncryptionKey>,
+    config_json: Option<&String>,
+) -> AppResult<Option<String>> {
+    let Some(config_json) = config_json else {
+        return Ok(None);
+    };
+    let Some(key) = key else {
+        return Ok(Some(config_json.clone()));
+    };
+    crate::encryption::encrypt_value(key, config_json)
+        .map(Some)
+        .map_err(|e| AppError::Repository(format!("failed to encrypt config_json: {e}")))
 }
 
 fn maybe_encrypt_api_key(
@@ -114,7 +146,7 @@ pub(crate) async fn list_indexer_configs_query(
     let mut sql = String::from(
         "SELECT id, name, provider_type, base_url, api_key_encrypted, rate_limit_seconds,
                 rate_limit_burst, disabled_until, is_enabled, enable_interactive_search,
-                enable_auto_search, last_health_status, last_error_at, created_at, updated_at
+                enable_auto_search, last_health_status, last_error_at, config_json, created_at, updated_at
          FROM indexers",
     );
 
@@ -150,7 +182,7 @@ pub(crate) async fn get_indexer_config_query(
     let row = sqlx::query(
         "SELECT id, name, provider_type, base_url, api_key_encrypted, rate_limit_seconds,
                 rate_limit_burst, disabled_until, is_enabled, enable_interactive_search,
-                enable_auto_search, last_health_status, last_error_at, created_at, updated_at
+                enable_auto_search, last_health_status, last_error_at, config_json, created_at, updated_at
          FROM indexers WHERE id = ?",
     )
     .bind(id)
@@ -167,13 +199,14 @@ pub(crate) async fn create_indexer_config_query(
     encryption_key: Option<&EncryptionKey>,
 ) -> AppResult<IndexerConfig> {
     let stored_api_key = maybe_encrypt_api_key(encryption_key, config.api_key_encrypted.as_ref())?;
+    let stored_config_json = maybe_encrypt_config_json(encryption_key, config.config_json.as_ref())?;
 
     sqlx::query(
         "INSERT INTO indexers
          (id, name, provider_type, base_url, api_key_encrypted, rate_limit_seconds,
           rate_limit_burst, disabled_until, is_enabled, enable_interactive_search,
-          enable_auto_search, last_health_status, last_error_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          enable_auto_search, last_health_status, last_error_at, config_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&config.id)
     .bind(&config.name)
@@ -198,6 +231,7 @@ pub(crate) async fn create_indexer_config_query(
             .as_ref()
             .map(DateTime::<Utc>::to_rfc3339),
     )
+    .bind(&stored_config_json)
     .bind(config.created_at.to_rfc3339())
     .bind(config.updated_at.to_rfc3339())
     .execute(pool)
@@ -220,6 +254,7 @@ pub(crate) async fn update_indexer_config_query(
     is_enabled: Option<bool>,
     enable_interactive_search: Option<bool>,
     enable_auto_search: Option<bool>,
+    config_json: Option<String>,
     encryption_key: Option<&EncryptionKey>,
 ) -> AppResult<IndexerConfig> {
     let mut assignments = vec!["updated_at = ?".to_string()];
@@ -250,6 +285,9 @@ pub(crate) async fn update_indexer_config_query(
     }
     if enable_auto_search.is_some() {
         assignments.push("enable_auto_search = ?".to_string());
+    }
+    if config_json.is_some() {
+        assignments.push("config_json = ?".to_string());
     }
 
     if assignments.len() == 1 {
@@ -292,6 +330,11 @@ pub(crate) async fn update_indexer_config_query(
     }
     if let Some(enable_auto_search) = enable_auto_search {
         statement = statement.bind(if enable_auto_search { 1_i64 } else { 0_i64 });
+    }
+    if let Some(config_json) = config_json {
+        let stored = maybe_encrypt_config_json(encryption_key, Some(&config_json))?
+            .unwrap_or_default();
+        statement = statement.bind(stored);
     }
 
     statement = statement.bind(id);

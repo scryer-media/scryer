@@ -93,8 +93,9 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
       - name: Run workspace tests
-        run: cargo test --workspace --locked
+        run: cargo nextest run --workspace --locked
 
   rust-package:
     name: rust-package-${{ matrix.platform }}

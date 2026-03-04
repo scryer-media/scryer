@@ -7,7 +7,8 @@ export type SettingsSection =
   | "downloadClients"
   | "qualityProfiles"
   | "acquisition"
-  | "rules";
+  | "rules"
+  | "plugins";
 export type ContentSettingsSection = "overview" | "settings";
 
 export type Translate = (

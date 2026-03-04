@@ -96,6 +96,7 @@ async fn seed_single_indexer(
         is_enabled: parse_env_bool(&format!("{env_prefix}_ENABLED"), true),
         enable_interactive_search: true,
         enable_auto_search: true,
+        config_json: None,
     };
 
     let existing = app_use_case

@@ -94,7 +94,7 @@ export function SettingsDownloadClientsContainer({
 
     setMutatingDownloadClientId(editingDownloadClientId || "new");
     try {
-      if (payload.clientType === "nzbget") {
+      if (payload.clientType === "nzbget" || payload.clientType === "sabnzbd") {
         setGlobalStatus(t("status.testingDownloadClient"));
         const { data: testData, error: testError } = await client.mutation(
           testDownloadClientConnectionMutation,

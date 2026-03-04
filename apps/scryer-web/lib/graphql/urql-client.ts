@@ -28,7 +28,7 @@ export function setOnBackendRestarting(cb: (() => void) | null) {
   onBackendRestarting = cb;
 }
 
-const scryerFetch: typeof fetch = async (input, init) => {
+export const scryerFetch: typeof fetch = async (input, init) => {
   const response = await fetch(input, init);
   const ct = response.headers.get("content-type") ?? "";
   if (ct.includes("text/html")) {

@@ -1,0 +1,58 @@
+{
+  "history": {
+    "noofslots": 2,
+    "last_history_update": 1709312345,
+    "slots": [
+      {
+        "status": "Completed",
+        "nzo_id": "SABnzbd_nzo_hist01",
+        "name": "Completed.Movie.2024.1080p",
+        "nzb_name": "Completed.Movie.2024.1080p.nzb",
+        "size": "4.5 GB",
+        "bytes": 4831838208,
+        "downloaded": 4831838208,
+        "download_time": 3600,
+        "postproc_time": 120,
+        "category": "movies",
+        "pp": "D",
+        "script": "notify.py",
+        "storage": "/data/complete/movies/Completed.Movie.2024.1080p",
+        "path": "/data/complete/movies/Completed.Movie.2024.1080p",
+        "completed": 1706832000,
+        "time_added": 1706828400,
+        "fail_message": "",
+        "url": "https://indexer.example.com/get?id=abc123",
+        "retry": false,
+        "stage_log": [
+          {"name": "Download", "actions": ["Downloaded 4.5 GB in 1h00m"]},
+          {"name": "Repair", "actions": ["[Quick check] All par2 files correct"]},
+          {"name": "Unpack", "actions": ["Unpacked 1 file"]}
+        ]
+      },
+      {
+        "status": "Failed",
+        "nzo_id": "SABnzbd_nzo_hist02",
+        "name": "Failed.Show.S02E05.720p",
+        "nzb_name": "Failed.Show.S02E05.720p.nzb",
+        "size": "1.2 GB",
+        "bytes": 1288490188,
+        "downloaded": 644245094,
+        "download_time": 900,
+        "postproc_time": 0,
+        "category": "tv",
+        "pp": "",
+        "script": "",
+        "storage": "",
+        "path": "",
+        "completed": 1706745600,
+        "time_added": 1706742000,
+        "fail_message": "Aborted, cannot be completed",
+        "url": "https://indexer.example.com/get?id=def456",
+        "retry": true,
+        "stage_log": [
+          {"name": "Download", "actions": ["Downloaded 50% - health check failed"]}
+        ]
+      }
+    ]
+  }
+}

@@ -273,6 +273,7 @@ pub struct IndexerConfigPayload {
     pub enable_auto_search: bool,
     pub last_health_status: Option<String>,
     pub last_error_at: Option<String>,
+    pub config_json: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -570,6 +571,7 @@ pub struct CreateIndexerConfigInput {
     pub is_enabled: Option<bool>,
     pub enable_interactive_search: Option<bool>,
     pub enable_auto_search: Option<bool>,
+    pub config_json: Option<String>,
 }
 
 #[derive(InputObject)]
@@ -584,6 +586,7 @@ pub struct UpdateIndexerConfigInput {
     pub is_enabled: Option<bool>,
     pub enable_interactive_search: Option<bool>,
     pub enable_auto_search: Option<bool>,
+    pub config_json: Option<String>,
 }
 
 #[derive(InputObject)]
@@ -1003,4 +1006,81 @@ pub struct CalendarEpisodePayload {
     pub episode_title: Option<String>,
     pub air_date: Option<String>,
     pub monitored: bool,
+}
+
+// ── Plugins ────────────────────────────────────────────────────────────────
+
+#[derive(SimpleObject, Clone)]
+pub struct RegistryPluginPayload {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub plugin_type: String,
+    pub provider_type: String,
+    pub author: String,
+    pub official: bool,
+    pub builtin: bool,
+    pub source_url: Option<String>,
+    pub is_installed: bool,
+    pub is_enabled: bool,
+    pub installed_version: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct PluginInstallationPayload {
+    pub id: String,
+    pub plugin_id: String,
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub plugin_type: String,
+    pub provider_type: String,
+    pub is_enabled: bool,
+    pub is_builtin: bool,
+    pub source_url: Option<String>,
+    pub installed_at: String,
+    pub updated_at: String,
+}
+
+#[derive(InputObject)]
+pub struct InstallPluginInput {
+    pub plugin_id: String,
+}
+
+#[derive(InputObject)]
+pub struct UninstallPluginInput {
+    pub plugin_id: String,
+}
+
+#[derive(InputObject)]
+pub struct TogglePluginInput {
+    pub plugin_id: String,
+    pub enabled: bool,
+}
+
+// ── Provider Type Config Schema ─────────────────────────────────────────
+
+#[derive(SimpleObject, Clone)]
+pub struct PluginConfigFieldOptionPayload {
+    pub value: String,
+    pub label: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct PluginConfigFieldPayload {
+    pub key: String,
+    pub label: String,
+    pub field_type: String,
+    pub required: bool,
+    pub default_value: Option<String>,
+    pub options: Vec<PluginConfigFieldOptionPayload>,
+    pub help_text: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct ProviderTypePayload {
+    pub provider_type: String,
+    pub name: String,
+    pub config_fields: Vec<PluginConfigFieldPayload>,
 }

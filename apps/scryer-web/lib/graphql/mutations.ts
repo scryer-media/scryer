@@ -57,6 +57,7 @@ export const createIndexerMutation = `mutation CreateIndexer($input: CreateIndex
     enableAutoSearch
     lastHealthStatus
     lastErrorAt
+    configJson
     createdAt
     updatedAt
   }
@@ -77,6 +78,7 @@ export const updateIndexerMutation = `mutation UpdateIndexer($input: UpdateIndex
     enableAutoSearch
     lastHealthStatus
     lastErrorAt
+    configJson
     createdAt
     updatedAt
   }
@@ -331,6 +333,62 @@ export const resumeWantedItemMutation = `mutation ResumeWantedItem($input: Wante
 export const resetWantedItemMutation = `mutation ResetWantedItem($input: WantedItemIdInput!) {
   resetWantedItem(input: $input)
 }`;
+
+// ── Plugins ──────────────────────────────────────────────────────────────
+
+export const refreshPluginRegistryMutation = `mutation RefreshPluginRegistry {
+  refreshPluginRegistry {
+    id
+    name
+    description
+    version
+    pluginType
+    providerType
+    author
+    official
+    builtin
+    sourceUrl
+    isInstalled
+    isEnabled
+    installedVersion
+  }
+}`;
+
+export const installPluginMutation = `mutation InstallPlugin($input: InstallPluginInput!) {
+  installPlugin(input: $input) {
+    id
+    pluginId
+    name
+    version
+    pluginType
+    providerType
+    isEnabled
+    isBuiltin
+    installedAt
+    updatedAt
+  }
+}`;
+
+export const uninstallPluginMutation = `mutation UninstallPlugin($input: UninstallPluginInput!) {
+  uninstallPlugin(input: $input)
+}`;
+
+export const togglePluginMutation = `mutation TogglePlugin($input: TogglePluginInput!) {
+  togglePlugin(input: $input) {
+    id
+    pluginId
+    name
+    version
+    pluginType
+    providerType
+    isEnabled
+    isBuiltin
+    installedAt
+    updatedAt
+  }
+}`;
+
+// ── Rule Sets ────────────────────────────────────────────────────────────
 
 export const createRuleSetMutation = `mutation CreateRuleSet($input: CreateRuleSetInput!) {
   createRuleSet(input: $input) {

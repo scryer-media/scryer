@@ -1,5 +1,5 @@
 use scryer_application::{AppResult, PrimaryCollectionSummary, ReleaseDecision, ReleaseDownloadAttemptOutcome, TitleMetadataUpdate, WantedItem};
-use scryer_domain::{CalendarEpisode, Collection, DownloadClientConfig, Episode, HistoryEvent, ImportRecord, IndexerConfig, MediaFacet, RuleSet, Title, User};
+use scryer_domain::{CalendarEpisode, Collection, DownloadClientConfig, Episode, HistoryEvent, ImportRecord, IndexerConfig, MediaFacet, PluginInstallation, RuleSet, Title, User};
 use scryer_application::QualityProfile;
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
@@ -11,8 +11,8 @@ use crate::types::{
 use crate::{
     migrations,
     queries::{
-        download_client::*, event::*, indexer::*, quality::*, rule_set::*, settings::*,
-        title::*, user::*, workflow::*,
+        download_client::*, event::*, indexer::*, plugin_installation::*, quality::*,
+        rule_set::*, settings::*, title::*, user::*, workflow::*,
     },
 };
 
@@ -188,6 +188,7 @@ pub(crate) enum DbCommand {
         is_enabled: Option<bool>,
         enable_interactive_search: Option<bool>,
         enable_auto_search: Option<bool>,
+        config_json: Option<String>,
         reply: Sender<AppResult<IndexerConfig>>,
     },
     TouchIndexerLastError {
@@ -479,6 +480,45 @@ pub(crate) enum DbCommand {
         actor_id: Option<String>,
         reply: Sender<AppResult<()>>,
     },
+    // ── Plugin Installations ─────────────────────────────────────
+    ListPluginInstallations {
+        reply: Sender<AppResult<Vec<PluginInstallation>>>,
+    },
+    GetPluginInstallation {
+        plugin_id: String,
+        reply: Sender<AppResult<Option<PluginInstallation>>>,
+    },
+    CreatePluginInstallation {
+        installation: PluginInstallation,
+        wasm_bytes: Option<Vec<u8>>,
+        reply: Sender<AppResult<PluginInstallation>>,
+    },
+    UpdatePluginInstallation {
+        installation: PluginInstallation,
+        reply: Sender<AppResult<PluginInstallation>>,
+    },
+    DeletePluginInstallation {
+        plugin_id: String,
+        reply: Sender<AppResult<()>>,
+    },
+    GetEnabledPluginWasmBytes {
+        reply: Sender<AppResult<Vec<(PluginInstallation, Option<Vec<u8>>)>>>,
+    },
+    SeedBuiltinPlugin {
+        plugin_id: String,
+        name: String,
+        description: String,
+        version: String,
+        provider_type: String,
+        reply: Sender<AppResult<()>>,
+    },
+    StoreRegistryCache {
+        json: String,
+        reply: Sender<AppResult<()>>,
+    },
+    GetRegistryCache {
+        reply: Sender<AppResult<Option<String>>>,
+    },
 }
 
 pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbCommand> {
@@ -717,6 +757,7 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     is_enabled,
                     enable_interactive_search,
                     enable_auto_search,
+                    config_json,
                     reply,
                 } => {
                     let _ = reply.send(
@@ -732,6 +773,7 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                             is_enabled,
                             enable_interactive_search,
                             enable_auto_search,
+                            config_json,
                             encryption_key.as_ref(),
                         )
                         .await,
@@ -1202,6 +1244,38 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                             rego_source.as_deref(), actor_id.as_deref(),
                         ).await,
                     );
+                }
+                // ── Plugin Installations ─────────────────────────────────
+                DbCommand::ListPluginInstallations { reply } => {
+                    let _ = reply.send(list_plugin_installations_query(&pool).await);
+                }
+                DbCommand::GetPluginInstallation { plugin_id, reply } => {
+                    let _ = reply.send(get_plugin_installation_query(&pool, &plugin_id).await);
+                }
+                DbCommand::CreatePluginInstallation { installation, wasm_bytes, reply } => {
+                    let _ = reply.send(
+                        create_plugin_installation_query(&pool, &installation, wasm_bytes.as_deref()).await,
+                    );
+                }
+                DbCommand::UpdatePluginInstallation { installation, reply } => {
+                    let _ = reply.send(update_plugin_installation_query(&pool, &installation).await);
+                }
+                DbCommand::DeletePluginInstallation { plugin_id, reply } => {
+                    let _ = reply.send(delete_plugin_installation_query(&pool, &plugin_id).await);
+                }
+                DbCommand::GetEnabledPluginWasmBytes { reply } => {
+                    let _ = reply.send(get_enabled_plugin_wasm_bytes_query(&pool).await);
+                }
+                DbCommand::SeedBuiltinPlugin { plugin_id, name, description, version, provider_type, reply } => {
+                    let _ = reply.send(
+                        seed_builtin_query(&pool, &plugin_id, &name, &description, &version, &provider_type).await,
+                    );
+                }
+                DbCommand::StoreRegistryCache { json, reply } => {
+                    let _ = reply.send(store_registry_cache_query(&pool, &json).await);
+                }
+                DbCommand::GetRegistryCache { reply } => {
+                    let _ = reply.send(get_registry_cache_query(&pool).await);
                 }
             }
         }

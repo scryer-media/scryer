@@ -6,10 +6,12 @@ use scryer_domain::ImportRecord;
 
 use scryer_domain::RuleSet;
 
+use scryer_domain::PluginInstallation;
+
 use crate::{
     AppError, AppResult, FileImporter, ImportRepository, IndexerQueryStats,
-    IndexerStatsTracker, MediaFileRepository, ReleaseDecision, RuleSetRepository,
-    SystemInfoProvider, TitleMediaFile, WantedItem, WantedItemRepository,
+    IndexerStatsTracker, MediaFileRepository, PluginInstallationRepository, ReleaseDecision,
+    RuleSetRepository, SystemInfoProvider, TitleMediaFile, WantedItem, WantedItemRepository,
 };
 
 #[derive(Default)]
@@ -164,6 +166,28 @@ impl RuleSetRepository for NullRuleSetRepository {
         &self, _rule_set_id: &str, _action: &str,
         _rego_source: Option<&str>, _actor_id: Option<&str>,
     ) -> AppResult<()> { Ok(()) }
+}
+
+#[derive(Default)]
+pub struct NullPluginInstallationRepository;
+
+#[async_trait]
+impl PluginInstallationRepository for NullPluginInstallationRepository {
+    async fn list_plugin_installations(&self) -> AppResult<Vec<PluginInstallation>> { Ok(vec![]) }
+    async fn get_plugin_installation(&self, _plugin_id: &str) -> AppResult<Option<PluginInstallation>> { Ok(None) }
+    async fn create_plugin_installation(&self, _installation: &PluginInstallation, _wasm_bytes: Option<&[u8]>) -> AppResult<PluginInstallation> {
+        Err(AppError::Repository("plugin installation repository is not configured".to_string()))
+    }
+    async fn update_plugin_installation(&self, _installation: &PluginInstallation) -> AppResult<PluginInstallation> {
+        Err(AppError::Repository("plugin installation repository is not configured".to_string()))
+    }
+    async fn delete_plugin_installation(&self, _plugin_id: &str) -> AppResult<()> {
+        Err(AppError::Repository("plugin installation repository is not configured".to_string()))
+    }
+    async fn get_enabled_plugin_wasm_bytes(&self) -> AppResult<Vec<(PluginInstallation, Option<Vec<u8>>)>> { Ok(vec![]) }
+    async fn seed_builtin(&self, _plugin_id: &str, _name: &str, _description: &str, _version: &str, _provider_type: &str) -> AppResult<()> { Ok(()) }
+    async fn store_registry_cache(&self, _json: &str) -> AppResult<()> { Ok(()) }
+    async fn get_registry_cache(&self) -> AppResult<Option<String>> { Ok(None) }
 }
 
 #[derive(Default)]

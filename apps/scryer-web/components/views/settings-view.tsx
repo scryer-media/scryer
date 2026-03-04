@@ -225,6 +225,7 @@ export function SettingsView({
             editIndexer={editIndexer}
             toggleIndexerEnabled={toggleIndexerEnabled}
             deleteIndexer={deleteIndexer}
+            providerTypes={[]}
           />
         )}
       </CardContent>

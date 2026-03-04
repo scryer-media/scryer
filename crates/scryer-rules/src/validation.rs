@@ -158,6 +158,7 @@ fn synthetic_test_input() -> UserRuleInput {
             age_days: Some(5),
             thumbs_up: Some(10),
             thumbs_down: Some(0),
+            extra: Default::default(),
         },
         profile: ProfileDoc {
             id: "test".to_string(),

@@ -1,0 +1,58 @@
+{
+  "queue": {
+    "status": "Downloading",
+    "speedlimit": "100",
+    "paused": false,
+    "noofslots_total": 2,
+    "noofslots": 2,
+    "limit": 100,
+    "start": 0,
+    "timeleft": "0:16:44",
+    "speed": "10.5 M",
+    "kbpersec": "10752.00",
+    "mb": "10240.00",
+    "mbleft": "4096.00",
+    "diskspace1": "123.45",
+    "diskspace2": "456.78",
+    "slots": [
+      {
+        "status": "Downloading",
+        "index": 0,
+        "password": "",
+        "avg_age": "100d",
+        "script": "Default",
+        "mb": "5120.00",
+        "mbleft": "2048.00",
+        "size": "5.0 GB",
+        "sizeleft": "2.0 GB",
+        "filename": "My.Movie.2024.1080p.BluRay",
+        "labels": [],
+        "priority": "Normal",
+        "cat": "movies",
+        "timeleft": "0:08:22",
+        "percentage": "60",
+        "nzo_id": "SABnzbd_nzo_kyt1f0",
+        "eta": "15:30 Sat 01 Mar"
+      },
+      {
+        "status": "Queued",
+        "index": 1,
+        "password": "",
+        "avg_age": "50d",
+        "script": "Default",
+        "mb": "5120.00",
+        "mbleft": "5120.00",
+        "size": "5.0 GB",
+        "sizeleft": "5.0 GB",
+        "filename": "Some.Show.S01E01.720p.WEB-DL",
+        "labels": [],
+        "priority": "Normal",
+        "cat": "tv",
+        "timeleft": "0:08:22",
+        "percentage": "0",
+        "nzo_id": "SABnzbd_nzo_xyz789",
+        "eta": "15:38 Sat 01 Mar"
+      }
+    ]
+  }
+}

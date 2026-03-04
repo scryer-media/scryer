@@ -84,6 +84,11 @@ const settingsEntries: Array<{
     label: (t) => t("settings.rules"),
     requiredEntitlement: "manage_config",
   },
+  {
+    id: "plugins",
+    label: (t) => t("settings.plugins"),
+    requiredEntitlement: "manage_config",
+  },
 ];
 
 function getMediaSectionChildren(

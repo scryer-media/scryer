@@ -149,6 +149,7 @@ pub(crate) async fn apply_dev_seed(
             is_enabled: seed_indexer.enabled,
             enable_interactive_search: true,
             enable_auto_search: true,
+            config_json: None,
         };
 
         app.create_indexer_config(&actor, input)

@@ -1,10 +1,11 @@
 use scryer_application::{
     ActivityChannel, ActivityEvent, IndexerSearchResult, LibraryScanSummary, ParsedEpisodeMetadata,
-    ParsedReleaseMetadata, QualityProfileDecision, RenameApplyItemResult, RenameApplyResult,
-    RenamePlan, RenamePlanItem, ScoringEntry, ScoringSource, SystemHealth, TitleReleaseBlocklistEntry,
+    ParsedReleaseMetadata, QualityProfileDecision, RegistryPlugin, RenameApplyItemResult,
+    RenameApplyResult, RenamePlan, RenamePlanItem, ScoringEntry, ScoringSource, SystemHealth,
+    TitleReleaseBlocklistEntry,
 };
 use scryer_domain::{
-    CalendarEpisode, DownloadQueueItem, PolicyOutput, RuleSet,
+    CalendarEpisode, DownloadQueueItem, PluginInstallation, PolicyOutput, RuleSet,
     Collection, DownloadClientConfig, Episode, HistoryEvent, IndexerConfig, Title, User,
 };
 use scryer_infrastructure::{SettingsValueRecord, WorkflowOperationRecord};
@@ -176,8 +177,39 @@ pub(crate) fn from_indexer_config(config: IndexerConfig) -> IndexerConfigPayload
         enable_auto_search: config.enable_auto_search,
         last_health_status: config.last_health_status,
         last_error_at: config.last_error_at.map(|value| value.to_rfc3339()),
+        config_json: config.config_json,
         created_at: config.created_at.to_rfc3339(),
         updated_at: config.updated_at.to_rfc3339(),
+    }
+}
+
+pub(crate) fn from_provider_type(
+    provider_type: String,
+    name: String,
+    config_fields: Vec<scryer_domain::ConfigFieldDef>,
+) -> ProviderTypePayload {
+    ProviderTypePayload {
+        provider_type,
+        name,
+        config_fields: config_fields
+            .into_iter()
+            .map(|f| PluginConfigFieldPayload {
+                key: f.key,
+                label: f.label,
+                field_type: f.field_type,
+                required: f.required,
+                default_value: f.default_value,
+                options: f
+                    .options
+                    .into_iter()
+                    .map(|o| PluginConfigFieldOptionPayload {
+                        value: o.value,
+                        label: o.label,
+                    })
+                    .collect(),
+                help_text: f.help_text,
+            })
+            .collect(),
     }
 }
 
@@ -617,5 +649,40 @@ pub(crate) fn from_rule_set(rs: RuleSet) -> RuleSetPayload {
             .collect(),
         created_at: rs.created_at.to_rfc3339(),
         updated_at: rs.updated_at.to_rfc3339(),
+    }
+}
+
+pub(crate) fn from_registry_plugin(p: RegistryPlugin) -> RegistryPluginPayload {
+    RegistryPluginPayload {
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        version: p.version,
+        plugin_type: p.plugin_type,
+        provider_type: p.provider_type,
+        author: p.author,
+        official: p.official,
+        builtin: p.builtin,
+        source_url: p.source_url,
+        is_installed: p.is_installed,
+        is_enabled: p.is_enabled,
+        installed_version: p.installed_version,
+    }
+}
+
+pub(crate) fn from_plugin_installation(inst: PluginInstallation) -> PluginInstallationPayload {
+    PluginInstallationPayload {
+        id: inst.id,
+        plugin_id: inst.plugin_id,
+        name: inst.name,
+        description: inst.description,
+        version: inst.version,
+        plugin_type: inst.plugin_type,
+        provider_type: inst.provider_type,
+        is_enabled: inst.is_enabled,
+        is_builtin: inst.is_builtin,
+        source_url: inst.source_url,
+        installed_at: inst.installed_at.to_rfc3339(),
+        updated_at: inst.updated_at.to_rfc3339(),
     }
 }

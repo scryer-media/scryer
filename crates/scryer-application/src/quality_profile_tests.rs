@@ -363,37 +363,6 @@ fn proper_upload_bonus() {
     assert!(d.scoring_log.iter().any(|e| e.code == "proper_upload" && e.delta == 30));
 }
 
-// ── apply_nzbgeek_vote_scoring ────────────────────────────────────────────
-
-#[test]
-fn vote_scoring_no_penalty_at_5_or_fewer() {
-    let mut d = QualityProfileDecision::new();
-    apply_nzbgeek_vote_scoring(&mut d, Some(10), Some(5));
-    assert!(d.scoring_log.is_empty());
-}
-
-#[test]
-fn vote_scoring_penalty_at_6() {
-    let mut d = QualityProfileDecision::new();
-    apply_nzbgeek_vote_scoring(&mut d, Some(0), Some(6));
-    assert_eq!(d.release_score, -2700); // -2400 - (1 * 300)
-}
-
-#[test]
-fn vote_scoring_penalty_at_15() {
-    let mut d = QualityProfileDecision::new();
-    apply_nzbgeek_vote_scoring(&mut d, Some(0), Some(15));
-    // extra = 10, capped at 10 → -2400 - (10 * 300) = -5400
-    assert_eq!(d.release_score, -5400);
-}
-
-#[test]
-fn vote_scoring_none_thumbs_down_no_op() {
-    let mut d = QualityProfileDecision::new();
-    apply_nzbgeek_vote_scoring(&mut d, Some(10), None);
-    assert!(d.scoring_log.is_empty());
-}
-
 // ── resolve_profile_id_for_title ──────────────────────────────────────────
 
 #[test]
