@@ -101,6 +101,7 @@ impl AppUseCase {
             enable_auto_search: input.enable_auto_search,
             last_health_status: None,
             last_error_at: None,
+            config_json: input.config_json.clone(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -121,6 +122,7 @@ impl AppUseCase {
         is_enabled: Option<bool>,
         enable_interactive_search: Option<bool>,
         enable_auto_search: Option<bool>,
+        config_json: Option<String>,
     ) -> AppResult<IndexerConfig> {
         require(actor, &Entitlement::ManageConfig)?;
 
@@ -132,7 +134,8 @@ impl AppUseCase {
             || rate_limit_burst.is_some()
             || is_enabled.is_some()
             || enable_interactive_search.is_some()
-            || enable_auto_search.is_some();
+            || enable_auto_search.is_some()
+            || config_json.is_some();
         if !has_any_updates {
             return Err(AppError::Validation(
                 "at least one indexer field must be provided".into(),
@@ -180,6 +183,7 @@ impl AppUseCase {
                 is_enabled,
                 enable_interactive_search,
                 enable_auto_search,
+                config_json,
             )
             .await?;
         self.services

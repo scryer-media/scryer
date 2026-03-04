@@ -176,7 +176,7 @@ impl AppUseCase {
     pub async fn rebuild_user_rules_engine(&self) -> AppResult<()> {
         let enabled = self.services.rule_sets.list_enabled_rule_sets().await?;
 
-        let policies: Vec<scryer_rules::UserPolicy> = enabled
+        let mut policies: Vec<scryer_rules::UserPolicy> = enabled
             .iter()
             .map(|rs| scryer_rules::UserPolicy {
                 id: rs.id.clone(),
@@ -189,6 +189,25 @@ impl AppUseCase {
             })
             .collect();
 
+        let user_count = policies.len();
+
+        // Append scoring policies from loaded WASM plugins.
+        // Rewrite package declarations so the Rego package path matches the
+        // system-assigned ID, same as we do for user-authored rules.
+        if let Some(ref pp) = self.services.plugin_provider {
+            let plugin_policies = pp.scoring_policies();
+            if !plugin_policies.is_empty() {
+                tracing::info!(
+                    plugin_policy_count = plugin_policies.len(),
+                    "including plugin-supplied scoring policies"
+                );
+                for mut p in plugin_policies {
+                    p.rego_source = scryer_rules::rewrite_package_declaration(&p.rego_source, &p.id);
+                    policies.push(p);
+                }
+            }
+        }
+
         let engine = scryer_rules::UserRulesEngine::build(&policies)
             .map_err(|e| AppError::Validation(format!("failed to build rules engine: {e}")))?;
 
@@ -200,7 +219,8 @@ impl AppUseCase {
         *guard = engine;
 
         tracing::info!(
-            rule_count = policies.len(),
+            user_rule_count = user_count,
+            total_rule_count = policies.len(),
             "user rules engine rebuilt"
         );
         Ok(())

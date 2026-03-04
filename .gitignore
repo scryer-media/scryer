@@ -13,4 +13,6 @@ tmp
 *.pem
 *.sqlite
 *.sqlite-*
+*.db
+*.db-*
 crates/scryer/dev-seed.toml

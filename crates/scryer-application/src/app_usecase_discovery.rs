@@ -79,6 +79,8 @@ impl AppUseCase {
         caller_label: &str,
         mode: SearchMode,
         runtime_minutes: Option<i32>,
+        season: Option<u32>,
+        episode: Option<u32>,
     ) -> AppResult<Vec<IndexerSearchResult>> {
         let quality_profile = self
             .resolve_quality_profile(
@@ -129,7 +131,7 @@ impl AppUseCase {
 
             set.spawn(async move {
                 indexer_client
-                    .search(query, imdb_id, tvdb_id, category, None, indexer_routing, limit, mode)
+                    .search(query, imdb_id, tvdb_id, category, None, indexer_routing, limit, mode, season, episode)
                     .await
             });
         }
@@ -217,8 +219,6 @@ impl AppUseCase {
             }
 
             let parsed_release_metadata = parse_release_metadata(&result.title);
-            let thumbs_up = result.thumbs_up;
-            let thumbs_down = result.thumbs_down;
             let mut decision =
                 evaluate_against_profile(&quality_profile, &parsed_release_metadata, false);
             apply_age_scoring(&mut decision, result.published_at.as_deref());
@@ -229,13 +229,10 @@ impl AppUseCase {
                 category.as_deref(),
                 runtime_minutes,
             );
-            crate::quality_profile::apply_nzbgeek_vote_scoring(
-                &mut decision,
-                thumbs_up,
-                thumbs_down,
-            );
-
             // ── User rules (additive, after all built-in scoring) ───────
+            // NZBGeek vote scoring is now handled by plugin-declared Rego
+            // policies (nzbgeek_vote_penalty, nzbgeek_language_bonus) that
+            // run as part of the user rules evaluation below.
             if !user_rules_engine.is_empty() {
                 let user_input = crate::app_usecase_discovery::build_user_rule_input(
                     &parsed_release_metadata,
@@ -328,6 +325,7 @@ impl AppUseCase {
         self.search_and_score_releases(
             queries, imdb_id, tvdb_id, category,
             &[], limit, &actor.id, SearchMode::Interactive, None,
+            None, None,
         ).await
     }
 
@@ -828,6 +826,7 @@ fn build_user_rule_input(
                 .map(|dt| (chrono::Utc::now() - dt.with_timezone(&chrono::Utc)).num_days()),
             thumbs_up: result.thumbs_up,
             thumbs_down: result.thumbs_down,
+            extra: result.extra.clone(),
         },
         profile: ProfileDoc {
             id: profile.id.clone(),

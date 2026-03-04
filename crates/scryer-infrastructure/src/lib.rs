@@ -1,6 +1,5 @@
 pub(crate) mod commands;
 mod download_clients;
-mod newznab_rate_limiter;
 mod file_importer;
 mod indexer_stats;
 mod library_scanner;
@@ -22,13 +21,8 @@ mod tests;
 pub use file_importer::FsFileImporter;
 pub use indexer_stats::InMemoryIndexerStatsTracker;
 pub use download_clients::{
-    MultiIndexerSearchClient, NzbGeekSearchClient, NzbgetDownloadClient,
-    PrioritizedDownloadClientRouter, NZBGEEK_BASE_BACKOFF_SECONDS, NZBGEEK_MAX_BACKOFF_SECONDS,
-    NZBGEEK_MIN_REQUEST_INTERVAL_MS,
-};
-pub use newznab_rate_limiter::{
-    NewznabRateLimiter, NewznabRateLimiterConfig, NewznabApiLimits,
-    parse_newznab_apilimits_xml, parse_apilimits_from_headers,
+    MultiIndexerSearchClient, NzbgetDownloadClient, SabnzbdDownloadClient,
+    PrioritizedDownloadClientRouter,
 };
 pub use library_renamer::FileSystemLibraryRenamer;
 pub use library_scanner::FileSystemLibraryScanner;

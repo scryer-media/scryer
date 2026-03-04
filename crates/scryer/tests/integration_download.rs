@@ -3,13 +3,13 @@ mod common;
 use std::sync::Arc;
 
 use serde_json::json;
-use wiremock::matchers::{body_json_string, method, path};
+use wiremock::matchers::{body_json_string, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use common::{load_fixture, TestContext};
 use scryer_application::{DownloadClient, DownloadClientConfigRepository};
 use scryer_domain::DownloadClientConfig;
-use scryer_infrastructure::{NzbgetDownloadClient, PrioritizedDownloadClientRouter};
+use scryer_infrastructure::{NzbgetDownloadClient, PrioritizedDownloadClientRouter, SabnzbdDownloadClient};
 
 fn new_nzbget_client(uri: &str) -> scryer_infrastructure::NzbgetDownloadClient {
     scryer_infrastructure::NzbgetDownloadClient::new(
@@ -716,10 +716,10 @@ async fn router_uses_fallback_when_no_clients_configured() {
 }
 
 #[tokio::test]
-async fn router_skips_client_with_unknown_type() {
+async fn router_skips_client_with_invalid_config() {
     let ctx = TestContext::new().await;
 
-    // Priority 1: unknown type — client_from_config returns Validation error, skipped.
+    // Priority 1: sabnzbd with missing API key — client_from_config returns Validation error, skipped.
     let bad_config = DownloadClientConfig {
         id: "bad".to_string(),
         name: "bad-client".to_string(),
@@ -748,7 +748,7 @@ async fn router_skips_client_with_unknown_type() {
     let items = router
         .list_queue()
         .await
-        .expect("valid nzbget client should be used after skipping unknown type");
+        .expect("valid nzbget client should be used after skipping invalid config");
 
     assert_eq!(items.len(), 2);
 }
@@ -816,4 +816,444 @@ async fn router_disabled_clients_are_not_used() {
     assert_eq!(items.len(), 2);
     // Disabled client's server received no requests.
     assert!(ctx.nzbget_server.received_requests().await.unwrap().is_empty());
+}
+
+// ===========================================================================
+// SABnzbd integration tests
+// ===========================================================================
+
+fn new_sabnzbd_client(uri: &str) -> SabnzbdDownloadClient {
+    SabnzbdDownloadClient::new(uri.to_string(), "test-api-key".to_string())
+}
+
+// ---------------------------------------------------------------------------
+// test_connection
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn sabnzbd_test_connection_returns_version() {
+    let server = MockServer::start().await;
+
+    // Version endpoint (no auth)
+    Mock::given(method("GET"))
+        .and(path("/api"))
+        .and(query_param("mode", "version"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(load_fixture("sabnzbd/version.json")),
+        )
+        .mount(&server)
+        .await;
+
+    // Queue endpoint (validates API key)
+    Mock::given(method("GET"))
+        .and(path("/api"))
+        .and(query_param("mode", "queue"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(load_fixture("sabnzbd/queue_empty.json")),
+        )
+        .mount(&server)
+        .await;
+
+    let result = new_sabnzbd_client(&server.uri()).test_connection().await;
+    assert_eq!(result.unwrap(), "4.5.1");
+}
+
+#[tokio::test]
+async fn sabnzbd_test_connection_unreachable() {
+    let client = SabnzbdDownloadClient::new("http://127.0.0.1:1".to_string(), "key".to_string());
+    let result = client.test_connection().await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn sabnzbd_test_connection_invalid_api_key() {
+    let server = MockServer::start().await;
+
+    // Version succeeds (no auth needed)
+    Mock::given(method("GET"))
+        .and(path("/api"))
+        .and(query_param("mode", "version"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(load_fixture("sabnzbd/version.json")),
+        )
+        .mount(&server)
+        .await;
+
+    // Queue returns auth error
+    Mock::given(method("GET"))
+        .and(path("/api"))
+        .and(query_param("mode", "queue"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(load_fixture("sabnzbd/error.json")),
+        )
+        .mount(&server)
+        .await;
+
+    let result = new_sabnzbd_client(&server.uri()).test_connection().await;
+    assert!(result.is_err(), "should fail with invalid API key");
+    assert!(
+        result.unwrap_err().to_string().contains("API Key"),
+        "error should mention API key"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// list_queue
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn sabnzbd_list_queue_two_items() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api"))
+        .and(query_param("mode", "queue"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(load_fixture("sabnzbd/queue.json")),
+        )
+        .mount(&server)
+        .await;
+
+    let items = new_sabnzbd_client(&server.uri())
+        .list_queue()
+        .await
+        .expect("list_queue should succeed");
+    assert_eq!(items.len(), 2);
+}
+
+#[tokio::test]
+async fn sabnzbd_list_queue_empty() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api"))
+        .and(query_param("mode", "queue"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(load_fixture("sabnzbd/queue_empty.json")),
+        )
+        .mount(&server)
+        .await;
+
+    let items = new_sabnzbd_client(&server.uri())
+        .list_queue()
+        .await
+        .expect("empty queue should succeed");
+    assert!(items.is_empty());
+}
+
+#[tokio::test]
+async fn sabnzbd_list_queue_item_has_correct_fields() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api"))
+        .and(query_param("mode", "queue"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(load_fixture("sabnzbd/queue.json")),
+        )
+        .mount(&server)
+        .await;
+
+    let items = new_sabnzbd_client(&server.uri())
+        .list_queue()
+        .await
+        .unwrap();
+
+    let first = &items[0];
+    assert_eq!(first.download_client_item_id, "SABnzbd_nzo_kyt1f0");
+    assert_eq!(first.title_name, "My.Movie.2024.1080p.BluRay");
+    assert_eq!(first.client_type, "sabnzbd");
+    assert_eq!(first.progress_percent, 60);
+    assert!(first.size_bytes.is_some());
+    assert!(first.remaining_seconds.is_some());
+
+    let second = &items[1];
+    assert_eq!(second.download_client_item_id, "SABnzbd_nzo_xyz789");
+    assert!(matches!(second.state, scryer_domain::DownloadQueueState::Queued));
+}
+
+// ---------------------------------------------------------------------------
+// list_history
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn sabnzbd_list_history_filters_old_entries() {
+    let server = MockServer::start().await;
+    // Use original fixture with old timestamps — should filter out everything
+    Mock::given(method("GET"))
+        .and(path("/api"))
+        .and(query_param("mode", "history"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(load_fixture("sabnzbd/history.json")),
+        )
+        .mount(&server)
+        .await;
+
+    let items = new_sabnzbd_client(&server.uri())
+        .list_history()
+        .await
+        .expect("list_history should succeed even with old entries");
+    assert!(
+        items.is_empty(),
+        "old entries beyond 7-day cutoff should be filtered out"
+    );
+}
+
+#[tokio::test]
+async fn sabnzbd_list_history_recent_entries() {
+    let server = MockServer::start().await;
+    let now = chrono::Utc::now().timestamp();
+    let history = load_fixture("sabnzbd/history.json")
+        .replace("1706832000", &now.to_string())
+        .replace("1706745600", &(now - 3600).to_string());
+
+    Mock::given(method("GET"))
+        .and(path("/api"))
+        .and(query_param("mode", "history"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(history))
+        .mount(&server)
+        .await;
+
+    let items = new_sabnzbd_client(&server.uri())
+        .list_history()
+        .await
+        .unwrap();
+    assert_eq!(items.len(), 2, "recent entries should pass 7-day cutoff");
+}
+
+#[tokio::test]
+async fn sabnzbd_list_history_maps_statuses() {
+    let server = MockServer::start().await;
+    let now = chrono::Utc::now().timestamp();
+    let history = load_fixture("sabnzbd/history.json")
+        .replace("1706832000", &now.to_string())
+        .replace("1706745600", &(now - 3600).to_string());
+
+    Mock::given(method("GET"))
+        .and(path("/api"))
+        .and(query_param("mode", "history"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(history))
+        .mount(&server)
+        .await;
+
+    let items = new_sabnzbd_client(&server.uri())
+        .list_history()
+        .await
+        .unwrap();
+
+    let completed = items.iter().find(|i| i.title_name.contains("Completed")).unwrap();
+    assert!(matches!(completed.state, scryer_domain::DownloadQueueState::Completed));
+    assert_eq!(completed.progress_percent, 100);
+
+    let failed = items.iter().find(|i| i.title_name.contains("Failed")).unwrap();
+    assert!(matches!(failed.state, scryer_domain::DownloadQueueState::Failed));
+    assert!(failed.attention_required);
+}
+
+// ---------------------------------------------------------------------------
+// list_completed_downloads
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn sabnzbd_list_completed_downloads() {
+    let server = MockServer::start().await;
+    let now = chrono::Utc::now().timestamp();
+    let history = load_fixture("sabnzbd/history.json")
+        .replace("1706832000", &now.to_string())
+        .replace("1706745600", &(now - 3600).to_string());
+
+    Mock::given(method("GET"))
+        .and(path("/api"))
+        .and(query_param("mode", "history"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(history))
+        .mount(&server)
+        .await;
+
+    let items = new_sabnzbd_client(&server.uri())
+        .list_completed_downloads()
+        .await
+        .expect("list_completed_downloads should succeed");
+
+    assert_eq!(items.len(), 1, "only Completed entries should be returned");
+    assert!(items[0].dest_dir.contains("Completed"));
+    assert_eq!(items[0].client_type, "sabnzbd");
+}
+
+// ---------------------------------------------------------------------------
+// pause / resume / delete
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn sabnzbd_pause_queue_item() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api"))
+        .and(query_param("mode", "queue"))
+        .and(query_param("name", "pause"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(load_fixture("sabnzbd/pause_resume_success.json")),
+        )
+        .mount(&server)
+        .await;
+
+    let result = new_sabnzbd_client(&server.uri())
+        .pause_queue_item("SABnzbd_nzo_kyt1f0")
+        .await;
+    assert!(result.is_ok(), "pause should succeed: {:?}", result.err());
+}
+
+#[tokio::test]
+async fn sabnzbd_resume_queue_item() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api"))
+        .and(query_param("mode", "queue"))
+        .and(query_param("name", "resume"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(load_fixture("sabnzbd/pause_resume_success.json")),
+        )
+        .mount(&server)
+        .await;
+
+    let result = new_sabnzbd_client(&server.uri())
+        .resume_queue_item("SABnzbd_nzo_kyt1f0")
+        .await;
+    assert!(result.is_ok(), "resume should succeed: {:?}", result.err());
+}
+
+#[tokio::test]
+async fn sabnzbd_delete_queue_item() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api"))
+        .and(query_param("mode", "queue"))
+        .and(query_param("name", "delete"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(load_fixture("sabnzbd/delete_success.json")),
+        )
+        .mount(&server)
+        .await;
+
+    let result = new_sabnzbd_client(&server.uri())
+        .delete_queue_item("SABnzbd_nzo_kyt1f0", false)
+        .await;
+    assert!(result.is_ok(), "delete should succeed: {:?}", result.err());
+}
+
+#[tokio::test]
+async fn sabnzbd_delete_history_item() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api"))
+        .and(query_param("mode", "history"))
+        .and(query_param("name", "delete"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(load_fixture("sabnzbd/delete_success.json")),
+        )
+        .mount(&server)
+        .await;
+
+    let result = new_sabnzbd_client(&server.uri())
+        .delete_queue_item("SABnzbd_nzo_hist01", true)
+        .await;
+    assert!(
+        result.is_ok(),
+        "history delete should succeed: {:?}",
+        result.err()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// submit_to_download_queue
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn sabnzbd_submit_download() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api"))
+        .and(query_param("mode", "addurl"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(load_fixture("sabnzbd/addurl.json")),
+        )
+        .mount(&server)
+        .await;
+
+    let title = scryer_domain::Title {
+        id: "test-title-id".to_string(),
+        name: "Test Movie Title".to_string(),
+        facet: scryer_domain::MediaFacet::Movie,
+        monitored: true,
+        tags: vec![],
+        external_ids: vec![],
+        created_by: None,
+        created_at: chrono::Utc::now(),
+        year: Some(2024),
+        overview: None,
+        poster_url: None,
+        sort_title: None,
+        slug: None,
+        imdb_id: None,
+        runtime_minutes: None,
+        genres: vec![],
+        content_status: None,
+        language: None,
+        first_aired: None,
+        network: None,
+        studio: None,
+        country: None,
+        aliases: vec![],
+        metadata_language: None,
+        metadata_fetched_at: None,
+        min_availability: None,
+        digital_release_date: None,
+    };
+
+    let nzb_url = "https://indexer.example.com/getnzb?id=abc123&apikey=xyz";
+    let result = new_sabnzbd_client(&server.uri())
+        .submit_to_download_queue(&title, Some(nzb_url.to_string()), None, None, Some("movies".to_string()))
+        .await;
+
+    assert!(result.is_ok(), "submit should succeed: {:?}", result.err());
+    assert_eq!(result.unwrap(), "SABnzbd_nzo_abc123");
+}
+
+#[tokio::test]
+async fn sabnzbd_submit_download_no_source_hint() {
+    let title = scryer_domain::Title {
+        id: "test-id".to_string(),
+        name: "Test".to_string(),
+        facet: scryer_domain::MediaFacet::Movie,
+        monitored: true,
+        tags: vec![],
+        external_ids: vec![],
+        created_by: None,
+        created_at: chrono::Utc::now(),
+        year: None,
+        overview: None,
+        poster_url: None,
+        sort_title: None,
+        slug: None,
+        imdb_id: None,
+        runtime_minutes: None,
+        genres: vec![],
+        content_status: None,
+        language: None,
+        first_aired: None,
+        network: None,
+        studio: None,
+        country: None,
+        aliases: vec![],
+        metadata_language: None,
+        metadata_fetched_at: None,
+        min_availability: None,
+        digital_release_date: None,
+    };
+
+    let server = MockServer::start().await;
+    let result = new_sabnzbd_client(&server.uri())
+        .submit_to_download_queue(&title, None, None, None, None)
+        .await;
+    assert!(result.is_err(), "should fail without source_hint");
 }

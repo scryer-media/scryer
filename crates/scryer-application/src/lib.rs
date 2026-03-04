@@ -23,6 +23,7 @@ mod app_usecase_import;
 mod app_usecase_security;
 mod acquisition_policy;
 mod app_usecase_acquisition;
+mod app_usecase_plugins;
 
 use crate::activity::ActivityStream;
 use async_trait::async_trait;
@@ -31,7 +32,8 @@ use scryer_domain::{
     CalendarEpisode, Collection, CompletedDownload, DownloadClientConfig, DownloadQueueItem,
     DownloadQueueState, Entitlement, Episode, EventType, ExternalId, HistoryEvent, Id,
     ImportFileResult, ImportRecord, IndexerConfig, MediaFacet, NewDownloadClientConfig,
-    NewIndexerConfig, NewTitle, PolicyInput, PolicyOutput, RuleSet, Title, User,
+    NewIndexerConfig, NewTitle, PluginInstallation, PolicyInput, PolicyOutput, RuleSet, Title,
+    User,
 };
 use std::path::Path;
 use rand_core::OsRng;
@@ -47,6 +49,7 @@ pub use activity::{ActivityChannel, ActivityEvent, ActivityKind, ActivitySeverit
 pub use acquisition_policy::AcquisitionThresholds;
 pub use app_usecase_acquisition::start_background_acquisition_poller;
 pub use app_usecase_integration::start_download_queue_poller;
+pub use app_usecase_plugins::RegistryPlugin;
 pub use library_scan::{
     AnimeEpisodeMapping, AnimeMapping, EpisodeMetadata, LibraryFile, LibraryScanSummary,
     LibraryScanner, MetadataGateway, MetadataSearchItem, MovieMetadata, MultiMetadataSearchResult,
@@ -73,7 +76,8 @@ pub use quality_profile::{
 pub use release_parser::{parse_release_metadata, ParsedEpisodeMetadata, ParsedReleaseMetadata};
 pub use null_repositories::{
     NullFileImporter, NullImportRepository, NullIndexerStatsTracker, NullMediaFileRepository,
-    NullRuleSetRepository, NullSystemInfoProvider, NullWantedItemRepository,
+    NullPluginInstallationRepository, NullRuleSetRepository, NullSystemInfoProvider,
+    NullWantedItemRepository,
 };
 pub use types::{
     IndexerQueryStats, IndexerSearchResult, JwtAuthConfig, PrimaryCollectionSummary,
@@ -128,9 +132,11 @@ pub struct AppServices {
     pub quality_profiles: Arc<dyn QualityProfileRepository>,
     pub wanted_items: Arc<dyn WantedItemRepository>,
     pub rule_sets: Arc<dyn RuleSetRepository>,
+    pub plugin_installations: Arc<dyn PluginInstallationRepository>,
     pub system_info: Arc<dyn SystemInfoProvider>,
     pub indexer_stats: Arc<dyn IndexerStatsTracker>,
     pub user_rules: Arc<std::sync::RwLock<scryer_rules::UserRulesEngine>>,
+    pub plugin_provider: Option<Arc<dyn IndexerPluginProvider>>,
     pub db_path: String,
     pub activity_stream: ActivityStream,
     pub event_broadcast: broadcast::Sender<HistoryEvent>,
@@ -177,9 +183,11 @@ impl AppServices {
             quality_profiles,
             wanted_items: Arc::new(NullWantedItemRepository),
             rule_sets: Arc::new(NullRuleSetRepository),
+            plugin_installations: Arc::new(NullPluginInstallationRepository),
             system_info: Arc::new(NullSystemInfoProvider),
             indexer_stats: Arc::new(NullIndexerStatsTracker),
             user_rules: Arc::new(std::sync::RwLock::new(scryer_rules::UserRulesEngine::empty())),
+            plugin_provider: None,
             db_path,
             activity_stream: ActivityStream::new(),
             event_broadcast: tx,
@@ -369,6 +377,7 @@ pub trait IndexerConfigRepository: Send + Sync {
         is_enabled: Option<bool>,
         enable_interactive_search: Option<bool>,
         enable_auto_search: Option<bool>,
+        config_json: Option<String>,
     ) -> AppResult<IndexerConfig>;
     async fn delete(&self, id: &str) -> AppResult<()>;
 }
@@ -593,6 +602,21 @@ pub trait RuleSetRepository: Send + Sync {
     ) -> AppResult<()>;
 }
 
+#[async_trait]
+pub trait PluginInstallationRepository: Send + Sync {
+    async fn list_plugin_installations(&self) -> AppResult<Vec<PluginInstallation>>;
+    async fn get_plugin_installation(&self, plugin_id: &str) -> AppResult<Option<PluginInstallation>>;
+    async fn create_plugin_installation(&self, installation: &PluginInstallation, wasm_bytes: Option<&[u8]>) -> AppResult<PluginInstallation>;
+    async fn update_plugin_installation(&self, installation: &PluginInstallation) -> AppResult<PluginInstallation>;
+    async fn delete_plugin_installation(&self, plugin_id: &str) -> AppResult<()>;
+    async fn get_enabled_plugin_wasm_bytes(&self) -> AppResult<Vec<(PluginInstallation, Option<Vec<u8>>)>>;
+    async fn seed_builtin(&self, plugin_id: &str, name: &str, description: &str, version: &str, provider_type: &str) -> AppResult<()>;
+    /// Store the JSON registry cache.
+    async fn store_registry_cache(&self, json: &str) -> AppResult<()>;
+    /// Retrieve the JSON registry cache. Returns None if never fetched.
+    async fn get_registry_cache(&self) -> AppResult<Option<String>>;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchMode {
     Interactive,
@@ -626,7 +650,39 @@ pub trait IndexerClient: Send + Sync {
         indexer_routing: Option<IndexerRoutingPlan>,
         limit: usize,
         mode: SearchMode,
+        season: Option<u32>,
+        episode: Option<u32>,
     ) -> AppResult<Vec<IndexerSearchResult>>;
+}
+
+/// Provides WASM-backed indexer clients for provider types not handled natively.
+/// Implemented by scryer-plugins; consumed by MultiIndexerSearchClient.
+pub trait IndexerPluginProvider: Send + Sync {
+    fn client_for_provider(&self, config: &IndexerConfig) -> Option<Arc<dyn IndexerClient>>;
+    fn available_provider_types(&self) -> Vec<String>;
+    /// Scoring policies bundled with loaded plugins. Included alongside user
+    /// rules when the rules engine is rebuilt.
+    fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy>;
+    /// Rebuild the loaded plugin set. `external_wasm_bytes` are user-installed
+    /// WASM plugins that take priority over builtins. `disabled_builtins` is a
+    /// list of provider_type strings for builtins the user has disabled.
+    /// Returns Err if the provider does not support dynamic reload.
+    fn reload_plugins(
+        &self,
+        external_wasm_bytes: &[&[u8]],
+        disabled_builtins: &[String],
+    ) -> Result<(), String> {
+        let _ = (external_wasm_bytes, disabled_builtins);
+        Err("this provider does not support dynamic reload".to_string())
+    }
+    /// Returns the config field schema declared by the plugin for this provider type.
+    fn config_fields_for_provider(&self, _provider_type: &str) -> Vec<scryer_domain::ConfigFieldDef> {
+        vec![]
+    }
+    /// Returns the human-readable plugin name for a given provider type.
+    fn plugin_name_for_provider(&self, _provider_type: &str) -> Option<String> {
+        None
+    }
 }
 
 #[async_trait]
@@ -778,7 +834,6 @@ fn sanitize_ids(ids: Vec<ExternalId>) -> Vec<ExternalId> {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use p256::pkcs8::{EncodePrivateKey, EncodePublicKey};
     use tokio::sync::Mutex;
 
     #[derive(Default)]
@@ -1233,6 +1288,8 @@ mod tests {
             _indexer_routing: Option<IndexerRoutingPlan>,
             _limit: usize,
             _mode: SearchMode,
+            _season: Option<u32>,
+            _episode: Option<u32>,
         ) -> AppResult<Vec<IndexerSearchResult>> {
             if let Some(tvdb) = tvdb_id {
                 tracing::info!(tvdb_id = %tvdb, category = ?category, "mock nzbgeek search");
@@ -1255,6 +1312,9 @@ mod tests {
                 nzbgeek_password_protected: None,
                 parsed_release_metadata: None,
                 quality_profile_decision: None,
+                extra: Default::default(),
+                guid: None,
+                info_url: None,
             }])
         }
     }
@@ -1343,6 +1403,7 @@ mod tests {
             is_enabled: Option<bool>,
             enable_interactive_search: Option<bool>,
             enable_auto_search: Option<bool>,
+            config_json: Option<String>,
         ) -> AppResult<IndexerConfig> {
             let mut entries = self.store.lock().await;
             let item = entries
@@ -1376,6 +1437,9 @@ mod tests {
             }
             if let Some(enable_auto_search) = enable_auto_search {
                 item.enable_auto_search = enable_auto_search;
+            }
+            if let Some(config_json) = config_json {
+                item.config_json = Some(config_json);
             }
             item.updated_at = Utc::now();
 
@@ -1585,15 +1649,6 @@ mod tests {
             quality_profiles,
             String::new(),
         );
-        let signing_key = p256::ecdsa::SigningKey::random(&mut rand_core::OsRng);
-        let jwt_ec_private_pem = signing_key
-            .to_pkcs8_pem(p256::pkcs8::LineEnding::LF)
-            .expect("test EC private key")
-            .to_string();
-        let jwt_ec_public_pem = signing_key
-            .verifying_key()
-            .to_public_key_pem(p256::pkcs8::LineEnding::LF)
-            .expect("test EC public key");
         let mut registry = FacetRegistry::new();
         registry.register(Arc::new(MovieFacetHandler));
         registry.register(Arc::new(SeriesFacetHandler::new(scryer_domain::MediaFacet::Tv)));
@@ -1603,8 +1658,7 @@ mod tests {
             JwtAuthConfig {
                 issuer: "scryer-test".to_string(),
                 access_ttl_seconds: 3600,
-                jwt_ec_private_pem,
-                jwt_ec_public_pem,
+                jwt_hmac_secret: "dGVzdC1zZWNyZXQtZm9yLXVuaXQtdGVzdHMtb25seS0zMmJ5dGVzISE=".to_string(),
             },
             Arc::new(registry),
         );
@@ -2452,11 +2506,8 @@ mod tests {
             username: user.username.clone(),
             entitlements: vec![],
         };
-        let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256);
-        let key = jsonwebtoken::EncodingKey::from_ec_pem(
-            app.auth.jwt_ec_private_pem.as_bytes(),
-        )
-        .expect("encoding key");
+        let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS512);
+        let key = jsonwebtoken::EncodingKey::from_secret(app.auth.jwt_hmac_secret.as_bytes());
         let expired_token = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
         let result = app.authenticate_token(&expired_token).await;
         assert!(result.is_err(), "expired token should be rejected");
@@ -2479,11 +2530,8 @@ mod tests {
             username: user.username.clone(),
             entitlements: vec!["view_catalog".to_string()],
         };
-        let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256);
-        let key = jsonwebtoken::EncodingKey::from_ec_pem(
-            app.auth.jwt_ec_private_pem.as_bytes(),
-        )
-        .expect("encoding key");
+        let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS512);
+        let key = jsonwebtoken::EncodingKey::from_secret(app.auth.jwt_hmac_secret.as_bytes());
         let bad_token = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
         let result = app.authenticate_token(&bad_token).await;
         assert!(result.is_err(), "token with wrong issuer should be rejected");

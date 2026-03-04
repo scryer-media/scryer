@@ -14,6 +14,7 @@ export type IndexerRecord = {
   enableAutoSearch: boolean;
   lastHealthStatus: string | null;
   lastErrorAt: string | null;
+  configJson: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -23,11 +24,31 @@ export type IndexerDraft = {
   providerType: string;
   baseUrl: string;
   apiKey: string;
-  rateLimitSeconds: string;
-  rateLimitBurst: string;
   isEnabled: boolean;
   enableInteractiveSearch: boolean;
   enableAutoSearch: boolean;
+  configValues: Record<string, string>;
+};
+
+export type ConfigFieldOption = {
+  value: string;
+  label: string;
+};
+
+export type ConfigFieldDef = {
+  key: string;
+  label: string;
+  fieldType: string;
+  required: boolean;
+  defaultValue: string | null;
+  options: ConfigFieldOption[];
+  helpText: string | null;
+};
+
+export type ProviderTypeInfo = {
+  providerType: string;
+  name: string;
+  configFields: ConfigFieldDef[];
 };
 
 export type IndexerCategoryRoutingSettings = {

@@ -3,6 +3,7 @@ pub mod validation;
 
 use regorus::{Engine, Value};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::warn;
 
@@ -66,6 +67,9 @@ pub struct ReleaseDoc {
     pub age_days: Option<i64>,
     pub thumbs_up: Option<i32>,
     pub thumbs_down: Option<i32>,
+    /// Arbitrary plugin-supplied metadata, accessible as `input.release.extra.*` in Rego.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -630,6 +634,77 @@ mod tests {
         assert_eq!(result.entries[0].delta, i32::MAX);
     }
 
+    #[test]
+    fn plugin_scoring_policy_with_rewritten_package() {
+        // Simulates the plugin scoring policy flow: the plugin declares its own
+        // package name, but the host rewrites it to match the system-assigned ID.
+        let rego = r#"package scryer.rules.user.plugin_nzbgeek_vote_penalty
+import rego.v1
+
+score_entry["nzbgeek_thumbs_down"] := penalty if {
+    td := input.release.extra.thumbs_down
+    td > 5
+    extra := min([td - 5, 10])
+    penalty := -2400 - (extra * 300)
+}
+"#;
+        let id = "plugin_nzbgeek_nzbgeek_vote_penalty";
+        let rewritten = rewrite_package_declaration(rego, id);
+
+        let policy = UserPolicy {
+            id: id.to_string(),
+            rego_source: rewritten,
+            applied_facets: vec![],
+        };
+
+        let engine = UserRulesEngine::build(&[policy]).unwrap();
+        let mut evaluator = engine.evaluator();
+        let mut input = test_input();
+        // thumbs_down = 8 → penalty = -2400 - ((8-5).min(10) * 300) = -2400 - 900 = -3300
+        input.release.extra.insert(
+            "thumbs_down".to_string(),
+            serde_json::Value::from(8),
+        );
+        let result = evaluator.evaluate(&input, "movie").unwrap();
+        assert_eq!(result.entries.len(), 1);
+        assert_eq!(result.entries[0].code, "nzbgeek_thumbs_down");
+        assert_eq!(result.entries[0].delta, -3300);
+    }
+
+    #[test]
+    fn plugin_language_bonus_policy() {
+        let rego = r#"package scryer.rules.user.original_doesnt_matter
+import rego.v1
+
+score_entry["nzbgeek_english_confirmed"] := 200 if {
+    langs := input.release.extra.languages
+    count(langs) > 0
+    some lang in langs
+    lower(lang) == "english"
+}
+"#;
+        let id = "plugin_nzbgeek_nzbgeek_language_bonus";
+        let rewritten = rewrite_package_declaration(rego, id);
+
+        let policy = UserPolicy {
+            id: id.to_string(),
+            rego_source: rewritten,
+            applied_facets: vec![],
+        };
+
+        let engine = UserRulesEngine::build(&[policy]).unwrap();
+        let mut evaluator = engine.evaluator();
+        let mut input = test_input();
+        input.release.extra.insert(
+            "languages".to_string(),
+            serde_json::json!(["English", "French"]),
+        );
+        let result = evaluator.evaluate(&input, "movie").unwrap();
+        assert_eq!(result.entries.len(), 1);
+        assert_eq!(result.entries[0].code, "nzbgeek_english_confirmed");
+        assert_eq!(result.entries[0].delta, 200);
+    }
+
     fn test_input() -> UserRuleInput {
         UserRuleInput {
             release: ReleaseDoc {
@@ -656,6 +731,7 @@ mod tests {
                 age_days: Some(5),
                 thumbs_up: None,
                 thumbs_down: None,
+                extra: Default::default(),
             },
             profile: ProfileDoc {
                 id: "4k".to_string(),

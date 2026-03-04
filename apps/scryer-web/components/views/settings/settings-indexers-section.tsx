@@ -16,34 +16,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { Translate } from "@/components/root/types";
-
-type IndexerRecord = {
-  id: string;
-  name: string;
-  providerType: string;
-  baseUrl: string;
-  hasApiKey: boolean;
-  rateLimitSeconds: number | null;
-  rateLimitBurst: number | null;
-  disabledUntil: string | null;
-  isEnabled: boolean;
-  enableInteractiveSearch: boolean;
-  enableAutoSearch: boolean;
-  lastHealthStatus: string | null;
-  lastErrorAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-type IndexerDraft = {
-  name: string;
-  providerType: string;
-  baseUrl: string;
-  apiKey: string;
-  isEnabled: boolean;
-  enableInteractiveSearch: boolean;
-  enableAutoSearch: boolean;
-};
+import type { IndexerRecord, IndexerDraft, ProviderTypeInfo, ConfigFieldDef } from "@/lib/types";
 
 type SettingsIndexersSectionProps = {
   t: Translate;
@@ -59,19 +32,20 @@ type SettingsIndexersSectionProps = {
   editIndexer: (indexer: IndexerRecord) => void;
   toggleIndexerEnabled: (indexer: IndexerRecord) => Promise<void> | void;
   deleteIndexer: (indexer: IndexerRecord) => Promise<void> | void;
+  providerTypes: ProviderTypeInfo[];
 };
 
-const INDEXER_PROVIDER_OPTIONS = [
+const FALLBACK_PROVIDER_OPTIONS = [
   { value: "nzbgeek", label: "Nzbgeek" },
   { value: "dognzb", label: "DogNZB" },
 ];
 
-const INDEXER_PROVIDER_LOGOS = {
+const INDEXER_PROVIDER_LOGOS: Record<string, string> = {
   nzbgeek: "/media-sites/nzbgeek.svg",
 };
 
 function getProviderLogoSrc(value: string) {
-  return INDEXER_PROVIDER_LOGOS[value.trim().toLowerCase() as keyof typeof INDEXER_PROVIDER_LOGOS];
+  return INDEXER_PROVIDER_LOGOS[value.trim().toLowerCase()];
 }
 
 function IndexerProviderTypeCell({ providerType }: { providerType: string }) {
@@ -91,6 +65,73 @@ function IndexerProviderTypeCell({ providerType }: { providerType: string }) {
   );
 }
 
+function DynamicConfigField({
+  field,
+  value,
+  onChange,
+}: {
+  field: ConfigFieldDef;
+  value: string;
+  onChange: (key: string, value: string) => void;
+}) {
+  if (field.fieldType === "bool") {
+    return (
+      <label className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={value === "true"}
+          onChange={(e) => onChange(field.key, e.target.checked ? "true" : "false")}
+          className="accent-primary"
+        />
+        <span className="text-sm">{field.label}</span>
+        {field.helpText ? (
+          <span className="text-xs text-muted-foreground">{field.helpText}</span>
+        ) : null}
+      </label>
+    );
+  }
+
+  if (field.fieldType === "select" && field.options.length > 0) {
+    return (
+      <label>
+        <Label className="mb-2 block">{field.label}</Label>
+        <Select
+          value={value || field.defaultValue || ""}
+          onValueChange={(v) => onChange(field.key, v)}
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {field.options.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {field.helpText ? (
+          <p className="mt-1 text-xs text-muted-foreground">{field.helpText}</p>
+        ) : null}
+      </label>
+    );
+  }
+
+  return (
+    <label>
+      <Label className="mb-2 block">{field.label}</Label>
+      <Input
+        value={value}
+        onChange={(e) => onChange(field.key, e.target.value)}
+        type={field.fieldType === "password" ? "password" : field.fieldType === "number" ? "number" : "text"}
+        required={field.required}
+        placeholder={field.defaultValue ?? ""}
+      />
+      {field.helpText ? (
+        <p className="mt-1 text-xs text-muted-foreground">{field.helpText}</p>
+      ) : null}
+    </label>
+  );
+}
+
 export function SettingsIndexersSection({
   t,
   editingIndexerId,
@@ -105,17 +146,42 @@ export function SettingsIndexersSection({
   editIndexer,
   toggleIndexerEnabled,
   deleteIndexer,
+  providerTypes,
 }: SettingsIndexersSectionProps) {
   const normalizedProviderType = indexerDraft.providerType.trim().toLowerCase();
+
+  // Build provider type options from loaded plugins, falling back to hardcoded list
   const providerTypeOptions = React.useMemo(() => {
+    const baseOptions = providerTypes.length > 0
+      ? providerTypes.map((pt) => ({ value: pt.providerType, label: pt.name }))
+      : FALLBACK_PROVIDER_OPTIONS;
+
     if (!normalizedProviderType) {
-      return INDEXER_PROVIDER_OPTIONS;
+      return baseOptions;
     }
-    if (INDEXER_PROVIDER_OPTIONS.some((option) => option.value === normalizedProviderType)) {
-      return INDEXER_PROVIDER_OPTIONS;
+    if (baseOptions.some((option) => option.value === normalizedProviderType)) {
+      return baseOptions;
     }
-    return [{ value: normalizedProviderType, label: indexerDraft.providerType }, ...INDEXER_PROVIDER_OPTIONS];
-  }, [indexerDraft.providerType, normalizedProviderType]);
+    return [{ value: normalizedProviderType, label: indexerDraft.providerType }, ...baseOptions];
+  }, [indexerDraft.providerType, normalizedProviderType, providerTypes]);
+
+  // Get config fields for the selected provider type
+  const selectedProviderFields = React.useMemo(() => {
+    const match = providerTypes.find(
+      (pt) => pt.providerType === normalizedProviderType,
+    );
+    return match?.configFields ?? [];
+  }, [normalizedProviderType, providerTypes]);
+
+  const handleConfigValueChange = React.useCallback(
+    (key: string, value: string) => {
+      setIndexerDraft((prev) => ({
+        ...prev,
+        configValues: { ...prev.configValues, [key]: value },
+      }));
+    },
+    [setIndexerDraft],
+  );
 
   return (
     <div className="space-y-4 text-sm">
@@ -299,6 +365,39 @@ export function SettingsIndexersSection({
                 />
               </label>
             </div>
+
+            {selectedProviderFields.length > 0 ? (
+              <div className="space-y-3">
+                <Label className="text-sm font-medium">{t("settings.indexerConfig")}</Label>
+                <div className="grid gap-3 md:grid-cols-3">
+                  {selectedProviderFields
+                    .filter((f) => f.fieldType !== "bool")
+                    .map((field) => (
+                      <DynamicConfigField
+                        key={field.key}
+                        field={field}
+                        value={indexerDraft.configValues[field.key] ?? field.defaultValue ?? ""}
+                        onChange={handleConfigValueChange}
+                      />
+                    ))}
+                </div>
+                {selectedProviderFields.some((f) => f.fieldType === "bool") ? (
+                  <div className="flex items-center gap-6">
+                    {selectedProviderFields
+                      .filter((f) => f.fieldType === "bool")
+                      .map((field) => (
+                        <DynamicConfigField
+                          key={field.key}
+                          field={field}
+                          value={indexerDraft.configValues[field.key] ?? field.defaultValue ?? "false"}
+                          onChange={handleConfigValueChange}
+                        />
+                      ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             <div className="flex items-center gap-6">
               <label className="flex items-center gap-2">
                 <input

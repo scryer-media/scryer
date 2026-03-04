@@ -1,0 +1,22 @@
+[package]
+name = "scryer-plugins"
+version = "0.0.4"
+edition = "2021"
+
+[dependencies]
+scryer-application = { path = "../scryer-application" }
+scryer-domain = { path = "../scryer-domain" }
+scryer-rules = { path = "../scryer-rules" }
+extism = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+async-trait = "0.1"
+
+[dev-dependencies]
+chrono = { workspace = true }
+tempfile = "3"
+tokio = { workspace = true, features = ["full"] }
+scryer-domain = { path = "../scryer-domain" }
+scryer-application = { path = "../scryer-application" }

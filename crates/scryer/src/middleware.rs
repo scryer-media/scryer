@@ -317,11 +317,17 @@ pub(crate) struct AuthState {
     pub(crate) dev_auto_login: bool,
 }
 
+/// GraphQL handler that returns a streaming response body.
+///
+/// When the client disconnects (e.g. via `AbortController.abort()` in the browser),
+/// hyper stops polling this body stream, which drops the `execute_batch` future.
+/// This cancels the entire resolver chain — including any outbound reqwest call to
+/// SMG — so the cancellation propagates all the way through to the database query.
 pub(crate) async fn graphql_handler(
     State(state): State<AuthState>,
     headers: HeaderMap,
     body: async_graphql_axum::GraphQLBatchRequest,
-) -> async_graphql_axum::GraphQLResponse {
+) -> Response {
     let actor = resolve_actor(&state, &headers).await;
     let batch = body.into_inner();
     let batch = if let Some(user) = actor {
@@ -340,7 +346,21 @@ pub(crate) async fn graphql_handler(
     } else {
         batch
     };
-    state.schema.execute_batch(batch).await.into()
+
+    // Wrap execution in a single-item stream so the future is dropped (cancelled)
+    // when hyper detects the client has disconnected.
+    let schema = state.schema.clone();
+    let body_stream = futures_util::stream::once(async move {
+        let batch_response = schema.execute_batch(batch).await;
+        Ok::<_, std::io::Error>(
+            serde_json::to_vec(&batch_response).unwrap_or_else(|_| b"{}".to_vec()),
+        )
+    });
+
+    Response::builder()
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from_stream(body_stream))
+        .unwrap()
 }
 
 async fn resolve_actor(
