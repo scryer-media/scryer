@@ -270,7 +270,7 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_SERVICE,
             scope: SETTINGS_SCOPE_SYSTEM,
-            key_name: "jwt.private_key",
+            key_name: "jwt.hmac_secret",
             data_type: "string",
             default_value_json: "null",
             is_sensitive: true,

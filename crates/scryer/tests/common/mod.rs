@@ -45,6 +45,19 @@ impl TestContext {
             .await
             .expect("failed to create in-memory SQLite");
 
+        // Seed the JWT setting definition so ensure_jwt_hmac_secret can persist the secret
+        db.ensure_setting_definition(
+            "security",
+            "system",
+            "jwt.hmac_secret",
+            "string",
+            "\"\"",
+            true,
+            None,
+        )
+        .await
+        .expect("failed to seed jwt setting definition");
+
         // Generate JWT HMAC secret via the standard bootstrap path
         let jwt_hmac_secret =
             scryer_infrastructure::jwt_keys::ensure_jwt_hmac_secret(&db, None)
