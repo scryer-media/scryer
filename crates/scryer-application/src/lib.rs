@@ -80,7 +80,7 @@ pub use null_repositories::{
     NullWantedItemRepository,
 };
 pub use types::{
-    IndexerQueryStats, IndexerSearchResult, JwtAuthConfig, PrimaryCollectionSummary,
+    IndexerQueryStats, IndexerSearchResponse, IndexerSearchResult, JwtAuthConfig, PrimaryCollectionSummary,
     ReleaseDecision, ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature, SystemHealth,
     TitleMediaFile, TitleMetadataUpdate, TitleReleaseBlocklistEntry, WantedItem,
 };
@@ -607,7 +607,7 @@ pub trait PluginInstallationRepository: Send + Sync {
     async fn list_plugin_installations(&self) -> AppResult<Vec<PluginInstallation>>;
     async fn get_plugin_installation(&self, plugin_id: &str) -> AppResult<Option<PluginInstallation>>;
     async fn create_plugin_installation(&self, installation: &PluginInstallation, wasm_bytes: Option<&[u8]>) -> AppResult<PluginInstallation>;
-    async fn update_plugin_installation(&self, installation: &PluginInstallation) -> AppResult<PluginInstallation>;
+    async fn update_plugin_installation(&self, installation: &PluginInstallation, wasm_bytes: Option<&[u8]>) -> AppResult<PluginInstallation>;
     async fn delete_plugin_installation(&self, plugin_id: &str) -> AppResult<()>;
     async fn get_enabled_plugin_wasm_bytes(&self) -> AppResult<Vec<(PluginInstallation, Option<Vec<u8>>)>>;
     async fn seed_builtin(&self, plugin_id: &str, name: &str, description: &str, version: &str, provider_type: &str) -> AppResult<()>;
@@ -652,7 +652,7 @@ pub trait IndexerClient: Send + Sync {
         mode: SearchMode,
         season: Option<u32>,
         episode: Option<u32>,
-    ) -> AppResult<Vec<IndexerSearchResult>>;
+    ) -> AppResult<IndexerSearchResponse>;
 }
 
 /// Provides WASM-backed indexer clients for provider types not handled natively.
@@ -682,6 +682,15 @@ pub trait IndexerPluginProvider: Send + Sync {
     /// Returns the human-readable plugin name for a given provider type.
     fn plugin_name_for_provider(&self, _provider_type: &str) -> Option<String> {
         None
+    }
+    /// Returns the search capabilities declared by the plugin for a provider type.
+    /// Defaults to all-true for backward compat with unknown providers.
+    fn capabilities_for_provider(&self, _provider_type: &str) -> scryer_domain::IndexerProviderCapabilities {
+        scryer_domain::IndexerProviderCapabilities {
+            search: true,
+            imdb_search: true,
+            tvdb_search: true,
+        }
     }
 }
 
@@ -1290,32 +1299,38 @@ mod tests {
             _mode: SearchMode,
             _season: Option<u32>,
             _episode: Option<u32>,
-        ) -> AppResult<Vec<IndexerSearchResult>> {
+        ) -> AppResult<IndexerSearchResponse> {
             if let Some(tvdb) = tvdb_id {
                 tracing::info!(tvdb_id = %tvdb, category = ?category, "mock nzbgeek search");
             }
             if let Some(imdb) = imdb_id {
                 tracing::info!(imdb_id = %imdb, category = ?category, "mock nzbgeek search");
             }
-            Ok(vec![IndexerSearchResult {
-                source: "nzbgeek".into(),
-                title: format!("match for {query}"),
-                link: None,
-                download_url: None,
-                size_bytes: None,
-                published_at: Some("1970-01-01T00:00:00Z".into()),
-                thumbs_up: None,
-                thumbs_down: None,
-                nzbgeek_languages: None,
-                nzbgeek_subtitles: None,
-                nzbgeek_grabs: None,
-                nzbgeek_password_protected: None,
-                parsed_release_metadata: None,
-                quality_profile_decision: None,
-                extra: Default::default(),
-                guid: None,
-                info_url: None,
-            }])
+            Ok(IndexerSearchResponse {
+                results: vec![IndexerSearchResult {
+                    source: "nzbgeek".into(),
+                    title: format!("match for {query}"),
+                    link: None,
+                    download_url: None,
+                    size_bytes: None,
+                    published_at: Some("1970-01-01T00:00:00Z".into()),
+                    thumbs_up: None,
+                    thumbs_down: None,
+                    nzbgeek_languages: None,
+                    nzbgeek_subtitles: None,
+                    nzbgeek_grabs: None,
+                    nzbgeek_password_protected: None,
+                    parsed_release_metadata: None,
+                    quality_profile_decision: None,
+                    extra: Default::default(),
+                    guid: None,
+                    info_url: None,
+                }],
+                api_current: None,
+                api_max: None,
+                grab_current: None,
+                grab_max: None,
+            })
         }
     }
 

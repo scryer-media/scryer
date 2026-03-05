@@ -67,7 +67,8 @@ async fn nzbgeek_search_movie_by_category() {
             None,
         )
         .await
-        .expect("search should succeed");
+        .expect("search should succeed")
+        .results;
 
     assert_eq!(results.len(), 2);
     assert!(results[0].title.contains("2160p"), "first result should be 4K");
@@ -99,7 +100,8 @@ async fn nzbgeek_search_movie_extracts_size() {
             None,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .results;
 
     assert!(
         results[0].size_bytes.unwrap_or(0) > 0,
@@ -133,7 +135,8 @@ async fn nzbgeek_search_movie_extracts_download_url() {
             None,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .results;
 
     assert!(
         results[0].download_url.is_some(),
@@ -175,7 +178,8 @@ async fn nzbgeek_search_tv_by_category() {
             None,
         )
         .await
-        .expect("TV search should succeed");
+        .expect("TV search should succeed")
+        .results;
 
     assert_eq!(results.len(), 2);
 }
@@ -366,7 +370,8 @@ async fn nzbgeek_search_empty_results() {
             None,
         )
         .await
-        .expect("empty search should succeed");
+        .expect("empty search should succeed")
+        .results;
 
     assert!(results.is_empty());
 }
@@ -398,7 +403,8 @@ async fn nzbgeek_search_single_item_response() {
             None,
         )
         .await
-        .expect("single-item response should parse correctly");
+        .expect("single-item response should parse correctly")
+        .results;
 
     assert_eq!(results.len(), 1, "should parse single item response");
     assert!(results[0].title.contains("2160p"));
@@ -579,7 +585,7 @@ async fn nzbgeek_search_empty_query_and_no_ids_fails() {
 
     // Should return empty results or error when no query/ids
     assert!(
-        results.is_err() || results.unwrap().is_empty(),
+        results.is_err() || results.unwrap().results.is_empty(),
         "empty query with no IDs should fail or return empty"
     );
 }
@@ -614,7 +620,8 @@ async fn nzbgeek_search_extracts_metadata_attributes() {
             None,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .results;
 
     let result = &results[0];
     assert_eq!(result.thumbs_up, Some(42), "thumbsup should be parsed");

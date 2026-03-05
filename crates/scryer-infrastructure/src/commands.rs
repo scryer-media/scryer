@@ -18,6 +18,8 @@ use crate::{
 
 use tokio::sync::oneshot::Sender;
 
+type PluginWasmBytesReply = AppResult<Vec<(PluginInstallation, Option<Vec<u8>>)>>;
+
 use crate::encryption::EncryptionKey;
 
 pub(crate) enum DbCommand {
@@ -495,6 +497,7 @@ pub(crate) enum DbCommand {
     },
     UpdatePluginInstallation {
         installation: PluginInstallation,
+        wasm_bytes: Option<Vec<u8>>,
         reply: Sender<AppResult<PluginInstallation>>,
     },
     DeletePluginInstallation {
@@ -502,7 +505,7 @@ pub(crate) enum DbCommand {
         reply: Sender<AppResult<()>>,
     },
     GetEnabledPluginWasmBytes {
-        reply: Sender<AppResult<Vec<(PluginInstallation, Option<Vec<u8>>)>>>,
+        reply: Sender<PluginWasmBytesReply>,
     },
     SeedBuiltinPlugin {
         plugin_id: String,
@@ -1257,8 +1260,8 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                         create_plugin_installation_query(&pool, &installation, wasm_bytes.as_deref()).await,
                     );
                 }
-                DbCommand::UpdatePluginInstallation { installation, reply } => {
-                    let _ = reply.send(update_plugin_installation_query(&pool, &installation).await);
+                DbCommand::UpdatePluginInstallation { installation, wasm_bytes, reply } => {
+                    let _ = reply.send(update_plugin_installation_query(&pool, &installation, wasm_bytes.as_deref()).await);
                 }
                 DbCommand::DeletePluginInstallation { plugin_id, reply } => {
                     let _ = reply.send(delete_plugin_installation_query(&pool, &plugin_id).await);

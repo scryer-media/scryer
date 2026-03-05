@@ -667,6 +667,7 @@ pub(crate) fn from_registry_plugin(p: RegistryPlugin) -> RegistryPluginPayload {
         is_installed: p.is_installed,
         is_enabled: p.is_enabled,
         installed_version: p.installed_version,
+        update_available: p.update_available,
     }
 }
 

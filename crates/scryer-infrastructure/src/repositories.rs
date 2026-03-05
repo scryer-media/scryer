@@ -1178,11 +1178,13 @@ impl PluginInstallationRepository for SqliteServices {
     async fn update_plugin_installation(
         &self,
         installation: &PluginInstallation,
+        wasm_bytes: Option<&[u8]>,
     ) -> AppResult<PluginInstallation> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
             .send(crate::commands::DbCommand::UpdatePluginInstallation {
                 installation: installation.clone(),
+                wasm_bytes: wasm_bytes.map(|b| b.to_vec()),
                 reply: reply_tx,
             })
             .await

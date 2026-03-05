@@ -178,7 +178,7 @@ impl PluginInstallationRepository for NullPluginInstallationRepository {
     async fn create_plugin_installation(&self, _installation: &PluginInstallation, _wasm_bytes: Option<&[u8]>) -> AppResult<PluginInstallation> {
         Err(AppError::Repository("plugin installation repository is not configured".to_string()))
     }
-    async fn update_plugin_installation(&self, _installation: &PluginInstallation) -> AppResult<PluginInstallation> {
+    async fn update_plugin_installation(&self, _installation: &PluginInstallation, _wasm_bytes: Option<&[u8]>) -> AppResult<PluginInstallation> {
         Err(AppError::Repository("plugin installation repository is not configured".to_string()))
     }
     async fn delete_plugin_installation(&self, _plugin_id: &str) -> AppResult<()> {

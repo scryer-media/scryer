@@ -142,8 +142,8 @@ impl AppUseCase {
 
         while let Some(result) = set.join_next().await {
             match result {
-                Ok(Ok(mut items)) => {
-                    raw_results.append(&mut items);
+                Ok(Ok(mut response)) => {
+                    raw_results.append(&mut response.results);
                 }
                 Ok(Err(error)) => {
                     query_failures += 1;

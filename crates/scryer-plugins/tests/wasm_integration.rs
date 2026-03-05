@@ -73,7 +73,8 @@ async fn test_indexer_search() {
             None,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .results;
 
     assert_eq!(results.len(), 1);
     let r = &results[0];

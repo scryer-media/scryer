@@ -33,4 +33,5 @@ p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem", "arithmetic"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 toml = "0.8"
 extism = "1.13"
+semver = "1"
 wiremock = "0.6"

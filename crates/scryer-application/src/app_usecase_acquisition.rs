@@ -1073,11 +1073,13 @@ pub async fn start_background_acquisition_poller(
     let mut poll_interval = tokio::time::interval(std::time::Duration::from_secs(60));
     let mut sync_interval = tokio::time::interval(std::time::Duration::from_secs(3600));
     let mut metadata_refresh_interval = tokio::time::interval(std::time::Duration::from_secs(43200)); // 12h
+    let mut registry_refresh_interval = tokio::time::interval(std::time::Duration::from_secs(86400)); // 24h
 
     // Consume the first tick immediately
     poll_interval.tick().await;
     sync_interval.tick().await;
     metadata_refresh_interval.tick().await;
+    registry_refresh_interval.tick().await;
 
     let wake = app.services.acquisition_wake.clone();
 
@@ -1101,6 +1103,12 @@ pub async fn start_background_acquisition_poller(
             _ = metadata_refresh_interval.tick() => {
                 info!("starting periodic metadata refresh for monitored series");
                 app.refresh_monitored_series_metadata().await;
+            }
+            _ = registry_refresh_interval.tick() => {
+                info!("refreshing plugin registry");
+                if let Err(e) = app.refresh_plugin_registry_internal().await {
+                    warn!(error = %e, "periodic plugin registry refresh failed");
+                }
             }
         }
     }
