@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 pub use scryer_domain::{ConfigFieldDef, ConfigFieldOption};
+pub use scryer_domain::IndexerProviderCapabilities as IndexerCapabilities;
 use serde::{Deserialize, Serialize};
 
 /// Returned by a plugin's `describe()` export.
@@ -41,16 +42,6 @@ pub struct PluginScoringPolicy {
     pub applied_facets: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct IndexerCapabilities {
-    #[serde(default)]
-    pub search: bool,
-    #[serde(default)]
-    pub imdb_search: bool,
-    #[serde(default)]
-    pub tvdb_search: bool,
-}
-
 /// Sent to a plugin's `search()` export.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginSearchRequest {
@@ -76,6 +67,14 @@ pub struct PluginSearchRequest {
 pub struct PluginSearchResponse {
     #[serde(default)]
     pub results: Vec<PluginSearchResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_current: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_max: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grab_current: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grab_max: Option<u32>,
 }
 
 /// A single search result from a plugin.

@@ -1025,6 +1025,7 @@ pub struct RegistryPluginPayload {
     pub is_installed: bool,
     pub is_enabled: bool,
     pub installed_version: Option<String>,
+    pub update_available: bool,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -1057,6 +1058,11 @@ pub struct UninstallPluginInput {
 pub struct TogglePluginInput {
     pub plugin_id: String,
     pub enabled: bool,
+}
+
+#[derive(InputObject)]
+pub struct UpgradePluginInput {
+    pub plugin_id: String,
 }
 
 // ── Provider Type Config Schema ─────────────────────────────────────────

@@ -133,6 +133,17 @@ pub struct IndexerSearchResult {
     pub info_url: Option<String>,
 }
 
+/// Wrapper around search results that also carries API limit metadata
+/// from the indexer response.
+#[derive(Clone, Debug)]
+pub struct IndexerSearchResponse {
+    pub results: Vec<IndexerSearchResult>,
+    pub api_current: Option<u32>,
+    pub api_max: Option<u32>,
+    pub grab_current: Option<u32>,
+    pub grab_max: Option<u32>,
+}
+
 #[derive(Clone, Debug)]
 pub struct JwtAuthConfig {
     pub issuer: String,

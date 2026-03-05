@@ -2,7 +2,8 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use scryer_application::{
-    AppError, AppResult, IndexerClient, IndexerRoutingPlan, IndexerSearchResult, SearchMode,
+    AppError, AppResult, IndexerClient, IndexerRoutingPlan, IndexerSearchResponse,
+    IndexerSearchResult, SearchMode,
 };
 use tracing::warn;
 
@@ -38,7 +39,7 @@ impl IndexerClient for WasmIndexerClient {
         _mode: SearchMode,
         season: Option<u32>,
         episode: Option<u32>,
-    ) -> AppResult<Vec<IndexerSearchResult>> {
+    ) -> AppResult<IndexerSearchResponse> {
         let request = PluginSearchRequest {
             query,
             imdb_id,
@@ -126,6 +127,12 @@ impl IndexerClient for WasmIndexerClient {
             })
             .collect();
 
-        Ok(results)
+        Ok(IndexerSearchResponse {
+            results,
+            api_current: response.api_current,
+            api_max: response.api_max,
+            grab_current: response.grab_current,
+            grab_max: response.grab_max,
+        })
     }
 }

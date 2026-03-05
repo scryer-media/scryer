@@ -586,6 +586,18 @@ pub enum DomainError {
 
 pub type DomainResult<T> = Result<T, DomainError>;
 
+/// Indexer capabilities declared by a plugin. Used by the dispatcher to skip
+/// indexers that don't support a given search type.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IndexerProviderCapabilities {
+    #[serde(default)]
+    pub search: bool,
+    #[serde(default)]
+    pub imdb_search: bool,
+    #[serde(default)]
+    pub tvdb_search: bool,
+}
+
 /// Describes a single configuration field a plugin expects.
 /// Used by the plugin system to advertise what config keys are needed,
 /// and by the frontend to render dynamic form fields.

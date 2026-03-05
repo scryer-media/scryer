@@ -3347,6 +3347,7 @@ dependencies = [
  "reqwest",
  "scryer-domain",
  "scryer-rules",
+ "semver",
  "serde",
  "serde_json",
  "sha2",

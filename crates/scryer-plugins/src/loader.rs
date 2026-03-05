@@ -212,6 +212,22 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
             .map(|loaded| loaded.descriptor.name.clone())
     }
 
+    fn capabilities_for_provider(&self, provider_type: &str) -> scryer_domain::IndexerProviderCapabilities {
+        let key = provider_type.trim().to_ascii_lowercase();
+        self.plugins
+            .get(&key)
+            .map(|loaded| scryer_domain::IndexerProviderCapabilities {
+                search: loaded.descriptor.capabilities.search,
+                imdb_search: loaded.descriptor.capabilities.imdb_search,
+                tvdb_search: loaded.descriptor.capabilities.tvdb_search,
+            })
+            .unwrap_or(scryer_domain::IndexerProviderCapabilities {
+                search: true,
+                imdb_search: true,
+                tvdb_search: true,
+            })
+    }
+
     fn client_for_provider(&self, config: &IndexerConfig) -> Option<Arc<dyn IndexerClient>> {
         let provider = config.provider_type.trim().to_ascii_lowercase();
         let loaded = self.plugins.get(&provider)?;
@@ -339,6 +355,11 @@ impl IndexerPluginProvider for DynamicPluginProvider {
     fn plugin_name_for_provider(&self, provider_type: &str) -> Option<String> {
         let guard = self.inner.read().expect("DynamicPluginProvider lock poisoned");
         guard.plugin_name_for_provider(provider_type)
+    }
+
+    fn capabilities_for_provider(&self, provider_type: &str) -> scryer_domain::IndexerProviderCapabilities {
+        let guard = self.inner.read().expect("DynamicPluginProvider lock poisoned");
+        guard.capabilities_for_provider(provider_type)
     }
 
     fn reload_plugins(

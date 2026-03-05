@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use scryer_application::{
     AppError, AppResult, IndexerClient, IndexerConfigRepository, IndexerPluginProvider,
-    IndexerRoutingPlan, IndexerSearchResult, IndexerStatsTracker, SearchMode,
+    IndexerRoutingPlan, IndexerSearchResponse, IndexerSearchResult, IndexerStatsTracker, SearchMode,
 };
 use scryer_domain::IndexerConfig;
 use tracing::{info, warn};
@@ -58,7 +58,7 @@ impl IndexerClient for MultiIndexerSearchClient {
         mode: SearchMode,
         season: Option<u32>,
         episode: Option<u32>,
-    ) -> AppResult<Vec<IndexerSearchResult>> {
+    ) -> AppResult<IndexerSearchResponse> {
         let configs = self.indexer_configs.list(None).await.unwrap_or_else(|err| {
             warn!(error = %err, "failed to load indexer configs");
             vec![]
@@ -78,7 +78,13 @@ impl IndexerClient for MultiIndexerSearchClient {
 
         if enabled.is_empty() {
             info!(mode = ?mode, "no enabled indexer configs found");
-            return Ok(vec![]);
+            return Ok(IndexerSearchResponse {
+                results: vec![],
+                api_current: None,
+                api_max: None,
+                grab_current: None,
+                grab_max: None,
+            });
         }
 
         info!(
@@ -118,6 +124,23 @@ impl IndexerClient for MultiIndexerSearchClient {
                     }
                 })
                 .unwrap_or_else(|| newznab_categories.clone());
+
+            // Skip indexers that don't support the requested search type
+            let caps = self.plugin_provider.capabilities_for_provider(&config.provider_type);
+            if imdb_id.is_some() && !caps.imdb_search {
+                info!(
+                    indexer = config.name.as_str(),
+                    "skipping indexer: does not support IMDB search"
+                );
+                continue;
+            }
+            if tvdb_id.is_some() && !caps.tvdb_search {
+                info!(
+                    indexer = config.name.as_str(),
+                    "skipping indexer: does not support TVDB search"
+                );
+                continue;
+            }
 
             let client = match Self::client_from_config(
                 config,
@@ -161,10 +184,17 @@ impl IndexerClient for MultiIndexerSearchClient {
         let mut all_results: Vec<IndexerSearchResult> = Vec::new();
         while let Some(join_result) = set.join_next().await {
             match join_result {
-                Ok((id, name, Ok(mut items))) => {
-                    info!(indexer = name.as_str(), count = items.len(), "indexer returned results");
+                Ok((id, name, Ok(mut response))) => {
+                    info!(indexer = name.as_str(), count = response.results.len(), "indexer returned results");
                     self.stats_tracker.record_query(&id, &name, true);
-                    all_results.append(&mut items);
+                    self.stats_tracker.record_api_limits(
+                        &id,
+                        response.api_current,
+                        response.api_max,
+                        response.grab_current,
+                        response.grab_max,
+                    );
+                    all_results.append(&mut response.results);
                 }
                 Ok((id, name, Err(err))) => {
                     warn!(indexer = name.as_str(), error = %err, "indexer search failed");
@@ -176,6 +206,12 @@ impl IndexerClient for MultiIndexerSearchClient {
             }
         }
 
-        Ok(all_results)
+        Ok(IndexerSearchResponse {
+            results: all_results,
+            api_current: None,
+            api_max: None,
+            grab_current: None,
+            grab_max: None,
+        })
     }
 }

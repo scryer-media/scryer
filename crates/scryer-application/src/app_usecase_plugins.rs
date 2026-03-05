@@ -23,6 +23,8 @@ pub struct RegistryPlugin {
     pub is_installed: bool,
     pub is_enabled: bool,
     pub installed_version: Option<String>,
+    /// True when the registry version is newer than the installed version.
+    pub update_available: bool,
 }
 
 /// Raw registry JSON format (matches scryer-plugins/registry.json).
@@ -190,6 +192,15 @@ impl AppUseCase {
                 is_installed: inst.is_some(),
                 is_enabled: inst.map(|i| i.is_enabled).unwrap_or(false),
                 installed_version: inst.map(|i| i.version.clone()),
+                update_available: inst
+                    .map(|i| {
+                        semver::Version::parse(&entry.version)
+                            .ok()
+                            .zip(semver::Version::parse(&i.version).ok())
+                            .map(|(reg, inst)| reg > inst)
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(false),
             });
         }
 
@@ -213,6 +224,7 @@ impl AppUseCase {
                     is_installed: true,
                     is_enabled: inst.is_enabled,
                     installed_version: Some(inst.version.clone()),
+                    update_available: false,
                 });
             }
         }
@@ -226,10 +238,13 @@ impl AppUseCase {
         actor: &User,
     ) -> AppResult<Vec<RegistryPlugin>> {
         require(actor, &Entitlement::ManageConfig)?;
+        self.refresh_plugin_registry_internal().await?;
+        self.list_available_plugins(actor).await
+    }
 
-        let registry_url = DEFAULT_REGISTRY_URL.to_string();
-
-        let body = reqwest::get(&registry_url)
+    /// Internal registry refresh (no auth check) for use by startup and background tasks.
+    pub async fn refresh_plugin_registry_internal(&self) -> AppResult<()> {
+        let body = reqwest::get(DEFAULT_REGISTRY_URL)
             .await
             .map_err(|e| AppError::Repository(format!("failed to fetch plugin registry: {e}")))?
             .text()
@@ -238,18 +253,16 @@ impl AppUseCase {
                 AppError::Repository(format!("failed to read plugin registry body: {e}"))
             })?;
 
-        // Validate it parses
         let _manifest: RegistryManifest = serde_json::from_str(&body).map_err(|e| {
             AppError::Validation(format!("invalid plugin registry JSON: {e}"))
         })?;
 
-        // Store in cache
         self.services
             .plugin_installations
             .store_registry_cache(&body)
             .await?;
 
-        self.list_available_plugins(actor).await
+        Ok(())
     }
 
     /// Install a plugin from the registry.
@@ -393,7 +406,109 @@ impl AppUseCase {
         let result = self
             .services
             .plugin_installations
-            .update_plugin_installation(&installation)
+            .update_plugin_installation(&installation, None)
+            .await?;
+
+        self.rebuild_plugin_provider().await?;
+        Ok(result)
+    }
+
+    /// Upgrade a non-builtin plugin to the latest registry version.
+    pub async fn upgrade_plugin(
+        &self,
+        actor: &User,
+        plugin_id: &str,
+    ) -> AppResult<PluginInstallation> {
+        require(actor, &Entitlement::ManageConfig)?;
+
+        let installation = self
+            .services
+            .plugin_installations
+            .get_plugin_installation(plugin_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("plugin '{plugin_id}' not installed")))?;
+
+        if installation.is_builtin {
+            return Err(AppError::Validation(
+                "cannot upgrade built-in plugins".to_string(),
+            ));
+        }
+
+        // Look up in cached registry
+        let registry_json = self
+            .services
+            .plugin_installations
+            .get_registry_cache()
+            .await?
+            .ok_or_else(|| {
+                AppError::Validation(
+                    "plugin registry not loaded; refresh first".to_string(),
+                )
+            })?;
+
+        let manifest: RegistryManifest = serde_json::from_str(&registry_json)
+            .map_err(|e| AppError::Repository(format!("invalid cached registry: {e}")))?;
+
+        let entry = manifest
+            .plugins
+            .iter()
+            .find(|p| p.id == plugin_id)
+            .ok_or_else(|| {
+                AppError::NotFound(format!("plugin '{plugin_id}' not in registry"))
+            })?;
+
+        // Verify a newer version exists
+        let reg_ver = semver::Version::parse(&entry.version).map_err(|e| {
+            AppError::Validation(format!("invalid registry version '{}': {e}", entry.version))
+        })?;
+        let inst_ver = semver::Version::parse(&installation.version).map_err(|e| {
+            AppError::Validation(format!(
+                "invalid installed version '{}': {e}",
+                installation.version
+            ))
+        })?;
+        if reg_ver <= inst_ver {
+            return Err(AppError::Validation(format!(
+                "plugin '{plugin_id}' is already at version {} (registry has {})",
+                installation.version, entry.version
+            )));
+        }
+
+        let wasm_url = entry.wasm_url.as_ref().ok_or_else(|| {
+            AppError::Validation(format!(
+                "plugin '{plugin_id}' has no wasm_url in registry"
+            ))
+        })?;
+
+        // Download WASM
+        let wasm_bytes = reqwest::get(wasm_url)
+            .await
+            .map_err(|e| AppError::Repository(format!("failed to download plugin WASM: {e}")))?
+            .bytes()
+            .await
+            .map_err(|e| AppError::Repository(format!("failed to read plugin WASM: {e}")))?;
+
+        // Verify SHA256 if provided
+        if let Some(ref expected_sha) = entry.wasm_sha256 {
+            let actual_sha = format!("{:x}", Sha256::digest(&wasm_bytes));
+            if actual_sha != *expected_sha {
+                return Err(AppError::Validation(format!(
+                    "WASM SHA256 mismatch: expected {expected_sha}, got {actual_sha}"
+                )));
+            }
+        }
+
+        let mut updated = installation;
+        updated.version = entry.version.clone();
+        updated.name = entry.name.clone();
+        updated.description = entry.description.clone();
+        updated.wasm_sha256 = entry.wasm_sha256.clone();
+        updated.updated_at = Utc::now();
+
+        let result = self
+            .services
+            .plugin_installations
+            .update_plugin_installation(&updated, Some(&wasm_bytes))
             .await?;
 
         self.rebuild_plugin_provider().await?;

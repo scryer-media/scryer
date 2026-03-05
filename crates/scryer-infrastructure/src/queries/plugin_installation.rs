@@ -109,16 +109,22 @@ pub(crate) async fn create_plugin_installation_query(
 pub(crate) async fn update_plugin_installation_query(
     pool: &SqlitePool,
     installation: &PluginInstallation,
+    wasm_bytes: Option<&[u8]>,
 ) -> AppResult<PluginInstallation> {
     sqlx::query(
         "UPDATE plugin_installations
-         SET name = ?, description = ?, version = ?, is_enabled = ?, updated_at = ?
+         SET name = ?, description = ?, version = ?, is_enabled = ?,
+             wasm_bytes = COALESCE(?, wasm_bytes),
+             wasm_sha256 = COALESCE(?, wasm_sha256),
+             updated_at = ?
          WHERE plugin_id = ?",
     )
     .bind(&installation.name)
     .bind(&installation.description)
     .bind(&installation.version)
     .bind(installation.is_enabled as i32)
+    .bind(wasm_bytes)
+    .bind(&installation.wasm_sha256)
     .bind(installation.updated_at.to_rfc3339())
     .bind(&installation.plugin_id)
     .execute(pool)

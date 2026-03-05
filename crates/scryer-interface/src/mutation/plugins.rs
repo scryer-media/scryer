@@ -62,4 +62,18 @@ impl PluginMutations {
             .map_err(to_gql_error)?;
         Ok(from_plugin_installation(installation))
     }
+
+    async fn upgrade_plugin(
+        &self,
+        ctx: &Context<'_>,
+        input: UpgradePluginInput,
+    ) -> GqlResult<PluginInstallationPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let installation = app
+            .upgrade_plugin(&actor, &input.plugin_id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_plugin_installation(installation))
+    }
 }

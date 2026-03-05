@@ -36,6 +36,7 @@ impl ApqCache {
         self.map.get(key)
     }
 
+    #[allow(clippy::map_entry)] // entry API borrows map, conflicting with eviction logic
     fn insert(&mut self, key: String, entry: ApqCacheEntry) {
         if self.map.contains_key(&key) {
             self.map.insert(key, entry);
