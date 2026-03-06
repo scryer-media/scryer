@@ -9,7 +9,12 @@ RUN apk add --no-cache \
       openssl-dev \
       sqlite-dev \
       musl-dev \
+      mold \
  && cargo install --locked cargo-chef
+
+# Use mold for faster linking in all stages (chef cook and cargo run).
+# -fuse-ld=mold tells gcc (Alpine's default cc) to use mold as the linker.
+ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold"
 
 FROM rust-base AS planner
 
