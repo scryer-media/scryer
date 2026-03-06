@@ -72,11 +72,14 @@ impl TestContext {
             "SCORE".to_string(),
         );
 
-        // Build indexer client backed by built-in WASM plugins
+        // Build indexer client backed by built-in WASM plugins (using DynamicPluginProvider
+        // so reload_plugins works in integration tests)
         let plugin_provider: Arc<dyn IndexerPluginProvider> = Arc::new(
-            scryer_plugins::WasmIndexerPluginProvider::empty()
-                .with_builtin(scryer_plugins::builtins::NZBGEEK_WASM)
-                .with_builtin(scryer_plugins::builtins::NEWZNAB_WASM),
+            scryer_plugins::DynamicPluginProvider::new(
+                scryer_plugins::WasmIndexerPluginProvider::empty()
+                    .with_builtin(scryer_plugins::builtins::NZBGEEK_WASM)
+                    .with_builtin(scryer_plugins::builtins::NEWZNAB_WASM),
+            ),
         );
         let indexer_stats: Arc<dyn scryer_application::IndexerStatsTracker> =
             Arc::new(scryer_infrastructure::InMemoryIndexerStatsTracker::new());
