@@ -90,14 +90,14 @@ impl AppUseCase {
 
     /// Rebuild the plugin provider from database state + builtins.
     pub async fn rebuild_plugin_provider(&self) -> AppResult<()> {
-        let installations = self
+        let enabled = self
             .services
             .plugin_installations
             .get_enabled_plugin_wasm_bytes()
             .await?;
 
         // Collect WASM bytes for user-installed (non-builtin) enabled plugins
-        let external_bytes: Vec<Vec<u8>> = installations
+        let external_bytes: Vec<Vec<u8>> = enabled
             .iter()
             .filter(|(inst, _)| !inst.is_builtin)
             .filter_map(|(_, wasm)| wasm.clone())
@@ -105,10 +105,16 @@ impl AppUseCase {
         let external_refs: Vec<&[u8]> = external_bytes.iter().map(|b| b.as_slice()).collect();
 
         // Collect provider_types of builtins the user has disabled
-        let disabled_builtins: Vec<String> = installations
+        // (must query all installations, not just enabled ones)
+        let all_installations = self
+            .services
+            .plugin_installations
+            .list_plugin_installations()
+            .await?;
+        let disabled_builtins: Vec<String> = all_installations
             .iter()
-            .filter(|(inst, _)| inst.is_builtin && !inst.is_enabled)
-            .map(|(inst, _)| inst.provider_type.clone())
+            .filter(|inst| inst.is_builtin && !inst.is_enabled)
+            .map(|inst| inst.provider_type.clone())
             .collect();
 
         if let Some(ref provider) = self.services.plugin_provider {
@@ -645,3 +651,7 @@ impl AppUseCase {
         Ok(result)
     }
 }
+
+#[cfg(test)]
+#[path = "app_usecase_plugins_tests.rs"]
+mod app_usecase_plugins_tests;
