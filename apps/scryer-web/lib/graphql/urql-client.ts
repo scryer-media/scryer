@@ -45,6 +45,7 @@ export const scryerFetch: typeof fetch = async (input, init) => {
 export const backendClient = new Client({
   url: import.meta.env.SCRYER_GRAPHQL_URL ?? "/graphql",
   preferGetMethod: false,
+  requestPolicy: "network-only",
   fetch: scryerFetch,
   exchanges: [
     subscriptionExchange({
