@@ -25,6 +25,8 @@ pub struct RegistryPlugin {
     pub installed_version: Option<String>,
     /// True when the registry version is newer than the installed version.
     pub update_available: bool,
+    /// When set, installing this plugin auto-creates an IndexerConfig with this URL.
+    pub default_base_url: Option<String>,
 }
 
 /// Raw registry JSON format (matches scryer-plugins/registry.json).
@@ -120,10 +122,69 @@ impl AppUseCase {
         Ok(())
     }
 
+    /// Ensure every loaded indexer plugin with a `default_base_url` has at least
+    /// one IndexerConfig. This covers the case where a plugin was installed before
+    /// the auto-create logic existed, or when the registry was stale at install time.
+    pub async fn reconcile_indexer_configs(&self) -> AppResult<()> {
+        let Some(ref provider) = self.services.plugin_provider else {
+            return Ok(());
+        };
+
+        let now = Utc::now();
+        for pt in provider.available_provider_types() {
+            let Some(default_url) = provider.default_base_url_for_provider(&pt) else {
+                continue;
+            };
+            let existing = self
+                .services
+                .indexer_configs
+                .list(Some(pt.clone()))
+                .await
+                .unwrap_or_default();
+            if existing.is_empty() {
+                let name = provider
+                    .plugin_name_for_provider(&pt)
+                    .unwrap_or_else(|| pt.clone());
+                let config = IndexerConfig {
+                    id: Id::new().0,
+                    name,
+                    provider_type: pt.clone(),
+                    base_url: default_url,
+                    api_key_encrypted: None,
+                    is_enabled: true,
+                    enable_interactive_search: true,
+                    enable_auto_search: true,
+                    rate_limit_seconds: None,
+                    rate_limit_burst: None,
+                    disabled_until: None,
+                    last_health_status: None,
+                    last_error_at: None,
+                    config_json: None,
+                    created_at: now,
+                    updated_at: now,
+                };
+                if let Err(e) = self.services.indexer_configs.create(config).await {
+                    tracing::warn!(
+                        error = %e,
+                        provider_type = pt.as_str(),
+                        "failed to auto-create indexer config during reconciliation"
+                    );
+                } else {
+                    tracing::info!(
+                        provider_type = pt.as_str(),
+                        "auto-created indexer config for plugin"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Returns all available indexer provider types with their config field schemas.
+    /// Tuple: (provider_type, name, config_fields, default_base_url)
     pub fn available_indexer_provider_types(
         &self,
-    ) -> Vec<(String, String, Vec<scryer_domain::ConfigFieldDef>)> {
+    ) -> Vec<(String, String, Vec<scryer_domain::ConfigFieldDef>, Option<String>)> {
         let Some(ref provider) = self.services.plugin_provider else {
             return vec![];
         };
@@ -137,7 +198,8 @@ impl AppUseCase {
                     .plugin_name_for_provider(&pt)
                     .unwrap_or_else(|| pt.clone());
                 let fields = provider.config_fields_for_provider(&pt);
-                (pt, name, fields)
+                let default_base_url = provider.default_base_url_for_provider(&pt);
+                (pt, name, fields, default_base_url)
             })
             .collect()
     }
@@ -189,6 +251,11 @@ impl AppUseCase {
                 wasm_url: entry.wasm_url.clone(),
                 wasm_sha256: entry.wasm_sha256.clone(),
                 min_scryer_version: entry.min_scryer_version.clone(),
+                default_base_url: self
+                    .services
+                    .plugin_provider
+                    .as_ref()
+                    .and_then(|p| p.default_base_url_for_provider(&entry.provider_type)),
                 is_installed: inst.is_some(),
                 is_enabled: inst.map(|i| i.is_enabled).unwrap_or(false),
                 installed_version: inst.map(|i| i.version.clone()),
@@ -221,6 +288,11 @@ impl AppUseCase {
                     wasm_url: None,
                     wasm_sha256: inst.wasm_sha256.clone(),
                     min_scryer_version: None,
+                    default_base_url: self
+                        .services
+                        .plugin_provider
+                        .as_ref()
+                        .and_then(|p| p.default_base_url_for_provider(&inst.provider_type)),
                     is_installed: true,
                     is_enabled: inst.is_enabled,
                     installed_version: Some(inst.version.clone()),
@@ -351,6 +423,49 @@ impl AppUseCase {
             .await?;
 
         self.rebuild_plugin_provider().await?;
+
+        // Auto-create an IndexerConfig for single-endpoint indexer plugins.
+        // Read default_base_url from the loaded plugin descriptor (not the
+        // registry cache) — the WASM itself is the source of truth.
+        if entry.plugin_type == "indexer" {
+            let default_url = self
+                .services
+                .plugin_provider
+                .as_ref()
+                .and_then(|p| p.default_base_url_for_provider(&entry.provider_type));
+            if let Some(ref default_url) = default_url {
+                let existing = self
+                    .services
+                    .indexer_configs
+                    .list(Some(entry.provider_type.clone()))
+                    .await
+                    .unwrap_or_default();
+                if existing.is_empty() {
+                    let config = IndexerConfig {
+                        id: Id::new().0,
+                        name: entry.name.clone(),
+                        provider_type: entry.provider_type.clone(),
+                        base_url: default_url.clone(),
+                        api_key_encrypted: None,
+                        is_enabled: true,
+                        enable_interactive_search: true,
+                        enable_auto_search: true,
+                        rate_limit_seconds: None,
+                        rate_limit_burst: None,
+                        disabled_until: None,
+                        last_health_status: None,
+                        last_error_at: None,
+                        config_json: None,
+                        created_at: now,
+                        updated_at: now,
+                    };
+                    if let Err(e) = self.services.indexer_configs.create(config).await {
+                        tracing::warn!(error = %e, "failed to auto-create indexer config for plugin");
+                    }
+                }
+            }
+        }
+
         Ok(result)
     }
 
@@ -373,6 +488,21 @@ impl AppUseCase {
             return Err(AppError::Validation(
                 "cannot uninstall built-in plugins; disable them instead".to_string(),
             ));
+        }
+
+        // Delete all associated IndexerConfigs for this plugin's provider type.
+        if installation.plugin_type == "indexer" {
+            let configs = self
+                .services
+                .indexer_configs
+                .list(Some(installation.provider_type.clone()))
+                .await
+                .unwrap_or_default();
+            for config in configs {
+                if let Err(e) = self.services.indexer_configs.delete(&config.id).await {
+                    tracing::warn!(error = %e, indexer = config.name, "failed to delete indexer config during plugin uninstall");
+                }
+            }
         }
 
         self.services
