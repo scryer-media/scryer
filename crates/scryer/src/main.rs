@@ -16,16 +16,15 @@ use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use axum::Router;
 use scryer_application::{
-    AppServices, AppUseCase, FacetRegistry, MovieFacetHandler, SeriesFacetHandler,
-    start_background_acquisition_poller, start_download_queue_poller,
+    AppServices, AppUseCase, FacetRegistry, IndexerPluginProvider, MovieFacetHandler,
+    SeriesFacetHandler, start_background_acquisition_poller, start_download_queue_poller,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use scryer_infrastructure::{
     FileSystemLibraryRenamer, FileSystemLibraryScanner, MetadataGatewayClient, MigrationMode,
-    MultiIndexerSearchClient, NzbGeekSearchClient, NzbgetDownloadClient,
+    MultiIndexerSearchClient, NzbgetDownloadClient,
     PrioritizedDownloadClientRouter, SmgEnrollmentConfig, SqliteServices,
-    NZBGEEK_BASE_BACKOFF_SECONDS, NZBGEEK_MAX_BACKOFF_SECONDS, NZBGEEK_MIN_REQUEST_INTERVAL_MS,
 };
 use scryer_interface::{build_schema_with_log_buffer, LogBuffer};
 use tokio::net::TcpListener;
@@ -300,14 +299,14 @@ async fn bootstrap_application(
     }
     tracing::info!(elapsed_ms = %t.elapsed().as_millis(), "settings normalized");
 
-    // Bootstrap JWT EC key pair (env > DB > auto-generate, persisted encrypted)
+    // Bootstrap JWT HMAC secret (env > DB > auto-generate, persisted)
     let t = std::time::Instant::now();
-    let env_jwt_pem = normalize_env_option("SCRYER_JWT_EC_PRIVATE_PEM");
-    let (jwt_ec_private_pem, jwt_ec_public_pem) =
-        scryer_infrastructure::jwt_keys::ensure_jwt_keys(&db, env_jwt_pem)
+    let env_jwt_secret = normalize_env_option("SCRYER_JWT_HMAC_SECRET");
+    let jwt_hmac_secret =
+        scryer_infrastructure::jwt_keys::ensure_jwt_hmac_secret(&db, env_jwt_secret)
             .await
-            .map_err(|e| format!("failed to ensure JWT EC key pair: {e}"))?;
-    tracing::info!(elapsed_ms = %t.elapsed().as_millis(), "JWT keys bootstrapped");
+            .map_err(|e| format!("failed to ensure JWT HMAC secret: {e}"))?;
+    tracing::info!(elapsed_ms = %t.elapsed().as_millis(), "JWT secret bootstrapped");
 
     let t = std::time::Instant::now();
     let runtime_settings = load_service_runtime_settings(&db)
@@ -334,21 +333,58 @@ async fn bootstrap_application(
         download_client_configs.clone(),
         fallback_download_client,
     ));
-    // Env-configured NZBGeek fallback: used when no indexer configs exist in the DB
-    let fallback_indexer = Arc::new(NzbGeekSearchClient::new(
-        normalize_env_option("SCRYER_NZBGEEK_API_KEY"),
-        normalize_env_option("SCRYER_NZBGEEK_API_BASE_URL"),
-        NZBGEEK_MIN_REQUEST_INTERVAL_MS,
-        NZBGEEK_BASE_BACKOFF_SECONDS,
-        NZBGEEK_MAX_BACKOFF_SECONDS,
-    ));
     let indexer_stats: Arc<dyn scryer_application::IndexerStatsTracker> =
         Arc::new(scryer_infrastructure::InMemoryIndexerStatsTracker::new());
-    let indexer_client = Arc::new(MultiIndexerSearchClient::new(
+
+    // Load WASM indexer plugins: external plugins dir first, then built-in plugins.
+    // Built-in plugins (nzbgeek, newznab) are always available; external plugins
+    // with the same provider_type override the built-in.
+    let plugins_dir = std::env::var("SCRYER_PLUGINS_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::path::Path::new(&db_path)
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join("plugins")
+        });
+    let external_provider = if plugins_dir.is_dir() {
+        match scryer_plugins::load_indexer_plugins(&plugins_dir) {
+            Ok(provider) => {
+                let types = provider.available_provider_types();
+                if !types.is_empty() {
+                    tracing::info!(
+                        plugins_dir = %plugins_dir.display(),
+                        provider_types = ?types,
+                        "loaded external WASM indexer plugins"
+                    );
+                }
+                provider
+            }
+            Err(e) => {
+                tracing::warn!(
+                    plugins_dir = %plugins_dir.display(),
+                    error = %e,
+                    "failed to load external WASM indexer plugins"
+                );
+                scryer_plugins::WasmIndexerPluginProvider::empty()
+            }
+        }
+    } else {
+        scryer_plugins::WasmIndexerPluginProvider::empty()
+    };
+    let initial_provider = external_provider
+        .with_builtin(scryer_plugins::builtins::NZBGEEK_WASM)
+        .with_builtin(scryer_plugins::builtins::NEWZNAB_WASM);
+    let dynamic_provider = scryer_plugins::DynamicPluginProvider::new(initial_provider);
+    let plugin_provider: Arc<dyn IndexerPluginProvider> = Arc::new(dynamic_provider);
+
+    let indexer_client = MultiIndexerSearchClient::new(
         indexer_configs.clone(),
-        fallback_indexer,
         indexer_stats.clone(),
-    ));
+        plugin_provider.clone(),
+    );
+
+    let indexer_client = Arc::new(indexer_client);
     let metadata_gateway_url = std::env::var("SCRYER_METADATA_GATEWAY_GRAPHQL_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:8090/graphql".to_string());
     // TODO: Remove SCRYER_METADATA_GATEWAY_INSECURE once the gateway has proper TLS certificates.
@@ -404,48 +440,36 @@ async fn bootstrap_application(
     services.media_files = Arc::new(db.clone());
     services.wanted_items = Arc::new(db.clone());
     services.rule_sets = Arc::new(db.clone());
+    services.plugin_installations = Arc::new(db.clone());
     services.system_info = Arc::new(db.clone());
     services.indexer_stats = indexer_stats;
-
-    // Bootstrap user rules engine from persisted rule sets.
-    {
-        let enabled = services.rule_sets.list_enabled_rule_sets().await.unwrap_or_default();
-        if !enabled.is_empty() {
-            let policies: Vec<scryer_rules::UserPolicy> = enabled
-                .iter()
-                .map(|rs| scryer_rules::UserPolicy {
-                    id: rs.id.clone(),
-                    rego_source: rs.rego_source.clone(),
-                    applied_facets: rs
-                        .applied_facets
-                        .iter()
-                        .map(|f| format!("{:?}", f).to_lowercase())
-                        .collect(),
-                })
-                .collect();
-            match scryer_rules::UserRulesEngine::build(&policies) {
-                Ok(engine) => {
-                    let count = engine.rule_count();
-                    *services.user_rules.write().unwrap() = engine;
-                    tracing::info!(rule_count = count, "user rules engine bootstrapped");
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed to bootstrap user rules engine, starting with empty");
-                }
-            }
-        }
-    }
+    services.plugin_provider = Some(plugin_provider);
 
     let app_use_case = AppUseCase::new(
         services,
         scryer_application::JwtAuthConfig {
             issuer: jwt_issuer,
             access_ttl_seconds: jwt_access_ttl_seconds as usize,
-            jwt_ec_private_pem,
-            jwt_ec_public_pem,
+            jwt_hmac_secret,
         },
         facet_registry,
     );
+
+    // Seed built-in plugin rows and rebuild provider from DB state.
+    // This ensures user enable/disable toggles are respected after restart.
+    if let Err(e) = app_use_case.seed_builtin_plugins().await {
+        tracing::warn!(error = %e, "failed to seed built-in plugin installations");
+    }
+    if let Err(e) = app_use_case.rebuild_plugin_provider().await {
+        tracing::warn!(error = %e, "failed to rebuild plugin provider from DB state");
+    }
+    if let Err(e) = app_use_case.reconcile_indexer_configs().await {
+        tracing::warn!(error = %e, "failed to reconcile indexer configs on startup");
+    }
+    if let Err(e) = app_use_case.refresh_plugin_registry_internal().await {
+        tracing::warn!(error = %e, "failed to refresh plugin registry on startup");
+    }
+
     let dev_auto_login = std::env::var("SCRYER_DEV_AUTO_LOGIN")
         .as_deref() == Ok("true");
     let log_buf_snapshot = log_ring_buffer.clone();

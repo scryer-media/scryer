@@ -2,7 +2,8 @@ import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { SettingsRulesSection } from "@/components/views/settings/settings-rules-section";
 import { useClient } from "urql";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 import type { RuleSetRecord, RuleSetDraft, RuleValidationResult } from "@/lib/types/rule-sets";
 import { ruleSetsQuery } from "@/lib/graphql/queries";
 import {
@@ -13,11 +14,6 @@ import {
   validateRuleSetMutation,
 } from "@/lib/graphql/mutations";
 
-type SettingsRulesContainerProps = {
-  t: Translate;
-  setGlobalStatus: (status: string) => void;
-};
-
 const RULE_SET_INITIAL_DRAFT: RuleSetDraft = {
   name: "",
   description: "",
@@ -27,10 +23,9 @@ const RULE_SET_INITIAL_DRAFT: RuleSetDraft = {
   appliedFacets: [],
 };
 
-export function SettingsRulesContainer({
-  t,
-  setGlobalStatus,
-}: SettingsRulesContainerProps) {
+export function SettingsRulesContainer() {
+  const setGlobalStatus = useGlobalStatus();
+  const t = useTranslate();
   const client = useClient();
   const [ruleSetRecords, setRuleSetRecords] = useState<RuleSetRecord[]>([]);
   const [mutatingRuleSetId, setMutatingRuleSetId] = useState<string | null>(null);
@@ -211,7 +206,6 @@ export function SettingsRulesContainer({
   return (
     <>
       <SettingsRulesSection
-        t={t}
         editingRuleSetId={editingRuleSetId}
         ruleSetDraft={ruleSetDraft}
         setRuleSetDraft={setRuleSetDraft}

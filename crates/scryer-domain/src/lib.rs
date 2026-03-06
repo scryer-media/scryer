@@ -138,6 +138,7 @@ pub struct IndexerConfig {
     pub enable_auto_search: bool,
     pub last_health_status: Option<String>,
     pub last_error_at: Option<DateTime<Utc>>,
+    pub config_json: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -153,6 +154,7 @@ pub struct NewIndexerConfig {
     pub is_enabled: bool,
     pub enable_interactive_search: bool,
     pub enable_auto_search: bool,
+    pub config_json: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -463,6 +465,25 @@ pub struct PolicyScoringEntry {
     pub source: String,
 }
 
+/// A plugin installation record.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PluginInstallation {
+    pub id: String,
+    /// Unique plugin identifier from the registry (e.g. "nzbgeek", "newznab").
+    pub plugin_id: String,
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub plugin_type: String,
+    pub provider_type: String,
+    pub is_enabled: bool,
+    pub is_builtin: bool,
+    pub wasm_sha256: Option<String>,
+    pub source_url: Option<String>,
+    pub installed_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// A user-authored rule set definition.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuleSet {
@@ -564,6 +585,48 @@ pub enum DomainError {
 }
 
 pub type DomainResult<T> = Result<T, DomainError>;
+
+/// Indexer capabilities declared by a plugin. Used by the dispatcher to skip
+/// indexers that don't support a given search type.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IndexerProviderCapabilities {
+    #[serde(default)]
+    pub search: bool,
+    #[serde(default)]
+    pub imdb_search: bool,
+    #[serde(default)]
+    pub tvdb_search: bool,
+}
+
+/// Describes a single configuration field a plugin expects.
+/// Used by the plugin system to advertise what config keys are needed,
+/// and by the frontend to render dynamic form fields.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConfigFieldDef {
+    /// Config key name (e.g. "custom_endpoint"). Used as the JSON key in
+    /// `config_json` and the Extism config key.
+    pub key: String,
+    /// Human-readable label for the form field.
+    pub label: String,
+    /// Field type: "string", "password", "bool", "select", "number".
+    pub field_type: String,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<String>,
+    /// For "select" fields: the available options.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<ConfigFieldOption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help_text: Option<String>,
+}
+
+/// A single option for "select"-type config fields.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConfigFieldOption {
+    pub value: String,
+    pub label: String,
+}
 
 pub fn parse_query(value: &str) -> String {
     value.trim().to_lowercase()

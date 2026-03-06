@@ -1,38 +1,41 @@
-import { type ReactNode } from "react";
+import { type ReactNode, useEffect } from "react";
 import { useGlobalSearch } from "@/lib/hooks/use-global-search";
-import type { UseGlobalSearchResult } from "@/lib/hooks/use-global-search";
 import type { Facet } from "@/lib/types";
 import type { LocaleCode } from "@/lib/i18n";
-
-type Translate = (
-  key: string,
-  values?: Record<string, string | number | boolean | null | undefined>,
-) => string;
+import { SearchContext } from "@/lib/context/search-context";
 
 type GlobalSearchProviderProps = {
-  t: Translate;
-  setGlobalStatus: (status: string) => void;
+  activeFacet: Facet;
   queueFacet: Facet;
   uiLanguage: LocaleCode;
   onCatalogChanged: () => void;
-  children: (searchState: UseGlobalSearchResult) => ReactNode;
+  children: ReactNode;
 };
 
 export function GlobalSearchProvider({
-  t,
-  setGlobalStatus,
+  activeFacet,
   queueFacet,
   uiLanguage,
   onCatalogChanged,
   children,
 }: GlobalSearchProviderProps) {
   const searchState = useGlobalSearch({
-    t,
-    setGlobalStatus,
     queueFacet,
     uiLanguage,
     onCatalogChanged,
   });
 
-  return <>{children(searchState)}</>;
+  const { setQueueFacet, setTvdbCandidates, setSearchResults, setSelectedTvdbId } = searchState;
+  useEffect(() => {
+    setQueueFacet(activeFacet);
+    setTvdbCandidates([]);
+    setSearchResults([]);
+    setSelectedTvdbId(null);
+  }, [activeFacet, setQueueFacet, setTvdbCandidates, setSearchResults, setSelectedTvdbId]);
+
+  return (
+    <SearchContext.Provider value={searchState}>
+      {children}
+    </SearchContext.Provider>
+  );
 }

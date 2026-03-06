@@ -20,7 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
 import type { DownloadClientRecord, DownloadClientDraft } from "@/lib/types";
 
 type DownloadClientTypeOption = {
@@ -105,7 +105,6 @@ const SabnzbdIcon = (props: React.ComponentPropsWithoutRef<"svg">) => (
 );
 
 export type SettingsDownloadClientsSectionProps = {
-  t: Translate;
   editingDownloadClientId: string | null;
   downloadClientDraft: DownloadClientDraft;
   setDownloadClientDraft: React.Dispatch<React.SetStateAction<DownloadClientDraft>>;
@@ -176,7 +175,6 @@ function DownloadClientTypeLogo({
 }
 
 export function SettingsDownloadClientsSection({
-  t,
   editingDownloadClientId,
   downloadClientDraft,
   setDownloadClientDraft,
@@ -190,6 +188,7 @@ export function SettingsDownloadClientsSection({
   toggleDownloadClientEnabled,
   deleteDownloadClient,
 }: SettingsDownloadClientsSectionProps) {
+  const t = useTranslate();
   const urlPreview = buildUrlPreview(downloadClientDraft);
   const normalizedClientType = downloadClientDraft.clientType.trim().toLowerCase();
   const hasApiKeyField = normalizedClientType === "sabnzbd";
@@ -256,7 +255,7 @@ export function SettingsDownloadClientsSection({
                         onClick={() => void toggleDownloadClientEnabled(client)}
                         disabled={mutatingDownloadClientId === client.id}
                       >
-                        {client.isEnabled ? t("label.disabled") : t("label.enabled")}
+                        {client.isEnabled ? t("label.disable") : t("label.enable")}
                       </Button>
                       <Button
                         size="sm"

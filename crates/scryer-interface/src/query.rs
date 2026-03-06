@@ -9,8 +9,8 @@ use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_
 use crate::mappers::{
     from_activity_event, from_calendar_episode, from_collection, from_download_client_config,
     from_episode, from_download_queue_item, from_event, from_indexer_config,
-    from_media_rename_plan, from_release_decision, from_system_health, from_title,
-    from_title_media_file, from_title_release_blocklist_entry, from_wanted_item,
+    from_media_rename_plan, from_provider_type, from_release_decision, from_system_health,
+    from_title, from_title_media_file, from_title_release_blocklist_entry, from_wanted_item,
     map_admin_setting, from_user, file_size_bytes_for_path,
 };
 use crate::types::*;
@@ -415,7 +415,15 @@ impl QueryRoot {
             .list_indexer_configs(&actor, provider_type)
             .await
             .map_err(to_gql_error)?;
-        Ok(configs.into_iter().map(from_indexer_config).collect())
+        let stats = app.services.indexer_stats.all_stats();
+        let mut payloads: Vec<IndexerConfigPayload> =
+            configs.into_iter().map(from_indexer_config).collect();
+        for payload in &mut payloads {
+            if let Some(s) = stats.iter().find(|s| s.indexer_id == payload.id) {
+                payload.last_query_at = s.last_query_at.clone();
+            }
+        }
+        Ok(payloads)
     }
 
     async fn indexer(
@@ -425,12 +433,18 @@ impl QueryRoot {
     ) -> GqlResult<Option<IndexerConfigPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let config = app
+        let mut payload = app
             .get_indexer_config(&actor, &id)
             .await
             .map_err(to_gql_error)?
             .map(from_indexer_config);
-        Ok(config)
+        if let Some(ref mut p) = payload {
+            let stats = app.services.indexer_stats.all_stats();
+            if let Some(s) = stats.iter().find(|s| s.indexer_id == p.id) {
+                p.last_query_at = s.last_query_at.clone();
+            }
+        }
+        Ok(payload)
     }
 
     async fn download_client_configs(
@@ -639,6 +653,41 @@ impl QueryRoot {
             .await
             .map_err(to_gql_error)?;
         Ok(rule_set.map(crate::mappers::from_rule_set))
+    }
+
+    // ── Plugins ──────────────────────────────────────────────────────────
+
+    async fn plugins(&self, ctx: &Context<'_>) -> GqlResult<Vec<RegistryPluginPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let plugins = app
+            .list_available_plugins(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(plugins
+            .into_iter()
+            .map(crate::mappers::from_registry_plugin)
+            .collect())
+    }
+
+    /// Returns all available indexer provider types from loaded plugins,
+    /// with their config field schemas for dynamic form rendering.
+    async fn indexer_provider_types(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<ProviderTypePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let provider_types = app.available_indexer_provider_types();
+        Ok(provider_types
+            .into_iter()
+            .map(|(pt, name, fields, default_base_url)| {
+                from_provider_type(pt, name, fields, default_base_url)
+            })
+            .collect())
     }
 
     // ── Metadata Gateway (proxied from SMG) ──────────────────────────────

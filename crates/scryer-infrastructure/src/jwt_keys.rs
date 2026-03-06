@@ -1,44 +1,41 @@
-use p256::ecdsa::SigningKey;
-use p256::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey};
+use base64::{engine::general_purpose::STANDARD, Engine};
+use ring::rand::{SecureRandom, SystemRandom};
 
-const JWT_PRIVATE_KEY_SETTING: &str = "jwt.private_key";
+const JWT_HMAC_SECRET_SETTING: &str = "jwt.hmac_secret";
 const SETTINGS_SCOPE_SYSTEM: &str = "system";
 
-/// Ensure a JWT EC P-256 private key exists.
+/// Ensure a JWT HMAC-SHA-512 secret exists.
 ///
-/// Priority: env var > DB setting > auto-generate.
-/// Returns `(private_pem, public_pem)`.
-pub async fn ensure_jwt_keys(
+/// Priority: `SCRYER_JWT_HMAC_SECRET` env var > DB setting > auto-generate (64 random bytes).
+pub async fn ensure_jwt_hmac_secret(
     db: &crate::SqliteServices,
-    env_private_pem: Option<String>,
-) -> Result<(String, String), String> {
-    // 1. Env var provided → validate, persist, derive public
-    if let Some(priv_pem) = env_private_pem {
-        let signing_key = SigningKey::from_pkcs8_pem(&priv_pem)
-            .map_err(|e| format!("SCRYER_JWT_EC_PRIVATE_PEM is not a valid PKCS#8 EC P-256 key: {e}"))?;
-        let public_pem = signing_key
-            .verifying_key()
-            .to_public_key_pem(p256::pkcs8::LineEnding::LF)
-            .map_err(|e| format!("failed to derive EC public key: {e}"))?;
+    env_secret: Option<String>,
+) -> Result<String, String> {
+    // 1. Env var provided → validate and persist
+    if let Some(secret_b64) = env_secret {
+        let secret_b64 = secret_b64.trim().to_string();
+        if !secret_b64.is_empty() {
+            validate_hmac_secret(&secret_b64)?;
 
-        db.upsert_setting_value(
-            SETTINGS_SCOPE_SYSTEM,
-            JWT_PRIVATE_KEY_SETTING,
-            None,
-            serde_json::to_string(&priv_pem).unwrap(),
-            "env",
-            None,
-        )
-        .await
-        .map_err(|e| format!("failed to persist JWT private key from env: {e}"))?;
+            db.upsert_setting_value(
+                SETTINGS_SCOPE_SYSTEM,
+                JWT_HMAC_SECRET_SETTING,
+                None,
+                serde_json::to_string(&secret_b64).unwrap(),
+                "env",
+                None,
+            )
+            .await
+            .map_err(|e| format!("failed to persist JWT HMAC secret from env: {e}"))?;
 
-        tracing::info!("using JWT EC private key from SCRYER_JWT_EC_PRIVATE_PEM");
-        return Ok((priv_pem, public_pem));
+            tracing::info!("using JWT HMAC secret from SCRYER_JWT_HMAC_SECRET");
+            return Ok(secret_b64);
+        }
     }
 
-    // 2. Check DB (tolerate decryption failures — just regenerate)
+    // 2. Check DB
     match db
-        .get_setting_with_defaults(SETTINGS_SCOPE_SYSTEM, JWT_PRIVATE_KEY_SETTING, None)
+        .get_setting_with_defaults(SETTINGS_SCOPE_SYSTEM, JWT_HMAC_SECRET_SETTING, None)
         .await
     {
         Ok(record) => {
@@ -47,53 +44,61 @@ pub async fn ensure_jwt_keys(
                 .and_then(|r| r.value_json.as_deref())
                 .and_then(parse_string_json);
 
-            if let Some(priv_pem) = existing {
-                if !priv_pem.is_empty() {
-                    let signing_key = SigningKey::from_pkcs8_pem(&priv_pem)
-                        .map_err(|e| format!("JWT private key in database is invalid: {e}"))?;
-                    let public_pem = signing_key
-                        .verifying_key()
-                        .to_public_key_pem(p256::pkcs8::LineEnding::LF)
-                        .map_err(|e| format!("failed to derive EC public key: {e}"))?;
-
-                    tracing::info!("loaded JWT EC private key from database");
-                    return Ok((priv_pem, public_pem));
+            if let Some(secret_b64) = existing {
+                if !secret_b64.is_empty() {
+                    validate_hmac_secret(&secret_b64)
+                        .map_err(|e| format!("JWT HMAC secret in database is invalid: {e}"))?;
+                    tracing::info!("loaded JWT HMAC secret from database");
+                    return Ok(secret_b64);
                 }
             }
         }
         Err(e) => {
             tracing::warn!(
                 error = %e,
-                "could not read JWT key from database (encryption key changed?), generating new key pair"
+                "could not read JWT HMAC secret from database, generating new secret"
             );
         }
     }
 
-    // 3. Generate new key pair
-    let signing_key = SigningKey::random(&mut rand_core::OsRng);
-    let private_pem = signing_key
-        .to_pkcs8_pem(p256::pkcs8::LineEnding::LF)
-        .map_err(|e| format!("failed to encode JWT EC private key: {e}"))?
-        .to_string();
-    let public_pem = signing_key
-        .verifying_key()
-        .to_public_key_pem(p256::pkcs8::LineEnding::LF)
-        .map_err(|e| format!("failed to encode JWT EC public key: {e}"))?;
+    // 3. Generate new 64-byte secret
+    let rng = SystemRandom::new();
+    let mut bytes = [0u8; 64];
+    rng.fill(&mut bytes)
+        .map_err(|_| "failed to generate random JWT HMAC secret".to_string())?;
+    let secret_b64 = STANDARD.encode(bytes);
 
-    tracing::info!("generated new JWT EC key pair (persisted to database)");
+    tracing::warn!(
+        "generated new JWT HMAC secret — all existing sessions are invalidated. \
+         To preserve it across upgrades, set:\n\n  SCRYER_JWT_HMAC_SECRET: {}\n",
+        secret_b64
+    );
 
     db.upsert_setting_value(
         SETTINGS_SCOPE_SYSTEM,
-        JWT_PRIVATE_KEY_SETTING,
+        JWT_HMAC_SECRET_SETTING,
         None,
-        serde_json::to_string(&private_pem).unwrap(),
+        serde_json::to_string(&secret_b64).unwrap(),
         "auto-generated",
         None,
     )
     .await
-    .map_err(|e| format!("failed to persist JWT private key: {e}"))?;
+    .map_err(|e| format!("failed to persist JWT HMAC secret: {e}"))?;
 
-    Ok((private_pem, public_pem))
+    Ok(secret_b64)
+}
+
+fn validate_hmac_secret(b64: &str) -> Result<(), String> {
+    let bytes = STANDARD
+        .decode(b64.trim())
+        .map_err(|e| format!("JWT HMAC secret is not valid base64: {e}"))?;
+    if bytes.len() < 32 {
+        return Err(format!(
+            "JWT HMAC secret must be at least 32 bytes, got {}",
+            bytes.len()
+        ));
+    }
+    Ok(())
 }
 
 fn parse_string_json(raw: &str) -> Option<String> {

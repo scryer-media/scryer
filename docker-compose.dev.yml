@@ -74,7 +74,7 @@ services:
       RUST_LOG: "info,scryer_infrastructure::metadata_gateway=debug"
       SCRYER_DEV_AUTO_LOGIN: "true"
     command: >
-      bash -c '
+      sh -c '
         set -eu
         cargo run --locked -p scryer
       '

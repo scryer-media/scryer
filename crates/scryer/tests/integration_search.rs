@@ -1,19 +1,39 @@
 mod common;
 
+use std::sync::Arc;
+
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, ResponseTemplate};
 
 use common::{load_fixture, TestContext};
-use scryer_application::{IndexerClient, MetadataGateway, SearchMode};
+use scryer_application::{IndexerClient, IndexerPluginProvider, MetadataGateway, SearchMode};
 
-fn new_nzbgeek_client(uri: &str) -> scryer_infrastructure::NzbGeekSearchClient {
-    scryer_infrastructure::NzbGeekSearchClient::new(
-        Some("test-api-key".to_string()),
-        Some(uri.to_string()),
-        0, // no rate-limit delay in tests
-        1,
-        1,
-    )
+/// Create an IndexerClient backed by the built-in nzbgeek WASM plugin,
+/// configured to talk to the given wiremock URI.
+fn new_nzbgeek_client(uri: &str) -> Arc<dyn IndexerClient> {
+    let provider = scryer_plugins::WasmIndexerPluginProvider::empty()
+        .with_builtin(scryer_plugins::builtins::NZBGEEK_WASM);
+    let config = scryer_domain::IndexerConfig {
+        id: "test-nzbgeek".to_string(),
+        name: "Test NZBGeek".to_string(),
+        provider_type: "nzbgeek".to_string(),
+        base_url: uri.to_string(),
+        api_key_encrypted: Some("test-api-key".to_string()),
+        is_enabled: true,
+        enable_interactive_search: true,
+        enable_auto_search: true,
+        rate_limit_seconds: None,
+        rate_limit_burst: None,
+        disabled_until: None,
+        last_health_status: None,
+        last_error_at: None,
+        config_json: None,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+    provider
+        .client_for_provider(&config)
+        .expect("should create nzbgeek WASM client")
 }
 
 // ---------------------------------------------------------------------------
@@ -43,9 +63,12 @@ async fn nzbgeek_search_movie_by_category() {
             None,
             100,
             SearchMode::Interactive,
+            None,
+            None,
         )
         .await
-        .expect("search should succeed");
+        .expect("search should succeed")
+        .results;
 
     assert_eq!(results.len(), 2);
     assert!(results[0].title.contains("2160p"), "first result should be 4K");
@@ -73,9 +96,12 @@ async fn nzbgeek_search_movie_extracts_size() {
             None,
             100,
             SearchMode::Interactive,
+            None,
+            None,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .results;
 
     assert!(
         results[0].size_bytes.unwrap_or(0) > 0,
@@ -105,9 +131,12 @@ async fn nzbgeek_search_movie_extracts_download_url() {
             None,
             100,
             SearchMode::Interactive,
+            None,
+            None,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .results;
 
     assert!(
         results[0].download_url.is_some(),
@@ -145,9 +174,12 @@ async fn nzbgeek_search_tv_by_category() {
             None,
             100,
             SearchMode::Interactive,
+            None,
+            None,
         )
         .await
-        .expect("TV search should succeed");
+        .expect("TV search should succeed")
+        .results;
 
     assert_eq!(results.len(), 2);
 }
@@ -175,6 +207,8 @@ async fn nzbgeek_search_tv_by_anime_category() {
             None,
             100,
             SearchMode::Interactive,
+            None,
+            None,
         )
         .await;
 
@@ -203,6 +237,8 @@ async fn nzbgeek_search_tv_by_series_category() {
             None,
             100,
             SearchMode::Interactive,
+            None,
+            None,
         )
         .await;
 
@@ -236,6 +272,8 @@ async fn nzbgeek_search_infers_movie_from_imdb_id() {
             None,
             100,
             SearchMode::Interactive,
+            None,
+            None,
         )
         .await;
 
@@ -264,6 +302,8 @@ async fn nzbgeek_search_infers_tvsearch_from_tvdb_id() {
             None,
             100,
             SearchMode::Interactive,
+            None,
+            None,
         )
         .await;
 
@@ -293,6 +333,8 @@ async fn nzbgeek_search_generic_without_ids() {
             None,
             100,
             SearchMode::Interactive,
+            None,
+            None,
         )
         .await;
 
@@ -324,9 +366,12 @@ async fn nzbgeek_search_empty_results() {
             None,
             100,
             SearchMode::Interactive,
+            None,
+            None,
         )
         .await
-        .expect("empty search should succeed");
+        .expect("empty search should succeed")
+        .results;
 
     assert!(results.is_empty());
 }
@@ -354,9 +399,12 @@ async fn nzbgeek_search_single_item_response() {
             None,
             100,
             SearchMode::Interactive,
+            None,
+            None,
         )
         .await
-        .expect("single-item response should parse correctly");
+        .expect("single-item response should parse correctly")
+        .results;
 
     assert_eq!(results.len(), 1, "should parse single item response");
     assert!(results[0].title.contains("2160p"));
@@ -369,13 +417,29 @@ async fn nzbgeek_search_single_item_response() {
 #[tokio::test]
 async fn nzbgeek_search_no_api_key_fails() {
     let ctx = TestContext::new().await;
-    let client = scryer_infrastructure::NzbGeekSearchClient::new(
-        None,
-        Some(ctx.nzbgeek_server.uri()),
-        0,
-        1,
-        1,
-    );
+    let provider = scryer_plugins::WasmIndexerPluginProvider::empty()
+        .with_builtin(scryer_plugins::builtins::NZBGEEK_WASM);
+    let config = scryer_domain::IndexerConfig {
+        id: "test-no-key".to_string(),
+        name: "Test No Key".to_string(),
+        provider_type: "nzbgeek".to_string(),
+        base_url: ctx.nzbgeek_server.uri(),
+        api_key_encrypted: None,
+        is_enabled: true,
+        enable_interactive_search: true,
+        enable_auto_search: true,
+        rate_limit_seconds: None,
+        rate_limit_burst: None,
+        disabled_until: None,
+        last_health_status: None,
+        last_error_at: None,
+        config_json: None,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+    let client = provider
+        .client_for_provider(&config)
+        .expect("should create client");
 
     let results = client
         .search(
@@ -387,6 +451,8 @@ async fn nzbgeek_search_no_api_key_fails() {
             None,
             100,
             SearchMode::Interactive,
+            None,
+            None,
         )
         .await;
 
@@ -412,6 +478,8 @@ async fn nzbgeek_search_http_error() {
             None,
             100,
             SearchMode::Interactive,
+            None,
+            None,
         )
         .await;
 
@@ -441,6 +509,8 @@ async fn nzbgeek_search_rate_limited() {
             None,
             100,
             SearchMode::Interactive,
+            None,
+            None,
         )
         .await;
 
@@ -480,6 +550,8 @@ async fn nzbgeek_search_server_error_fallback() {
             None,
             100,
             SearchMode::Interactive,
+            None,
+            None,
         )
         .await;
 
@@ -506,12 +578,14 @@ async fn nzbgeek_search_empty_query_and_no_ids_fails() {
             None,
             100,
             SearchMode::Interactive,
+            None,
+            None,
         )
         .await;
 
     // Should return empty results or error when no query/ids
     assert!(
-        results.is_err() || results.unwrap().is_empty(),
+        results.is_err() || results.unwrap().results.is_empty(),
         "empty query with no IDs should fail or return empty"
     );
 }
@@ -542,9 +616,12 @@ async fn nzbgeek_search_extracts_metadata_attributes() {
             None,
             100,
             SearchMode::Interactive,
+            None,
+            None,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .results;
 
     let result = &results[0];
     assert_eq!(result.thumbs_up, Some(42), "thumbsup should be parsed");

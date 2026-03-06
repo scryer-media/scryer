@@ -5,9 +5,11 @@ members = [
     "crates/scryer-infrastructure",
     "crates/scryer-interface",
     "crates/scryer-rules",
+    "crates/scryer-plugins",
     "crates/scryer",
     "crates/scryer-mock-apis",
 ]
+exclude = ["test-plugins/test-indexer"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -30,4 +32,6 @@ argon2 = "0.5"
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem", "arithmetic"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 toml = "0.8"
+extism = "1.13"
+semver = "1"
 wiremock = "0.6"

@@ -1,5 +1,6 @@
 import * as React from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { useTranslate } from "@/lib/context/translate-context";
 import { Button } from "@/components/ui/button";
 import { Loader2, Search, Trash2, Zap } from "lucide-react";
 import {
@@ -19,11 +20,6 @@ import {
 import type { ViewId } from "@/components/root/types";
 import type { Release, TitleRecord } from "@/lib/types";
 
-type Translate = (
-  key: string,
-  values?: Record<string, string | number | boolean | null | undefined>,
-) => string;
-
 function bytesToReadable(raw: number | null | undefined) {
   if (!raw || raw <= 0) {
     return "—";
@@ -41,7 +37,6 @@ function bytesToReadable(raw: number | null | undefined) {
 }
 
 type TitleTableProps = {
-  t: Translate;
   view: string;
   titles: TitleRecord[];
   titleLoading: boolean;
@@ -55,7 +50,6 @@ type TitleTableProps = {
 };
 
 export function TitleTable({
-  t,
   view,
   titles,
   titleLoading,
@@ -67,6 +61,7 @@ export function TitleTable({
   onQueueFromInteractive,
   isDeletingById,
 }: TitleTableProps) {
+  const t = useTranslate();
   const isMovieView = view === "movies";
   const overviewTargetView: ViewId = isMovieView ? "movies" : view === "anime" ? "anime" : "series";
   const columnCount = isMovieView ? 6 : 5;
@@ -294,7 +289,6 @@ export function TitleTable({
                   <SearchResultBuckets
                     results={interactiveSearchResults}
                     onQueue={(release) => onQueueFromInteractive(item, release)}
-                    t={t}
                   />
                 )}
               </div>

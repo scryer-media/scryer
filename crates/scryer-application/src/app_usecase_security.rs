@@ -78,11 +78,8 @@ impl AppUseCase {
             entitlements,
         };
 
-        let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256);
-        let key = jsonwebtoken::EncodingKey::from_ec_pem(
-            self.auth.jwt_ec_private_pem.as_bytes(),
-        )
-        .map_err(|err| AppError::Validation(format!("invalid ec private key: {err}")))?;
+        let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS512);
+        let key = jsonwebtoken::EncodingKey::from_secret(self.auth.jwt_hmac_secret.as_bytes());
 
         let token = jsonwebtoken::encode(&header, &claims, &key)
             .map_err(|err| AppError::Repository(format!("failed to issue token: {err}")))?;
@@ -91,14 +88,11 @@ impl AppUseCase {
     }
 
     pub async fn authenticate_token(&self, token: &str) -> AppResult<User> {
-        let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::ES256);
+        let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS512);
         validation.validate_exp = true;
         validation.set_issuer(&[self.auth.issuer.as_str()]);
 
-        let key = jsonwebtoken::DecodingKey::from_ec_pem(
-            self.auth.jwt_ec_public_pem.as_bytes(),
-        )
-        .map_err(|err| AppError::Validation(format!("invalid ec public key: {err}")))?;
+        let key = jsonwebtoken::DecodingKey::from_secret(self.auth.jwt_hmac_secret.as_bytes());
 
         let token_data = jsonwebtoken::decode::<JwtClaims>(token, &key, &validation)
             .map_err(|err| AppError::Unauthorized(format!("invalid token: {err}")))?;

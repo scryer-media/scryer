@@ -3,11 +3,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
 import type { LocaleCode, LanguageOption } from "@/lib/i18n";
 
 type SettingsOverviewSectionProps = {
-  t: Translate;
   availableLanguages: LanguageOption[];
   selectedLanguage: LanguageOption | null;
   uiLanguage: LocaleCode;
@@ -21,7 +20,6 @@ type SettingsOverviewSectionProps = {
 };
 
 export function SettingsOverviewSection({
-  t,
   availableLanguages,
   uiLanguage,
   onSelectLanguage,
@@ -32,6 +30,7 @@ export function SettingsOverviewSection({
   tlsSaving,
   onTlsSave,
 }: SettingsOverviewSectionProps) {
+  const t = useTranslate();
   return (
     <div className="space-y-6 text-sm">
       <div>

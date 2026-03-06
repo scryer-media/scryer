@@ -1,0 +1,19 @@
+{
+  "queue": {
+    "status": "Idle",
+    "speedlimit": "100",
+    "paused": false,
+    "noofslots_total": 0,
+    "noofslots": 0,
+    "limit": 100,
+    "start": 0,
+    "timeleft": "0:00:00",
+    "speed": "0 ",
+    "kbpersec": "0.00",
+    "mb": "0.00",
+    "mbleft": "0.00",
+    "diskspace1": "123.45",
+    "diskspace2": "456.78",
+    "slots": []
+  }
+}

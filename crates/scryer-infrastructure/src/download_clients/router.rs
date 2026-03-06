@@ -6,6 +6,7 @@ use scryer_domain::{DownloadClientConfig, DownloadQueueItem, Title};
 use tracing::warn;
 
 use super::nzbget::NzbgetDownloadClient;
+use super::sabnzbd::SabnzbdDownloadClient;
 use super::{parse_download_client_config_json, read_config_string, resolve_download_client_base_url};
 
 #[derive(Clone)]
@@ -54,6 +55,25 @@ impl PrioritizedDownloadClientRouter {
                 let dupe_mode = read_config_string(&parsed_config, &["dupe_mode", "dupeMode"])
                     .unwrap_or_else(|| "SCORE".to_string());
                 let client = NzbgetDownloadClient::new(base_url, username, password, dupe_mode);
+                Ok(Arc::new(client))
+            }
+            "sabnzbd" => {
+                let parsed_config = parse_download_client_config_json(&config.config_json)?;
+                let base_url = resolve_download_client_base_url(config, &parsed_config)
+                    .ok_or_else(|| {
+                        AppError::Validation(format!(
+                            "download client {} has no valid base URL",
+                            config.id
+                        ))
+                    })?;
+                let api_key = read_config_string(&parsed_config, &["api_key", "apiKey", "apikey"])
+                    .ok_or_else(|| {
+                        AppError::Validation(format!(
+                            "download client {} (sabnzbd) requires an API key",
+                            config.id
+                        ))
+                    })?;
+                let client = SabnzbdDownloadClient::new(base_url, api_key);
                 Ok(Arc::new(client))
             }
             _ => Err(AppError::Validation(format!(

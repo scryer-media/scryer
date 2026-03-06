@@ -5,6 +5,8 @@ import type { AdminSetting } from "@/lib/types/admin-settings";
 import type { Facet, Release, TitleRecord } from "@/lib/types";
 import type { ViewCategoryId } from "@/lib/types/quality-profiles";
 import type { LocaleCode } from "@/lib/i18n";
+import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 import {
   mediaSettingsInitQuery,
   metadataMovieQuery,
@@ -14,6 +16,7 @@ import {
   searchQuery,
   titlesQuery,
 } from "@/lib/graphql/queries";
+import { scryerFetch } from "@/lib/graphql/urql-client";
 import { addTitleMutation } from "@/lib/graphql/mutations";
 import {
   QUALITY_PROFILE_CATALOG_KEY,
@@ -26,11 +29,6 @@ import {
 } from "@/lib/utils/quality-profiles";
 import { getSettingDisplayValue } from "@/lib/utils/settings";
 import { FACET_REGISTRY, facetById } from "@/lib/facets/registry";
-
-type Translate = (
-  key: string,
-  values?: Record<string, string | number | boolean | null | undefined>,
-) => string;
 
 export type MetadataSearchResults = Record<string, MetadataTvdbSearchItem[]>;
 
@@ -69,8 +67,6 @@ const AUTOCOMPLETE_DEBOUNCE_MS = 250;
 const AUTOCOMPLETE_LIMIT = 10;
 
 type UseGlobalSearchArgs = {
-  t: Translate;
-  setGlobalStatus: (status: string) => void;
   queueFacet: Facet;
   uiLanguage: LocaleCode;
   onCatalogChanged?: () => void;
@@ -120,6 +116,9 @@ export interface UseGlobalSearchResult {
     facet: Facet,
     result: MetadataTvdbSearchItem,
   ) => boolean;
+  queueFacet: Facet;
+  setQueueFacet: (value: Facet) => void;
+  catalogChangeSignal: number;
 }
 
 function monitorTypeToMonitored(monitorType: MetadataCatalogMonitorType): boolean {
@@ -127,13 +126,15 @@ function monitorTypeToMonitored(monitorType: MetadataCatalogMonitorType): boolea
 }
 
 export function useGlobalSearch({
-  t,
-  setGlobalStatus,
-  queueFacet,
+  queueFacet: initialQueueFacet,
   uiLanguage,
   onCatalogChanged,
 }: UseGlobalSearchArgs): UseGlobalSearchResult {
+  const setGlobalStatus = useGlobalStatus();
+  const t = useTranslate();
   const client = useClient();
+  const [queueFacet, setQueueFacet] = useState<Facet>(initialQueueFacet);
+  const [catalogChangeSignal, setCatalogChangeSignal] = useState(0);
   const sortByRelevance = useCallback((results: MetadataTvdbSearchItem[], query: string) => {
     const q = query.trim().toLowerCase();
 
@@ -177,6 +178,7 @@ export function useGlobalSearch({
   );
   const [isGlobalSearchPanelOpen, setIsGlobalSearchPanelOpen] = useState(false);
   const autocompleteRequestId = useRef(0);
+  const autocompleteAbortRef = useRef<AbortController | null>(null);
 
   const isTitleInCatalogByFacet = useMemo(() => {
     const buckets = Object.fromEntries(
@@ -459,7 +461,7 @@ export function useGlobalSearch({
         return [];
       }
     },
-    [client, isMetadataSearchResultInAnyCatalog, mapFacetToTvdbType, queueFacet, setGlobalStatus, t, uiLanguage],
+    [client, isMetadataSearchResultInAnyCatalog, mapFacetToTvdbType, queueFacet, setGlobalStatus, t, uiLanguage, sortByRelevance],
   );
 
   const runMetadataAutocomplete = useCallback(
@@ -480,6 +482,15 @@ export function useGlobalSearch({
       const requestId = ++autocompleteRequestId.current;
       setSearching(true);
 
+      // Abort previous in-flight autocomplete HTTP requests so cancellation
+      // propagates through Rust all the way to the SMG database query.
+      autocompleteAbortRef.current?.abort();
+      const abortController = new AbortController();
+      autocompleteAbortRef.current = abortController;
+      const { signal } = abortController;
+      const abortableFetch: typeof fetch = (input, init) =>
+        scryerFetch(input, { ...init, signal });
+
       // Fire both queries in parallel but render each result as it arrives
       // so the fast catalog query populates immediately while the metadata
       // spinner keeps spinning.
@@ -487,7 +498,7 @@ export function useGlobalSearch({
       const catalogPromise = client.query(titlesQuery, {
         query: trimmed,
         facet: null,
-      }).toPromise().then(async ({ data, error }) => {
+      }, { fetch: abortableFetch }).toPromise().then(async ({ data, error }) => {
         if (error) throw error;
         if (requestId !== autocompleteRequestId.current) return;
         const catalogEntries = data.titles || [];
@@ -512,7 +523,7 @@ export function useGlobalSearch({
         query: trimmed,
         limit: AUTOCOMPLETE_LIMIT,
         language: uiLanguage,
-      }).toPromise().then(({ data, error }) => {
+      }, { fetch: abortableFetch }).toPromise().then(({ data, error }) => {
         if (error) throw error;
         if (requestId !== autocompleteRequestId.current) return;
         const multi = data.searchMetadataMulti ?? { movies: [], series: [], anime: [] };
@@ -555,13 +566,20 @@ export function useGlobalSearch({
 
       if (requestId !== autocompleteRequestId.current) return;
 
-      // Surface errors from either leg
-      if (catalogResult.status === "rejected") {
+      // Surface errors from either leg (suppress AbortError — the request
+      // was intentionally cancelled by a newer autocomplete keystroke).
+      const isAbortError = (err: unknown): boolean =>
+        err != null &&
+        typeof err === "object" &&
+        "networkError" in err &&
+        (err as { networkError?: { name?: string } }).networkError?.name === "AbortError";
+
+      if (catalogResult.status === "rejected" && !isAbortError(catalogResult.reason)) {
         const msg = catalogResult.reason instanceof Error ? catalogResult.reason.message : t("status.apiError");
         setGlobalStatus(msg);
         setCatalogSearchResults((prev) => (prev.length === 0 ? prev : []));
       }
-      if (metadataResult.status === "rejected") {
+      if (metadataResult.status === "rejected" && !isAbortError(metadataResult.reason)) {
         const msg = metadataResult.reason instanceof Error ? metadataResult.reason.message : t("status.apiError");
         setGlobalStatus(msg);
         setMetadataSearchResults((prev) => (isMetadataEmpty(prev) ? prev : emptyMetadataSearchResults));
@@ -577,6 +595,7 @@ export function useGlobalSearch({
       uiLanguage,
       emptyMetadataSearchResults,
       resolveCatalogPosterUrl,
+      sortByRelevance,
     ],
   );
 
@@ -584,6 +603,8 @@ export function useGlobalSearch({
     const trimmed = globalSearch.trim();
 
     if (trimmed.length < AUTOCOMPLETE_MIN_CHARS) {
+      autocompleteAbortRef.current?.abort();
+      autocompleteAbortRef.current = null;
       setCatalogSearchResults((previous) => (previous.length === 0 ? previous : []));
       setMetadataSearchResults((previous) => {
         if (previous.movie.length === 0 && previous.series.length === 0 && previous.anime.length === 0) {
@@ -754,6 +775,7 @@ export function useGlobalSearch({
         );
         await runMetadataAutocomplete(globalSearch.trim());
         onCatalogChanged?.();
+        setCatalogChangeSignal((v) => v + 1);
         return addData.addTitle?.title?.id?.trim() || null;
       } catch (error) {
         setGlobalStatus(error instanceof Error ? error.message : t("status.queueFailed"));
@@ -841,5 +863,8 @@ export function useGlobalSearch({
     resolveDefaultQualityProfileIdForFacet,
     addMetadataSearchResultToCatalog,
     isMetadataSearchResultInCatalog,
+    queueFacet,
+    setQueueFacet,
+    catalogChangeSignal,
   };
 }

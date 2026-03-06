@@ -5,12 +5,8 @@ import { acquisitionSettingsQuery } from "@/lib/graphql/queries";
 import { saveAdminSettingsMutation } from "@/lib/graphql/mutations";
 import type { AdminSetting } from "@/lib/types/admin-settings";
 import { getSettingDisplayValue } from "@/lib/utils/settings";
-import type { Translate } from "@/components/root/types";
-
-type Props = {
-  t: Translate;
-  setGlobalStatus: (status: string) => void;
-};
+import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 
 type AcquisitionSettings = {
   enabled: boolean;
@@ -40,7 +36,9 @@ function parseSetting(items: AdminSetting[], key: string, fallback: string): str
   return raw.length > 0 ? raw : fallback;
 }
 
-export function SettingsAcquisitionContainer({ t, setGlobalStatus }: Props) {
+export function SettingsAcquisitionContainer() {
+  const setGlobalStatus = useGlobalStatus();
+  const t = useTranslate();
   const client = useClient();
   const [settings, setSettings] = React.useState<AcquisitionSettings>(DEFAULTS);
   const [saving, setSaving] = React.useState(false);
@@ -102,7 +100,6 @@ export function SettingsAcquisitionContainer({ t, setGlobalStatus }: Props) {
 
   return (
     <SettingsAcquisitionSection
-      t={t}
       settings={settings}
       setSettings={setSettings}
       saving={saving}

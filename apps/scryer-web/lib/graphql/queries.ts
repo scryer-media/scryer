@@ -383,8 +383,27 @@ export const indexersQuery = `query Indexers($providerType: String) {
     enableAutoSearch
     lastHealthStatus
     lastErrorAt
+    lastQueryAt
+    configJson
     createdAt
     updatedAt
+  }
+}`;
+
+export const indexerProviderTypesQuery = `query IndexerProviderTypes {
+  indexerProviderTypes {
+    providerType
+    name
+    defaultBaseUrl
+    configFields {
+      key
+      label
+      fieldType
+      required
+      defaultValue
+      options { value label }
+      helpText
+    }
   }
 }`;
 
@@ -527,6 +546,7 @@ const indexerFieldSelection = `
     enableAutoSearch
     lastHealthStatus
     lastErrorAt
+    configJson
     createdAt
     updatedAt`;
 
@@ -721,6 +741,25 @@ export const releaseDecisionsQuery = `query ReleaseDecisions($wantedItemId: Stri
     scoreDelta
     explanationJson
     createdAt
+  }
+}`;
+
+export const pluginsQuery = `query Plugins {
+  plugins {
+    id
+    name
+    description
+    version
+    pluginType
+    providerType
+    author
+    official
+    builtin
+    sourceUrl
+    isInstalled
+    isEnabled
+    installedVersion
+    updateAvailable
   }
 }`;
 

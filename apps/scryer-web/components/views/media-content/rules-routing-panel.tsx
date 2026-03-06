@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useTranslate } from "@/lib/context/translate-context";
 import { FileCode2, Power } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,13 +13,7 @@ import {
 } from "@/components/ui/table";
 import type { RuleSetRecord } from "@/lib/types/rule-sets";
 
-type Translate = (
-  key: string,
-  values?: Record<string, string | number | boolean | null | undefined>,
-) => string;
-
 type RulesRoutingPanelProps = {
-  t: Translate;
   facet: string;
   ruleSets: RuleSetRecord[];
   loading: boolean;
@@ -27,13 +22,13 @@ type RulesRoutingPanelProps = {
 };
 
 export const RulesRoutingPanel = React.memo(function RulesRoutingPanel({
-  t,
   facet,
   ruleSets,
   loading,
   saving,
   onToggleFacet,
 }: RulesRoutingPanelProps) {
+  const t = useTranslate();
   // Only show globally-enabled rules
   const enabledRules = React.useMemo(
     () => ruleSets.filter((r) => r.enabled),

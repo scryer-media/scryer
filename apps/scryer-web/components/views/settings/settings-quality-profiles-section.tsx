@@ -17,7 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
 
 type ViewCategoryId = "movie" | "series" | "anime";
 
@@ -80,7 +80,6 @@ type ProfileListChoice = {
 };
 
 type SettingsQualityProfilesSectionProps = {
-  t: Translate;
   qualityProfiles: ParsedQualityProfile[];
   qualityProfileParseError: string;
   getQualityProfileCriteria: (profileId: string) => QualityProfileCriteriaPayload | undefined;
@@ -146,7 +145,6 @@ function ProfileListEditor({
   onMoveToDenied,
   emptyStateMessage,
   info,
-  t,
 }: {
   title: string;
   allowed: string[];
@@ -156,8 +154,8 @@ function ProfileListEditor({
   onMoveToDenied: (value: string) => void;
   emptyStateMessage?: string;
   info?: string;
-  t: Translate;
 }) {
+  const t = useTranslate();
   const optionByValue = React.useMemo(() => {
     const next = new Map<string, string>();
     choices.forEach((option) => {
@@ -196,7 +194,7 @@ function ProfileListEditor({
         label: optionByValue.get(value) ?? value,
       }))
       .sort((left, right) => sortProfileListChoiceByNumericDesc(left, right));
-  }, [allChoiceValues, sortedAllowedValues, sortedDeniedValues.length, sortedDeniedValues, deniedSet]);
+  }, [allChoiceValues, sortedAllowedValues, deniedSet, optionByValue]);
   const sortedDenied = React.useMemo(
     () =>
       sortedDeniedValues
@@ -342,7 +340,6 @@ function sortProfileListChoiceByNumericDesc(
 }
 
 export function SettingsQualityProfilesSection({
-  t,
   qualityProfiles,
   qualityProfileParseError,
   getQualityProfileCriteria,
@@ -382,6 +379,7 @@ export function SettingsQualityProfilesSection({
   archivalQualityOptions,
   deleteQualityProfile,
 }: SettingsQualityProfilesSectionProps) {
+  const t = useTranslate();
   const [globalQualityProfileDraft, setGlobalQualityProfileDraft] = React.useState(
     globalQualityProfileId,
   );
@@ -849,7 +847,6 @@ export function SettingsQualityProfilesSection({
 
           <div className="space-y-3">
             <ProfileListEditor
-              t={t}
               title={t("qualityProfile.sourceAllowlist")}
               allowed={activeSourceAllowlist}
               denied={activeSourceBlocklist}
@@ -864,7 +861,6 @@ export function SettingsQualityProfilesSection({
               info={t("qualityProfile.sourceAllowlistInfo")}
             />
             <ProfileListEditor
-              t={t}
               title={t("qualityProfile.videoCodecAllowlist")}
               allowed={activeVideoCodecAllowlist}
               denied={activeVideoCodecBlocklist}
@@ -879,7 +875,6 @@ export function SettingsQualityProfilesSection({
               info={t("qualityProfile.videoCodecAllowlistInfo")}
             />
             <ProfileListEditor
-              t={t}
               title={t("qualityProfile.audioCodecAllowlist")}
               allowed={activeAudioCodecAllowlist}
               denied={activeAudioCodecBlocklist}

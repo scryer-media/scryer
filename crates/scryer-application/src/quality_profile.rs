@@ -775,29 +775,6 @@ pub fn apply_size_scoring_for_category(
     decision.log(code, delta);
 }
 
-/// Apply NZBGeek community vote weighting.
-///
-/// Releases with more than 5 thumbs-down are heavily penalized so they rank
-/// well below similarly-qualified alternatives.
-pub fn apply_nzbgeek_vote_scoring(
-    decision: &mut QualityProfileDecision,
-    _thumbs_up: Option<i32>,
-    thumbs_down: Option<i32>,
-) {
-    let Some(thumbs_down) = thumbs_down else {
-        return;
-    };
-
-    if thumbs_down <= 5 {
-        return;
-    }
-
-    let extra = thumbs_down.saturating_sub(5);
-    let capped_extra = extra.min(10);
-    let penalty = -2400 - (capped_extra * 300);
-    decision.log("nzbgeek_thumbs_down_penalty", penalty);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

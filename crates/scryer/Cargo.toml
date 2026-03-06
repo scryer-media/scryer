@@ -9,6 +9,7 @@ scryer-domain = { path = "../scryer-domain" }
 scryer-rules = { path = "../scryer-rules" }
 scryer-interface = { path = "../scryer-interface" }
 scryer-infrastructure = { path = "../scryer-infrastructure" }
+scryer-plugins = { path = "../scryer-plugins" }
 async-graphql = { workspace = true }
 async-graphql-axum = { version = "7.0" }
 axum = { version = "0.8", features = ["macros", "http1", "http2", "json", "ws"] }

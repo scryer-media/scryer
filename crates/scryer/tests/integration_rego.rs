@@ -163,6 +163,7 @@ fn test_input() -> scryer_rules::UserRuleInput {
             age_days: Some(2),
             thumbs_up: Some(10),
             thumbs_down: Some(1),
+            extra: Default::default(),
         },
         profile: scryer_rules::ProfileDoc {
             id: "test-profile".to_string(),
@@ -661,9 +662,10 @@ async fn rego_engine_rebuilds_after_create() {
 
     create_rule(&ctx, "Rebuild Test", SIMPLE_BONUS_REGO).await;
 
-    // After creating, engine should have rules
+    // After creating, engine should have the user rule + any plugin-declared
+    // scoring policies (e.g. nzbgeek_vote_penalty, nzbgeek_language_bonus).
     let engine = ctx.app.services.user_rules.read().unwrap();
-    assert_eq!(engine.rule_count(), 1, "engine should have 1 rule");
+    assert!(engine.rule_count() >= 1, "engine should have at least 1 rule");
 }
 
 #[tokio::test]
@@ -776,11 +778,12 @@ async fn rego_engine_disabled_excluded() {
     let ctx = TestContext::new().await;
     let id = create_rule(&ctx, "Disable Test", SIMPLE_BONUS_REGO).await;
 
-    // Verify engine has the rule
-    {
+    // Verify engine has the rule (plus any plugin-declared scoring policies)
+    let count_with_rule = {
         let engine = ctx.app.services.user_rules.read().unwrap();
-        assert_eq!(engine.rule_count(), 1);
-    }
+        assert!(engine.rule_count() >= 1);
+        engine.rule_count()
+    };
 
     // Disable it
     gql(
@@ -792,11 +795,11 @@ async fn rego_engine_disabled_excluded() {
     )
     .await;
 
-    // Engine should now be empty
+    // Engine should have one fewer rule (the disabled user rule)
     let engine = ctx.app.services.user_rules.read().unwrap();
     assert_eq!(
         engine.rule_count(),
-        0,
+        count_with_rule - 1,
         "disabled rule should be excluded from engine"
     );
 }

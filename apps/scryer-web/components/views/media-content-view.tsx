@@ -1,5 +1,6 @@
 
 import * as React from "react";
+import { useTranslate } from "@/lib/context/translate-context";
 import { Button } from "@/components/ui/button";
 import { LayoutGrid, LayoutList } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,11 +28,6 @@ import { TitleTable } from "./media-content/title-table";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { RuleSetRecord } from "@/lib/types/rule-sets";
 
-type Translate = (
-  key: string,
-  values?: Record<string, string | number | boolean | null | undefined>,
-) => string;
-
 type Facet = "movie" | "tv" | "anime";
 type ContentSettingsSection = "overview" | "settings";
 
@@ -54,7 +50,6 @@ export function MediaContentView({
   state,
 }: {
   state: {
-    t: Translate;
     view: ViewId;
     contentSettingsSection: ContentSettingsSection;
     contentSettingsLabel: string;
@@ -180,8 +175,8 @@ export function MediaContentView({
     isDeletingCatalogTitleById: Record<string, boolean>;
   };
 }) {
+  const t = useTranslate();
   const {
-    t,
     view,
     contentSettingsSection,
     contentSettingsLabel,
@@ -495,7 +490,6 @@ export function MediaContentView({
         <div className="space-y-4">
           {view === "movies" || view === "series" ? (
             <MediaLibrarySettingsPanel
-              t={t}
               settingsTitle={mediaLibrarySettingsTitle}
               pathLabel={mediaLibraryPathLabel}
               pathValue={mediaLibraryPathValue}
@@ -511,7 +505,6 @@ export function MediaContentView({
           ) : null}
 
           <RenameSettingsForm
-            t={t}
             contentSettingsLabel={contentSettingsLabel}
             mediaSettingsLoading={mediaSettingsLoading}
             qualityProfiles={qualityProfiles}
@@ -546,7 +539,6 @@ export function MediaContentView({
           />
 
           <IndexerRoutingPanel
-            t={t}
             scopeLabel={scopeLabel}
             activeQualityScopeId={activeQualityScopeId}
             indexers={indexers}
@@ -561,7 +553,6 @@ export function MediaContentView({
           />
 
           <DownloadClientRoutingPanel
-            t={t}
             scopeLabel={scopeLabel}
             downloadClients={downloadClients}
             activeScopeRouting={activeScopeRouting}
@@ -574,7 +565,6 @@ export function MediaContentView({
           />
 
           <RulesRoutingPanel
-            t={t}
             facet={activeQualityScopeId}
             ruleSets={ruleSets}
             loading={rulesLoading}
@@ -632,7 +622,6 @@ export function MediaContentView({
                 if (viewMode === "poster") {
                   return (
                     <PosterGrid
-                      t={t}
                       titles={monitoredTitles}
                       isMovieView={isMovieView}
                       resolvedProfileName={resolvedProfileName}
@@ -647,7 +636,6 @@ export function MediaContentView({
 
                 return (
                   <TitleTable
-                    t={t}
                     view={view}
                     titles={monitoredTitles}
                     titleLoading={titleLoading}
@@ -665,7 +653,6 @@ export function MediaContentView({
           </Card>
         ) : (
           <AddTitleForm
-            t={t}
             titleNameForQueue={titleNameForQueue}
             setTitleNameForQueue={setTitleNameForQueue}
             queueFacet={queueFacet}

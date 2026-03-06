@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use scryer_application::{
     AppError, AppResult, DownloadClientConfigRepository, EventRepository, IndexerConfigRepository,
-    ImportRepository, MediaFileRepository, PrimaryCollectionSummary,
+    ImportRepository, MediaFileRepository, PluginInstallationRepository, PrimaryCollectionSummary,
     ReleaseDecision, RuleSetRepository, SystemInfoProvider, TitleMediaFile, WantedItem, WantedItemRepository,
     QualityProfile as ApplicationQualityProfile, QualityProfileRepository,
     ReleaseAttemptRepository, ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature,
@@ -10,7 +10,7 @@ use scryer_application::{
 };
 use scryer_domain::{
     CalendarEpisode, Collection, DownloadClientConfig, Entitlement, Episode, HistoryEvent,
-    ImportRecord, IndexerConfig, MediaFacet, RuleSet, Title, User,
+    ImportRecord, IndexerConfig, MediaFacet, PluginInstallation, RuleSet, Title, User,
 };
 use tokio::sync::oneshot;
 
@@ -654,6 +654,7 @@ impl IndexerConfigRepository for SqliteServices {
         is_enabled: Option<bool>,
         enable_interactive_search: Option<bool>,
         enable_auto_search: Option<bool>,
+        config_json: Option<String>,
     ) -> AppResult<IndexerConfig> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
@@ -668,6 +669,7 @@ impl IndexerConfigRepository for SqliteServices {
                 is_enabled,
                 enable_interactive_search,
                 enable_auto_search,
+                config_json,
                 reply: reply_tx,
             })
             .await
@@ -1127,6 +1129,129 @@ impl RuleSetRepository for SqliteServices {
                 actor_id: actor_id.map(|s| s.to_string()),
                 reply: reply_tx,
             })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+    }
+}
+
+#[async_trait]
+impl PluginInstallationRepository for SqliteServices {
+    async fn list_plugin_installations(&self) -> AppResult<Vec<PluginInstallation>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::ListPluginInstallations { reply: reply_tx })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn get_plugin_installation(&self, plugin_id: &str) -> AppResult<Option<PluginInstallation>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::GetPluginInstallation {
+                plugin_id: plugin_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn create_plugin_installation(
+        &self,
+        installation: &PluginInstallation,
+        wasm_bytes: Option<&[u8]>,
+    ) -> AppResult<PluginInstallation> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::CreatePluginInstallation {
+                installation: installation.clone(),
+                wasm_bytes: wasm_bytes.map(|b| b.to_vec()),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn update_plugin_installation(
+        &self,
+        installation: &PluginInstallation,
+        wasm_bytes: Option<&[u8]>,
+    ) -> AppResult<PluginInstallation> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::UpdatePluginInstallation {
+                installation: installation.clone(),
+                wasm_bytes: wasm_bytes.map(|b| b.to_vec()),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn delete_plugin_installation(&self, plugin_id: &str) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::DeletePluginInstallation {
+                plugin_id: plugin_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn get_enabled_plugin_wasm_bytes(&self) -> AppResult<Vec<(PluginInstallation, Option<Vec<u8>>)>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::GetEnabledPluginWasmBytes { reply: reply_tx })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn seed_builtin(
+        &self,
+        plugin_id: &str,
+        name: &str,
+        description: &str,
+        version: &str,
+        provider_type: &str,
+    ) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::SeedBuiltinPlugin {
+                plugin_id: plugin_id.to_string(),
+                name: name.to_string(),
+                description: description.to_string(),
+                version: version.to_string(),
+                provider_type: provider_type.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn store_registry_cache(&self, json: &str) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::StoreRegistryCache {
+                json: json.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn get_registry_cache(&self) -> AppResult<Option<String>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::GetRegistryCache { reply: reply_tx })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
         reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?

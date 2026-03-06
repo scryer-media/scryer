@@ -5,10 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { Translate } from "@/components/root/types";
 import type { ViewId } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
-import type { Facet, TitleRecord } from "@/lib/types";
+import type { Facet } from "@/lib/types";
 import type {
   CatalogQualityProfileOption,
   MetadataCatalogAddOptions,
@@ -21,23 +21,10 @@ import {
   viewFromFacet,
   defaultMonitorTypeForFacet,
 } from "@/lib/facets/helpers";
+import { useSearchContext } from "@/lib/context/search-context";
 
 type MobileSearchOverlayProps = {
-  t: Translate;
-  globalSearch: string;
-  onGlobalSearchChange: (value: string) => void;
-  searching: boolean;
-  catalogSearchResults: TitleRecord[];
-  metadataSearchResults: MetadataSearchResults;
   onClose: () => void;
-  catalogQualityProfileOptions: CatalogQualityProfileOption[];
-  resolveDefaultQualityProfileIdForFacet: (facet: Facet) => string;
-  onAddMetadataSearchResultToCatalog: (
-    result: MetadataTvdbSearchItem,
-    facet: Facet,
-    options: MetadataCatalogAddOptions,
-  ) => Promise<string | null>;
-  isMetadataSearchResultInCatalog: (facet: Facet, result: MetadataTvdbSearchItem) => boolean;
   onOpenOverview?: (targetView: ViewId, titleId: string) => void;
 };
 
@@ -50,19 +37,11 @@ function renderMetadataResultKey(section: string, tvdbId: string, name: string, 
 }
 
 export function MobileSearchOverlay({
-  t,
-  globalSearch,
-  onGlobalSearchChange,
-  searching,
-  catalogSearchResults,
-  metadataSearchResults,
   onClose,
-  catalogQualityProfileOptions,
-  resolveDefaultQualityProfileIdForFacet,
-  onAddMetadataSearchResultToCatalog,
-  isMetadataSearchResultInCatalog,
   onOpenOverview,
 }: MobileSearchOverlayProps) {
+  const searchState = useSearchContext();
+  const t = useTranslate();
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [expandedMetadataCardKey, setExpandedMetadataCardKey] = React.useState<string | null>(null);
   const [metadataAddDrafts, setMetadataAddDrafts] = React.useState<Record<string, MetadataCatalogAddOptions>>({});
@@ -88,19 +67,20 @@ export function MobileSearchOverlay({
   }, []);
 
   const hasAnyMatches =
-    catalogSearchResults.length > 0 ||
-    FACET_REGISTRY.some((f) => (metadataSearchResults[f.metadataKey] ?? []).length > 0);
+    searchState.catalogSearchResults.length > 0 ||
+    FACET_REGISTRY.some((f) => (searchState.metadataSearchResults[f.metadataKey] ?? []).length > 0);
 
   const catalogSearchSections = React.useMemo(
     () => Object.fromEntries(
       FACET_REGISTRY.map((f) => [
         f.id,
-        catalogSearchResults.filter((title) => catalogFacetFromString(title.facet) === f.id),
+        searchState.catalogSearchResults.filter((title) => catalogFacetFromString(title.facet) === f.id),
       ]),
-    ) as Record<Facet, TitleRecord[]>,
-    [catalogSearchResults],
+    ) as Record<Facet, import("@/lib/types").TitleRecord[]>,
+    [searchState.catalogSearchResults],
   );
 
+  const { resolveDefaultQualityProfileIdForFacet, addMetadataSearchResultToCatalog, isMetadataSearchResultInCatalog, catalogQualityProfileOptions } = searchState;
   const defaultAddOptionsForFacet = React.useCallback(
     (facet: Facet): MetadataCatalogAddOptions => ({
       qualityProfileId: resolveDefaultQualityProfileIdForFacet(facet),
@@ -148,7 +128,7 @@ export function MobileSearchOverlay({
 
       setMetadataAddInFlightKeys((prev) => ({ ...prev, [cardKey]: true }));
       try {
-        const titleId = await onAddMetadataSearchResultToCatalog(result, facet, {
+        const titleId = await addMetadataSearchResultToCatalog(result, facet, {
           ...draft,
           qualityProfileId,
         });
@@ -166,11 +146,11 @@ export function MobileSearchOverlay({
         });
       }
     },
-    [defaultAddOptionsForFacet, metadataAddDrafts, onAddMetadataSearchResultToCatalog, onClose, onOpenOverview, resolveDefaultQualityProfileIdForFacet],
+    [defaultAddOptionsForFacet, metadataAddDrafts, addMetadataSearchResultToCatalog, onClose, onOpenOverview, resolveDefaultQualityProfileIdForFacet],
   );
 
   const renderCatalogItem = React.useCallback(
-    (title: TitleRecord, facet: "movie" | "tv" | "anime") => {
+    (title: import("@/lib/types").TitleRecord, facet: "movie" | "tv" | "anime") => {
       const targetView: ViewId = facet === "tv" ? "series" : facet === "anime" ? "anime" : "movies";
       const tvdbId = title.externalIds
         .find((externalId) => externalId.source.toLowerCase() === "tvdb")
@@ -306,7 +286,7 @@ export function MobileSearchOverlay({
                     {catalogQualityProfileOptions.length === 0 ? (
                       <SelectItem value="__none" disabled>{t("search.addConfigNoQualityProfiles")}</SelectItem>
                     ) : (
-                      catalogQualityProfileOptions.map((profile) => (
+                      catalogQualityProfileOptions.map((profile: CatalogQualityProfileOption) => (
                         <SelectItem key={profile.id} value={profile.id}>{profile.name}</SelectItem>
                       ))
                     )}
@@ -423,7 +403,7 @@ export function MobileSearchOverlay({
     ],
   );
 
-  const renderCatalogSection = (items: TitleRecord[], facet: Facet) => {
+  const renderCatalogSection = (items: import("@/lib/types").TitleRecord[], facet: Facet) => {
     if (items.length === 0) return null;
     return (
       <div className="space-y-2">
@@ -473,19 +453,19 @@ export function MobileSearchOverlay({
           <Search className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground" />
           <Input
             ref={inputRef}
-            value={globalSearch}
-            onChange={(e) => onGlobalSearchChange(e.target.value)}
+            value={searchState.globalSearch}
+            onChange={(e) => searchState.setGlobalSearch(e.target.value)}
             className="h-10 w-full border-emerald-500/70 pl-10 text-base placeholder-heading-font focus-visible:border-emerald-400 focus-visible:ring-emerald-400/45"
             placeholder={t("search.globalPlaceholder")}
             aria-label={t("search.globalPlaceholder")}
             autoFocus
           />
-          {globalSearch ? (
+          {searchState.globalSearch ? (
             <button
               type="button"
               className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground"
               onClick={() => {
-                onGlobalSearchChange("");
+                searchState.setGlobalSearch("");
                 inputRef.current?.focus();
               }}
               aria-label={t("label.clear")}
@@ -513,16 +493,16 @@ export function MobileSearchOverlay({
             <section className="space-y-3">
               <h3 className="text-sm font-semibold text-foreground">{t("search.metadataSearch")}</h3>
               <div className="space-y-3">
-                {FACET_REGISTRY.map((f) => renderMetadataSection(metadataSearchResults[f.metadataKey] ?? [], f.id, f.metadataKey))}
+                {FACET_REGISTRY.map((f) => renderMetadataSection(searchState.metadataSearchResults[f.metadataKey] ?? [], f.id, f.metadataKey))}
               </div>
             </section>
           </div>
-        ) : searching ? (
+        ) : searchState.searching ? (
           <div className="flex items-center gap-3 py-6">
             <Loader2 className="h-5 w-5 animate-spin text-emerald-500" />
             <p className="text-sm text-muted-foreground">{t("label.searching")}</p>
           </div>
-        ) : globalSearch ? (
+        ) : searchState.globalSearch ? (
           <p className="py-6 text-center text-sm text-muted-foreground">{t("status.nothingFound")}</p>
         ) : (
           <p className="py-6 text-center text-sm text-muted-foreground">{t("search.globalPlaceholder")}</p>

@@ -8,10 +8,11 @@ use tokio::net::TcpListener;
 use wiremock::MockServer;
 
 use scryer_application::{
-    AppServices, AppUseCase, FacetRegistry, JwtAuthConfig, MovieFacetHandler, SeriesFacetHandler,
+    AppServices, AppUseCase, FacetRegistry, IndexerPluginProvider, JwtAuthConfig,
+    MovieFacetHandler, SeriesFacetHandler,
 };
 use scryer_infrastructure::{
-    MetadataGatewayClient, NzbGeekSearchClient, NzbgetDownloadClient, SmgEnrollmentConfig,
+    MetadataGatewayClient, MultiIndexerSearchClient, NzbgetDownloadClient, SmgEnrollmentConfig,
     SqliteServices,
 };
 use scryer_interface::{build_schema, ApiSchema};
@@ -44,11 +45,11 @@ impl TestContext {
             .await
             .expect("failed to create in-memory SQLite");
 
-        // Seed the JWT setting definition so ensure_jwt_keys can persist keys
+        // Seed the JWT setting definition so ensure_jwt_hmac_secret can persist the secret
         db.ensure_setting_definition(
             "security",
             "system",
-            "jwt.private_key",
+            "jwt.hmac_secret",
             "string",
             "\"\"",
             true,
@@ -57,11 +58,11 @@ impl TestContext {
         .await
         .expect("failed to seed jwt setting definition");
 
-        // Generate JWT key pair via the standard bootstrap path
-        let (jwt_ec_private_pem, jwt_ec_public_pem) =
-            scryer_infrastructure::jwt_keys::ensure_jwt_keys(&db, None)
+        // Generate JWT HMAC secret via the standard bootstrap path
+        let jwt_hmac_secret =
+            scryer_infrastructure::jwt_keys::ensure_jwt_hmac_secret(&db, None)
                 .await
-                .expect("failed to generate JWT keys");
+                .expect("failed to generate JWT HMAC secret");
 
         // Real clients pointed at wiremock URLs
         let nzbget = NzbgetDownloadClient::new(
@@ -71,12 +72,21 @@ impl TestContext {
             "SCORE".to_string(),
         );
 
-        let nzbgeek = NzbGeekSearchClient::new(
-            Some("test-api-key".to_string()),
-            Some(nzbgeek_server.uri()),
-            0,  // no rate-limit delay in tests
-            1,  // base backoff
-            1,  // max backoff
+        // Build indexer client backed by built-in WASM plugins (using DynamicPluginProvider
+        // so reload_plugins works in integration tests)
+        let plugin_provider: Arc<dyn IndexerPluginProvider> = Arc::new(
+            scryer_plugins::DynamicPluginProvider::new(
+                scryer_plugins::WasmIndexerPluginProvider::empty()
+                    .with_builtin(scryer_plugins::builtins::NZBGEEK_WASM)
+                    .with_builtin(scryer_plugins::builtins::NEWZNAB_WASM),
+            ),
+        );
+        let indexer_stats: Arc<dyn scryer_application::IndexerStatsTracker> =
+            Arc::new(scryer_infrastructure::InMemoryIndexerStatsTracker::new());
+        let indexer_client = MultiIndexerSearchClient::new(
+            Arc::new(db.clone()),
+            indexer_stats.clone(),
+            plugin_provider.clone(),
         );
 
         let metadata_gateway = MetadataGatewayClient::new(
@@ -110,7 +120,7 @@ impl TestContext {
             users,
             events,
             indexer_configs,
-            Arc::new(nzbgeek),
+            Arc::new(indexer_client),
             Arc::new(nzbget),
             download_client_configs,
             release_attempts,
@@ -119,6 +129,9 @@ impl TestContext {
             ":memory:".to_string(),
         );
         services.metadata_gateway = Arc::new(metadata_gateway);
+        services.indexer_stats = indexer_stats;
+        services.plugin_provider = Some(plugin_provider);
+        services.plugin_installations = Arc::new(db.clone());
         services.rule_sets = Arc::new(db.clone());
 
         // Facet registry with all built-in facets
@@ -137,8 +150,7 @@ impl TestContext {
             JwtAuthConfig {
                 issuer: "scryer-test".to_string(),
                 access_ttl_seconds: 3600,
-                jwt_ec_private_pem,
-                jwt_ec_public_pem,
+                jwt_hmac_secret,
             },
             facet_registry,
         );

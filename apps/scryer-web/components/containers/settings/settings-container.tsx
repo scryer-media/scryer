@@ -9,13 +9,13 @@ import { SettingsQualityProfilesContainer } from "@/components/containers/settin
 import { SettingsAcquisitionContainer } from "@/components/containers/settings/settings-acquisition-container";
 import { SettingsProfileContainer } from "@/components/containers/settings/settings-profile-container";
 import { SettingsRulesContainer } from "@/components/containers/settings/settings-rules-container";
-import type { SettingsSection, Translate } from "@/components/root/types";
+import { SettingsPluginsContainer } from "@/components/containers/settings/settings-plugins-container";
+import type { SettingsSection } from "@/components/root/types";
 import type { LocaleCode, LanguageOption } from "@/lib/i18n";
+import { useTranslate } from "@/lib/context/translate-context";
 
 type SettingsContainerProps = {
   settingsSection: SettingsSection;
-  t: Translate;
-  setGlobalStatus: (status: string) => void;
   userId?: string;
   username?: string;
   availableLanguages: LanguageOption[];
@@ -26,8 +26,6 @@ type SettingsContainerProps = {
 
 export const SettingsContainer = memo(function SettingsContainer({
   settingsSection,
-  t,
-  setGlobalStatus,
   userId,
   username,
   availableLanguages,
@@ -35,6 +33,7 @@ export const SettingsContainer = memo(function SettingsContainer({
   uiLanguage,
   onSelectLanguage,
 }: SettingsContainerProps) {
+  const t = useTranslate();
   return (
     <Card className="bg-card border-border">
       <CardHeader>
@@ -55,6 +54,8 @@ export const SettingsContainer = memo(function SettingsContainer({
                   ? t("settings.acquisition")
                 : settingsSection === "rules"
                   ? t("settings.rules")
+                : settingsSection === "plugins"
+                  ? t("settings.plugins")
                     : t("settings.qualityProfiles"),
           })}
         </CardTitle>
@@ -62,50 +63,30 @@ export const SettingsContainer = memo(function SettingsContainer({
       <CardContent>
         {settingsSection === "profile" ? (
           <SettingsProfileContainer
-            t={t}
-            setGlobalStatus={setGlobalStatus}
             userId={userId}
             username={username}
           />
         ) : settingsSection === "general" ? (
           <SettingsOverviewContainer
-            t={t}
-            setGlobalStatus={setGlobalStatus}
             availableLanguages={availableLanguages}
             selectedLanguage={selectedLanguage}
             uiLanguage={uiLanguage}
             onSelectLanguage={onSelectLanguage}
           />
         ) : settingsSection === "users" ? (
-          <SettingsUsersContainer
-            t={t}
-            setGlobalStatus={setGlobalStatus}
-          />
+          <SettingsUsersContainer />
         ) : settingsSection === "indexers" ? (
-          <SettingsIndexersContainer
-            t={t}
-            setGlobalStatus={setGlobalStatus}
-          />
+          <SettingsIndexersContainer />
         ) : settingsSection === "downloadClients" ? (
-          <SettingsDownloadClientsContainer
-            t={t}
-            setGlobalStatus={setGlobalStatus}
-          />
+          <SettingsDownloadClientsContainer />
         ) : settingsSection === "acquisition" ? (
-          <SettingsAcquisitionContainer
-            t={t}
-            setGlobalStatus={setGlobalStatus}
-          />
+          <SettingsAcquisitionContainer />
         ) : settingsSection === "rules" ? (
-          <SettingsRulesContainer
-            t={t}
-            setGlobalStatus={setGlobalStatus}
-          />
+          <SettingsRulesContainer />
+        ) : settingsSection === "plugins" ? (
+          <SettingsPluginsContainer />
         ) : (
-          <SettingsQualityProfilesContainer
-            t={t}
-            setGlobalStatus={setGlobalStatus}
-          />
+          <SettingsQualityProfilesContainer />
         )}
       </CardContent>
     </Card>

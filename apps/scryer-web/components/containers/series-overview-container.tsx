@@ -26,7 +26,8 @@ import {
   normalizeActivityEvent,
 } from "@/lib/utils/activity";
 import { useClient, useSubscription } from "urql";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { SeriesOverviewView } from "@/components/views/series-overview-view";
 import { ManualImportDialog } from "@/components/dialogs/manual-import-dialog";
 
@@ -122,8 +123,6 @@ export type EpisodeMediaFile = {
 
 type SeriesOverviewContainerProps = {
   titleId: string;
-  t: Translate;
-  setGlobalStatus: (status: string) => void;
   onTitleNotFound?: () => void;
   onBackToList?: () => void;
   initialEpisodeId?: string | null;
@@ -131,12 +130,12 @@ type SeriesOverviewContainerProps = {
 
 export const SeriesOverviewContainer = React.memo(function SeriesOverviewContainer({
   titleId,
-  t,
-  setGlobalStatus,
   onTitleNotFound,
   onBackToList,
   initialEpisodeId,
 }: SeriesOverviewContainerProps) {
+  const setGlobalStatus = useGlobalStatus();
+  const t = useTranslate();
   const client = useClient();
   const [title, setTitle] = React.useState<TitleDetail | null>(null);
   const [collections, setCollections] = React.useState<TitleCollection[]>([]);
@@ -355,7 +354,6 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
 
   // Only re-fetch episodes when the set of collection IDs changes (add/remove),
   // not when a property like `monitored` is updated on an existing collection.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const collectionIdKey = collections.map((c) => c.id).join("\0");
 
   React.useEffect(() => {
@@ -491,7 +489,6 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   return (
     <>
       <SeriesOverviewView
-        t={t}
         loading={loading}
         title={title}
         collections={collections}
@@ -499,7 +496,6 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         episodesByCollection={episodesByCollection}
         mediaFilesByEpisode={mediaFilesByEpisode}
         releaseBlocklistEntries={releaseBlocklistEntries}
-        setGlobalStatus={setGlobalStatus}
         onTitleChanged={refreshTitleDetail}
         onBackToList={onBackToList}
         onSetCollectionMonitored={handleSetCollectionMonitored}

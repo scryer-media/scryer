@@ -1,5 +1,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslate } from "@/lib/context/translate-context";
 import { useClient } from "urql";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,13 +17,7 @@ import { Separator } from "@/components/ui/separator";
 import { serviceLogsQuery, serviceLogLinesSubscription } from "@/lib/graphql/queries";
 import { wsClient } from "@/lib/graphql/ws-client";
 
-type Translate = (
-  key: string,
-  values?: Record<string, string | number | boolean | null | undefined>,
-) => string;
-
 type SystemViewState = {
-  t: Translate;
   systemHealth: SystemHealth | null;
   systemLoading: boolean;
   refreshSystem: () => Promise<void>;
@@ -308,7 +303,8 @@ export function SystemView({
 }: {
   state: SystemViewState;
 }) {
-  const { t, systemHealth, systemLoading, refreshSystem } = state;
+  const t = useTranslate();
+  const { systemHealth, systemLoading, refreshSystem } = state;
 
   return (
     <div className="space-y-4">

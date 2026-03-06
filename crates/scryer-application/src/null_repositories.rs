@@ -6,10 +6,12 @@ use scryer_domain::ImportRecord;
 
 use scryer_domain::RuleSet;
 
+use scryer_domain::PluginInstallation;
+
 use crate::{
     AppError, AppResult, FileImporter, ImportRepository, IndexerQueryStats,
-    IndexerStatsTracker, MediaFileRepository, ReleaseDecision, RuleSetRepository,
-    SystemInfoProvider, TitleMediaFile, WantedItem, WantedItemRepository,
+    IndexerStatsTracker, MediaFileRepository, PluginInstallationRepository, ReleaseDecision,
+    RuleSetRepository, SystemInfoProvider, TitleMediaFile, WantedItem, WantedItemRepository,
 };
 
 #[derive(Default)]
@@ -167,6 +169,28 @@ impl RuleSetRepository for NullRuleSetRepository {
 }
 
 #[derive(Default)]
+pub struct NullPluginInstallationRepository;
+
+#[async_trait]
+impl PluginInstallationRepository for NullPluginInstallationRepository {
+    async fn list_plugin_installations(&self) -> AppResult<Vec<PluginInstallation>> { Ok(vec![]) }
+    async fn get_plugin_installation(&self, _plugin_id: &str) -> AppResult<Option<PluginInstallation>> { Ok(None) }
+    async fn create_plugin_installation(&self, _installation: &PluginInstallation, _wasm_bytes: Option<&[u8]>) -> AppResult<PluginInstallation> {
+        Err(AppError::Repository("plugin installation repository is not configured".to_string()))
+    }
+    async fn update_plugin_installation(&self, _installation: &PluginInstallation, _wasm_bytes: Option<&[u8]>) -> AppResult<PluginInstallation> {
+        Err(AppError::Repository("plugin installation repository is not configured".to_string()))
+    }
+    async fn delete_plugin_installation(&self, _plugin_id: &str) -> AppResult<()> {
+        Err(AppError::Repository("plugin installation repository is not configured".to_string()))
+    }
+    async fn get_enabled_plugin_wasm_bytes(&self) -> AppResult<Vec<(PluginInstallation, Option<Vec<u8>>)>> { Ok(vec![]) }
+    async fn seed_builtin(&self, _plugin_id: &str, _name: &str, _description: &str, _version: &str, _provider_type: &str) -> AppResult<()> { Ok(()) }
+    async fn store_registry_cache(&self, _json: &str) -> AppResult<()> { Ok(()) }
+    async fn get_registry_cache(&self) -> AppResult<Option<String>> { Ok(None) }
+}
+
+#[derive(Default)]
 pub struct NullSystemInfoProvider;
 
 #[async_trait]
@@ -192,4 +216,141 @@ impl IndexerStatsTracker for NullIndexerStatsTracker {
         _grab_current: Option<u32>, _grab_max: Option<u32>,
     ) {}
     fn all_stats(&self) -> Vec<IndexerQueryStats> { vec![] }
+}
+
+// ── Additional null impls for test bootstrapping ─────────────────────────────
+
+#[cfg(test)]
+pub mod test_nulls {
+    use async_trait::async_trait;
+    use scryer_domain::{
+        CalendarEpisode, Collection, DownloadClientConfig, Entitlement, Episode, HistoryEvent,
+        MediaFacet, Title, User,
+    };
+    use crate::{
+        AppError, AppResult, DownloadClient, DownloadClientConfigRepository, EventRepository,
+        IndexerClient, IndexerRoutingPlan, IndexerSearchResponse, PrimaryCollectionSummary,
+        QualityProfile, QualityProfileRepository, ReleaseAttemptRepository,
+        ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature, SearchMode,
+        SettingsRepository, ShowRepository, TitleMetadataUpdate, TitleReleaseBlocklistEntry,
+        TitleRepository, UserRepository,
+    };
+
+    #[derive(Default)]
+    pub struct NullTitleRepository;
+
+    #[async_trait]
+    impl TitleRepository for NullTitleRepository {
+        async fn list(&self, _: Option<MediaFacet>, _: Option<String>) -> AppResult<Vec<Title>> { Ok(vec![]) }
+        async fn get_by_id(&self, _: &str) -> AppResult<Option<Title>> { Ok(None) }
+        async fn create(&self, _: Title) -> AppResult<Title> { Err(AppError::Repository("not configured".into())) }
+        async fn update_monitored(&self, _: &str, _: bool) -> AppResult<Title> { Err(AppError::Repository("not configured".into())) }
+        async fn update_metadata(&self, _: &str, _: Option<String>, _: Option<MediaFacet>, _: Option<Vec<String>>) -> AppResult<Title> { Err(AppError::Repository("not configured".into())) }
+        async fn update_title_hydrated_metadata(&self, _: &str, _: TitleMetadataUpdate) -> AppResult<Title> { Err(AppError::Repository("not configured".into())) }
+        async fn delete(&self, _: &str) -> AppResult<()> { Ok(()) }
+    }
+
+    #[derive(Default)]
+    pub struct NullShowRepository;
+
+    #[async_trait]
+    impl ShowRepository for NullShowRepository {
+        async fn list_collections_for_title(&self, _: &str) -> AppResult<Vec<Collection>> { Ok(vec![]) }
+        async fn get_collection_by_id(&self, _: &str) -> AppResult<Option<Collection>> { Ok(None) }
+        async fn create_collection(&self, _: Collection) -> AppResult<Collection> { Err(AppError::Repository("not configured".into())) }
+        async fn update_collection(&self, _: &str, _: Option<String>, _: Option<String>, _: Option<String>, _: Option<String>, _: Option<String>, _: Option<String>, _: Option<bool>) -> AppResult<Collection> { Err(AppError::Repository("not configured".into())) }
+        async fn set_collection_episodes_monitored(&self, _: &str, _: bool) -> AppResult<()> { Ok(()) }
+        async fn delete_collection(&self, _: &str) -> AppResult<()> { Ok(()) }
+        async fn list_episodes_for_collection(&self, _: &str) -> AppResult<Vec<Episode>> { Ok(vec![]) }
+        async fn get_episode_by_id(&self, _: &str) -> AppResult<Option<Episode>> { Ok(None) }
+        async fn create_episode(&self, _: Episode) -> AppResult<Episode> { Err(AppError::Repository("not configured".into())) }
+        async fn update_episode(&self, _: &str, _: Option<String>, _: Option<String>, _: Option<String>, _: Option<String>, _: Option<String>, _: Option<String>, _: Option<i64>, _: Option<bool>, _: Option<bool>, _: Option<bool>, _: Option<String>) -> AppResult<Episode> { Err(AppError::Repository("not configured".into())) }
+        async fn delete_episode(&self, _: &str) -> AppResult<()> { Ok(()) }
+        async fn find_episode_by_title_and_numbers(&self, _: &str, _: &str, _: &str) -> AppResult<Option<Episode>> { Ok(None) }
+        async fn find_episode_by_title_and_absolute_number(&self, _: &str, _: &str) -> AppResult<Option<Episode>> { Ok(None) }
+        async fn list_primary_collection_summaries(&self, _: &[String]) -> AppResult<Vec<PrimaryCollectionSummary>> { Ok(vec![]) }
+        async fn list_episodes_in_date_range(&self, _: &str, _: &str) -> AppResult<Vec<CalendarEpisode>> { Ok(vec![]) }
+    }
+
+    #[derive(Default)]
+    pub struct NullUserRepository;
+
+    #[async_trait]
+    impl UserRepository for NullUserRepository {
+        async fn get_by_username(&self, _: &str) -> AppResult<Option<User>> { Ok(None) }
+        async fn create(&self, _: User) -> AppResult<User> { Err(AppError::Repository("not configured".into())) }
+        async fn list_all(&self) -> AppResult<Vec<User>> { Ok(vec![]) }
+        async fn get_by_id(&self, _: &str) -> AppResult<Option<User>> { Ok(None) }
+        async fn update_entitlements(&self, _: &str, _: Vec<Entitlement>) -> AppResult<User> { Err(AppError::Repository("not configured".into())) }
+        async fn update_password_hash(&self, _: &str, _: String) -> AppResult<User> { Err(AppError::Repository("not configured".into())) }
+        async fn delete(&self, _: &str) -> AppResult<()> { Ok(()) }
+    }
+
+    #[derive(Default)]
+    pub struct NullEventRepository;
+
+    #[async_trait]
+    impl EventRepository for NullEventRepository {
+        async fn list(&self, _: Option<String>, _: i64, _: i64) -> AppResult<Vec<HistoryEvent>> { Ok(vec![]) }
+        async fn append(&self, _: HistoryEvent) -> AppResult<()> { Ok(()) }
+    }
+
+    #[derive(Default)]
+    pub struct NullIndexerClient;
+
+    #[async_trait]
+    impl IndexerClient for NullIndexerClient {
+        async fn search(&self, _: String, _: Option<String>, _: Option<String>, _: Option<String>, _: Option<Vec<String>>, _: Option<IndexerRoutingPlan>, _: usize, _: SearchMode, _: Option<u32>, _: Option<u32>) -> AppResult<IndexerSearchResponse> {
+            Ok(IndexerSearchResponse { results: vec![], api_current: None, api_max: None, grab_current: None, grab_max: None })
+        }
+    }
+
+    #[derive(Default)]
+    pub struct NullDownloadClient;
+
+    #[async_trait]
+    impl DownloadClient for NullDownloadClient {
+        async fn submit_to_download_queue(&self, _: &Title, _: Option<String>, _: Option<String>, _: Option<String>, _: Option<String>) -> AppResult<String> {
+            Err(AppError::Repository("not configured".into()))
+        }
+    }
+
+    #[derive(Default)]
+    pub struct NullDownloadClientConfigRepository;
+
+    #[async_trait]
+    impl DownloadClientConfigRepository for NullDownloadClientConfigRepository {
+        async fn list(&self, _: Option<String>) -> AppResult<Vec<DownloadClientConfig>> { Ok(vec![]) }
+        async fn get_by_id(&self, _: &str) -> AppResult<Option<DownloadClientConfig>> { Ok(None) }
+        async fn create(&self, _: DownloadClientConfig) -> AppResult<DownloadClientConfig> { Err(AppError::Repository("not configured".into())) }
+        async fn update(&self, _: &str, _: Option<String>, _: Option<String>, _: Option<String>, _: Option<String>, _: Option<bool>) -> AppResult<DownloadClientConfig> { Err(AppError::Repository("not configured".into())) }
+        async fn delete(&self, _: &str) -> AppResult<()> { Ok(()) }
+    }
+
+    #[derive(Default)]
+    pub struct NullReleaseAttemptRepository;
+
+    #[async_trait]
+    impl ReleaseAttemptRepository for NullReleaseAttemptRepository {
+        async fn record_release_attempt(&self, _: Option<String>, _: Option<String>, _: Option<String>, _: ReleaseDownloadAttemptOutcome, _: Option<String>, _: Option<String>) -> AppResult<()> { Ok(()) }
+        async fn list_failed_release_signatures(&self, _: usize) -> AppResult<Vec<ReleaseDownloadFailureSignature>> { Ok(vec![]) }
+        async fn list_failed_release_signatures_for_title(&self, _: &str, _: usize) -> AppResult<Vec<TitleReleaseBlocklistEntry>> { Ok(vec![]) }
+        async fn get_latest_source_password(&self, _: Option<&str>, _: Option<&str>, _: Option<&str>) -> AppResult<Option<String>> { Ok(None) }
+    }
+
+    #[derive(Default)]
+    pub struct NullSettingsRepository;
+
+    #[async_trait]
+    impl SettingsRepository for NullSettingsRepository {
+        async fn get_setting_json(&self, _: &str, _: &str, _: Option<String>) -> AppResult<Option<String>> { Ok(None) }
+    }
+
+    #[derive(Default)]
+    pub struct NullQualityProfileRepository;
+
+    #[async_trait]
+    impl QualityProfileRepository for NullQualityProfileRepository {
+        async fn list_quality_profiles(&self, _: &str, _: Option<String>) -> AppResult<Vec<QualityProfile>> { Ok(vec![]) }
+    }
 }

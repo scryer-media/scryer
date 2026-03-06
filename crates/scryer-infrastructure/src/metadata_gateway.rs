@@ -1,3 +1,5 @@
+use std::collections::{HashMap, VecDeque};
+use std::sync::RwLock;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -11,6 +13,44 @@ use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
 use tracing::{debug, info, warn};
+
+struct ApqCacheEntry {
+    etag: String,
+    body: String,
+}
+
+struct ApqCache {
+    map: HashMap<String, ApqCacheEntry>,
+    order: VecDeque<String>,
+}
+
+impl ApqCache {
+    fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<&ApqCacheEntry> {
+        self.map.get(key)
+    }
+
+    #[allow(clippy::map_entry)] // entry API borrows map, conflicting with eviction logic
+    fn insert(&mut self, key: String, entry: ApqCacheEntry) {
+        if self.map.contains_key(&key) {
+            self.map.insert(key, entry);
+            return;
+        }
+        if self.map.len() >= 1000 {
+            if let Some(oldest) = self.order.pop_front() {
+                self.map.remove(&oldest);
+            }
+        }
+        self.order.push_back(key.clone());
+        self.map.insert(key, entry);
+    }
+}
 
 use crate::smg_enrollment;
 
@@ -181,6 +221,7 @@ pub struct MetadataGatewayClient {
     search_multi_hash: String,
     movie_hash: String,
     series_hash: String,
+    apq_cache: RwLock<ApqCache>,
 }
 
 impl MetadataGatewayClient {
@@ -235,6 +276,7 @@ impl MetadataGatewayClient {
             search_multi_hash,
             movie_hash,
             series_hash,
+            apq_cache: RwLock::new(ApqCache::new()),
         }
     }
 
@@ -307,6 +349,7 @@ impl MetadataGatewayClient {
     /// Execute a GraphQL query using APQ (Automatic Persisted Queries).
     ///
     /// 1. Send GET with hash only (no query body) — cache-friendly.
+    ///    Sends `If-None-Match` if we have a cached ETag; on 304 returns cached body.
     /// 2. If the server returns `PersistedQueryNotFound`, POST with full query + hash to register.
     /// 3. Subsequent GETs for the same hash will hit Cloudflare edge cache.
     async fn execute_graphql_apq<T: serde::de::DeserializeOwned>(
@@ -315,8 +358,6 @@ impl MetadataGatewayClient {
         hash: &str,
         variables: serde_json::Value,
     ) -> AppResult<T> {
-        debug!(endpoint = %self.endpoint, hash, "APQ GET request");
-
         let extensions = json!({
             "persistedQuery": {
                 "version": 1,
@@ -324,28 +365,55 @@ impl MetadataGatewayClient {
             }
         });
 
-        // Step 1: GET with hash + variables (no query body)
         let variables_str = serde_json::to_string(&variables)
             .map_err(|e| AppError::Repository(format!("failed to serialize variables: {e}")))?;
         let extensions_str = serde_json::to_string(&extensions)
             .map_err(|e| AppError::Repository(format!("failed to serialize extensions: {e}")))?;
 
+        let cache_key = format!("{hash}:{variables_str}");
+
+        // Check for a cached ETag to send If-None-Match
+        let cached_etag = self.apq_cache.read().unwrap()
+            .get(&cache_key)
+            .map(|e| e.etag.clone());
+
+        debug!(endpoint = %self.endpoint, hash, has_etag = cached_etag.is_some(), "APQ GET request");
+
         let client = self.get_http_client().await;
-        let get_result = client
+        let mut req = client
             .get(&self.endpoint)
-            .query(&[("extensions", &extensions_str), ("variables", &variables_str)])
-            .send()
-            .await;
+            .query(&[("extensions", &extensions_str), ("variables", &variables_str)]);
+        if let Some(ref etag) = cached_etag {
+            req = req.header(reqwest::header::IF_NONE_MATCH, etag);
+        }
+        let get_result = req.send().await;
 
         match get_result {
+            Ok(resp) if resp.status() == reqwest::StatusCode::NOT_MODIFIED => {
+                // 304: serve from our local cache
+                let body = self.apq_cache.read().unwrap()
+                    .get(&cache_key)
+                    .map(|e| e.body.clone())
+                    .ok_or_else(|| AppError::Repository("APQ 304 but no cached body".into()))?;
+                debug!(hash, "APQ 304 — serving from ETag cache");
+                let parsed: GraphqlResponse<T> = serde_json::from_str(&body)
+                    .map_err(|e| AppError::Repository(format!("APQ cache: invalid JSON: {e}")))?;
+                parsed.data
+                    .ok_or_else(|| AppError::Repository("APQ cache: empty data".into()))
+            }
             Ok(resp) if resp.status().is_success() => {
+                let etag = resp.headers()
+                    .get(reqwest::header::ETAG)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string());
                 let raw = resp.text().await
                     .map_err(|e| AppError::Repository(e.to_string()))?;
+
                 let parsed: GraphqlResponse<T> = serde_json::from_str(&raw).map_err(|e| {
                     AppError::Repository(format!("APQ GET: invalid JSON: {e}"))
                 })?;
 
-                // Check for PersistedQueryNotFound
+                // Check for PersistedQueryNotFound before caching
                 if let Some(ref errors) = parsed.errors {
                     let is_not_found = errors.iter().any(|e|
                         e.message.contains("PersistedQueryNotFound")
@@ -358,6 +426,12 @@ impl MetadataGatewayClient {
                         .map(|e| e.message.as_str())
                         .unwrap_or("metadata gateway returned errors");
                     return Err(AppError::Repository(msg.to_string()));
+                }
+
+                // Store ETag + body for future conditional requests (evicts oldest beyond 1000)
+                if let Some(etag) = etag {
+                    self.apq_cache.write().unwrap()
+                        .insert(cache_key, ApqCacheEntry { etag, body: raw });
                 }
 
                 parsed.data

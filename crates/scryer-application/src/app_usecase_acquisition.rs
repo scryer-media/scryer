@@ -385,7 +385,9 @@ async fn process_single_wanted_item(
     };
 
     // Build search queries based on media type
-    let (queries, imdb_id, tvdb_id, category) = build_search_queries(&title, item, episode.as_ref(), &app.facet_registry);
+    let sq = build_search_queries(&title, item, episode.as_ref(), &app.facet_registry);
+    let (queries, imdb_id, tvdb_id, category) = (sq.queries, sq.imdb_id, sq.tvdb_id, sq.category);
+    let (search_season, search_episode) = (sq.season, sq.episode);
 
     // Derive the download client category separately — search_category ("series")
     // is for Newznab query type, download_category ("tv") is for NZBGet routing.
@@ -430,6 +432,8 @@ async fn process_single_wanted_item(
         "background_acquisition",
         SearchMode::Auto,
         runtime_minutes,
+        search_season,
+        search_episode,
     ).await {
         Ok(r) => r,
         Err(err) => {
@@ -764,12 +768,21 @@ async fn process_single_wanted_item(
     Ok(())
 }
 
+struct SearchQueryResult {
+    queries: Vec<String>,
+    imdb_id: Option<String>,
+    tvdb_id: Option<String>,
+    category: String,
+    season: Option<u32>,
+    episode: Option<u32>,
+}
+
 fn build_search_queries(
     title: &Title,
     item: &WantedItem,
     episode: Option<&Episode>,
     facet_registry: &crate::FacetRegistry,
-) -> (Vec<String>, Option<String>, Option<String>, String) {
+) -> SearchQueryResult {
     let imdb_id = title.imdb_id.clone();
     let tvdb_id = tvdb_id_from_external_ids(&title.external_ids);
 
@@ -792,10 +805,12 @@ fn build_search_queries(
             if queries.is_empty() && imdb_id.is_some() {
                 queries.push(String::new());
             }
-            (queries, imdb_id, tvdb_id, category)
+            SearchQueryResult { queries, imdb_id, tvdb_id, category, season: None, episode: None }
         }
         "episode" => {
             let mut queries = Vec::new();
+            let mut season_param: Option<u32> = None;
+            let mut episode_param: Option<u32> = None;
 
             if let Some(ep) = episode {
                 let season_num: usize = ep
@@ -808,6 +823,13 @@ fn build_search_queries(
                     .as_deref()
                     .and_then(|e| e.parse().ok())
                     .unwrap_or(0);
+
+                if season_num > 0 {
+                    season_param = Some(season_num as u32);
+                }
+                if episode_num > 0 {
+                    episode_param = Some(episode_num as u32);
+                }
 
                 if season_num > 0 && episode_num > 0 {
                     queries.push(format!("S{:0>2}E{:0>2}", season_num, episode_num));
@@ -859,9 +881,9 @@ fn build_search_queries(
                 }
             }
 
-            (queries, imdb_id, tvdb_id, category)
+            SearchQueryResult { queries, imdb_id, tvdb_id, category, season: season_param, episode: episode_param }
         }
-        _ => (vec![], None, None, category),
+        _ => SearchQueryResult { queries: vec![], imdb_id: None, tvdb_id: None, category, season: None, episode: None },
     }
 }
 
@@ -1051,11 +1073,13 @@ pub async fn start_background_acquisition_poller(
     let mut poll_interval = tokio::time::interval(std::time::Duration::from_secs(60));
     let mut sync_interval = tokio::time::interval(std::time::Duration::from_secs(3600));
     let mut metadata_refresh_interval = tokio::time::interval(std::time::Duration::from_secs(43200)); // 12h
+    let mut registry_refresh_interval = tokio::time::interval(std::time::Duration::from_secs(86400)); // 24h
 
     // Consume the first tick immediately
     poll_interval.tick().await;
     sync_interval.tick().await;
     metadata_refresh_interval.tick().await;
+    registry_refresh_interval.tick().await;
 
     let wake = app.services.acquisition_wake.clone();
 
@@ -1079,6 +1103,12 @@ pub async fn start_background_acquisition_poller(
             _ = metadata_refresh_interval.tick() => {
                 info!("starting periodic metadata refresh for monitored series");
                 app.refresh_monitored_series_metadata().await;
+            }
+            _ = registry_refresh_interval.tick() => {
+                info!("refreshing plugin registry");
+                if let Err(e) = app.refresh_plugin_registry_internal().await {
+                    warn!(error = %e, "periodic plugin registry refresh failed");
+                }
             }
         }
     }

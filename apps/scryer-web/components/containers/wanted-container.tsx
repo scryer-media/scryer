@@ -25,15 +25,14 @@ import {
 } from "@/lib/constants/settings";
 import type { WantedItem, ReleaseDecisionItem, TitleRecord, Release } from "@/lib/types";
 import type { ParsedQualityProfileEntry } from "@/lib/types/quality-profiles";
-import type { Translate } from "@/components/root/types";
 import { FACETS_BY_ID } from "@/lib/facets/registry";
 import type { ViewId } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 
 export type WantedTab = "wanted" | "cutoff" | "calendar";
 
 type WantedContainerProps = {
-  t: Translate;
-  setGlobalStatus: (status: string) => void;
   onOpenOverview?: (targetView: ViewId, titleId: string, episodeId?: string) => void;
 };
 
@@ -112,7 +111,9 @@ function readTabFromUrl(): WantedTab {
   return t && VALID_TABS.has(t) ? t : "wanted";
 }
 
-export const WantedContainer = memo(function WantedContainer({ t, setGlobalStatus, onOpenOverview }: WantedContainerProps) {
+export const WantedContainer = memo(function WantedContainer({ onOpenOverview }: WantedContainerProps) {
+  const setGlobalStatus = useGlobalStatus();
+  const t = useTranslate();
   const client = useClient();
 
   // --- Tab state (synced with URL ?tab= param) ---
@@ -503,7 +504,6 @@ export const WantedContainer = memo(function WantedContainer({ t, setGlobalStatu
       tab={tab}
       onTabChange={setTab}
       wantedState={{
-        t,
         items,
         total,
         loading,
@@ -525,7 +525,6 @@ export const WantedContainer = memo(function WantedContainer({ t, setGlobalStatu
         resetItem,
       }}
       cutoffState={{
-        t,
         items: cutoffItems,
         loading: cutoffLoading,
         facetFilter: cutoffFacetFilter,
@@ -538,7 +537,6 @@ export const WantedContainer = memo(function WantedContainer({ t, setGlobalStatu
         cancelBulkSearch,
       }}
       calendarState={{
-        t,
         episodes: calendarEpisodes,
         loading: calendarLoading,
         onDateRangeChange: handleCalendarDateRangeChange,

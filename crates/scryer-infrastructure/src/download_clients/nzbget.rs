@@ -9,6 +9,8 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use tracing::{debug, warn};
 
+use super::{extract_f64_value, extract_i64_value, is_http_url, parse_duration_seconds, progress_percent_from_sizes, size_to_bytes};
+
 #[derive(Clone)]
 pub struct NzbgetDownloadClient {
     rpc_url: String,
@@ -890,56 +892,6 @@ fn extract_result_array(value: Value, preferred_key: &str) -> Option<Vec<Value>>
     }
 }
 
-fn extract_i64_value(value: Option<&Value>) -> Option<i64> {
-    value.and_then(|value| {
-        value.as_i64().or_else(|| {
-            value
-                .as_str()
-                .and_then(|raw| raw.trim().parse::<i64>().ok())
-        })
-    })
-}
-
-fn extract_f64_value(value: Option<&Value>) -> Option<f64> {
-    value.and_then(|value| {
-        value.as_f64().or_else(|| {
-            value
-                .as_str()
-                .and_then(|raw| raw.trim().parse::<f64>().ok())
-        })
-    })
-}
-
-fn size_to_bytes(size_mb: f64) -> Option<i64> {
-    if !size_mb.is_finite() {
-        return None;
-    }
-    if size_mb <= 0.0 {
-        return Some(0);
-    }
-    let bytes = (size_mb * 1_048_576f64).round() as i64;
-    Some(bytes.max(0))
-}
-
-fn progress_percent_from_sizes(size_mb: f64, remaining_mb: f64) -> u8 {
-    if size_mb <= 0.0 || !size_mb.is_finite() || !remaining_mb.is_finite() {
-        return 0;
-    }
-
-    let completed_mb = (size_mb - remaining_mb).clamp(0.0, size_mb);
-    if completed_mb <= 0.0 {
-        return 0;
-    }
-
-    let percent = ((completed_mb / size_mb) * 100.0).round();
-    let clamped = if percent.is_nan() {
-        0.0
-    } else {
-        percent.clamp(0.0, 100.0)
-    };
-    clamped as u8
-}
-
 fn queue_state_from_status(status: &str) -> DownloadQueueState {
     let normalized = status.to_ascii_uppercase();
     match normalized.as_str() {
@@ -1140,42 +1092,6 @@ fn extract_remaining_seconds_from_entry(entry: &serde_json::Map<String, Value>) 
     Some(remaining.max(0))
 }
 
-fn parse_duration_seconds(raw: &str) -> Option<i64> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    if let Ok(seconds) = trimmed.parse::<i64>() {
-        return Some(seconds.max(0));
-    }
-
-    let mut parts = trimmed.split(':');
-    let first = parts.next()?;
-    let second = parts.next()?;
-    let third = parts.next();
-    if parts.next().is_some() {
-        return None;
-    }
-
-    let (hours, minutes, seconds) = if let Some(third_part) = third {
-        let hours = first.parse::<i64>().ok()?;
-        let minutes = second.parse::<i64>().ok()?;
-        let seconds = third_part.parse::<i64>().ok()?;
-        (hours, minutes, seconds)
-    } else {
-        let minutes = first.parse::<i64>().ok()?;
-        let seconds = second.parse::<i64>().ok()?;
-        (0, minutes, seconds)
-    };
-
-    if hours < 0 || minutes < 0 || seconds < 0 || minutes >= 60 || seconds >= 60 {
-        return None;
-    }
-
-    Some(hours * 3600 + minutes * 60 + seconds)
-}
-
 fn map_history_state(status_upper: &str) -> (DownloadQueueState, Option<String>) {
     if status_upper.starts_with("SUCCESS") {
         (DownloadQueueState::Completed, None)
@@ -1192,10 +1108,6 @@ fn map_history_state(status_upper: &str) -> (DownloadQueueState, Option<String>)
     } else {
         (DownloadQueueState::Completed, None)
     }
-}
-
-fn is_http_url(value: &str) -> bool {
-    value.starts_with("http://") || value.starts_with("https://")
 }
 
 fn sanitize_filename_with_nzb_ext(name: &str) -> String {

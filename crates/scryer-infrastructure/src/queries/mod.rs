@@ -3,6 +3,7 @@ pub mod download_client;
 pub mod event;
 pub mod indexer;
 pub mod media_file;
+pub mod plugin_installation;
 pub mod quality;
 pub mod rule_set;
 pub mod settings;

@@ -115,6 +115,7 @@ impl ConfigMutations {
                     is_enabled: input.is_enabled.unwrap_or(true),
                     enable_interactive_search: input.enable_interactive_search.unwrap_or(true),
                     enable_auto_search: input.enable_auto_search.unwrap_or(true),
+                    config_json: input.config_json,
                 },
             )
             .await
@@ -142,6 +143,7 @@ impl ConfigMutations {
                 input.is_enabled,
                 input.enable_interactive_search,
                 input.enable_auto_search,
+                input.config_json,
             )
             .await
             .map_err(to_gql_error)?;
@@ -184,7 +186,7 @@ impl ConfigMutations {
             .await
             .map_err(to_gql_error)?;
 
-        if config.client_type == "nzbget" {
+        if config.client_type == "nzbget" || config.client_type == "sabnzbd" {
             ensure_nzbget_routing_entry_for_client(&db, &config.id, &actor.id).await?;
         }
 
@@ -212,7 +214,7 @@ impl ConfigMutations {
             .await
             .map_err(to_gql_error)?;
 
-        if config.client_type == "nzbget" {
+        if config.client_type == "nzbget" || config.client_type == "sabnzbd" {
             ensure_nzbget_routing_entry_for_client(&db, &config.id, &actor.id).await?;
         }
 
@@ -243,9 +245,6 @@ impl ConfigMutations {
         }
 
         let client_type = input.client_type.trim().to_lowercase();
-        if client_type != "nzbget" {
-            return Err(Error::new("test connection is currently supported only for nzbget"));
-        }
 
         let base_url = input.base_url.trim().to_string();
         if base_url.is_empty() {
@@ -261,26 +260,50 @@ impl ConfigMutations {
             })?
         };
 
-        let username = config
-            .get("username")
-            .and_then(Value::as_str)
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
-        let password = config
-            .get("password")
-            .and_then(Value::as_str)
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
+        match client_type.as_str() {
+            "nzbget" => {
+                let username = config
+                    .get("username")
+                    .and_then(Value::as_str)
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty());
+                let password = config
+                    .get("password")
+                    .and_then(Value::as_str)
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty());
 
-        scryer_infrastructure::NzbgetDownloadClient::new(
-            base_url,
-            username,
-            password,
-            "SCORE".to_string(),
-        )
-        .test_connection()
-        .await
-        .map_err(to_gql_error)?;
+                scryer_infrastructure::NzbgetDownloadClient::new(
+                    base_url,
+                    username,
+                    password,
+                    "SCORE".to_string(),
+                )
+                .test_connection()
+                .await
+                .map_err(to_gql_error)?;
+            }
+            "sabnzbd" => {
+                let api_key = config
+                    .get("api_key")
+                    .or_else(|| config.get("apiKey"))
+                    .or_else(|| config.get("apikey"))
+                    .and_then(Value::as_str)
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| Error::new("sabnzbd requires an API key"))?;
+
+                scryer_infrastructure::SabnzbdDownloadClient::new(base_url, api_key)
+                    .test_connection()
+                    .await
+                    .map_err(to_gql_error)?;
+            }
+            _ => {
+                return Err(Error::new(format!(
+                    "test connection is not supported for client type '{client_type}'"
+                )));
+            }
+        }
 
         Ok(true)
     }

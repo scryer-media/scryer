@@ -11,7 +11,8 @@ import {
 import { downloadClientsQuery } from "@/lib/graphql/queries";
 import { DEFAULT_DOWNLOAD_CLIENT_DRAFT } from "@/lib/constants/download-clients";
 import { useClient } from "urql";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 import {
   buildDownloadClientBaseUrl,
   buildDownloadClientConfigJson,
@@ -21,15 +22,10 @@ import {
 import type { DownloadClientRecord, DownloadClientDraft } from "@/lib/types";
 
 type SettingsDownloadClientsSectionProps = ComponentProps<typeof SettingsDownloadClientsSection>;
-type SettingsDownloadClientsContainerProps = {
-  t: Translate;
-  setGlobalStatus: (status: string) => void;
-};
 
-export function SettingsDownloadClientsContainer({
-  t,
-  setGlobalStatus,
-}: SettingsDownloadClientsContainerProps) {
+export function SettingsDownloadClientsContainer() {
+  const setGlobalStatus = useGlobalStatus();
+  const t = useTranslate();
   const client = useClient();
   const [settingsDownloadClients, setSettingsDownloadClients] = useState<SettingsDownloadClientsSectionProps["settingsDownloadClients"]>(
     [],
@@ -94,7 +90,7 @@ export function SettingsDownloadClientsContainer({
 
     setMutatingDownloadClientId(editingDownloadClientId || "new");
     try {
-      if (payload.clientType === "nzbget") {
+      if (payload.clientType === "nzbget" || payload.clientType === "sabnzbd") {
         setGlobalStatus(t("status.testingDownloadClient"));
         const { data: testData, error: testError } = await client.mutation(
           testDownloadClientConnectionMutation,
@@ -258,7 +254,6 @@ export function SettingsDownloadClientsContainer({
   return (
     <>
       <SettingsDownloadClientsSection
-        t={t}
         editingDownloadClientId={editingDownloadClientId}
         downloadClientDraft={downloadClientDraft}
         setDownloadClientDraft={setDownloadClientDraft}

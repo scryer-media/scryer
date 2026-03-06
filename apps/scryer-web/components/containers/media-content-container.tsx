@@ -25,61 +25,31 @@ import { useQueueFormState } from "@/lib/hooks/use-queue-form-state";
 import { useTitleManagementState } from "@/lib/hooks/use-title-management-state";
 import type {
   Release,
-  Facet,
   TitleRecord,
   RuleSetRecord,
 } from "@/lib/types";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { useSearchContext } from "@/lib/context/search-context";
 
-type NzbSearchOptions = {
-  imdbId?: string | null;
-  tvdbId?: string | null;
-  limit?: number;
-};
 type MediaContentContainerProps = {
-  t: Translate;
   view: ViewId;
   contentSettingsSection: ContentSettingsSection;
-  setGlobalStatus: (status: string) => void;
-  queueFacet: Facet;
-  setQueueFacet: (value: Facet) => void;
-  runTvdbSearch: (query: string) => Promise<MetadataTvdbSearchItem[]>;
-  catalogChangeSignal?: number;
-  runSearch: (
-    query: string,
-    category?: string | null,
-    options?: NzbSearchOptions,
-  ) => Promise<Release[]>;
-  searchNzbForSelectedTvdb: () => Promise<void>;
-  selectedTvdb: MetadataTvdbSearchItem | null;
-  tvdbCandidates: MetadataTvdbSearchItem[];
-  selectedTvdbId: string | null;
-  selectTvdbCandidate: (candidate: MetadataTvdbSearchItem) => void;
-  searchResults: Release[];
   onOpenOverview: (targetView: ViewId, titleId: string) => void;
 };
 
 export const MediaContentContainer = React.memo(function MediaContentContainer({
-  t,
   view,
   contentSettingsSection,
-  setGlobalStatus,
-  queueFacet,
-  setQueueFacet,
-  runTvdbSearch,
-  runSearch,
-  searchNzbForSelectedTvdb,
-  selectedTvdb,
-  tvdbCandidates,
-  selectedTvdbId,
-  selectTvdbCandidate,
-  searchResults,
   onOpenOverview,
-  catalogChangeSignal,
 }: MediaContentContainerProps) {
+  const searchState = useSearchContext();
+  const { queueFacet, setQueueFacet, runTvdbSearch, runSearch, searchNzbForSelectedTvdb, selectedTvdb, tvdbCandidates, selectedTvdbId, selectTvdbCandidate, searchResults, catalogChangeSignal } = searchState;
+  const setGlobalStatus = useGlobalStatus();
+  const t = useTranslate();
   const client = useClient();
   const activeFacet = viewToFacet[view as keyof typeof viewToFacet] ?? "movie";
   const activeQualityScopeId = CATEGORY_SCOPE_MAP[view as keyof typeof CATEGORY_SCOPE_MAP] ?? "movie";
@@ -142,8 +112,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     refreshMediaSettings,
   } = useMediaSettings({
     activeQualityScopeId,
-    setGlobalStatus,
-    t,
     view,
   });
 
@@ -165,8 +133,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     saveDownloadClientRouting,
   } = useDownloadClientRouting({
     activeQualityScopeId,
-    setGlobalStatus,
-    t,
   });
   const {
     indexers,
@@ -180,8 +146,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     moveIndexerInScope,
   } = useIndexerRouting({
     activeQualityScopeId,
-    setGlobalStatus,
-    t,
   });
 
   const [ruleSets, setRuleSets] = React.useState<RuleSetRecord[]>([]);
@@ -245,7 +209,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     setMonitorSpecialsForQueue(categoryMonitorSpecials.anime !== "false");
     setInterSeasonMoviesForQueue(categoryInterSeasonMovies.anime !== "false");
     setPreferredSubGroupForQueue(categoryPreferredSubGroup.anime);
-  }, [categoryMonitorSpecials.anime, categoryInterSeasonMovies.anime, categoryPreferredSubGroup.anime]);
+  }, [categoryMonitorSpecials.anime, categoryInterSeasonMovies.anime, categoryPreferredSubGroup.anime, setInterSeasonMoviesForQueue, setMonitorSpecialsForQueue, setPreferredSubGroupForQueue]);
 
   const refreshTitles = React.useCallback(async () => {
     setTitleLoading(true);
@@ -264,7 +228,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     } finally {
       setTitleLoading(false);
     }
-  }, [activeFacet, client, t, titleFilter]);
+  }, [activeFacet, client, t, titleFilter, setMonitoredTitles, setTitleLoading, setTitleStatus]);
 
   React.useEffect(() => {
     if (!catalogChangeSignal) {
@@ -352,7 +316,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         setGlobalStatus(error instanceof Error ? error.message : t("status.queueFailed"));
       }
     },
-    [interSeasonMoviesForQueue, minAvailabilityForQueue, monitorSpecialsForQueue, monitoredForQueue, preferredSubGroupForQueue, queueFacet, refreshTitles, client, setGlobalStatus, t],
+    [interSeasonMoviesForQueue, minAvailabilityForQueue, monitorSpecialsForQueue, monitoredForQueue, preferredSubGroupForQueue, queueFacet, refreshTitles, client, setGlobalStatus, t, seasonFoldersForQueue, setTitleNameForQueue],
   );
 
   const queueFromSearch = React.useCallback(
@@ -439,6 +403,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       setGlobalStatus,
       titleNameForQueue,
       t,
+      seasonFoldersForQueue,
+      setTitleNameForQueue,
     ],
   );
 
@@ -543,12 +509,12 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const requestDeleteTitle = React.useCallback((title: TitleRecord) => {
     setTitleToDelete(title);
     setDeleteFilesOnDisk(false);
-  }, []);
+  }, [setTitleToDelete, setDeleteFilesOnDisk]);
 
   const closeDeleteTitleDialog = React.useCallback(() => {
     setTitleToDelete(null);
     setDeleteFilesOnDisk(false);
-  }, []);
+  }, [setTitleToDelete, setDeleteFilesOnDisk]);
 
   const confirmDeleteTitle = React.useCallback(async () => {
     if (!titleToDelete) {
@@ -586,7 +552,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       });
       closeDeleteTitleDialog();
     }
-  }, [closeDeleteTitleDialog, deleteFilesOnDisk, refreshTitles, client, t, titleToDelete, setGlobalStatus]);
+  }, [closeDeleteTitleDialog, deleteFilesOnDisk, refreshTitles, client, t, titleToDelete, setGlobalStatus, setDeleteTitleLoadingById]);
 
   const handleLibraryScan = React.useCallback(async () => {
     setLibraryScanLoading(true);
@@ -608,13 +574,13 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     } finally {
       setLibraryScanLoading(false);
     }
-  }, [refreshTitles, client, setGlobalStatus, t]);
+  }, [refreshTitles, client, setGlobalStatus, t, setLibraryScanLoading, setLibraryScanSummary]);
 
   React.useEffect(() => {
     if (!titleStatus) {
       setTitleStatus(t("title.noManaged"));
     }
-  }, [t, titleStatus]);
+  }, [t, titleStatus, setTitleStatus]);
 
   React.useEffect(() => {
     if (view !== "movies" && view !== "series" && view !== "anime") {
@@ -642,7 +608,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     <>
       <MediaContentView
         state={{
-          t,
           view,
           contentSettingsSection,
           contentSettingsLabel,

@@ -2,16 +2,17 @@ import { useState, useCallback } from "react";
 import { useClient } from "urql";
 import { SettingsProfileSection } from "@/components/views/settings/settings-profile-section";
 import { setUserPasswordMutation } from "@/lib/graphql/mutations";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 
 type Props = {
-  t: Translate;
-  setGlobalStatus: (status: string) => void;
   userId?: string;
   username?: string;
 };
 
-export function SettingsProfileContainer({ t, setGlobalStatus, userId, username }: Props) {
+export function SettingsProfileContainer({ userId, username }: Props) {
+  const setGlobalStatus = useGlobalStatus();
+  const t = useTranslate();
   const client = useClient();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -51,7 +52,6 @@ export function SettingsProfileContainer({ t, setGlobalStatus, userId, username 
 
   return (
     <SettingsProfileSection
-      t={t}
       username={username}
       currentPassword={currentPassword}
       newPassword={newPassword}

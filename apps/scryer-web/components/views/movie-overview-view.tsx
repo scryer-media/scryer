@@ -19,6 +19,7 @@ import {
   setTagValue,
   removeTagByPrefix,
 } from "@/lib/utils/title-tags";
+import { useTranslate } from "@/lib/context/translate-context";
 import type { Translate } from "@/components/root/types";
 import type { Release } from "@/lib/types";
 import type {
@@ -129,18 +130,17 @@ const MONITOR_TYPE_TAG_PREFIX = "scryer:monitor-type:";
 const INHERIT_VALUE = "__inherit__";
 
 function TitleSettingsPanel({
-  t,
   title,
   qualityProfiles,
   defaultRootFolder,
   onUpdateTitleTags,
 }: {
-  t: Translate;
   title: TitleDetail;
   qualityProfiles: { id: string; name: string }[];
   defaultRootFolder: string;
   onUpdateTitleTags: (newTags: string[]) => Promise<void>;
 }) {
+  const t = useTranslate();
   const currentProfileId = getTagValue(title.tags, QUALITY_PROFILE_PREFIX) ?? INHERIT_VALUE;
   const currentRootFolder = getTagValue(title.tags, ROOT_FOLDER_PREFIX) ?? "";
   const [rootFolderDraft, setRootFolderDraft] = React.useState(currentRootFolder || defaultRootFolder);
@@ -248,7 +248,6 @@ function TitleSettingsPanel({
 // ─── main view ────────────────────────────────────────────────────────────────
 
 type Props = {
-  t: Translate;
   loading: boolean;
   title: TitleDetail | null;
   collections: TitleCollection[];
@@ -271,7 +270,6 @@ type Props = {
 };
 
 export function MovieOverviewView({
-  t,
   loading,
   title,
   collections,
@@ -292,6 +290,7 @@ export function MovieOverviewView({
   onUpdateTitleTags,
   blocklistEntries,
 }: Props) {
+  const t = useTranslate();
   if (loading) {
     return (
       <div className="space-y-4">
@@ -531,8 +530,8 @@ export function MovieOverviewView({
                     </tr>
                   </thead>
                   <tbody>
-                    {renamePlan.items.map((item, index) => (
-                      <tr key={`${item.collectionId ?? "none"}-${index}`} className="border-t border-border">
+                    {renamePlan.items.map((item) => (
+                      <tr key={`${item.collectionId ?? "none"}-${item.currentPath ?? ""}`} className="border-t border-border">
                         <td className="px-3 py-2 align-top font-mono text-xs text-muted-foreground">
                           {item.currentPath || "—"}
                         </td>
@@ -597,7 +596,6 @@ export function MovieOverviewView({
             <SearchResultBuckets
               results={searchResults}
               onQueue={onQueue}
-              t={t}
             />
           )}
         </CardContent>
@@ -619,9 +617,9 @@ export function MovieOverviewView({
             </p>
           ) : (
             <div className="space-y-2">
-              {blocklistEntries.map((entry, index) => (
+              {blocklistEntries.map((entry) => (
                 <div
-                  key={`${entry.sourceHint ?? "hint"}-${entry.sourceTitle ?? "title"}-${entry.attemptedAt}-${index}`}
+                  key={`${entry.sourceHint ?? ""}-${entry.attemptedAt}-${entry.sourceTitle ?? ""}`}
                   className="rounded-lg border border-border bg-background/30 p-3"
                 >
                   <p className="break-words text-sm text-card-foreground">
@@ -657,7 +655,6 @@ export function MovieOverviewView({
         </summary>
         <div className="border-t border-border">
           <TitleSettingsPanel
-            t={t}
             title={title}
             qualityProfiles={qualityProfiles}
             defaultRootFolder={defaultRootFolder}

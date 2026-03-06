@@ -2,6 +2,7 @@ mod collections;
 mod config;
 mod downloads;
 mod library;
+mod plugins;
 mod rules;
 mod settings;
 mod titles;
@@ -21,4 +22,5 @@ pub struct MutationRoot(
     library::LibraryMutations,
     wanted::WantedMutations,
     rules::RulesMutations,
+    plugins::PluginMutations,
 );

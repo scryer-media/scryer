@@ -1,5 +1,6 @@
 
 import * as React from "react";
+import { useClient } from "urql";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
 import type { LucideIcon } from "lucide-react";
 import type {
@@ -8,6 +9,7 @@ import type {
   Translate,
   ViewId,
 } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
 import {
   Sidebar,
   SidebarContent,
@@ -31,7 +33,6 @@ type NavItem = {
 };
 
 type RootSidebarProps = {
-  t: Translate;
   topNav: NavItem[];
   view: ViewId;
   settingsSection: SettingsSection;
@@ -84,6 +85,11 @@ const settingsEntries: Array<{
     label: (t) => t("settings.rules"),
     requiredEntitlement: "manage_config",
   },
+  {
+    id: "plugins",
+    label: (t) => t("settings.plugins"),
+    requiredEntitlement: "manage_config",
+  },
 ];
 
 function getMediaSectionChildren(
@@ -112,7 +118,6 @@ function getMediaSectionChildren(
 }
 
 export const RootSidebar = React.memo(function RootSidebar({
-  t,
   topNav,
   view,
   settingsSection,
@@ -121,7 +126,27 @@ export const RootSidebar = React.memo(function RootSidebar({
   children,
   onNavigate,
 }: RootSidebarProps) {
+  const t = useTranslate();
   const isMobile = useIsMobile();
+  const client = useClient();
+  const [pluginUpgradeCount, setPluginUpgradeCount] = React.useState(0);
+
+  React.useEffect(() => {
+    const q = `query { plugins { updateAvailable } }`;
+    client.query(q, {}).toPromise().then(({ data }) => {
+      if (data?.plugins) {
+        setPluginUpgradeCount(
+          (data.plugins as Array<{ updateAvailable: boolean }>).filter((p) => p.updateAvailable).length,
+        );
+      }
+    }).catch(() => { /* ignore */ });
+
+    const onPluginUpdate = (e: Event) => {
+      setPluginUpgradeCount((e as CustomEvent<number>).detail);
+    };
+    window.addEventListener("scryer:pluginUpgradeCount", onPluginUpdate);
+    return () => window.removeEventListener("scryer:pluginUpgradeCount", onPluginUpdate);
+  }, [client]);
 
   const visibleSettingsEntries = React.useMemo(
     () => settingsEntries.filter((e) => !e.requiredEntitlement || entitlements.includes(e.requiredEntitlement)),
@@ -210,6 +235,11 @@ export const RootSidebar = React.memo(function RootSidebar({
                                     }}
                                   >
                                     {entry.label(t)}
+                                    {entry.id === "plugins" && pluginUpgradeCount > 0 ? (
+                                      <span className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-medium leading-none text-white">
+                                        {pluginUpgradeCount}
+                                      </span>
+                                    ) : null}
                                   </SidebarMenuSubButton>
                                 </SidebarMenuSubItem>
                               ))

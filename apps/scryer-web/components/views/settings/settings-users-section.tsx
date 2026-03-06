@@ -14,7 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
 
 type UserRecord = {
   id: string;
@@ -23,7 +23,6 @@ type UserRecord = {
 };
 
 type SettingsUsersSectionProps = {
-  t: Translate;
   settingsUsers: UserRecord[];
   currentUserId?: string | null;
   ALL_ENTITLEMENTS: string[];
@@ -46,7 +45,6 @@ type SettingsUsersSectionProps = {
 };
 
 export function SettingsUsersSection({
-  t,
   settingsUsers,
   currentUserId,
   ALL_ENTITLEMENTS,
@@ -67,6 +65,7 @@ export function SettingsUsersSection({
   setUserEntitlements,
   deleteUser,
 }: SettingsUsersSectionProps) {
+  const t = useTranslate();
   return (
     <div className="space-y-4 text-sm">
       <CardTitle className="flex items-center gap-2 text-base">

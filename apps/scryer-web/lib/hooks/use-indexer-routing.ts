@@ -18,7 +18,8 @@ import type {
   IndexerCategoryRoutingSettings,
 } from "@/lib/types";
 import type { ViewCategoryId } from "@/lib/types/quality-profiles";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 
 const DEFAULT_SCOPE_ROUTING_ORDER = getDefaultRoutingOrder();
 
@@ -26,8 +27,6 @@ type Direction = "up" | "down";
 
 type IndexerRoutingHookArgs = {
   activeQualityScopeId: ViewCategoryId;
-  setGlobalStatus: (status: string) => void;
-  t: Translate;
 };
 
 export type IndexerRoutingHookResult = {
@@ -47,9 +46,9 @@ export type IndexerRoutingHookResult = {
 
 export function useIndexerRouting({
   activeQualityScopeId,
-  setGlobalStatus,
-  t,
 }: IndexerRoutingHookArgs): IndexerRoutingHookResult {
+  const setGlobalStatus = useGlobalStatus();
+  const t = useTranslate();
   const client = useClient();
   const [indexers, setIndexers] = React.useState<IndexerRecord[]>([]);
   const [indexerRoutingByScope, setIndexerRoutingByScope] =

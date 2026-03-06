@@ -431,16 +431,15 @@ export function normalizeProfileId(value: string | null | undefined): string {
     return QUALITY_PROFILE_INHERIT_VALUE;
   }
 
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (typeof parsed === "string") {
-      return parsed.trim();
+  if (trimmed.startsWith('"')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed === "string") {
+        return parsed.trim();
+      }
+    } catch {
+      // keep raw value if it is not valid JSON
     }
-  } catch (error) {
-    if (process.env.NODE_ENV !== "production") {
-      console.warn("Failed to parse quality profile ID as JSON", { value: trimmed, error });
-    }
-    // keep raw value if it is not JSON
   }
 
   return trimmed;
