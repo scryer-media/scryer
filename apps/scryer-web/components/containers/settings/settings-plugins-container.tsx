@@ -12,6 +12,7 @@ import {
   installPluginMutation,
   uninstallPluginMutation,
   togglePluginMutation,
+  upgradePluginMutation,
 } from "@/lib/graphql/mutations";
 
 type SettingsPluginsContainerProps = {
@@ -107,6 +108,24 @@ export function SettingsPluginsContainer({
     setPendingUninstall(plugin);
   };
 
+  const upgradePlugin = async (plugin: RegistryPluginRecord) => {
+    setMutatingPluginId(plugin.id);
+    try {
+      const { error } = await client
+        .mutation(upgradePluginMutation, {
+          input: { pluginId: plugin.id },
+        })
+        .toPromise();
+      if (error) throw error;
+      setGlobalStatus(t("status.pluginUpgraded", { name: plugin.name, version: plugin.version }));
+      await refreshPlugins();
+    } catch (error) {
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+    } finally {
+      setMutatingPluginId(null);
+    }
+  };
+
   const confirmUninstall = async () => {
     if (!pendingUninstall) return;
     const plugin = pendingUninstall;
@@ -139,13 +158,14 @@ export function SettingsPluginsContainer({
         onTogglePlugin={togglePlugin}
         onInstallPlugin={installPlugin}
         onUninstallPlugin={uninstallPlugin}
+        onUpgradePlugin={upgradePlugin}
       />
       <ConfirmDialog
         open={pendingUninstall !== null}
         title={t("settings.pluginUninstall")}
         description={
           pendingUninstall
-            ? t("status.pluginUninstalled", { name: pendingUninstall.name })
+            ? t("settings.pluginUninstallWarning", { name: pendingUninstall.name })
             : ""
         }
         confirmLabel={t("settings.pluginUninstall")}
