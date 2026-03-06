@@ -1,5 +1,14 @@
-import { Download, Power, RefreshCw, Trash2 } from "lucide-react";
+import { useState, useMemo } from "react";
+import { ArrowUpCircle, Download, Power, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -24,6 +33,7 @@ export type RegistryPluginRecord = {
   isInstalled: boolean;
   isEnabled: boolean;
   installedVersion: string | null;
+  updateAvailable: boolean;
 };
 
 type SettingsPluginsSectionProps = {
@@ -35,27 +45,211 @@ type SettingsPluginsSectionProps = {
   onTogglePlugin: (plugin: RegistryPluginRecord) => void;
   onInstallPlugin: (plugin: RegistryPluginRecord) => void;
   onUninstallPlugin: (plugin: RegistryPluginRecord) => void;
+  onUpgradePlugin: (plugin: RegistryPluginRecord) => void;
 };
 
-function StatusBadge({ plugin, t }: { plugin: RegistryPluginRecord; t: Translate }) {
-  if (plugin.builtin) {
-    return (
-      <span className="rounded bg-blue-900/40 px-1.5 py-0.5 text-xs text-blue-300">
-        {t("settings.pluginBuiltin")}
-      </span>
-    );
+type FilterState = {
+  category: string;
+  officialOnly: boolean;
+};
+
+function categoryLabel(pluginType: string, t: Translate): string {
+  switch (pluginType) {
+    case "indexer": return t("settings.pluginCategoryIndexer");
+    case "download_client": return t("settings.pluginCategoryDownloadClient");
+    case "notification": return t("settings.pluginCategoryNotification");
+    default: return pluginType;
   }
-  if (plugin.isInstalled) {
-    return (
-      <span className="rounded bg-green-900/40 px-1.5 py-0.5 text-xs text-green-300">
-        {t("settings.pluginInstalled")}
-      </span>
-    );
-  }
+}
+
+function applyFilters(
+  plugins: RegistryPluginRecord[],
+  filters: FilterState,
+): RegistryPluginRecord[] {
+  return plugins
+    .filter((p) => filters.category === "all" || p.pluginType === filters.category)
+    .filter((p) => !filters.officialOnly || p.official)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function PluginFilters({
+  t,
+  filters,
+  categories,
+  onChange,
+}: {
+  t: Translate;
+  filters: FilterState;
+  categories: string[];
+  onChange: (filters: FilterState) => void;
+}) {
   return (
-    <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
-      {t("settings.pluginNotInstalled")}
-    </span>
+    <div className="flex items-center gap-3">
+      <Select
+        value={filters.category}
+        onValueChange={(v) => onChange({ ...filters, category: v })}
+      >
+        <SelectTrigger className="h-8 w-44 text-sm">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">{t("settings.pluginAllCategories")}</SelectItem>
+          {categories.map((cat) => (
+            <SelectItem key={cat} value={cat}>
+              {categoryLabel(cat, t)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <label className="flex cursor-pointer select-none items-center gap-1.5 text-sm text-muted-foreground">
+        <Checkbox
+          checked={filters.officialOnly}
+          onCheckedChange={(checked) => onChange({ ...filters, officialOnly: !!checked })}
+        />
+        {t("settings.pluginOfficialOnly")}
+      </label>
+    </div>
+  );
+}
+
+function PluginTable({
+  t,
+  plugins,
+  mutatingPluginId,
+  showActions,
+  onTogglePlugin,
+  onInstallPlugin,
+  onUninstallPlugin,
+  onUpgradePlugin,
+  emptyMessage,
+}: {
+  t: Translate;
+  plugins: RegistryPluginRecord[];
+  mutatingPluginId: string | null;
+  showActions: "installed" | "available";
+  onTogglePlugin: (plugin: RegistryPluginRecord) => void;
+  onInstallPlugin: (plugin: RegistryPluginRecord) => void;
+  onUninstallPlugin: (plugin: RegistryPluginRecord) => void;
+  onUpgradePlugin: (plugin: RegistryPluginRecord) => void;
+  emptyMessage: string;
+}) {
+  if (plugins.length === 0) {
+    return <p className="py-4 text-sm text-muted-foreground">{emptyMessage}</p>;
+  }
+
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>{t("label.name")}</TableHead>
+          <TableHead>{t("label.type")}</TableHead>
+          <TableHead>{t("label.version")}</TableHead>
+          <TableHead>{t("label.status")}</TableHead>
+          {showActions === "installed" && <TableHead>{t("label.enabled")}</TableHead>}
+          <TableHead className="text-right">{t("label.actions")}</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {plugins.map((plugin) => {
+          const isBusy = mutatingPluginId === plugin.id;
+          const displayVersion =
+            showActions === "installed" && plugin.installedVersion
+              ? plugin.installedVersion
+              : plugin.version;
+          return (
+            <TableRow key={plugin.id}>
+              <TableCell>
+                <div>
+                  <div className="font-medium">{plugin.name}</div>
+                  <div className="max-w-[300px] truncate text-xs text-muted-foreground">
+                    {plugin.description}
+                  </div>
+                </div>
+              </TableCell>
+              <TableCell className="text-sm">{categoryLabel(plugin.pluginType, t)}</TableCell>
+              <TableCell className="text-sm">
+                {t("settings.pluginVersion", { version: displayVersion })}
+                {plugin.updateAvailable && (
+                  <div className="text-xs text-yellow-400">
+                    {t("settings.pluginUpdateAvailable", { version: plugin.version })}
+                  </div>
+                )}
+              </TableCell>
+              <TableCell>
+                <div className="flex items-center gap-2">
+                  {plugin.builtin && (
+                    <span className="rounded bg-blue-900/40 px-1.5 py-0.5 text-xs text-blue-300">
+                      {t("settings.pluginBuiltin")}
+                    </span>
+                  )}
+                  {plugin.official && (
+                    <span className="rounded bg-purple-900/40 px-1.5 py-0.5 text-xs text-purple-300">
+                      {t("settings.pluginOfficial")}
+                    </span>
+                  )}
+                </div>
+              </TableCell>
+              {showActions === "installed" && (
+                <TableCell>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    disabled={isBusy}
+                    onClick={() => onTogglePlugin(plugin)}
+                    title={plugin.isEnabled ? t("label.disable") : t("label.enable")}
+                  >
+                    <Power
+                      className={`h-4 w-4 ${plugin.isEnabled ? "text-green-400" : "text-muted-foreground"}`}
+                    />
+                  </Button>
+                </TableCell>
+              )}
+              <TableCell className="text-right">
+                <div className="flex items-center justify-end gap-1">
+                  {showActions === "installed" ? (
+                    <>
+                      {plugin.updateAvailable && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={isBusy}
+                          onClick={() => onUpgradePlugin(plugin)}
+                          className="border-amber-600/70 bg-amber-900/40 text-amber-200 hover:bg-amber-900/60"
+                        >
+                          <ArrowUpCircle className="mr-1 h-3 w-3" />
+                          {t("settings.pluginUpgrade", { version: plugin.version })}
+                        </Button>
+                      )}
+                      {!plugin.builtin && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          disabled={isBusy}
+                          onClick={() => onUninstallPlugin(plugin)}
+                          title={t("settings.pluginUninstall")}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      )}
+                    </>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={isBusy}
+                      onClick={() => onInstallPlugin(plugin)}
+                    >
+                      <Download className="mr-1 h-3 w-3" />
+                      {t("settings.pluginInstall")}
+                    </Button>
+                  )}
+                </div>
+              </TableCell>
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
   );
 }
 
@@ -68,115 +262,102 @@ export function SettingsPluginsSection({
   onTogglePlugin,
   onInstallPlugin,
   onUninstallPlugin,
+  onUpgradePlugin,
 }: SettingsPluginsSectionProps) {
+  const [installedFilters, setInstalledFilters] = useState<FilterState>({
+    category: "all",
+    officialOnly: false,
+  });
+  const [availableFilters, setAvailableFilters] = useState<FilterState>({
+    category: "all",
+    officialOnly: false,
+  });
+
+  const installed = useMemo(() => plugins.filter((p) => p.isInstalled), [plugins]);
+  const available = useMemo(() => plugins.filter((p) => !p.isInstalled), [plugins]);
+  const allCategories = useMemo(
+    () => [...new Set(plugins.map((p) => p.pluginType))].sort(),
+    [plugins],
+  );
+
+  const filteredInstalled = useMemo(
+    () => applyFilters(installed, installedFilters),
+    [installed, installedFilters],
+  );
+  const filteredAvailable = useMemo(
+    () => applyFilters(available, availableFilters),
+    [available, availableFilters],
+  );
+
+  const upgradeCount = installed.filter((p) => p.updateAvailable).length;
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-8">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">{t("settings.pluginsSection")}</p>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={refreshing}
-          onClick={onRefreshRegistry}
-        >
+        <div className="flex items-center gap-2">
+          <p className="text-sm text-muted-foreground">{t("settings.pluginsSection")}</p>
+          {upgradeCount > 0 && (
+            <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1.5 text-[11px] font-medium text-white">
+              {upgradeCount}
+            </span>
+          )}
+        </div>
+        <Button variant="outline" size="sm" disabled={refreshing} onClick={onRefreshRegistry}>
           <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
           {refreshing ? t("settings.pluginsRefreshing") : t("settings.pluginsRefresh")}
         </Button>
       </div>
 
       {plugins.length === 0 ? (
-        <p className="text-sm text-muted-foreground py-4">
-          {t("settings.pluginsNoPlugins")}
-        </p>
+        <p className="py-4 text-sm text-muted-foreground">{t("settings.pluginsNoPlugins")}</p>
       ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>{t("label.name")}</TableHead>
-              <TableHead>{t("label.version")}</TableHead>
-              <TableHead>{t("label.type")}</TableHead>
-              <TableHead>{t("label.status")}</TableHead>
-              <TableHead>{t("label.enabled")}</TableHead>
-              <TableHead className="text-right">{t("label.actions")}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {plugins.map((plugin) => {
-              const isBusy = mutatingPluginId === plugin.id;
-              return (
-                <TableRow key={plugin.id}>
-                  <TableCell>
-                    <div>
-                      <div className="font-medium">{plugin.name}</div>
-                      <div className="text-xs text-muted-foreground max-w-[300px] truncate">
-                        {plugin.description}
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-sm">
-                    {t("settings.pluginVersion", { version: plugin.version })}
-                    {plugin.isInstalled &&
-                      plugin.installedVersion &&
-                      plugin.installedVersion !== plugin.version && (
-                        <div className="text-xs text-yellow-400">
-                          {t("settings.pluginUpdateAvailable", { version: plugin.version })}
-                        </div>
-                      )}
-                  </TableCell>
-                  <TableCell className="text-sm">{plugin.providerType}</TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      <StatusBadge plugin={plugin} t={t} />
-                      {plugin.official && (
-                        <span className="rounded bg-purple-900/40 px-1.5 py-0.5 text-xs text-purple-300">
-                          {t("settings.pluginOfficial")}
-                        </span>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    {plugin.isInstalled && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        disabled={isBusy}
-                        onClick={() => onTogglePlugin(plugin)}
-                        title={plugin.isEnabled ? t("label.disabled") : t("label.enabled")}
-                      >
-                        <Power
-                          className={`h-4 w-4 ${plugin.isEnabled ? "text-green-400" : "text-muted-foreground"}`}
-                        />
-                      </Button>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    {!plugin.isInstalled ? (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={isBusy}
-                        onClick={() => onInstallPlugin(plugin)}
-                      >
-                        <Download className="mr-1 h-3 w-3" />
-                        {t("settings.pluginInstall")}
-                      </Button>
-                    ) : !plugin.builtin ? (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        disabled={isBusy}
-                        onClick={() => onUninstallPlugin(plugin)}
-                        title={t("settings.pluginUninstall")}
-                      >
-                        <Trash2 className="h-4 w-4 text-destructive" />
-                      </Button>
-                    ) : null}
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
+        <>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-medium">{t("settings.pluginsInstalled")}</h3>
+              <PluginFilters
+                t={t}
+                filters={installedFilters}
+                categories={allCategories}
+                onChange={setInstalledFilters}
+              />
+            </div>
+            <PluginTable
+              t={t}
+              plugins={filteredInstalled}
+              mutatingPluginId={mutatingPluginId}
+              showActions="installed"
+              onTogglePlugin={onTogglePlugin}
+              onInstallPlugin={onInstallPlugin}
+              onUninstallPlugin={onUninstallPlugin}
+              onUpgradePlugin={onUpgradePlugin}
+              emptyMessage={t("settings.pluginsNoInstalled")}
+            />
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-medium">{t("settings.pluginsAvailable")}</h3>
+              <PluginFilters
+                t={t}
+                filters={availableFilters}
+                categories={allCategories}
+                onChange={setAvailableFilters}
+              />
+            </div>
+            <PluginTable
+              t={t}
+              plugins={filteredAvailable}
+              mutatingPluginId={mutatingPluginId}
+              showActions="available"
+              onTogglePlugin={onTogglePlugin}
+              onInstallPlugin={onInstallPlugin}
+              onUninstallPlugin={onUninstallPlugin}
+              onUpgradePlugin={onUpgradePlugin}
+              emptyMessage={t("settings.pluginsNoAvailable")}
+            />
+          </div>
+        </>
       )}
     </div>
   );
