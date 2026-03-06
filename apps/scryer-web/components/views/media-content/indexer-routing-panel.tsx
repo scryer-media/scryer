@@ -15,16 +15,11 @@ import { IndexerCategoryPicker } from "./indexer-category-picker";
 import type { ViewCategoryId } from "./indexer-category-picker";
 import { getDefaultIndexerRouting } from "@/lib/constants/indexers";
 import type { IndexerCategoryRoutingSettings, IndexerRecord } from "@/lib/types";
-
-type Translate = (
-  key: string,
-  values?: Record<string, string | number | boolean | null | undefined>,
-) => string;
+import { useTranslate } from "@/lib/context/translate-context";
 
 type IndexerRoutingRecord = Record<string, IndexerCategoryRoutingSettings>;
 
 type IndexerRoutingPanelProps = {
-  t: Translate;
   scopeLabel: string;
   activeQualityScopeId: ViewCategoryId;
   indexers: IndexerRecord[];
@@ -39,7 +34,6 @@ type IndexerRoutingPanelProps = {
 };
 
 export const IndexerRoutingPanel = React.memo(function IndexerRoutingPanel({
-  t,
   scopeLabel,
   activeQualityScopeId,
   indexers,
@@ -52,6 +46,7 @@ export const IndexerRoutingPanel = React.memo(function IndexerRoutingPanel({
   onMoveUp,
   onMoveDown,
 }: IndexerRoutingPanelProps) {
+  const t = useTranslate();
   const indexerById = React.useMemo(
     () => Object.fromEntries(indexers.map((indexer) => [indexer.id, indexer])),
     [indexers],
@@ -109,7 +104,6 @@ export const IndexerRoutingPanel = React.memo(function IndexerRoutingPanel({
                         <TableCell>{indexer.name}</TableCell>
                         <TableCell className="w-[30rem] min-w-[30rem] max-w-[30rem]">
                           <IndexerCategoryPicker
-                            t={t}
                             value={routing.categories}
                             scope={activeQualityScopeId}
                             disabled={indexerRoutingLoading}

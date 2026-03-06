@@ -1,5 +1,7 @@
 import * as React from "react";
 import { useClient } from "urql";
+import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 
 import { saveAdminSettingsMutation } from "@/lib/graphql/mutations";
 import { mediaSettingsInitQuery } from "@/lib/graphql/queries";
@@ -40,16 +42,9 @@ import { getSettingDisplayValue } from "@/lib/utils/settings";
 import type { AdminSetting, AdminSettingsResponse } from "@/lib/types";
 import type { ViewCategoryId } from "@/lib/types/quality-profiles";
 
-type Translate = (
-  key: string,
-  values?: Record<string, string | number | boolean | null | undefined>,
-) => string;
-
 type UseMediaSettingsArgs = {
   activeQualityScopeId: ViewCategoryId;
   view: ViewId;
-  setGlobalStatus: (status: string) => void;
-  t: Translate;
 };
 
 export type UseMediaSettingsResult = {
@@ -136,9 +131,9 @@ const PLEXMATCH_WRITE_KEYS: Partial<Record<ViewCategoryId, string>> = {
 export function useMediaSettings({
   activeQualityScopeId,
   view,
-  setGlobalStatus,
-  t,
 }: UseMediaSettingsArgs): UseMediaSettingsResult {
+  const setGlobalStatus = useGlobalStatus();
+  const t = useTranslate();
   const client = useClient();
   const [moviesPath, setMoviesPath] = React.useState(DEFAULT_MOVIE_LIBRARY_PATH);
   const [seriesPath, setSeriesPath] = React.useState(DEFAULT_SERIES_LIBRARY_PATH);

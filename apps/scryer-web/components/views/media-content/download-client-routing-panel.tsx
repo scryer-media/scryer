@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useTranslate } from "@/lib/context/translate-context";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ChevronDown, ChevronUp } from "lucide-react";
@@ -14,11 +15,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { DownloadClientRecord, NzbgetCategoryRoutingSettings } from "@/lib/types";
-
-type Translate = (
-  key: string,
-  values?: Record<string, string | number | boolean | null | undefined>,
-) => string;
 
 type ScopeRoutingRecord = Record<string, NzbgetCategoryRoutingSettings>;
 
@@ -191,7 +187,6 @@ function formatTagsInput(tags: string[]): string {
 }
 
 type DownloadClientRoutingPanelProps = {
-  t: Translate;
   scopeLabel: string;
   downloadClients: DownloadClientRecord[];
   activeScopeRouting: ScopeRoutingRecord;
@@ -204,7 +199,6 @@ type DownloadClientRoutingPanelProps = {
 };
 
 export const DownloadClientRoutingPanel = React.memo(function DownloadClientRoutingPanel({
-  t,
   scopeLabel,
   downloadClients,
   activeScopeRouting,
@@ -215,6 +209,7 @@ export const DownloadClientRoutingPanel = React.memo(function DownloadClientRout
   moveDownloadClientInScope,
   saveDownloadClientRouting,
 }: DownloadClientRoutingPanelProps) {
+  const t = useTranslate();
   const clientById = React.useMemo(
     () => Object.fromEntries(downloadClients.map((client) => [client.id, client])),
     [downloadClients],

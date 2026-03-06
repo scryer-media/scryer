@@ -2,12 +2,8 @@
 import * as React from "react";
 import { ChevronDown, ChevronUp, ArrowDown, ArrowUp, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useTranslate } from "@/lib/context/translate-context";
 import type { Release } from "@/lib/types";
-
-type Translate = (
-  key: string,
-  values?: Record<string, string | number | boolean | null | undefined>,
-) => string;
 
 type SortKey = "score" | "size";
 type SortDirection = "asc" | "desc";
@@ -67,14 +63,13 @@ function sortBy(
 function SearchResultRow({
   result,
   onQueue,
-  t,
   blocked,
 }: {
   result: Release;
   onQueue: (r: Release) => Promise<void> | void;
-  t: Translate;
   blocked: boolean;
 }) {
+  const t = useTranslate();
   const [expanded, setExpanded] = React.useState(false);
   const [queueRequested, setQueueRequested] = React.useState(false);
   const decision = result.qualityProfileDecision;
@@ -246,12 +241,11 @@ function SearchResultRow({
 export function SearchResultBuckets({
   results,
   onQueue,
-  t,
 }: {
   results: Release[];
   onQueue: (r: Release) => Promise<void> | void;
-  t: Translate;
 }) {
+  const t = useTranslate();
   const considered = React.useMemo(
     () => results.filter((r) => !r.qualityProfileDecision || r.qualityProfileDecision.allowed),
     [results],
@@ -331,7 +325,6 @@ export function SearchResultBuckets({
                   key={`${result.source}-${result.title}-${result.link}`}
                   result={result}
                   onQueue={onQueue}
-                  t={t}
                   blocked={isBlocked}
                 />
               ))}
@@ -340,7 +333,7 @@ export function SearchResultBuckets({
         </div>
       );
     },
-    [handleSort, onQueue, renderSortIcon, t],
+    [handleSort, onQueue, renderSortIcon],
   );
 
   return (

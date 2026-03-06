@@ -3,10 +3,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Loader2 } from "lucide-react";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
 
 type Props = {
-  t: Translate;
   username?: string;
   currentPassword: string;
   newPassword: string;
@@ -19,7 +18,6 @@ type Props = {
 };
 
 export function SettingsProfileSection({
-  t,
   username,
   currentPassword,
   newPassword,
@@ -30,6 +28,7 @@ export function SettingsProfileSection({
   onConfirmPasswordChange,
   onChangePassword,
 }: Props) {
+  const t = useTranslate();
   const passwordMismatch = confirmPassword.length > 0 && newPassword !== confirmPassword;
   const canSubmit = currentPassword.length > 0 && newPassword.length > 0 && !passwordMismatch && !saving;
 

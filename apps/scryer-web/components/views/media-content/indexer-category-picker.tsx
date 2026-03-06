@@ -1,13 +1,9 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
+import { useTranslate } from "@/lib/context/translate-context";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ChevronDown } from "lucide-react";
-
-type Translate = (
-  key: string,
-  values?: Record<string, string | number | boolean | null | undefined>,
-) => string;
 
 export type ViewCategoryId = "movie" | "series" | "anime";
 
@@ -157,7 +153,6 @@ export function getSortedCategoryCodesByScope(scope: ViewCategoryId, values: str
 }
 
 type IndexerCategoryPickerProps = {
-  t: Translate;
   value: string[];
   scope: ViewCategoryId;
   disabled: boolean;
@@ -166,13 +161,13 @@ type IndexerCategoryPickerProps = {
 };
 
 export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
-  t,
   value,
   scope,
   disabled,
   onChange,
   categoriesLabel,
 }: IndexerCategoryPickerProps) {
+  const t = useTranslate();
   const pickerRef = React.useRef<HTMLDivElement>(null);
   const floatingPanelRef = React.useRef<HTMLDivElement>(null);
   const [isOpen, setIsOpen] = React.useState(false);

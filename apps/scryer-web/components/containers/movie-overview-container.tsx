@@ -22,7 +22,8 @@ import {
   normalizeActivityEvent,
 } from "@/lib/utils/activity";
 import { useClient, useSubscription } from "urql";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 import type { Release } from "@/lib/types";
 import { MovieOverviewView } from "@/components/views/movie-overview-view";
 
@@ -116,19 +117,17 @@ export type MediaRenameApplyResult = {
 
 type MovieOverviewContainerProps = {
   titleId: string;
-  t: Translate;
-  setGlobalStatus: (status: string) => void;
   onTitleNotFound?: () => void;
   onBackToList?: () => void;
 };
 
 export const MovieOverviewContainer = React.memo(function MovieOverviewContainer({
   titleId,
-  t,
-  setGlobalStatus,
   onTitleNotFound,
   onBackToList,
 }: MovieOverviewContainerProps) {
+  const setGlobalStatus = useGlobalStatus();
+  const t = useTranslate();
   const client = useClient();
   const [title, setTitle] = React.useState<TitleDetail | null>(null);
   const [collections, setCollections] = React.useState<TitleCollection[]>([]);
@@ -422,7 +421,6 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
 
   return (
     <MovieOverviewView
-      t={t}
       loading={loading}
       title={title}
       collections={collections}

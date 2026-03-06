@@ -7,9 +7,9 @@ import {
 } from "@/lib/graphql/queries";
 import { wsClient } from "@/lib/graphql/ws-client";
 import type { DownloadQueueItem } from "@/lib/types";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 
 type UseDownloadQueueArgs = {
-  setGlobalStatus: (status: string) => void;
   includeAllActivity: boolean;
   includeHistoryOnly: boolean;
 };
@@ -23,10 +23,10 @@ export type UseDownloadQueueResult = {
 };
 
 export function useDownloadQueue({
-  setGlobalStatus,
   includeAllActivity,
   includeHistoryOnly,
 }: UseDownloadQueueArgs): UseDownloadQueueResult {
+  const setGlobalStatus = useGlobalStatus();
   const client = useClient();
   const [queueItems, setQueueItems] = useState<DownloadQueueItem[]>([]);
   const [queueLoading, setQueueLoading] = useState(false);

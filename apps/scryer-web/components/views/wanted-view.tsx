@@ -1,4 +1,5 @@
 import { lazy, Suspense } from "react";
+import { useTranslate } from "@/lib/context/translate-context";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -35,13 +36,7 @@ const CalendarView = lazy(() =>
   import("@/components/views/calendar-view").then((m) => ({ default: m.CalendarView })),
 );
 
-type Translate = (
-  key: string,
-  values?: Record<string, string | number | boolean | null | undefined>,
-) => string;
-
 type CutoffUnmetViewState = {
-  t: Translate;
   items: CutoffUnmetItem[];
   loading: boolean;
   facetFilter: string | undefined;
@@ -55,7 +50,6 @@ type CutoffUnmetViewState = {
 };
 
 type WantedViewState = {
-  t: Translate;
   items: WantedItem[];
   total: number;
   loading: boolean;
@@ -161,7 +155,6 @@ type CalendarEpisodeItem = {
 };
 
 type CalendarViewState = {
-  t: Translate;
   episodes: CalendarEpisodeItem[];
   loading: boolean;
   onDateRangeChange: (start: string, end: string) => void;
@@ -180,7 +173,7 @@ const TOGGLE_ITEM_CLASS =
   "h-full min-w-36 rounded-none px-6 text-base font-semibold first:rounded-l-xl last:rounded-r-xl data-[state=off]:bg-accent/80 data-[state=off]:text-foreground data-[state=off]:hover:bg-accent/80 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground data-[state=on]:border-0 data-[state=on]:shadow-none";
 
 export function WantedView({ tab, onTabChange, wantedState, cutoffState, calendarState }: WantedViewProps) {
-  const { t } = wantedState;
+  const t = useTranslate();
 
   return (
     <div className="space-y-4">
@@ -221,7 +214,6 @@ export function WantedView({ tab, onTabChange, wantedState, cutoffState, calenda
             loading={calendarState.loading}
             onDateRangeChange={calendarState.onDateRangeChange}
             onEpisodeClick={calendarState.onEpisodeClick}
-            t={calendarState.t}
           />
         </Suspense>
       ) : tab === "cutoff" ? (
@@ -234,8 +226,8 @@ export function WantedView({ tab, onTabChange, wantedState, cutoffState, calenda
 }
 
 function WantedItemsCard({ state }: { state: WantedViewState }) {
+  const t = useTranslate();
   const {
-    t,
     items,
     total,
     loading,

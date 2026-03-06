@@ -8,15 +8,14 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RouteCommandPalette } from "@/components/common/route-command-palette";
-import type { Translate } from "@/components/root/types";
 import type { ViewId } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
-import type { Facet, TitleRecord } from "@/lib/types";
+import type { Facet } from "@/lib/types";
 import type {
   CatalogQualityProfileOption,
   MetadataCatalogAddOptions,
   MetadataCatalogMonitorType,
-  MetadataSearchResults,
 } from "@/lib/hooks/use-global-search";
 import type { RouteCommandPaletteConfig } from "@/components/common/route-command-palette";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
@@ -27,27 +26,10 @@ import {
   viewFromFacet,
   defaultMonitorTypeForFacet,
 } from "@/lib/facets/helpers";
+import { useSearchContext } from "@/lib/context/search-context";
 
 type RootHeaderProps = {
-  t: Translate;
-  globalSearch: string;
-  onGlobalSearchChange: (value: string) => void;
-  searching: boolean;
-  globalSearchInputRef: React.RefObject<HTMLInputElement | null>;
-  catalogSearchResults: TitleRecord[];
-  metadataSearchResults: MetadataSearchResults;
   routeCommandPalette?: RouteCommandPaletteConfig;
-  isGlobalSearchPanelOpen: boolean;
-  onOpenGlobalSearchPanel: () => void;
-  onCloseGlobalSearchPanel: () => void;
-  catalogQualityProfileOptions: CatalogQualityProfileOption[];
-  resolveDefaultQualityProfileIdForFacet: (facet: Facet) => string;
-  onAddMetadataSearchResultToCatalog: (
-    result: MetadataTvdbSearchItem,
-    facet: Facet,
-    options: MetadataCatalogAddOptions,
-  ) => Promise<string | null>;
-  isMetadataSearchResultInCatalog: (facet: Facet, result: MetadataTvdbSearchItem) => boolean;
   onOpenOverview?: (targetView: ViewId, titleId: string) => void;
 };
 
@@ -60,23 +42,11 @@ function renderMetadataResultKey(section: string, tvdbId: string, name: string, 
 }
 
 export const RootHeader = React.memo(function RootHeader({
-  t,
-  globalSearch,
-  onGlobalSearchChange,
-  searching,
-  globalSearchInputRef,
-  catalogSearchResults,
-  metadataSearchResults,
   routeCommandPalette,
-  isGlobalSearchPanelOpen,
-  onOpenGlobalSearchPanel,
-  onCloseGlobalSearchPanel,
-  catalogQualityProfileOptions,
-  resolveDefaultQualityProfileIdForFacet,
-  onAddMetadataSearchResultToCatalog,
-  isMetadataSearchResultInCatalog,
   onOpenOverview,
 }: RootHeaderProps) {
+  const searchState = useSearchContext();
+  const t = useTranslate();
   const isMobile = useIsMobile();
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = React.useState(false);
@@ -88,17 +58,17 @@ export const RootHeader = React.memo(function RootHeader({
   }, [theme, setTheme]);
   const searchPanelRef = React.useRef<HTMLDivElement>(null);
   const hasAnyMatches =
-    catalogSearchResults.length > 0 ||
-    FACET_REGISTRY.some((f) => (metadataSearchResults[f.metadataKey] ?? []).length > 0);
+    searchState.catalogSearchResults.length > 0 ||
+    FACET_REGISTRY.some((f) => (searchState.metadataSearchResults[f.metadataKey] ?? []).length > 0);
 
   const catalogSearchSections = React.useMemo(
     () => Object.fromEntries(
       FACET_REGISTRY.map((f) => [
         f.id,
-        catalogSearchResults.filter((title) => catalogFacetFromString(title.facet) === f.id),
+        searchState.catalogSearchResults.filter((title) => catalogFacetFromString(title.facet) === f.id),
       ]),
-    ) as Record<Facet, TitleRecord[]>,
-    [catalogSearchResults],
+    ) as Record<Facet, import("@/lib/types").TitleRecord[]>,
+    [searchState.catalogSearchResults],
   );
   const [expandedMetadataCardKey, setExpandedMetadataCardKey] = React.useState<string | null>(null);
   const [metadataAddDrafts, setMetadataAddDrafts] = React.useState<
@@ -113,12 +83,12 @@ export const RootHeader = React.memo(function RootHeader({
 
   const defaultAddOptionsForFacet = React.useCallback(
     (facet: Facet): MetadataCatalogAddOptions => ({
-      qualityProfileId: resolveDefaultQualityProfileIdForFacet(facet),
+      qualityProfileId: searchState.resolveDefaultQualityProfileIdForFacet(facet),
       seasonFolder: facet !== "movie",
       monitorType: defaultMonitorTypeForFacet(facet),
       ...(facet === "movie" ? { minAvailability: "announced" } : {}),
     }),
-    [resolveDefaultQualityProfileIdForFacet],
+    [searchState.resolveDefaultQualityProfileIdForFacet],
   );
 
   const toggleMetadataAddOptionsCard = React.useCallback(
@@ -165,7 +135,7 @@ export const RootHeader = React.memo(function RootHeader({
   const submitMetadataAddFromCard = React.useCallback(
     async (result: MetadataTvdbSearchItem, facet: Facet, cardKey: string) => {
       const draft = metadataAddDrafts[cardKey] ?? defaultAddOptionsForFacet(facet);
-      const qualityProfileId = (draft.qualityProfileId || resolveDefaultQualityProfileIdForFacet(facet)).trim();
+      const qualityProfileId = (draft.qualityProfileId || searchState.resolveDefaultQualityProfileIdForFacet(facet)).trim();
       if (!qualityProfileId) {
         return;
       }
@@ -175,7 +145,7 @@ export const RootHeader = React.memo(function RootHeader({
         [cardKey]: true,
       }));
       try {
-        const titleId = await onAddMetadataSearchResultToCatalog(result, facet, {
+        const titleId = await searchState.addMetadataSearchResultToCatalog(result, facet, {
           ...draft,
           qualityProfileId,
         });
@@ -186,7 +156,7 @@ export const RootHeader = React.memo(function RootHeader({
         setMetadataAddedKeys((previous) => ({ ...previous, [cardKey]: true }));
         setExpandedMetadataCardKey((current) => (current === cardKey ? null : current));
         onOpenOverview?.(viewFromFacet(facet), titleId);
-        onCloseGlobalSearchPanel();
+        searchState.closeGlobalSearchPanel();
       } finally {
         setMetadataAddInFlightKeys((previous) => {
           if (!previous[cardKey]) {
@@ -201,32 +171,32 @@ export const RootHeader = React.memo(function RootHeader({
     [
       defaultAddOptionsForFacet,
       metadataAddDrafts,
-      onAddMetadataSearchResultToCatalog,
-      onCloseGlobalSearchPanel,
+      searchState.addMetadataSearchResultToCatalog,
+      searchState.closeGlobalSearchPanel,
       onOpenOverview,
-      resolveDefaultQualityProfileIdForFacet,
+      searchState.resolveDefaultQualityProfileIdForFacet,
     ],
   );
 
   const handleSearchSubmit = React.useCallback(
     (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
-      onCloseGlobalSearchPanel();
+      searchState.closeGlobalSearchPanel();
     },
-    [onCloseGlobalSearchPanel],
+    [searchState.closeGlobalSearchPanel],
   );
 
   const handleSearchChange = React.useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {
-      onGlobalSearchChange(event.target.value);
-      onOpenGlobalSearchPanel();
+      searchState.setGlobalSearch(event.target.value);
+      searchState.openGlobalSearchPanel();
     },
-    [onOpenGlobalSearchPanel, onGlobalSearchChange],
+    [searchState.openGlobalSearchPanel, searchState.setGlobalSearch],
   );
 
   const handleSearchFocus = React.useCallback(() => {
-    onOpenGlobalSearchPanel();
-  }, [onOpenGlobalSearchPanel]);
+    searchState.openGlobalSearchPanel();
+  }, [searchState.openGlobalSearchPanel]);
 
   const handleSearchBlur = React.useCallback(
     (event: React.FocusEvent<HTMLInputElement>) => {
@@ -234,9 +204,9 @@ export const RootHeader = React.memo(function RootHeader({
       if (nextTarget && searchPanelRef.current?.contains(nextTarget)) {
         return;
       }
-      onCloseGlobalSearchPanel();
+      searchState.closeGlobalSearchPanel();
     },
-    [onCloseGlobalSearchPanel],
+    [searchState.closeGlobalSearchPanel],
   );
 
   const handleSearchEscape = React.useCallback(
@@ -244,19 +214,19 @@ export const RootHeader = React.memo(function RootHeader({
       if (event.key !== "Escape") {
         return;
       }
-      onCloseGlobalSearchPanel();
-      globalSearchInputRef.current?.blur();
+      searchState.closeGlobalSearchPanel();
+      searchState.globalSearchInputRef.current?.blur();
     },
-    [globalSearchInputRef, onCloseGlobalSearchPanel],
+    [searchState.globalSearchInputRef, searchState.closeGlobalSearchPanel],
   );
 
   const handleClearSearch = React.useCallback(() => {
-    onGlobalSearchChange("");
-    globalSearchInputRef.current?.focus();
-  }, [globalSearchInputRef, onGlobalSearchChange]);
+    searchState.setGlobalSearch("");
+    searchState.globalSearchInputRef.current?.focus();
+  }, [searchState.globalSearchInputRef, searchState.setGlobalSearch]);
 
   const renderCatalogSection = React.useCallback(
-    (items: TitleRecord[], facet: Facet) => {
+    (items: import("@/lib/types").TitleRecord[], facet: Facet) => {
       return items.map((title) => {
         const targetView: ViewId = viewFromFacet(facet);
         const tvdbId = title.externalIds
@@ -267,7 +237,7 @@ export const RootHeader = React.memo(function RootHeader({
             key={title.id}
             type="button"
             onClick={() => {
-              onCloseGlobalSearchPanel();
+              searchState.closeGlobalSearchPanel();
               onOpenOverview?.(targetView, title.id);
             }}
             className="block w-full rounded-lg border border-border bg-card/60 p-3 text-left hover:bg-accent/80"
@@ -300,29 +270,29 @@ export const RootHeader = React.memo(function RootHeader({
         );
       });
     },
-    [onCloseGlobalSearchPanel, onOpenOverview, t],
+    [searchState.closeGlobalSearchPanel, onOpenOverview, t],
   );
 
   const handleSearchPanelBackdropMouseDown = React.useCallback(() => {
-    onCloseGlobalSearchPanel();
-    globalSearchInputRef.current?.blur();
-  }, [globalSearchInputRef, onCloseGlobalSearchPanel]);
+    searchState.closeGlobalSearchPanel();
+    searchState.globalSearchInputRef.current?.blur();
+  }, [searchState.globalSearchInputRef, searchState.closeGlobalSearchPanel]);
 
   React.useEffect(() => {
-    if (!isGlobalSearchPanelOpen) {
+    if (!searchState.isGlobalSearchPanelOpen) {
       setExpandedMetadataCardKey(null);
     }
-  }, [isGlobalSearchPanelOpen]);
+  }, [searchState.isGlobalSearchPanelOpen]);
 
   const renderMetadataSection = React.useCallback(
     (items: MetadataTvdbSearchItem[], facet: Facet, section: string) => {
       return items.map((result) => {
         const tvdbId = String(result.tvdbId).trim();
-        const isInCatalog = isMetadataSearchResultInCatalog(facet, result);
+        const isInCatalog = searchState.isMetadataSearchResultInCatalog(facet, result);
         const cardKey = renderMetadataResultKey(section, tvdbId, result.name, result.year);
         const draft = metadataAddDrafts[cardKey] ?? defaultAddOptionsForFacet(facet);
         const qualityProfileValue =
-          draft.qualityProfileId || resolveDefaultQualityProfileIdForFacet(facet);
+          draft.qualityProfileId || searchState.resolveDefaultQualityProfileIdForFacet(facet);
         const isExpanded = expandedMetadataCardKey === cardKey && !isInCatalog;
         const isAdding = Boolean(metadataAddInFlightKeys[cardKey]);
         const isAdded = Boolean(metadataAddedKeys[cardKey]);
@@ -405,22 +375,22 @@ export const RootHeader = React.memo(function RootHeader({
                     {t("search.addConfigQualityProfile")}
                   </span>
                   <Select
-                    value={catalogQualityProfileOptions.length > 0 ? qualityProfileValue : ""}
+                    value={searchState.catalogQualityProfileOptions.length > 0 ? qualityProfileValue : ""}
                     onValueChange={(v) =>
                       updateMetadataAddDraft(cardKey, facet, {
                         qualityProfileId: v,
                       })
                     }
-                    disabled={isAdding || catalogQualityProfileOptions.length === 0}
+                    disabled={isAdding || searchState.catalogQualityProfileOptions.length === 0}
                   >
                     <SelectTrigger className="h-9 w-full">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {catalogQualityProfileOptions.length === 0 ? (
+                      {searchState.catalogQualityProfileOptions.length === 0 ? (
                         <SelectItem value="__none" disabled>{t("search.addConfigNoQualityProfiles")}</SelectItem>
                       ) : (
-                        catalogQualityProfileOptions.map((profile) => (
+                        searchState.catalogQualityProfileOptions.map((profile: CatalogQualityProfileOption) => (
                           <SelectItem key={profile.id} value={profile.id}>
                             {profile.name}
                           </SelectItem>
@@ -540,14 +510,14 @@ export const RootHeader = React.memo(function RootHeader({
       });
     },
     [
-      catalogQualityProfileOptions,
+      searchState.catalogQualityProfileOptions,
       defaultAddOptionsForFacet,
       expandedMetadataCardKey,
-      isMetadataSearchResultInCatalog,
+      searchState.isMetadataSearchResultInCatalog,
       metadataAddDrafts,
       metadataAddedKeys,
       metadataAddInFlightKeys,
-      resolveDefaultQualityProfileIdForFacet,
+      searchState.resolveDefaultQualityProfileIdForFacet,
       submitMetadataAddFromCard,
       t,
       toggleMetadataAddOptionsCard,
@@ -571,8 +541,8 @@ export const RootHeader = React.memo(function RootHeader({
             <div className="relative flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-7 w-7 -translate-y-1/2 text-muted-foreground" />
               <Input
-                ref={globalSearchInputRef}
-                value={globalSearch}
+                ref={searchState.globalSearchInputRef}
+                value={searchState.globalSearch}
                 onChange={handleSearchChange}
                 onFocus={isMobile ? undefined : handleSearchFocus}
                 onClick={isMobile ? handleSearchFocus : undefined}
@@ -583,7 +553,7 @@ export const RootHeader = React.memo(function RootHeader({
                 aria-label={t("search.globalPlaceholder")}
                 readOnly={isMobile}
               />
-              {globalSearch && !isMobile ? (
+              {searchState.globalSearch && !isMobile ? (
                 <button
                   type="button"
                   className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition hover:text-foreground"
@@ -593,7 +563,7 @@ export const RootHeader = React.memo(function RootHeader({
                   <X className="h-6 w-6" />
                 </button>
               ) : null}
-              {isGlobalSearchPanelOpen && !isMobile ? (
+              {searchState.isGlobalSearchPanelOpen && !isMobile ? (
                 <div
                   ref={searchPanelRef}
                   className="absolute left-0 top-full z-30 mt-2 w-full max-h-[65vh] overflow-y-auto rounded-xl border border-border bg-card p-4 shadow-lg"
@@ -624,7 +594,7 @@ export const RootHeader = React.memo(function RootHeader({
                     </section>
                       <div className={`grid gap-4 md:grid-cols-${FACET_REGISTRY.length}`}>
                         {FACET_REGISTRY.map((f) => {
-                          const items = metadataSearchResults[f.metadataKey] ?? [];
+                          const items = searchState.metadataSearchResults[f.metadataKey] ?? [];
                           return (
                             <section key={f.id} className="space-y-2">
                               <h3 className="text-sm font-semibold text-foreground">
@@ -642,7 +612,7 @@ export const RootHeader = React.memo(function RootHeader({
                         })}
                       </div>
                     </div>
-                  ) : searching ? (
+                  ) : searchState.searching ? (
                     <div className="flex items-center gap-3 py-3">
                       <Loader2 className="h-5 w-5 animate-spin text-emerald-500" />
                       <p className="text-sm text-muted-foreground">{t("label.searching")}</p>
@@ -678,26 +648,16 @@ export const RootHeader = React.memo(function RootHeader({
           )}
         </div>
       </header>
-      {isGlobalSearchPanelOpen && !isMobile ? (
+      {searchState.isGlobalSearchPanelOpen && !isMobile ? (
         <div
           className="fixed inset-0 z-40 bg-background/80 backdrop-blur-sm"
           onMouseDown={handleSearchPanelBackdropMouseDown}
           aria-hidden="true"
         />
       ) : null}
-      {isGlobalSearchPanelOpen && isMobile ? (
+      {searchState.isGlobalSearchPanelOpen && isMobile ? (
         <MobileSearchOverlay
-          t={t}
-          globalSearch={globalSearch}
-          onGlobalSearchChange={onGlobalSearchChange}
-          searching={searching}
-          catalogSearchResults={catalogSearchResults}
-          metadataSearchResults={metadataSearchResults}
-          onClose={onCloseGlobalSearchPanel}
-          catalogQualityProfileOptions={catalogQualityProfileOptions}
-          resolveDefaultQualityProfileIdForFacet={resolveDefaultQualityProfileIdForFacet}
-          onAddMetadataSearchResultToCatalog={onAddMetadataSearchResultToCatalog}
-          isMetadataSearchResultInCatalog={isMetadataSearchResultInCatalog}
+          onClose={searchState.closeGlobalSearchPanel}
           onOpenOverview={onOpenOverview}
         />
       ) : null}

@@ -1,16 +1,11 @@
 import * as React from "react";
+import { useTranslate } from "@/lib/context/translate-context";
 import { Button } from "@/components/ui/button";
 import { Loader2, Trash2, Zap } from "lucide-react";
 import type { ViewId } from "@/components/root/types";
 import type { TitleRecord } from "@/lib/types";
 
-type Translate = (
-  key: string,
-  values?: Record<string, string | number | boolean | null | undefined>,
-) => string;
-
 type PosterGridProps = {
-  t: Translate;
   titles: TitleRecord[];
   isMovieView: boolean;
   resolvedProfileName: string | null;
@@ -22,7 +17,6 @@ type PosterGridProps = {
 };
 
 export function PosterGrid({
-  t,
   titles,
   isMovieView,
   resolvedProfileName,
@@ -32,6 +26,7 @@ export function PosterGrid({
   isDeletingById,
   overviewTargetView,
 }: PosterGridProps) {
+  const t = useTranslate();
   const [autoQueueLoadingById, setAutoQueueLoadingById] = React.useState<Record<string, boolean>>({});
 
   const handleAutoQueue = React.useCallback(
@@ -61,7 +56,6 @@ export function PosterGrid({
       {titles.map((title) => (
         <PosterCard
           key={title.id}
-          t={t}
           title={title}
           isMovieView={isMovieView}
           resolvedProfileName={resolvedProfileName}
@@ -78,7 +72,6 @@ export function PosterGrid({
 }
 
 type PosterCardProps = {
-  t: Translate;
   title: TitleRecord;
   isMovieView: boolean;
   resolvedProfileName: string | null;
@@ -91,7 +84,6 @@ type PosterCardProps = {
 };
 
 function PosterCard({
-  t,
   title,
   isMovieView,
   resolvedProfileName,
@@ -102,6 +94,7 @@ function PosterCard({
   autoQueueLoading,
   overviewTargetView,
 }: PosterCardProps) {
+  const t = useTranslate();
   const qualityLabel = isMovieView
     ? title.qualityTier
     : resolvedProfileName;

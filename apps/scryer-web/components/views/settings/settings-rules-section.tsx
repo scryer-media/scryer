@@ -14,11 +14,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
 import type { RuleSetRecord, RuleSetDraft, RuleValidationResult } from "@/lib/types/rule-sets";
 
 type SettingsRulesSectionProps = {
-  t: Translate;
   editingRuleSetId: string | null;
   ruleSetDraft: RuleSetDraft;
   setRuleSetDraft: React.Dispatch<React.SetStateAction<RuleSetDraft>>;
@@ -118,7 +117,8 @@ const REF_SECTIONS: RefSectionDef[] = [
   { titleKey: "settings.refSectionBuiltinScore", path: "input.builtin_score", fields: BUILTIN_SCORE_FIELDS },
 ];
 
-function RefFieldTable({ t, section }: { t: Translate; section: RefSectionDef }) {
+function RefFieldTable({ section }: { section: RefSectionDef }) {
+  const t = useTranslate();
   return (
     <div>
       <h4 className="mb-1 font-semibold">
@@ -153,7 +153,8 @@ function RefFieldTable({ t, section }: { t: Translate; section: RefSectionDef })
   );
 }
 
-function RulesContextReference({ t }: { t: Translate }) {
+function RulesContextReference() {
+  const t = useTranslate();
   const [open, setOpen] = React.useState(false);
 
   return (
@@ -188,7 +189,7 @@ function RulesContextReference({ t }: { t: Translate }) {
           </div>
 
           {REF_SECTIONS.map((section) => (
-            <RefFieldTable key={section.path} t={t} section={section} />
+            <RefFieldTable key={section.path} section={section} />
           ))}
 
           <div>
@@ -285,7 +286,6 @@ function FacetBadges({ facets }: { facets: string[] }) {
 }
 
 export function SettingsRulesSection({
-  t,
   editingRuleSetId,
   ruleSetDraft,
   setRuleSetDraft,
@@ -300,6 +300,7 @@ export function SettingsRulesSection({
   validating,
   validationResult,
 }: SettingsRulesSectionProps) {
+  const t = useTranslate();
   return (
     <div className="space-y-4 text-sm">
       <CardTitle className="flex items-center gap-2 text-base">
@@ -524,7 +525,7 @@ export function SettingsRulesSection({
         </CardContent>
       </Card>
 
-      <RulesContextReference t={t} />
+      <RulesContextReference />
     </div>
   );
 }

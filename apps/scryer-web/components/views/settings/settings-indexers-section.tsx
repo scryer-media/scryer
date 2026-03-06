@@ -1,6 +1,6 @@
 
 import * as React from "react";
-import { Edit, MonitorCog, Power, Trash2 } from "lucide-react";
+import { Edit, MonitorCog, Power, PowerOff, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -15,11 +15,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
 import type { IndexerRecord, IndexerDraft, ProviderTypeInfo, ConfigFieldDef } from "@/lib/types";
 
 type SettingsIndexersSectionProps = {
-  t: Translate;
   editingIndexerId: string | null;
   indexerDraft: IndexerDraft;
   setIndexerDraft: React.Dispatch<React.SetStateAction<IndexerDraft>>;
@@ -91,7 +90,8 @@ function formatRelativeTime(isoDate: string): string {
   return relative;
 }
 
-function IndexerStatusCell({ indexer, t }: { indexer: IndexerRecord; t: Translate }) {
+function IndexerStatusCell({ indexer }: { indexer: IndexerRecord }) {
+  const t = useTranslate();
   if (!indexer.isEnabled) {
     return <span className="text-muted-foreground">{t("label.disabled")}</span>;
   }
@@ -194,7 +194,6 @@ function DynamicConfigField({
 }
 
 export function SettingsIndexersSection({
-  t,
   editingIndexerId,
   indexerDraft,
   setIndexerDraft,
@@ -209,6 +208,7 @@ export function SettingsIndexersSection({
   deleteIndexer,
   providerTypes,
 }: SettingsIndexersSectionProps) {
+  const t = useTranslate();
   const normalizedProviderType = indexerDraft.providerType.trim().toLowerCase();
 
   // Build provider type options from loaded plugins, falling back to hardcoded list
@@ -307,23 +307,22 @@ export function SettingsIndexersSection({
                     />
                   </TableCell>
                   <TableCell>
-                    <IndexerStatusCell indexer={indexer} t={t} />
+                    <IndexerStatusCell indexer={indexer} />
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
                       <Button
-                        size="sm"
-                        variant="secondary"
+                        size="icon"
+                        variant="ghost"
                         onClick={() => void toggleIndexerEnabled(indexer)}
                         disabled={mutatingIndexerId === indexer.id}
-                        className={
-                          indexer.isEnabled
-                            ? "border-red-700/70 bg-red-900/60 text-red-200 hover:bg-red-900/80 hover:text-red-100"
-                            : "border-emerald-300/70 dark:border-emerald-700/70 bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-100 hover:bg-emerald-200 dark:hover:bg-emerald-800/80"
-                        }
+                        title={indexer.isEnabled ? t("label.disable") : t("label.enable")}
                       >
-                        <Power className="mr-1 h-3.5 w-3.5" />
-                        {indexer.isEnabled ? t("label.disable") : t("label.enable")}
+                        {indexer.isEnabled ? (
+                          <Power className="h-4 w-4 text-green-400" />
+                        ) : (
+                          <PowerOff className="h-4 w-4 text-red-400" />
+                        )}
                       </Button>
                       <Button
                         size="sm"

@@ -7,13 +7,12 @@ import {
   ANIME_STATUS_PREFIX,
   getTagValue,
 } from "@/lib/utils/title-tags";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
 import type { CollectionEpisode } from "@/components/containers/series-overview-container";
 
 type AnimeMetadataPanelProps = {
   tags: string[];
   episodesByCollection: Record<string, CollectionEpisode[]>;
-  t: Translate;
 };
 
 function formatAnimeStatus(raw: string): string {
@@ -36,7 +35,8 @@ function formatAnimeMediaType(raw: string): string {
   return map[raw.toLowerCase()] ?? raw;
 }
 
-export function AnimeMetadataPanel({ tags, episodesByCollection, t }: AnimeMetadataPanelProps) {
+export function AnimeMetadataPanel({ tags, episodesByCollection }: AnimeMetadataPanelProps) {
+  const t = useTranslate();
   const malScore = getTagValue(tags, MAL_SCORE_PREFIX);
   const animeMediaType = getTagValue(tags, ANIME_MEDIA_TYPE_PREFIX);
   const animeStatus = getTagValue(tags, ANIME_STATUS_PREFIX);

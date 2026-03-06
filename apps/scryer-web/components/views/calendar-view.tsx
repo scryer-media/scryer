@@ -1,4 +1,5 @@
 import { useMemo, useCallback, useState } from "react";
+import { useTranslate } from "@/lib/context/translate-context";
 import FullCalendar from "@fullcalendar/react";
 import dayGridPlugin from "@fullcalendar/daygrid";
 import type { DatesSetArg, EventClickArg, EventMountArg } from "@fullcalendar/core";
@@ -16,17 +17,11 @@ export type CalendarEpisodeItem = {
   monitored: boolean;
 };
 
-type Translate = (
-  key: string,
-  values?: Record<string, string | number | boolean | null | undefined>,
-) => string;
-
 type CalendarViewProps = {
   episodes: CalendarEpisodeItem[];
   loading: boolean;
   onDateRangeChange: (start: string, end: string) => void;
   onEpisodeClick?: (episode: CalendarEpisodeItem) => void;
-  t: Translate;
 };
 
 const FACET_COLORS: Record<string, string> = {
@@ -76,8 +71,8 @@ export function CalendarView({
   loading,
   onDateRangeChange,
   onEpisodeClick,
-  t,
 }: CalendarViewProps) {
+  const t = useTranslate();
   const [facetFilter, setFacetFilter] = useState<string[]>(["anime", "movie", "tv"]);
 
   const filteredEpisodes = useMemo(

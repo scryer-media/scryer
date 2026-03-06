@@ -9,6 +9,7 @@ import type {
   Translate,
   ViewId,
 } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
 import {
   Sidebar,
   SidebarContent,
@@ -32,7 +33,6 @@ type NavItem = {
 };
 
 type RootSidebarProps = {
-  t: Translate;
   topNav: NavItem[];
   view: ViewId;
   settingsSection: SettingsSection;
@@ -118,7 +118,6 @@ function getMediaSectionChildren(
 }
 
 export const RootSidebar = React.memo(function RootSidebar({
-  t,
   topNav,
   view,
   settingsSection,
@@ -127,6 +126,7 @@ export const RootSidebar = React.memo(function RootSidebar({
   children,
   onNavigate,
 }: RootSidebarProps) {
+  const t = useTranslate();
   const isMobile = useIsMobile();
   const client = useClient();
   const [pluginUpgradeCount, setPluginUpgradeCount] = React.useState(0);
@@ -140,6 +140,12 @@ export const RootSidebar = React.memo(function RootSidebar({
         );
       }
     }).catch(() => { /* ignore */ });
+
+    const onPluginUpdate = (e: Event) => {
+      setPluginUpgradeCount((e as CustomEvent<number>).detail);
+    };
+    window.addEventListener("scryer:pluginUpgradeCount", onPluginUpdate);
+    return () => window.removeEventListener("scryer:pluginUpgradeCount", onPluginUpdate);
   }, [client]);
 
   const visibleSettingsEntries = React.useMemo(

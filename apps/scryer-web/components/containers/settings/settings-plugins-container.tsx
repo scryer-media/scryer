@@ -5,7 +5,8 @@ import {
   type RegistryPluginRecord,
 } from "@/components/views/settings/settings-plugins-section";
 import { useClient } from "urql";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { pluginsQuery } from "@/lib/graphql/queries";
 import {
   refreshPluginRegistryMutation,
@@ -15,17 +16,19 @@ import {
   upgradePluginMutation,
 } from "@/lib/graphql/mutations";
 
-type SettingsPluginsContainerProps = {
-  t: Translate;
-  setGlobalStatus: (status: string) => void;
-};
-
-export function SettingsPluginsContainer({
-  t,
-  setGlobalStatus,
-}: SettingsPluginsContainerProps) {
+export function SettingsPluginsContainer() {
+  const setGlobalStatus = useGlobalStatus();
+  const t = useTranslate();
   const client = useClient();
-  const [plugins, setPlugins] = useState<RegistryPluginRecord[]>([]);
+  const [plugins, _setPlugins] = useState<RegistryPluginRecord[]>([]);
+
+  const setPlugins = useCallback((next: RegistryPluginRecord[]) => {
+    _setPlugins(next);
+    const upgradeCount = next.filter((p) => p.isInstalled && p.updateAvailable).length;
+    window.dispatchEvent(
+      new CustomEvent("scryer:pluginUpgradeCount", { detail: upgradeCount }),
+    );
+  }, []);
   const [mutatingPluginId, setMutatingPluginId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [pendingUninstall, setPendingUninstall] = useState<RegistryPluginRecord | null>(null);
@@ -150,7 +153,6 @@ export function SettingsPluginsContainer({
   return (
     <>
       <SettingsPluginsSection
-        t={t}
         plugins={plugins}
         mutatingPluginId={mutatingPluginId}
         refreshing={refreshing}

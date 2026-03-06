@@ -5,6 +5,8 @@ import type { AdminSetting } from "@/lib/types/admin-settings";
 import type { Facet, Release, TitleRecord } from "@/lib/types";
 import type { ViewCategoryId } from "@/lib/types/quality-profiles";
 import type { LocaleCode } from "@/lib/i18n";
+import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 import {
   mediaSettingsInitQuery,
   metadataMovieQuery,
@@ -27,11 +29,6 @@ import {
 } from "@/lib/utils/quality-profiles";
 import { getSettingDisplayValue } from "@/lib/utils/settings";
 import { FACET_REGISTRY, facetById } from "@/lib/facets/registry";
-
-type Translate = (
-  key: string,
-  values?: Record<string, string | number | boolean | null | undefined>,
-) => string;
 
 export type MetadataSearchResults = Record<string, MetadataTvdbSearchItem[]>;
 
@@ -70,8 +67,6 @@ const AUTOCOMPLETE_DEBOUNCE_MS = 250;
 const AUTOCOMPLETE_LIMIT = 10;
 
 type UseGlobalSearchArgs = {
-  t: Translate;
-  setGlobalStatus: (status: string) => void;
   queueFacet: Facet;
   uiLanguage: LocaleCode;
   onCatalogChanged?: () => void;
@@ -121,6 +116,9 @@ export interface UseGlobalSearchResult {
     facet: Facet,
     result: MetadataTvdbSearchItem,
   ) => boolean;
+  queueFacet: Facet;
+  setQueueFacet: (value: Facet) => void;
+  catalogChangeSignal: number;
 }
 
 function monitorTypeToMonitored(monitorType: MetadataCatalogMonitorType): boolean {
@@ -128,13 +126,15 @@ function monitorTypeToMonitored(monitorType: MetadataCatalogMonitorType): boolea
 }
 
 export function useGlobalSearch({
-  t,
-  setGlobalStatus,
-  queueFacet,
+  queueFacet: initialQueueFacet,
   uiLanguage,
   onCatalogChanged,
 }: UseGlobalSearchArgs): UseGlobalSearchResult {
+  const setGlobalStatus = useGlobalStatus();
+  const t = useTranslate();
   const client = useClient();
+  const [queueFacet, setQueueFacet] = useState<Facet>(initialQueueFacet);
+  const [catalogChangeSignal, setCatalogChangeSignal] = useState(0);
   const sortByRelevance = useCallback((results: MetadataTvdbSearchItem[], query: string) => {
     const q = query.trim().toLowerCase();
 
@@ -774,6 +774,7 @@ export function useGlobalSearch({
         );
         await runMetadataAutocomplete(globalSearch.trim());
         onCatalogChanged?.();
+        setCatalogChangeSignal((v) => v + 1);
         return addData.addTitle?.title?.id?.trim() || null;
       } catch (error) {
         setGlobalStatus(error instanceof Error ? error.message : t("status.queueFailed"));
@@ -861,5 +862,8 @@ export function useGlobalSearch({
     resolveDefaultQualityProfileIdForFacet,
     addMetadataSearchResultToCatalog,
     isMetadataSearchResultInCatalog,
+    queueFacet,
+    setQueueFacet,
+    catalogChangeSignal,
   };
 }

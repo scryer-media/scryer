@@ -1,18 +1,9 @@
 
 import { SettingsQualityProfilesSection } from "@/components/views/settings/settings-quality-profiles-section";
 import { useQualityProfilesManager } from "@/lib/hooks/use-quality-profiles-manager";
-import type { Translate } from "@/components/root/types";
 import { QUALITY_PROFILE_INHERIT_VALUE } from "@/lib/constants/settings";
 
-type SettingsQualityProfilesContainerProps = {
-  t: Translate;
-  setGlobalStatus: (status: string) => void;
-};
-
-export function SettingsQualityProfilesContainer({
-  t,
-  setGlobalStatus,
-}: SettingsQualityProfilesContainerProps) {
+export function SettingsQualityProfilesContainer() {
   const {
     mediaSettingsLoading,
     initialLoadComplete,
@@ -51,11 +42,10 @@ export function SettingsQualityProfilesContainer({
     deleteQualityProfile,
     saveCategoryQualityProfile,
     toProfileOptions,
-  } = useQualityProfilesManager({ setGlobalStatus, t });
+  } = useQualityProfilesManager();
 
   return (
     <SettingsQualityProfilesSection
-      t={t}
       qualityProfiles={qualityProfiles}
       qualityProfileParseError={qualityProfileParseError}
       getQualityProfileCriteria={getQualityProfileCriteria}

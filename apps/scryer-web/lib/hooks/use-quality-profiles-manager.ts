@@ -2,7 +2,8 @@ import * as React from "react";
 import { deleteQualityProfileMutation, saveAdminSettingsMutation } from "@/lib/graphql/mutations";
 import { qualityProfilesInitQuery } from "@/lib/graphql/queries";
 import { useClient } from "urql";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 import {
   buildQualityProfileTemplate,
   coerceProfileSetting,
@@ -75,10 +76,7 @@ function resolveGlobalQualityProfileId(
   return profiles[0]?.id ?? "default";
 }
 
-type UseQualityProfilesManagerArgs = {
-  setGlobalStatus: (status: string) => void;
-  t: Translate;
-};
+type UseQualityProfilesManagerArgs = Record<string, never>;
 
 export type UseQualityProfilesManagerResult = {
   mediaSettingsLoading: boolean;
@@ -139,10 +137,11 @@ export type UseQualityProfilesManagerResult = {
   toProfileOptions: typeof toProfileOptions;
 };
 
-export function useQualityProfilesManager({
-  setGlobalStatus,
-  t,
-}: UseQualityProfilesManagerArgs): UseQualityProfilesManagerResult {
+export function useQualityProfilesManager(
+  _args: UseQualityProfilesManagerArgs = {},
+): UseQualityProfilesManagerResult {
+  const setGlobalStatus = useGlobalStatus();
+  const t = useTranslate();
   const client = useClient();
   const [mediaSettingsLoading, setMediaSettingsLoading] = React.useState(false);
   const [qualityProfilesSaving, setQualityProfilesSaving] = React.useState(false);

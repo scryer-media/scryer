@@ -17,7 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
 
 export type RegistryPluginRecord = {
   id: string;
@@ -37,7 +37,6 @@ export type RegistryPluginRecord = {
 };
 
 type SettingsPluginsSectionProps = {
-  t: Translate;
   plugins: RegistryPluginRecord[];
   mutatingPluginId: string | null;
   refreshing: boolean;
@@ -52,6 +51,8 @@ type FilterState = {
   category: string;
   officialOnly: boolean;
 };
+
+type Translate = (key: string, values?: Record<string, string | number | boolean | null | undefined>) => string;
 
 function categoryLabel(pluginType: string, t: Translate): string {
   switch (pluginType) {
@@ -73,16 +74,15 @@ function applyFilters(
 }
 
 function PluginFilters({
-  t,
   filters,
   categories,
   onChange,
 }: {
-  t: Translate;
   filters: FilterState;
   categories: string[];
   onChange: (filters: FilterState) => void;
 }) {
+  const t = useTranslate();
   return (
     <div className="flex items-center gap-3">
       <Select
@@ -113,7 +113,6 @@ function PluginFilters({
 }
 
 function PluginTable({
-  t,
   plugins,
   mutatingPluginId,
   showActions,
@@ -123,7 +122,6 @@ function PluginTable({
   onUpgradePlugin,
   emptyMessage,
 }: {
-  t: Translate;
   plugins: RegistryPluginRecord[];
   mutatingPluginId: string | null;
   showActions: "installed" | "available";
@@ -133,6 +131,7 @@ function PluginTable({
   onUpgradePlugin: (plugin: RegistryPluginRecord) => void;
   emptyMessage: string;
 }) {
+  const t = useTranslate();
   if (plugins.length === 0) {
     return <p className="py-4 text-sm text-muted-foreground">{emptyMessage}</p>;
   }
@@ -254,7 +253,6 @@ function PluginTable({
 }
 
 export function SettingsPluginsSection({
-  t,
   plugins,
   mutatingPluginId,
   refreshing,
@@ -264,6 +262,7 @@ export function SettingsPluginsSection({
   onUninstallPlugin,
   onUpgradePlugin,
 }: SettingsPluginsSectionProps) {
+  const t = useTranslate();
   const [installedFilters, setInstalledFilters] = useState<FilterState>({
     category: "all",
     officialOnly: false,
@@ -316,14 +315,12 @@ export function SettingsPluginsSection({
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-medium">{t("settings.pluginsInstalled")}</h3>
               <PluginFilters
-                t={t}
                 filters={installedFilters}
                 categories={allCategories}
                 onChange={setInstalledFilters}
               />
             </div>
             <PluginTable
-              t={t}
               plugins={filteredInstalled}
               mutatingPluginId={mutatingPluginId}
               showActions="installed"
@@ -339,14 +336,12 @@ export function SettingsPluginsSection({
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-medium">{t("settings.pluginsAvailable")}</h3>
               <PluginFilters
-                t={t}
                 filters={availableFilters}
                 categories={allCategories}
                 onChange={setAvailableFilters}
               />
             </div>
             <PluginTable
-              t={t}
               plugins={filteredAvailable}
               mutatingPluginId={mutatingPluginId}
               showActions="available"
