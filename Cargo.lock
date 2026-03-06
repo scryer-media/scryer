@@ -3309,7 +3309,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scryer"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-graphql",
  "async-graphql-axum",
@@ -3343,7 +3343,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-application"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "argon2",
  "async-trait",
@@ -3366,7 +3366,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-domain"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "chrono",
  "serde",
@@ -3376,7 +3376,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3400,7 +3400,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -3415,7 +3415,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-mock-apis"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "axum",
  "serde",
@@ -3428,7 +3428,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-plugins"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3445,7 +3445,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-rules"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "regorus",
  "serde",
