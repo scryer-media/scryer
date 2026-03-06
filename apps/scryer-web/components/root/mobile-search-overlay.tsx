@@ -80,14 +80,15 @@ export function MobileSearchOverlay({
     [searchState.catalogSearchResults],
   );
 
+  const { resolveDefaultQualityProfileIdForFacet, addMetadataSearchResultToCatalog, isMetadataSearchResultInCatalog, catalogQualityProfileOptions } = searchState;
   const defaultAddOptionsForFacet = React.useCallback(
     (facet: Facet): MetadataCatalogAddOptions => ({
-      qualityProfileId: searchState.resolveDefaultQualityProfileIdForFacet(facet),
+      qualityProfileId: resolveDefaultQualityProfileIdForFacet(facet),
       seasonFolder: facet !== "movie",
       monitorType: defaultMonitorTypeForFacet(facet),
       ...(facet === "movie" ? { minAvailability: "announced" } : {}),
     }),
-    [searchState.resolveDefaultQualityProfileIdForFacet],
+    [resolveDefaultQualityProfileIdForFacet],
   );
 
   const toggleMetadataAddOptionsCard = React.useCallback(
@@ -122,12 +123,12 @@ export function MobileSearchOverlay({
   const submitMetadataAddFromCard = React.useCallback(
     async (result: MetadataTvdbSearchItem, facet: Facet, cardKey: string) => {
       const draft = metadataAddDrafts[cardKey] ?? defaultAddOptionsForFacet(facet);
-      const qualityProfileId = (draft.qualityProfileId || searchState.resolveDefaultQualityProfileIdForFacet(facet)).trim();
+      const qualityProfileId = (draft.qualityProfileId || resolveDefaultQualityProfileIdForFacet(facet)).trim();
       if (!qualityProfileId) return;
 
       setMetadataAddInFlightKeys((prev) => ({ ...prev, [cardKey]: true }));
       try {
-        const titleId = await searchState.addMetadataSearchResultToCatalog(result, facet, {
+        const titleId = await addMetadataSearchResultToCatalog(result, facet, {
           ...draft,
           qualityProfileId,
         });
@@ -145,7 +146,7 @@ export function MobileSearchOverlay({
         });
       }
     },
-    [defaultAddOptionsForFacet, metadataAddDrafts, searchState.addMetadataSearchResultToCatalog, onClose, onOpenOverview, searchState.resolveDefaultQualityProfileIdForFacet],
+    [defaultAddOptionsForFacet, metadataAddDrafts, addMetadataSearchResultToCatalog, onClose, onOpenOverview, resolveDefaultQualityProfileIdForFacet],
   );
 
   const renderCatalogItem = React.useCallback(
@@ -198,10 +199,10 @@ export function MobileSearchOverlay({
   const renderMetadataItem = React.useCallback(
     (result: MetadataTvdbSearchItem, facet: "movie" | "tv" | "anime", section: keyof MetadataSearchResults) => {
       const tvdbId = String(result.tvdbId).trim();
-      const isInCatalog = searchState.isMetadataSearchResultInCatalog(facet, result);
+      const isInCatalog = isMetadataSearchResultInCatalog(facet, result);
       const cardKey = renderMetadataResultKey(section, tvdbId, result.name, result.year);
       const draft = metadataAddDrafts[cardKey] ?? defaultAddOptionsForFacet(facet);
-      const qualityProfileValue = draft.qualityProfileId || searchState.resolveDefaultQualityProfileIdForFacet(facet);
+      const qualityProfileValue = draft.qualityProfileId || resolveDefaultQualityProfileIdForFacet(facet);
       const isExpanded = expandedMetadataCardKey === cardKey && !isInCatalog;
       const isAdding = Boolean(metadataAddInFlightKeys[cardKey]);
       const isAdded = Boolean(metadataAddedKeys[cardKey]);
@@ -274,18 +275,18 @@ export function MobileSearchOverlay({
                   {t("search.addConfigQualityProfile")}
                 </span>
                 <Select
-                  value={searchState.catalogQualityProfileOptions.length > 0 ? qualityProfileValue : ""}
+                  value={catalogQualityProfileOptions.length > 0 ? qualityProfileValue : ""}
                   onValueChange={(v) => updateMetadataAddDraft(cardKey, facet, { qualityProfileId: v })}
-                  disabled={isAdding || searchState.catalogQualityProfileOptions.length === 0}
+                  disabled={isAdding || catalogQualityProfileOptions.length === 0}
                 >
                   <SelectTrigger className="h-10 w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {searchState.catalogQualityProfileOptions.length === 0 ? (
+                    {catalogQualityProfileOptions.length === 0 ? (
                       <SelectItem value="__none" disabled>{t("search.addConfigNoQualityProfiles")}</SelectItem>
                     ) : (
-                      searchState.catalogQualityProfileOptions.map((profile: CatalogQualityProfileOption) => (
+                      catalogQualityProfileOptions.map((profile: CatalogQualityProfileOption) => (
                         <SelectItem key={profile.id} value={profile.id}>{profile.name}</SelectItem>
                       ))
                     )}
@@ -387,14 +388,14 @@ export function MobileSearchOverlay({
       );
     },
     [
-      searchState.catalogQualityProfileOptions,
+      catalogQualityProfileOptions,
       defaultAddOptionsForFacet,
       expandedMetadataCardKey,
-      searchState.isMetadataSearchResultInCatalog,
+      isMetadataSearchResultInCatalog,
       metadataAddDrafts,
       metadataAddedKeys,
       metadataAddInFlightKeys,
-      searchState.resolveDefaultQualityProfileIdForFacet,
+      resolveDefaultQualityProfileIdForFacet,
       submitMetadataAddFromCard,
       t,
       toggleMetadataAddOptionsCard,

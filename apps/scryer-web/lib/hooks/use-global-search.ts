@@ -461,7 +461,7 @@ export function useGlobalSearch({
         return [];
       }
     },
-    [client, isMetadataSearchResultInAnyCatalog, mapFacetToTvdbType, queueFacet, setGlobalStatus, t, uiLanguage],
+    [client, isMetadataSearchResultInAnyCatalog, mapFacetToTvdbType, queueFacet, setGlobalStatus, t, uiLanguage, sortByRelevance],
   );
 
   const runMetadataAutocomplete = useCallback(
@@ -595,6 +595,7 @@ export function useGlobalSearch({
       uiLanguage,
       emptyMetadataSearchResults,
       resolveCatalogPosterUrl,
+      sortByRelevance,
     ],
   );
 

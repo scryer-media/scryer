@@ -817,6 +817,8 @@ export function useMediaSettings({
       setGlobalStatus,
       t,
       view,
+      moviesPath,
+      seriesPath,
     ],
   );
 

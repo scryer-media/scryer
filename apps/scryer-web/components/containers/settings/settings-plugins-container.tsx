@@ -41,7 +41,7 @@ export function SettingsPluginsContainer() {
     } catch (error) {
       setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
     }
-  }, [client, setGlobalStatus, t]);
+  }, [client, setGlobalStatus, t, setPlugins]);
 
   useEffect(() => {
     void refreshPlugins();

@@ -354,7 +354,6 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
 
   // Only re-fetch episodes when the set of collection IDs changes (add/remove),
   // not when a property like `monitored` is updated on an existing collection.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const collectionIdKey = collections.map((c) => c.id).join("\0");
 
   React.useEffect(() => {

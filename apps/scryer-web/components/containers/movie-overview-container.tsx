@@ -197,7 +197,7 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
     return () => {
       cancelled = true;
     };
-  }, [refreshTitleDetail, setGlobalStatus, t]);
+  }, [refreshTitleDetail, setGlobalStatus, t, titleId]);
 
   React.useEffect(() => {
     if (titleId && titleLookupAttempted && !loading && !titleLookupFailed && !title) {
