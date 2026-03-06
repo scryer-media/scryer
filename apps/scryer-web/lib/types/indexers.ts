@@ -14,6 +14,7 @@ export type IndexerRecord = {
   enableAutoSearch: boolean;
   lastHealthStatus: string | null;
   lastErrorAt: string | null;
+  lastQueryAt: string | null;
   configJson: string | null;
   createdAt: string;
   updatedAt: string;
@@ -48,6 +49,7 @@ export type ConfigFieldDef = {
 export type ProviderTypeInfo = {
   providerType: string;
   name: string;
+  defaultBaseUrl: string | null;
   configFields: ConfigFieldDef[];
 };
 

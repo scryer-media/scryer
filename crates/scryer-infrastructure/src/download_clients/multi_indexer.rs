@@ -64,15 +64,29 @@ impl IndexerClient for MultiIndexerSearchClient {
             vec![]
         });
 
-        // Filter by is_enabled AND the appropriate search mode flag
+        let now = chrono::Utc::now();
+
+        // Filter by is_enabled, search mode flag, and disabled_until backoff
         let enabled: Vec<&IndexerConfig> = configs
             .iter()
             .filter(|c| {
-                c.is_enabled
-                    && match mode {
-                        SearchMode::Interactive => c.enable_interactive_search,
-                        SearchMode::Auto => c.enable_auto_search,
+                if !c.is_enabled {
+                    return false;
+                }
+                if let Some(until) = c.disabled_until {
+                    if until > now {
+                        info!(
+                            indexer = c.name.as_str(),
+                            disabled_until = %until,
+                            "skipping indexer: temporarily disabled"
+                        );
+                        return false;
                     }
+                }
+                match mode {
+                    SearchMode::Interactive => c.enable_interactive_search,
+                    SearchMode::Auto => c.enable_auto_search,
+                }
             })
             .collect();
 

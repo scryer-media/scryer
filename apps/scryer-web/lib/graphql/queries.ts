@@ -383,6 +383,7 @@ export const indexersQuery = `query Indexers($providerType: String) {
     enableAutoSearch
     lastHealthStatus
     lastErrorAt
+    lastQueryAt
     configJson
     createdAt
     updatedAt
@@ -393,6 +394,7 @@ export const indexerProviderTypesQuery = `query IndexerProviderTypes {
   indexerProviderTypes {
     providerType
     name
+    defaultBaseUrl
     configFields {
       key
       label
@@ -757,6 +759,7 @@ export const pluginsQuery = `query Plugins {
     isInstalled
     isEnabled
     installedVersion
+    updateAvailable
   }
 }`;
 

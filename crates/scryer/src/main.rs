@@ -463,6 +463,9 @@ async fn bootstrap_application(
     if let Err(e) = app_use_case.rebuild_plugin_provider().await {
         tracing::warn!(error = %e, "failed to rebuild plugin provider from DB state");
     }
+    if let Err(e) = app_use_case.reconcile_indexer_configs().await {
+        tracing::warn!(error = %e, "failed to reconcile indexer configs on startup");
+    }
     if let Err(e) = app_use_case.refresh_plugin_registry_internal().await {
         tracing::warn!(error = %e, "failed to refresh plugin registry on startup");
     }

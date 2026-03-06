@@ -1,5 +1,6 @@
 
 import * as React from "react";
+import { useClient } from "urql";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
 import type { LucideIcon } from "lucide-react";
 import type {
@@ -127,6 +128,19 @@ export const RootSidebar = React.memo(function RootSidebar({
   onNavigate,
 }: RootSidebarProps) {
   const isMobile = useIsMobile();
+  const client = useClient();
+  const [pluginUpgradeCount, setPluginUpgradeCount] = React.useState(0);
+
+  React.useEffect(() => {
+    const q = `query { plugins { updateAvailable } }`;
+    client.query(q, {}).toPromise().then(({ data }) => {
+      if (data?.plugins) {
+        setPluginUpgradeCount(
+          (data.plugins as Array<{ updateAvailable: boolean }>).filter((p) => p.updateAvailable).length,
+        );
+      }
+    }).catch(() => { /* ignore */ });
+  }, [client]);
 
   const visibleSettingsEntries = React.useMemo(
     () => settingsEntries.filter((e) => !e.requiredEntitlement || entitlements.includes(e.requiredEntitlement)),
@@ -215,6 +229,11 @@ export const RootSidebar = React.memo(function RootSidebar({
                                     }}
                                   >
                                     {entry.label(t)}
+                                    {entry.id === "plugins" && pluginUpgradeCount > 0 ? (
+                                      <span className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-medium leading-none text-white">
+                                        {pluginUpgradeCount}
+                                      </span>
+                                    ) : null}
                                   </SidebarMenuSubButton>
                                 </SidebarMenuSubItem>
                               ))
