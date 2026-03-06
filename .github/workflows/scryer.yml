@@ -131,7 +131,7 @@ jobs:
         if: contains(matrix.target, '-musl')
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools
+          sudo apt-get install -y musl-tools mold
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: false
@@ -144,7 +144,12 @@ jobs:
         env:
           SCRYER_EMBED_UI_DIR: ${{ github.workspace }}/scryer-web-out
           SCRYER_SMG_REGISTRATION_SECRET: ${{ secrets.SMG_REGISTRATION_SECRET }}
-        run: cargo build -p scryer --release --locked --target ${{ matrix.target }}
+        run: |
+          if [[ "${{ matrix.target }}" == *"-musl" ]]; then
+            mold -run cargo build -p scryer --release --locked --target ${{ matrix.target }}
+          else
+            cargo build -p scryer --release --locked --target ${{ matrix.target }}
+          fi
       - name: Package tarball
         run: |
           mkdir -p dist/package
