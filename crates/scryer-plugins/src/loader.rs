@@ -171,7 +171,12 @@ impl WasmIndexerPluginProvider {
 
 impl IndexerPluginProvider for WasmIndexerPluginProvider {
     fn available_provider_types(&self) -> Vec<String> {
-        self.plugins.keys().cloned().collect()
+        // Only return primary provider_types, not aliases (which map to the same plugin)
+        self.plugins
+            .iter()
+            .filter(|(key, loaded)| **key == loaded.descriptor.provider_type.trim().to_ascii_lowercase())
+            .map(|(key, _)| key.clone())
+            .collect()
     }
 
     fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
@@ -210,6 +215,13 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
         self.plugins
             .get(&key)
             .map(|loaded| loaded.descriptor.name.clone())
+    }
+
+    fn default_base_url_for_provider(&self, provider_type: &str) -> Option<String> {
+        let key = provider_type.trim().to_ascii_lowercase();
+        self.plugins
+            .get(&key)
+            .and_then(|loaded| loaded.descriptor.default_base_url.clone())
     }
 
     fn capabilities_for_provider(&self, provider_type: &str) -> scryer_domain::IndexerProviderCapabilities {
@@ -355,6 +367,11 @@ impl IndexerPluginProvider for DynamicPluginProvider {
     fn plugin_name_for_provider(&self, provider_type: &str) -> Option<String> {
         let guard = self.inner.read().expect("DynamicPluginProvider lock poisoned");
         guard.plugin_name_for_provider(provider_type)
+    }
+
+    fn default_base_url_for_provider(&self, provider_type: &str) -> Option<String> {
+        let guard = self.inner.read().expect("DynamicPluginProvider lock poisoned");
+        guard.default_base_url_for_provider(provider_type)
     }
 
     fn capabilities_for_provider(&self, provider_type: &str) -> scryer_domain::IndexerProviderCapabilities {

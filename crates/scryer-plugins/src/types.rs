@@ -30,6 +30,11 @@ pub struct PluginDescriptor {
     /// in `IndexerConfig.config_json` and injected via Extism `config::get()`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config_fields: Vec<ConfigFieldDef>,
+    /// If set, the plugin has a fixed public endpoint and doesn't need
+    /// user-supplied base_url or api_key. The frontend hides those fields
+    /// and uses this URL when auto-creating an IndexerConfig.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

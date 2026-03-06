@@ -36,8 +36,8 @@ type SettingsIndexersSectionProps = {
 };
 
 const FALLBACK_PROVIDER_OPTIONS = [
-  { value: "nzbgeek", label: "Nzbgeek" },
-  { value: "dognzb", label: "DogNZB" },
+  { value: "nzbgeek", label: "NZBGeek Indexer" },
+  { value: "newznab", label: "Newznab Indexer" },
 ];
 
 const INDEXER_PROVIDER_LOGOS: Record<string, string> = {
@@ -63,6 +63,67 @@ function IndexerProviderTypeCell({ providerType }: { providerType: string }) {
       <span>{providerType}</span>
     </div>
   );
+}
+
+function formatRelativeTime(isoDate: string): string {
+  const date = new Date(isoDate);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const absDiffMs = Math.abs(diffMs);
+  const isFuture = diffMs < 0;
+
+  const minutes = Math.floor(absDiffMs / 60_000);
+  const hours = Math.floor(absDiffMs / 3_600_000);
+  const days = Math.floor(absDiffMs / 86_400_000);
+
+  let relative: string;
+  if (minutes < 1) relative = "just now";
+  else if (minutes < 60) relative = `${minutes}m ago`;
+  else if (hours < 24) relative = `${hours}h ago`;
+  else relative = `${days}d ago`;
+
+  if (isFuture) {
+    if (minutes < 60) relative = `in ${minutes}m`;
+    else if (hours < 24) relative = `in ${hours}h`;
+    else relative = `in ${days}d`;
+  }
+
+  return relative;
+}
+
+function IndexerStatusCell({ indexer, t }: { indexer: IndexerRecord; t: Translate }) {
+  if (!indexer.isEnabled) {
+    return <span className="text-muted-foreground">{t("label.disabled")}</span>;
+  }
+
+  if (indexer.disabledUntil) {
+    const until = new Date(indexer.disabledUntil);
+    if (until > new Date()) {
+      return (
+        <span className="text-yellow-600 dark:text-yellow-400" title={indexer.disabledUntil}>
+          {t("settings.indexerDisabledUntil", { time: formatRelativeTime(indexer.disabledUntil) })}
+        </span>
+      );
+    }
+  }
+
+  if (indexer.lastErrorAt) {
+    return (
+      <span className="text-red-600 dark:text-red-400" title={indexer.lastErrorAt}>
+        {t("settings.indexerLastError", { time: formatRelativeTime(indexer.lastErrorAt) })}
+      </span>
+    );
+  }
+
+  if (indexer.lastQueryAt) {
+    return (
+      <span className="text-muted-foreground" title={indexer.lastQueryAt}>
+        {t("settings.indexerLastSearched", { time: formatRelativeTime(indexer.lastQueryAt) })}
+      </span>
+    );
+  }
+
+  return <span className="text-muted-foreground">{t("settings.indexerNoActivity")}</span>;
 }
 
 function DynamicConfigField({
@@ -166,12 +227,17 @@ export function SettingsIndexersSection({
   }, [indexerDraft.providerType, normalizedProviderType, providerTypes]);
 
   // Get config fields for the selected provider type
-  const selectedProviderFields = React.useMemo(() => {
-    const match = providerTypes.find(
+  const selectedProvider = React.useMemo(() => {
+    return providerTypes.find(
       (pt) => pt.providerType === normalizedProviderType,
-    );
-    return match?.configFields ?? [];
+    ) ?? null;
   }, [normalizedProviderType, providerTypes]);
+
+  const selectedProviderFields = selectedProvider?.configFields ?? [];
+
+  // When a provider has a default_base_url, it has a fixed public endpoint
+  // — no need to show base URL or API key fields.
+  const hasFixedEndpoint = !!selectedProvider?.defaultBaseUrl;
 
   const handleConfigValueChange = React.useCallback(
     (key: string, value: string) => {
@@ -241,7 +307,7 @@ export function SettingsIndexersSection({
                     />
                   </TableCell>
                   <TableCell>
-                    <span className="italic text-muted-foreground">not implemented yet</span>
+                    <IndexerStatusCell indexer={indexer} t={t} />
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
@@ -257,7 +323,7 @@ export function SettingsIndexersSection({
                         }
                       >
                         <Power className="mr-1 h-3.5 w-3.5" />
-                        {indexer.isEnabled ? t("label.disabled") : t("label.enabled")}
+                        {indexer.isEnabled ? t("label.disable") : t("label.enable")}
                       </Button>
                       <Button
                         size="sm"
@@ -318,7 +384,7 @@ export function SettingsIndexersSection({
               <label>
                 <Label className="mb-2 block">{t("form.providerTypePlaceholder")}</Label>
                 <Select
-                  value={normalizedProviderType || "nzbgeek"}
+                  value={normalizedProviderType || undefined}
                   onValueChange={(v) =>
                     setIndexerDraft((prev: IndexerDraft) => ({
                       ...prev,
@@ -327,7 +393,7 @@ export function SettingsIndexersSection({
                   }
                 >
                   <SelectTrigger className="w-full">
-                    <SelectValue />
+                    <SelectValue placeholder={t("form.providerTypePlaceholder")} />
                   </SelectTrigger>
                   <SelectContent>
                     {providerTypeOptions.map((opt) => (
@@ -336,34 +402,38 @@ export function SettingsIndexersSection({
                   </SelectContent>
                 </Select>
               </label>
-              <label>
-                <Label className="mb-2 block">{t("form.baseUrlPlaceholder")}</Label>
-                <Input
-                  value={indexerDraft.baseUrl}
-                  onChange={(event) =>
-                    setIndexerDraft((prev: IndexerDraft) => ({
-                      ...prev,
-                      baseUrl: event.target.value,
-                    }))
-                  }
-                  required
-                  placeholder={t("form.baseUrlPlaceholderValue")}
-                />
-              </label>
-              <label>
-                <Label className="mb-2 block">{t("settings.indexerApi")}</Label>
-                <Input
-                  value={indexerDraft.apiKey}
-                  onChange={(event) =>
-                    setIndexerDraft((prev: IndexerDraft) => ({
-                      ...prev,
-                      apiKey: event.target.value,
-                    }))
-                  }
-                  placeholder={t("form.apiKeyInputPlaceholder")}
-                  type="password"
-                />
-              </label>
+              {!hasFixedEndpoint ? (
+                <>
+                  <label>
+                    <Label className="mb-2 block">{t("form.baseUrlPlaceholder")}</Label>
+                    <Input
+                      value={indexerDraft.baseUrl}
+                      onChange={(event) =>
+                        setIndexerDraft((prev: IndexerDraft) => ({
+                          ...prev,
+                          baseUrl: event.target.value,
+                        }))
+                      }
+                      required
+                      placeholder={t("form.baseUrlPlaceholderValue")}
+                    />
+                  </label>
+                  <label>
+                    <Label className="mb-2 block">{t("settings.indexerApi")}</Label>
+                    <Input
+                      value={indexerDraft.apiKey}
+                      onChange={(event) =>
+                        setIndexerDraft((prev: IndexerDraft) => ({
+                          ...prev,
+                          apiKey: event.target.value,
+                        }))
+                      }
+                      placeholder={t("form.apiKeyInputPlaceholder")}
+                      type="password"
+                    />
+                  </label>
+                </>
+              ) : null}
             </div>
 
             {selectedProviderFields.length > 0 ? (

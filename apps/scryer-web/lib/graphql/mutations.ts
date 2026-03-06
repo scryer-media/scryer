@@ -351,6 +351,7 @@ export const refreshPluginRegistryMutation = `mutation RefreshPluginRegistry {
     isInstalled
     isEnabled
     installedVersion
+    updateAvailable
   }
 }`;
 
@@ -375,6 +376,21 @@ export const uninstallPluginMutation = `mutation UninstallPlugin($input: Uninsta
 
 export const togglePluginMutation = `mutation TogglePlugin($input: TogglePluginInput!) {
   togglePlugin(input: $input) {
+    id
+    pluginId
+    name
+    version
+    pluginType
+    providerType
+    isEnabled
+    isBuiltin
+    installedAt
+    updatedAt
+  }
+}`;
+
+export const upgradePluginMutation = `mutation UpgradePlugin($input: UpgradePluginInput!) {
+  upgradePlugin(input: $input) {
     id
     pluginId
     name

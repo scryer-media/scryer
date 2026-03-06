@@ -273,6 +273,7 @@ pub struct IndexerConfigPayload {
     pub enable_auto_search: bool,
     pub last_health_status: Option<String>,
     pub last_error_at: Option<String>,
+    pub last_query_at: Option<String>,
     pub config_json: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -1026,6 +1027,7 @@ pub struct RegistryPluginPayload {
     pub is_enabled: bool,
     pub installed_version: Option<String>,
     pub update_available: bool,
+    pub default_base_url: Option<String>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -1089,4 +1091,5 @@ pub struct ProviderTypePayload {
     pub provider_type: String,
     pub name: String,
     pub config_fields: Vec<PluginConfigFieldPayload>,
+    pub default_base_url: Option<String>,
 }

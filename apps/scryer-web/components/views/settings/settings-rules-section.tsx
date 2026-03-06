@@ -354,7 +354,7 @@ export function SettingsRulesSection({
                         }
                       >
                         <Power className="mr-1 h-3.5 w-3.5" />
-                        {record.enabled ? t("label.disabled") : t("label.enabled")}
+                        {record.enabled ? t("label.disable") : t("label.enable")}
                       </Button>
                       <Button
                         size="sm"

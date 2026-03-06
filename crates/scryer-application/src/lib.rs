@@ -683,6 +683,12 @@ pub trait IndexerPluginProvider: Send + Sync {
     fn plugin_name_for_provider(&self, _provider_type: &str) -> Option<String> {
         None
     }
+    /// Returns the plugin's default base URL for a provider type, if set.
+    /// When present, the plugin has a fixed public endpoint and doesn't need
+    /// user-supplied base_url or api_key.
+    fn default_base_url_for_provider(&self, _provider_type: &str) -> Option<String> {
+        None
+    }
     /// Returns the search capabilities declared by the plugin for a provider type.
     /// Defaults to all-true for backward compat with unknown providers.
     fn capabilities_for_provider(&self, _provider_type: &str) -> scryer_domain::IndexerProviderCapabilities {

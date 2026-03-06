@@ -21,8 +21,8 @@ type SettingsIndexersSectionProps = ComponentProps<typeof SettingsIndexersSectio
 
 const INDEXER_INITIAL_DRAFT = {
   name: "",
-  providerType: "nzbgeek",
-  baseUrl: "https://api.nzbgeek.info/api",
+  providerType: "",
+  baseUrl: "",
   apiKey: "",
   isEnabled: true,
   enableInteractiveSearch: true,
@@ -93,10 +93,14 @@ export function SettingsIndexersContainer({
 
   const submitIndexer = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const selectedProvider = providerTypes.find(
+      (pt) => pt.providerType === indexerDraft.providerType.trim().toLowerCase(),
+    );
+    const effectiveBaseUrl = selectedProvider?.defaultBaseUrl || indexerDraft.baseUrl.trim();
     const payload = {
       name: indexerDraft.name.trim(),
       providerType: indexerDraft.providerType.trim(),
-      baseUrl: indexerDraft.baseUrl.trim(),
+      baseUrl: effectiveBaseUrl,
       apiKey: indexerDraft.apiKey.trim(),
       isEnabled: indexerDraft.isEnabled,
       enableInteractiveSearch: indexerDraft.enableInteractiveSearch,

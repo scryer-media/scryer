@@ -177,6 +177,7 @@ pub(crate) fn from_indexer_config(config: IndexerConfig) -> IndexerConfigPayload
         enable_auto_search: config.enable_auto_search,
         last_health_status: config.last_health_status,
         last_error_at: config.last_error_at.map(|value| value.to_rfc3339()),
+        last_query_at: None,
         config_json: config.config_json,
         created_at: config.created_at.to_rfc3339(),
         updated_at: config.updated_at.to_rfc3339(),
@@ -187,10 +188,12 @@ pub(crate) fn from_provider_type(
     provider_type: String,
     name: String,
     config_fields: Vec<scryer_domain::ConfigFieldDef>,
+    default_base_url: Option<String>,
 ) -> ProviderTypePayload {
     ProviderTypePayload {
         provider_type,
         name,
+        default_base_url,
         config_fields: config_fields
             .into_iter()
             .map(|f| PluginConfigFieldPayload {
@@ -668,6 +671,7 @@ pub(crate) fn from_registry_plugin(p: RegistryPlugin) -> RegistryPluginPayload {
         is_enabled: p.is_enabled,
         installed_version: p.installed_version,
         update_available: p.update_available,
+        default_base_url: p.default_base_url,
     }
 }
 

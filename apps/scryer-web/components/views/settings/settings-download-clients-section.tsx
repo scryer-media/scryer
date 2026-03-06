@@ -256,7 +256,7 @@ export function SettingsDownloadClientsSection({
                         onClick={() => void toggleDownloadClientEnabled(client)}
                         disabled={mutatingDownloadClientId === client.id}
                       >
-                        {client.isEnabled ? t("label.disabled") : t("label.enabled")}
+                        {client.isEnabled ? t("label.disable") : t("label.enable")}
                       </Button>
                       <Button
                         size="sm"
