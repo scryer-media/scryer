@@ -3,11 +3,14 @@ import { Film } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { RootHeader } from "@/components/root/root-header";
 import { RootSidebar } from "@/components/root/root-sidebar";
+import { GlobalSearchProvider } from "@/components/root/global-search-provider";
 import { ViewLoadingFallback } from "@/components/common/view-loading-fallback";
 import { buildRouteCommands } from "@/components/root/route-commands";
 import { useLanguage } from "@/lib/hooks/use-language";
 import { useGlobalStatusToast } from "@/lib/hooks/use-global-status-toast";
 import { ScryerGraphqlProvider } from "@/lib/graphql/urql-provider";
+import { TranslateContext } from "@/lib/context/translate-context";
+import { GlobalStatusContext } from "@/lib/context/global-status-context";
 import type { ViewId, SettingsSection, ContentSettingsSection } from "@/components/root/types";
 import { buildViewPath } from "@/lib/utils/routing";
 
@@ -23,8 +26,7 @@ export function MovieOverviewShell() {
   const titleId = searchParams.get("id") ?? "";
   const navigate = useNavigate();
 
-  const { uiLanguage, t } =
-    useLanguage(searchParams);
+  const { uiLanguage, t } = useLanguage(searchParams);
 
   const [, setGlobalStatusRaw] = useState("");
   const setGlobalStatus = useGlobalStatusToast(setGlobalStatusRaw);
@@ -76,52 +78,35 @@ export function MovieOverviewShell() {
 
   return (
     <ScryerGraphqlProvider language={uiLanguage}>
-    <div className="min-h-screen bg-background text-foreground">
-      <RootHeader
-        t={t}
-        globalSearch=""
-        onGlobalSearchChange={() => undefined}
-        searching={false}
-        globalSearchInputRef={{ current: null } as React.RefObject<HTMLInputElement | null>}
-        catalogSearchResults={[]}
-        metadataSearchResults={{
-          movie: [],
-          series: [],
-          anime: [],
-        }}
-        isGlobalSearchPanelOpen={false}
-        onOpenGlobalSearchPanel={() => undefined}
-        onCloseGlobalSearchPanel={() => undefined}
-        routeCommandPalette={routeCommandPaletteConfig}
-        catalogQualityProfileOptions={[]}
-        resolveDefaultQualityProfileIdForFacet={() => ""}
-        onAddMetadataSearchResultToCatalog={async () => null}
-        isMetadataSearchResultInCatalog={() => false}
-      />
+      <TranslateContext.Provider value={t}>
+        <GlobalStatusContext.Provider value={setGlobalStatus}>
+          <GlobalSearchProvider activeFacet="movie" queueFacet="movie" uiLanguage={uiLanguage} onCatalogChanged={() => undefined}>
+            <div className="min-h-screen bg-background text-foreground">
+              <RootHeader routeCommandPalette={routeCommandPaletteConfig} />
 
-      <div className="mx-auto w-full max-w-[1480px] px-3 pb-10 pt-4">
-        <RootSidebar
-          t={t}
-          topNav={topNav}
-          view="movies"
-          settingsSection="profile"
-          contentSettingsSection="overview"
-          entitlements={[]}
-          onNavigate={navigateTo}
-        >
-          <main className="min-h-[70vh]">
-            <Suspense fallback={<ViewLoadingFallback />}>
-            <MovieOverviewContainer
-              titleId={titleId}
-              t={t}
-              setGlobalStatus={setGlobalStatus}
-              onTitleNotFound={handleTitleNotFound}
-            />
-            </Suspense>
-          </main>
-        </RootSidebar>
-      </div>
-    </div>
+              <div className="mx-auto w-full max-w-[1480px] px-3 pb-10 pt-4">
+                <RootSidebar
+                  topNav={topNav}
+                  view="movies"
+                  settingsSection="profile"
+                  contentSettingsSection="overview"
+                  entitlements={[]}
+                  onNavigate={navigateTo}
+                >
+                  <main className="min-h-[70vh]">
+                    <Suspense fallback={<ViewLoadingFallback />}>
+                      <MovieOverviewContainer
+                        titleId={titleId}
+                        onTitleNotFound={handleTitleNotFound}
+                      />
+                    </Suspense>
+                  </main>
+                </RootSidebar>
+              </div>
+            </div>
+          </GlobalSearchProvider>
+        </GlobalStatusContext.Provider>
+      </TranslateContext.Provider>
     </ScryerGraphqlProvider>
   );
 }

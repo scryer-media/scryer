@@ -16,11 +16,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Loader2, Search } from "lucide-react";
-
-type Translate = (
-  key: string,
-  values?: Record<string, string | number | boolean | null | undefined>,
-) => string;
+import { useTranslate } from "@/lib/context/translate-context";
 
 export type CutoffUnmetItem = {
   id: string;
@@ -32,7 +28,6 @@ export type CutoffUnmetItem = {
 };
 
 type CutoffUnmetViewState = {
-  t: Translate;
   items: CutoffUnmetItem[];
   loading: boolean;
   facetFilter: string | undefined;
@@ -60,8 +55,8 @@ function qualityBadge(tier: string, variant: "current" | "target") {
 }
 
 export function CutoffUnmetView({ state }: { state: CutoffUnmetViewState }) {
+  const t = useTranslate();
   const {
-    t,
     items,
     loading,
     facetFilter,

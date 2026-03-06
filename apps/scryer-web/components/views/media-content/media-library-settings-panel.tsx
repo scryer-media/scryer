@@ -4,14 +4,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { LibraryScanSummary } from "@/lib/types";
-
-type Translate = (
-  key: string,
-  values?: Record<string, string | number | boolean | null | undefined>,
-) => string;
+import { useTranslate } from "@/lib/context/translate-context";
 
 type MediaLibrarySettingsPanelProps = {
-  t: Translate;
   settingsTitle: string;
   pathLabel: string;
   pathValue: string;
@@ -26,7 +21,6 @@ type MediaLibrarySettingsPanelProps = {
 };
 
 export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySettingsPanel({
-  t,
   settingsTitle,
   pathLabel,
   pathValue,
@@ -39,6 +33,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
   scanSummary,
   onScan,
 }: MediaLibrarySettingsPanelProps) {
+  const t = useTranslate();
   return (
     <>
       <Card>

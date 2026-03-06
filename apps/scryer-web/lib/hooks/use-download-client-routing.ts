@@ -20,7 +20,8 @@ import type {
   NzbgetCategoryRoutingSettings,
 } from "@/lib/types";
 import { type ViewCategoryId } from "@/lib/types/quality-profiles";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 
 const DEFAULT_SCOPE_ROUTING_ORDER = getDefaultRoutingOrder();
 
@@ -28,8 +29,6 @@ type Direction = "up" | "down";
 
 type DownloadClientRoutingHookArgs = {
   activeQualityScopeId: ViewCategoryId;
-  setGlobalStatus: (status: string) => void;
-  t: Translate;
 };
 
 export type DownloadClientRoutingHookResult = {
@@ -49,9 +48,9 @@ export type DownloadClientRoutingHookResult = {
 
 export function useDownloadClientRouting({
   activeQualityScopeId,
-  setGlobalStatus,
-  t,
 }: DownloadClientRoutingHookArgs): DownloadClientRoutingHookResult {
+  const setGlobalStatus = useGlobalStatus();
+  const t = useTranslate();
   const client = useClient();
   const [downloadClients, setDownloadClients] = React.useState<DownloadClientRecord[]>([]);
   const [downloadClientRoutingByScope, setDownloadClientRoutingByScope] =

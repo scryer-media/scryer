@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useTranslate } from "@/lib/context/translate-context";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,16 +19,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-type Translate = (
-  key: string,
-  values?: Record<string, string | number | boolean | null | undefined>,
-) => string;
-
 type Facet = "movie" | "tv" | "anime";
 type TvdbSearchItem = MetadataTvdbSearchItem;
 
 type AddTitleFormProps = {
-  t: Translate;
   titleNameForQueue: string;
   setTitleNameForQueue: (value: string) => void;
   queueFacet: Facet;
@@ -64,7 +59,6 @@ type AddTitleFormProps = {
 };
 
 export function AddTitleForm({
-  t,
   titleNameForQueue,
   setTitleNameForQueue,
   queueFacet,
@@ -99,6 +93,7 @@ export function AddTitleForm({
   onOpenOverview,
   queueExisting,
 }: AddTitleFormProps) {
+  const t = useTranslate();
   const handleTitleNameChange = React.useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {
       setTitleNameForQueue(event.target.value);
@@ -332,7 +327,6 @@ export function AddTitleForm({
             <SearchResultBuckets
               results={searchResults}
               onQueue={handleQueueFromSearch}
-              t={t}
             />
           )}
         </CardContent>

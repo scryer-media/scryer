@@ -30,16 +30,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { DownloadQueueItem, ImportRecord } from "@/lib/types";
-
-type Translate = (
-  key: string,
-  values?: Record<string, string | number | boolean | null | undefined>,
-) => string;
+import { useTranslate } from "@/lib/context/translate-context";
 
 type QueueMode = "scryer" | "all" | "history";
 
 type ActivityViewState = {
-  t: Translate;
   queueItems: DownloadQueueItem[];
   queueLoading: boolean;
   queueError: string | null;
@@ -202,8 +197,8 @@ function formatTimestamp(ts: string | null): string {
 }
 
 export function ActivityView({ state }: { state: ActivityViewState }) {
+  const t = useTranslate();
   const {
-    t,
     queueItems,
     queueLoading,
     queueError,

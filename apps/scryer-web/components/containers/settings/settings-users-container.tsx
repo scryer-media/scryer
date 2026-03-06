@@ -14,12 +14,8 @@ import { useAuth } from "@/lib/hooks/use-auth";
 import { humanizeEntitlement } from "@/lib/utils/formatting";
 import { useClient } from "urql";
 import type { UserRecord } from "@/lib/types";
-import type { Translate } from "@/components/root/types";
-
-type SettingsUsersContainerProps = {
-  t: Translate;
-  setGlobalStatus: (status: string) => void;
-};
+import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 
 function normalizeEntitlementValue(value: string): string {
   const normalized = value.trim().toLowerCase().replace(/[-\s]/g, "_");
@@ -46,10 +42,9 @@ function normalizeEntitlements(values: string[]): string[] {
   return Array.from(new Set(values.map(normalizeEntitlementValue).filter((value) => value.length > 0)));
 }
 
-export function SettingsUsersContainer({
-  t,
-  setGlobalStatus,
-}: SettingsUsersContainerProps) {
+export function SettingsUsersContainer() {
+  const setGlobalStatus = useGlobalStatus();
+  const t = useTranslate();
   const client = useClient();
   const { user: currentUser } = useAuth();
   const [settingsUsers, setSettingsUsers] = useState<UserRecord[]>([]);
@@ -218,7 +213,6 @@ export function SettingsUsersContainer({
   return (
     <>
       <SettingsUsersSection
-        t={t}
         settingsUsers={settingsUsers}
         newUsername={newUsername}
         setNewUsername={setNewUsername}

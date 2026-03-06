@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2 } from "lucide-react";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
 
 type AcquisitionSettings = {
   enabled: boolean;
@@ -16,7 +16,6 @@ type AcquisitionSettings = {
 };
 
 type Props = {
-  t: Translate;
   settings: AcquisitionSettings;
   setSettings: (s: AcquisitionSettings) => void;
   saving: boolean;
@@ -25,13 +24,13 @@ type Props = {
 };
 
 export function SettingsAcquisitionSection({
-  t,
   settings,
   setSettings,
   saving,
   loading,
   onSave,
 }: Props) {
+  const t = useTranslate();
   const update = (patch: Partial<AcquisitionSettings>) =>
     setSettings({ ...settings, ...patch });
 

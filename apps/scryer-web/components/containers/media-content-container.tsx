@@ -25,61 +25,31 @@ import { useQueueFormState } from "@/lib/hooks/use-queue-form-state";
 import { useTitleManagementState } from "@/lib/hooks/use-title-management-state";
 import type {
   Release,
-  Facet,
   TitleRecord,
   RuleSetRecord,
 } from "@/lib/types";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { useSearchContext } from "@/lib/context/search-context";
 
-type NzbSearchOptions = {
-  imdbId?: string | null;
-  tvdbId?: string | null;
-  limit?: number;
-};
 type MediaContentContainerProps = {
-  t: Translate;
   view: ViewId;
   contentSettingsSection: ContentSettingsSection;
-  setGlobalStatus: (status: string) => void;
-  queueFacet: Facet;
-  setQueueFacet: (value: Facet) => void;
-  runTvdbSearch: (query: string) => Promise<MetadataTvdbSearchItem[]>;
-  catalogChangeSignal?: number;
-  runSearch: (
-    query: string,
-    category?: string | null,
-    options?: NzbSearchOptions,
-  ) => Promise<Release[]>;
-  searchNzbForSelectedTvdb: () => Promise<void>;
-  selectedTvdb: MetadataTvdbSearchItem | null;
-  tvdbCandidates: MetadataTvdbSearchItem[];
-  selectedTvdbId: string | null;
-  selectTvdbCandidate: (candidate: MetadataTvdbSearchItem) => void;
-  searchResults: Release[];
   onOpenOverview: (targetView: ViewId, titleId: string) => void;
 };
 
 export const MediaContentContainer = React.memo(function MediaContentContainer({
-  t,
   view,
   contentSettingsSection,
-  setGlobalStatus,
-  queueFacet,
-  setQueueFacet,
-  runTvdbSearch,
-  runSearch,
-  searchNzbForSelectedTvdb,
-  selectedTvdb,
-  tvdbCandidates,
-  selectedTvdbId,
-  selectTvdbCandidate,
-  searchResults,
   onOpenOverview,
-  catalogChangeSignal,
 }: MediaContentContainerProps) {
+  const searchState = useSearchContext();
+  const { queueFacet, setQueueFacet, runTvdbSearch, runSearch, searchNzbForSelectedTvdb, selectedTvdb, tvdbCandidates, selectedTvdbId, selectTvdbCandidate, searchResults, catalogChangeSignal } = searchState;
+  const setGlobalStatus = useGlobalStatus();
+  const t = useTranslate();
   const client = useClient();
   const activeFacet = viewToFacet[view as keyof typeof viewToFacet] ?? "movie";
   const activeQualityScopeId = CATEGORY_SCOPE_MAP[view as keyof typeof CATEGORY_SCOPE_MAP] ?? "movie";
@@ -142,8 +112,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     refreshMediaSettings,
   } = useMediaSettings({
     activeQualityScopeId,
-    setGlobalStatus,
-    t,
     view,
   });
 
@@ -165,8 +133,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     saveDownloadClientRouting,
   } = useDownloadClientRouting({
     activeQualityScopeId,
-    setGlobalStatus,
-    t,
   });
   const {
     indexers,
@@ -180,8 +146,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     moveIndexerInScope,
   } = useIndexerRouting({
     activeQualityScopeId,
-    setGlobalStatus,
-    t,
   });
 
   const [ruleSets, setRuleSets] = React.useState<RuleSetRecord[]>([]);
@@ -642,7 +606,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     <>
       <MediaContentView
         state={{
-          t,
           view,
           contentSettingsSection,
           contentSettingsLabel,

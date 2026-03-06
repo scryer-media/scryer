@@ -3,17 +3,13 @@ import { memo, useCallback, useEffect, useState } from "react";
 import { useClient } from "urql";
 import { SystemView } from "@/components/views/system-view";
 import { systemHealthQuery } from "@/lib/graphql/queries";
-import type { SystemHealth, Translate } from "@/components/root/types";
+import type { SystemHealth } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 
-type SystemContainerProps = {
-  t: Translate;
-  setGlobalStatus: (status: string) => void;
-};
-
-export const SystemContainer = memo(function SystemContainer({
-  t,
-  setGlobalStatus,
-}: SystemContainerProps) {
+export const SystemContainer = memo(function SystemContainer() {
+  const setGlobalStatus = useGlobalStatus();
+  const t = useTranslate();
   const client = useClient();
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null);
   const [systemLoading, setSystemLoading] = useState(false);
@@ -39,7 +35,6 @@ export const SystemContainer = memo(function SystemContainer({
   return (
     <SystemView
       state={{
-        t,
         systemHealth,
         systemLoading,
         refreshSystem,

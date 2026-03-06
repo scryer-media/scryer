@@ -2,37 +2,17 @@ import { lazy, Suspense } from "react";
 import { createBrowserRouter } from "react-router-dom";
 import { PageShellFallback } from "@/components/root/page-shell-fallback";
 import { RouteErrorBoundary } from "./error-boundary";
-import type { HomePageRouteState } from "@/lib/types/root";
-import { FACET_REGISTRY } from "@/lib/facets/registry";
-import type { ViewId } from "@/components/root/types";
 
 const RootPageShell = lazy(() => import("@/components/root/root-page-shell"));
 const LoginPage = lazy(() => import("@/src/pages/login"));
 
-function ShellRoute({
-  initialView,
-  initialSettingsSection,
-  initialContentSection,
-}: HomePageRouteState) {
+function ShellRoute() {
   return (
     <Suspense fallback={<PageShellFallback />}>
-      <RootPageShell
-        initialView={initialView}
-        initialSettingsSection={initialSettingsSection}
-        initialContentSection={initialContentSection}
-      />
+      <RootPageShell />
     </Suspense>
   );
 }
-
-const mediaRoutes = FACET_REGISTRY.flatMap((f) => {
-  const viewId = f.viewId as ViewId;
-  return [
-    { path: `/${f.viewId}`, element: <ShellRoute initialView={viewId} initialContentSection="overview" /> },
-    { path: `/${f.viewId}/overview`, element: <ShellRoute initialView={viewId} initialContentSection="overview" /> },
-    { path: `/${f.viewId}/settings`, element: <ShellRoute initialView={viewId} initialContentSection="settings" /> },
-  ];
-});
 
 export const router = createBrowserRouter([
   {
@@ -47,30 +27,26 @@ export const router = createBrowserRouter([
         ),
       },
       { path: "/", element: <ShellRoute /> },
-      ...mediaRoutes,
-      { path: "/activity", element: <ShellRoute initialView="activity" /> },
-      { path: "/wanted", element: <ShellRoute initialView="wanted" /> },
-      { path: "/settings", element: <ShellRoute initialView="settings" initialSettingsSection="profile" /> },
-      { path: "/settings/profile", element: <ShellRoute initialView="settings" initialSettingsSection="profile" /> },
-      { path: "/settings/indexers", element: <ShellRoute initialView="settings" initialSettingsSection="indexers" /> },
-      {
-        path: "/settings/download-clients",
-        element: <ShellRoute initialView="settings" initialSettingsSection="downloadClients" />,
-      },
-      {
-        path: "/settings/quality-profiles",
-        element: <ShellRoute initialView="settings" initialSettingsSection="qualityProfiles" />,
-      },
-      { path: "/settings/users", element: <ShellRoute initialView="settings" initialSettingsSection="users" /> },
-      {
-        path: "/settings/acquisition",
-        element: <ShellRoute initialView="settings" initialSettingsSection="acquisition" />,
-      },
-      {
-        path: "/settings/rules",
-        element: <ShellRoute initialView="settings" initialSettingsSection="rules" />,
-      },
-      { path: "/system", element: <ShellRoute initialView="system" /> },
+      { path: "/movies", element: <ShellRoute /> },
+      { path: "/movies/overview", element: <ShellRoute /> },
+      { path: "/movies/settings", element: <ShellRoute /> },
+      { path: "/series", element: <ShellRoute /> },
+      { path: "/series/overview", element: <ShellRoute /> },
+      { path: "/series/settings", element: <ShellRoute /> },
+      { path: "/anime", element: <ShellRoute /> },
+      { path: "/anime/overview", element: <ShellRoute /> },
+      { path: "/anime/settings", element: <ShellRoute /> },
+      { path: "/activity", element: <ShellRoute /> },
+      { path: "/wanted", element: <ShellRoute /> },
+      { path: "/settings", element: <ShellRoute /> },
+      { path: "/settings/profile", element: <ShellRoute /> },
+      { path: "/settings/indexers", element: <ShellRoute /> },
+      { path: "/settings/download-clients", element: <ShellRoute /> },
+      { path: "/settings/quality-profiles", element: <ShellRoute /> },
+      { path: "/settings/users", element: <ShellRoute /> },
+      { path: "/settings/acquisition", element: <ShellRoute /> },
+      { path: "/settings/rules", element: <ShellRoute /> },
+      { path: "/system", element: <ShellRoute /> },
       { path: "*", element: <ShellRoute /> },
     ],
   },

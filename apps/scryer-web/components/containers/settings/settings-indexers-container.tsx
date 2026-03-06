@@ -3,7 +3,8 @@ import { type ComponentProps, type FormEvent, useCallback, useEffect, useState }
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { SettingsIndexersSection } from "@/components/views/settings/settings-indexers-section";
 import { useClient } from "urql";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 import type { IndexerRecord, ProviderTypeInfo } from "@/lib/types";
 import { indexersQuery, indexerProviderTypesQuery } from "@/lib/graphql/queries";
 import {
@@ -11,11 +12,6 @@ import {
   deleteIndexerMutation,
   updateIndexerMutation,
 } from "@/lib/graphql/mutations";
-
-type SettingsIndexersContainerProps = {
-  t: Translate;
-  setGlobalStatus: (status: string) => void;
-};
 
 type SettingsIndexersSectionProps = ComponentProps<typeof SettingsIndexersSection>;
 
@@ -46,10 +42,9 @@ function parseConfigJson(configJson: string | null): Record<string, string> {
   }
 }
 
-export function SettingsIndexersContainer({
-  t,
-  setGlobalStatus,
-}: SettingsIndexersContainerProps) {
+export function SettingsIndexersContainer() {
+  const setGlobalStatus = useGlobalStatus();
+  const t = useTranslate();
   const client = useClient();
   const [settingsIndexers, setSettingsIndexers] = useState<IndexerRecord[]>([]);
   const [settingsIndexerFilter, setSettingsIndexerFilter] = useState("");
@@ -222,7 +217,6 @@ export function SettingsIndexersContainer({
   return (
     <>
       <SettingsIndexersSection
-        t={t}
         editingIndexerId={editingIndexerId}
         indexerDraft={indexerDraft}
         setIndexerDraft={setIndexerDraft}

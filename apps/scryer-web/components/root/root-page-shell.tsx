@@ -3,6 +3,8 @@ import { ActivitySquare, Download, ListChecks, Loader2, MonitorCog, Settings, Wi
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/lib/hooks/use-auth";
 
+import { TranslateContext } from "@/lib/context/translate-context";
+import { GlobalStatusContext } from "@/lib/context/global-status-context";
 import { RootHeader } from "@/components/root/root-header";
 import { RootSidebar } from "@/components/root/root-sidebar";
 import { ViewLoadingFallback } from "@/components/common/view-loading-fallback";
@@ -16,11 +18,7 @@ import { useOnlineStatus } from "@/lib/hooks/use-online-status";
 import { useInstallPrompt } from "@/lib/hooks/use-install-prompt";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
 import type { ViewId, SettingsSection, ContentSettingsSection } from "@/components/root/types";
-import type { UseGlobalSearchResult } from "@/lib/hooks/use-global-search";
-import type {
-  HomePageRouteState,
-  Facet,
-} from "@/lib/types";
+import type { Facet } from "@/lib/types";
 import {
   URL_PARAM_CONTENT_SECTION_DEPRECATED,
   URL_PARAM_LANGUAGE,
@@ -70,8 +68,7 @@ const GlobalSearchProvider = lazy(() =>
   import("@/components/root/global-search-provider").then((m) => ({ default: m.GlobalSearchProvider })),
 );
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function OverviewContainerForView({ view, initialEpisodeId, ...props }: { view: ViewId; titleId: string; t: any; setGlobalStatus: (s: string) => void; onBackToList: () => void; onTitleNotFound: () => void; initialEpisodeId?: string | null }) {
+function OverviewContainerForView({ view, initialEpisodeId, ...props }: { view: ViewId; titleId: string; onBackToList: () => void; onTitleNotFound: () => void; initialEpisodeId?: string | null }) {
   const facet = facetForView(view);
   if (facet?.hasEpisodes) {
     return <SeriesOverviewContainer {...props} initialEpisodeId={initialEpisodeId} />;
@@ -80,44 +77,10 @@ function OverviewContainerForView({ view, initialEpisodeId, ...props }: { view: 
 }
 
 /**
- * Synchronises the active facet (derived from the current view) with the search
- * state that lives inside the lazy-loaded GlobalSearchProvider.  Extracted into
- * its own component so that the useEffect can reference the search-state setters
- * that are only available inside the provider's render-prop.
- */
-function ActiveFacetSync({
-  activeFacet,
-  setQueueFacet,
-  setTvdbCandidates,
-  setSearchResults,
-  setSelectedTvdbId,
-}: {
-  activeFacet: Facet;
-  setQueueFacet: (f: Facet) => void;
-  setTvdbCandidates: UseGlobalSearchResult["setTvdbCandidates"];
-  setSearchResults: UseGlobalSearchResult["setSearchResults"];
-  setSelectedTvdbId: UseGlobalSearchResult["setSelectedTvdbId"];
-}) {
-  useEffect(() => {
-    setQueueFacet(activeFacet);
-    setTvdbCandidates([]);
-    setSearchResults([]);
-    setSelectedTvdbId(null);
-  }, [activeFacet, setQueueFacet, setTvdbCandidates, setSearchResults, setSelectedTvdbId]);
-
-  return null;
-}
-
-/**
- * Renders the main content area.  Extracted so that views needing search state
- * (MediaContentContainer) can receive it via the searchState prop which comes
- * from the GlobalSearchProvider render-prop, while non-search views are
- * unaffected.
+ * Renders the main content area.
  */
 function MainContent({
   view,
-  t,
-  setGlobalStatus,
   overviewTitleId,
   overviewEpisodeId,
   handleBackToList,
@@ -129,15 +92,9 @@ function MainContent({
   uiLanguage,
   setLanguagePreferenceFromShell,
   contentSettingsSection,
-  queueFacet,
-  setQueueFacet,
-  searchState,
   handleOpenOverview,
-  catalogChangeSignal,
 }: {
   view: ViewId;
-  t: (key: string, values?: Record<string, string | number | boolean | null | undefined>) => string;
-  setGlobalStatus: (status: string) => void;
   overviewTitleId: string | null;
   overviewEpisodeId: string | null;
   handleBackToList: () => void;
@@ -149,20 +106,16 @@ function MainContent({
   uiLanguage: LocaleCode;
   setLanguagePreferenceFromShell: (code: string) => void;
   contentSettingsSection: ContentSettingsSection;
-  queueFacet: Facet;
-  setQueueFacet: (f: Facet) => void;
-  searchState: UseGlobalSearchResult;
   handleOpenOverview: (targetView: ViewId, titleId: string, episodeId?: string) => void;
-  catalogChangeSignal: number;
 }) {
   if (view === "activity") {
-    return <ActivityContainer key="activity" t={t} setGlobalStatus={setGlobalStatus} />;
+    return <ActivityContainer key="activity" />;
   }
   if (view === "wanted") {
-    return <WantedContainer key="wanted" t={t} setGlobalStatus={setGlobalStatus} onOpenOverview={handleOpenOverview} />;
+    return <WantedContainer key="wanted" onOpenOverview={handleOpenOverview} />;
   }
   if (view === "system") {
-    return <SystemContainer key="system" t={t} setGlobalStatus={setGlobalStatus} />;
+    return <SystemContainer key="system" />;
   }
   if (isMediaView(view) && overviewTitleId) {
     return (
@@ -171,8 +124,6 @@ function MainContent({
         view={view}
         titleId={overviewTitleId}
         initialEpisodeId={overviewEpisodeId}
-        t={t}
-        setGlobalStatus={setGlobalStatus}
         onBackToList={handleBackToList}
         onTitleNotFound={handleTitleNotFound}
       />
@@ -183,8 +134,6 @@ function MainContent({
       <SettingsContainer
         key="settings"
         settingsSection={settingsSection}
-        t={t}
-        setGlobalStatus={setGlobalStatus}
         userId={userId}
         username={username}
         availableLanguages={AVAILABLE_LANGUAGES}
@@ -197,31 +146,14 @@ function MainContent({
   return (
     <MediaContentContainer
       key={`${view}-${contentSettingsSection}`}
-      t={t}
       view={view}
       contentSettingsSection={contentSettingsSection}
-      setGlobalStatus={setGlobalStatus}
-      queueFacet={queueFacet}
-      setQueueFacet={setQueueFacet}
-      runTvdbSearch={searchState.runTvdbSearch}
-      runSearch={searchState.runSearch}
-      searchNzbForSelectedTvdb={searchState.searchNzbForSelectedTvdb}
-      selectedTvdb={searchState.selectedTvdb}
-      tvdbCandidates={searchState.tvdbCandidates}
-      selectedTvdbId={searchState.selectedTvdbId}
-      selectTvdbCandidate={searchState.selectTvdbCandidate}
-      searchResults={searchState.searchResults}
       onOpenOverview={handleOpenOverview}
-      catalogChangeSignal={catalogChangeSignal}
     />
   );
 }
 
-export default function HomePage({
-  initialView,
-  initialSettingsSection,
-  initialContentSection,
-}: HomePageRouteState = {}) {
+export default function HomePage() {
   const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
 
@@ -243,20 +175,10 @@ export default function HomePage({
     return null;
   }
 
-  return (
-    <AuthenticatedHomePage
-      initialView={initialView}
-      initialSettingsSection={initialSettingsSection}
-      initialContentSection={initialContentSection}
-    />
-  );
+  return <AuthenticatedHomePage />;
 }
 
-function AuthenticatedHomePage({
-  initialView,
-  initialSettingsSection,
-  initialContentSection,
-}: HomePageRouteState = {}) {
+function AuthenticatedHomePage() {
   const { user } = useAuth();
   const isMobile = useIsMobile();
   const isOnline = useOnlineStatus();
@@ -264,123 +186,29 @@ function AuthenticatedHomePage({
 
   const { pathname } = useLocation();
   const [searchParams] = useSearchParams();
-  const pathnameSegments = useMemo(() => {
-    const trimmedPath = pathname?.replace(/^\/+|\/+$/g, "").toLowerCase();
-    return trimmedPath ? trimmedPath.split("/") : [];
-  }, [pathname]);
+  const navigate = useNavigate();
 
-  const deriveSectionsFromPath = useCallback((segments: string[]) => {
-    const parsedView = parseViewFromPath(segments[0]);
-    const parsedSettingsSection = parsedView === "settings"
-      ? parseSettingsSectionFromPath(segments[1] ?? null)
-      : "general";
-    const parsedContentSection = isMediaView(parsedView)
+  const { parsedView: view, parsedSettingsSection: settingsSection, parsedContentSection: contentSettingsSection } =
+    useMemo(() => {
+      const trimmed = pathname.replace(/^\/+|\/+$/g, "").toLowerCase();
+      const segments = trimmed ? trimmed.split("/") : [];
+      const parsedView = parseViewFromPath(segments[0]);
+      const parsedSettingsSection: SettingsSection = parsedView === "settings"
+        ? parseSettingsSectionFromPath(segments[1] ?? null)
+        : "general";
+      const parsedContentSection: ContentSettingsSection = isMediaView(parsedView)
         ? parseContentSectionFromPath(segments[1] ?? null)
         : "overview";
+      return { parsedView, parsedSettingsSection, parsedContentSection };
+    }, [pathname]);
 
-    return {
-      parsedView,
-      parsedSettingsSection,
-      parsedContentSection,
-    };
-  }, []);
+  const overviewTitleId = useMemo(() => {
+    if (!isMediaView(view) || contentSettingsSection !== "overview") return null;
+    return searchParams.get("id")?.trim() || null;
+  }, [view, contentSettingsSection, searchParams]);
 
-  const initialParsedSections = useMemo(
-    () => deriveSectionsFromPath(pathnameSegments),
-    [deriveSectionsFromPath, pathnameSegments],
-  );
-
-  const initialResolvedView = useMemo(
-    () => initialView ?? initialParsedSections.parsedView,
-    [initialParsedSections.parsedView, initialView],
-  );
-
-  const initialResolvedSettingsSection = useMemo(
-    () =>
-      initialResolvedView === "settings"
-        ? (initialSettingsSection ?? initialParsedSections.parsedSettingsSection)
-        : "general",
-    [initialParsedSections.parsedSettingsSection, initialResolvedView, initialSettingsSection],
-  );
-
-  const initialResolvedContentSection = useMemo(
-    () =>
-      isMediaView(initialResolvedView)
-        ? (initialContentSection ?? initialParsedSections.parsedContentSection)
-        : "overview",
-    [initialContentSection, initialParsedSections.parsedContentSection, initialResolvedView],
-  );
-
-  const initialResolvedOverviewTitleId = useMemo(() => {
-    if (!isMediaView(initialResolvedView)) {
-      return null;
-    }
-
-    if (initialResolvedContentSection !== "overview") {
-      return null;
-    }
-
-    const nextTitleId = searchParams.get("id")?.trim();
-    return nextTitleId && nextTitleId.length > 0 ? nextTitleId : null;
-  }, [initialResolvedContentSection, initialResolvedView, searchParams]);
-
-  const [view, setView] = useState<ViewId>(initialResolvedView);
-  const [settingsSection, setSettingsSection] = useState<SettingsSection>(initialResolvedSettingsSection);
-  const [contentSettingsSection, setContentSettingsSection] = useState<ContentSettingsSection>(initialResolvedContentSection);
-  const [overviewTitleId, setOverviewTitleId] = useState<string | null>(initialResolvedOverviewTitleId);
-  const [overviewEpisodeId, setOverviewEpisodeId] = useState<string | null>(null);
-
-  const parseOverviewTitleId = useCallback(
-    (
-      nextView: ViewId,
-      nextContentSection: ContentSettingsSection,
-      nextSearch: string,
-    ) => {
-      if (
-        nextContentSection !== "overview" ||
-        !isMediaView(nextView)
-      ) {
-        return null;
-      }
-
-      const nextTitleId = new URLSearchParams(nextSearch).get("id")?.trim();
-      return nextTitleId && nextTitleId.length > 0 ? nextTitleId : null;
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const onPopState = () => {
-      const trimmedPath = window.location.pathname.replace(/^\/+|\/+$/g, "").toLowerCase();
-      const segments = trimmedPath ? trimmedPath.split("/") : [];
-      const parsed = deriveSectionsFromPath(segments);
-
-      const nextView = parsed.parsedView;
-      const nextSettingsSection = nextView === "settings"
-        ? parsed.parsedSettingsSection
-        : "general";
-      const nextContentSection = isMediaView(nextView)
-          ? parsed.parsedContentSection
-          : "overview";
-      const nextOverviewTitleId = parseOverviewTitleId(nextView, nextContentSection, window.location.search);
-
-      setView(nextView);
-      setSettingsSection(nextSettingsSection);
-      setContentSettingsSection(nextContentSection);
-      setOverviewTitleId(nextOverviewTitleId);
-    };
-
-    window.addEventListener("popstate", onPopState);
-    onPopState();
-
-    return () => {
-      window.removeEventListener("popstate", onPopState);
-    };
-  }, [deriveSectionsFromPath, parseOverviewTitleId]);
+  const overviewEpisodeId = useMemo(() =>
+    searchParams.get("episodeId")?.trim() || null, [searchParams]);
 
   const {
     uiLanguage,
@@ -411,13 +239,12 @@ function AuthenticatedHomePage({
     [getLanguageLabel, setLanguagePreference, t],
   );
 
-  const [queueFacet, setQueueFacet] = useState<Facet>("movie");
-  const [catalogChangeSignal, setCatalogChangeSignal] = useState(0);
   const [installBannerDismissed, setInstallBannerDismissed] = useState(false);
 
-  const onCatalogChanged = useCallback(() => setCatalogChangeSignal((v) => v + 1), []);
+  const onCatalogChanged = useCallback(() => {}, []);
 
   const activeFacet = useMemo<Facet>(() => facetForView(view)?.id ?? "movie", [view]);
+  const queueFacet = activeFacet;
 
   const navigateTo = useCallback(
     (
@@ -433,8 +260,6 @@ function AuthenticatedHomePage({
         nextView === "settings" ? nextSettingsSection : undefined,
         isMedia ? nextContentSection : undefined,
       );
-      const normalizedSettingsSection =
-        nextView === "settings" ? (nextSettingsSection ?? "general") : "general";
       const normalizedContentSection = isMedia
         ? (nextContentSection ?? "overview")
         : "overview";
@@ -442,25 +267,7 @@ function AuthenticatedHomePage({
         ? (nextOverviewTitleId as string).trim()
         : null;
 
-      setView(nextView);
-      setSettingsSection(normalizedSettingsSection);
-      setContentSettingsSection(normalizedContentSection);
-      setOverviewTitleId(
-        normalizedContentSection === "overview" && isMedia
-          ? normalizedOverviewTitleId
-          : null,
-      );
-      setOverviewEpisodeId(
-        normalizedContentSection === "overview" && isMedia && normalizedOverviewTitleId
-          ? (nextEpisodeId ?? null)
-          : null,
-      );
-
-      if (typeof window === "undefined") {
-        return;
-      }
-
-      const nextParams = new URLSearchParams(window.location.search);
+      const nextParams = new URLSearchParams(searchParams.toString());
       nextParams.delete(URL_PARAM_VIEW_DEPRECATED);
       nextParams.delete(URL_PARAM_SETTINGS_SECTION_DEPRECATED);
       nextParams.delete(URL_PARAM_CONTENT_SECTION_DEPRECATED);
@@ -482,13 +289,13 @@ function AuthenticatedHomePage({
 
       const nextQuery = nextParams.toString();
       const nextPathWithQuery = `${targetPath}${nextQuery ? `?${nextQuery}` : ""}`;
-      const currentPath = `${window.location.pathname}${window.location.search ? `?${window.location.search}` : ""}`;
+      const currentPathWithQuery = `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
 
-      if (nextPathWithQuery !== currentPath) {
-        window.history.pushState({}, "", nextPathWithQuery);
+      if (nextPathWithQuery !== currentPathWithQuery) {
+        navigate(nextPathWithQuery);
       }
     },
-    [],
+    [navigate, searchParams, pathname],
   );
 
   const handleOpenOverview = useCallback(
@@ -565,6 +372,8 @@ function AuthenticatedHomePage({
 
   return (
     <ScryerGraphqlProvider language={uiLanguage}>
+    <TranslateContext.Provider value={t}>
+    <GlobalStatusContext.Provider value={setGlobalStatus}>
     <div className="min-h-screen bg-background text-foreground">
       {serviceRestarting && (
         <div className="fixed inset-0 z-[9999] grid place-items-center bg-[#070b18]">
@@ -582,111 +391,80 @@ function AuthenticatedHomePage({
       )}
       <Suspense fallback={<ViewLoadingFallback />}>
         <GlobalSearchProvider
-          t={t}
-          setGlobalStatus={setGlobalStatus}
+          activeFacet={activeFacet}
           queueFacet={queueFacet}
           uiLanguage={uiLanguage}
           onCatalogChanged={onCatalogChanged}
         >
-          {(searchState) => (
-            <>
-              <ActiveFacetSync
-                activeFacet={activeFacet}
-                setQueueFacet={setQueueFacet}
-                setTvdbCandidates={searchState.setTvdbCandidates}
-                setSearchResults={searchState.setSearchResults}
-                setSelectedTvdbId={searchState.setSelectedTvdbId}
-              />
-              <RootHeader
-                t={t}
-                globalSearch={searchState.globalSearch}
-                onGlobalSearchChange={searchState.setGlobalSearch}
-                routeCommandPalette={routeCommandPaletteConfig}
-                catalogSearchResults={searchState.catalogSearchResults}
-                metadataSearchResults={searchState.metadataSearchResults}
-                isGlobalSearchPanelOpen={searchState.isGlobalSearchPanelOpen}
-                onOpenGlobalSearchPanel={searchState.openGlobalSearchPanel}
-                onCloseGlobalSearchPanel={searchState.closeGlobalSearchPanel}
-                catalogQualityProfileOptions={searchState.catalogQualityProfileOptions}
-                resolveDefaultQualityProfileIdForFacet={searchState.resolveDefaultQualityProfileIdForFacet}
-                onAddMetadataSearchResultToCatalog={searchState.addMetadataSearchResultToCatalog}
-                isMetadataSearchResultInCatalog={searchState.isMetadataSearchResultInCatalog}
-                searching={searchState.searching}
-                globalSearchInputRef={searchState.globalSearchInputRef}
-                onOpenOverview={handleOpenOverview}
-              />
+          <RootHeader
+            onOpenOverview={handleOpenOverview}
+            routeCommandPalette={routeCommandPaletteConfig}
+          />
 
-              {!isOnline ? (
-                <div className="flex items-center justify-center gap-2 bg-amber-900/80 px-4 py-2 text-sm text-amber-100">
-                  <WifiOff className="h-4 w-4 flex-none" />
-                  <span>{t("pwa.offline")}</span>
-                </div>
-              ) : null}
+          {!isOnline ? (
+            <div className="flex items-center justify-center gap-2 bg-amber-900/80 px-4 py-2 text-sm text-amber-100">
+              <WifiOff className="h-4 w-4 flex-none" />
+              <span>{t("pwa.offline")}</span>
+            </div>
+          ) : null}
 
-              {isMobile && canPrompt && !isInstalled && !installBannerDismissed ? (
-                <div className="flex items-center justify-center gap-3 bg-emerald-100 dark:bg-emerald-900/60 px-4 py-2 text-sm text-emerald-800 dark:text-emerald-100">
-                  <Download className="h-4 w-4 flex-none" />
-                  <span>{t("pwa.installApp")}</span>
-                  <button
-                    type="button"
-                    onClick={() => void promptInstall()}
-                    className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-medium text-foreground hover:bg-emerald-500"
-                  >
-                    {t("pwa.installApp")}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setInstallBannerDismissed(true)}
-                    className="ml-auto text-emerald-700 dark:text-emerald-300 hover:text-foreground"
-                    aria-label={t("label.dismiss")}
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-              ) : null}
+          {isMobile && canPrompt && !isInstalled && !installBannerDismissed ? (
+            <div className="flex items-center justify-center gap-3 bg-emerald-100 dark:bg-emerald-900/60 px-4 py-2 text-sm text-emerald-800 dark:text-emerald-100">
+              <Download className="h-4 w-4 flex-none" />
+              <span>{t("pwa.installApp")}</span>
+              <button
+                type="button"
+                onClick={() => void promptInstall()}
+                className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-medium text-foreground hover:bg-emerald-500"
+              >
+                {t("pwa.installApp")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setInstallBannerDismissed(true)}
+                className="ml-auto text-emerald-700 dark:text-emerald-300 hover:text-foreground"
+                aria-label={t("label.dismiss")}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ) : null}
 
-              <div className="mx-auto w-full max-w-[1480px] px-3 pb-10 pt-4">
-                <RootSidebar
-                  t={t}
-                  topNav={topNav}
-                  view={view}
-                  settingsSection={settingsSection}
-                  contentSettingsSection={contentSettingsSection}
-                  entitlements={entitlements}
-                  onNavigate={navigateTo}
-                >
-                  <main className="min-h-[70vh]">
-                    <Suspense fallback={<ViewLoadingFallback />}>
-                      <MainContent
-                        view={view}
-                        t={t}
-                        setGlobalStatus={setGlobalStatus}
-                        overviewTitleId={overviewTitleId}
-                        overviewEpisodeId={overviewEpisodeId}
-                        handleBackToList={handleBackToList}
-                        handleTitleNotFound={handleTitleNotFound}
-                        settingsSection={settingsSection}
-                        userId={user?.id}
-                        username={user?.username}
-                        selectedLanguage={selectedLanguage}
-                        uiLanguage={uiLanguage}
-                        setLanguagePreferenceFromShell={setLanguagePreferenceFromShell}
-                        contentSettingsSection={contentSettingsSection}
-                        queueFacet={queueFacet}
-                        setQueueFacet={setQueueFacet}
-                        searchState={searchState}
-                        handleOpenOverview={handleOpenOverview}
-                        catalogChangeSignal={catalogChangeSignal}
-                      />
-                    </Suspense>
-                  </main>
-                </RootSidebar>
-              </div>
-            </>
-          )}
+          <div className="mx-auto w-full max-w-[1480px] px-3 pb-10 pt-4">
+            <RootSidebar
+              topNav={topNav}
+              view={view}
+              settingsSection={settingsSection}
+              contentSettingsSection={contentSettingsSection}
+              entitlements={entitlements}
+              onNavigate={navigateTo}
+            >
+              <main className="min-h-[70vh]">
+                <Suspense fallback={<ViewLoadingFallback />}>
+                  <MainContent
+                    view={view}
+                    overviewTitleId={overviewTitleId}
+                    overviewEpisodeId={overviewEpisodeId}
+                    handleBackToList={handleBackToList}
+                    handleTitleNotFound={handleTitleNotFound}
+                    settingsSection={settingsSection}
+                    userId={user?.id}
+                    username={user?.username}
+                    selectedLanguage={selectedLanguage}
+                    uiLanguage={uiLanguage}
+                    setLanguagePreferenceFromShell={setLanguagePreferenceFromShell}
+                    contentSettingsSection={contentSettingsSection}
+                    handleOpenOverview={handleOpenOverview}
+                  />
+                </Suspense>
+              </main>
+            </RootSidebar>
+          </div>
         </GlobalSearchProvider>
       </Suspense>
     </div>
+    </GlobalStatusContext.Provider>
+    </TranslateContext.Provider>
     </ScryerGraphqlProvider>
   );
 }

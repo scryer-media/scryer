@@ -1,4 +1,6 @@
 import * as React from "react";
+import { useTranslate } from "@/lib/context/translate-context";
+import type { Translate } from "@/components/root/types";
 import { Button } from "@/components/ui/button";
 import { InfoHelp } from "@/components/common/info-help";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,11 +8,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { ViewCategoryId } from "./indexer-category-picker";
-
-type Translate = (
-  key: string,
-  values?: Record<string, string | number | boolean | null | undefined>,
-) => string;
 
 type ParsedQualityProfile = {
   id: string;
@@ -216,7 +213,6 @@ function applyRenameTemplate(template: string, scopeId: ViewCategoryId): string 
 // --- Component ---
 
 export function RenameSettingsForm({
-  t,
   contentSettingsLabel,
   mediaSettingsLoading,
   qualityProfiles,
@@ -249,8 +245,8 @@ export function RenameSettingsForm({
   updateCategoryMediaProfileSettings,
   mediaSettingsSaving,
 }: {
-  t: Translate;
   contentSettingsLabel: string;
+
   mediaSettingsLoading: boolean;
   qualityProfiles: ParsedQualityProfile[];
   qualityProfileParseError: string;
@@ -282,6 +278,7 @@ export function RenameSettingsForm({
   updateCategoryMediaProfileSettings: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
   mediaSettingsSaving: boolean;
 }) {
+  const t = useTranslate();
   const templateValue = categoryRenameTemplates[activeQualityScopeId];
   const renameValidationError = React.useMemo(
     () => validateRenameTemplate(templateValue, t),

@@ -3,7 +3,8 @@ import { memo, useCallback, useEffect, useState } from "react";
 import { useClient, useMutation } from "urql";
 
 import { ActivityView } from "@/components/views/activity-view";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 import {
   triggerImportMutation,
   pauseDownloadMutation,
@@ -14,15 +15,12 @@ import { importHistoryQuery } from "@/lib/graphql/queries";
 import { useDownloadQueue } from "@/lib/hooks/use-download-queue";
 import type { DownloadQueueItem, ImportRecord } from "@/lib/types";
 
-type ActivityContainerProps = {
-  t: Translate;
-  setGlobalStatus: (status: string) => void;
-};
-
 const HISTORY_STATES = new Set(["completed", "failed", "import_pending", "importpending"]);
 type QueueMode = "scryer" | "all" | "history";
 
-export const ActivityContainer = memo(function ActivityContainer({ t, setGlobalStatus }: ActivityContainerProps) {
+export const ActivityContainer = memo(function ActivityContainer() {
+  const setGlobalStatus = useGlobalStatus();
+  const t = useTranslate();
   const client = useClient();
   const [, executeTriggerImport] = useMutation(triggerImportMutation);
   const [, executePauseDownload] = useMutation(pauseDownloadMutation);
@@ -32,7 +30,6 @@ export const ActivityContainer = memo(function ActivityContainer({ t, setGlobalS
   const [queueMode, setQueueMode] = useState<QueueMode>("scryer");
 
   const { queueItems, queueLoading, queueError, lastRefreshedAt, refreshQueue } = useDownloadQueue({
-    setGlobalStatus,
     includeAllActivity: queueMode !== "scryer",
     includeHistoryOnly: queueMode === "history",
   });
@@ -134,7 +131,6 @@ export const ActivityContainer = memo(function ActivityContainer({ t, setGlobalS
   return (
     <ActivityView
       state={{
-        t,
         queueItems,
         queueLoading,
         queueError,

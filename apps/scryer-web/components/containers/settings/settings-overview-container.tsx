@@ -7,12 +7,11 @@ import type { AdminSetting } from "@/lib/types/admin-settings";
 import { TLS_CERT_PATH_KEY, TLS_KEY_PATH_KEY } from "@/lib/constants/settings";
 import { getSettingDisplayValue } from "@/lib/utils/settings";
 import { useClient } from "urql";
-import type { Translate } from "@/components/root/types";
+import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 import type { LocaleCode, LanguageOption } from "@/lib/i18n";
 
 type SettingsOverviewContainerProps = {
-  t: Translate;
-  setGlobalStatus: (status: string) => void;
   availableLanguages: LanguageOption[];
   selectedLanguage: LanguageOption | null;
   uiLanguage: LocaleCode;
@@ -20,13 +19,13 @@ type SettingsOverviewContainerProps = {
 };
 
 export function SettingsOverviewContainer({
-  t,
-  setGlobalStatus,
   availableLanguages,
   selectedLanguage,
   uiLanguage,
   onSelectLanguage,
 }: SettingsOverviewContainerProps) {
+  const setGlobalStatus = useGlobalStatus();
+  const t = useTranslate();
   const client = useClient();
   const [tlsCertPath, setTlsCertPath] = React.useState("");
   const [tlsKeyPath, setTlsKeyPath] = React.useState("");
@@ -82,7 +81,6 @@ export function SettingsOverviewContainer({
 
   return (
     <SettingsOverviewSection
-      t={t}
       availableLanguages={availableLanguages}
       selectedLanguage={selectedLanguage}
       uiLanguage={uiLanguage}
