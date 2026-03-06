@@ -31,7 +31,9 @@ export function SettingsPluginsContainer({
 
   const refreshPlugins = useCallback(async () => {
     try {
-      const { data, error } = await client.query(pluginsQuery, {}).toPromise();
+      const { data, error } = await client
+        .query(pluginsQuery, {}, { requestPolicy: "network-only" })
+        .toPromise();
       if (error) throw error;
       setPlugins(data.plugins || []);
     } catch (error) {
