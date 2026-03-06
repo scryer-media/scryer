@@ -1,15 +1,14 @@
 # syntax=docker/dockerfile:1.7
-FROM rust:1.89 AS rust-base
+FROM rust:alpine AS rust-base
 
 WORKDIR /workspace
 
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
+RUN apk add --no-cache \
       ca-certificates \
-      pkg-config \
-      libssl-dev \
-      libsqlite3-dev \
- && rm -rf /var/lib/apt/lists/* \
+      pkgconf \
+      openssl-dev \
+      sqlite-dev \
+      musl-dev \
  && cargo install --locked cargo-chef
 
 FROM rust-base AS planner
