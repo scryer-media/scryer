@@ -194,7 +194,7 @@ function ProfileListEditor({
         label: optionByValue.get(value) ?? value,
       }))
       .sort((left, right) => sortProfileListChoiceByNumericDesc(left, right));
-  }, [allChoiceValues, sortedAllowedValues, sortedDeniedValues.length, sortedDeniedValues, deniedSet]);
+  }, [allChoiceValues, sortedAllowedValues, deniedSet, optionByValue]);
   const sortedDenied = React.useMemo(
     () =>
       sortedDeniedValues

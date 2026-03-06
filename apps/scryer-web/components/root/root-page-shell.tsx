@@ -236,7 +236,7 @@ function AuthenticatedHomePage() {
       setLanguagePreference(code);
       setGlobalStatus(t("status.languageChanged", { language: getLanguageLabel(code) }));
     },
-    [getLanguageLabel, setLanguagePreference, t],
+    [getLanguageLabel, setLanguagePreference, t, setGlobalStatus],
   );
 
   const [installBannerDismissed, setInstallBannerDismissed] = useState(false);

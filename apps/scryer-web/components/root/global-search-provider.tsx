@@ -25,12 +25,13 @@ export function GlobalSearchProvider({
     onCatalogChanged,
   });
 
+  const { setQueueFacet, setTvdbCandidates, setSearchResults, setSelectedTvdbId } = searchState;
   useEffect(() => {
-    searchState.setQueueFacet(activeFacet);
-    searchState.setTvdbCandidates([]);
-    searchState.setSearchResults([]);
-    searchState.setSelectedTvdbId(null);
-  }, [activeFacet, searchState.setQueueFacet, searchState.setTvdbCandidates, searchState.setSearchResults, searchState.setSelectedTvdbId]);
+    setQueueFacet(activeFacet);
+    setTvdbCandidates([]);
+    setSearchResults([]);
+    setSelectedTvdbId(null);
+  }, [activeFacet, setQueueFacet, setTvdbCandidates, setSearchResults, setSelectedTvdbId]);
 
   return (
     <SearchContext.Provider value={searchState}>

@@ -209,7 +209,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     setMonitorSpecialsForQueue(categoryMonitorSpecials.anime !== "false");
     setInterSeasonMoviesForQueue(categoryInterSeasonMovies.anime !== "false");
     setPreferredSubGroupForQueue(categoryPreferredSubGroup.anime);
-  }, [categoryMonitorSpecials.anime, categoryInterSeasonMovies.anime, categoryPreferredSubGroup.anime]);
+  }, [categoryMonitorSpecials.anime, categoryInterSeasonMovies.anime, categoryPreferredSubGroup.anime, setInterSeasonMoviesForQueue, setMonitorSpecialsForQueue, setPreferredSubGroupForQueue]);
 
   const refreshTitles = React.useCallback(async () => {
     setTitleLoading(true);
@@ -228,7 +228,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     } finally {
       setTitleLoading(false);
     }
-  }, [activeFacet, client, t, titleFilter]);
+  }, [activeFacet, client, t, titleFilter, setMonitoredTitles, setTitleLoading, setTitleStatus]);
 
   React.useEffect(() => {
     if (!catalogChangeSignal) {
@@ -316,7 +316,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         setGlobalStatus(error instanceof Error ? error.message : t("status.queueFailed"));
       }
     },
-    [interSeasonMoviesForQueue, minAvailabilityForQueue, monitorSpecialsForQueue, monitoredForQueue, preferredSubGroupForQueue, queueFacet, refreshTitles, client, setGlobalStatus, t],
+    [interSeasonMoviesForQueue, minAvailabilityForQueue, monitorSpecialsForQueue, monitoredForQueue, preferredSubGroupForQueue, queueFacet, refreshTitles, client, setGlobalStatus, t, seasonFoldersForQueue, setTitleNameForQueue],
   );
 
   const queueFromSearch = React.useCallback(
@@ -403,6 +403,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       setGlobalStatus,
       titleNameForQueue,
       t,
+      seasonFoldersForQueue,
+      setTitleNameForQueue,
     ],
   );
 
@@ -507,12 +509,12 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const requestDeleteTitle = React.useCallback((title: TitleRecord) => {
     setTitleToDelete(title);
     setDeleteFilesOnDisk(false);
-  }, []);
+  }, [setTitleToDelete, setDeleteFilesOnDisk]);
 
   const closeDeleteTitleDialog = React.useCallback(() => {
     setTitleToDelete(null);
     setDeleteFilesOnDisk(false);
-  }, []);
+  }, [setTitleToDelete, setDeleteFilesOnDisk]);
 
   const confirmDeleteTitle = React.useCallback(async () => {
     if (!titleToDelete) {
@@ -550,7 +552,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       });
       closeDeleteTitleDialog();
     }
-  }, [closeDeleteTitleDialog, deleteFilesOnDisk, refreshTitles, client, t, titleToDelete, setGlobalStatus]);
+  }, [closeDeleteTitleDialog, deleteFilesOnDisk, refreshTitles, client, t, titleToDelete, setGlobalStatus, setDeleteTitleLoadingById]);
 
   const handleLibraryScan = React.useCallback(async () => {
     setLibraryScanLoading(true);
@@ -572,13 +574,13 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     } finally {
       setLibraryScanLoading(false);
     }
-  }, [refreshTitles, client, setGlobalStatus, t]);
+  }, [refreshTitles, client, setGlobalStatus, t, setLibraryScanLoading, setLibraryScanSummary]);
 
   React.useEffect(() => {
     if (!titleStatus) {
       setTitleStatus(t("title.noManaged"));
     }
-  }, [t, titleStatus]);
+  }, [t, titleStatus, setTitleStatus]);
 
   React.useEffect(() => {
     if (view !== "movies" && view !== "series" && view !== "anime") {

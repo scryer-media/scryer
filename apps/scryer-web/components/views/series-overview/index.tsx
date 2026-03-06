@@ -326,7 +326,7 @@ export function SeriesOverviewView({
         dispatchEpisodePanel({ type: "SET_INTERSTITIAL_LOADING", collectionId, loading: false });
         dispatchEpisodePanel({ type: "SET_INTERSTITIAL_LOADED", collectionId });
       });
-  }, [title, episodePanel.interstitialMovieMetadataLoadedByCollection, episodePanel.interstitialMovieMetadataLoadingByCollection]);
+  }, [title, episodePanel.interstitialMovieMetadataLoadedByCollection, episodePanel.interstitialMovieMetadataLoadingByCollection, client]);
 
   if (loading) {
     return (
