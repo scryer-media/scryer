@@ -76,6 +76,10 @@ export function SeasonSection({
   interstitialMovieMetadata,
   interstitialMovieMetadataLoaded,
   interstitialMovieMetadataLoading,
+  seasonSearchResults,
+  seasonSearchLoading,
+  onRunSeasonSearch,
+  onQueueFromSeasonSearch,
 }: {
   collection: TitleCollection;
   facet: string;
@@ -102,6 +106,10 @@ export function SeasonSection({
   interstitialMovieMetadata: MetadataTvdbSearchItem | null;
   interstitialMovieMetadataLoaded: boolean;
   interstitialMovieMetadataLoading: boolean;
+  seasonSearchResults?: Release[];
+  seasonSearchLoading?: boolean;
+  onRunSeasonSearch?: () => void;
+  onQueueFromSeasonSearch?: (release: Release) => Promise<void> | void;
 }) {
   const t = useTranslate();
   const Chevron = expanded ? ChevronDown : ChevronRight;
@@ -170,24 +178,51 @@ export function SeasonSection({
             ) : null}
           </div>
         </div>
-        <span className="text-xs text-muted-foreground">
-          {collection.collectionType === "interstitial" ? (
-            <span className="inline-flex items-center gap-1">
-              <Film className="h-3 w-3" />
-              Movie
-            </span>
-          ) : isSpecialsCollection(collection) ? (
-            <span className="inline-flex items-center gap-1">
-              <Star className="h-3 w-3" />
-              {episodes.length} special{episodes.length === 1 ? "" : "s"}
-            </span>
-          ) : (
-            <>
-              {episodes.length} episode
-              {episodes.length === 1 ? "" : "s"}
-            </>
-          )}
-        </span>
+        <div className="flex items-center gap-1">
+          <span className="text-xs text-muted-foreground">
+            {collection.collectionType === "interstitial" ? (
+              <span className="inline-flex items-center gap-1">
+                <Film className="h-3 w-3" />
+                Movie
+              </span>
+            ) : isSpecialsCollection(collection) ? (
+              <span className="inline-flex items-center gap-1">
+                <Star className="h-3 w-3" />
+                {episodes.length} special{episodes.length === 1 ? "" : "s"}
+              </span>
+            ) : (
+              <>
+                {episodes.length} episode
+                {episodes.length === 1 ? "" : "s"}
+              </>
+            )}
+          </span>
+          {onRunSeasonSearch && !isSpecialsCollection(collection) && collection.collectionType !== "interstitial" ? (
+            <HoverCard openDelay={600} closeDelay={75}>
+              <HoverCardTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label={t("series.searchSeason")}
+                  disabled={seasonSearchLoading === true}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRunSeasonSearch();
+                  }}
+                >
+                  {seasonSearchLoading === true ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Search className="h-4 w-4" />
+                  )}
+                </Button>
+              </HoverCardTrigger>
+              <HoverCardContent side="left" className="w-auto p-2 text-xs">
+                {t("help.seasonSearchTooltip")}
+              </HoverCardContent>
+            </HoverCard>
+          ) : null}
+        </div>
       </div>
 
       {expanded ? (
@@ -208,11 +243,22 @@ export function SeasonSection({
               <p>Unable to identify a movie title to look up metadata.</p>
             )}
           </div>
-        ) : episodes.length === 0 ? (
-          <div className="border-t border-border px-4 py-3 text-sm text-muted-foreground">
-            No episode records for this season.
-          </div>
         ) : (
+          <>
+            {seasonSearchResults && seasonSearchResults.length > 0 && onQueueFromSeasonSearch ? (
+              <div className="border-t border-border px-4 py-3">
+                <p className="mb-2 text-xs font-medium text-muted-foreground">Season pack results</p>
+                <SearchResultBuckets
+                  results={seasonSearchResults}
+                  onQueue={onQueueFromSeasonSearch}
+                />
+              </div>
+            ) : null}
+            {episodes.length === 0 ? (
+              <div className="border-t border-border px-4 py-3 text-sm text-muted-foreground">
+                No episode records for this season.
+              </div>
+            ) : (
           <Table>
             <TableHeader>
               <TableRow>
@@ -437,6 +483,8 @@ export function SeasonSection({
               })}
             </TableBody>
           </Table>
+            )}
+          </>
         )
       ) : null}
     </div>
