@@ -1,0 +1,39 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "hevc",
+      "codec_type": "video",
+      "width": 3840,
+      "height": 2160,
+      "bit_rate": "30000000",
+      "bits_per_raw_sample": "10",
+      "color_transfer": "smpte2084",
+      "side_data_list": [
+        { "side_data_type": "DOVI configuration record" },
+        { "side_data_type": "Mastering display metadata" }
+      ],
+      "tags": {}
+    },
+    {
+      "index": 1,
+      "codec_name": "truehd",
+      "codec_type": "audio",
+      "channels": 8,
+      "tags": { "language": "jpn", "title": "TrueHD Atmos 7.1" }
+    },
+    {
+      "index": 2,
+      "codec_name": "truehd",
+      "codec_type": "audio",
+      "channels": 8,
+      "tags": { "language": "eng", "title": "TrueHD Atmos 7.1" }
+    }
+  ],
+  "format": {
+    "filename": "Movie.2024.2160p.BluRay.Remux.HEVC.DV.TrueHD.Atmos.7.1.mkv",
+    "format_name": "matroska,webm",
+    "duration": "7200.000000",
+    "bit_rate": "35000000"
+  }
+}

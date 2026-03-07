@@ -1,4 +1,5 @@
 use crate::{
+    app_usecase_post_processing::{spawn_post_processing, PostProcessingContext},
     nfo::{render_episode_nfo, render_movie_nfo, render_plexmatch, render_tvshow_nfo},
     parse_release_metadata, render_rename_template, require, ActivityChannel, ActivityKind,
     ActivitySeverity, AppError, AppResult, AppUseCase,
@@ -10,6 +11,7 @@ use scryer_domain::{
 use chrono::Utc;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 const SERIES_PATH_KEY: &str = "series.path";
 const RENAME_TEMPLATE_SERIES_GLOBAL_KEY: &str = "rename.template.series.global";
@@ -407,6 +409,22 @@ async fn import_movie_download(
         .import_file(&source_video, &dest_path)
         .await?;
 
+    // Spawn post-processing script (non-blocking)
+    spawn_post_processing(PostProcessingContext {
+        app: app.clone(),
+        actor_id: Some(actor.id.clone()),
+        title_id: title.id.clone(),
+        title_name: title.name.clone(),
+        facet: title.facet.clone(),
+        dest_path: dest_path.clone(),
+        year: title.year,
+        imdb_id: title.external_ids.iter().find(|e| e.source == "imdb").map(|e| e.value.clone()),
+        tvdb_id: title.external_ids.iter().find(|e| e.source == "tvdb").map(|e| e.value.clone()),
+        season: None,
+        episode: None,
+        quality: parsed.quality.clone(),
+    });
+
     // Write NFO sidecar (non-fatal, opt-in)
     {
         let nfo_enabled = app
@@ -432,7 +450,7 @@ async fn import_movie_download(
 
     // Record media file
     let quality_label = parsed.quality.clone();
-    if let Err(err) = app
+    let media_file_id = match app
         .services
         .media_files
         .insert_media_file(
@@ -443,12 +461,20 @@ async fn import_movie_download(
         )
         .await
     {
-        tracing::warn!(
-            error = %err,
-            title_id = %title.id,
-            dest_path = %dest_path.display(),
-            "failed to insert media_files record (import will still succeed)"
-        );
+        Ok(id) => Some(id),
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                title_id = %title.id,
+                dest_path = %dest_path.display(),
+                "failed to insert media_files record (import will still succeed)"
+            );
+            None
+        }
+    };
+
+    if let Some(ref file_id) = media_file_id {
+        spawn_media_analysis(app, file_id.clone(), dest_path.clone(), title.id.clone());
     }
 
     // Create collection record (so the movie overview UI can show the file)
@@ -763,6 +789,22 @@ async fn import_single_episode_file(
         .import_file(source_video, &dest_path)
         .await?;
 
+    // Spawn post-processing script (non-blocking)
+    spawn_post_processing(PostProcessingContext {
+        app: app.clone(),
+        actor_id: None,
+        title_id: title.id.clone(),
+        title_name: title.name.clone(),
+        facet: title.facet.clone(),
+        dest_path: dest_path.clone(),
+        year: title.year,
+        imdb_id: title.external_ids.iter().find(|e| e.source == "imdb").map(|e| e.value.clone()),
+        tvdb_id: title.external_ids.iter().find(|e| e.source == "tvdb").map(|e| e.value.clone()),
+        season: Some(season),
+        episode: ep_meta.episode_numbers.first().copied().map(|n| n as u32),
+        quality: parsed.quality.clone(),
+    });
+
     // Write episode NFO sidecar (non-fatal, opt-in)
     if nfo_enabled {
         let nfo_path = dest_path.with_extension("nfo");
@@ -807,6 +849,8 @@ async fn import_single_episode_file(
             quality_label,
         )
         .await?;
+
+    spawn_media_analysis(app, media_file_id.clone(), dest_path.clone(), title.id.clone());
 
     // Link to ALL matching episodes (supports multi-episode files like S01E01E02)
     let mut linked = false;
@@ -1459,6 +1503,127 @@ pub async fn execute_manual_import(
         .await?;
 
     Ok(results)
+}
+
+// ---------------------------------------------------------------------------
+// Post-import media analysis (background, non-blocking)
+// ---------------------------------------------------------------------------
+
+/// Spawns a background task to run ffprobe on an imported file.
+/// Does not block the import response — failures are logged, not propagated.
+fn spawn_media_analysis(
+    app: &AppUseCase,
+    file_id: String,
+    path: PathBuf,
+    title_id: String,
+) {
+    let media_files = Arc::clone(&app.services.media_files);
+    let wanted_items = Arc::clone(&app.services.wanted_items);
+    let release_attempts = Arc::clone(&app.services.release_attempts);
+    tokio::spawn(async move {
+        run_media_analysis(media_files, wanted_items, release_attempts, file_id, path, title_id)
+            .await;
+    });
+}
+
+async fn run_media_analysis(
+    media_files: Arc<dyn crate::MediaFileRepository>,
+    wanted_items: Arc<dyn crate::WantedItemRepository>,
+    release_attempts: Arc<dyn crate::ReleaseAttemptRepository>,
+    file_id: String,
+    path: PathBuf,
+    title_id: String,
+) {
+    let Some(ffprobe_path) = scryer_mediainfo::locate_ffprobe() else {
+        tracing::debug!("ffprobe not found alongside binary, skipping media analysis");
+        return;
+    };
+
+    let analysis = match scryer_mediainfo::analyze_file(&ffprobe_path, &path).await {
+        Ok(a) => a,
+        Err(err) => {
+            tracing::warn!(error = %err, file_id = %file_id, "ffprobe analysis failed");
+            let _ = media_files.mark_scan_failed(&file_id, &err.to_string()).await;
+            return;
+        }
+    };
+
+    if !scryer_mediainfo::is_valid_video(&analysis) {
+        tracing::warn!(
+            path = %path.display(),
+            file_id = %file_id,
+            "imported file is not a valid video — deleting and blocklisting"
+        );
+
+        // Delete from disk
+        if let Err(err) = tokio::fs::remove_file(&path).await {
+            tracing::warn!(error = %err, path = %path.display(), "failed to delete invalid file from disk");
+        }
+
+        // Extract the grabbed release title from the wanted item so we can blocklist it
+        let release_title = wanted_items
+            .get_wanted_item_for_title(&title_id, None)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|w| w.grabbed_release)
+            .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+            .and_then(|v| v["title"].as_str().map(str::to_owned));
+
+        let _ = release_attempts
+            .record_release_attempt(
+                Some(title_id.clone()),
+                None,
+                release_title,
+                crate::ReleaseDownloadAttemptOutcome::Failed,
+                Some("imported file is not a valid video".to_string()),
+                None,
+            )
+            .await;
+
+        // Delete the media_files DB record
+        let _ = media_files.delete_media_file(&file_id).await;
+
+        // Reset the wanted item so it re-searches
+        if let Ok(Some(item)) = wanted_items.get_wanted_item_for_title(&title_id, None).await {
+            let _ = wanted_items
+                .update_wanted_item_status(
+                    &item.id,
+                    "wanted",
+                    None,
+                    None,
+                    item.search_count,
+                    None,
+                    None,
+                )
+                .await;
+        }
+
+        return;
+    }
+
+    // Store analysis results on the media file record
+    let dto = crate::MediaFileAnalysis {
+        video_codec: analysis.video_codec,
+        video_width: analysis.video_width,
+        video_height: analysis.video_height,
+        video_bitrate_kbps: analysis.video_bitrate_kbps,
+        video_bit_depth: analysis.video_bit_depth,
+        video_hdr_format: analysis.video_hdr_format,
+        audio_codec: analysis.audio_codec,
+        audio_channels: analysis.audio_channels,
+        audio_languages: analysis.audio_languages,
+        subtitle_languages: analysis.subtitle_languages,
+        has_multiaudio: analysis.has_multiaudio,
+        duration_seconds: analysis.duration_seconds,
+        container_format: analysis.container_format,
+        raw_json: analysis.raw_json,
+    };
+
+    if let Err(err) = media_files.update_media_file_analysis(&file_id, dto).await {
+        tracing::warn!(error = %err, file_id = %file_id, "failed to store media analysis");
+        let _ = media_files.mark_scan_failed(&file_id, &err.to_string()).await;
+    }
 }
 
 #[cfg(test)]

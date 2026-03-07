@@ -3352,6 +3352,7 @@ dependencies = [
  "rand_core 0.6.4",
  "reqwest",
  "scryer-domain",
+ "scryer-mediainfo",
  "scryer-rules",
  "semver",
  "serde",
@@ -3409,6 +3410,17 @@ dependencies = [
  "scryer-infrastructure",
  "serde",
  "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "scryer-mediainfo"
+version = "0.0.4"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
  "tokio",
  "tracing",
 ]

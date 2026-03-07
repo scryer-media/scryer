@@ -1,0 +1,28 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "h264",
+      "codec_type": "video",
+      "width": 1920,
+      "height": 1080,
+      "bit_rate": "4000000",
+      "bits_per_raw_sample": "8",
+      "color_transfer": "bt709",
+      "tags": {}
+    },
+    {
+      "index": 1,
+      "codec_name": "aac",
+      "codec_type": "audio",
+      "channels": 2,
+      "tags": { "language": "eng" }
+    }
+  ],
+  "format": {
+    "filename": "Movie.2024.1080p.WEB-DL.H.264.AAC.mkv",
+    "format_name": "matroska,webm",
+    "duration": "5400.123456",
+    "bit_rate": "4200000"
+  }
+}

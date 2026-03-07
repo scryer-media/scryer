@@ -1,0 +1,28 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "h264",
+      "codec_type": "video",
+      "width": 1280,
+      "height": 720,
+      "bit_rate": "2000000",
+      "bits_per_raw_sample": "8",
+      "color_transfer": "bt709",
+      "tags": {}
+    },
+    {
+      "index": 1,
+      "codec_name": "aac",
+      "codec_type": "audio",
+      "channels": 2,
+      "tags": {}
+    }
+  ],
+  "format": {
+    "filename": "Movie.720p.mkv",
+    "format_name": "matroska,webm",
+    "duration": "3600.000000",
+    "bit_rate": "2200000"
+  }
+}

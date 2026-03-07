@@ -1,0 +1,41 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "hevc",
+      "codec_type": "video",
+      "width": 1920,
+      "height": 1080,
+      "bit_rate": "5000000",
+      "bits_per_raw_sample": "10",
+      "color_transfer": "bt709",
+      "tags": {}
+    },
+    {
+      "index": 1,
+      "codec_name": "flac",
+      "codec_type": "audio",
+      "channels": 2,
+      "tags": { "language": "jpn", "title": "Japanese" }
+    },
+    {
+      "index": 2,
+      "codec_name": "aac",
+      "codec_type": "audio",
+      "channels": 2,
+      "tags": { "language": "eng", "title": "English" }
+    },
+    {
+      "index": 3,
+      "codec_name": "subrip",
+      "codec_type": "subtitle",
+      "tags": { "language": "eng", "title": "English" }
+    }
+  ],
+  "format": {
+    "filename": "Anime.S01E01.1080p.Dual.Audio.HEVC.mkv",
+    "format_name": "matroska,webm",
+    "duration": "1440.000000",
+    "bit_rate": "5200000"
+  }
+}

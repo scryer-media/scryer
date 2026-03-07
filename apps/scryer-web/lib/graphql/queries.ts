@@ -590,6 +590,11 @@ export const acquisitionSettingsQuery = `query AcquisitionSettings {
   }
 }`;
 
+export const postProcessingSettingsQuery = `query PostProcessingSettings {
+  postProcessingSettings: adminSettings(scope: "system", category: "post_processing") {${adminSettingsFieldSelection}
+  }
+}`;
+
 // Batched query for download client routing: 2 requests → 1
 export const downloadClientRoutingInitQuery = `query DownloadClientRoutingInit($scopeId: String!) {
   downloadClientConfigs {${downloadClientFieldSelection}

@@ -207,6 +207,7 @@ fn test_input() -> scryer_rules::UserRuleInput {
             blocked: false,
             codes: vec!["quality_tier_0".to_string(), "source_webdl".to_string()],
         },
+        file: None,
     }
 }
 

@@ -449,6 +449,16 @@ pub(crate) fn from_title_media_file(file: scryer_application::TitleMediaFile) ->
         quality_label: file.quality_label,
         scan_status: file.scan_status,
         created_at: file.created_at,
+        video_codec: file.video_codec,
+        video_width: file.video_width,
+        video_height: file.video_height,
+        video_hdr_format: file.video_hdr_format,
+        audio_codec: file.audio_codec,
+        audio_channels: file.audio_channels,
+        audio_languages: file.audio_languages,
+        subtitle_languages: file.subtitle_languages,
+        has_multiaudio: file.has_multiaudio,
+        duration_seconds: file.duration_seconds,
     }
 }
 

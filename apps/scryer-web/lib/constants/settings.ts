@@ -84,6 +84,7 @@ export const SETTINGS_SECTION_PATH_TO_ID: Record<string, SettingsSection> = {
   acquisition: "acquisition",
   rules: "rules",
   plugins: "plugins",
+  "post-processing": "post-processing",
 };
 
 export const CONTENT_SECTION_PATH_TO_ID: Record<string, ContentSettingsSection> = {

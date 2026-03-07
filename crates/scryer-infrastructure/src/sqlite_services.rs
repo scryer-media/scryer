@@ -661,6 +661,57 @@ impl SqliteServices {
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
+    pub async fn update_media_file_analysis(
+        &self,
+        file_id: &str,
+        analysis: scryer_application::MediaFileAnalysis,
+    ) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::UpdateMediaFileAnalysis {
+                file_id: file_id.to_string(),
+                analysis: Box::new(analysis),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn mark_scan_failed(&self, file_id: &str, error: &str) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::MarkMediaFileScanFailed {
+                file_id: file_id.to_string(),
+                error: error.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn delete_media_file(&self, file_id: &str) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::DeleteMediaFile {
+                file_id: file_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
     pub async fn find_episode_by_title_and_numbers(
         &self,
         title_id: &str,
