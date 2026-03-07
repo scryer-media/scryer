@@ -42,6 +42,25 @@ pub struct TitleMediaFile {
     pub quality_label: Option<String>,
     pub scan_status: String,
     pub created_at: String,
+    // Media analysis fields (populated after ffprobe scan; None until scan_status='scanned')
+    pub video_codec: Option<String>,
+    pub video_width: Option<i32>,
+    pub video_height: Option<i32>,
+    pub video_bitrate_kbps: Option<i32>,
+    pub video_bit_depth: Option<i32>,
+    pub video_hdr_format: Option<String>,
+    pub video_frame_rate: Option<String>,
+    pub video_profile: Option<String>,
+    pub audio_codec: Option<String>,
+    pub audio_channels: Option<i32>,
+    pub audio_bitrate_kbps: Option<i32>,
+    pub audio_languages: Vec<String>,
+    pub audio_streams: Vec<crate::AudioStreamDetail>,
+    pub subtitle_languages: Vec<String>,
+    pub subtitle_codecs: Vec<String>,
+    pub has_multiaudio: bool,
+    pub duration_seconds: Option<i32>,
+    pub container_format: Option<String>,
 }
 
 #[derive(Clone, Debug)]

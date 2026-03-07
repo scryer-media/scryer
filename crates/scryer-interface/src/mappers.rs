@@ -9,6 +9,7 @@ use scryer_domain::{
     Collection, DownloadClientConfig, Episode, HistoryEvent, IndexerConfig, Title, User,
 };
 use scryer_infrastructure::{SettingsValueRecord, WorkflowOperationRecord};
+use scryer_rules;
 use std::fs;
 
 use crate::types::*;
@@ -449,6 +450,33 @@ pub(crate) fn from_title_media_file(file: scryer_application::TitleMediaFile) ->
         quality_label: file.quality_label,
         scan_status: file.scan_status,
         created_at: file.created_at,
+        video_codec: file.video_codec,
+        video_width: file.video_width,
+        video_height: file.video_height,
+        video_bitrate_kbps: file.video_bitrate_kbps,
+        video_bit_depth: file.video_bit_depth,
+        video_hdr_format: file.video_hdr_format,
+        video_frame_rate: file.video_frame_rate,
+        video_profile: file.video_profile,
+        audio_codec: file.audio_codec,
+        audio_channels: file.audio_channels,
+        audio_bitrate_kbps: file.audio_bitrate_kbps,
+        audio_languages: file.audio_languages,
+        audio_streams: file
+            .audio_streams
+            .into_iter()
+            .map(|s| crate::types::AudioStreamDetailPayload {
+                codec: s.codec,
+                channels: s.channels,
+                language: s.language,
+                bitrate_kbps: s.bitrate_kbps,
+            })
+            .collect(),
+        subtitle_languages: file.subtitle_languages,
+        subtitle_codecs: file.subtitle_codecs,
+        has_multiaudio: file.has_multiaudio,
+        duration_seconds: file.duration_seconds,
+        container_format: file.container_format,
     }
 }
 
@@ -642,7 +670,7 @@ pub(crate) fn from_rule_set(rs: RuleSet) -> RuleSetPayload {
         id: rs.id,
         name: rs.name,
         description: rs.description,
-        rego_source: rs.rego_source,
+        rego_source: scryer_rules::strip_editor_source(&rs.rego_source),
         enabled: rs.enabled,
         priority: rs.priority,
         applied_facets: rs

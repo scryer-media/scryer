@@ -959,6 +959,22 @@ impl MediaFileRepository for SqliteServices {
     ) -> AppResult<Vec<TitleMediaFile>> {
         self.list_media_files_for_title(title_id).await
     }
+
+    async fn update_media_file_analysis(
+        &self,
+        file_id: &str,
+        analysis: scryer_application::MediaFileAnalysis,
+    ) -> AppResult<()> {
+        self.update_media_file_analysis(file_id, analysis).await
+    }
+
+    async fn mark_scan_failed(&self, file_id: &str, error: &str) -> AppResult<()> {
+        self.mark_scan_failed(file_id, error).await
+    }
+
+    async fn delete_media_file(&self, file_id: &str) -> AppResult<()> {
+        self.delete_media_file(file_id).await
+    }
 }
 
 #[async_trait]

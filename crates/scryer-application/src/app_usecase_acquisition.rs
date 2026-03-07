@@ -472,6 +472,19 @@ async fn process_single_wanted_item(
         "background acquisition: evaluating candidates"
     );
 
+    // Load DB-level blocklist (covers post-import failures like fake/non-video files,
+    // in addition to the download-client snapshot checked below).
+    let db_blocklist: std::collections::HashSet<String> = app
+        .services
+        .release_attempts
+        .list_failed_release_signatures_for_title(&title.id, 200)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|e| e.source_title)
+        .map(|t| t.to_ascii_lowercase())
+        .collect();
+
     let mut selected_candidate: Option<&IndexerSearchResult> = None;
     let mut had_allowed_candidate = false;
     let mut skipped_for_failed = false;
@@ -524,6 +537,16 @@ async fn process_single_wanted_item(
                 )
                 .await;
 
+            skipped_for_failed = true;
+            continue;
+        }
+
+        if db_blocklist.contains(&candidate.title.to_ascii_lowercase()) {
+            warn!(
+                title = title.name.as_str(),
+                release = candidate.title.as_str(),
+                "skipping DB-blocklisted release"
+            );
             skipped_for_failed = true;
             continue;
         }

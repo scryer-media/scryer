@@ -77,6 +77,22 @@ impl MediaFileRepository for NullMediaFileRepository {
     ) -> AppResult<Vec<TitleMediaFile>> {
         Err(AppError::Repository("media file repository is not configured".to_string()))
     }
+
+    async fn update_media_file_analysis(
+        &self,
+        _file_id: &str,
+        _analysis: crate::MediaFileAnalysis,
+    ) -> AppResult<()> {
+        Err(AppError::Repository("media file repository is not configured".to_string()))
+    }
+
+    async fn mark_scan_failed(&self, _file_id: &str, _error: &str) -> AppResult<()> {
+        Err(AppError::Repository("media file repository is not configured".to_string()))
+    }
+
+    async fn delete_media_file(&self, _file_id: &str) -> AppResult<()> {
+        Err(AppError::Repository("media file repository is not configured".to_string()))
+    }
 }
 
 #[derive(Default)]

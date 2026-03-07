@@ -304,3 +304,61 @@ fn find_video_files_recurses_into_subdirs() {
     let files = find_video_files(dir.path(), false).expect("find");
     assert_eq!(files.len(), 2);
 }
+
+// ── missing_audio_languages ───────────────────────────────────────────────────
+
+#[test]
+fn missing_audio_languages_all_present() {
+    let required = vec!["JPN".to_string(), "ENG".to_string()];
+    let actual = vec!["jpn".to_string(), "eng".to_string()];
+    assert!(missing_audio_languages(&required, &actual).is_empty());
+}
+
+#[test]
+fn missing_audio_languages_case_normalization() {
+    // ffprobe emits lowercase codes; profile stores uppercase
+    let required = vec!["JPN".to_string()];
+    let actual = vec!["jpn".to_string()];
+    assert!(missing_audio_languages(&required, &actual).is_empty());
+}
+
+#[test]
+fn missing_audio_languages_one_missing() {
+    let required = vec!["JPN".to_string(), "ENG".to_string()];
+    let actual = vec!["eng".to_string()];
+    let missing = missing_audio_languages(&required, &actual);
+    assert_eq!(missing, vec!["JPN"]);
+}
+
+#[test]
+fn missing_audio_languages_all_missing() {
+    let required = vec!["JPN".to_string()];
+    let actual = vec!["eng".to_string(), "spa".to_string()];
+    let missing = missing_audio_languages(&required, &actual);
+    assert_eq!(missing, vec!["JPN"]);
+}
+
+#[test]
+fn missing_audio_languages_empty_required_always_passes() {
+    let required: Vec<String> = vec![];
+    let actual = vec!["eng".to_string()];
+    assert!(missing_audio_languages(&required, &actual).is_empty());
+}
+
+#[test]
+fn missing_audio_languages_empty_actual_returns_all_required() {
+    let required = vec!["JPN".to_string(), "ENG".to_string()];
+    let actual: Vec<String> = vec![];
+    let missing = missing_audio_languages(&required, &actual);
+    assert_eq!(missing.len(), 2);
+}
+
+// ── facet_to_category_hint ────────────────────────────────────────────────────
+
+#[test]
+fn facet_to_category_hint_values() {
+    assert_eq!(facet_to_category_hint(&MediaFacet::Movie), "movie");
+    assert_eq!(facet_to_category_hint(&MediaFacet::Tv), "tv");
+    assert_eq!(facet_to_category_hint(&MediaFacet::Anime), "anime");
+    assert_eq!(facet_to_category_hint(&MediaFacet::Other), "other");
+}

@@ -1,4 +1,4 @@
-export type ViewId = "movies" | "series" | "anime" | "activity" | "wanted" | "settings" | "system";
+export type ViewId = "movies" | "series" | "anime" | "activity" | "wanted" | "history" | "settings" | "system";
 export type SettingsSection =
   | "profile"
   | "general"
@@ -8,7 +8,8 @@ export type SettingsSection =
   | "qualityProfiles"
   | "acquisition"
   | "rules"
-  | "plugins";
+  | "plugins"
+  | "post-processing";
 export type ContentSettingsSection = "overview" | "settings";
 
 export type Translate = (

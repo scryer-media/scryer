@@ -38,6 +38,11 @@ pub(crate) const RENAME_MISSING_METADATA_POLICY_MOVIE_GLOBAL_KEY: &str =
     "rename.missing_metadata_policy.movie.global";
 pub(crate) const QUALITY_PROFILE_INHERIT_VALUE: &str = "__inherit__";
 pub(crate) const SETTINGS_CATEGORY_ACQUISITION: &str = "acquisition";
+pub(crate) const SETTINGS_CATEGORY_POST_PROCESSING: &str = "post_processing";
+pub(crate) const POST_PROCESSING_SCRIPT_MOVIE_KEY:  &str = "post_processing.script.movie";
+pub(crate) const POST_PROCESSING_SCRIPT_SERIES_KEY: &str = "post_processing.script.series";
+pub(crate) const POST_PROCESSING_SCRIPT_ANIME_KEY:  &str = "post_processing.script.anime";
+pub(crate) const POST_PROCESSING_TIMEOUT_KEY:       &str = "post_processing.timeout_secs";
 
 #[derive(Debug)]
 pub(crate) struct ServiceSettingSeed {
@@ -471,6 +476,39 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             key_name: "plexmatch.write_on_import.anime",
             data_type: "boolean",
             default_value_json: "\"false\"",
+            is_sensitive: false,
+        },
+        // Post-processing scripts
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_POST_PROCESSING,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: POST_PROCESSING_SCRIPT_MOVIE_KEY,
+            data_type: "string",
+            default_value_json: "\"\"",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_POST_PROCESSING,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: POST_PROCESSING_SCRIPT_SERIES_KEY,
+            data_type: "string",
+            default_value_json: "\"\"",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_POST_PROCESSING,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: POST_PROCESSING_SCRIPT_ANIME_KEY,
+            data_type: "string",
+            default_value_json: "\"\"",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_POST_PROCESSING,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: POST_PROCESSING_TIMEOUT_KEY,
+            data_type: "number",
+            default_value_json: "1800",
             is_sensitive: false,
         },
     ]

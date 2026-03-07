@@ -5,6 +5,7 @@ import {
   adminSettingsQuery,
   mediaRenamePreviewQuery,
   searchQuery,
+  titleMediaFilesQuery,
   titleOverviewInitQuery,
 } from "@/lib/graphql/queries";
 import {
@@ -80,6 +81,35 @@ export type TitleReleaseBlocklistEntry = {
   attemptedAt: string;
 };
 
+export type TitleMediaFile = {
+  id: string;
+  titleId: string;
+  episodeId: string | null;
+  filePath: string;
+  sizeBytes: string;
+  qualityLabel: string | null;
+  scanStatus: string;
+  createdAt: string;
+  videoCodec: string | null;
+  videoWidth: number | null;
+  videoHeight: number | null;
+  videoBitrateKbps: number | null;
+  videoBitDepth: number | null;
+  videoHdrFormat: string | null;
+  videoFrameRate: string | null;
+  videoProfile: string | null;
+  audioCodec: string | null;
+  audioChannels: number | null;
+  audioBitrateKbps: number | null;
+  audioLanguages: string[];
+  audioStreams: { codec: string | null; channels: number | null; language: string | null; bitrateKbps: number | null }[];
+  subtitleLanguages: string[];
+  subtitleCodecs: string[];
+  hasMultiaudio: boolean;
+  durationSeconds: number | null;
+  containerFormat: string | null;
+};
+
 export type MediaRenamePlanItem = {
   collectionId: string | null;
   currentPath: string;
@@ -146,14 +176,19 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
   const [titleLookupFailed, setTitleLookupFailed] = React.useState(false);
   const [qualityProfiles, setQualityProfiles] = React.useState<{ id: string; name: string }[]>([]);
   const [defaultRootFolder, setDefaultRootFolder] = React.useState(DEFAULT_MOVIE_LIBRARY_PATH);
+  const [mediaFiles, setMediaFiles] = React.useState<TitleMediaFile[]>([]);
 
   const refreshTitleDetail = React.useCallback(async () => {
-    const { data, error } = await client.query(titleOverviewInitQuery, { id: titleId, blocklistLimit: 200 }).toPromise();
-    if (error) throw error;
-    setTitle(data.title ?? null);
-    setCollections(data.titleCollections ?? []);
-    setEvents(data.titleEvents ?? []);
-    setBlocklistEntries(data.titleReleaseBlocklist ?? []);
+    const [titleResult, mediaResult] = await Promise.all([
+      client.query(titleOverviewInitQuery, { id: titleId, blocklistLimit: 200 }).toPromise(),
+      client.query(titleMediaFilesQuery, { titleId }).toPromise(),
+    ]);
+    if (titleResult.error) throw titleResult.error;
+    setTitle(titleResult.data.title ?? null);
+    setCollections(titleResult.data.titleCollections ?? []);
+    setEvents(titleResult.data.titleEvents ?? []);
+    setBlocklistEntries(titleResult.data.titleReleaseBlocklist ?? []);
+    setMediaFiles(mediaResult.data?.titleMediaFiles ?? []);
     setRenamePlan(null);
   }, [titleId, client]);
 
@@ -167,6 +202,7 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
       setEvents([]);
       setBlocklistEntries([]);
       setSearchResults([]);
+      setMediaFiles([]);
       setRenamePlan(null);
       setRenamePreviewing(false);
       setRenameApplying(false);
@@ -440,6 +476,7 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
       defaultRootFolder={defaultRootFolder}
       onUpdateTitleTags={handleUpdateTitleTags}
       blocklistEntries={blocklistEntries}
+      mediaFiles={mediaFiles}
     />
   );
 });

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState, useCallback, useMemo } from "react";
-import { ActivitySquare, Clapperboard, Film, ListChecks, MonitorCog, Settings, Tv } from "lucide-react";
+import { ActivitySquare, Clapperboard, Film, History, ListChecks, MonitorCog, Settings, Tv } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { RootHeader } from "@/components/root/root-header";
 import { RootSidebar } from "@/components/root/root-sidebar";
@@ -24,6 +24,7 @@ const TOP_NAV_IDS: ViewId[] = [
   "anime",
   "activity",
   "wanted",
+  "history",
   "settings",
   "system",
 ];
@@ -34,6 +35,7 @@ const TOP_NAV_ICONS: Record<ViewId, typeof Film> = {
   anime: Clapperboard,
   activity: ActivitySquare,
   wanted: ListChecks,
+  history: History,
   settings: Settings,
   system: MonitorCog,
 };

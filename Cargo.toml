@@ -8,6 +8,7 @@ members = [
     "crates/scryer-plugins",
     "crates/scryer",
     "crates/scryer-mock-apis",
+    "crates/scryer-mediainfo",
 ]
 exclude = ["test-plugins/test-indexer"]
 resolver = "2"

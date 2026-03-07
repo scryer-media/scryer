@@ -1,0 +1,32 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "av1",
+      "codec_type": "video",
+      "width": 3840,
+      "height": 2160,
+      "bit_rate": "10000000",
+      "bits_per_raw_sample": "10",
+      "color_transfer": "smpte2084",
+      "side_data_list": [
+        { "side_data_type": "Mastering display metadata" },
+        { "side_data_type": "Content light level metadata" }
+      ],
+      "tags": {}
+    },
+    {
+      "index": 1,
+      "codec_name": "flac",
+      "codec_type": "audio",
+      "channels": 6,
+      "tags": { "language": "eng" }
+    }
+  ],
+  "format": {
+    "filename": "Movie.2024.2160p.BluRay.AV1.HDR10.FLAC.mkv",
+    "format_name": "matroska,webm",
+    "duration": "6900.000000",
+    "bit_rate": "10500000"
+  }
+}

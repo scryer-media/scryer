@@ -304,6 +304,29 @@ export const titleMediaFilesQuery = `query TitleMediaFiles($titleId: String!) {
     qualityLabel
     scanStatus
     createdAt
+    videoCodec
+    videoWidth
+    videoHeight
+    videoBitrateKbps
+    videoBitDepth
+    videoHdrFormat
+    videoFrameRate
+    videoProfile
+    audioCodec
+    audioChannels
+    audioBitrateKbps
+    audioLanguages
+    audioStreams {
+      codec
+      channels
+      language
+      bitrateKbps
+    }
+    subtitleLanguages
+    subtitleCodecs
+    hasMultiaudio
+    durationSeconds
+    containerFormat
   }
 }`;
 
@@ -587,6 +610,11 @@ export const tlsSettingsQuery = `query TlsSettings {
 // Acquisition settings query
 export const acquisitionSettingsQuery = `query AcquisitionSettings {
   acquisitionSettings: adminSettings(scope: "system", category: "acquisition") {${adminSettingsFieldSelection}
+  }
+}`;
+
+export const postProcessingSettingsQuery = `query PostProcessingSettings {
+  postProcessingSettings: adminSettings(scope: "system", category: "post_processing") {${adminSettingsFieldSelection}
   }
 }`;
 

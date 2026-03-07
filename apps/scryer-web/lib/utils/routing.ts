@@ -16,6 +16,7 @@ export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
   acquisition: "acquisition",
   rules: "rules",
   plugins: "plugins",
+  "post-processing": "post-processing",
 };
 
 export const CONTENT_SECTION_PATH: Record<ContentSettingsSection, string> = {

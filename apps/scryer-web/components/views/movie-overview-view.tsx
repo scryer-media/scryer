@@ -28,7 +28,9 @@ import type {
   TitleDetail,
   TitleCollection,
   TitleEvent,
+  TitleMediaFile,
 } from "@/components/containers/movie-overview-container";
+import { MediaInfoBadges } from "@/components/common/media-info-badges";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -267,6 +269,7 @@ type Props = {
   defaultRootFolder: string;
   onUpdateTitleTags: (newTags: string[]) => Promise<void>;
   blocklistEntries: TitleReleaseBlocklistEntry[];
+  mediaFiles: TitleMediaFile[];
 };
 
 export function MovieOverviewView({
@@ -289,6 +292,7 @@ export function MovieOverviewView({
   defaultRootFolder,
   onUpdateTitleTags,
   blocklistEntries,
+  mediaFiles,
 }: Props) {
   const t = useTranslate();
   if (loading) {
@@ -479,22 +483,24 @@ export function MovieOverviewView({
             <div className="space-y-2">
               {collections.map((col) => {
                 const qualityHint = col.label ?? col.collectionIndex ?? null;
+                const mediaFile = mediaFiles.find((f) => f.filePath === col.orderedPath) ?? null;
                 return (
                   <div key={col.id} className="rounded-lg border border-border p-3">
                     <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
+                      <div className="min-w-0 space-y-1.5">
                         {col.orderedPath ? (
                           <p className="truncate font-mono text-xs text-muted-foreground">{col.orderedPath}</p>
                         ) : (
                           <p className="text-sm text-muted-foreground">Path not recorded</p>
                         )}
-                        <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                        <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
                           <span className="capitalize">{col.collectionType}</span>
                           {qualityHint ? (
                             <span className="rounded bg-accent px-1 py-0.5 text-card-foreground">{qualityHint}</span>
                           ) : null}
                           <span className="text-muted-foreground/60">Added {formatDate(col.createdAt)}</span>
                         </div>
+                        {mediaFile ? <MediaInfoBadges file={mediaFile} /> : null}
                       </div>
                     </div>
                   </div>

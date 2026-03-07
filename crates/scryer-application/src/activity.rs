@@ -19,6 +19,7 @@ pub enum ActivityKind {
     AcquisitionCandidateAccepted,
     AcquisitionCandidateRejected,
     AcquisitionDownloadFailed,
+    PostProcessingCompleted,
     #[default]
     SystemNotice,
 }
@@ -73,6 +74,7 @@ impl ActivityKind {
             Self::AcquisitionCandidateAccepted => "acquisition_candidate_accepted",
             Self::AcquisitionCandidateRejected => "acquisition_candidate_rejected",
             Self::AcquisitionDownloadFailed => "acquisition_download_failed",
+            Self::PostProcessingCompleted => "post_processing_completed",
             Self::SystemNotice => "system_notice",
         }
     }

@@ -375,6 +375,20 @@ pub(crate) enum DbCommand {
         title_id: String,
         reply: Sender<AppResult<Vec<scryer_application::TitleMediaFile>>>,
     },
+    UpdateMediaFileAnalysis {
+        file_id: String,
+        analysis: Box<scryer_application::MediaFileAnalysis>,
+        reply: Sender<AppResult<()>>,
+    },
+    MarkMediaFileScanFailed {
+        file_id: String,
+        error: String,
+        reply: Sender<AppResult<()>>,
+    },
+    DeleteMediaFile {
+        file_id: String,
+        reply: Sender<AppResult<()>>,
+    },
     FindEpisodeByTitleAndNumbers {
         title_id: String,
         season_number: String,
@@ -1115,6 +1129,28 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                             &pool, &title_id,
                         )
                         .await,
+                    );
+                }
+                DbCommand::UpdateMediaFileAnalysis { file_id, analysis, reply } => {
+                    let _ = reply.send(
+                        crate::queries::media_file::update_media_file_analysis_query(
+                            &pool, &file_id, &analysis,
+                        )
+                        .await,
+                    );
+                }
+                DbCommand::MarkMediaFileScanFailed { file_id, error, reply } => {
+                    let _ = reply.send(
+                        crate::queries::media_file::mark_scan_failed_query(
+                            &pool, &file_id, &error,
+                        )
+                        .await,
+                    );
+                }
+                DbCommand::DeleteMediaFile { file_id, reply } => {
+                    let _ = reply.send(
+                        crate::queries::media_file::delete_media_file_query(&pool, &file_id)
+                            .await,
                     );
                 }
                 DbCommand::FindEpisodeByTitleAndNumbers {

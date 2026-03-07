@@ -33,13 +33,49 @@ pub struct UserPolicy {
     pub applied_facets: Vec<String>,
 }
 
+/// Score delta at or below this value is treated as a hard block.
+/// Matches `scryer.block_score()` builtin which returns -10000.
+pub const BLOCK_SCORE_THRESHOLD: i32 = -9000;
+
 /// Input document set per-release for user rule evaluation.
+///
+/// `file` is `None` during pre-download search scoring (no file on disk yet).
+/// It is populated during post-download evaluation after ffprobe runs on the
+/// actual imported file. Rules that reference `input.file` fields are no-ops
+/// during pre-download because `input.file` serializes as `null` and field
+/// access on `null` evaluates to `undefined` in Rego.
 #[derive(Debug, Clone, Serialize)]
 pub struct UserRuleInput {
     pub release: ReleaseDoc,
     pub profile: ProfileDoc,
     pub context: ContextDoc,
     pub builtin_score: BuiltinScoreDoc,
+    /// Actual file properties from ffprobe. Null during pre-download scoring.
+    pub file: Option<FileDoc>,
+}
+
+/// Ground-truth file properties extracted by ffprobe after download.
+/// Available as `input.file` in Rego during post-download evaluation.
+#[derive(Debug, Clone, Serialize)]
+pub struct FileDoc {
+    /// Video stream codec name (e.g. "hevc", "av1", "h264").
+    pub video_codec: Option<String>,
+    pub video_width: Option<i32>,
+    pub video_height: Option<i32>,
+    pub video_bitrate_kbps: Option<i32>,
+    pub video_bit_depth: Option<i32>,
+    /// e.g. "Dolby Vision", "HDR10", "HLG"
+    pub video_hdr_format: Option<String>,
+    /// Primary audio stream codec name.
+    pub audio_codec: Option<String>,
+    pub audio_channels: Option<i32>,
+    /// BCP-47/ISO 639-2 codes from all audio streams.
+    pub audio_languages: Vec<String>,
+    /// Language codes from all subtitle streams.
+    pub subtitle_languages: Vec<String>,
+    pub has_multiaudio: bool,
+    pub duration_seconds: Option<i32>,
+    pub container_format: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -141,31 +177,66 @@ pub struct EvalResult {
 // ── Package rewriting ───────────────────────────────────────────────────────
 
 /// Rewrite (or insert) the package declaration in user Rego source to match
-/// the system-assigned rule ID. This decouples the user from having to know
-/// or maintain the package line.
+/// the system-assigned rule ID, and ensure `import rego.v1` is present.
+///
+/// The editor strips both the package line and the import before showing
+/// source to users; this function restores them on every save so the stored
+/// source is always a complete, valid Rego module.
 pub fn rewrite_package_declaration(rego_source: &str, rule_id: &str) -> String {
     let pkg_line = format!("package scryer.rules.user.{rule_id}");
-    let mut output = String::with_capacity(rego_source.len() + pkg_line.len());
+    let has_import = rego_source.lines().any(|l| l.trim() == "import rego.v1");
+    let mut output = String::with_capacity(rego_source.len() + pkg_line.len() + 20);
     let mut found = false;
 
     for line in rego_source.lines() {
         if !found && line.trim().starts_with("package ") {
             output.push_str(&pkg_line);
+            output.push('\n');
+            if !has_import {
+                output.push_str("import rego.v1\n");
+            }
             found = true;
         } else {
             output.push_str(line);
+            output.push('\n');
         }
-        output.push('\n');
     }
 
     if !found {
-        let mut with_pkg = pkg_line;
-        with_pkg.push('\n');
-        with_pkg.push_str(&output);
-        return with_pkg;
+        let mut header = format!("{pkg_line}\n");
+        if !has_import {
+            header.push_str("import rego.v1\n");
+        }
+        return format!("{header}{output}");
     }
 
     output
+}
+
+/// Strip boilerplate lines from stored Rego source before displaying in the
+/// editor. Removes the package declaration and `import rego.v1`; both are
+/// restored automatically by [`rewrite_package_declaration`] on save.
+pub fn strip_editor_source(rego_source: &str) -> String {
+    let lines: Vec<&str> = rego_source
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            !t.starts_with("package ") && t != "import rego.v1"
+        })
+        .collect();
+
+    // Drop leading blank lines left behind after stripping
+    let trimmed: Vec<&str> = lines
+        .iter()
+        .copied()
+        .skip_while(|l| l.trim().is_empty())
+        .collect();
+
+    if trimmed.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", trimmed.join("\n"))
+    }
 }
 
 // ── UserRulesEngine (thread-safe factory) ───────────────────────────────────
@@ -615,6 +686,42 @@ mod tests {
     }
 
     #[test]
+    fn rewrite_injects_import_when_absent() {
+        // Editor source has no import — rewrite must add it
+        let source = "score_entry[\"x\"] := 1\n";
+        let rewritten = rewrite_package_declaration(source, "r1234");
+        assert!(rewritten.starts_with("package scryer.rules.user.r1234\n"));
+        assert!(rewritten.contains("import rego.v1"));
+    }
+
+    #[test]
+    fn rewrite_does_not_duplicate_import() {
+        let source = "package scryer.rules.user.old\nimport rego.v1\nscore_entry[\"x\"] := 1\n";
+        let rewritten = rewrite_package_declaration(source, "r1234");
+        let import_count = rewritten.lines().filter(|l| l.trim() == "import rego.v1").count();
+        assert_eq!(import_count, 1);
+    }
+
+    #[test]
+    fn strip_editor_source_removes_boilerplate() {
+        let stored = "package scryer.rules.user.rabc\nimport rego.v1\n\nscore_entry[\"bonus\"] := 100\n";
+        let stripped = strip_editor_source(stored);
+        assert!(!stripped.contains("package "));
+        assert!(!stripped.contains("import rego.v1"));
+        assert!(stripped.contains("score_entry"));
+    }
+
+    #[test]
+    fn strip_then_rewrite_roundtrip() {
+        let stored = "package scryer.rules.user.rabc\nimport rego.v1\n\nscore_entry[\"bonus\"] := 100\n";
+        let stripped = strip_editor_source(stored);
+        let restored = rewrite_package_declaration(&stripped, "rabc");
+        assert!(restored.contains("package scryer.rules.user.rabc"));
+        assert!(restored.contains("import rego.v1"));
+        assert!(restored.contains("score_entry[\"bonus\"] := 100"));
+    }
+
+    #[test]
     fn i32_overflow_clamped() {
         let policy = UserPolicy {
             id: "big_score".to_string(),
@@ -775,6 +882,7 @@ score_entry["nzbgeek_english_confirmed"] := 200 if {
                 blocked: false,
                 codes: vec![],
             },
+            file: None,
         }
     }
 }

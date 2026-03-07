@@ -119,6 +119,24 @@ export type EpisodeMediaFile = {
   qualityLabel: string | null;
   scanStatus: string;
   createdAt: string;
+  videoCodec: string | null;
+  videoWidth: number | null;
+  videoHeight: number | null;
+  videoBitrateKbps: number | null;
+  videoBitDepth: number | null;
+  videoHdrFormat: string | null;
+  videoFrameRate: string | null;
+  videoProfile: string | null;
+  audioCodec: string | null;
+  audioChannels: number | null;
+  audioBitrateKbps: number | null;
+  audioLanguages: string[];
+  audioStreams: { codec: string | null; channels: number | null; language: string | null; bitrateKbps: number | null }[];
+  subtitleLanguages: string[];
+  subtitleCodecs: string[];
+  hasMultiaudio: boolean;
+  durationSeconds: number | null;
+  containerFormat: string | null;
 };
 
 type SeriesOverviewContainerProps = {

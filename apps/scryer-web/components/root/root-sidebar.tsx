@@ -90,6 +90,11 @@ const settingsEntries: Array<{
     label: (t) => t("settings.plugins"),
     requiredEntitlement: "manage_config",
   },
+  {
+    id: "post-processing",
+    label: (t) => t("settings.postProcessing"),
+    requiredEntitlement: "manage_config",
+  },
 ];
 
 function getMediaSectionChildren(
