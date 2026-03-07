@@ -58,6 +58,7 @@ export const URL_SECTION_SERIES = "series";
 export const URL_SECTION_ANIME = "anime";
 export const URL_SECTION_ACTIVITY = "activity";
 export const URL_SECTION_WANTED = "wanted";
+export const URL_SECTION_HISTORY = "history";
 export const URL_SECTION_SYSTEM = "system";
 export const URL_PARAM_LANGUAGE = "lang";
 export const URL_PARAM_VIEW_DEPRECATED = "view";
@@ -68,6 +69,7 @@ export const URL_PATH_SEGMENTS: ViewId[] = [
   ...MEDIA_VIEW_IDS as string[] as ViewId[],
   URL_SECTION_ACTIVITY,
   URL_SECTION_WANTED,
+  URL_SECTION_HISTORY,
   URL_SECTION_SETTINGS,
   URL_SECTION_SYSTEM,
 ];

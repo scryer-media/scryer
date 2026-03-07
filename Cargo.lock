@@ -3402,6 +3402,7 @@ dependencies = [
  "scryer-application",
  "scryer-domain",
  "scryer-infrastructure",
+ "scryer-rules",
  "serde",
  "serde_json",
  "tokio",

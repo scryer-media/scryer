@@ -304,6 +304,29 @@ export const titleMediaFilesQuery = `query TitleMediaFiles($titleId: String!) {
     qualityLabel
     scanStatus
     createdAt
+    videoCodec
+    videoWidth
+    videoHeight
+    videoBitrateKbps
+    videoBitDepth
+    videoHdrFormat
+    videoFrameRate
+    videoProfile
+    audioCodec
+    audioChannels
+    audioBitrateKbps
+    audioLanguages
+    audioStreams {
+      codec
+      channels
+      language
+      bitrateKbps
+    }
+    subtitleLanguages
+    subtitleCodecs
+    hasMultiaudio
+    durationSeconds
+    containerFormat
   }
 }`;
 

@@ -474,7 +474,14 @@ async fn import_movie_download(
     };
 
     if let Some(ref file_id) = media_file_id {
-        spawn_media_analysis(app, file_id.clone(), dest_path.clone(), title.id.clone());
+        let tvdb_id = title.external_ids.iter().find(|e| e.source == "tvdb").map(|e| e.value.as_str());
+        let category_hint = facet_to_category_hint(&title.facet);
+        let required_audio_languages = app
+            .resolve_quality_profile(&title.tags, title.imdb_id.as_deref(), tvdb_id, Some(category_hint))
+            .await
+            .map(|p| p.criteria.required_audio_languages)
+            .unwrap_or_default();
+        spawn_media_analysis(app, file_id.clone(), dest_path.clone(), title.id.clone(), required_audio_languages);
     }
 
     // Create collection record (so the movie overview UI can show the file)
@@ -850,7 +857,16 @@ async fn import_single_episode_file(
         )
         .await?;
 
-    spawn_media_analysis(app, media_file_id.clone(), dest_path.clone(), title.id.clone());
+    {
+        let tvdb_id = title.external_ids.iter().find(|e| e.source == "tvdb").map(|e| e.value.as_str());
+        let category_hint = facet_to_category_hint(&title.facet);
+        let required_audio_languages = app
+            .resolve_quality_profile(&title.tags, title.imdb_id.as_deref(), tvdb_id, Some(category_hint))
+            .await
+            .map(|p| p.criteria.required_audio_languages)
+            .unwrap_or_default();
+        spawn_media_analysis(app, media_file_id.clone(), dest_path.clone(), title.id.clone(), required_audio_languages);
+    }
 
     // Link to ALL matching episodes (supports multi-episode files like S01E01E02)
     let mut linked = false;
@@ -1509,6 +1525,27 @@ pub async fn execute_manual_import(
 // Post-import media analysis (background, non-blocking)
 // ---------------------------------------------------------------------------
 
+fn facet_to_category_hint(facet: &MediaFacet) -> &'static str {
+    match facet {
+        MediaFacet::Movie => "movie",
+        MediaFacet::Tv => "tv",
+        MediaFacet::Anime => "anime",
+        MediaFacet::Other => "other",
+    }
+}
+
+/// Returns the subset of `required` language codes (uppercase 3-letter ISO) that
+/// are absent from `actual` (which may use any case — comparison is case-insensitive).
+fn missing_audio_languages<'a>(required: &'a [String], actual: &[String]) -> Vec<&'a str> {
+    let actual_upper: std::collections::HashSet<String> =
+        actual.iter().map(|l| l.to_ascii_uppercase()).collect();
+    required
+        .iter()
+        .filter(|r| !actual_upper.contains(r.as_str()))
+        .map(String::as_str)
+        .collect()
+}
+
 /// Spawns a background task to run ffprobe on an imported file.
 /// Does not block the import response — failures are logged, not propagated.
 fn spawn_media_analysis(
@@ -1516,13 +1553,22 @@ fn spawn_media_analysis(
     file_id: String,
     path: PathBuf,
     title_id: String,
+    required_audio_languages: Vec<String>,
 ) {
     let media_files = Arc::clone(&app.services.media_files);
     let wanted_items = Arc::clone(&app.services.wanted_items);
     let release_attempts = Arc::clone(&app.services.release_attempts);
     tokio::spawn(async move {
-        run_media_analysis(media_files, wanted_items, release_attempts, file_id, path, title_id)
-            .await;
+        run_media_analysis(
+            media_files,
+            wanted_items,
+            release_attempts,
+            file_id,
+            path,
+            title_id,
+            required_audio_languages,
+        )
+        .await;
     });
 }
 
@@ -1533,6 +1579,7 @@ async fn run_media_analysis(
     file_id: String,
     path: PathBuf,
     title_id: String,
+    required_audio_languages: Vec<String>,
 ) {
     let Some(ffprobe_path) = scryer_mediainfo::locate_ffprobe() else {
         tracing::debug!("ffprobe not found alongside binary, skipping media analysis");
@@ -1602,6 +1649,69 @@ async fn run_media_analysis(
         return;
     }
 
+    // Language verification: if the quality profile requires specific audio languages,
+    // check that the file actually contains them. Missing languages trigger the same
+    // delete/blocklist/reset flow as fake-file detection.
+    if !required_audio_languages.is_empty() {
+        let missing = missing_audio_languages(&required_audio_languages, &analysis.audio_languages);
+
+        if !missing.is_empty() {
+            let msg = format!(
+                "imported file is missing required audio language(s): {}",
+                missing.join(", ")
+            );
+            tracing::warn!(
+                path = %path.display(),
+                file_id = %file_id,
+                missing = ?missing,
+                "{}",
+                msg
+            );
+
+            if let Err(err) = tokio::fs::remove_file(&path).await {
+                tracing::warn!(error = %err, path = %path.display(), "failed to delete language-mismatch file from disk");
+            }
+
+            let release_title = wanted_items
+                .get_wanted_item_for_title(&title_id, None)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|w| w.grabbed_release)
+                .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+                .and_then(|v| v["title"].as_str().map(str::to_owned));
+
+            let _ = release_attempts
+                .record_release_attempt(
+                    Some(title_id.clone()),
+                    None,
+                    release_title,
+                    crate::ReleaseDownloadAttemptOutcome::Failed,
+                    Some(msg),
+                    None,
+                )
+                .await;
+
+            let _ = media_files.delete_media_file(&file_id).await;
+
+            if let Ok(Some(item)) = wanted_items.get_wanted_item_for_title(&title_id, None).await {
+                let _ = wanted_items
+                    .update_wanted_item_status(
+                        &item.id,
+                        "wanted",
+                        None,
+                        None,
+                        item.search_count,
+                        None,
+                        None,
+                    )
+                    .await;
+            }
+
+            return;
+        }
+    }
+
     // Store analysis results on the media file record
     let dto = crate::MediaFileAnalysis {
         video_codec: analysis.video_codec,
@@ -1610,10 +1720,24 @@ async fn run_media_analysis(
         video_bitrate_kbps: analysis.video_bitrate_kbps,
         video_bit_depth: analysis.video_bit_depth,
         video_hdr_format: analysis.video_hdr_format,
+        video_frame_rate: analysis.video_frame_rate,
+        video_profile: analysis.video_profile,
         audio_codec: analysis.audio_codec,
         audio_channels: analysis.audio_channels,
+        audio_bitrate_kbps: analysis.audio_bitrate_kbps,
         audio_languages: analysis.audio_languages,
+        audio_streams: analysis
+            .audio_streams
+            .into_iter()
+            .map(|s| crate::AudioStreamDetail {
+                codec: s.codec,
+                channels: s.channels,
+                language: s.language,
+                bitrate_kbps: s.bitrate_kbps,
+            })
+            .collect(),
         subtitle_languages: analysis.subtitle_languages,
+        subtitle_codecs: analysis.subtitle_codecs,
         has_multiaudio: analysis.has_multiaudio,
         duration_seconds: analysis.duration_seconds,
         container_format: analysis.container_format,

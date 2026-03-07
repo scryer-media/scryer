@@ -176,42 +176,67 @@ pub struct EvalResult {
 
 // ── Package rewriting ───────────────────────────────────────────────────────
 
-const MANAGED_COMMENT: &str = "# managed by scryer — do not modify this line";
-
 /// Rewrite (or insert) the package declaration in user Rego source to match
-/// the system-assigned rule ID. This decouples the user from having to know
-/// or maintain the package line.
+/// the system-assigned rule ID, and ensure `import rego.v1` is present.
 ///
-/// A `# managed by scryer` comment is emitted immediately after the package
-/// line so users understand not to edit it. On subsequent rewrites the old
-/// comment is stripped before reinsertion, keeping the output idempotent.
+/// The editor strips both the package line and the import before showing
+/// source to users; this function restores them on every save so the stored
+/// source is always a complete, valid Rego module.
 pub fn rewrite_package_declaration(rego_source: &str, rule_id: &str) -> String {
     let pkg_line = format!("package scryer.rules.user.{rule_id}");
-    let mut output = String::with_capacity(rego_source.len() + pkg_line.len() + MANAGED_COMMENT.len() + 2);
+    let has_import = rego_source.lines().any(|l| l.trim() == "import rego.v1");
+    let mut output = String::with_capacity(rego_source.len() + pkg_line.len() + 20);
     let mut found = false;
 
     for line in rego_source.lines() {
-        // Strip any previously inserted managed comment — we'll re-emit it.
-        if line.trim() == MANAGED_COMMENT {
-            continue;
-        }
         if !found && line.trim().starts_with("package ") {
             output.push_str(&pkg_line);
             output.push('\n');
-            output.push_str(MANAGED_COMMENT);
+            if !has_import {
+                output.push_str("import rego.v1\n");
+            }
             found = true;
         } else {
             output.push_str(line);
+            output.push('\n');
         }
-        output.push('\n');
     }
 
     if !found {
-        let header = format!("{pkg_line}\n{MANAGED_COMMENT}\n");
+        let mut header = format!("{pkg_line}\n");
+        if !has_import {
+            header.push_str("import rego.v1\n");
+        }
         return format!("{header}{output}");
     }
 
     output
+}
+
+/// Strip boilerplate lines from stored Rego source before displaying in the
+/// editor. Removes the package declaration and `import rego.v1`; both are
+/// restored automatically by [`rewrite_package_declaration`] on save.
+pub fn strip_editor_source(rego_source: &str) -> String {
+    let lines: Vec<&str> = rego_source
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            !t.starts_with("package ") && t != "import rego.v1"
+        })
+        .collect();
+
+    // Drop leading blank lines left behind after stripping
+    let trimmed: Vec<&str> = lines
+        .iter()
+        .copied()
+        .skip_while(|l| l.trim().is_empty())
+        .collect();
+
+    if trimmed.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", trimmed.join("\n"))
+    }
 }
 
 // ── UserRulesEngine (thread-safe factory) ───────────────────────────────────
@@ -658,6 +683,42 @@ mod tests {
         let rewritten = rewrite_package_declaration(source, "r1234");
         assert!(rewritten.starts_with("package scryer.rules.user.r1234\n"));
         assert!(rewritten.contains("import rego.v1"));
+    }
+
+    #[test]
+    fn rewrite_injects_import_when_absent() {
+        // Editor source has no import — rewrite must add it
+        let source = "score_entry[\"x\"] := 1\n";
+        let rewritten = rewrite_package_declaration(source, "r1234");
+        assert!(rewritten.starts_with("package scryer.rules.user.r1234\n"));
+        assert!(rewritten.contains("import rego.v1"));
+    }
+
+    #[test]
+    fn rewrite_does_not_duplicate_import() {
+        let source = "package scryer.rules.user.old\nimport rego.v1\nscore_entry[\"x\"] := 1\n";
+        let rewritten = rewrite_package_declaration(source, "r1234");
+        let import_count = rewritten.lines().filter(|l| l.trim() == "import rego.v1").count();
+        assert_eq!(import_count, 1);
+    }
+
+    #[test]
+    fn strip_editor_source_removes_boilerplate() {
+        let stored = "package scryer.rules.user.rabc\nimport rego.v1\n\nscore_entry[\"bonus\"] := 100\n";
+        let stripped = strip_editor_source(stored);
+        assert!(!stripped.contains("package "));
+        assert!(!stripped.contains("import rego.v1"));
+        assert!(stripped.contains("score_entry"));
+    }
+
+    #[test]
+    fn strip_then_rewrite_roundtrip() {
+        let stored = "package scryer.rules.user.rabc\nimport rego.v1\n\nscore_entry[\"bonus\"] := 100\n";
+        let stripped = strip_editor_source(stored);
+        let restored = rewrite_package_declaration(&stripped, "rabc");
+        assert!(restored.contains("package scryer.rules.user.rabc"));
+        assert!(restored.contains("import rego.v1"));
+        assert!(restored.contains("score_entry[\"bonus\"] := 100"));
     }
 
     #[test]

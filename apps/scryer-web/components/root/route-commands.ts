@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   ActivitySquare,
+  History,
   MonitorCog,
   Settings,
   Users,
@@ -71,6 +72,14 @@ export function buildRouteCommands({ t, onNavigate }: BuildRouteCommandsArgs): R
       keywords: ["activity", "events", "log", "audit", "system"],
       icon: ActivitySquare,
       onSelect: buildNavigate(onNavigate, "activity"),
+    },
+    {
+      id: "history",
+      label: t("nav.history"),
+      description: t("nav.history"),
+      keywords: ["history", "imports", "import", "log", "records"],
+      icon: History,
+      onSelect: buildNavigate(onNavigate, "history"),
     },
     {
       id: "settings-general",
