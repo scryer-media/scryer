@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { ActivitySquare, Download, ListChecks, Loader2, MonitorCog, Settings, WifiOff, X } from "lucide-react";
+import { ActivitySquare, Download, History, ListChecks, Loader2, MonitorCog, Settings, WifiOff, X } from "lucide-react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/lib/hooks/use-auth";
 
@@ -64,6 +64,10 @@ const WantedContainer = lazy(() =>
   import("@/components/containers/wanted-container").then((m) => ({ default: m.WantedContainer })),
 );
 
+const ImportHistoryContainer = lazy(() =>
+  import("@/components/containers/import-history-container").then((m) => ({ default: m.ImportHistoryContainer })),
+);
+
 const GlobalSearchProvider = lazy(() =>
   import("@/components/root/global-search-provider").then((m) => ({ default: m.GlobalSearchProvider })),
 );
@@ -113,6 +117,9 @@ function MainContent({
   }
   if (view === "wanted") {
     return <WantedContainer key="wanted" onOpenOverview={handleOpenOverview} />;
+  }
+  if (view === "history") {
+    return <ImportHistoryContainer key="history" />;
   }
   if (view === "system") {
     return <SystemContainer key="system" />;
@@ -314,6 +321,7 @@ function AuthenticatedHomePage() {
       ...FACET_REGISTRY.map((f) => ({ id: f.viewId as ViewId, label: t(f.navLabelKey), icon: f.icon })),
       { id: "activity" as ViewId, label: t("nav.activity"), icon: ActivitySquare },
       { id: "wanted" as ViewId, label: t("nav.wanted"), icon: ListChecks },
+      { id: "history" as ViewId, label: t("nav.history"), icon: History },
       { id: "settings" as ViewId, label: t("nav.settings"), icon: Settings },
       { id: "system" as ViewId, label: t("nav.system"), icon: MonitorCog },
     ],

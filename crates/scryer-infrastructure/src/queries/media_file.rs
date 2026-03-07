@@ -63,9 +63,14 @@ pub(crate) async fn list_media_files_for_title_query(
     let rows: Vec<SqliteRow> = sqlx::query(
         "SELECT mf.id, mf.title_id, fem.episode_id, mf.file_path,
                 mf.size_bytes, mf.quality_id, mf.scan_status, mf.created_at,
-                mf.video_codec, mf.video_width, mf.video_height, mf.video_hdr_format,
-                mf.audio_codec, mf.audio_channels, mf.duration_seconds,
-                mf.audio_languages_json, mf.subtitle_languages_json, mf.has_multiaudio
+                mf.video_codec, mf.video_width, mf.video_height,
+                mf.video_bitrate_kbps, mf.video_bit_depth,
+                mf.video_hdr_format, mf.video_frame_rate, mf.video_profile,
+                mf.audio_codec, mf.audio_channels, mf.audio_bitrate_kbps,
+                mf.duration_seconds, mf.container_format,
+                mf.audio_languages_json, mf.audio_streams_json,
+                mf.subtitle_languages_json,
+                mf.subtitle_codecs_json, mf.has_multiaudio
          FROM media_files mf
          LEFT JOIN file_episode_map fem ON fem.file_id = mf.id
          WHERE mf.title_id = ?
@@ -108,10 +113,16 @@ fn row_to_title_media_file(row: &SqliteRow) -> AppResult<TitleMediaFile> {
     let video_codec: Option<String> = row.try_get("video_codec").unwrap_or(None);
     let video_width: Option<i32> = row.try_get("video_width").unwrap_or(None);
     let video_height: Option<i32> = row.try_get("video_height").unwrap_or(None);
+    let video_bitrate_kbps: Option<i32> = row.try_get("video_bitrate_kbps").unwrap_or(None);
+    let video_bit_depth: Option<i32> = row.try_get("video_bit_depth").unwrap_or(None);
     let video_hdr_format: Option<String> = row.try_get("video_hdr_format").unwrap_or(None);
+    let video_frame_rate: Option<String> = row.try_get("video_frame_rate").unwrap_or(None);
+    let video_profile: Option<String> = row.try_get("video_profile").unwrap_or(None);
     let audio_codec: Option<String> = row.try_get("audio_codec").unwrap_or(None);
     let audio_channels: Option<i32> = row.try_get("audio_channels").unwrap_or(None);
+    let audio_bitrate_kbps: Option<i32> = row.try_get("audio_bitrate_kbps").unwrap_or(None);
     let duration_seconds: Option<i32> = row.try_get("duration_seconds").unwrap_or(None);
+    let container_format: Option<String> = row.try_get("container_format").unwrap_or(None);
     let has_multiaudio: i64 = row.try_get("has_multiaudio").unwrap_or(0i64);
 
     let audio_languages: Vec<String> = row
@@ -119,8 +130,18 @@ fn row_to_title_media_file(row: &SqliteRow) -> AppResult<TitleMediaFile> {
         .unwrap_or(None)
         .and_then(|json| serde_json::from_str(&json).ok())
         .unwrap_or_default();
+    let audio_streams: Vec<scryer_application::AudioStreamDetail> = row
+        .try_get::<Option<String>, _>("audio_streams_json")
+        .unwrap_or(None)
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default();
     let subtitle_languages: Vec<String> = row
         .try_get::<Option<String>, _>("subtitle_languages_json")
+        .unwrap_or(None)
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default();
+    let subtitle_codecs: Vec<String> = row
+        .try_get::<Option<String>, _>("subtitle_codecs_json")
         .unwrap_or(None)
         .and_then(|json| serde_json::from_str(&json).ok())
         .unwrap_or_default();
@@ -137,13 +158,21 @@ fn row_to_title_media_file(row: &SqliteRow) -> AppResult<TitleMediaFile> {
         video_codec,
         video_width,
         video_height,
+        video_bitrate_kbps,
+        video_bit_depth,
         video_hdr_format,
+        video_frame_rate,
+        video_profile,
         audio_codec,
         audio_channels,
+        audio_bitrate_kbps,
         audio_languages,
+        audio_streams,
         subtitle_languages,
+        subtitle_codecs,
         has_multiaudio: has_multiaudio != 0,
         duration_seconds,
+        container_format,
     })
 }
 
@@ -154,7 +183,11 @@ pub(crate) async fn update_media_file_analysis_query(
 ) -> AppResult<()> {
     let audio_languages_json = serde_json::to_string(&analysis.audio_languages)
         .unwrap_or_else(|_| "[]".to_string());
+    let audio_streams_json = serde_json::to_string(&analysis.audio_streams)
+        .unwrap_or_else(|_| "[]".to_string());
     let subtitle_languages_json = serde_json::to_string(&analysis.subtitle_languages)
+        .unwrap_or_else(|_| "[]".to_string());
+    let subtitle_codecs_json = serde_json::to_string(&analysis.subtitle_codecs)
         .unwrap_or_else(|_| "[]".to_string());
 
     sqlx::query(
@@ -165,13 +198,18 @@ pub(crate) async fn update_media_file_analysis_query(
             video_bitrate_kbps = ?,
             video_bit_depth = ?,
             video_hdr_format = ?,
+            video_frame_rate = ?,
+            video_profile = ?,
             audio_codec = ?,
             audio_channels = ?,
+            audio_bitrate_kbps = ?,
             duration_seconds = ?,
             container_format = ?,
             ffprobe_json = ?,
             audio_languages_json = ?,
+            audio_streams_json = ?,
             subtitle_languages_json = ?,
+            subtitle_codecs_json = ?,
             has_multiaudio = ?,
             scan_status = 'scanned'
          WHERE id = ?",
@@ -182,13 +220,18 @@ pub(crate) async fn update_media_file_analysis_query(
     .bind(analysis.video_bitrate_kbps)
     .bind(analysis.video_bit_depth)
     .bind(&analysis.video_hdr_format)
+    .bind(&analysis.video_frame_rate)
+    .bind(&analysis.video_profile)
     .bind(&analysis.audio_codec)
     .bind(analysis.audio_channels)
+    .bind(analysis.audio_bitrate_kbps)
     .bind(analysis.duration_seconds)
     .bind(&analysis.container_format)
     .bind(&analysis.raw_json)
     .bind(&audio_languages_json)
+    .bind(&audio_streams_json)
     .bind(&subtitle_languages_json)
+    .bind(&subtitle_codecs_json)
     .bind(if analysis.has_multiaudio { 1i64 } else { 0i64 })
     .bind(file_id)
     .execute(pool)

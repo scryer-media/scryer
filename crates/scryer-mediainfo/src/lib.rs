@@ -1,5 +1,14 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+/// A single audio stream extracted from ffprobe output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioStreamDetail {
+    pub codec: Option<String>,
+    pub channels: Option<i32>,
+    pub language: Option<String>,
+    pub bitrate_kbps: Option<i32>,
+}
 
 /// Parsed media properties extracted from ffprobe output.
 #[derive(Debug, Clone)]
@@ -11,12 +20,22 @@ pub struct MediaAnalysis {
     pub video_bit_depth: Option<i32>,
     /// "Dolby Vision", "HDR10+", "HDR10", or "HLG"
     pub video_hdr_format: Option<String>,
+    /// Frame rate as a decimal string, e.g. "23.976", "24", "60"
+    pub video_frame_rate: Option<String>,
+    /// Codec profile, e.g. "Main 10", "High", "Main"
+    pub video_profile: Option<String>,
     pub audio_codec: Option<String>,
     pub audio_channels: Option<i32>,
+    /// Bitrate of the primary audio stream in kbps
+    pub audio_bitrate_kbps: Option<i32>,
     /// Language tags from all audio streams (BCP-47 / ISO 639-2), "und" filtered out
     pub audio_languages: Vec<String>,
+    /// All audio streams with per-stream details
+    pub audio_streams: Vec<AudioStreamDetail>,
     /// Language tags from all subtitle streams
     pub subtitle_languages: Vec<String>,
+    /// Codec names for all subtitle streams
+    pub subtitle_codecs: Vec<String>,
     pub has_multiaudio: bool,
     pub duration_seconds: Option<i32>,
     pub container_format: Option<String>,
@@ -112,10 +131,18 @@ pub fn parse_ffprobe_output(json: &str) -> Result<MediaAnalysis, FfprobeError> {
         .and_then(|s| s.bits_per_raw_sample.as_deref())
         .and_then(|b| b.parse::<i32>().ok());
     let video_hdr_format = video_stream.and_then(detect_hdr);
+    let video_frame_rate = video_stream
+        .and_then(|s| s.r_frame_rate.as_deref())
+        .and_then(parse_frame_rate);
+    let video_profile = video_stream.and_then(|s| s.profile.clone());
 
     let primary_audio = audio_streams.first().copied();
     let audio_codec = primary_audio.and_then(|s| s.codec_name.clone());
     let audio_channels = primary_audio.and_then(|s| s.channels);
+    let audio_bitrate_kbps = primary_audio
+        .and_then(|s| s.bit_rate.as_deref())
+        .and_then(|br| br.parse::<i64>().ok())
+        .map(|br| (br / 1000) as i32);
 
     let audio_languages: Vec<String> = audio_streams
         .iter()
@@ -124,11 +151,35 @@ pub fn parse_ffprobe_output(json: &str) -> Result<MediaAnalysis, FfprobeError> {
         .map(str::to_owned)
         .collect();
 
+    let audio_streams_detail: Vec<AudioStreamDetail> = audio_streams
+        .iter()
+        .map(|s| AudioStreamDetail {
+            codec: s.codec_name.clone(),
+            channels: s.channels,
+            language: s
+                .tags
+                .language
+                .as_deref()
+                .filter(|l| !l.is_empty() && *l != "und")
+                .map(str::to_owned),
+            bitrate_kbps: s
+                .bit_rate
+                .as_deref()
+                .and_then(|br| br.parse::<i64>().ok())
+                .map(|br| (br / 1000) as i32),
+        })
+        .collect();
+
     let subtitle_languages: Vec<String> = subtitle_streams
         .iter()
         .filter_map(|s| s.tags.language.as_deref())
         .filter(|lang| !lang.is_empty() && *lang != "und")
         .map(str::to_owned)
+        .collect();
+
+    let subtitle_codecs: Vec<String> = subtitle_streams
+        .iter()
+        .filter_map(|s| s.codec_name.clone())
         .collect();
 
     let has_multiaudio = audio_streams.len() > 1;
@@ -156,15 +207,39 @@ pub fn parse_ffprobe_output(json: &str) -> Result<MediaAnalysis, FfprobeError> {
         video_bitrate_kbps,
         video_bit_depth,
         video_hdr_format,
+        video_frame_rate,
+        video_profile,
         audio_codec,
         audio_channels,
+        audio_bitrate_kbps,
         audio_languages,
+        audio_streams: audio_streams_detail,
         subtitle_languages,
+        subtitle_codecs,
         has_multiaudio,
         duration_seconds,
         container_format,
         raw_json: json.to_owned(),
     })
+}
+
+/// Parse a rational frame rate string like "24000/1001" or "24/1" into a
+/// human-readable decimal string like "23.976" or "24".
+fn parse_frame_rate(r_frame_rate: &str) -> Option<String> {
+    let (num_str, den_str) = r_frame_rate.split_once('/')?;
+    let num: f64 = num_str.trim().parse().ok()?;
+    let den: f64 = den_str.trim().parse().ok()?;
+    if den == 0.0 {
+        return None;
+    }
+    let fps = num / den;
+    if fps <= 0.0 {
+        return None;
+    }
+    // Round to 3 decimal places; trim trailing zeros
+    let s = format!("{fps:.3}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    Some(s.to_owned())
 }
 
 fn detect_hdr(stream: &FfprobeStream) -> Option<String> {
@@ -201,8 +276,10 @@ struct FfprobeOutput {
 struct FfprobeStream {
     codec_name: Option<String>,
     codec_type: Option<String>,
+    profile: Option<String>,
     width: Option<i32>,
     height: Option<i32>,
+    r_frame_rate: Option<String>,
     // ffprobe outputs these as strings; some versions may use numbers — handle both
     #[serde(default, deserialize_with = "string_from_value_opt")]
     bit_rate: Option<String>,

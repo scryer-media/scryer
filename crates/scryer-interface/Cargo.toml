@@ -7,6 +7,7 @@ edition = "2021"
 scryer-application = { path = "../scryer-application" }
 scryer-domain = { path = "../scryer-domain" }
 scryer-infrastructure = { path = "../scryer-infrastructure" }
+scryer-rules = { path = "../scryer-rules" }
 async-graphql = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }

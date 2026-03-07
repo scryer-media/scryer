@@ -517,6 +517,15 @@ pub trait FileImporter: Send + Sync {
 }
 
 /// Parsed media properties from ffprobe — application-layer DTO.
+/// A single audio stream, mirroring `scryer_mediainfo::AudioStreamDetail`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AudioStreamDetail {
+    pub codec: Option<String>,
+    pub channels: Option<i32>,
+    pub language: Option<String>,
+    pub bitrate_kbps: Option<i32>,
+}
+
 /// Mirrors `scryer_mediainfo::MediaAnalysis` without depending on that crate.
 pub struct MediaFileAnalysis {
     pub video_codec: Option<String>,
@@ -525,10 +534,15 @@ pub struct MediaFileAnalysis {
     pub video_bitrate_kbps: Option<i32>,
     pub video_bit_depth: Option<i32>,
     pub video_hdr_format: Option<String>,
+    pub video_frame_rate: Option<String>,
+    pub video_profile: Option<String>,
     pub audio_codec: Option<String>,
     pub audio_channels: Option<i32>,
+    pub audio_bitrate_kbps: Option<i32>,
     pub audio_languages: Vec<String>,
+    pub audio_streams: Vec<AudioStreamDetail>,
     pub subtitle_languages: Vec<String>,
+    pub subtitle_codecs: Vec<String>,
     pub has_multiaudio: bool,
     pub duration_seconds: Option<i32>,
     pub container_format: Option<String>,
