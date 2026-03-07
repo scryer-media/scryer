@@ -1,14 +1,3 @@
-# ── Linker (macOS) ────────────────────────────────────────────────────────────
-# lld is significantly faster than Apple ld for incremental builds.
-# Requires: brew install llvm
-[target.aarch64-apple-darwin]
-linker = "clang"
-rustflags = ["-C", "link-arg=-fuse-ld=/opt/homebrew/opt/lld/bin/ld64.lld"]
-
-[target.x86_64-apple-darwin]
-linker = "clang"
-rustflags = ["-C", "link-arg=-fuse-ld=/opt/homebrew/opt/lld/bin/ld64.lld"]
-
 # ── Dev profile ───────────────────────────────────────────────────────────────
 # unpacked: skip the expensive dsymutil bundle step on macOS.
 # Debug symbols stay in object files; `lldb` and `rust-lldb` still work.
