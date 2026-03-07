@@ -1,0 +1,11 @@
+ALTER TABLE media_files ADD COLUMN video_codec TEXT;
+ALTER TABLE media_files ADD COLUMN video_width INTEGER;
+ALTER TABLE media_files ADD COLUMN video_height INTEGER;
+ALTER TABLE media_files ADD COLUMN video_bitrate_kbps INTEGER;
+ALTER TABLE media_files ADD COLUMN video_bit_depth INTEGER;
+ALTER TABLE media_files ADD COLUMN video_hdr_format TEXT;
+ALTER TABLE media_files ADD COLUMN audio_codec TEXT;
+ALTER TABLE media_files ADD COLUMN audio_channels INTEGER;
+ALTER TABLE media_files ADD COLUMN duration_seconds INTEGER;
+ALTER TABLE media_files ADD COLUMN container_format TEXT;
+ALTER TABLE media_files ADD COLUMN ffprobe_json TEXT;

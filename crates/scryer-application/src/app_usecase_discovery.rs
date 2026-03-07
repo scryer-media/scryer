@@ -870,6 +870,7 @@ fn build_user_rule_input(
                 .map(|e| e.code.clone())
                 .collect(),
         },
+        file: None,
     }
 }
 

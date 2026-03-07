@@ -8,7 +8,8 @@ export type SettingsSection =
   | "qualityProfiles"
   | "acquisition"
   | "rules"
-  | "plugins";
+  | "plugins"
+  | "post-processing";
 export type ContentSettingsSection = "overview" | "settings";
 
 export type Translate = (

@@ -1,0 +1,28 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "hevc",
+      "codec_type": "video",
+      "width": 3840,
+      "height": 2160,
+      "bit_rate": "20000000",
+      "bits_per_raw_sample": "10",
+      "color_transfer": "arib-std-b67",
+      "tags": {}
+    },
+    {
+      "index": 1,
+      "codec_name": "aac",
+      "codec_type": "audio",
+      "channels": 2,
+      "tags": { "language": "eng" }
+    }
+  ],
+  "format": {
+    "filename": "Movie.2024.2160p.HEVC.HLG.mkv",
+    "format_name": "matroska,webm",
+    "duration": "5400.000000",
+    "bit_rate": "20500000"
+  }
+}

@@ -1,0 +1,11 @@
+[package]
+name = "scryer-mediainfo"
+version = "0.0.4"
+edition = "2021"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

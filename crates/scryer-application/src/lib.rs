@@ -24,6 +24,7 @@ mod app_usecase_security;
 mod acquisition_policy;
 mod app_usecase_acquisition;
 mod app_usecase_plugins;
+pub mod app_usecase_post_processing;
 
 use crate::activity::ActivityStream;
 use async_trait::async_trait;
@@ -515,6 +516,25 @@ pub trait FileImporter: Send + Sync {
     ) -> AppResult<ImportFileResult>;
 }
 
+/// Parsed media properties from ffprobe — application-layer DTO.
+/// Mirrors `scryer_mediainfo::MediaAnalysis` without depending on that crate.
+pub struct MediaFileAnalysis {
+    pub video_codec: Option<String>,
+    pub video_width: Option<i32>,
+    pub video_height: Option<i32>,
+    pub video_bitrate_kbps: Option<i32>,
+    pub video_bit_depth: Option<i32>,
+    pub video_hdr_format: Option<String>,
+    pub audio_codec: Option<String>,
+    pub audio_channels: Option<i32>,
+    pub audio_languages: Vec<String>,
+    pub subtitle_languages: Vec<String>,
+    pub has_multiaudio: bool,
+    pub duration_seconds: Option<i32>,
+    pub container_format: Option<String>,
+    pub raw_json: String,
+}
+
 #[async_trait]
 pub trait MediaFileRepository: Send + Sync {
     async fn insert_media_file(
@@ -535,6 +555,20 @@ pub trait MediaFileRepository: Send + Sync {
         &self,
         title_id: &str,
     ) -> AppResult<Vec<TitleMediaFile>>;
+
+    async fn update_media_file_analysis(
+        &self,
+        file_id: &str,
+        analysis: MediaFileAnalysis,
+    ) -> AppResult<()>;
+
+    async fn mark_scan_failed(
+        &self,
+        file_id: &str,
+        error: &str,
+    ) -> AppResult<()>;
+
+    async fn delete_media_file(&self, file_id: &str) -> AppResult<()>;
 }
 
 #[async_trait]

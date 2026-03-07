@@ -33,13 +33,49 @@ pub struct UserPolicy {
     pub applied_facets: Vec<String>,
 }
 
+/// Score delta at or below this value is treated as a hard block.
+/// Matches `scryer.block_score()` builtin which returns -10000.
+pub const BLOCK_SCORE_THRESHOLD: i32 = -9000;
+
 /// Input document set per-release for user rule evaluation.
+///
+/// `file` is `None` during pre-download search scoring (no file on disk yet).
+/// It is populated during post-download evaluation after ffprobe runs on the
+/// actual imported file. Rules that reference `input.file` fields are no-ops
+/// during pre-download because `input.file` serializes as `null` and field
+/// access on `null` evaluates to `undefined` in Rego.
 #[derive(Debug, Clone, Serialize)]
 pub struct UserRuleInput {
     pub release: ReleaseDoc,
     pub profile: ProfileDoc,
     pub context: ContextDoc,
     pub builtin_score: BuiltinScoreDoc,
+    /// Actual file properties from ffprobe. Null during pre-download scoring.
+    pub file: Option<FileDoc>,
+}
+
+/// Ground-truth file properties extracted by ffprobe after download.
+/// Available as `input.file` in Rego during post-download evaluation.
+#[derive(Debug, Clone, Serialize)]
+pub struct FileDoc {
+    /// Video stream codec name (e.g. "hevc", "av1", "h264").
+    pub video_codec: Option<String>,
+    pub video_width: Option<i32>,
+    pub video_height: Option<i32>,
+    pub video_bitrate_kbps: Option<i32>,
+    pub video_bit_depth: Option<i32>,
+    /// e.g. "Dolby Vision", "HDR10", "HLG"
+    pub video_hdr_format: Option<String>,
+    /// Primary audio stream codec name.
+    pub audio_codec: Option<String>,
+    pub audio_channels: Option<i32>,
+    /// BCP-47/ISO 639-2 codes from all audio streams.
+    pub audio_languages: Vec<String>,
+    /// Language codes from all subtitle streams.
+    pub subtitle_languages: Vec<String>,
+    pub has_multiaudio: bool,
+    pub duration_seconds: Option<i32>,
+    pub container_format: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -140,17 +176,29 @@ pub struct EvalResult {
 
 // ── Package rewriting ───────────────────────────────────────────────────────
 
+const MANAGED_COMMENT: &str = "# managed by scryer — do not modify this line";
+
 /// Rewrite (or insert) the package declaration in user Rego source to match
 /// the system-assigned rule ID. This decouples the user from having to know
 /// or maintain the package line.
+///
+/// A `# managed by scryer` comment is emitted immediately after the package
+/// line so users understand not to edit it. On subsequent rewrites the old
+/// comment is stripped before reinsertion, keeping the output idempotent.
 pub fn rewrite_package_declaration(rego_source: &str, rule_id: &str) -> String {
     let pkg_line = format!("package scryer.rules.user.{rule_id}");
-    let mut output = String::with_capacity(rego_source.len() + pkg_line.len());
+    let mut output = String::with_capacity(rego_source.len() + pkg_line.len() + MANAGED_COMMENT.len() + 2);
     let mut found = false;
 
     for line in rego_source.lines() {
+        // Strip any previously inserted managed comment — we'll re-emit it.
+        if line.trim() == MANAGED_COMMENT {
+            continue;
+        }
         if !found && line.trim().starts_with("package ") {
             output.push_str(&pkg_line);
+            output.push('\n');
+            output.push_str(MANAGED_COMMENT);
             found = true;
         } else {
             output.push_str(line);
@@ -159,10 +207,8 @@ pub fn rewrite_package_declaration(rego_source: &str, rule_id: &str) -> String {
     }
 
     if !found {
-        let mut with_pkg = pkg_line;
-        with_pkg.push('\n');
-        with_pkg.push_str(&output);
-        return with_pkg;
+        let header = format!("{pkg_line}\n{MANAGED_COMMENT}\n");
+        return format!("{header}{output}");
     }
 
     output
@@ -775,6 +821,7 @@ score_entry["nzbgeek_english_confirmed"] := 200 if {
                 blocked: false,
                 codes: vec![],
             },
+            file: None,
         }
     }
 }

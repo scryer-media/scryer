@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 scryer-domain = { path = "../scryer-domain" }
 scryer-rules = { path = "../scryer-rules" }
+scryer-mediainfo = { path = "../scryer-mediainfo" }
 jsonwebtoken = { workspace = true }
 rand_core = { workspace = true }
 sha2 = { workspace = true }

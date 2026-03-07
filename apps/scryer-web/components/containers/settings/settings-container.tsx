@@ -10,6 +10,7 @@ import { SettingsAcquisitionContainer } from "@/components/containers/settings/s
 import { SettingsProfileContainer } from "@/components/containers/settings/settings-profile-container";
 import { SettingsRulesContainer } from "@/components/containers/settings/settings-rules-container";
 import { SettingsPluginsContainer } from "@/components/containers/settings/settings-plugins-container";
+import { SettingsPostProcessingContainer } from "@/components/containers/settings/settings-post-processing-container";
 import type { SettingsSection } from "@/components/root/types";
 import type { LocaleCode, LanguageOption } from "@/lib/i18n";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -56,6 +57,8 @@ export const SettingsContainer = memo(function SettingsContainer({
                   ? t("settings.rules")
                 : settingsSection === "plugins"
                   ? t("settings.plugins")
+                : settingsSection === "post-processing"
+                  ? t("settings.postProcessing")
                     : t("settings.qualityProfiles"),
           })}
         </CardTitle>
@@ -85,6 +88,8 @@ export const SettingsContainer = memo(function SettingsContainer({
           <SettingsRulesContainer />
         ) : settingsSection === "plugins" ? (
           <SettingsPluginsContainer />
+        ) : settingsSection === "post-processing" ? (
+          <SettingsPostProcessingContainer />
         ) : (
           <SettingsQualityProfilesContainer />
         )}

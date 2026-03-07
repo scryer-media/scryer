@@ -594,6 +594,16 @@ const en: LocaleDictionary = {
   "settings.refSectionOutput": "Rule Output Format",
   "settings.refOutputIntro": "Rules must define a score_entry rule that returns a map of string keys (score codes) to integer values (point deltas). Positive values boost the release, negative values penalize it. If conditions are not met, the rule produces no output and has no effect.",
 
+  "settings.postProcessing": "Post-Processing",
+  "settings.postProcessingSaved": "Post-processing settings saved.",
+  "settings.pp.intro": "Run a custom script after each file is imported. Leave blank to disable. The working directory is set to the folder containing the imported file.",
+  "settings.pp.movieScript": "Movie Script",
+  "settings.pp.seriesScript": "Series Script",
+  "settings.pp.animeScript": "Anime Script",
+  "settings.pp.timeoutSecs": "Script Timeout (seconds)",
+  "settings.pp.envVarsHeading": "Environment Variables",
+  "settings.pp.envVarsDescription": "The following variables are available in your script:",
+
   "settings.plugins": "Plugins",
   "settings.pluginsSection": "Manage plugins",
   "settings.pluginsRefresh": "Refresh Registry",

@@ -1,5 +1,5 @@
 use crate::{
-    BuiltinScoreDoc, ContextDoc, ProfileDoc, ReleaseDoc, RulesError, UserRuleInput,
+    BuiltinScoreDoc, ContextDoc, FileDoc, ProfileDoc, ReleaseDoc, RulesError, UserRuleInput,
     builtins,
 };
 use regorus::{Engine, Value};
@@ -202,6 +202,21 @@ fn synthetic_test_input() -> UserRuleInput {
             blocked: false,
             codes: vec!["quality_tier_0".to_string(), "source_webdl".to_string()],
         },
+        file: Some(FileDoc {
+            video_codec: Some("hevc".to_string()),
+            video_width: Some(3840),
+            video_height: Some(2160),
+            video_bitrate_kbps: Some(40000),
+            video_bit_depth: Some(10),
+            video_hdr_format: Some("HDR10".to_string()),
+            audio_codec: Some("eac3".to_string()),
+            audio_channels: Some(6),
+            audio_languages: vec!["eng".to_string()],
+            subtitle_languages: vec!["eng".to_string()],
+            has_multiaudio: false,
+            duration_seconds: Some(7200),
+            container_format: Some("matroska".to_string()),
+        }),
     }
 }
 
