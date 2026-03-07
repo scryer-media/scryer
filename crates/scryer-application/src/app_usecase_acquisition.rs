@@ -318,9 +318,19 @@ async fn process_due_wanted_items(app: &AppUseCase) {
     // Track URLs already submitted this cycle to avoid sending the same NZB
     // multiple times (e.g. a season pack matching several episode wanted items).
     let mut grabbed_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Track (title_id, season_num) for which a season pack search was attempted this cycle.
+    let mut season_pack_attempted: std::collections::HashSet<(String, u32)> = std::collections::HashSet::new();
+    // Track (title_id, season_num) for which a season pack was successfully grabbed this cycle.
+    let mut season_pack_grabbed: std::collections::HashSet<(String, u32)> = std::collections::HashSet::new();
 
     for item in &due_items {
-        if let Err(err) = process_single_wanted_item(app, item, &now, &mut grabbed_urls, &dl_snapshot).await {
+        if let Err(err) = process_single_wanted_item(
+            app, item, &now,
+            &mut grabbed_urls,
+            &mut season_pack_attempted,
+            &mut season_pack_grabbed,
+            &dl_snapshot,
+        ).await {
             warn!(
                 wanted_item_id = item.id.as_str(),
                 title_id = item.title_id.as_str(),
@@ -356,6 +366,8 @@ async fn process_single_wanted_item(
     item: &WantedItem,
     now: &DateTime<Utc>,
     grabbed_urls: &mut std::collections::HashSet<String>,
+    season_pack_attempted: &mut std::collections::HashSet<(String, u32)>,
+    season_pack_grabbed: &mut std::collections::HashSet<(String, u32)>,
     dl_snapshot: &DownloadClientSnapshot,
 ) -> AppResult<()> {
     // Load the title to get search context
@@ -391,6 +403,146 @@ async fn process_single_wanted_item(
 
     // Derive the download client category separately — search_category ("series")
     // is for Newznab query type, download_category ("tv") is for NZBGet routing.
+    //
+    // ── Season pack priority ──────────────────────────────────────────────────
+    // For episode wanted items, try a season pack search first. Season packs are
+    // a first-class release type on Usenet and are more efficient than individual
+    // episodes. Individual episode searches only run if no season pack was found
+    // this cycle for this (title, season).
+    if item.media_type == "episode" {
+        if let Some(season_num) = search_season {
+            let season_key = (title.id.clone(), season_num);
+
+            if !season_pack_attempted.contains(&season_key) {
+                season_pack_attempted.insert(season_key.clone());
+
+                let mut pack_queries =
+                    vec![format!("S{:0>2}", season_num), format!("S{}", season_num)];
+                let mut seen = std::collections::HashSet::new();
+                pack_queries.retain(|q| seen.insert(q.to_ascii_lowercase()));
+
+                let pack_results = app
+                    .search_and_score_releases(
+                        pack_queries,
+                        imdb_id.clone(),
+                        tvdb_id.clone(),
+                        Some(category.clone()),
+                        &title.tags,
+                        50,
+                        "background_acquisition_season_pack",
+                        SearchMode::Auto,
+                        title.runtime_minutes,
+                        Some(season_num),
+                        None, // episode=None signals a season pack search
+                    )
+                    .await
+                    .unwrap_or_default();
+
+                if let Some(best_pack) = pack_results
+                    .iter()
+                    .find(|r| r.quality_profile_decision.as_ref().map(|d| d.allowed).unwrap_or(false))
+                {
+                    let pack_url = best_pack.download_url.clone().or_else(|| best_pack.link.clone());
+                    let url_str = pack_url.as_deref().unwrap_or("").to_string();
+
+                    if !url_str.is_empty() && grabbed_urls.insert(url_str.clone()) {
+                        let download_cat = app.derive_download_category(&title.facet).await;
+                        let pack_title = Some(best_pack.title.clone());
+                        let pack_hint = normalize_release_attempt_hint(pack_url.as_deref());
+                        let pack_title_norm = normalize_release_attempt_title(pack_title.as_deref());
+                        let pack_password = normalize_release_password(
+                            best_pack.nzbgeek_password_protected.as_deref(),
+                        );
+
+                        let grab_result = app
+                            .services
+                            .download_client
+                            .submit_to_download_queue(
+                                &title,
+                                pack_url.clone(),
+                                pack_title.clone(),
+                                pack_password.clone(),
+                                Some(download_cat),
+                            )
+                            .await;
+
+                        match grab_result {
+                            Ok(_) => {
+                                season_pack_grabbed.insert(season_key.clone());
+                                let _ = app
+                                    .services
+                                    .release_attempts
+                                    .record_release_attempt(
+                                        Some(title.id.clone()),
+                                        pack_hint,
+                                        pack_title_norm,
+                                        ReleaseDownloadAttemptOutcome::Success,
+                                        None,
+                                        pack_password,
+                                    )
+                                    .await;
+                                let pack_score = best_pack
+                                    .quality_profile_decision
+                                    .as_ref()
+                                    .map(|d| d.preference_score)
+                                    .unwrap_or(0);
+                                let _ = app
+                                    .services
+                                    .record_activity_event(
+                                        None,
+                                        Some(title.id.clone()),
+                                        ActivityKind::AcquisitionCandidateAccepted,
+                                        format!(
+                                            "season pack grabbed: {} S{:0>2} '{}' (score: {})",
+                                            title.name,
+                                            season_num,
+                                            best_pack.title,
+                                            pack_score,
+                                        ),
+                                        ActivitySeverity::Success,
+                                        vec![ActivityChannel::WebUi, ActivityChannel::Toast],
+                                    )
+                                    .await;
+                                info!(
+                                    title = title.name.as_str(),
+                                    season = season_num,
+                                    release = best_pack.title.as_str(),
+                                    "season pack grabbed; skipping individual episode searches for this season"
+                                );
+                            }
+                            Err(err) => {
+                                warn!(
+                                    title = title.name.as_str(),
+                                    season = season_num,
+                                    error = %err,
+                                    "season pack grab failed, will fall back to individual episode search"
+                                );
+                                let _ = app
+                                    .services
+                                    .release_attempts
+                                    .record_release_attempt(
+                                        Some(title.id.clone()),
+                                        pack_hint,
+                                        pack_title_norm,
+                                        ReleaseDownloadAttemptOutcome::Failed,
+                                        Some(err.to_string()),
+                                        pack_password,
+                                    )
+                                    .await;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // If a season pack was grabbed this cycle (by this item or an earlier
+            // item for the same season), skip the individual episode search.
+            if season_pack_grabbed.contains(&season_key) {
+                return Ok(());
+            }
+        }
+    }
+    // ── End season pack priority ──────────────────────────────────────────────
     // Uses the configurable per-facet nzbget.category setting with hardcoded fallback.
     let download_cat = app.derive_download_category(&title.facet).await;
 

@@ -512,6 +512,88 @@ impl AppUseCase {
 
         Ok(results)
     }
+
+    pub async fn search_indexers_season(
+        &self,
+        actor: &User,
+        title: String,
+        season: String,
+        imdb_id: Option<String>,
+        tvdb_id: Option<String>,
+        category: Option<String>,
+        limit: usize,
+    ) -> AppResult<Vec<IndexerSearchResult>> {
+        require(actor, &Entitlement::ViewCatalog)?;
+
+        let normalized_title = title.trim();
+        let season = season.trim();
+
+        if normalized_title.is_empty() || season.is_empty() {
+            return Err(AppError::Validation("title and season are required".into()));
+        }
+
+        let normalized_imdb_id = normalize_imdb_id(imdb_id);
+        let normalized_tvdb_id = normalize_numeric_id(tvdb_id);
+        let normalized_category = category
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
+        let season_digits: String = season.chars().filter(|value| value.is_ascii_digit()).collect();
+        if season_digits.is_empty() {
+            return Err(AppError::Validation("season must include a numeric value".into()));
+        }
+
+        let season_num = season_digits
+            .parse::<usize>()
+            .map_err(|_| AppError::Validation("invalid season value".into()))?;
+
+        let mut queries = vec![
+            format!("S{:0>2}", season_num),
+            format!("S{}", season_num),
+        ];
+        let mut unique = std::collections::HashSet::new();
+        queries.retain(|value| unique.insert(value.to_ascii_lowercase()));
+
+        let results = self
+            .search_indexer_queries(
+                actor,
+                queries,
+                normalized_imdb_id.clone(),
+                normalized_tvdb_id.clone(),
+                normalized_category.clone(),
+                limit,
+            )
+            .await?;
+
+        let activity_media_label = normalized_category
+            .as_deref()
+            .map(|value| match value.trim().to_ascii_lowercase().as_str() {
+                "series" | "tv" => "series",
+                "anime" => "anime",
+                _ => "movie",
+            })
+            .unwrap_or("series");
+
+        let _ = self
+            .services
+            .record_activity_event(
+                Some(actor.id.clone()),
+                None,
+                ActivityKind::MovieFetched,
+                format!(
+                    "{} season pack searched: {} S{:0>2} ({} results)",
+                    activity_media_label,
+                    normalized_title,
+                    season_num,
+                    results.len()
+                ),
+                ActivitySeverity::Info,
+                vec![ActivityChannel::WebUi],
+            )
+            .await;
+
+        Ok(results)
+    }
 }
 
 fn is_release_blocklisted(

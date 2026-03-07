@@ -242,6 +242,47 @@ export const searchSeriesEpisodeQuery = `query SearchIndexersEpisode($title: Str
   }
 }`;
 
+export const searchSeasonQuery = `query SearchIndexersSeason($title: String!, $season: String!, $imdbId: String, $tvdbId: String, $category: String, $limit: Int) {
+  searchIndexersSeason(title: $title, season: $season, imdbId: $imdbId, tvdbId: $tvdbId, category: $category, limit: $limit) {
+    source
+    title
+    link
+    downloadUrl
+    sizeBytes
+    publishedAt
+    thumbsUp
+    thumbsDown
+    parsedRelease {
+      rawTitle
+      normalizedTitle
+      releaseGroup
+      quality
+      source
+      videoCodec
+      videoEncoding
+      audio
+      isDualAudio
+      isDolbyVision
+      detectedHdr
+      parseConfidence
+      isProperUpload
+      isRemux
+      isBdDisk
+    }
+    qualityProfileDecision {
+      allowed
+      blockCodes
+      releaseScore
+      preferenceScore
+      scoringLog {
+        code
+        delta
+        source
+      }
+    }
+  }
+}`;
+
 export const titlesQuery = `query Titles($facet: String, $query: String) {
   titles(facet: $facet, query: $query) {
     id

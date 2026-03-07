@@ -54,6 +54,10 @@ type Props = {
   completedDownloads?: DownloadQueueItem[];
   onOpenManualImport?: (item: DownloadQueueItem) => void;
   initialEpisodeId?: string | null;
+  seasonSearchResultsByCollection?: Record<string, Release[]>;
+  seasonSearchLoadingByCollection?: Record<string, boolean>;
+  onRunSeasonSearch?: (collection: TitleCollection) => Promise<void> | void;
+  onQueueFromSeasonSearch?: (release: Release) => Promise<void> | void;
 };
 
 export function SeriesOverviewView({
@@ -75,6 +79,10 @@ export function SeriesOverviewView({
   completedDownloads,
   onOpenManualImport,
   initialEpisodeId,
+  seasonSearchResultsByCollection,
+  seasonSearchLoadingByCollection,
+  onRunSeasonSearch,
+  onQueueFromSeasonSearch,
 }: Props) {
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
@@ -524,6 +532,10 @@ export function SeriesOverviewView({
                   onAutoSearchEpisode={handleAutoSearchEpisode}
                   onSetCollectionMonitored={onSetCollectionMonitored}
                   onSetEpisodeMonitored={onSetEpisodeMonitored}
+                  seasonSearchResults={seasonSearchResultsByCollection?.[collection.id]}
+                  seasonSearchLoading={seasonSearchLoadingByCollection?.[collection.id] === true}
+                  onRunSeasonSearch={onRunSeasonSearch ? () => onRunSeasonSearch(collection) : undefined}
+                  onQueueFromSeasonSearch={onQueueFromSeasonSearch}
                 />
               );
             })

@@ -14,7 +14,7 @@ import {
   setEpisodeMonitoredMutation,
   updateTitleMutation,
 } from "@/lib/graphql/mutations";
-import { downloadQueueQuery } from "@/lib/graphql/queries";
+import { downloadQueueQuery, searchSeasonQuery } from "@/lib/graphql/queries";
 import type { DownloadQueueItem } from "@/lib/types/download-queue";
 import type { AdminSetting } from "@/lib/types/admin-settings";
 import type { Release } from "@/lib/types";
@@ -370,6 +370,64 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     [collections, refreshTitleDetail, client, title, t, setGlobalStatus],
   );
 
+  const [seasonSearchResultsByCollection, setSeasonSearchResultsByCollection] = React.useState<
+    Record<string, Release[]>
+  >({});
+  const [seasonSearchLoadingByCollection, setSeasonSearchLoadingByCollection] = React.useState<
+    Record<string, boolean>
+  >({});
+
+  const handleRunSeasonSearch = React.useCallback(
+    async (collection: TitleCollection) => {
+      if (!title) return;
+      const tvdbId =
+        title.externalIds?.find((id) => id.source.toLowerCase() === "tvdb")?.value?.trim() || null;
+      const seasonNum = collection.collectionIndex?.trim().replace(/\D+/g, "") || "";
+      if (!seasonNum) return;
+
+      setSeasonSearchLoadingByCollection((prev) => ({ ...prev, [collection.id]: true }));
+      try {
+        const { data } = await client
+          .query(searchSeasonQuery, {
+            title: title.name,
+            season: seasonNum,
+            tvdbId,
+            category: title.facet,
+            limit: 50,
+          })
+          .toPromise();
+        setSeasonSearchResultsByCollection((prev) => ({
+          ...prev,
+          [collection.id]: data?.searchIndexersSeason ?? [],
+        }));
+      } finally {
+        setSeasonSearchLoadingByCollection((prev) => ({ ...prev, [collection.id]: false }));
+      }
+    },
+    [client, title],
+  );
+
+  const handleQueueFromSeasonSearch = React.useCallback(
+    async (release: Release) => {
+      if (!title) return;
+      const sourceHint = release.downloadUrl || release.link;
+      if (!sourceHint) return;
+      try {
+        const { error } = await client
+          .mutation(queueExistingMutation, {
+            input: { titleId: title.id, sourceHint, sourceTitle: release.title },
+          })
+          .toPromise();
+        if (error) throw error;
+        setGlobalStatus(t("status.queuedLatest", { name: title.name }));
+        await refreshTitleDetail();
+      } catch (error: unknown) {
+        setGlobalStatus(error instanceof Error ? error.message : t("status.queueFailed"));
+      }
+    },
+    [client, title, refreshTitleDetail, setGlobalStatus, t],
+  );
+
   // Only re-fetch episodes when the set of collection IDs changes (add/remove),
   // not when a property like `monitored` is updated on an existing collection.
   const collectionIdKey = collections.map((c) => c.id).join("\0");
@@ -525,6 +583,10 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         completedDownloads={completedDownloads}
         onOpenManualImport={handleOpenManualImport}
         initialEpisodeId={initialEpisodeId}
+        seasonSearchResultsByCollection={seasonSearchResultsByCollection}
+        seasonSearchLoadingByCollection={seasonSearchLoadingByCollection}
+        onRunSeasonSearch={handleRunSeasonSearch}
+        onQueueFromSeasonSearch={handleQueueFromSeasonSearch}
       />
       {manualImportItem && title && (
         <ManualImportDialog
