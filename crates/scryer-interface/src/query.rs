@@ -289,6 +289,35 @@ impl QueryRoot {
         Ok(results.into_iter().map(crate::mappers::from_search_result).collect())
     }
 
+    async fn search_indexers_season(
+        &self,
+        ctx: &Context<'_>,
+        title: String,
+        season: String,
+        imdb_id: Option<String>,
+        tvdb_id: Option<String>,
+        category: Option<String>,
+        limit: Option<i32>,
+    ) -> GqlResult<Vec<IndexerSearchResultPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let limit = limit.unwrap_or(200).clamp(1, 200) as usize;
+        let results = app
+            .search_indexers_season(
+                &actor,
+                title,
+                season,
+                imdb_id,
+                tvdb_id,
+                category,
+                limit,
+            )
+            .await
+            .map_err(to_gql_error)?;
+
+        Ok(results.into_iter().map(crate::mappers::from_search_result).collect())
+    }
+
     async fn title_events(
         &self,
         ctx: &Context<'_>,

@@ -9,6 +9,8 @@ const en: LocaleDictionary = {
   "label.searching": "Searching",
   "help.autoSearchTooltip": "Auto search and queue the latest matching release for this item.",
   "help.interactiveSearchTooltip": "Search now for this item and open the release picker to choose what to queue.",
+  "series.searchSeason": "Search for season pack",
+  "help.seasonSearchTooltip": "Search indexers for a season pack release for this season.",
   "label.searchingWithQuery": "Searching {{query}}",
   "label.refresh": "Refresh",
   "label.refreshing": "Refreshing",
