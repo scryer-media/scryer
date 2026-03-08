@@ -6,9 +6,11 @@ export type SettingsSection =
   | "indexers"
   | "downloadClients"
   | "qualityProfiles"
+  | "delayProfiles"
   | "acquisition"
   | "rules"
   | "plugins"
+  | "notifications"
   | "post-processing";
 export type ContentSettingsSection = "overview" | "settings";
 

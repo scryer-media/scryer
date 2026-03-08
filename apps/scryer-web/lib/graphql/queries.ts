@@ -368,6 +368,20 @@ export const titleMediaFilesQuery = `query TitleMediaFiles($titleId: String!) {
     hasMultiaudio
     durationSeconds
     containerFormat
+    sceneName
+    releaseGroup
+    sourceType
+    resolution
+    videoCodecParsed
+    audioCodecParsed
+    acquisitionScore
+    scoringLog
+    indexerSource
+    grabbedReleaseTitle
+    grabbedAt
+    edition
+    originalFilePath
+    releaseHash
   }
 }`;
 
@@ -846,6 +860,54 @@ export const ruleSetsQuery = `query RuleSets {
   }
 }`;
 
+// ── Notifications ─────────────────────────────────────────────────────
+
+export const notificationChannelsQuery = `query NotificationChannels {
+  notificationChannels {
+    id
+    name
+    channelType
+    configJson
+    isEnabled
+    createdAt
+    updatedAt
+  }
+}`;
+
+export const notificationSubscriptionsQuery = `query NotificationSubscriptions {
+  notificationSubscriptions {
+    id
+    channelId
+    eventType
+    scope
+    scopeId
+    isEnabled
+    createdAt
+    updatedAt
+  }
+}`;
+
+export const notificationProviderTypesQuery = `query NotificationProviderTypes {
+  notificationProviderTypes {
+    providerType
+    name
+    defaultBaseUrl
+    configFields {
+      key
+      label
+      fieldType
+      required
+      defaultValue
+      options { value label }
+      helpText
+    }
+  }
+}`;
+
+export const notificationEventTypesQuery = `query NotificationEventTypes {
+  notificationEventTypes
+}`;
+
 // ── Metadata Gateway (proxied through backend) ────────────────────────
 
 const METADATA_SEARCH_FIELDS = `
@@ -929,6 +991,23 @@ export const metadataSeriesQuery = `query MetadataSeries($id: String!, $includeE
       runtimeMinutes
       isFiller
     }
+  }
+}`;
+
+export const pendingReleasesQuery = `query PendingReleases {
+  pendingReleases {
+    id
+    wantedItemId
+    titleId
+    releaseTitle
+    releaseUrl
+    releaseSizeBytes
+    releaseScore
+    scoringLogJson
+    indexerSource
+    addedAt
+    delayUntil
+    status
   }
 }`;
 

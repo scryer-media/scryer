@@ -14,11 +14,13 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 sqlx = { workspace = true }
 chrono = { workspace = true }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "zstd"] }
+flate2 = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "gzip", "brotli", "zstd", "deflate"] }
 p256 = { workspace = true }
 rand_core = { workspace = true }
 rcgen = "0.13"
 ring = "0.17"
 tracing = { workspace = true }
 uuid = { workspace = true }
+metrics = { workspace = true }
 x509-parser = "0.16"

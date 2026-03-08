@@ -35,6 +35,22 @@ pub struct PluginDescriptor {
     /// and uses this URL when auto-creating an IndexerConfig.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_base_url: Option<String>,
+    /// Additional hostnames the plugin is allowed to reach beyond the
+    /// configured base_url (indexer) or config_json URLs (notification).
+    /// The loader always grants access to the base_url hostname and any
+    /// config_json values that parse as URLs. Use this for extra static
+    /// hosts (CDNs, secondary APIs). Use `["*"]` for unrestricted access.
+    /// Empty (the default) means the plugin can only reach its configured URLs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_hosts: Vec<String>,
+    /// Recommended minimum seconds between API requests. Used as the default
+    /// `rate_limit_seconds` when auto-creating an IndexerConfig for this plugin.
+    /// If unset, the global default (1 second) applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_limit_seconds: Option<i64>,
+    /// Notification-specific capabilities. Only present for `plugin_type: "notification"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notification_capabilities: Option<NotificationCapabilities>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +61,59 @@ pub struct PluginScoringPolicy {
     /// Empty means it applies to all facets.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub applied_facets: Vec<String>,
+}
+
+/// Notification capabilities declared by a notification plugin.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NotificationCapabilities {
+    #[serde(default)]
+    pub supports_rich_text: bool,
+    #[serde(default)]
+    pub supports_images: bool,
+    /// Which event types this plugin can meaningfully handle.
+    /// Empty means all events are supported.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_events: Vec<String>,
+}
+
+/// Sent to a notification plugin's `send_notification()` export.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginNotificationRequest {
+    pub event_type: String,
+    pub title: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_year: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_facet: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poster_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub episode_info: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_client: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application_version: Option<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub metadata: HashMap<String, serde_json::Value>,
+}
+
+/// Returned by a notification plugin's `send_notification()` export.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginNotificationResponse {
+    pub success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Sent to a plugin's `search()` export.
@@ -249,5 +318,71 @@ mod tests {
         assert!(r.size_bytes.is_none());
         assert!(r.languages.is_empty());
         assert!(r.extra.is_empty());
+    }
+
+    #[test]
+    fn notification_descriptor_round_trip() {
+        let json = r#"{
+            "name": "Webhook",
+            "version": "1.0.0",
+            "sdk_version": "0.1",
+            "plugin_type": "notification",
+            "provider_type": "webhook",
+            "capabilities": { "search": false },
+            "notification_capabilities": {
+                "supports_rich_text": false,
+                "supports_images": false,
+                "supported_events": ["grab", "import_complete"]
+            },
+            "config_fields": [
+                { "key": "webhook_url", "label": "Webhook URL", "field_type": "string", "required": true }
+            ]
+        }"#;
+        let desc: PluginDescriptor = serde_json::from_str(json).unwrap();
+        assert_eq!(desc.plugin_type, "notification");
+        assert_eq!(desc.provider_type, "webhook");
+        let caps = desc.notification_capabilities.unwrap();
+        assert!(!caps.supports_rich_text);
+        assert_eq!(caps.supported_events, vec!["grab", "import_complete"]);
+        assert_eq!(desc.config_fields.len(), 1);
+    }
+
+    #[test]
+    fn notification_request_round_trip() {
+        let req = PluginNotificationRequest {
+            event_type: "grab".to_string(),
+            title: "Download started".to_string(),
+            message: "Dune was grabbed".to_string(),
+            title_name: Some("Dune".to_string()),
+            title_year: Some(2024),
+            title_facet: Some("movie".to_string()),
+            poster_url: None,
+            episode_info: None,
+            quality: Some("Bluray-2160p".to_string()),
+            release_title: Some("Dune.2024.2160p.BluRay".to_string()),
+            download_client: Some("sabnzbd".to_string()),
+            file_path: None,
+            health_message: None,
+            application_version: None,
+            metadata: HashMap::new(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: PluginNotificationRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.event_type, "grab");
+        assert_eq!(parsed.title_name, Some("Dune".to_string()));
+        assert_eq!(parsed.title_year, Some(2024));
+    }
+
+    #[test]
+    fn notification_response_round_trip() {
+        let json = r#"{ "success": true }"#;
+        let resp: PluginNotificationResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.success);
+        assert!(resp.error.is_none());
+
+        let json = r#"{ "success": false, "error": "connection refused" }"#;
+        let resp: PluginNotificationResponse = serde_json::from_str(json).unwrap();
+        assert!(!resp.success);
+        assert_eq!(resp.error.as_deref(), Some("connection refused"));
     }
 }

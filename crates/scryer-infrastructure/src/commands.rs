@@ -1,4 +1,4 @@
-use scryer_application::{AppResult, PrimaryCollectionSummary, ReleaseDecision, ReleaseDownloadAttemptOutcome, TitleMetadataUpdate, WantedItem};
+use scryer_application::{AppError, AppResult, PendingRelease, PrimaryCollectionSummary, ReleaseDecision, ReleaseDownloadAttemptOutcome, TitleMetadataUpdate, WantedItem};
 use scryer_domain::{CalendarEpisode, Collection, DownloadClientConfig, Episode, HistoryEvent, ImportRecord, IndexerConfig, MediaFacet, PluginInstallation, RuleSet, Title, User};
 use scryer_application::QualityProfile;
 use sqlx::SqlitePool;
@@ -11,7 +11,8 @@ use crate::types::{
 use crate::{
     migrations,
     queries::{
-        download_client::*, event::*, indexer::*, plugin_installation::*, quality::*,
+        download_client::*, event::*, housekeeping, indexer::*, notification_channel,
+        notification_subscription, plugin_installation::*, quality::*,
         rule_set::*, settings::*, title::*, user::*, workflow::*,
     },
 };
@@ -297,6 +298,10 @@ pub(crate) enum DbCommand {
     ListAppliedMigrations {
         reply: Sender<AppResult<Vec<MigrationStatus>>>,
     },
+    VacuumInto {
+        dest_path: String,
+        reply: Sender<AppResult<()>>,
+    },
     CreateWorkflowOperation {
         operation_type: String,
         status: String,
@@ -337,6 +342,19 @@ pub(crate) enum DbCommand {
         source_title: Option<String>,
         reply: Sender<AppResult<Option<String>>>,
     },
+    RecordDownloadSubmission {
+        title_id: String,
+        facet: String,
+        download_client_type: String,
+        download_client_item_id: String,
+        source_title: Option<String>,
+        reply: Sender<AppResult<()>>,
+    },
+    FindDownloadSubmission {
+        download_client_type: String,
+        download_client_item_id: String,
+        reply: Sender<AppResult<Option<scryer_application::DownloadSubmission>>>,
+    },
     GetImportBySourceRef {
         source_system: String,
         source_ref: String,
@@ -360,10 +378,7 @@ pub(crate) enum DbCommand {
         reply: Sender<AppResult<Vec<ImportRecord>>>,
     },
     InsertMediaFile {
-        title_id: String,
-        file_path: String,
-        size_bytes: i64,
-        quality_label: Option<String>,
+        input: scryer_application::InsertMediaFileInput,
         reply: Sender<AppResult<String>>,
     },
     LinkFileToEpisode {
@@ -465,6 +480,37 @@ pub(crate) enum DbCommand {
         limit: i64,
         reply: Sender<AppResult<Vec<ReleaseDecision>>>,
     },
+    // ── Pending Releases ──────────────────────────────────────────────
+    InsertPendingRelease {
+        release: PendingRelease,
+        reply: Sender<AppResult<String>>,
+    },
+    ListExpiredPendingReleases {
+        now: String,
+        reply: Sender<AppResult<Vec<PendingRelease>>>,
+    },
+    ListPendingReleasesForWantedItem {
+        wanted_item_id: String,
+        reply: Sender<AppResult<Vec<PendingRelease>>>,
+    },
+    UpdatePendingReleaseStatus {
+        id: String,
+        status: String,
+        grabbed_at: Option<String>,
+        reply: Sender<AppResult<()>>,
+    },
+    SupersedePendingReleasesForWantedItem {
+        wanted_item_id: String,
+        except_id: String,
+        reply: Sender<AppResult<()>>,
+    },
+    ListWaitingPendingReleases {
+        reply: Sender<AppResult<Vec<PendingRelease>>>,
+    },
+    GetPendingRelease {
+        id: String,
+        reply: Sender<AppResult<Option<PendingRelease>>>,
+    },
     // ── Rule Sets ──────────────────────────────────────────────────────
     ListRuleSets {
         reply: Sender<AppResult<Vec<RuleSet>>>,
@@ -535,6 +581,74 @@ pub(crate) enum DbCommand {
     },
     GetRegistryCache {
         reply: Sender<AppResult<Option<String>>>,
+    },
+    // ── Notification channels ───────────────────────────────
+    ListNotificationChannels {
+        reply: Sender<AppResult<Vec<scryer_domain::NotificationChannelConfig>>>,
+    },
+    GetNotificationChannel {
+        id: String,
+        reply: Sender<AppResult<Option<scryer_domain::NotificationChannelConfig>>>,
+    },
+    CreateNotificationChannel {
+        config: scryer_domain::NotificationChannelConfig,
+        reply: Sender<AppResult<scryer_domain::NotificationChannelConfig>>,
+    },
+    UpdateNotificationChannel {
+        config: scryer_domain::NotificationChannelConfig,
+        reply: Sender<AppResult<scryer_domain::NotificationChannelConfig>>,
+    },
+    DeleteNotificationChannel {
+        id: String,
+        reply: Sender<AppResult<()>>,
+    },
+    // ── Notification subscriptions ──────────────────────────
+    ListNotificationSubscriptions {
+        reply: Sender<AppResult<Vec<scryer_domain::NotificationSubscription>>>,
+    },
+    ListNotificationSubscriptionsForChannel {
+        channel_id: String,
+        reply: Sender<AppResult<Vec<scryer_domain::NotificationSubscription>>>,
+    },
+    ListNotificationSubscriptionsForEvent {
+        event_type: String,
+        reply: Sender<AppResult<Vec<scryer_domain::NotificationSubscription>>>,
+    },
+    CreateNotificationSubscription {
+        sub: scryer_domain::NotificationSubscription,
+        reply: Sender<AppResult<scryer_domain::NotificationSubscription>>,
+    },
+    UpdateNotificationSubscription {
+        sub: scryer_domain::NotificationSubscription,
+        reply: Sender<AppResult<scryer_domain::NotificationSubscription>>,
+    },
+    DeleteNotificationSubscription {
+        id: String,
+        reply: Sender<AppResult<()>>,
+    },
+    // ── Housekeeping ───────────────────────────────────────────────────
+    DeleteReleaseDecisionsOlderThan {
+        days: i64,
+        reply: Sender<AppResult<u32>>,
+    },
+    DeleteReleaseAttemptsOlderThan {
+        days: i64,
+        reply: Sender<AppResult<u32>>,
+    },
+    DeleteDispatchedEventOutboxesOlderThan {
+        days: i64,
+        reply: Sender<AppResult<u32>>,
+    },
+    DeleteHistoryEventsOlderThan {
+        days: i64,
+        reply: Sender<AppResult<u32>>,
+    },
+    ListAllMediaFilePaths {
+        reply: Sender<AppResult<Vec<(String, String)>>>,
+    },
+    DeleteMediaFilesByIds {
+        ids: Vec<String>,
+        reply: Sender<AppResult<u32>>,
     },
 }
 
@@ -967,6 +1081,15 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 DbCommand::ListAppliedMigrations { reply } => {
                     let _ = reply.send(migrations::list_applied_migrations(&pool).await);
                 }
+                DbCommand::VacuumInto { dest_path, reply } => {
+                    let result = sqlx::query("VACUUM INTO ?")
+                        .bind(&dest_path)
+                        .execute(&pool)
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| AppError::Repository(format!("vacuum into failed: {e}")));
+                    let _ = reply.send(result);
+                }
                 DbCommand::CreateWorkflowOperation {
                     operation_type,
                     status,
@@ -1023,6 +1146,40 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                             title_id.as_deref(),
                             source_hint.as_deref(),
                             source_title.as_deref(),
+                        )
+                        .await,
+                    );
+                }
+                DbCommand::RecordDownloadSubmission {
+                    title_id,
+                    facet,
+                    download_client_type,
+                    download_client_item_id,
+                    source_title,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        record_download_submission_query(
+                            &pool,
+                            &title_id,
+                            &facet,
+                            &download_client_type,
+                            &download_client_item_id,
+                            source_title.as_deref(),
+                        )
+                        .await,
+                    );
+                }
+                DbCommand::FindDownloadSubmission {
+                    download_client_type,
+                    download_client_item_id,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        find_download_submission_query(
+                            &pool,
+                            &download_client_type,
+                            &download_client_item_id,
                         )
                         .await,
                     );
@@ -1098,15 +1255,12 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     let _ = reply.send(list_imports_query(&pool, limit).await);
                 }
                 DbCommand::InsertMediaFile {
-                    title_id,
-                    file_path,
-                    size_bytes,
-                    quality_label,
+                    input,
                     reply,
                 } => {
                     let _ = reply.send(
                         crate::queries::media_file::insert_media_file_query(
-                            &pool, &title_id, &file_path, size_bytes, quality_label,
+                            &pool, &input,
                         )
                         .await,
                     );
@@ -1257,6 +1411,56 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                         ).await,
                     );
                 }
+                // ── Pending Releases ──────────────────────────────────────
+                DbCommand::InsertPendingRelease { release, reply } => {
+                    let _ = reply.send(
+                        crate::queries::pending_releases::insert_pending_release_query(
+                            &pool, &release,
+                        ).await,
+                    );
+                }
+                DbCommand::ListExpiredPendingReleases { now, reply } => {
+                    let _ = reply.send(
+                        crate::queries::pending_releases::list_expired_pending_releases_query(
+                            &pool, &now,
+                        ).await,
+                    );
+                }
+                DbCommand::ListPendingReleasesForWantedItem { wanted_item_id, reply } => {
+                    let _ = reply.send(
+                        crate::queries::pending_releases::list_pending_releases_for_wanted_item_query(
+                            &pool, &wanted_item_id,
+                        ).await,
+                    );
+                }
+                DbCommand::UpdatePendingReleaseStatus { id, status, grabbed_at, reply } => {
+                    let _ = reply.send(
+                        crate::queries::pending_releases::update_pending_release_status_query(
+                            &pool, &id, &status, grabbed_at.as_deref(),
+                        ).await,
+                    );
+                }
+                DbCommand::SupersedePendingReleasesForWantedItem { wanted_item_id, except_id, reply } => {
+                    let _ = reply.send(
+                        crate::queries::pending_releases::supersede_pending_releases_for_wanted_item_query(
+                            &pool, &wanted_item_id, &except_id,
+                        ).await,
+                    );
+                }
+                DbCommand::ListWaitingPendingReleases { reply } => {
+                    let _ = reply.send(
+                        crate::queries::pending_releases::list_waiting_pending_releases_query(
+                            &pool,
+                        ).await,
+                    );
+                }
+                DbCommand::GetPendingRelease { id, reply } => {
+                    let _ = reply.send(
+                        crate::queries::pending_releases::get_pending_release_query(
+                            &pool, &id,
+                        ).await,
+                    );
+                }
                 // ── Rule Sets ──────────────────────────────────────────────
                 DbCommand::ListRuleSets { reply } => {
                     let _ = reply.send(list_rule_sets_query(&pool).await);
@@ -1315,6 +1519,94 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 }
                 DbCommand::GetRegistryCache { reply } => {
                     let _ = reply.send(get_registry_cache_query(&pool).await);
+                }
+                // ── Notification Channels ────────────────────────────────
+                DbCommand::ListNotificationChannels { reply } => {
+                    let _ = reply.send(
+                        notification_channel::list_notification_channels_query(&pool, encryption_key.as_ref()).await,
+                    );
+                }
+                DbCommand::GetNotificationChannel { id, reply } => {
+                    let _ = reply.send(
+                        notification_channel::get_notification_channel_query(&pool, &id, encryption_key.as_ref()).await,
+                    );
+                }
+                DbCommand::CreateNotificationChannel { config, reply } => {
+                    let _ = reply.send(
+                        notification_channel::create_notification_channel_query(&pool, &config, encryption_key.as_ref()).await,
+                    );
+                }
+                DbCommand::UpdateNotificationChannel { config, reply } => {
+                    let _ = reply.send(
+                        notification_channel::update_notification_channel_query(&pool, &config, encryption_key.as_ref()).await,
+                    );
+                }
+                DbCommand::DeleteNotificationChannel { id, reply } => {
+                    let _ = reply.send(
+                        notification_channel::delete_notification_channel_query(&pool, &id).await,
+                    );
+                }
+                // ── Notification Subscriptions ───────────────────────────
+                DbCommand::ListNotificationSubscriptions { reply } => {
+                    let _ = reply.send(
+                        notification_subscription::list_notification_subscriptions_query(&pool).await,
+                    );
+                }
+                DbCommand::ListNotificationSubscriptionsForChannel { channel_id, reply } => {
+                    let _ = reply.send(
+                        notification_subscription::list_notification_subscriptions_for_channel_query(&pool, &channel_id).await,
+                    );
+                }
+                DbCommand::ListNotificationSubscriptionsForEvent { event_type, reply } => {
+                    let _ = reply.send(
+                        notification_subscription::list_notification_subscriptions_for_event_query(&pool, &event_type).await,
+                    );
+                }
+                DbCommand::CreateNotificationSubscription { sub, reply } => {
+                    let _ = reply.send(
+                        notification_subscription::create_notification_subscription_query(&pool, &sub).await,
+                    );
+                }
+                DbCommand::UpdateNotificationSubscription { sub, reply } => {
+                    let _ = reply.send(
+                        notification_subscription::update_notification_subscription_query(&pool, &sub).await,
+                    );
+                }
+                DbCommand::DeleteNotificationSubscription { id, reply } => {
+                    let _ = reply.send(
+                        notification_subscription::delete_notification_subscription_query(&pool, &id).await,
+                    );
+                }
+                // ── Housekeeping ────────────────────────────────────────
+                DbCommand::DeleteReleaseDecisionsOlderThan { days, reply } => {
+                    let _ = reply.send(
+                        housekeeping::delete_release_decisions_older_than_query(&pool, days).await,
+                    );
+                }
+                DbCommand::DeleteReleaseAttemptsOlderThan { days, reply } => {
+                    let _ = reply.send(
+                        housekeeping::delete_release_attempts_older_than_query(&pool, days).await,
+                    );
+                }
+                DbCommand::DeleteDispatchedEventOutboxesOlderThan { days, reply } => {
+                    let _ = reply.send(
+                        housekeeping::delete_dispatched_event_outboxes_older_than_query(&pool, days).await,
+                    );
+                }
+                DbCommand::DeleteHistoryEventsOlderThan { days, reply } => {
+                    let _ = reply.send(
+                        housekeeping::delete_history_events_older_than_query(&pool, days).await,
+                    );
+                }
+                DbCommand::ListAllMediaFilePaths { reply } => {
+                    let _ = reply.send(
+                        housekeeping::list_all_media_file_paths_query(&pool).await,
+                    );
+                }
+                DbCommand::DeleteMediaFilesByIds { ids, reply } => {
+                    let _ = reply.send(
+                        housekeeping::delete_media_files_by_ids_query(&pool, &ids).await,
+                    );
                 }
             }
         }

@@ -38,11 +38,11 @@
 
 ## Task Management
 
-1. **Plan First**: Write plan to `tasks/todo.md` with checkable items
+1. **Plan First**: Plans live in `scryer-docs/plans/` (sibling repo). Read existing plans before starting implementation.
 2. **Verify Plan**: Check in before starting implementation
-3. **Track Progress**: Mark items complete as you go
+3. **Track Progress**: Mark items complete as you go (update the plan doc)
 4. **Explain Changes**: High-level summary at each step
-5. **Document Results**: Add review section to `tasks/todo.md`
+5. **Document Results**: Update the relevant plan in `scryer-docs/plans/`
 6. **Capture Lessons**: Update `tasks/lessons.md` after corrections
 
 ## Core Principles

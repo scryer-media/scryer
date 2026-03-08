@@ -3,15 +3,16 @@ use std::path::Path;
 use std::sync::Arc;
 
 use extism::Manifest;
-use scryer_application::{IndexerClient, IndexerPluginProvider};
-use scryer_domain::IndexerConfig;
+use scryer_application::{IndexerClient, IndexerPluginProvider, NotificationClient, NotificationPluginProvider};
+use scryer_domain::{IndexerConfig, NotificationChannelConfig};
 use tracing::{info, warn};
 
 use crate::indexer_adapter::WasmIndexerClient;
+use crate::notification_adapter::WasmNotificationClient;
 use crate::types::PluginDescriptor;
 
 const SUPPORTED_SDK_MAJOR: &str = "0";
-const SUPPORTED_PLUGIN_TYPE: &str = "indexer";
+const SUPPORTED_PLUGIN_TYPES: &[&str] = &["indexer", "notification"];
 
 struct LoadedPlugin {
     wasm_bytes: Vec<u8>,
@@ -35,7 +36,7 @@ impl WasmIndexerPluginProvider {
     pub fn with_external_bytes(mut self, wasm_bytes: &[u8]) -> Self {
         match load_from_bytes(wasm_bytes) {
             Ok((descriptor, bytes)) => {
-                if !validate_descriptor(&descriptor) {
+                if !validate_descriptor_for_type(&descriptor, Some("indexer")) {
                     return self;
                 }
 
@@ -109,7 +110,7 @@ impl WasmIndexerPluginProvider {
     pub fn with_builtin(mut self, wasm_bytes: &[u8]) -> Self {
         match load_from_bytes(wasm_bytes) {
             Ok((descriptor, bytes)) => {
-                if !validate_descriptor(&descriptor) {
+                if !validate_descriptor_for_type(&descriptor, Some("indexer")) {
                     return self;
                 }
 
@@ -224,6 +225,13 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
             .and_then(|loaded| loaded.descriptor.default_base_url.clone())
     }
 
+    fn rate_limit_seconds_for_provider(&self, provider_type: &str) -> Option<i64> {
+        let key = provider_type.trim().to_ascii_lowercase();
+        self.plugins
+            .get(&key)
+            .and_then(|loaded| loaded.descriptor.rate_limit_seconds)
+    }
+
     fn capabilities_for_provider(&self, provider_type: &str) -> scryer_domain::IndexerProviderCapabilities {
         let key = provider_type.trim().to_ascii_lowercase();
         self.plugins
@@ -245,9 +253,13 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
         let loaded = self.plugins.get(&provider)?;
 
         let mut manifest = Manifest::new([extism::Wasm::data(loaded.wasm_bytes.clone())]);
-        manifest = manifest
-            .with_allowed_host("*")
-            .with_timeout(std::time::Duration::from_secs(30));
+        manifest = apply_allowed_hosts(
+            manifest,
+            &loaded.descriptor,
+            Some(&config.base_url),
+            config.config_json.as_deref(),
+        );
+        manifest = manifest.with_timeout(std::time::Duration::from_secs(30));
 
         // Inject standard config values the plugin can read via config::get()
         manifest = manifest.with_config_key("base_url", &config.base_url);
@@ -374,6 +386,11 @@ impl IndexerPluginProvider for DynamicPluginProvider {
         guard.default_base_url_for_provider(provider_type)
     }
 
+    fn rate_limit_seconds_for_provider(&self, provider_type: &str) -> Option<i64> {
+        let guard = self.inner.read().expect("DynamicPluginProvider lock poisoned");
+        guard.rate_limit_seconds_for_provider(provider_type)
+    }
+
     fn capabilities_for_provider(&self, provider_type: &str) -> scryer_domain::IndexerProviderCapabilities {
         let guard = self.inner.read().expect("DynamicPluginProvider lock poisoned");
         guard.capabilities_for_provider(provider_type)
@@ -406,9 +423,9 @@ impl IndexerPluginProvider for DynamicPluginProvider {
     }
 }
 
-/// Validate a plugin descriptor. Returns false (with log warnings) if the
-/// plugin should be skipped.
-fn validate_descriptor(descriptor: &PluginDescriptor) -> bool {
+/// Validate a plugin descriptor, optionally filtering by a specific plugin type.
+/// If `expected_type` is None, any supported type passes.
+fn validate_descriptor_for_type(descriptor: &PluginDescriptor, expected_type: Option<&str>) -> bool {
     let sdk_major = descriptor.sdk_version.split('.').next().unwrap_or("");
     if sdk_major != SUPPORTED_SDK_MAJOR {
         warn!(
@@ -420,14 +437,20 @@ fn validate_descriptor(descriptor: &PluginDescriptor) -> bool {
         return false;
     }
 
-    if descriptor.plugin_type != SUPPORTED_PLUGIN_TYPE {
+    if !SUPPORTED_PLUGIN_TYPES.contains(&descriptor.plugin_type.as_str()) {
         info!(
             plugin = descriptor.name.as_str(),
             plugin_type = descriptor.plugin_type.as_str(),
-            "skipping plugin: type '{}' not yet supported",
+            "skipping plugin: type '{}' not supported",
             descriptor.plugin_type
         );
         return false;
+    }
+
+    if let Some(expected) = expected_type {
+        if descriptor.plugin_type != expected {
+            return false;
+        }
     }
 
     true
@@ -455,7 +478,7 @@ pub fn load_indexer_plugins(plugins_dir: &Path) -> Result<WasmIndexerPluginProvi
 
         match load_single_plugin(&wasm_path) {
             Ok((descriptor, wasm_bytes)) => {
-                if !validate_descriptor(&descriptor) {
+                if !validate_descriptor_for_type(&descriptor, Some("indexer")) {
                     continue;
                 }
 
@@ -524,10 +547,75 @@ fn load_single_plugin(wasm_path: &Path) -> Result<(PluginDescriptor, Vec<u8>), S
     load_from_bytes(&wasm_bytes)
 }
 
+/// Build the Extism allowed-hosts list for a plugin manifest.
+///
+/// The allowed hosts are derived from:
+/// 1. The plugin's `allowed_hosts` descriptor field (static declarations).
+///    Use `["*"]` for unrestricted access.
+/// 2. The hostname from `base_url` (indexer plugins).
+/// 3. Hostnames from `config_json` values that parse as URLs (notification plugins).
+///
+/// If the resulting set is empty, no hosts are allowed (plugin has no network access).
+fn apply_allowed_hosts(
+    mut manifest: Manifest,
+    descriptor: &PluginDescriptor,
+    base_url: Option<&str>,
+    config_json: Option<&str>,
+) -> Manifest {
+    // Short-circuit: explicit wildcard in descriptor
+    if descriptor.allowed_hosts.iter().any(|h| h == "*") {
+        return manifest.with_allowed_host("*");
+    }
+
+    let mut hosts: Vec<String> = descriptor.allowed_hosts.clone();
+
+    // Add hostname from base_url (indexer plugins)
+    if let Some(url_str) = base_url {
+        if let Some(host) = host_from_url(url_str) {
+            hosts.push(host);
+        }
+    }
+
+    // Add hostnames from config_json values that parse as URLs (notification plugins)
+    if let Some(json_str) = config_json {
+        if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(json_str) {
+            for v in map.values() {
+                if let Some(host) = host_from_url(v) {
+                    hosts.push(host);
+                }
+            }
+        }
+    }
+
+    for host in &hosts {
+        manifest = manifest.with_allowed_host(host);
+    }
+    manifest
+}
+
+/// Extract hostname from a URL string without pulling in the `url` crate.
+fn host_from_url(url: &str) -> Option<String> {
+    // Expect "scheme://host..." — strip scheme, then take until '/' or ':'
+    let after_scheme = url.split("://").nth(1)?;
+    let host = after_scheme.split('/').next()?;
+    // Strip port if present
+    let host = if host.contains('[') {
+        // IPv6: [::1]:8080 — take everything including brackets
+        host.split(']').next().map(|h| format!("{}]", h)).unwrap_or_default()
+    } else {
+        host.split(':').next().unwrap_or(host).to_string()
+    };
+    if host.is_empty() {
+        None
+    } else {
+        Some(host)
+    }
+}
+
 fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Vec<u8>), String> {
     let bytes = wasm_bytes.to_vec();
+    // No allowed hosts needed — describe() is a pure function that returns JSON.
     let manifest = Manifest::new([extism::Wasm::data(bytes.clone())])
-        .with_allowed_host("*")
         .with_timeout(std::time::Duration::from_secs(10));
 
     let mut plugin = extism::Plugin::new(manifest, [], true)
@@ -541,4 +629,220 @@ fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Vec<u8>), Str
         .map_err(|e| format!("describe() returned invalid JSON: {e}"))?;
 
     Ok((descriptor, bytes))
+}
+
+// ── Notification plugin provider ───────────────────────────────────────
+
+pub struct WasmNotificationPluginProvider {
+    plugins: HashMap<String, LoadedPlugin>,
+}
+
+impl WasmNotificationPluginProvider {
+    pub fn empty() -> Self {
+        Self {
+            plugins: HashMap::new(),
+        }
+    }
+
+    pub fn with_external_bytes(mut self, wasm_bytes: &[u8]) -> Self {
+        match load_from_bytes(wasm_bytes) {
+            Ok((descriptor, bytes)) => {
+                if !validate_descriptor_for_type(&descriptor, Some("notification")) {
+                    return self;
+                }
+
+                let provider_type = descriptor.provider_type.trim().to_ascii_lowercase();
+                info!(
+                    plugin = descriptor.name.as_str(),
+                    version = descriptor.version.as_str(),
+                    provider_type = provider_type.as_str(),
+                    "registered external notification plugin"
+                );
+                self.plugins.insert(
+                    provider_type,
+                    LoadedPlugin {
+                        wasm_bytes: bytes,
+                        descriptor,
+                    },
+                );
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to load external notification plugin");
+            }
+        }
+        self
+    }
+
+    pub fn without_provider_type(mut self, provider_type: &str) -> Self {
+        let key = provider_type.trim().to_ascii_lowercase();
+        self.plugins.remove(&key);
+        self
+    }
+
+    fn create_notification_client(
+        loaded: &LoadedPlugin,
+        config: &NotificationChannelConfig,
+    ) -> Option<Arc<dyn NotificationClient>> {
+        let mut manifest = Manifest::new([extism::Wasm::data(loaded.wasm_bytes.clone())]);
+        manifest = apply_allowed_hosts(
+            manifest,
+            &loaded.descriptor,
+            None,
+            Some(&config.config_json),
+        );
+        manifest = manifest.with_timeout(std::time::Duration::from_secs(30));
+
+        // Inject config_json key-value pairs
+        match serde_json::from_str::<HashMap<String, String>>(&config.config_json) {
+            Ok(map) => {
+                for (k, v) in &map {
+                    manifest = manifest.with_config_key(k, v);
+                }
+            }
+            Err(e) => {
+                warn!(
+                    channel = config.name.as_str(),
+                    error = %e,
+                    "failed to parse notification channel config_json"
+                );
+            }
+        }
+
+        match extism::Plugin::new(manifest, [], true) {
+            Ok(plugin) => {
+                let client = WasmNotificationClient::new(
+                    plugin,
+                    loaded.descriptor.clone(),
+                    config.name.clone(),
+                );
+                Some(Arc::new(client))
+            }
+            Err(e) => {
+                warn!(
+                    channel = config.name.as_str(),
+                    error = %e,
+                    "failed to instantiate WASM notification plugin"
+                );
+                None
+            }
+        }
+    }
+}
+
+impl NotificationPluginProvider for WasmNotificationPluginProvider {
+    fn client_for_channel(&self, config: &NotificationChannelConfig) -> Option<Arc<dyn NotificationClient>> {
+        let provider = config.channel_type.trim().to_ascii_lowercase();
+        let loaded = self.plugins.get(&provider)?;
+        Self::create_notification_client(loaded, config)
+    }
+
+    fn available_provider_types(&self) -> Vec<String> {
+        self.plugins
+            .iter()
+            .filter(|(key, loaded)| **key == loaded.descriptor.provider_type.trim().to_ascii_lowercase())
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
+
+    fn config_fields_for_provider(&self, provider_type: &str) -> Vec<scryer_domain::ConfigFieldDef> {
+        let key = provider_type.trim().to_ascii_lowercase();
+        self.plugins
+            .get(&key)
+            .map(|loaded| loaded.descriptor.config_fields.clone())
+            .unwrap_or_default()
+    }
+
+    fn plugin_name_for_provider(&self, provider_type: &str) -> Option<String> {
+        let key = provider_type.trim().to_ascii_lowercase();
+        self.plugins
+            .get(&key)
+            .map(|loaded| loaded.descriptor.name.clone())
+    }
+
+    fn reload_plugins(
+        &self,
+        _external_wasm_bytes: &[&[u8]],
+        _disabled_builtins: &[String],
+    ) -> Result<(), String> {
+        Err("use DynamicNotificationPluginProvider for reload".to_string())
+    }
+}
+
+/// Thread-safe wrapper around `WasmNotificationPluginProvider` that supports runtime reload.
+pub struct DynamicNotificationPluginProvider {
+    inner: std::sync::RwLock<WasmNotificationPluginProvider>,
+    client_cache: std::sync::Mutex<HashMap<(String, String), Arc<dyn NotificationClient>>>,
+}
+
+impl DynamicNotificationPluginProvider {
+    pub fn new(provider: WasmNotificationPluginProvider) -> Self {
+        Self {
+            inner: std::sync::RwLock::new(provider),
+            client_cache: std::sync::Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn reload(&self, new_provider: WasmNotificationPluginProvider) {
+        let mut guard = self.inner.write().expect("DynamicNotificationPluginProvider lock poisoned");
+        *guard = new_provider;
+        if let Ok(mut cache) = self.client_cache.lock() {
+            cache.clear();
+        }
+        info!("notification plugin provider reloaded");
+    }
+}
+
+impl NotificationPluginProvider for DynamicNotificationPluginProvider {
+    fn client_for_channel(&self, config: &NotificationChannelConfig) -> Option<Arc<dyn NotificationClient>> {
+        let cache_key = (config.id.clone(), config.updated_at.to_rfc3339());
+
+        if let Ok(cache) = self.client_cache.lock() {
+            if let Some(client) = cache.get(&cache_key) {
+                return Some(Arc::clone(client));
+            }
+        }
+
+        let guard = self.inner.read().expect("DynamicNotificationPluginProvider lock poisoned");
+        let client = guard.client_for_channel(config)?;
+
+        if let Ok(mut cache) = self.client_cache.lock() {
+            cache.insert(cache_key, Arc::clone(&client));
+        }
+
+        Some(client)
+    }
+
+    fn available_provider_types(&self) -> Vec<String> {
+        let guard = self.inner.read().expect("DynamicNotificationPluginProvider lock poisoned");
+        guard.available_provider_types()
+    }
+
+    fn config_fields_for_provider(&self, provider_type: &str) -> Vec<scryer_domain::ConfigFieldDef> {
+        let guard = self.inner.read().expect("DynamicNotificationPluginProvider lock poisoned");
+        guard.config_fields_for_provider(provider_type)
+    }
+
+    fn plugin_name_for_provider(&self, provider_type: &str) -> Option<String> {
+        let guard = self.inner.read().expect("DynamicNotificationPluginProvider lock poisoned");
+        guard.plugin_name_for_provider(provider_type)
+    }
+
+    fn reload_plugins(
+        &self,
+        external_wasm_bytes: &[&[u8]],
+        disabled_builtins: &[String],
+    ) -> Result<(), String> {
+        let mut provider = WasmNotificationPluginProvider::empty();
+
+        for bytes in external_wasm_bytes {
+            provider = provider.with_external_bytes(bytes);
+        }
+
+        for pt in disabled_builtins {
+            provider = provider.without_provider_type(pt);
+        }
+
+        self.reload(provider);
+        Ok(())
+    }
 }

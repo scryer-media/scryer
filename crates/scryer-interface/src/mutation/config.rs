@@ -3,7 +3,7 @@ use scryer_domain::{Entitlement, NewDownloadClientConfig, NewIndexerConfig};
 use serde_json::{json, Map, Value};
 
 use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_error};
-use crate::mappers::{from_download_client_config, from_indexer_config};
+use crate::mappers::{from_download_client_config, from_housekeeping_report, from_indexer_config, from_rss_sync_report};
 use crate::types::*;
 
 const SETTINGS_SCOPE_SYSTEM: &str = "system";
@@ -306,5 +306,44 @@ impl ConfigMutations {
         }
 
         Ok(true)
+    }
+
+    async fn test_indexer_connection(
+        &self,
+        ctx: &Context<'_>,
+        input: TestIndexerConnectionInput,
+    ) -> GqlResult<bool> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        app.test_indexer_connection(
+            &actor,
+            &input.provider_type,
+            &input.base_url,
+            input.api_key.as_deref(),
+            input.config_json.as_deref(),
+        )
+        .await
+        .map_err(to_gql_error)?;
+        Ok(true)
+    }
+
+    async fn run_housekeeping(&self, ctx: &Context<'_>) -> GqlResult<HousekeepingReportPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let report = app.run_housekeeping().await.map_err(to_gql_error)?;
+        Ok(from_housekeeping_report(report))
+    }
+
+    async fn trigger_rss_sync(&self, ctx: &Context<'_>) -> GqlResult<RssSyncReportPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let report = app.run_rss_sync().await.map_err(to_gql_error)?;
+        Ok(from_rss_sync_report(report))
     }
 }

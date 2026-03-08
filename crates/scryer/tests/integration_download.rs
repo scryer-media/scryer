@@ -497,8 +497,9 @@ async fn nzbget_submit_download() {
         "submit should succeed: {:?}",
         result.err()
     );
+    let grab = result.unwrap();
     assert!(
-        !result.unwrap().is_empty(),
+        !grab.job_id.is_empty(),
         "should return a non-empty job ID"
     );
 }
@@ -1170,10 +1171,21 @@ async fn sabnzbd_delete_history_item() {
 
 #[tokio::test]
 async fn sabnzbd_submit_download() {
+    // Mock server for both the NZB download and the SABnzbd API
     let server = MockServer::start().await;
+
+    // Mock: NZB file download from indexer
     Mock::given(method("GET"))
+        .and(path("/getnzb"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_bytes(b"<?xml version=\"1.0\"?><nzb></nzb>".to_vec()),
+        )
+        .mount(&server)
+        .await;
+
+    // Mock: SABnzbd addfile (POST with multipart)
+    Mock::given(method("POST"))
         .and(path("/api"))
-        .and(query_param("mode", "addurl"))
         .respond_with(
             ResponseTemplate::new(200).set_body_string(load_fixture("sabnzbd/addurl.json")),
         )
@@ -1210,13 +1222,15 @@ async fn sabnzbd_submit_download() {
         digital_release_date: None,
     };
 
-    let nzb_url = "https://indexer.example.com/getnzb?id=abc123&apikey=xyz";
+    let nzb_url = format!("{}/getnzb?id=abc123&apikey=xyz", server.uri());
     let result = new_sabnzbd_client(&server.uri())
-        .submit_to_download_queue(&title, Some(nzb_url.to_string()), None, None, Some("movies".to_string()))
+        .submit_to_download_queue(&title, Some(nzb_url), None, None, Some("movies".to_string()))
         .await;
 
     assert!(result.is_ok(), "submit should succeed: {:?}", result.err());
-    assert_eq!(result.unwrap(), "SABnzbd_nzo_abc123");
+    let grab = result.unwrap();
+    assert_eq!(grab.job_id, "SABnzbd_nzo_abc123");
+    assert_eq!(grab.client_type, "sabnzbd");
 }
 
 #[tokio::test]

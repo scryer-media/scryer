@@ -270,11 +270,31 @@ impl AppUseCase {
             Vec::new()
         };
 
-        let items = if include_history_only {
+        let mut items: Vec<DownloadQueueItem> = if include_history_only {
             history_items
         } else {
             queue_items
         };
+
+        // Enrich items with download_submissions data (for SABnzbd which
+        // cannot embed metadata in the download itself). This populates
+        // title_id, facet, and is_scryer_origin from the submissions table.
+        for item in &mut items {
+            if item.is_scryer_origin {
+                continue;
+            }
+            if let Ok(Some(submission)) = self
+                .services
+                .download_submissions
+                .find_by_client_item_id(&item.client_type, &item.download_client_item_id)
+                .await
+            {
+                item.is_scryer_origin = true;
+                item.title_id = Some(submission.title_id);
+                item.facet = Some(submission.facet);
+            }
+        }
+
         let merged = items
             .into_iter()
             .filter(|item| include_history_only || include_all_activity || item.is_scryer_origin)
@@ -735,6 +755,23 @@ pub async fn start_download_queue_poller(
                     Ok(items) => {
                         // Trigger imports for any newly-completed downloads
                         crate::app_usecase_import::try_import_completed_downloads(&app, &actor, &items).await;
+
+                        // Emit download queue gauge by state
+                        let mut counts = [0u64; 6];
+                        for item in &items {
+                            match item.state {
+                                scryer_domain::DownloadQueueState::Queued => counts[0] += 1,
+                                scryer_domain::DownloadQueueState::Downloading => counts[1] += 1,
+                                scryer_domain::DownloadQueueState::Paused => counts[2] += 1,
+                                scryer_domain::DownloadQueueState::Completed => counts[3] += 1,
+                                scryer_domain::DownloadQueueState::ImportPending => counts[4] += 1,
+                                scryer_domain::DownloadQueueState::Failed => counts[5] += 1,
+                            }
+                        }
+                        let labels = ["queued", "downloading", "paused", "completed", "import_pending", "failed"];
+                        for (label, &count) in labels.iter().zip(&counts) {
+                            metrics::gauge!("scryer_download_queue_items", "state" => *label).set(count as f64);
+                        }
 
                         let _ = app
                             .services

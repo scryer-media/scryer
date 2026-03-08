@@ -32,6 +32,8 @@ type SettingsIndexersSectionProps = {
   toggleIndexerEnabled: (indexer: IndexerRecord) => Promise<void> | void;
   deleteIndexer: (indexer: IndexerRecord) => Promise<void> | void;
   providerTypes: ProviderTypeInfo[];
+  testIndexerConnection: () => Promise<void> | void;
+  isTestingConnection: boolean;
 };
 
 const FALLBACK_PROVIDER_OPTIONS = [
@@ -207,6 +209,8 @@ export function SettingsIndexersSection({
   toggleIndexerEnabled,
   deleteIndexer,
   providerTypes,
+  testIndexerConnection,
+  isTestingConnection,
 }: SettingsIndexersSectionProps) {
   const t = useTranslate();
   const normalizedProviderType = indexerDraft.providerType.trim().toLowerCase();
@@ -504,6 +508,14 @@ export function SettingsIndexersSection({
                   : editingIndexerId
                     ? t("settings.indexerUpdate")
                     : t("settings.indexerCreate")}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void testIndexerConnection()}
+                disabled={isTestingConnection}
+              >
+                {isTestingConnection ? t("status.testingIndexerConnection") : t("settings.indexerTest")}
               </Button>
               <Button type="button" variant="secondary" onClick={resetIndexerDraft}>
                 {t("label.cancel")}

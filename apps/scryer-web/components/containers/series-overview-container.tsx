@@ -137,6 +137,20 @@ export type EpisodeMediaFile = {
   hasMultiaudio: boolean;
   durationSeconds: number | null;
   containerFormat: string | null;
+  sceneName: string | null;
+  releaseGroup: string | null;
+  sourceType: string | null;
+  resolution: string | null;
+  videoCodecParsed: string | null;
+  audioCodecParsed: string | null;
+  acquisitionScore: number | null;
+  scoringLog: string | null;
+  indexerSource: string | null;
+  grabbedReleaseTitle: string | null;
+  grabbedAt: string | null;
+  edition: string | null;
+  originalFilePath: string | null;
+  releaseHash: string | null;
 };
 
 type SeriesOverviewContainerProps = {
@@ -537,9 +551,9 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   }, [title, refreshMediaFiles]);
 
   // Subscribe to activity events via WebSocket — refetch media files when an
-  // import completes for this title (movie_downloaded / series_episode_imported).
+  // import completes for this title (movie_downloaded / series_episode_imported / file_upgraded).
   const IMPORT_KINDS = React.useMemo(
-    () => new Set(["movie_downloaded", "series_episode_imported"]),
+    () => new Set(["movie_downloaded", "series_episode_imported", "file_upgraded"]),
     [],
   );
 

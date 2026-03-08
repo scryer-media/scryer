@@ -27,6 +27,20 @@ export type MediaInfoFile = {
   hasMultiaudio: boolean;
   durationSeconds: number | null;
   containerFormat: string | null;
+  sceneName?: string | null;
+  releaseGroup?: string | null;
+  sourceType?: string | null;
+  resolution?: string | null;
+  videoCodecParsed?: string | null;
+  audioCodecParsed?: string | null;
+  acquisitionScore?: number | null;
+  scoringLog?: string | null;
+  indexerSource?: string | null;
+  grabbedReleaseTitle?: string | null;
+  grabbedAt?: string | null;
+  edition?: string | null;
+  originalFilePath?: string | null;
+  releaseHash?: string | null;
 };
 
 function resolveResolution(width: number | null, height: number | null): string | null {
@@ -65,6 +79,18 @@ function resolveAudioChannels(channels: number | null): string | null {
   if (channels === 2) return "2.0";
   if (channels === 1) return "1.0";
   return `${channels}ch`;
+}
+
+function resolveSourceType(source: string): string | null {
+  const s = source.toLowerCase();
+  if (s === "bluray" || s === "blu-ray") return "BluRay";
+  if (s === "webdl" || s === "web-dl") return "WEB-DL";
+  if (s === "webrip" || s === "web-rip") return "WEBRip";
+  if (s === "hdtv") return "HDTV";
+  if (s === "dvd" || s === "dvdrip") return "DVD";
+  if (s === "remux") return "Remux";
+  if (s === "bdremux") return "BD Remux";
+  return source;
 }
 
 function Badge({
@@ -107,7 +133,8 @@ export function MediaInfoBadges({ file }: { file: MediaInfoFile }) {
     return "cyan";
   };
 
-  const hasTechInfo = resolution || videoCodec || file.videoHdrFormat || audioCodec || audioChannels || file.hasMultiaudio;
+  const sourceType = file.sourceType ? resolveSourceType(file.sourceType) : null;
+  const hasTechInfo = resolution || videoCodec || file.videoHdrFormat || audioCodec || audioChannels || file.hasMultiaudio || sourceType || file.releaseGroup || file.edition;
   const isPendingScan = file.scanStatus === "imported";
   const isScanFailed = file.scanStatus === "scan_failed";
 
@@ -118,9 +145,12 @@ export function MediaInfoBadges({ file }: { file: MediaInfoFile }) {
       {resolution ? <Badge color="sky">{resolution}</Badge> : null}
       {videoCodec ? <Badge color="blue">{videoCodec}</Badge> : null}
       {file.videoHdrFormat ? <Badge color={hdrColor()}>{file.videoHdrFormat}</Badge> : null}
+      {sourceType ? <Badge color="teal">{sourceType}</Badge> : null}
       {audioCodec ? <Badge color="violet">{audioCodec}</Badge> : null}
       {audioChannels ? <Badge color="purple">{audioChannels}</Badge> : null}
       {file.hasMultiaudio ? <Badge color="purple">Multi-Audio</Badge> : null}
+      {file.edition ? <Badge color="cyan">{file.edition}</Badge> : null}
+      {file.releaseGroup ? <Badge color="indigo">{file.releaseGroup}</Badge> : null}
       {isPendingScan ? <Badge color="amber">{t("mediaFile.pendingScan")}</Badge> : null}
       {isScanFailed ? <Badge color="red">{t("mediaFile.scanFailed")}</Badge> : null}
     </div>

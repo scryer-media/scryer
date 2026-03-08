@@ -1,8 +1,12 @@
 pub mod common;
 pub mod download_client;
 pub mod event;
+pub mod housekeeping;
 pub mod indexer;
 pub mod media_file;
+pub mod notification_channel;
+pub mod notification_subscription;
+pub mod pending_releases;
 pub mod plugin_installation;
 pub mod quality;
 pub mod rule_set;

@@ -16,6 +16,21 @@ export type WantedItem = {
   updatedAt: string;
 };
 
+export type PendingReleaseItem = {
+  id: string;
+  wantedItemId: string;
+  titleId: string;
+  releaseTitle: string;
+  releaseUrl: string | null;
+  releaseSizeBytes: string | null;
+  releaseScore: number;
+  scoringLogJson: string | null;
+  indexerSource: string | null;
+  addedAt: string;
+  delayUntil: string;
+  status: string;
+};
+
 export type ReleaseDecisionItem = {
   id: string;
   wantedItemId: string;

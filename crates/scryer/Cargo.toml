@@ -29,8 +29,10 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 percent-encoding = "2"
 toml = { workspace = true }
+metrics = { workspace = true }
+metrics-exporter-prometheus = "0.16"
 
 [dev-dependencies]
 wiremock = { workspace = true }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "brotli", "zstd", "deflate"] }
 tempfile = "3"

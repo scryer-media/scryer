@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use tokio::io::AsyncReadExt;
 use scryer_domain::MediaFacet;
 use crate::{ActivityChannel, ActivityKind, ActivitySeverity, AppUseCase};
 
@@ -109,7 +110,7 @@ async fn run(ctx: PostProcessingContext) -> crate::AppResult<()> {
         "running post-processing script"
     );
 
-    let child = match cmd.spawn() {
+    let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(err) => {
             let message = format!(
@@ -131,14 +132,33 @@ async fn run(ctx: PostProcessingContext) -> crate::AppResult<()> {
         }
     };
 
+    // Take pipe handles before waiting so we can drain them without consuming
+    // the child — this lets us call child.kill() on timeout.
+    let stderr_pipe = child.stderr.take();
+    let stdout_pipe = child.stdout.take();
+
+    let drain_stderr = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = stderr_pipe {
+            let _ = pipe.read_to_end(&mut buf).await;
+        }
+        buf
+    });
+    // Drain stdout to prevent pipe deadlock (output is discarded).
+    tokio::spawn(async move {
+        if let Some(mut pipe) = stdout_pipe {
+            let _ = tokio::io::copy(&mut pipe, &mut tokio::io::sink()).await;
+        }
+    });
+
     match tokio::time::timeout(
         std::time::Duration::from_secs(timeout_secs),
-        child.wait_with_output(),
+        child.wait(),
     )
     .await
     {
-        Ok(Ok(output)) => {
-            if output.status.success() {
+        Ok(Ok(status)) => {
+            if status.success() {
                 let message = format!(
                     "Post-processing succeeded for '{}'",
                     ctx.title_name
@@ -155,12 +175,12 @@ async fn run(ctx: PostProcessingContext) -> crate::AppResult<()> {
                     )
                     .await;
             } else {
-                let code = output
-                    .status
+                let code = status
                     .code()
                     .map(|c| c.to_string())
                     .unwrap_or_else(|| "signal".into());
-                let stderr_tail = last_bytes_utf8(&output.stderr, 2048);
+                let stderr_bytes = drain_stderr.await.unwrap_or_default();
+                let stderr_tail = last_bytes_utf8(&stderr_bytes, 2048);
                 let message = format!(
                     "Post-processing failed (exit {code}) for '{}': {stderr_tail}",
                     ctx.title_name
@@ -196,6 +216,7 @@ async fn run(ctx: PostProcessingContext) -> crate::AppResult<()> {
                 .await;
         }
         Err(_elapsed) => {
+            let _ = child.kill().await;
             let message = format!(
                 "Post-processing timed out after {timeout_secs}s for '{}'",
                 ctx.title_name

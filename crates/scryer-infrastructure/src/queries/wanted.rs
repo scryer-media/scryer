@@ -52,12 +52,14 @@ pub(crate) async fn list_due_wanted_items_query(
     batch_limit: i64,
 ) -> AppResult<Vec<WantedItem>> {
     let rows: Vec<SqliteRow> = sqlx::query(
-        "SELECT id, title_id, episode_id, media_type, search_phase, next_search_at,
-                last_search_at, search_count, baseline_date, status, grabbed_release,
-                current_score, created_at, updated_at
-         FROM wanted_items
-         WHERE status = 'wanted' AND (next_search_at IS NULL OR next_search_at <= ?)
-         ORDER BY next_search_at ASC
+        "SELECT w.id, w.title_id, w.episode_id, e.season_number,
+                w.media_type, w.search_phase, w.next_search_at,
+                w.last_search_at, w.search_count, w.baseline_date, w.status, w.grabbed_release,
+                w.current_score, w.created_at, w.updated_at
+         FROM wanted_items w
+         LEFT JOIN episodes e ON e.id = w.episode_id
+         WHERE w.status = 'wanted' AND (w.next_search_at IS NULL OR w.next_search_at <= ?)
+         ORDER BY w.next_search_at ASC
          LIMIT ?",
     )
     .bind(now)
@@ -373,6 +375,7 @@ fn row_to_wanted_item(row: &SqliteRow) -> AppResult<WantedItem> {
         title_id: row.try_get("title_id").map_err(|e| AppError::Repository(e.to_string()))?,
         title_name: row.try_get("title_name").unwrap_or(None),
         episode_id: row.try_get("episode_id").unwrap_or(None),
+        season_number: row.try_get("season_number").unwrap_or(None),
         media_type: row.try_get("media_type").map_err(|e| AppError::Repository(e.to_string()))?,
         search_phase: row.try_get("search_phase").map_err(|e| AppError::Repository(e.to_string()))?,
         next_search_at: row.try_get("next_search_at").unwrap_or(None),

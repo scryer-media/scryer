@@ -1,8 +1,10 @@
 use super::*;
-use tracing::{info, warn};
-use tokio::fs;
+use scryer_domain::NotificationEventType;
+use std::collections::HashMap;
 use std::collections::HashSet;
-use std::io::ErrorKind;
+use std::path::Path;
+use tokio::fs;
+use tracing::{info, warn};
 
 /// Extract the first non-empty `category` value from a `nzbget.client_routing` JSON
 /// blob, which has the shape `{ "client_id": { "category": "Movies", ... }, ... }`.
@@ -105,6 +107,27 @@ impl AppUseCase {
                     )
                     .await?;
             }
+        }
+
+        // Dispatch notification for title added
+        {
+            let facet_str = format!("{:?}", title.facet).to_lowercase();
+            let mut metadata = HashMap::new();
+            metadata.insert("title_name".to_string(), serde_json::json!(title.name));
+            if let Some(ref year) = title.year {
+                metadata.insert("title_year".to_string(), serde_json::json!(year));
+            }
+            metadata.insert("title_facet".to_string(), serde_json::json!(facet_str));
+            if let Some(ref poster) = title.poster_url {
+                metadata.insert("poster_url".to_string(), serde_json::json!(poster));
+            }
+            self.dispatch_notification(
+                NotificationEventType::TitleAdded.as_str(),
+                &format!("{} added: {}", facet_str, title.name),
+                &format!("{} has been added to your library.", title.name),
+                &metadata,
+            )
+            .await;
         }
 
         // Hydrate rich metadata from the metadata gateway
@@ -646,8 +669,15 @@ impl AppUseCase {
             )
             .await;
 
-        let job_id = match job_result {
-            Ok(job_id) => {
+        let grab = match job_result {
+            Ok(grab) => {
+                {
+                    let facet_label = serde_json::to_string(&title.facet)
+                        .unwrap_or_else(|_| "\"other\"".to_string())
+                        .trim_matches('"')
+                        .to_string();
+                    metrics::counter!("scryer_grabs_total", "indexer" => "manual", "facet" => facet_label).increment(1);
+                }
                 let _ = self
                     .services
                     .release_attempts
@@ -660,7 +690,18 @@ impl AppUseCase {
                         source_password.clone(),
                     )
                     .await;
-                job_id
+                let facet_str = serde_json::to_string(&title.facet)
+                    .unwrap_or_else(|_| "\"other\"".to_string());
+                let _ = self.services.download_submissions
+                    .record_submission(DownloadSubmission {
+                        title_id: title.id.clone(),
+                        facet: facet_str.trim_matches('"').to_string(),
+                        download_client_type: grab.client_type.clone(),
+                        download_client_item_id: grab.job_id.clone(),
+                        source_title: source_title_for_attempt.clone(),
+                    })
+                    .await;
+                grab
             }
             Err(error) => {
                 let error_message = error.to_string();
@@ -687,7 +728,7 @@ impl AppUseCase {
                 EventType::ActionTriggered,
                 format!(
                     "download queued for title {} with job {}",
-                    title.name, job_id
+                    title.name, grab.job_id
                 ),
             )
             .await?;
@@ -702,7 +743,7 @@ impl AppUseCase {
             )
             .await?;
 
-        Ok((title, job_id))
+        Ok((title, grab.job_id))
     }
 
     pub async fn queue_existing_title_download(
@@ -750,8 +791,15 @@ impl AppUseCase {
             )
             .await;
 
-        let job_id = match job_result {
-            Ok(job_id) => {
+        let grab = match job_result {
+            Ok(grab) => {
+                {
+                    let facet_label = serde_json::to_string(&title.facet)
+                        .unwrap_or_else(|_| "\"other\"".to_string())
+                        .trim_matches('"')
+                        .to_string();
+                    metrics::counter!("scryer_grabs_total", "indexer" => "manual", "facet" => facet_label).increment(1);
+                }
                 let _ = self
                     .services
                     .release_attempts
@@ -764,7 +812,18 @@ impl AppUseCase {
                     source_password.clone(),
                 )
                 .await;
-                job_id
+                let facet_str = serde_json::to_string(&title.facet)
+                    .unwrap_or_else(|_| "\"other\"".to_string());
+                let _ = self.services.download_submissions
+                    .record_submission(DownloadSubmission {
+                        title_id: title.id.clone(),
+                        facet: facet_str.trim_matches('"').to_string(),
+                        download_client_type: grab.client_type.clone(),
+                        download_client_item_id: grab.job_id.clone(),
+                        source_title: source_title_for_attempt.clone(),
+                    })
+                    .await;
+                grab
             }
             Err(error) => {
                 let error_message = error.to_string();
@@ -791,7 +850,7 @@ impl AppUseCase {
                 EventType::ActionTriggered,
                 format!(
                     "download queued for existing title {} with job {}",
-                    title.name, job_id
+                    title.name, grab.job_id
                 ),
             )
             .await?;
@@ -806,7 +865,7 @@ impl AppUseCase {
             )
             .await?;
 
-        Ok(job_id)
+        Ok(grab.job_id)
     }
 
     /// Resolve the NZBGet download category for a facet.
@@ -947,23 +1006,40 @@ impl AppUseCase {
                 unique_paths.insert(media_file.file_path.trim().to_string());
             }
 
+            let media_root = crate::recycle_bin::media_root_for_title(self, &title).await;
+            let recycle_config = crate::recycle_bin::resolve_recycle_config(
+                self,
+                media_root.as_deref(),
+            )
+            .await;
+
             let mut delete_failures = Vec::new();
             for file_path in unique_paths {
                 if file_path.is_empty() {
                     continue;
                 }
 
-                if let Err(error) = fs::remove_file(&file_path).await {
-                    if error.kind() == ErrorKind::NotFound {
-                        continue;
-                    }
+                let manifest = crate::recycle_bin::RecycleManifest {
+                    recycled_at: chrono::Utc::now().to_rfc3339(),
+                    original_path: file_path.clone(),
+                    size_bytes: fs::metadata(&file_path)
+                        .await
+                        .map(|m| m.len())
+                        .unwrap_or(0),
+                    title_id: Some(id.to_string()),
+                    reason: "title_deleted".to_string(),
+                };
 
+                if let Err(error) =
+                    crate::recycle_bin::recycle_file(&recycle_config, Path::new(&file_path), manifest)
+                        .await
+                {
                     warn!(
                         title_id = %id,
                         title_name = %title.name,
                         file_path = %file_path,
                         error = %error,
-                        "failed to delete media file while removing title from catalog"
+                        "failed to recycle media file while removing title from catalog"
                     );
                     delete_failures.push(format!("{file_path}: {error}"));
                 }
@@ -1026,6 +1102,24 @@ impl AppUseCase {
             )
             .await?;
         self.services.titles.delete(id).await?;
+
+        // Dispatch notification for title deleted
+        {
+            let facet_str = format!("{:?}", title.facet).to_lowercase();
+            let mut metadata = HashMap::new();
+            metadata.insert("title_name".to_string(), serde_json::json!(title.name));
+            if let Some(ref year) = title.year {
+                metadata.insert("title_year".to_string(), serde_json::json!(year));
+            }
+            metadata.insert("title_facet".to_string(), serde_json::json!(facet_str));
+            self.dispatch_notification(
+                NotificationEventType::TitleDeleted.as_str(),
+                &format!("{} deleted: {}", facet_str, title.name),
+                &format!("{} has been removed from your library.", title.name),
+                &metadata,
+            )
+            .await;
+        }
 
         Ok(())
     }

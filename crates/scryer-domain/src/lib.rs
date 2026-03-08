@@ -432,6 +432,7 @@ pub enum EventType {
     PolicyEvaluated,
     ActionTriggered,
     ActionCompleted,
+    FileUpgraded,
     Error,
 }
 
@@ -626,6 +627,128 @@ pub struct ConfigFieldDef {
 pub struct ConfigFieldOption {
     pub value: String,
     pub label: String,
+}
+
+// ── Notification types ──────────────────────────────────────────────
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NotificationChannelConfig {
+    pub id: String,
+    pub name: String,
+    pub channel_type: String,
+    pub config_json: String,
+    pub is_enabled: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NewNotificationChannelConfig {
+    pub name: String,
+    pub channel_type: String,
+    pub config_json: String,
+    pub is_enabled: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NotificationSubscription {
+    pub id: String,
+    pub channel_id: String,
+    pub event_type: String,
+    pub scope: String,
+    pub scope_id: Option<String>,
+    pub is_enabled: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NewNotificationSubscription {
+    pub channel_id: String,
+    pub event_type: String,
+    pub scope: String,
+    pub scope_id: Option<String>,
+    pub is_enabled: bool,
+}
+
+/// All notification event types supported by the system.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationEventType {
+    Grab,
+    Download,
+    Upgrade,
+    ImportComplete,
+    Rename,
+    TitleAdded,
+    TitleDeleted,
+    FileDeleted,
+    FileDeletedForUpgrade,
+    HealthIssue,
+    HealthRestored,
+    ApplicationUpdate,
+    ManualInteractionRequired,
+    Test,
+}
+
+impl NotificationEventType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Grab => "grab",
+            Self::Download => "download",
+            Self::Upgrade => "upgrade",
+            Self::ImportComplete => "import_complete",
+            Self::Rename => "rename",
+            Self::TitleAdded => "title_added",
+            Self::TitleDeleted => "title_deleted",
+            Self::FileDeleted => "file_deleted",
+            Self::FileDeletedForUpgrade => "file_deleted_for_upgrade",
+            Self::HealthIssue => "health_issue",
+            Self::HealthRestored => "health_restored",
+            Self::ApplicationUpdate => "application_update",
+            Self::ManualInteractionRequired => "manual_interaction_required",
+            Self::Test => "test",
+        }
+    }
+
+    pub fn all() -> &'static [NotificationEventType] {
+        &[
+            Self::Grab,
+            Self::Download,
+            Self::Upgrade,
+            Self::ImportComplete,
+            Self::Rename,
+            Self::TitleAdded,
+            Self::TitleDeleted,
+            Self::FileDeleted,
+            Self::FileDeletedForUpgrade,
+            Self::HealthIssue,
+            Self::HealthRestored,
+            Self::ApplicationUpdate,
+            Self::ManualInteractionRequired,
+            Self::Test,
+        ]
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "grab" => Some(Self::Grab),
+            "download" => Some(Self::Download),
+            "upgrade" => Some(Self::Upgrade),
+            "import_complete" => Some(Self::ImportComplete),
+            "rename" => Some(Self::Rename),
+            "title_added" => Some(Self::TitleAdded),
+            "title_deleted" => Some(Self::TitleDeleted),
+            "file_deleted" => Some(Self::FileDeleted),
+            "file_deleted_for_upgrade" => Some(Self::FileDeletedForUpgrade),
+            "health_issue" => Some(Self::HealthIssue),
+            "health_restored" => Some(Self::HealthRestored),
+            "application_update" => Some(Self::ApplicationUpdate),
+            "manual_interaction_required" => Some(Self::ManualInteractionRequired),
+            "test" => Some(Self::Test),
+            _ => None,
+        }
+    }
 }
 
 pub fn parse_query(value: &str) -> String {

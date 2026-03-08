@@ -17,10 +17,16 @@ import { Separator } from "@/components/ui/separator";
 import { serviceLogsQuery, serviceLogLinesSubscription } from "@/lib/graphql/queries";
 import { wsClient } from "@/lib/graphql/ws-client";
 
+type RssSyncState = {
+  syncing: boolean;
+  triggerSync: () => Promise<void>;
+};
+
 type SystemViewState = {
   systemHealth: SystemHealth | null;
   systemLoading: boolean;
   refreshSystem: () => Promise<void>;
+  rssSync: RssSyncState;
 };
 
 type IndexerQueryStats = {
@@ -304,7 +310,7 @@ export function SystemView({
   state: SystemViewState;
 }) {
   const t = useTranslate();
-  const { systemHealth, systemLoading, refreshSystem } = state;
+  const { systemHealth, systemLoading, refreshSystem, rssSync } = state;
 
   return (
     <div className="space-y-4">
@@ -354,6 +360,23 @@ export function SystemView({
             </div>
           )}
         </CardContent>
+      </Card>
+
+      {/* RSS Sync */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base">{t("system.rssSync")}</CardTitle>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => void rssSync.triggerSync()}
+              disabled={rssSync.syncing}
+            >
+              {rssSync.syncing ? t("system.rssSyncing") : t("system.rssSyncTrigger")}
+            </Button>
+          </div>
+        </CardHeader>
       </Card>
 
       {/* Database & SMG Certificate */}

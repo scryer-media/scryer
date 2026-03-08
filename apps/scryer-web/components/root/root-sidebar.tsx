@@ -71,6 +71,11 @@ const settingsEntries: Array<{
     requiredEntitlement: "manage_config",
   },
   {
+    id: "delayProfiles",
+    label: (t) => t("settings.delayProfiles"),
+    requiredEntitlement: "manage_config",
+  },
+  {
     id: "downloadClients",
     label: (t) => t("settings.downloadClients"),
     requiredEntitlement: "manage_config",
@@ -88,6 +93,11 @@ const settingsEntries: Array<{
   {
     id: "plugins",
     label: (t) => t("settings.plugins"),
+    requiredEntitlement: "manage_config",
+  },
+  {
+    id: "notifications",
+    label: (t) => t("settings.notifications"),
     requiredEntitlement: "manage_config",
   },
   {

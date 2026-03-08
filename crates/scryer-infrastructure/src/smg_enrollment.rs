@@ -87,7 +87,7 @@ async fn enroll_with_smg(
     instance_id: &str,
     registration_url: &str,
     registration_secret: &str,
-    _ca_cert_override: Option<&str>,
+    ca_cert_override: Option<&str>,
 ) -> Result<EnrollmentState, String> {
     // Generate EC P-256 keypair
     let key_pair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
@@ -112,8 +112,14 @@ async fn enroll_with_smg(
         .map_err(|e| format!("failed to serialize CSR to PEM: {e}"))?;
 
     // POST to SMG registration endpoint
-    let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+    let mut builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30));
+    if let Some(ca_pem) = ca_cert_override {
+        let cert = reqwest::Certificate::from_pem(ca_pem.as_bytes())
+            .map_err(|e| format!("failed to parse SCRYER_SMG_CA_CERT: {e}"))?;
+        builder = builder.add_root_certificate(cert);
+    }
+    let http = builder
         .build()
         .map_err(|e| format!("failed to build HTTP client for enrollment: {e}"))?;
 

@@ -22,9 +22,20 @@ mod app_usecase_integration;
 mod app_usecase_import;
 mod app_usecase_security;
 mod acquisition_policy;
+mod delay_profile;
 mod app_usecase_acquisition;
+mod app_usecase_indexer_test;
+pub(crate) mod app_usecase_rss;
+mod app_usecase_pending;
+mod app_usecase_notifications;
 mod app_usecase_plugins;
+mod app_usecase_housekeeping;
 pub mod app_usecase_post_processing;
+pub(crate) mod recycle_bin;
+pub(crate) mod import_checks;
+pub(crate) mod upgrade;
+mod app_usecase_health;
+mod app_usecase_backup;
 
 use crate::activity::ActivityStream;
 use async_trait::async_trait;
@@ -74,17 +85,27 @@ pub use quality_profile::{
     QualityProfileCriteria, QualityProfileDecision, ScoringEntry, ScoringSource, BLOCK_SCORE,
     QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY,
 };
+pub use delay_profile::{
+    parse_delay_profile_catalog, resolve_delay_profile, should_bypass_delay, DelayProfile,
+    DELAY_PROFILE_CATALOG_KEY,
+};
 pub use release_parser::{parse_release_metadata, ParsedEpisodeMetadata, ParsedReleaseMetadata};
 pub use null_repositories::{
-    NullFileImporter, NullImportRepository, NullIndexerStatsTracker, NullMediaFileRepository,
-    NullPluginInstallationRepository, NullRuleSetRepository, NullSystemInfoProvider,
-    NullWantedItemRepository,
+    NullDownloadSubmissionRepository, NullFileImporter, NullHousekeepingRepository,
+    NullImportRepository, NullIndexerStatsTracker, NullMediaFileRepository,
+    NullNotificationChannelRepository, NullNotificationSubscriptionRepository,
+    NullPendingReleaseRepository, NullPluginInstallationRepository, NullRuleSetRepository,
+    NullSystemInfoProvider, NullWantedItemRepository,
 };
 pub use types::{
-    IndexerQueryStats, IndexerSearchResponse, IndexerSearchResult, JwtAuthConfig, PrimaryCollectionSummary,
-    ReleaseDecision, ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature, SystemHealth,
-    TitleMediaFile, TitleMetadataUpdate, TitleReleaseBlocklistEntry, WantedItem,
+    BackupInfo, DiskSpaceInfo, DownloadGrabResult, HealthCheckResult, HealthCheckStatus,
+    HousekeepingReport, IndexerQueryStats, IndexerSearchResponse, IndexerSearchResult,
+    JwtAuthConfig, PendingRelease, PrimaryCollectionSummary, ReleaseDecision,
+    ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature, SystemHealth, TitleMediaFile,
+    TitleMetadataUpdate, TitleReleaseBlocklistEntry, WantedItem,
 };
+pub use app_usecase_rss::RssSyncReport;
+pub use app_usecase_backup::BackupService;
 pub(crate) use types::JwtClaims;
 pub use facet_handler::{FacetHandler, HydrationResult};
 pub use facet_movie::MovieFacetHandler;
@@ -129,6 +150,7 @@ pub struct AppServices {
     pub media_files: Arc<dyn MediaFileRepository>,
     pub download_client_configs: Arc<dyn DownloadClientConfigRepository>,
     pub release_attempts: Arc<dyn ReleaseAttemptRepository>,
+    pub download_submissions: Arc<dyn DownloadSubmissionRepository>,
     pub settings: Arc<dyn SettingsRepository>,
     pub quality_profiles: Arc<dyn QualityProfileRepository>,
     pub wanted_items: Arc<dyn WantedItemRepository>,
@@ -138,12 +160,19 @@ pub struct AppServices {
     pub indexer_stats: Arc<dyn IndexerStatsTracker>,
     pub user_rules: Arc<std::sync::RwLock<scryer_rules::UserRulesEngine>>,
     pub plugin_provider: Option<Arc<dyn IndexerPluginProvider>>,
+    pub notification_channels: Option<Arc<dyn NotificationChannelRepository>>,
+    pub notification_subscriptions: Option<Arc<dyn NotificationSubscriptionRepository>>,
+    pub notification_provider: Option<Arc<dyn NotificationPluginProvider>>,
     pub db_path: String,
     pub activity_stream: ActivityStream,
     pub event_broadcast: broadcast::Sender<HistoryEvent>,
     pub activity_event_broadcast: broadcast::Sender<ActivityEvent>,
     pub download_queue_broadcast: broadcast::Sender<Vec<DownloadQueueItem>>,
     pub acquisition_wake: Arc<tokio::sync::Notify>,
+    pub housekeeping: Arc<dyn HousekeepingRepository>,
+    pub health_check_results: Arc<tokio::sync::RwLock<Vec<HealthCheckResult>>>,
+    pub pending_releases: Arc<dyn PendingReleaseRepository>,
+    pub rss_seen_guids: Arc<tokio::sync::RwLock<HashSet<String>>>,
 }
 
 impl AppServices {
@@ -180,6 +209,7 @@ impl AppServices {
             media_files: Arc::new(NullMediaFileRepository),
             download_client_configs,
             release_attempts,
+            download_submissions: Arc::new(NullDownloadSubmissionRepository),
             settings,
             quality_profiles,
             wanted_items: Arc::new(NullWantedItemRepository),
@@ -189,12 +219,19 @@ impl AppServices {
             indexer_stats: Arc::new(NullIndexerStatsTracker),
             user_rules: Arc::new(std::sync::RwLock::new(scryer_rules::UserRulesEngine::empty())),
             plugin_provider: None,
+            notification_channels: None,
+            notification_subscriptions: None,
+            notification_provider: None,
             db_path,
             activity_stream: ActivityStream::new(),
             event_broadcast: tx,
             activity_event_broadcast: activity_tx,
             download_queue_broadcast: queue_tx,
             acquisition_wake: Arc::new(tokio::sync::Notify::new()),
+            housekeeping: Arc::new(NullHousekeepingRepository),
+            pending_releases: Arc::new(NullPendingReleaseRepository),
+            health_check_results: Arc::new(tokio::sync::RwLock::new(Vec::new())),
+            rss_seen_guids: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
         }
     }
 
@@ -415,6 +452,17 @@ pub trait SystemInfoProvider: Send + Sync {
     async fn current_migration_version(&self) -> AppResult<Option<String>>;
     async fn pending_migration_count(&self) -> AppResult<usize>;
     async fn smg_cert_expires_at(&self) -> AppResult<Option<String>>;
+    async fn vacuum_into(&self, dest_path: &str) -> AppResult<()>;
+}
+
+#[async_trait]
+pub trait HousekeepingRepository: Send + Sync {
+    async fn delete_release_decisions_older_than(&self, days: i64) -> AppResult<u32>;
+    async fn delete_release_attempts_older_than(&self, days: i64) -> AppResult<u32>;
+    async fn delete_dispatched_event_outboxes_older_than(&self, days: i64) -> AppResult<u32>;
+    async fn delete_history_events_older_than(&self, days: i64) -> AppResult<u32>;
+    async fn list_all_media_file_paths(&self) -> AppResult<Vec<(String, String)>>;
+    async fn delete_media_files_by_ids(&self, ids: &[String]) -> AppResult<u32>;
 }
 
 /// Tracks per-indexer query counts and API quota information in memory.
@@ -469,6 +517,29 @@ pub trait ReleaseAttemptRepository: Send + Sync {
         source_hint: Option<&str>,
         source_title: Option<&str>,
     ) -> AppResult<Option<String>>;
+}
+
+#[derive(Clone, Debug)]
+pub struct DownloadSubmission {
+    pub title_id: String,
+    pub facet: String,
+    pub download_client_type: String,
+    pub download_client_item_id: String,
+    pub source_title: Option<String>,
+}
+
+#[async_trait]
+pub trait DownloadSubmissionRepository: Send + Sync {
+    async fn record_submission(
+        &self,
+        submission: DownloadSubmission,
+    ) -> AppResult<()>;
+
+    async fn find_by_client_item_id(
+        &self,
+        download_client_type: &str,
+        download_client_item_id: &str,
+    ) -> AppResult<Option<DownloadSubmission>>;
 }
 
 #[async_trait]
@@ -549,14 +620,34 @@ pub struct MediaFileAnalysis {
     pub raw_json: String,
 }
 
+/// Input for inserting a media file record with rich metadata.
+#[derive(Clone, Debug, Default)]
+pub struct InsertMediaFileInput {
+    pub title_id: String,
+    pub file_path: String,
+    pub size_bytes: i64,
+    pub quality_label: Option<String>,
+    pub scene_name: Option<String>,
+    pub release_group: Option<String>,
+    pub source_type: Option<String>,
+    pub resolution: Option<String>,
+    pub video_codec_parsed: Option<String>,
+    pub audio_codec_parsed: Option<String>,
+    pub acquisition_score: Option<i32>,
+    pub scoring_log: Option<String>,
+    pub indexer_source: Option<String>,
+    pub grabbed_release_title: Option<String>,
+    pub grabbed_at: Option<String>,
+    pub edition: Option<String>,
+    pub original_file_path: Option<String>,
+    pub release_hash: Option<String>,
+}
+
 #[async_trait]
 pub trait MediaFileRepository: Send + Sync {
     async fn insert_media_file(
         &self,
-        title_id: &str,
-        file_path: &str,
-        size_bytes: i64,
-        quality_label: Option<String>,
+        input: &InsertMediaFileInput,
     ) -> AppResult<String>;
 
     async fn link_file_to_episode(
@@ -631,6 +722,29 @@ pub trait WantedItemRepository: Send + Sync {
         wanted_item_id: &str,
         limit: i64,
     ) -> AppResult<Vec<ReleaseDecision>>;
+}
+
+#[async_trait]
+pub trait PendingReleaseRepository: Send + Sync {
+    async fn insert_pending_release(&self, release: &PendingRelease) -> AppResult<String>;
+    async fn list_expired_pending_releases(&self, now: &str) -> AppResult<Vec<PendingRelease>>;
+    async fn list_waiting_pending_releases(&self) -> AppResult<Vec<PendingRelease>>;
+    async fn get_pending_release(&self, id: &str) -> AppResult<Option<PendingRelease>>;
+    async fn list_pending_releases_for_wanted_item(
+        &self,
+        wanted_item_id: &str,
+    ) -> AppResult<Vec<PendingRelease>>;
+    async fn update_pending_release_status(
+        &self,
+        id: &str,
+        status: &str,
+        grabbed_at: Option<&str>,
+    ) -> AppResult<()>;
+    async fn supersede_pending_releases_for_wanted_item(
+        &self,
+        wanted_item_id: &str,
+        except_id: &str,
+    ) -> AppResult<()>;
 }
 
 #[async_trait]
@@ -737,6 +851,11 @@ pub trait IndexerPluginProvider: Send + Sync {
     fn default_base_url_for_provider(&self, _provider_type: &str) -> Option<String> {
         None
     }
+    /// Returns the plugin-declared rate limit (seconds between requests) for a provider type.
+    /// Used when auto-creating IndexerConfig entries so the config inherits the plugin's preference.
+    fn rate_limit_seconds_for_provider(&self, _provider_type: &str) -> Option<i64> {
+        None
+    }
     /// Returns the search capabilities declared by the plugin for a provider type.
     /// Defaults to all-true for backward compat with unknown providers.
     fn capabilities_for_provider(&self, _provider_type: &str) -> scryer_domain::IndexerProviderCapabilities {
@@ -748,6 +867,53 @@ pub trait IndexerPluginProvider: Send + Sync {
     }
 }
 
+// ── Notification traits ────────────────────────────────────────────────
+
+#[async_trait]
+pub trait NotificationClient: Send + Sync {
+    async fn send_notification(
+        &self,
+        event_type: &str,
+        title: &str,
+        message: &str,
+        metadata: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> AppResult<()>;
+}
+
+pub trait NotificationPluginProvider: Send + Sync {
+    fn client_for_channel(&self, config: &scryer_domain::NotificationChannelConfig) -> Option<Arc<dyn NotificationClient>>;
+    fn available_provider_types(&self) -> Vec<String>;
+    fn config_fields_for_provider(&self, provider_type: &str) -> Vec<scryer_domain::ConfigFieldDef>;
+    fn plugin_name_for_provider(&self, provider_type: &str) -> Option<String>;
+    fn reload_plugins(
+        &self,
+        external_wasm_bytes: &[&[u8]],
+        disabled_builtins: &[String],
+    ) -> Result<(), String> {
+        let _ = (external_wasm_bytes, disabled_builtins);
+        Err("this provider does not support dynamic reload".to_string())
+    }
+}
+
+#[async_trait]
+pub trait NotificationChannelRepository: Send + Sync {
+    async fn list_channels(&self) -> AppResult<Vec<scryer_domain::NotificationChannelConfig>>;
+    async fn get_channel(&self, id: &str) -> AppResult<Option<scryer_domain::NotificationChannelConfig>>;
+    async fn create_channel(&self, config: scryer_domain::NotificationChannelConfig) -> AppResult<scryer_domain::NotificationChannelConfig>;
+    async fn update_channel(&self, config: scryer_domain::NotificationChannelConfig) -> AppResult<scryer_domain::NotificationChannelConfig>;
+    async fn delete_channel(&self, id: &str) -> AppResult<()>;
+}
+
+#[async_trait]
+pub trait NotificationSubscriptionRepository: Send + Sync {
+    async fn list_subscriptions(&self) -> AppResult<Vec<scryer_domain::NotificationSubscription>>;
+    async fn list_subscriptions_for_channel(&self, channel_id: &str) -> AppResult<Vec<scryer_domain::NotificationSubscription>>;
+    async fn list_subscriptions_for_event(&self, event_type: &str) -> AppResult<Vec<scryer_domain::NotificationSubscription>>;
+    async fn create_subscription(&self, sub: scryer_domain::NotificationSubscription) -> AppResult<scryer_domain::NotificationSubscription>;
+    async fn update_subscription(&self, sub: scryer_domain::NotificationSubscription) -> AppResult<scryer_domain::NotificationSubscription>;
+    async fn delete_subscription(&self, id: &str) -> AppResult<()>;
+}
+
 #[async_trait]
 pub trait DownloadClient: Send + Sync {
     async fn submit_to_download_queue(
@@ -757,7 +923,7 @@ pub trait DownloadClient: Send + Sync {
         source_title: Option<String>,
         source_password: Option<String>,
         category: Option<String>,
-    ) -> AppResult<String>;
+    ) -> AppResult<DownloadGrabResult>;
 
     async fn list_queue(&self) -> AppResult<Vec<DownloadQueueItem>> {
         Err(AppError::Repository(
@@ -1686,8 +1852,11 @@ mod tests {
         _source_title: Option<String>,
         _source_password: Option<String>,
         _category: Option<String>,
-    ) -> AppResult<String> {
-            Ok(format!("job-for-{}", title.id))
+    ) -> AppResult<DownloadGrabResult> {
+            Ok(DownloadGrabResult {
+                job_id: format!("job-for-{}", title.id),
+                client_type: "nzbget".to_string(),
+            })
         }
     }
 

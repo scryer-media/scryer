@@ -70,8 +70,8 @@ pub async fn ensure_jwt_hmac_secret(
 
     tracing::warn!(
         "generated new JWT HMAC secret — all existing sessions are invalidated. \
-         To preserve it across upgrades, set:\n\n  SCRYER_JWT_HMAC_SECRET: {}\n",
-        secret_b64
+         To preserve across upgrades, copy the value from Settings > General > JWT HMAC Secret \
+         into the SCRYER_JWT_HMAC_SECRET environment variable."
     );
 
     db.upsert_setting_value(

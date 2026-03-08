@@ -10,6 +10,7 @@ import { indexersQuery, indexerProviderTypesQuery } from "@/lib/graphql/queries"
 import {
   createIndexerMutation,
   deleteIndexerMutation,
+  testIndexerConnectionMutation,
   updateIndexerMutation,
 } from "@/lib/graphql/mutations";
 
@@ -51,6 +52,7 @@ export function SettingsIndexersContainer() {
   const [mutatingIndexerId, setMutatingIndexerId] = useState<string | null>(null);
   const [editingIndexerId, setEditingIndexerId] = useState<string | null>(null);
   const [pendingDeleteIndexer, setPendingDeleteIndexer] = useState<IndexerRecord | null>(null);
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [providerTypes, setProviderTypes] = useState<ProviderTypeInfo[]>([]);
   const [indexerDraft, setIndexerDraft] = useState<SettingsIndexersSectionProps["indexerDraft"]>(
     () => ({ ...INDEXER_INITIAL_DRAFT }),
@@ -214,6 +216,43 @@ export function SettingsIndexersContainer() {
     }
   };
 
+  const testIndexerConnection = async () => {
+    const selectedProvider = providerTypes.find(
+      (pt) => pt.providerType === indexerDraft.providerType.trim().toLowerCase(),
+    );
+    const effectiveBaseUrl = selectedProvider?.defaultBaseUrl || indexerDraft.baseUrl.trim();
+    const payload = {
+      name: indexerDraft.name.trim(),
+      providerType: indexerDraft.providerType.trim(),
+      baseUrl: effectiveBaseUrl,
+      apiKey: indexerDraft.apiKey.trim() || undefined,
+      configJson: serializeConfigJson(indexerDraft.configValues),
+    };
+
+    if (!payload.name || !payload.providerType || !payload.baseUrl) {
+      setGlobalStatus(t("form.indexerValidation"));
+      return;
+    }
+
+    setIsTestingConnection(true);
+    try {
+      setGlobalStatus(t("status.testingIndexerConnection"));
+      const { data: testData, error: testError } = await client.mutation(
+        testIndexerConnectionMutation,
+        { input: payload },
+      ).toPromise();
+      if (testError) throw testError;
+      if (!testData.testIndexerConnection) {
+        throw new Error(t("status.indexerConnectionTestFailed"));
+      }
+      setGlobalStatus(t("status.indexerConnectionTestPassed"));
+    } catch (error) {
+      setGlobalStatus(error instanceof Error ? error.message : t("status.indexerConnectionTestFailed"));
+    } finally {
+      setIsTestingConnection(false);
+    }
+  };
+
   return (
     <>
       <SettingsIndexersSection
@@ -230,6 +269,8 @@ export function SettingsIndexersContainer() {
         toggleIndexerEnabled={toggleIndexerEnabled}
         deleteIndexer={deleteIndexer}
         providerTypes={providerTypes}
+        testIndexerConnection={testIndexerConnection}
+        isTestingConnection={isTestingConnection}
       />
       <ConfirmDialog
         open={pendingDeleteIndexer !== null}

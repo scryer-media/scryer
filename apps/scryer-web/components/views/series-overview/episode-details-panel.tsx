@@ -39,6 +39,11 @@ export function EpisodeDetailsPanel({
                   ) : null}
                   <span className="text-xs text-muted-foreground/60">{formatFileSize(Number(file.sizeBytes))}</span>
                   <span className="text-xs text-muted-foreground/60">{formatDate(file.createdAt)}</span>
+                  {file.acquisitionScore != null ? (
+                    <span className="text-xs text-muted-foreground/60" title={file.scoringLog ?? undefined}>
+                      {t("mediaFile.score", { score: file.acquisitionScore })}
+                    </span>
+                  ) : null}
                 </div>
                 <MediaInfoBadges file={file} />
               </div>

@@ -118,9 +118,14 @@ impl AppUseCase {
             .collect();
 
         if let Some(ref provider) = self.services.plugin_provider {
-            if let Err(e) = provider.reload_plugins(&external_refs, &disabled_builtins) {
-                tracing::warn!(error = %e, "failed to reload plugin provider");
-            }
+            provider.reload_plugins(&external_refs, &disabled_builtins)
+                .map_err(|e| AppError::Repository(format!("failed to reload plugin provider: {e}")))?;
+        }
+
+        // Also rebuild notification plugin provider
+        if let Some(ref notif_provider) = self.services.notification_provider {
+            notif_provider.reload_plugins(&external_refs, &disabled_builtins)
+                .map_err(|e| AppError::Repository(format!("failed to reload notification plugin provider: {e}")))?;
         }
 
         // Rebuild rules engine to pick up new/removed scoring policies
@@ -160,7 +165,7 @@ impl AppUseCase {
                     is_enabled: true,
                     enable_interactive_search: true,
                     enable_auto_search: true,
-                    rate_limit_seconds: None,
+                    rate_limit_seconds: provider.rate_limit_seconds_for_provider(&pt),
                     rate_limit_burst: None,
                     disabled_until: None,
                     last_health_status: None,
@@ -447,6 +452,11 @@ impl AppUseCase {
                     .await
                     .unwrap_or_default();
                 if existing.is_empty() {
+                    let plugin_rate_limit = self
+                        .services
+                        .plugin_provider
+                        .as_ref()
+                        .and_then(|p| p.rate_limit_seconds_for_provider(&entry.provider_type));
                     let config = IndexerConfig {
                         id: Id::new().0,
                         name: entry.name.clone(),
@@ -456,7 +466,7 @@ impl AppUseCase {
                         is_enabled: true,
                         enable_interactive_search: true,
                         enable_auto_search: true,
-                        rate_limit_seconds: None,
+                        rate_limit_seconds: plugin_rate_limit,
                         rate_limit_burst: None,
                         disabled_until: None,
                         last_health_status: None,

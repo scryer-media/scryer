@@ -72,4 +72,26 @@ impl WantedMutations {
             .map_err(to_gql_error)?;
         Ok(true)
     }
+
+    async fn force_grab_pending_release(
+        &self,
+        ctx: &Context<'_>,
+        input: PendingReleaseActionInput,
+    ) -> GqlResult<bool> {
+        let app = app_from_ctx(ctx)?;
+        app.force_grab_pending_release(&input.id)
+            .await
+            .map_err(to_gql_error)
+    }
+
+    async fn dismiss_pending_release(
+        &self,
+        ctx: &Context<'_>,
+        input: PendingReleaseActionInput,
+    ) -> GqlResult<bool> {
+        let app = app_from_ctx(ctx)?;
+        app.dismiss_pending_release(&input.id)
+            .await
+            .map_err(to_gql_error)
+    }
 }

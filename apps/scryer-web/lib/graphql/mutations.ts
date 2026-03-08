@@ -88,6 +88,10 @@ export const deleteIndexerMutation = `mutation DeleteIndexer($input: DeleteIndex
   deleteIndexerConfig(input: $input)
 }`;
 
+export const testIndexerConnectionMutation = `mutation TestIndexerConnection($input: TestIndexerConnectionInput!) {
+  testIndexerConnection(input: $input)
+}`;
+
 export const createDownloadClientMutation = `mutation CreateDownloadClient($input: CreateDownloadClientConfigInput!) {
   createDownloadClientConfig(input: $input) {
     id
@@ -334,6 +338,27 @@ export const resetWantedItemMutation = `mutation ResetWantedItem($input: WantedI
   resetWantedItem(input: $input)
 }`;
 
+// ── RSS Sync ─────────────────────────────────────────────────────────────
+
+export const triggerRssSyncMutation = `mutation TriggerRssSync {
+  triggerRssSync {
+    releasesFetched
+    releasesMatched
+    releasesGrabbed
+    releasesHeld
+  }
+}`;
+
+// ── Pending Releases ─────────────────────────────────────────────────────
+
+export const forceGrabPendingReleaseMutation = `mutation ForceGrabPendingRelease($input: PendingReleaseActionInput!) {
+  forceGrabPendingRelease(input: $input)
+}`;
+
+export const dismissPendingReleaseMutation = `mutation DismissPendingRelease($input: PendingReleaseActionInput!) {
+  dismissPendingRelease(input: $input)
+}`;
+
 // ── Plugins ──────────────────────────────────────────────────────────────
 
 export const refreshPluginRegistryMutation = `mutation RefreshPluginRegistry {
@@ -402,6 +427,70 @@ export const upgradePluginMutation = `mutation UpgradePlugin($input: UpgradePlug
     installedAt
     updatedAt
   }
+}`;
+
+// ── Notifications ────────────────────────────────────────────────────────
+
+export const createNotificationChannelMutation = `mutation CreateNotificationChannel($input: CreateNotificationChannelInput!) {
+  createNotificationChannel(input: $input) {
+    id
+    name
+    channelType
+    configJson
+    isEnabled
+    createdAt
+    updatedAt
+  }
+}`;
+
+export const updateNotificationChannelMutation = `mutation UpdateNotificationChannel($input: UpdateNotificationChannelInput!) {
+  updateNotificationChannel(input: $input) {
+    id
+    name
+    channelType
+    configJson
+    isEnabled
+    createdAt
+    updatedAt
+  }
+}`;
+
+export const deleteNotificationChannelMutation = `mutation DeleteNotificationChannel($id: String!) {
+  deleteNotificationChannel(id: $id)
+}`;
+
+export const testNotificationChannelMutation = `mutation TestNotificationChannel($id: String!) {
+  testNotificationChannel(id: $id)
+}`;
+
+export const createNotificationSubscriptionMutation = `mutation CreateNotificationSubscription($input: CreateNotificationSubscriptionInput!) {
+  createNotificationSubscription(input: $input) {
+    id
+    channelId
+    eventType
+    scope
+    scopeId
+    isEnabled
+    createdAt
+    updatedAt
+  }
+}`;
+
+export const updateNotificationSubscriptionMutation = `mutation UpdateNotificationSubscription($input: UpdateNotificationSubscriptionInput!) {
+  updateNotificationSubscription(input: $input) {
+    id
+    channelId
+    eventType
+    scope
+    scopeId
+    isEnabled
+    createdAt
+    updatedAt
+  }
+}`;
+
+export const deleteNotificationSubscriptionMutation = `mutation DeleteNotificationSubscription($id: String!) {
+  deleteNotificationSubscription(id: $id)
 }`;
 
 // ── Rule Sets ────────────────────────────────────────────────────────────

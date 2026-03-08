@@ -18,6 +18,11 @@
 - When adding JOINs to existing queries, prefix ALL column references in WHERE and ORDER BY with table aliases to avoid ambiguous column errors.
 - Count queries without JOINs don't need prefixes — only fix the queries that actually have the JOIN.
 
+## Full-Stack Schema Changes
+- When adding fields to a GraphQL type, update ALL layers: migration → application types → infrastructure queries → interface types/mappers → **frontend TypeScript types** → frontend GraphQL queries.
+- Frontend types are manually defined (no codegen). Check `TitleMediaFile` in movie-overview-container, `EpisodeMediaFile` in series-overview-container, and `MediaInfoFile` in media-info-badges for media file schema changes.
+- Don't declare a schema change "done" until the frontend builds clean with the new fields flowing end-to-end.
+
 ## urql / Frontend Caching
 - `cacheExchange` was removed from both `backendClient` and `smgClient` — the network layer handles caching naturally.
 - Don't add per-query `requestPolicy` overrides; the exchange-level removal is the correct fix.
