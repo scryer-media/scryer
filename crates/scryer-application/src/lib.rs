@@ -31,9 +31,9 @@ mod app_usecase_notifications;
 mod app_usecase_plugins;
 mod app_usecase_housekeeping;
 pub mod app_usecase_post_processing;
-pub(crate) mod recycle_bin;
+pub mod recycle_bin;
 pub(crate) mod import_checks;
-pub(crate) mod upgrade;
+pub mod upgrade;
 mod app_usecase_health;
 mod app_usecase_backup;
 
@@ -60,6 +60,7 @@ use crate::quality_profile::resolve_profile_id_for_title;
 pub use activity::{ActivityChannel, ActivityEvent, ActivityKind, ActivitySeverity};
 pub use acquisition_policy::AcquisitionThresholds;
 pub use app_usecase_acquisition::start_background_acquisition_poller;
+pub use app_usecase_catalog::start_background_hydration_loop;
 pub use app_usecase_integration::start_download_queue_poller;
 pub use app_usecase_plugins::RegistryPlugin;
 pub use library_scan::{
@@ -105,9 +106,12 @@ pub use types::{
     TitleMetadataUpdate, TitleReleaseBlocklistEntry, WantedItem,
 };
 pub use app_usecase_rss::RssSyncReport;
+pub use app_usecase_post_processing::{PostProcessingContext, run_post_processing};
 pub use app_usecase_backup::BackupService;
 pub(crate) use types::JwtClaims;
-pub use facet_handler::{FacetHandler, HydrationResult};
+pub use facet_handler::{
+    movie_to_hydration_result, series_to_hydration_result, FacetHandler, HydrationResult,
+};
 pub use facet_movie::MovieFacetHandler;
 pub use facet_series::SeriesFacetHandler;
 pub use facet_registry::FacetRegistry;
@@ -169,6 +173,7 @@ pub struct AppServices {
     pub activity_event_broadcast: broadcast::Sender<ActivityEvent>,
     pub download_queue_broadcast: broadcast::Sender<Vec<DownloadQueueItem>>,
     pub acquisition_wake: Arc<tokio::sync::Notify>,
+    pub hydration_wake: Arc<tokio::sync::Notify>,
     pub housekeeping: Arc<dyn HousekeepingRepository>,
     pub health_check_results: Arc<tokio::sync::RwLock<Vec<HealthCheckResult>>>,
     pub pending_releases: Arc<dyn PendingReleaseRepository>,
@@ -228,6 +233,7 @@ impl AppServices {
             activity_event_broadcast: activity_tx,
             download_queue_broadcast: queue_tx,
             acquisition_wake: Arc::new(tokio::sync::Notify::new()),
+            hydration_wake: Arc::new(tokio::sync::Notify::new()),
             housekeeping: Arc::new(NullHousekeepingRepository),
             pending_releases: Arc::new(NullPendingReleaseRepository),
             health_check_results: Arc::new(tokio::sync::RwLock::new(Vec::new())),
@@ -305,6 +311,9 @@ pub trait TitleRepository: Send + Sync {
         metadata: TitleMetadataUpdate,
     ) -> AppResult<Title>;
     async fn delete(&self, id: &str) -> AppResult<()>;
+    /// Return titles that have never been hydrated (metadata_fetched_at IS NULL),
+    /// ordered by creation time, up to `limit`.
+    async fn list_unhydrated(&self, limit: usize) -> AppResult<Vec<Title>>;
 }
 
 #[async_trait]
@@ -587,7 +596,7 @@ pub trait FileImporter: Send + Sync {
     ) -> AppResult<ImportFileResult>;
 }
 
-/// Parsed media properties from ffprobe — application-layer DTO.
+/// Parsed media properties from media analysis — application-layer DTO.
 /// A single audio stream, mirroring `scryer_mediainfo::AudioStreamDetail`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AudioStreamDetail {
@@ -1182,6 +1191,16 @@ mod tests {
                 .ok_or_else(|| AppError::NotFound(format!("title {}", id)))?;
             list.remove(position);
             Ok(())
+        }
+
+        async fn list_unhydrated(&self, limit: usize) -> AppResult<Vec<Title>> {
+            let list = self.store.lock().await;
+            Ok(list
+                .iter()
+                .filter(|t| t.metadata_fetched_at.is_none())
+                .take(limit)
+                .cloned()
+                .collect())
         }
     }
 

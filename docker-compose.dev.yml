@@ -89,7 +89,7 @@ services:
       - "8080:8080"
 
   nodejs:
-    image: node:22-alpine
+    image: node:25-alpine
     container_name: scryer-nodejs
     working_dir: /app
     volumes:

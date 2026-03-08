@@ -17,7 +17,8 @@ use axum::routing::{get, post};
 use axum::Router;
 use scryer_application::{
     AppServices, AppUseCase, FacetRegistry, IndexerPluginProvider, MovieFacetHandler,
-    SeriesFacetHandler, start_background_acquisition_poller, start_download_queue_poller,
+    SeriesFacetHandler, start_background_acquisition_poller, start_background_hydration_loop,
+    start_download_queue_poller,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -514,6 +515,7 @@ async fn bootstrap_application(
     );
     tokio::spawn(start_download_queue_poller(app_use_case.clone(), shutdown_token.child_token()));
     tokio::spawn(start_background_acquisition_poller(app_use_case.clone(), shutdown_token.child_token()));
+    tokio::spawn(start_background_hydration_loop(app_use_case.clone(), shutdown_token.child_token()));
 
     if let Err(error) = seed_indexer_configs_from_env(&app_use_case).await {
         tracing::warn!(error = %error, "failed to seed indexer configs from environment");
@@ -652,14 +654,20 @@ async fn shutdown_signal(token: CancellationToken) {
 }
 
 fn load_env_file() {
-    let candidates = [".env", "crates/scryer/.env"];
+    // Load in reverse priority order: dotenvy skips vars already set, so the
+    // last file loaded has lowest priority.  Load the crate-local file first
+    // (higher priority), then the repo-root file (lower priority / template).
+    let candidates = ["crates/scryer/.env", ".env"];
+    let mut loaded = false;
     for candidate in candidates {
         if Path::new(candidate).exists() {
             let _ = dotenvy::from_path(candidate);
-            return;
+            loaded = true;
         }
     }
-    let _ = dotenvy::dotenv();
+    if !loaded {
+        let _ = dotenvy::dotenv();
+    }
 }
 
 pub(crate) fn normalize_env_option(name: &str) -> Option<String> {

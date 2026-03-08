@@ -1,18 +1,13 @@
 use std::collections::HashSet;
 
 use async_trait::async_trait;
-use chrono::Utc;
 use scryer_domain::{Collection, MediaFacet, Title};
 
-use crate::facet_handler::{FacetHandler, HydrationResult};
+use crate::facet_handler::{movie_to_hydration_result, FacetHandler, HydrationResult};
 use crate::{
     ActivityKind, AppResult, MetadataGateway, RenameCollisionPolicy,
-    RenameMissingMetadataPolicy, RenamePlanItem, TitleMetadataUpdate,
+    RenameMissingMetadataPolicy, RenamePlanItem,
 };
-
-fn non_empty(s: String) -> Option<String> {
-    if s.trim().is_empty() { None } else { Some(s) }
-}
 
 pub struct MovieFacetHandler;
 
@@ -77,33 +72,7 @@ impl FacetHandler for MovieFacetHandler {
         language: &str,
     ) -> AppResult<HydrationResult> {
         let movie = gateway.get_movie(tvdb_id, language).await?;
-        let update = TitleMetadataUpdate {
-            year: movie.year.filter(|&y| y > 0),
-            overview: non_empty(movie.overview),
-            poster_url: non_empty(movie.poster_url),
-            sort_title: non_empty(movie.sort_title),
-            slug: non_empty(movie.slug),
-            imdb_id: non_empty(movie.imdb_id),
-            runtime_minutes: if movie.runtime_minutes > 0 { Some(movie.runtime_minutes) } else { None },
-            genres: movie.genres,
-            content_status: non_empty(movie.content_status),
-            language: non_empty(movie.language),
-            first_aired: None,
-            network: None,
-            studio: non_empty(movie.studio),
-            country: None,
-            aliases: vec![],
-            metadata_language: Some(language.to_string()),
-            metadata_fetched_at: Some(Utc::now().to_rfc3339()),
-            digital_release_date: movie.tmdb_release_date,
-            ..Default::default()
-        };
-        Ok(HydrationResult {
-            metadata_update: update,
-            seasons: vec![],
-            episodes: vec![],
-            anime_mappings: vec![],
-        })
+        Ok(movie_to_hydration_result(movie, language))
     }
 
     fn build_rename_plan_item(

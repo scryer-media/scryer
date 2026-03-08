@@ -42,7 +42,7 @@ pub struct TitleMediaFile {
     pub quality_label: Option<String>,
     pub scan_status: String,
     pub created_at: String,
-    // Media analysis fields (populated after ffprobe scan; None until scan_status='scanned')
+    // Media analysis fields (populated after media scan; None until scan_status='scanned')
     pub video_codec: Option<String>,
     pub video_width: Option<i32>,
     pub video_height: Option<i32>,

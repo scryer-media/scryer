@@ -6,6 +6,7 @@ WORKDIR /workspace
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \
+      curl \
       pkg-config \
       libssl-dev \
       libsqlite3-dev \

@@ -40,7 +40,7 @@ pub const BLOCK_SCORE_THRESHOLD: i32 = -9000;
 /// Input document set per-release for user rule evaluation.
 ///
 /// `file` is `None` during pre-download search scoring (no file on disk yet).
-/// It is populated during post-download evaluation after ffprobe runs on the
+/// It is populated during post-download evaluation after media analysis runs on the
 /// actual imported file. Rules that reference `input.file` fields are no-ops
 /// during pre-download because `input.file` serializes as `null` and field
 /// access on `null` evaluates to `undefined` in Rego.
@@ -50,11 +50,11 @@ pub struct UserRuleInput {
     pub profile: ProfileDoc,
     pub context: ContextDoc,
     pub builtin_score: BuiltinScoreDoc,
-    /// Actual file properties from ffprobe. Null during pre-download scoring.
+    /// Actual file properties from media analysis. Null during pre-download scoring.
     pub file: Option<FileDoc>,
 }
 
-/// Ground-truth file properties extracted by ffprobe after download.
+/// Ground-truth file properties from media analysis after download.
 /// Available as `input.file` in Rego during post-download evaluation.
 #[derive(Debug, Clone, Serialize)]
 pub struct FileDoc {

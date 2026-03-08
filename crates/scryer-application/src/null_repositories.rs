@@ -339,6 +339,7 @@ pub mod test_nulls {
         async fn update_metadata(&self, _: &str, _: Option<String>, _: Option<MediaFacet>, _: Option<Vec<String>>) -> AppResult<Title> { Err(AppError::Repository("not configured".into())) }
         async fn update_title_hydrated_metadata(&self, _: &str, _: TitleMetadataUpdate) -> AppResult<Title> { Err(AppError::Repository("not configured".into())) }
         async fn delete(&self, _: &str) -> AppResult<()> { Ok(()) }
+        async fn list_unhydrated(&self, _: usize) -> AppResult<Vec<Title>> { Ok(vec![]) }
     }
 
     #[derive(Default)]

@@ -956,3 +956,249 @@ pub struct RssSyncReport {
     pub releases_grabbed: usize,
     pub releases_held: usize,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use scryer_domain::{MediaFacet, Title};
+
+    fn make_title(id: &str, name: &str, year: Option<i32>) -> Title {
+        Title {
+            id: id.to_string(),
+            name: name.to_string(),
+            facet: MediaFacet::Movie,
+            monitored: true,
+            tags: vec![],
+            external_ids: vec![],
+            created_by: None,
+            created_at: chrono::Utc::now(),
+            year,
+            overview: None,
+            poster_url: None,
+            sort_title: None,
+            slug: None,
+            imdb_id: None,
+            runtime_minutes: None,
+            genres: vec![],
+            content_status: None,
+            language: None,
+            first_aired: None,
+            network: None,
+            studio: None,
+            country: None,
+            aliases: vec![],
+            metadata_language: None,
+            metadata_fetched_at: None,
+            min_availability: None,
+            digital_release_date: None,
+        }
+    }
+
+    fn make_title_with_aliases(id: &str, name: &str, year: Option<i32>, aliases: Vec<&str>) -> Title {
+        let mut t = make_title(id, name, year);
+        t.aliases = aliases.into_iter().map(|s| s.to_string()).collect();
+        t
+    }
+
+    fn make_unmonitored(id: &str, name: &str) -> Title {
+        let mut t = make_title(id, name, None);
+        t.monitored = false;
+        t
+    }
+
+    // ── normalize_for_matching ──────────────────────────────────────
+
+    #[test]
+    fn normalize_basic_title() {
+        assert_eq!(normalize_for_matching("The Dark Knight"), "the dark knight");
+    }
+
+    #[test]
+    fn normalize_dots_and_dashes() {
+        assert_eq!(
+            normalize_for_matching("The.Dark.Knight-2008"),
+            "the dark knight 2008"
+        );
+    }
+
+    #[test]
+    fn normalize_underscores() {
+        assert_eq!(
+            normalize_for_matching("the_dark_knight"),
+            "the dark knight"
+        );
+    }
+
+    #[test]
+    fn normalize_strips_special_chars() {
+        assert_eq!(
+            normalize_for_matching("Spider-Man: Across the Spider-Verse"),
+            "spider man across the spider verse"
+        );
+    }
+
+    #[test]
+    fn normalize_collapses_whitespace() {
+        assert_eq!(
+            normalize_for_matching("  The   Dark   Knight  "),
+            "the dark knight"
+        );
+    }
+
+    #[test]
+    fn normalize_empty() {
+        assert_eq!(normalize_for_matching(""), "");
+    }
+
+    #[test]
+    fn normalize_unicode_alphanumeric() {
+        // é is alphanumeric in Unicode, so it's preserved
+        assert_eq!(normalize_for_matching("café"), "café");
+    }
+
+    // ── build_title_lookup ──────────────────────────────────────────
+
+    #[test]
+    fn lookup_indexes_by_primary_name() {
+        let titles = vec![make_title("t1", "Inception", Some(2010))];
+        let lookup = build_title_lookup(&titles);
+        assert!(lookup.contains_key("inception"));
+        assert_eq!(lookup["inception"].len(), 1);
+        assert_eq!(lookup["inception"][0].title_id, "t1");
+    }
+
+    #[test]
+    fn lookup_skips_unmonitored() {
+        let titles = vec![make_unmonitored("t1", "Inception")];
+        let lookup = build_title_lookup(&titles);
+        assert!(lookup.is_empty());
+    }
+
+    #[test]
+    fn lookup_indexes_aliases() {
+        let titles = vec![make_title_with_aliases(
+            "t1",
+            "Spirited Away",
+            Some(2001),
+            vec!["Sen to Chihiro no Kamikakushi"],
+        )];
+        let lookup = build_title_lookup(&titles);
+        assert!(lookup.contains_key("spirited away"));
+        assert!(lookup.contains_key("sen to chihiro no kamikakushi"));
+    }
+
+    #[test]
+    fn lookup_multiple_titles_same_normalized_name() {
+        let titles = vec![
+            make_title("t1", "Dune", Some(1984)),
+            make_title("t2", "Dune", Some(2021)),
+        ];
+        let lookup = build_title_lookup(&titles);
+        assert_eq!(lookup["dune"].len(), 2);
+    }
+
+    // ── match_release_to_title ──────────────────────────────────────
+
+    #[test]
+    fn match_exact_title() {
+        let titles = vec![make_title("t1", "Inception", Some(2010))];
+        let lookup = build_title_lookup(&titles);
+        let parsed = crate::parse_release_metadata("Inception.2010.1080p.BluRay.x264");
+        let result = match_release_to_title(&parsed, &lookup);
+        assert!(result.is_some(), "exact match should succeed");
+        assert_eq!(result.unwrap().title_id, "t1");
+    }
+
+    #[test]
+    fn match_prefers_year_match() {
+        let titles = vec![
+            make_title("t1", "Dune", Some(1984)),
+            make_title("t2", "Dune", Some(2021)),
+        ];
+        let lookup = build_title_lookup(&titles);
+        let parsed = crate::parse_release_metadata("Dune.2021.1080p.BluRay.x264");
+        let result = match_release_to_title(&parsed, &lookup);
+        assert!(result.is_some(), "result was None");
+        assert_eq!(result.unwrap().title_id, "t2");
+    }
+
+    #[test]
+    fn match_with_year_stripped_from_release() {
+        // Release has "Title 2010", lookup only has "Title" (with year in metadata)
+        let t = make_title("t1", "Inception", Some(2010));
+        // Name doesn't include the year
+        let titles = vec![t];
+        let lookup = build_title_lookup(&titles);
+        let parsed = crate::parse_release_metadata("Inception.2010.1080p.BluRay");
+        let result = match_release_to_title(&parsed, &lookup);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().title_id, "t1");
+    }
+
+    #[test]
+    fn match_release_title_without_year_finds_title_with_year() {
+        // Lookup has "title 2024", release only has "title"
+        let titles = vec![make_title("t1", "Dune 2024", Some(2024))];
+        let lookup = build_title_lookup(&titles);
+        let parsed = ParsedReleaseMetadata {
+            raw_title: "Dune".to_string(),
+            normalized_title: "Dune".to_string(),
+            year: None,
+            ..Default::default()
+        };
+        let result = match_release_to_title(&parsed, &lookup);
+        // Should match via the reverse year-addition path
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().title_id, "t1");
+    }
+
+    #[test]
+    fn match_no_match_returns_none() {
+        let titles = vec![make_title("t1", "Inception", Some(2010))];
+        let lookup = build_title_lookup(&titles);
+        let parsed = crate::parse_release_metadata("Totally.Unknown.Movie.2024.1080p");
+        let result = match_release_to_title(&parsed, &lookup);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn match_empty_release_title_returns_none() {
+        let titles = vec![make_title("t1", "Inception", Some(2010))];
+        let lookup = build_title_lookup(&titles);
+        let parsed = ParsedReleaseMetadata {
+            raw_title: String::new(),
+            normalized_title: String::new(),
+            ..Default::default()
+        };
+        let result = match_release_to_title(&parsed, &lookup);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn match_via_alias() {
+        let titles = vec![make_title_with_aliases(
+            "t1",
+            "Spirited Away",
+            Some(2001),
+            vec!["Sen to Chihiro no Kamikakushi"],
+        )];
+        let lookup = build_title_lookup(&titles);
+        let parsed = ParsedReleaseMetadata {
+            raw_title: "Sen.to.Chihiro.no.Kamikakushi".to_string(),
+            normalized_title: "Sen to Chihiro no Kamikakushi".to_string(),
+            ..Default::default()
+        };
+        let result = match_release_to_title(&parsed, &lookup);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().title_id, "t1");
+    }
+
+    // ── extract_title_from_release ──────────────────────────────────
+
+    #[test]
+    fn extract_title_normalizes() {
+        let parsed = crate::parse_release_metadata("The.Dark.Knight.2008.1080p.BluRay");
+        let title = extract_title_from_release(&parsed);
+        assert_eq!(title, "the dark knight");
+    }
+}

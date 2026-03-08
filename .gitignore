@@ -16,3 +16,4 @@ tmp
 *.db
 *.db-*
 crates/scryer/dev-seed.toml
+crates/scryer/dev-seed-titles.toml

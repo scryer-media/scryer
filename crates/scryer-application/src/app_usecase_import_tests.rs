@@ -316,7 +316,7 @@ fn missing_audio_languages_all_present() {
 
 #[test]
 fn missing_audio_languages_case_normalization() {
-    // ffprobe emits lowercase codes; profile stores uppercase
+    // media analysis emits lowercase codes; profile stores uppercase
     let required = vec!["JPN".to_string()];
     let actual = vec!["jpn".to_string()];
     assert!(missing_audio_languages(&required, &actual).is_empty());

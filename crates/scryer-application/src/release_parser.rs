@@ -6,7 +6,7 @@ pub struct ParsedEpisodeMetadata {
     pub raw: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ParsedReleaseMetadata {
     pub raw_title: String,
     pub normalized_title: String,

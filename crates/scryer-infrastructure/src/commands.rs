@@ -129,6 +129,10 @@ pub(crate) enum DbCommand {
         id: String,
         reply: Sender<AppResult<()>>,
     },
+    ListUnhydratedTitles {
+        limit: usize,
+        reply: Sender<AppResult<Vec<Title>>>,
+    },
     ListEvents {
         title_id: Option<String>,
         limit: i64,
@@ -815,6 +819,9 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 }
                 DbCommand::DeleteTitle { id, reply } => {
                     let _ = reply.send(delete_title_query(&pool, &id).await);
+                }
+                DbCommand::ListUnhydratedTitles { limit, reply } => {
+                    let _ = reply.send(list_unhydrated_titles_query(&pool, limit).await);
                 }
                 DbCommand::ListEvents {
                     title_id,

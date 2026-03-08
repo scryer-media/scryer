@@ -1733,7 +1733,7 @@ fn missing_audio_languages<'a>(required: &'a [String], actual: &[String]) -> Vec
         .collect()
 }
 
-/// Spawns a background task to run ffprobe on an imported file.
+/// Spawns a background task to analyze an imported media file.
 /// Does not block the import response — failures are logged, not propagated.
 fn spawn_media_analysis(
     app: &AppUseCase,
@@ -1768,15 +1768,10 @@ pub(crate) async fn run_media_analysis(
     title_id: String,
     required_audio_languages: Vec<String>,
 ) {
-    let Some(ffprobe_path) = scryer_mediainfo::locate_ffprobe() else {
-        tracing::debug!("ffprobe not found alongside binary, skipping media analysis");
-        return;
-    };
-
-    let analysis = match scryer_mediainfo::analyze_file(&ffprobe_path, &path).await {
+    let analysis = match scryer_mediainfo::analyze_file(&path) {
         Ok(a) => a,
         Err(err) => {
-            tracing::warn!(error = %err, file_id = %file_id, "ffprobe analysis failed");
+            tracing::warn!(error = %err, file_id = %file_id, "media analysis failed");
             let _ = media_files.mark_scan_failed(&file_id, &err.to_string()).await;
             return;
         }
