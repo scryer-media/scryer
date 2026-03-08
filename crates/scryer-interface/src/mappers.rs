@@ -1,8 +1,9 @@
 use scryer_application::{
-    ActivityChannel, ActivityEvent, IndexerSearchResult, LibraryScanSummary, ParsedEpisodeMetadata,
-    ParsedReleaseMetadata, QualityProfileDecision, RegistryPlugin, RenameApplyItemResult,
-    RenameApplyResult, RenamePlan, RenamePlanItem, ScoringEntry, ScoringSource, SystemHealth,
-    TitleReleaseBlocklistEntry,
+    ActivityChannel, ActivityEvent, BackupInfo, DiskSpaceInfo, HealthCheckResult,
+    HousekeepingReport, IndexerSearchResult, LibraryScanSummary, ParsedEpisodeMetadata,
+    ParsedReleaseMetadata, PendingRelease, QualityProfileDecision, RegistryPlugin,
+    RenameApplyItemResult, RenameApplyResult, RenamePlan, RenamePlanItem, RssSyncReport,
+    ScoringEntry, ScoringSource, SystemHealth, TitleReleaseBlocklistEntry,
 };
 use scryer_domain::{
     CalendarEpisode, DownloadQueueItem, PluginInstallation, PolicyOutput, RuleSet,
@@ -477,6 +478,20 @@ pub(crate) fn from_title_media_file(file: scryer_application::TitleMediaFile) ->
         has_multiaudio: file.has_multiaudio,
         duration_seconds: file.duration_seconds,
         container_format: file.container_format,
+        scene_name: file.scene_name,
+        release_group: file.release_group,
+        source_type: file.source_type,
+        resolution: file.resolution,
+        video_codec_parsed: file.video_codec_parsed,
+        audio_codec_parsed: file.audio_codec_parsed,
+        acquisition_score: file.acquisition_score,
+        scoring_log: file.scoring_log,
+        indexer_source: file.indexer_source,
+        grabbed_release_title: file.grabbed_release_title,
+        grabbed_at: file.grabbed_at,
+        edition: file.edition,
+        original_file_path: file.original_file_path,
+        release_hash: file.release_hash,
     }
 }
 
@@ -629,6 +644,16 @@ pub(crate) fn from_release_decision(
     }
 }
 
+pub(crate) fn from_disk_space(info: DiskSpaceInfo) -> DiskSpacePayload {
+    DiskSpacePayload {
+        path: info.path,
+        label: info.label,
+        total_bytes: info.total_bytes.to_string(),
+        free_bytes: info.free_bytes.to_string(),
+        used_bytes: info.used_bytes.to_string(),
+    }
+}
+
 pub(crate) fn from_system_health(health: SystemHealth) -> SystemHealthPayload {
     SystemHealthPayload {
         service_ready: health.service_ready,
@@ -703,6 +728,35 @@ pub(crate) fn from_registry_plugin(p: RegistryPlugin) -> RegistryPluginPayload {
     }
 }
 
+pub(crate) fn from_notification_channel(
+    ch: scryer_domain::NotificationChannelConfig,
+) -> NotificationChannelPayload {
+    NotificationChannelPayload {
+        id: ch.id,
+        name: ch.name,
+        channel_type: ch.channel_type,
+        config_json: ch.config_json,
+        is_enabled: ch.is_enabled,
+        created_at: ch.created_at.to_rfc3339(),
+        updated_at: ch.updated_at.to_rfc3339(),
+    }
+}
+
+pub(crate) fn from_notification_subscription(
+    sub: scryer_domain::NotificationSubscription,
+) -> NotificationSubscriptionPayload {
+    NotificationSubscriptionPayload {
+        id: sub.id,
+        channel_id: sub.channel_id,
+        event_type: sub.event_type,
+        scope: sub.scope,
+        scope_id: sub.scope_id,
+        is_enabled: sub.is_enabled,
+        created_at: sub.created_at.to_rfc3339(),
+        updated_at: sub.updated_at.to_rfc3339(),
+    }
+}
+
 pub(crate) fn from_plugin_installation(inst: PluginInstallation) -> PluginInstallationPayload {
     PluginInstallationPayload {
         id: inst.id,
@@ -717,5 +771,59 @@ pub(crate) fn from_plugin_installation(inst: PluginInstallation) -> PluginInstal
         source_url: inst.source_url,
         installed_at: inst.installed_at.to_rfc3339(),
         updated_at: inst.updated_at.to_rfc3339(),
+    }
+}
+
+pub(crate) fn from_backup_info(info: BackupInfo) -> BackupInfoPayload {
+    BackupInfoPayload {
+        filename: info.filename,
+        size_bytes: info.size_bytes.to_string(),
+        created_at: info.created_at,
+    }
+}
+
+pub(crate) fn from_health_check_result(result: HealthCheckResult) -> HealthCheckPayload {
+    HealthCheckPayload {
+        source: result.source,
+        status: result.status.as_str().to_string(),
+        message: result.message,
+    }
+}
+
+pub(crate) fn from_rss_sync_report(report: RssSyncReport) -> RssSyncReportPayload {
+    RssSyncReportPayload {
+        releases_fetched: report.releases_fetched as i32,
+        releases_matched: report.releases_matched as i32,
+        releases_grabbed: report.releases_grabbed as i32,
+        releases_held: report.releases_held as i32,
+    }
+}
+
+pub(crate) fn from_pending_release(pr: PendingRelease) -> PendingReleasePayload {
+    PendingReleasePayload {
+        id: pr.id,
+        wanted_item_id: pr.wanted_item_id,
+        title_id: pr.title_id,
+        release_title: pr.release_title,
+        release_url: pr.release_url,
+        release_size_bytes: pr.release_size_bytes.map(|v| v.to_string()),
+        release_score: pr.release_score,
+        scoring_log_json: pr.scoring_log_json,
+        indexer_source: pr.indexer_source,
+        added_at: pr.added_at,
+        delay_until: pr.delay_until,
+        status: pr.status,
+    }
+}
+
+pub(crate) fn from_housekeeping_report(report: HousekeepingReport) -> HousekeepingReportPayload {
+    HousekeepingReportPayload {
+        orphaned_media_files: report.orphaned_media_files as i32,
+        stale_release_decisions: report.stale_release_decisions as i32,
+        stale_release_attempts: report.stale_release_attempts as i32,
+        expired_event_outboxes: report.expired_event_outboxes as i32,
+        stale_history_events: report.stale_history_events as i32,
+        recycled_purged: report.recycled_purged as i32,
+        ran_at: report.ran_at,
     }
 }

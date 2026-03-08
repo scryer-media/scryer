@@ -81,6 +81,7 @@ impl AppUseCase {
             title_id: title.id.clone(),
             title_name: None,
             episode_id: None,
+            season_number: None,
             media_type: "movie".to_string(),
             search_phase: schedule.search_phase,
             next_search_at: Some(next_search_at),
@@ -177,6 +178,7 @@ impl AppUseCase {
                     title_id: title.id.clone(),
                     title_name: None,
                     episode_id: Some(episode.id.clone()),
+                    season_number: episode.season_number.clone(),
                     media_type: "episode".to_string(),
                     search_phase: schedule.search_phase,
                     next_search_at: Some(next_search_at),
@@ -205,7 +207,7 @@ impl AppUseCase {
 
 /// Snapshot of the download client's current queue and recent history,
 /// fetched once per polling cycle to avoid repeated API calls.
-struct DownloadClientSnapshot {
+pub(crate) struct DownloadClientSnapshot {
     /// Lowercase title names of items currently queued or downloading.
     active_titles: std::collections::HashSet<String>,
     /// Failed history items keyed by lowercase title name, value is the
@@ -214,7 +216,7 @@ struct DownloadClientSnapshot {
 }
 
 impl DownloadClientSnapshot {
-    async fn fetch(app: &AppUseCase) -> Self {
+    pub(crate) async fn fetch(app: &AppUseCase) -> Self {
         let mut active_titles = std::collections::HashSet::new();
         let mut failed_titles = std::collections::HashMap::new();
 
@@ -271,16 +273,110 @@ impl DownloadClientSnapshot {
     }
 
     /// Returns true if a release with this title is currently queued/downloading.
-    fn is_active(&self, release_title: &str) -> bool {
+    pub(crate) fn is_active(&self, release_title: &str) -> bool {
         self.active_titles.contains(&release_title.to_ascii_lowercase())
     }
 
     /// If a release with this title failed in history with a blocklist-worthy
     /// reason, returns the failure reason (e.g. "HEALTH").
-    fn failed_reason(&self, release_title: &str) -> Option<&str> {
+    pub(crate) fn failed_reason(&self, release_title: &str) -> Option<&str> {
         self.failed_titles
             .get(&release_title.to_ascii_lowercase())
             .map(String::as_str)
+    }
+}
+
+/// Check grabbed wanted items against the download client. If a grabbed
+/// release has failed in the download client, blocklist it and re-queue the
+/// wanted item for immediate re-search.
+async fn check_grabbed_for_failures(app: &AppUseCase, dl_snapshot: &DownloadClientSnapshot) {
+    let grabbed_items = match app
+        .services
+        .wanted_items
+        .list_wanted_items(Some("grabbed"), None, None, 200, 0)
+        .await
+    {
+        Ok(items) => items,
+        Err(err) => {
+            warn!(error = %err, "failed to list grabbed wanted items for failure check");
+            return;
+        }
+    };
+
+    if grabbed_items.is_empty() {
+        return;
+    }
+
+    let now = Utc::now();
+    let now_str = now.to_rfc3339();
+
+    for item in &grabbed_items {
+        // Extract the grabbed release title from the stored JSON
+        let release_title = item
+            .grabbed_release
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+            .and_then(|v| v.get("title").and_then(|t| t.as_str().map(String::from)));
+
+        let Some(release_title) = release_title else {
+            continue;
+        };
+
+        if let Some(failure_reason) = dl_snapshot.failed_reason(&release_title) {
+            warn!(
+                title_id = item.title_id.as_str(),
+                release = release_title.as_str(),
+                reason = failure_reason,
+                "grabbed release failed in download client, re-queuing for search"
+            );
+
+            // Blocklist the failed release
+            let hint = normalize_release_attempt_hint(None);
+            let rel_title = normalize_release_attempt_title(Some(&release_title));
+
+            let _ = app
+                .services
+                .release_attempts
+                .record_release_attempt(
+                    Some(item.title_id.clone()),
+                    hint,
+                    rel_title,
+                    ReleaseDownloadAttemptOutcome::Failed,
+                    Some(format!("download client failure: {failure_reason}")),
+                    None,
+                )
+                .await;
+
+            // Re-queue for immediate re-search
+            let _ = app
+                .services
+                .wanted_items
+                .update_wanted_item_status(
+                    &item.id,
+                    "wanted",
+                    Some(&now_str),
+                    None,
+                    item.search_count,
+                    item.current_score,
+                    None,
+                )
+                .await;
+
+            let _ = app
+                .services
+                .record_activity_event(
+                    None,
+                    Some(item.title_id.clone()),
+                    ActivityKind::AcquisitionDownloadFailed,
+                    format!(
+                        "download failed for '{}', re-queuing for search",
+                        release_title
+                    ),
+                    ActivitySeverity::Warning,
+                    vec![ActivityChannel::WebUi, ActivityChannel::Toast],
+                )
+                .await;
+        }
     }
 }
 
@@ -315,6 +411,9 @@ async fn process_due_wanted_items(app: &AppUseCase) {
     // Snapshot the download client state once for the entire cycle.
     let dl_snapshot = DownloadClientSnapshot::fetch(app).await;
 
+    // Check grabbed items for download failures and re-queue them
+    check_grabbed_for_failures(app, &dl_snapshot).await;
+
     // Track URLs already submitted this cycle to avoid sending the same NZB
     // multiple times (e.g. a season pack matching several episode wanted items).
     let mut grabbed_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -323,12 +422,30 @@ async fn process_due_wanted_items(app: &AppUseCase) {
     // Track (title_id, season_num) for which a season pack was successfully grabbed this cycle.
     let mut season_pack_grabbed: std::collections::HashSet<(String, u32)> = std::collections::HashSet::new();
 
+    // Count due episode items per (title_id, season_num). Season pack search is only
+    // worthwhile when >= 2 episodes from the same season are due this cycle — mirroring
+    // Sonarr's rule of "count > 1 missing" before issuing a SeasonSearchCriteria.
+    let mut season_due_counts: std::collections::HashMap<(String, u32), usize> =
+        std::collections::HashMap::new();
+    for item in &due_items {
+        if item.media_type == "episode" {
+            if let Some(sn) = item.season_number.as_deref() {
+                if let Ok(n) = sn.parse::<u32>() {
+                    if n > 0 {
+                        *season_due_counts.entry((item.title_id.clone(), n)).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+    }
+
     for item in &due_items {
         if let Err(err) = process_single_wanted_item(
             app, item, &now,
             &mut grabbed_urls,
             &mut season_pack_attempted,
             &mut season_pack_grabbed,
+            &season_due_counts,
             &dl_snapshot,
         ).await {
             warn!(
@@ -368,6 +485,7 @@ async fn process_single_wanted_item(
     grabbed_urls: &mut std::collections::HashSet<String>,
     season_pack_attempted: &mut std::collections::HashSet<(String, u32)>,
     season_pack_grabbed: &mut std::collections::HashSet<(String, u32)>,
+    season_due_counts: &std::collections::HashMap<(String, u32), usize>,
     dl_snapshot: &DownloadClientSnapshot,
 ) -> AppResult<()> {
     // Load the title to get search context
@@ -413,7 +531,11 @@ async fn process_single_wanted_item(
         if let Some(season_num) = search_season {
             let season_key = (title.id.clone(), season_num);
 
-            if !season_pack_attempted.contains(&season_key) {
+            // Only attempt a season pack search when >= 2 episodes from this season
+            // are due this cycle (mirrors Sonarr: count > 1 missing → SeasonSearchCriteria).
+            let due_count = season_due_counts.get(&season_key).copied().unwrap_or(0);
+
+            if due_count >= 2 && !season_pack_attempted.contains(&season_key) {
                 season_pack_attempted.insert(season_key.clone());
 
                 let mut pack_queries =
@@ -467,7 +589,12 @@ async fn process_single_wanted_item(
                             .await;
 
                         match grab_result {
-                            Ok(_) => {
+                            Ok(grab) => {
+                                let facet_label = serde_json::to_string(&title.facet)
+                                    .unwrap_or_else(|_| "\"other\"".to_string())
+                                    .trim_matches('"')
+                                    .to_string();
+                                metrics::counter!("scryer_grabs_total", "indexer" => best_pack.source.clone(), "facet" => facet_label).increment(1);
                                 season_pack_grabbed.insert(season_key.clone());
                                 let _ = app
                                     .services
@@ -480,6 +607,17 @@ async fn process_single_wanted_item(
                                         None,
                                         pack_password,
                                     )
+                                    .await;
+                                let facet_str = serde_json::to_string(&title.facet)
+                                    .unwrap_or_else(|_| "\"other\"".to_string());
+                                let _ = app.services.download_submissions
+                                    .record_submission(DownloadSubmission {
+                                        title_id: title.id.clone(),
+                                        facet: facet_str.trim_matches('"').to_string(),
+                                        download_client_type: grab.client_type,
+                                        download_client_item_id: grab.job_id,
+                                        source_title: Some(best_pack.title.clone()),
+                                    })
                                     .await;
                                 let pack_score = best_pack
                                     .quality_profile_decision
@@ -872,7 +1010,15 @@ async fn process_single_wanted_item(
         .await;
 
     match grab_result {
-        Ok(_job_id) => {
+        Ok(grab) => {
+            {
+                let facet_label = serde_json::to_string(&title.facet)
+                    .unwrap_or_else(|_| "\"other\"".to_string())
+                    .trim_matches('"')
+                    .to_string();
+                metrics::counter!("scryer_grabs_total", "indexer" => best.source.clone(), "facet" => facet_label).increment(1);
+            }
+
             // Record as release attempt for blocklist tracking
             let _ = app.services.release_attempts
                 .record_release_attempt(
@@ -883,6 +1029,19 @@ async fn process_single_wanted_item(
                     None,
                     source_password.clone(),
                 )
+                .await;
+
+            // Record download submission for auto-import matching
+            let facet_str = serde_json::to_string(&title.facet)
+                .unwrap_or_else(|_| "\"other\"".to_string());
+            let _ = app.services.download_submissions
+                .record_submission(DownloadSubmission {
+                    title_id: title.id.clone(),
+                    facet: facet_str.trim_matches('"').to_string(),
+                    download_client_type: grab.client_type,
+                    download_client_item_id: grab.job_id,
+                    source_title: source_title.clone(),
+                })
                 .await;
 
             // Update wanted item to grabbed
@@ -937,6 +1096,23 @@ async fn process_single_wanted_item(
                 ActivitySeverity::Error,
                 vec![ActivityChannel::WebUi, ActivityChannel::Toast],
             ).await;
+
+            // Re-queue for immediate re-search so the next cycle tries a different release
+            let _ = app.services.wanted_items.update_wanted_item_status(
+                &item.id,
+                "wanted",
+                Some(&now.to_rfc3339()),
+                Some(&now.to_rfc3339()),
+                item.search_count + 1,
+                item.current_score,
+                item.grabbed_release.as_deref(),
+            ).await;
+
+            info!(
+                title = title.name.as_str(),
+                wanted_item_id = item.id.as_str(),
+                "re-queued wanted item for immediate re-search after download failure"
+            );
         }
     }
 
@@ -977,6 +1153,20 @@ fn build_search_queries(
                 };
                 queries.push(query);
             }
+            // Add alias-based queries for broader search coverage
+            for alias in &title.aliases {
+                if !alias.is_empty() {
+                    let query = if let Some(year) = title.year {
+                        format!("{} {}", alias, year)
+                    } else {
+                        alias.clone()
+                    };
+                    queries.push(query);
+                }
+            }
+            // Dedup queries (alias may duplicate the primary name)
+            let mut seen = std::collections::HashSet::new();
+            queries.retain(|q| seen.insert(q.to_ascii_lowercase()));
             if queries.is_empty() && imdb_id.is_some() {
                 queries.push(String::new());
             }
@@ -1245,16 +1435,35 @@ pub async fn start_background_acquisition_poller(
         warn!(error = %err, "initial wanted state sync failed");
     }
 
+    // Run initial health checks after a short delay to let services initialize
+    {
+        let app = app.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            let results = app.run_health_checks().await;
+            *app.services.health_check_results.write().await = results;
+            info!("initial health checks completed");
+        });
+    }
+
     let mut poll_interval = tokio::time::interval(std::time::Duration::from_secs(60));
     let mut sync_interval = tokio::time::interval(std::time::Duration::from_secs(3600));
     let mut metadata_refresh_interval = tokio::time::interval(std::time::Duration::from_secs(43200)); // 12h
     let mut registry_refresh_interval = tokio::time::interval(std::time::Duration::from_secs(86400)); // 24h
+    let mut health_check_interval = tokio::time::interval(std::time::Duration::from_secs(21600)); // 6h
+    let mut housekeeping_interval = tokio::time::interval(std::time::Duration::from_secs(86400)); // 24h
+    let mut rss_sync_interval = tokio::time::interval(std::time::Duration::from_secs(900)); // 15min
+    let mut pending_release_interval = tokio::time::interval(std::time::Duration::from_secs(60)); // 1min
 
     // Consume the first tick immediately
     poll_interval.tick().await;
     sync_interval.tick().await;
     metadata_refresh_interval.tick().await;
     registry_refresh_interval.tick().await;
+    health_check_interval.tick().await;
+    housekeeping_interval.tick().await;
+    rss_sync_interval.tick().await;
+    pending_release_interval.tick().await;
 
     let wake = app.services.acquisition_wake.clone();
 
@@ -1265,25 +1474,110 @@ pub async fn start_background_acquisition_poller(
                 break;
             }
             _ = wake.notified() => {
+                let t = std::time::Instant::now();
                 process_due_wanted_items(&app).await;
+                metrics::counter!("scryer_task_runs_total", "task" => "wanted_items").increment(1);
+                metrics::histogram!("scryer_task_duration_seconds", "task" => "wanted_items").record(t.elapsed().as_secs_f64());
             }
             _ = poll_interval.tick() => {
+                let t = std::time::Instant::now();
                 process_due_wanted_items(&app).await;
+                metrics::counter!("scryer_task_runs_total", "task" => "wanted_items").increment(1);
+                metrics::histogram!("scryer_task_duration_seconds", "task" => "wanted_items").record(t.elapsed().as_secs_f64());
             }
             _ = sync_interval.tick() => {
+                let t = std::time::Instant::now();
                 if let Err(err) = app.sync_wanted_state().await {
                     warn!(error = %err, "periodic wanted state sync failed");
+                    metrics::counter!("scryer_task_errors_total", "task" => "sync_state").increment(1);
                 }
+                metrics::counter!("scryer_task_runs_total", "task" => "sync_state").increment(1);
+                metrics::histogram!("scryer_task_duration_seconds", "task" => "sync_state").record(t.elapsed().as_secs_f64());
             }
             _ = metadata_refresh_interval.tick() => {
+                let t = std::time::Instant::now();
                 info!("starting periodic metadata refresh for monitored series");
                 app.refresh_monitored_series_metadata().await;
+                metrics::counter!("scryer_task_runs_total", "task" => "metadata_refresh").increment(1);
+                metrics::histogram!("scryer_task_duration_seconds", "task" => "metadata_refresh").record(t.elapsed().as_secs_f64());
             }
             _ = registry_refresh_interval.tick() => {
+                let t = std::time::Instant::now();
                 info!("refreshing plugin registry");
                 if let Err(e) = app.refresh_plugin_registry_internal().await {
                     warn!(error = %e, "periodic plugin registry refresh failed");
+                    metrics::counter!("scryer_task_errors_total", "task" => "registry_refresh").increment(1);
                 }
+                metrics::counter!("scryer_task_runs_total", "task" => "registry_refresh").increment(1);
+                metrics::histogram!("scryer_task_duration_seconds", "task" => "registry_refresh").record(t.elapsed().as_secs_f64());
+            }
+            _ = health_check_interval.tick() => {
+                let t = std::time::Instant::now();
+                let results = app.run_health_checks().await;
+                *app.services.health_check_results.write().await = results;
+                info!("periodic health checks completed");
+                metrics::counter!("scryer_task_runs_total", "task" => "health_check").increment(1);
+                metrics::histogram!("scryer_task_duration_seconds", "task" => "health_check").record(t.elapsed().as_secs_f64());
+            }
+            _ = housekeeping_interval.tick() => {
+                let t = std::time::Instant::now();
+                match app.run_housekeeping().await {
+                    Ok(report) => info!(
+                        orphaned_media_files = report.orphaned_media_files,
+                        stale_release_decisions = report.stale_release_decisions,
+                        stale_release_attempts = report.stale_release_attempts,
+                        expired_event_outboxes = report.expired_event_outboxes,
+                        stale_history_events = report.stale_history_events,
+                        "periodic housekeeping completed"
+                    ),
+                    Err(e) => {
+                        warn!(error = %e, "periodic housekeeping failed");
+                        metrics::counter!("scryer_task_errors_total", "task" => "housekeeping").increment(1);
+                    }
+                }
+                if let Err(e) = app.auto_backup_if_due().await {
+                    warn!(error = %e, "auto-backup failed");
+                }
+                metrics::counter!("scryer_task_runs_total", "task" => "housekeeping").increment(1);
+                metrics::histogram!("scryer_task_duration_seconds", "task" => "housekeeping").record(t.elapsed().as_secs_f64());
+            }
+            _ = pending_release_interval.tick() => {
+                let t = std::time::Instant::now();
+                match app.process_expired_pending_releases().await {
+                    Ok(grabbed) => {
+                        if grabbed > 0 {
+                            info!(grabbed, "pending release processor: grabbed expired releases");
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "pending release processor failed");
+                        metrics::counter!("scryer_task_errors_total", "task" => "pending_releases").increment(1);
+                    }
+                }
+                metrics::counter!("scryer_task_runs_total", "task" => "pending_releases").increment(1);
+                metrics::histogram!("scryer_task_duration_seconds", "task" => "pending_releases").record(t.elapsed().as_secs_f64());
+            }
+            _ = rss_sync_interval.tick() => {
+                let t = std::time::Instant::now();
+                match app.run_rss_sync().await {
+                    Ok(report) => {
+                        if report.releases_fetched > 0 || report.releases_grabbed > 0 || report.releases_held > 0 {
+                            info!(
+                                fetched = report.releases_fetched,
+                                matched = report.releases_matched,
+                                grabbed = report.releases_grabbed,
+                                held = report.releases_held,
+                                "periodic RSS sync completed"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "periodic RSS sync failed");
+                        metrics::counter!("scryer_task_errors_total", "task" => "rss_sync").increment(1);
+                    }
+                }
+                metrics::counter!("scryer_task_runs_total", "task" => "rss_sync").increment(1);
+                metrics::histogram!("scryer_task_duration_seconds", "task" => "rss_sync").record(t.elapsed().as_secs_f64());
             }
         }
     }

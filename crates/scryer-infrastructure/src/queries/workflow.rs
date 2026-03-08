@@ -1,5 +1,5 @@
 use chrono::Utc;
-use scryer_application::{AppError, AppResult, ReleaseDownloadAttemptOutcome};
+use scryer_application::{AppError, AppResult, DownloadSubmission, ReleaseDownloadAttemptOutcome};
 use scryer_domain::{Id, ImportRecord};
 use sqlx::Row;
 use sqlx::SqlitePool;
@@ -473,4 +473,64 @@ pub(crate) async fn list_failed_release_download_attempts_for_title_query(
     }
 
     Ok(out)
+}
+
+pub(crate) async fn record_download_submission_query(
+    pool: &SqlitePool,
+    title_id: &str,
+    facet: &str,
+    download_client_type: &str,
+    download_client_item_id: &str,
+    source_title: Option<&str>,
+) -> AppResult<()> {
+    let id = Id::new().0;
+
+    sqlx::query(
+        "INSERT INTO download_submissions
+         (id, title_id, facet, download_client_type, download_client_item_id, source_title)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(download_client_type, download_client_item_id) DO UPDATE
+         SET title_id = excluded.title_id,
+             facet = excluded.facet,
+             source_title = excluded.source_title",
+    )
+    .bind(&id)
+    .bind(title_id)
+    .bind(facet)
+    .bind(download_client_type)
+    .bind(download_client_item_id)
+    .bind(source_title)
+    .execute(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(())
+}
+
+pub(crate) async fn find_download_submission_query(
+    pool: &SqlitePool,
+    download_client_type: &str,
+    download_client_item_id: &str,
+) -> AppResult<Option<DownloadSubmission>> {
+    let row = sqlx::query(
+        "SELECT title_id, facet, download_client_type, download_client_item_id, source_title
+         FROM download_submissions
+         WHERE download_client_type = ? AND download_client_item_id = ?",
+    )
+    .bind(download_client_type)
+    .bind(download_client_item_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    match row {
+        Some(row) => Ok(Some(DownloadSubmission {
+            title_id: row.try_get("title_id").map_err(|err| AppError::Repository(err.to_string()))?,
+            facet: row.try_get("facet").map_err(|err| AppError::Repository(err.to_string()))?,
+            download_client_type: row.try_get("download_client_type").map_err(|err| AppError::Repository(err.to_string()))?,
+            download_client_item_id: row.try_get("download_client_item_id").map_err(|err| AppError::Repository(err.to_string()))?,
+            source_title: row.try_get("source_title").map_err(|err| AppError::Repository(err.to_string()))?,
+        })),
+        None => Ok(None),
+    }
 }

@@ -2,12 +2,14 @@ mod collections;
 mod config;
 mod downloads;
 mod library;
+mod notifications;
 mod plugins;
 mod rules;
 mod settings;
 mod titles;
 mod users;
 mod wanted;
+mod backup;
 
 use async_graphql::MergedObject;
 
@@ -23,4 +25,6 @@ pub struct MutationRoot(
     wanted::WantedMutations,
     rules::RulesMutations,
     plugins::PluginMutations,
+    notifications::NotificationMutations,
+    backup::BackupMutations,
 );

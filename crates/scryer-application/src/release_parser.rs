@@ -622,6 +622,7 @@ fn is_release_group_token(token: &str) -> bool {
             | "REMUX"
             | "BD25"
             | "BD50"
+            | "BDMV"
             | "BDRIP"
             | "RIP"
             | "DV"
@@ -725,6 +726,7 @@ fn extract_release_group(raw_title: &str, tokens: &[String]) -> Option<String> {
             || token == "REMUX"
             || token == "BD25"
             || token == "BD50"
+            || token == "BDMV"
             || token == "BDRIP"
     });
 
@@ -1247,6 +1249,7 @@ fn is_noise_token(token: &str) -> bool {
             | "BDRIP"
             | "BD25"
             | "BD50"
+            | "BDMV"
             | "PROPER"
             | "REPACK"
             | "EXTENDED"
@@ -1613,7 +1616,8 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
             continue;
         }
 
-        if token == "BD25" || token == "BD50" || token == "BDRIP" {
+        if token == "BD25" || token == "BD50"
+            || token == "BDMV" || token == "BDRIP" {
             parsed.is_bd_disk = true;
             i += 1;
             continue;
@@ -1711,7 +1715,7 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
 
         if let Some(year) = parse_year(token) {
             // Prefer the latest year token to avoid treating numeric movie titles
-            // (e.g. "1917.2019...") as the release year.
+            // (e.g. "2048.2019...") as the release year.
             parsed.year = Some(year);
         }
 

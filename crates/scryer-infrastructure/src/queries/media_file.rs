@@ -1,35 +1,72 @@
 use chrono::Utc;
-use scryer_application::{AppError, AppResult, MediaFileAnalysis, TitleMediaFile};
+use scryer_application::{
+    AppError, AppResult, InsertMediaFileInput, MediaFileAnalysis, TitleMediaFile,
+};
 use scryer_domain::Id;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
 pub(crate) async fn insert_media_file_query(
     pool: &SqlitePool,
-    title_id: &str,
-    file_path: &str,
-    size_bytes: i64,
-    quality_label: Option<String>,
+    input: &InsertMediaFileInput,
 ) -> AppResult<String> {
     let id = Id::new().0;
     let now = Utc::now().to_rfc3339();
 
     sqlx::query(
         "INSERT INTO media_files
-         (id, title_id, file_path, size_bytes, quality_id, scan_status, created_at)
-         VALUES (?, ?, ?, ?, ?, 'imported', ?)
+         (id, title_id, file_path, size_bytes, quality_id, scan_status, created_at,
+          scene_name, release_group, source_type, resolution,
+          video_codec_parsed, audio_codec_parsed,
+          acquisition_score, scoring_log,
+          indexer_source, grabbed_release_title, grabbed_at,
+          edition, original_file_path, release_hash)
+         VALUES (?, ?, ?, ?, ?, 'imported', ?,
+                 ?, ?, ?, ?,
+                 ?, ?,
+                 ?, ?,
+                 ?, ?, ?,
+                 ?, ?, ?)
          ON CONFLICT(file_path) DO UPDATE SET
             title_id = excluded.title_id,
             size_bytes = excluded.size_bytes,
             quality_id = excluded.quality_id,
-            scan_status = excluded.scan_status",
+            scan_status = excluded.scan_status,
+            scene_name = excluded.scene_name,
+            release_group = excluded.release_group,
+            source_type = excluded.source_type,
+            resolution = excluded.resolution,
+            video_codec_parsed = excluded.video_codec_parsed,
+            audio_codec_parsed = excluded.audio_codec_parsed,
+            acquisition_score = excluded.acquisition_score,
+            scoring_log = excluded.scoring_log,
+            indexer_source = excluded.indexer_source,
+            grabbed_release_title = excluded.grabbed_release_title,
+            grabbed_at = excluded.grabbed_at,
+            edition = excluded.edition,
+            original_file_path = excluded.original_file_path,
+            release_hash = excluded.release_hash",
     )
     .bind(&id)
-    .bind(title_id)
-    .bind(file_path)
-    .bind(size_bytes)
-    .bind(&quality_label)
+    .bind(&input.title_id)
+    .bind(&input.file_path)
+    .bind(input.size_bytes)
+    .bind(&input.quality_label)
     .bind(&now)
+    .bind(&input.scene_name)
+    .bind(&input.release_group)
+    .bind(&input.source_type)
+    .bind(&input.resolution)
+    .bind(&input.video_codec_parsed)
+    .bind(&input.audio_codec_parsed)
+    .bind(input.acquisition_score)
+    .bind(&input.scoring_log)
+    .bind(&input.indexer_source)
+    .bind(&input.grabbed_release_title)
+    .bind(&input.grabbed_at)
+    .bind(&input.edition)
+    .bind(&input.original_file_path)
+    .bind(&input.release_hash)
     .execute(pool)
     .await
     .map_err(|err| AppError::Repository(err.to_string()))?;
@@ -70,7 +107,12 @@ pub(crate) async fn list_media_files_for_title_query(
                 mf.duration_seconds, mf.container_format,
                 mf.audio_languages_json, mf.audio_streams_json,
                 mf.subtitle_languages_json,
-                mf.subtitle_codecs_json, mf.has_multiaudio
+                mf.subtitle_codecs_json, mf.has_multiaudio,
+                mf.scene_name, mf.release_group, mf.source_type, mf.resolution,
+                mf.video_codec_parsed, mf.audio_codec_parsed,
+                mf.acquisition_score, mf.scoring_log,
+                mf.indexer_source, mf.grabbed_release_title, mf.grabbed_at,
+                mf.edition, mf.original_file_path, mf.release_hash
          FROM media_files mf
          LEFT JOIN file_episode_map fem ON fem.file_id = mf.id
          WHERE mf.title_id = ?
@@ -146,6 +188,22 @@ fn row_to_title_media_file(row: &SqliteRow) -> AppResult<TitleMediaFile> {
         .and_then(|json| serde_json::from_str(&json).ok())
         .unwrap_or_default();
 
+    // Rich schema fields (added by migration 0037)
+    let scene_name: Option<String> = row.try_get("scene_name").unwrap_or(None);
+    let release_group: Option<String> = row.try_get("release_group").unwrap_or(None);
+    let source_type: Option<String> = row.try_get("source_type").unwrap_or(None);
+    let resolution: Option<String> = row.try_get("resolution").unwrap_or(None);
+    let video_codec_parsed: Option<String> = row.try_get("video_codec_parsed").unwrap_or(None);
+    let audio_codec_parsed: Option<String> = row.try_get("audio_codec_parsed").unwrap_or(None);
+    let acquisition_score: Option<i32> = row.try_get("acquisition_score").unwrap_or(None);
+    let scoring_log: Option<String> = row.try_get("scoring_log").unwrap_or(None);
+    let indexer_source: Option<String> = row.try_get("indexer_source").unwrap_or(None);
+    let grabbed_release_title: Option<String> = row.try_get("grabbed_release_title").unwrap_or(None);
+    let grabbed_at: Option<String> = row.try_get("grabbed_at").unwrap_or(None);
+    let edition: Option<String> = row.try_get("edition").unwrap_or(None);
+    let original_file_path: Option<String> = row.try_get("original_file_path").unwrap_or(None);
+    let release_hash: Option<String> = row.try_get("release_hash").unwrap_or(None);
+
     Ok(TitleMediaFile {
         id,
         title_id,
@@ -173,6 +231,20 @@ fn row_to_title_media_file(row: &SqliteRow) -> AppResult<TitleMediaFile> {
         has_multiaudio: has_multiaudio != 0,
         duration_seconds,
         container_format,
+        scene_name,
+        release_group,
+        source_type,
+        resolution,
+        video_codec_parsed,
+        audio_codec_parsed,
+        acquisition_score,
+        scoring_log,
+        indexer_source,
+        grabbed_release_title,
+        grabbed_at,
+        edition,
+        original_file_path,
+        release_hash,
     })
 }
 

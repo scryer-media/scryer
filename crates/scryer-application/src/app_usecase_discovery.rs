@@ -596,7 +596,7 @@ impl AppUseCase {
     }
 }
 
-fn is_release_blocklisted(
+pub(crate) fn is_release_blocklisted(
     result: &IndexerSearchResult,
     failed_source_hints: &std::collections::HashSet<String>,
     failed_source_titles: &std::collections::HashSet<String>,
@@ -865,7 +865,7 @@ impl AppUseCase {
     }
 }
 
-fn build_user_rule_input(
+pub(crate) fn build_user_rule_input(
     parsed: &ParsedReleaseMetadata,
     profile: &QualityProfile,
     result: &IndexerSearchResult,

@@ -110,6 +110,22 @@ async fn main() {
             .init();
     }
 
+    // Install Prometheus metrics recorder when enabled.
+    // The `metrics` crate uses a global facade — once installed, `metrics::counter!()`
+    // calls from any crate resolve to this recorder. When not installed, they are no-ops.
+    let metrics_handle = if std::env::var("SCRYER_METRICS")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        let handle = metrics_exporter_prometheus::PrometheusBuilder::new()
+            .install_recorder()
+            .expect("failed to install prometheus metrics recorder");
+        tracing::info!("prometheus metrics enabled at /metrics");
+        Some(handle)
+    } else {
+        None
+    };
+
     tracing::info!(version = VERSION, "starting scryer");
 
     // ValidateOnly mode: check for pending migrations and exit immediately (no server).
@@ -151,6 +167,7 @@ async fn main() {
             cors,
             bootstrap_shutdown,
             log_ring_buffer,
+            metrics_handle,
         )
         .await
         {
@@ -229,6 +246,7 @@ async fn bootstrap_application(
     cors: CorsConfig,
     shutdown_token: CancellationToken,
     log_ring_buffer: log_buffer::LogRingBuffer,
+    metrics_handle: Option<metrics_exporter_prometheus::PrometheusHandle>,
 ) -> Result<Router, Box<dyn std::error::Error + Send + Sync>> {
     let bootstrap_start = std::time::Instant::now();
 
@@ -435,15 +453,26 @@ async fn bootstrap_application(
 
     services.library_scanner = library_scanner;
     services.library_renamer = library_renamer;
+    services.download_submissions = Arc::new(db.clone());
     services.imports = Arc::new(db.clone());
     services.file_importer = Arc::new(scryer_infrastructure::FsFileImporter::new());
     services.media_files = Arc::new(db.clone());
     services.wanted_items = Arc::new(db.clone());
+    services.pending_releases = Arc::new(db.clone());
     services.rule_sets = Arc::new(db.clone());
     services.plugin_installations = Arc::new(db.clone());
     services.system_info = Arc::new(db.clone());
+    services.housekeeping = Arc::new(db.clone());
     services.indexer_stats = indexer_stats;
     services.plugin_provider = Some(plugin_provider);
+    services.notification_channels = Some(Arc::new(db.clone()));
+    services.notification_subscriptions = Some(Arc::new(db.clone()));
+
+    // Load notification WASM plugins (same pattern as indexer plugins)
+    let notif_provider = scryer_plugins::DynamicNotificationPluginProvider::new(
+        scryer_plugins::WasmNotificationPluginProvider::empty(),
+    );
+    services.notification_provider = Some(Arc::new(notif_provider));
 
     let app_use_case = AppUseCase::new(
         services,
@@ -528,7 +557,7 @@ async fn bootstrap_application(
         get(graphql_ws_handler).with_state(ws_auth_state),
     );
 
-    let compressed_router = Router::new()
+    let mut compressed_router = Router::new()
         .route("/health", get(health_handler))
         .route("/graphiql", get(graphiql_handler))
         .route("/graphql", post(graphql_handler).with_state(auth_state))
@@ -551,6 +580,17 @@ async fn bootstrap_application(
         )
         .fallback(get(ui_fallback))
         .layer(CompressionLayer::new().zstd(true).br(true).gzip(true));
+
+    if let Some(ref handle) = metrics_handle {
+        let h = handle.clone();
+        compressed_router = compressed_router.route(
+            "/metrics",
+            get(move || {
+                let h = h.clone();
+                async move { h.render() }
+            }),
+        );
+    }
 
     let app = ws_router
         .merge(compressed_router)

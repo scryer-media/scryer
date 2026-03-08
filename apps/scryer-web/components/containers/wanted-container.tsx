@@ -9,6 +9,7 @@ import {
   adminSettingsQuery,
   searchQuery,
   calendarEpisodesQuery,
+  pendingReleasesQuery,
 } from "@/lib/graphql/queries";
 import {
   triggerWantedSearchMutation,
@@ -16,6 +17,8 @@ import {
   resumeWantedItemMutation,
   resetWantedItemMutation,
   queueExistingMutation,
+  forceGrabPendingReleaseMutation,
+  dismissPendingReleaseMutation,
 } from "@/lib/graphql/mutations";
 import { resolveQualityProfileCatalogState } from "@/lib/utils/quality-profiles";
 import {
@@ -23,14 +26,14 @@ import {
   QUALITY_PROFILE_ID_KEY,
   QUALITY_PROFILE_INHERIT_VALUE,
 } from "@/lib/constants/settings";
-import type { WantedItem, ReleaseDecisionItem, TitleRecord, Release } from "@/lib/types";
+import type { WantedItem, ReleaseDecisionItem, TitleRecord, Release, PendingReleaseItem } from "@/lib/types";
 import type { ParsedQualityProfileEntry } from "@/lib/types/quality-profiles";
 import { FACETS_BY_ID } from "@/lib/facets/registry";
 import type { ViewId } from "@/components/root/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 
-export type WantedTab = "wanted" | "cutoff" | "calendar";
+export type WantedTab = "wanted" | "cutoff" | "calendar" | "pending";
 
 type WantedContainerProps = {
   onOpenOverview?: (targetView: ViewId, titleId: string, episodeId?: string) => void;
@@ -102,7 +105,7 @@ function computeCutoffUnmetItems(
   return result;
 }
 
-const VALID_TABS = new Set<WantedTab>(["wanted", "cutoff", "calendar"]);
+const VALID_TABS = new Set<WantedTab>(["wanted", "cutoff", "calendar", "pending"]);
 
 function readTabFromUrl(): WantedTab {
   if (typeof window === "undefined") return "wanted";
@@ -205,6 +208,58 @@ export const WantedContainer = memo(function WantedContainer({ onOpenOverview }:
       void refreshCalendar(calendarRange.start, calendarRange.end);
     }
   }, [tab, calendarRange, refreshCalendar]);
+
+  // --- Pending releases state ---
+  const [pendingItems, setPendingItems] = useState<PendingReleaseItem[]>([]);
+  const [pendingLoading, setPendingLoading] = useState(false);
+  const [, executeForceGrab] = useMutation(forceGrabPendingReleaseMutation);
+  const [, executeDismiss] = useMutation(dismissPendingReleaseMutation);
+
+  const refreshPending = useCallback(async () => {
+    setPendingLoading(true);
+    try {
+      const { data, error } = await client.query(pendingReleasesQuery, {}).toPromise();
+      if (error) throw error;
+      setPendingItems(data?.pendingReleases ?? []);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t("status.failedToLoad");
+      setGlobalStatus(message);
+    } finally {
+      setPendingLoading(false);
+    }
+  }, [client, t, setGlobalStatus]);
+
+  useEffect(() => {
+    if (tab === "pending") {
+      void refreshPending();
+    }
+  }, [tab, refreshPending]);
+
+  const forceGrabPending = useCallback(
+    async (id: string) => {
+      const { error } = await executeForceGrab({ input: { id } });
+      if (error) {
+        setGlobalStatus(error.message);
+      } else {
+        setGlobalStatus(t("pending.grabbed"));
+        void refreshPending();
+      }
+    },
+    [executeForceGrab, refreshPending, setGlobalStatus, t],
+  );
+
+  const dismissPending = useCallback(
+    async (id: string) => {
+      const { error } = await executeDismiss({ input: { id } });
+      if (error) {
+        setGlobalStatus(error.message);
+      } else {
+        setGlobalStatus(t("pending.dismissed"));
+        void refreshPending();
+      }
+    },
+    [executeDismiss, refreshPending, setGlobalStatus, t],
+  );
 
   // --- Wanted data fetching ---
 
@@ -541,6 +596,13 @@ export const WantedContainer = memo(function WantedContainer({ onOpenOverview }:
         loading: calendarLoading,
         onDateRangeChange: handleCalendarDateRangeChange,
         onEpisodeClick: handleCalendarEpisodeClick,
+      }}
+      pendingState={{
+        items: pendingItems,
+        loading: pendingLoading,
+        refreshItems: refreshPending,
+        forceGrab: forceGrabPending,
+        dismiss: dismissPending,
       }}
     />
   );

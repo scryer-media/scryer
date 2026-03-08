@@ -39,9 +39,9 @@
     },
     {
       "NZBID": 1002,
-      "NZBName": "Show.S01E01.720p.HDTV.x264-FLEET",
-      "NZBFilename": "Show.S01E01.720p.HDTV.x264-FLEET.nzb",
-      "DestDir": "/downloads/completed/tv/Show.S01E01.720p.HDTV.x264-FLEET",
+      "NZBName": "Show.S01E01.720p.HDTV.x264-TGRP",
+      "NZBFilename": "Show.S01E01.720p.HDTV.x264-TGRP.nzb",
+      "DestDir": "/downloads/completed/tv/Show.S01E01.720p.HDTV.x264-TGRP",
       "FinalDir": "",
       "Category": "tv",
       "FileSizeLo": 734003200,

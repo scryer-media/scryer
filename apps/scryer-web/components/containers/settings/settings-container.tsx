@@ -5,11 +5,13 @@ import { SettingsOverviewContainer } from "@/components/containers/settings/sett
 import { SettingsUsersContainer } from "@/components/containers/settings/settings-users-container";
 import { SettingsIndexersContainer } from "@/components/containers/settings/settings-indexers-container";
 import { SettingsDownloadClientsContainer } from "@/components/containers/settings/settings-download-clients-container";
+import { SettingsDelayProfilesContainer } from "@/components/containers/settings/settings-delay-profiles-container";
 import { SettingsQualityProfilesContainer } from "@/components/containers/settings/settings-quality-profiles-container";
 import { SettingsAcquisitionContainer } from "@/components/containers/settings/settings-acquisition-container";
 import { SettingsProfileContainer } from "@/components/containers/settings/settings-profile-container";
 import { SettingsRulesContainer } from "@/components/containers/settings/settings-rules-container";
 import { SettingsPluginsContainer } from "@/components/containers/settings/settings-plugins-container";
+import { SettingsNotificationsContainer } from "@/components/containers/settings/settings-notifications-container";
 import { SettingsPostProcessingContainer } from "@/components/containers/settings/settings-post-processing-container";
 import type { SettingsSection } from "@/components/root/types";
 import type { LocaleCode, LanguageOption } from "@/lib/i18n";
@@ -57,8 +59,12 @@ export const SettingsContainer = memo(function SettingsContainer({
                   ? t("settings.rules")
                 : settingsSection === "plugins"
                   ? t("settings.plugins")
+                : settingsSection === "notifications"
+                  ? t("settings.notifications")
                 : settingsSection === "post-processing"
                   ? t("settings.postProcessing")
+                : settingsSection === "delayProfiles"
+                  ? t("settings.delayProfiles")
                     : t("settings.qualityProfiles"),
           })}
         </CardTitle>
@@ -88,8 +94,12 @@ export const SettingsContainer = memo(function SettingsContainer({
           <SettingsRulesContainer />
         ) : settingsSection === "plugins" ? (
           <SettingsPluginsContainer />
+        ) : settingsSection === "notifications" ? (
+          <SettingsNotificationsContainer />
         ) : settingsSection === "post-processing" ? (
           <SettingsPostProcessingContainer />
+        ) : settingsSection === "delayProfiles" ? (
+          <SettingsDelayProfilesContainer />
         ) : (
           <SettingsQualityProfilesContainer />
         )}

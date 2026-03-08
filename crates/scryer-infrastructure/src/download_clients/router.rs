@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use scryer_application::{AppError, AppResult, DownloadClient, DownloadClientConfigRepository};
+use scryer_application::{AppError, AppResult, DownloadClient, DownloadClientConfigRepository, DownloadGrabResult};
 use scryer_domain::{DownloadClientConfig, DownloadQueueItem, Title};
 use tracing::warn;
 
@@ -93,7 +93,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         source_title: Option<String>,
         source_password: Option<String>,
         category: Option<String>,
-    ) -> AppResult<String> {
+    ) -> AppResult<DownloadGrabResult> {
         let clients = match self.list_enabled_clients_by_priority().await {
             Ok(configs) => configs,
             Err(error) => {
@@ -155,7 +155,12 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 )
                 .await
             {
-                Ok(job_id) => return Ok(job_id),
+                Ok(result) => {
+                    return Ok(DownloadGrabResult {
+                        job_id: result.job_id,
+                        client_type: config.client_type.trim().to_ascii_lowercase(),
+                    });
+                }
                 Err(error) => {
                     let should_failover = matches!(error, AppError::Repository(_));
                     warn!(

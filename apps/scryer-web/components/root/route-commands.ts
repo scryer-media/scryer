@@ -106,6 +106,14 @@ export function buildRouteCommands({ t, onNavigate }: BuildRouteCommandsArgs): R
       onSelect: buildNavigate(onNavigate, "settings", "qualityProfiles"),
     },
     {
+      id: "settings-delay-profiles",
+      label: t("settings.delayProfiles"),
+      description: t("settings.delayProfiles"),
+      keywords: ["settings", "delay", "profiles", "pending", "wait"],
+      icon: Settings,
+      onSelect: buildNavigate(onNavigate, "settings", "delayProfiles"),
+    },
+    {
       id: "settings-download-clients",
       label: t("settings.downloadClients"),
       description: t("settings.downloadClients"),

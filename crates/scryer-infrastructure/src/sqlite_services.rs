@@ -96,6 +96,21 @@ impl SqliteServices {
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
+    pub async fn vacuum_into_db(&self, dest_path: &str) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::VacuumInto {
+                dest_path: dest_path.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
     pub async fn create_workflow_operation(
         &self,
         operation_type: impl Into<String>,
@@ -244,6 +259,52 @@ impl SqliteServices {
                 title_id: title_id.map(|value| value.to_string()),
                 source_hint: source_hint.map(|value| value.to_string()),
                 source_title: source_title.map(|value| value.to_string()),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn record_download_submission(
+        &self,
+        title_id: String,
+        facet: String,
+        download_client_type: String,
+        download_client_item_id: String,
+        source_title: Option<String>,
+    ) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::RecordDownloadSubmission {
+                title_id,
+                facet,
+                download_client_type,
+                download_client_item_id,
+                source_title,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn find_download_submission(
+        &self,
+        download_client_type: &str,
+        download_client_item_id: &str,
+    ) -> AppResult<Option<scryer_application::DownloadSubmission>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::FindDownloadSubmission {
+                download_client_type: download_client_type.to_string(),
+                download_client_item_id: download_client_item_id.to_string(),
                 reply: reply_tx,
             })
             .await
@@ -601,18 +662,12 @@ impl SqliteServices {
 
     pub async fn insert_media_file(
         &self,
-        title_id: &str,
-        file_path: &str,
-        size_bytes: i64,
-        quality_label: Option<String>,
+        input: &scryer_application::InsertMediaFileInput,
     ) -> AppResult<String> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
             .send(DbCommand::InsertMediaFile {
-                title_id: title_id.to_string(),
-                file_path: file_path.to_string(),
-                size_bytes,
-                quality_label,
+                input: input.clone(),
                 reply: reply_tx,
             })
             .await
@@ -1072,6 +1127,136 @@ impl SqliteServices {
         self.sender
             .send(DbCommand::DeleteDownloadClientConfig {
                 id: id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn insert_pending_release(
+        &self,
+        release: &scryer_application::PendingRelease,
+    ) -> AppResult<String> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::InsertPendingRelease {
+                release: release.clone(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn list_expired_pending_releases(
+        &self,
+        now: &str,
+    ) -> AppResult<Vec<scryer_application::PendingRelease>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::ListExpiredPendingReleases {
+                now: now.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn list_pending_releases_for_wanted_item(
+        &self,
+        wanted_item_id: &str,
+    ) -> AppResult<Vec<scryer_application::PendingRelease>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::ListPendingReleasesForWantedItem {
+                wanted_item_id: wanted_item_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn update_pending_release_status(
+        &self,
+        id: &str,
+        status: &str,
+        grabbed_at: Option<&str>,
+    ) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::UpdatePendingReleaseStatus {
+                id: id.to_string(),
+                status: status.to_string(),
+                grabbed_at: grabbed_at.map(str::to_string),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn list_waiting_pending_releases(
+        &self,
+    ) -> AppResult<Vec<scryer_application::PendingRelease>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::ListWaitingPendingReleases {
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn get_pending_release(
+        &self,
+        id: &str,
+    ) -> AppResult<Option<scryer_application::PendingRelease>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::GetPendingRelease {
+                id: id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn supersede_pending_releases_for_wanted_item(
+        &self,
+        wanted_item_id: &str,
+        except_id: &str,
+    ) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::SupersedePendingReleasesForWantedItem {
+                wanted_item_id: wanted_item_id.to_string(),
+                except_id: except_id.to_string(),
                 reply: reply_tx,
             })
             .await

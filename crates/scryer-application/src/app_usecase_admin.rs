@@ -63,6 +63,56 @@ impl AppUseCase {
         })
     }
 
+    pub async fn disk_space(&self, actor: &User) -> AppResult<Vec<DiskSpaceInfo>> {
+        require(actor, &Entitlement::ViewCatalog)?;
+
+        // Collect unique root folder paths from all facet handlers
+        let path_keys = [
+            ("series.path", "/media/series", "Series"),
+            ("anime.path", "/media/anime", "Anime"),
+            ("movies.path", "/media/movies", "Movies"),
+        ];
+
+        let mut seen_paths = std::collections::HashSet::new();
+        let mut results = Vec::new();
+
+        for (key, default, label) in &path_keys {
+            let path = self
+                .read_setting_string_value_for_scope(
+                    SETTINGS_SCOPE_MEDIA,
+                    key,
+                    None,
+                )
+                .await?
+                .unwrap_or_else(|| default.to_string());
+
+            if !seen_paths.insert(path.clone()) {
+                continue; // skip duplicate mount points
+            }
+
+            match nix::sys::statvfs::statvfs(path.as_str()) {
+                Ok(stat) => {
+                    let block_size = stat.block_size() as u64;
+                    let total = stat.blocks() as u64 * block_size;
+                    let free = stat.blocks_available() as u64 * block_size;
+                    let used = total.saturating_sub(free);
+                    results.push(DiskSpaceInfo {
+                        path,
+                        label: label.to_string(),
+                        total_bytes: total,
+                        free_bytes: free,
+                        used_bytes: used,
+                    });
+                }
+                Err(err) => {
+                    tracing::warn!(path = path.as_str(), error = %err, "failed to query disk space");
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
     pub fn subscribe_events(&self) -> broadcast::Receiver<HistoryEvent> {
         self.services.event_broadcast.subscribe()
     }

@@ -2,7 +2,7 @@ use crate::{
     app_usecase_post_processing::{spawn_post_processing, PostProcessingContext},
     nfo::{render_episode_nfo, render_movie_nfo, render_plexmatch, render_tvshow_nfo},
     parse_release_metadata, render_rename_template, require, ActivityChannel, ActivityKind,
-    ActivitySeverity, AppError, AppResult, AppUseCase,
+    ActivitySeverity, AppError, AppResult, AppUseCase, evaluate_against_profile,
 };
 use scryer_domain::{
     Collection, CompletedDownload, DownloadQueueItem, DownloadQueueState, Entitlement, EventType,
@@ -85,20 +85,34 @@ pub async fn try_import_completed_downloads(app: &AppUseCase, actor: &User, item
             continue;
         }
 
-        // SAFETY: Only auto-import downloads that originated from scryer.
-        // The *scryer_title_id parameter is injected at submission time and
-        // proves this download was initiated by scryer, not manually added
-        // to NZBGet. Downloads without this parameter are ignored by the
-        // automatic poller — users can still import them manually via the
-        // triggerImport GraphQL mutation.
-        // TODO: Auto-match RSS/manual NZBGet downloads when *scryer_title_id is missing.
-        // This should allow managed titles (especially series) to be imported automatically
-        // by parsing completed.name and matching against catalog content before manual action.
-        if !has_scryer_origin(&completed.parameters) {
-            continue;
-        }
+        // Only auto-import downloads that originated from scryer.
+        // NZBGet embeds *scryer_title_id via PPParameters. SABnzbd has no
+        // equivalent, so we fall back to the download_submissions table which
+        // records the (title_id, facet) at grab time.
+        let completed = if has_scryer_origin(&completed.parameters) {
+            completed.clone()
+        } else {
+            // Fallback: look up the download_submissions table
+            match app.services.download_submissions
+                .find_by_client_item_id(&completed.client_type, &completed.download_client_item_id)
+                .await
+            {
+                Ok(Some(submission)) => {
+                    let mut patched = completed.clone();
+                    patched.parameters = vec![
+                        ("*scryer_title_id".to_string(), submission.title_id),
+                        ("*scryer_facet".to_string(), submission.facet),
+                    ];
+                    patched
+                }
+                _ => continue, // Not a scryer-originated download
+            }
+        };
 
-        match import_completed_download(app, actor, completed).await {
+        let facet_label = extract_parameter(&completed.parameters, "*scryer_facet")
+            .unwrap_or_else(|| "unknown".to_string());
+        let import_start = std::time::Instant::now();
+        match import_completed_download(app, actor, &completed).await {
             Ok(result) => {
                 tracing::info!(
                     decision = ?result.decision,
@@ -107,6 +121,8 @@ pub async fn try_import_completed_downloads(app: &AppUseCase, actor: &User, item
                     "import completed for {}",
                     completed.name
                 );
+                metrics::counter!("scryer_imports_total", "decision" => result.decision.as_str(), "facet" => facet_label.clone()).increment(1);
+                metrics::histogram!("scryer_import_duration_seconds", "facet" => facet_label).record(import_start.elapsed().as_secs_f64());
             }
             Err(error) => {
                 tracing::warn!(
@@ -114,6 +130,8 @@ pub async fn try_import_completed_downloads(app: &AppUseCase, actor: &User, item
                     name = %completed.name,
                     "import failed for completed download"
                 );
+                metrics::counter!("scryer_imports_total", "decision" => "error", "facet" => facet_label.clone()).increment(1);
+                metrics::histogram!("scryer_import_duration_seconds", "facet" => facet_label).record(import_start.elapsed().as_secs_f64());
             }
         }
     }
@@ -373,32 +391,118 @@ async fn import_movie_download(
         .join(&title_folder)
         .join(&rendered_filename);
 
-    // Collision check
-    if dest_path.exists() {
-        let existing_size = std::fs::metadata(&dest_path)
-            .map(|m| m.len() as i64)
-            .unwrap_or(0);
+    // Pre-import checks
+    let existing_files = app
+        .services
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .unwrap_or_default();
+    let check_ctx = crate::import_checks::ImportCheckContext {
+        source_path: &source_video,
+        dest_path: &dest_path,
+        source_size: source_size as u64,
+        parsed: &parsed,
+        existing_files: &existing_files,
+    };
+    let verdict = crate::import_checks::run_import_checks(&check_ctx);
+    if let crate::import_checks::ImportVerdict::Reject { reason, code } = verdict {
+        let skip_reason = Some(match code {
+            "duplicate_file" => ImportSkipReason::DuplicateFile,
+            "insufficient_disk_space" => ImportSkipReason::DiskFull,
+            "invalid_extension" | "sample_file" | "sample_directory" => ImportSkipReason::NoVideoFiles,
+            _ => ImportSkipReason::PolicyMismatch,
+        });
+        let result = ImportResult {
+            import_id: import_id.to_string(),
+            decision: ImportDecision::Skipped,
+            skip_reason,
+            title_id: Some(title.id.clone()),
+            source_path: source_video.to_string_lossy().to_string(),
+            dest_path: Some(dest_path.to_string_lossy().to_string()),
+            file_size_bytes: Some(source_size),
+            link_type: None,
+            error_message: Some(reason),
+            started_at,
+            completed_at: Utc::now(),
+        };
+        let result_json = serde_json::to_string(&result).ok();
+        app.services
+            .imports
+            .update_import_status(import_id, "skipped", result_json)
+            .await?;
+        return Ok(result);
+    }
 
-        if existing_size == source_size {
-            let result = ImportResult {
-                import_id: import_id.to_string(),
-                decision: ImportDecision::Skipped,
-                skip_reason: Some(ImportSkipReason::DuplicateFile),
-                title_id: Some(title.id.clone()),
-                source_path: source_video.to_string_lossy().to_string(),
-                dest_path: Some(dest_path.to_string_lossy().to_string()),
-                file_size_bytes: Some(source_size),
-                link_type: None,
-                error_message: None,
-                started_at,
-                completed_at: Utc::now(),
-            };
-            let result_json = serde_json::to_string(&result).ok();
-            app.services
-                .imports
-                .update_import_status(import_id, "skipped", result_json)
-                .await?;
-            return Ok(result);
+    // Upgrade check: if there are existing files, score and compare
+    if !existing_files.is_empty() {
+        let tvdb_id = title.external_ids.iter().find(|e| e.source == "tvdb").map(|e| e.value.as_str());
+        let category_hint = facet_to_category_hint(&title.facet);
+        if let Ok(quality_profile) = app
+            .resolve_quality_profile(&title.tags, title.imdb_id.as_deref(), tvdb_id, Some(category_hint))
+            .await
+        {
+            let new_decision = evaluate_against_profile(&quality_profile, &parsed, true);
+            let new_score = new_decision.preference_score;
+
+            // Find the best existing file by acquisition_score
+            if let Some(existing_file) = existing_files.iter().max_by_key(|f| f.acquisition_score.unwrap_or(0)) {
+                let old_score = existing_file.acquisition_score.unwrap_or(0);
+                if new_score > old_score {
+                    let media_root_opt = crate::recycle_bin::media_root_for_title(app, title).await;
+                    let recycle_config = crate::recycle_bin::resolve_recycle_config(
+                        app,
+                        media_root_opt.as_deref(),
+                    )
+                    .await;
+
+                    match crate::upgrade::execute_upgrade(
+                        app,
+                        &title.name,
+                        &title.id,
+                        existing_file,
+                        &source_video,
+                        &dest_path,
+                        &parsed,
+                        new_score,
+                        old_score,
+                        &recycle_config,
+                    )
+                    .await
+                    {
+                        Ok(outcome) => {
+                            let result = ImportResult {
+                                import_id: import_id.to_string(),
+                                decision: ImportDecision::Imported,
+                                skip_reason: None,
+                                title_id: Some(title.id.clone()),
+                                source_path: source_video.to_string_lossy().to_string(),
+                                dest_path: Some(dest_path.to_string_lossy().to_string()),
+                                file_size_bytes: Some(source_size),
+                                link_type: None,
+                                error_message: None,
+                                started_at,
+                                completed_at: Utc::now(),
+                            };
+                            tracing::info!(
+                                title = %title.name,
+                                old_score = outcome.old_score,
+                                new_score = outcome.new_score,
+                                "movie file upgraded"
+                            );
+                            let result_json = serde_json::to_string(&result).ok();
+                            app.services
+                                .imports
+                                .update_import_status(import_id, "completed", result_json)
+                                .await?;
+                            return Ok(result);
+                        }
+                        Err(err) => {
+                            tracing::error!(error = %err, "upgrade failed, falling through to normal import");
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -448,17 +552,25 @@ async fn import_movie_download(
         }
     }
 
-    // Record media file
-    let quality_label = parsed.quality.clone();
+    // Record media file with rich metadata
+    let media_file_input = crate::InsertMediaFileInput {
+        title_id: title.id.clone(),
+        file_path: dest_path.to_string_lossy().to_string(),
+        size_bytes: file_result.size_bytes as i64,
+        quality_label: parsed.quality.clone(),
+        scene_name: Some(parsed.raw_title.clone()),
+        release_group: parsed.release_group.clone(),
+        source_type: parsed.source.clone(),
+        resolution: parsed.quality.clone(),
+        video_codec_parsed: parsed.video_codec.clone(),
+        audio_codec_parsed: parsed.audio.clone(),
+        original_file_path: Some(source_video.to_string_lossy().to_string()),
+        ..Default::default()
+    };
     let media_file_id = match app
         .services
         .media_files
-        .insert_media_file(
-            &title.id,
-            &dest_path.to_string_lossy(),
-            file_result.size_bytes as i64,
-            quality_label,
-        )
+        .insert_media_file(&media_file_input)
         .await
     {
         Ok(id) => Some(id),
@@ -778,14 +890,72 @@ async fn import_single_episode_file(
             .join(&rendered_filename)
     };
 
-    // Collision check
-    if dest_path.exists() {
-        let existing_size = std::fs::metadata(&dest_path)
-            .map(|m| m.len() as i64)
-            .unwrap_or(0);
-        if existing_size == source_size {
-            tracing::debug!(file = %dest_path.display(), "skipping duplicate episode file");
-            return Ok(false);
+    // Pre-import checks
+    let existing_files = app
+        .services
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .unwrap_or_default();
+    let check_ctx = crate::import_checks::ImportCheckContext {
+        source_path: source_video,
+        dest_path: &dest_path,
+        source_size: source_size as u64,
+        parsed: &parsed,
+        existing_files: &existing_files,
+    };
+    if let crate::import_checks::ImportVerdict::Reject { reason, code } = crate::import_checks::run_import_checks(&check_ctx) {
+        tracing::debug!(file = %dest_path.display(), %code, %reason, "skipping episode file");
+        return Ok(false);
+    }
+
+    // Upgrade check for episodes: find existing file for same dest path
+    if !existing_files.is_empty() {
+        let tvdb_id = title.external_ids.iter().find(|e| e.source == "tvdb").map(|e| e.value.as_str());
+        let category_hint = facet_to_category_hint(&title.facet);
+        if let Ok(quality_profile) = app
+            .resolve_quality_profile(&title.tags, title.imdb_id.as_deref(), tvdb_id, Some(category_hint))
+            .await
+        {
+            let new_decision = evaluate_against_profile(&quality_profile, &parsed, true);
+            let new_score = new_decision.preference_score;
+            let dest_str = dest_path.to_string_lossy();
+
+            // Find an existing file at the same dest path (or matching episode)
+            if let Some(existing_file) = existing_files.iter().find(|f| f.file_path == dest_str.as_ref()) {
+                let old_score = existing_file.acquisition_score.unwrap_or(0);
+                if new_score > old_score {
+                    let recycle_config = crate::recycle_bin::resolve_recycle_config(app, Some(media_root)).await;
+
+                    match crate::upgrade::execute_upgrade(
+                        app,
+                        &title.name,
+                        &title.id,
+                        existing_file,
+                        source_video,
+                        &dest_path,
+                        &parsed,
+                        new_score,
+                        old_score,
+                        &recycle_config,
+                    )
+                    .await
+                    {
+                        Ok(outcome) => {
+                            tracing::info!(
+                                title = %title.name,
+                                old_score = outcome.old_score,
+                                new_score = outcome.new_score,
+                                "episode file upgraded"
+                            );
+                            return Ok(true);
+                        }
+                        Err(err) => {
+                            tracing::error!(error = %err, "episode upgrade failed, falling through to normal import");
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -844,17 +1014,25 @@ async fn import_single_episode_file(
         }
     }
 
-    // Record media file
-    let quality_label = parsed.quality.clone();
+    // Record media file with rich metadata
+    let media_file_input = crate::InsertMediaFileInput {
+        title_id: title.id.clone(),
+        file_path: dest_path.to_string_lossy().to_string(),
+        size_bytes: file_result.size_bytes as i64,
+        quality_label: parsed.quality.clone(),
+        scene_name: Some(parsed.raw_title.clone()),
+        release_group: parsed.release_group.clone(),
+        source_type: parsed.source.clone(),
+        resolution: parsed.quality.clone(),
+        video_codec_parsed: parsed.video_codec.clone(),
+        audio_codec_parsed: parsed.audio.clone(),
+        original_file_path: Some(source_video.to_string_lossy().to_string()),
+        ..Default::default()
+    };
     let media_file_id = app
         .services
         .media_files
-        .insert_media_file(
-            &title.id,
-            &dest_path.to_string_lossy(),
-            file_result.size_bytes as i64,
-            quality_label,
-        )
+        .insert_media_file(&media_file_input)
         .await?;
 
     {
@@ -1448,16 +1626,25 @@ pub async fn execute_manual_import(
                     .clone()
                     .or_else(|| parsed.quality.clone());
 
-                // Record media file
+                // Record media file with rich metadata
+                let media_file_input = crate::InsertMediaFileInput {
+                    title_id: title.id.clone(),
+                    file_path: dest_path.to_string_lossy().to_string(),
+                    size_bytes: file_result.size_bytes as i64,
+                    quality_label: quality_label.clone(),
+                    scene_name: Some(parsed.raw_title.clone()),
+                    release_group: parsed.release_group.clone(),
+                    source_type: parsed.source.clone(),
+                    resolution: quality_label,
+                    video_codec_parsed: parsed.video_codec.clone(),
+                    audio_codec_parsed: parsed.audio.clone(),
+                    original_file_path: Some(source.to_string_lossy().to_string()),
+                    ..Default::default()
+                };
                 if let Ok(mf_id) = app
                     .services
                     .media_files
-                    .insert_media_file(
-                        &title.id,
-                        &dest_path.to_string_lossy(),
-                        file_result.size_bytes as i64,
-                        quality_label,
-                    )
+                    .insert_media_file(&media_file_input)
                     .await
                 {
                     let _ = app
@@ -1572,7 +1759,7 @@ fn spawn_media_analysis(
     });
 }
 
-async fn run_media_analysis(
+pub(crate) async fn run_media_analysis(
     media_files: Arc<dyn crate::MediaFileRepository>,
     wanted_items: Arc<dyn crate::WantedItemRepository>,
     release_attempts: Arc<dyn crate::ReleaseAttemptRepository>,
@@ -1602,9 +1789,17 @@ async fn run_media_analysis(
             "imported file is not a valid video — deleting and blocklisting"
         );
 
-        // Delete from disk
-        if let Err(err) = tokio::fs::remove_file(&path).await {
-            tracing::warn!(error = %err, path = %path.display(), "failed to delete invalid file from disk");
+        // Move to recycle bin (or delete if recycle bin disabled)
+        let recycle_config = crate::recycle_bin::config_from_file_path(&path);
+        let manifest = crate::recycle_bin::RecycleManifest {
+            recycled_at: chrono::Utc::now().to_rfc3339(),
+            original_path: path.display().to_string(),
+            size_bytes: tokio::fs::metadata(&path).await.map(|m| m.len()).unwrap_or(0),
+            title_id: Some(title_id.clone()),
+            reason: "invalid_file".to_string(),
+        };
+        if let Err(err) = crate::recycle_bin::recycle_file(&recycle_config, &path, manifest).await {
+            tracing::warn!(error = %err, path = %path.display(), "failed to recycle invalid file from disk");
         }
 
         // Extract the grabbed release title from the wanted item so we can blocklist it
@@ -1668,8 +1863,16 @@ async fn run_media_analysis(
                 msg
             );
 
-            if let Err(err) = tokio::fs::remove_file(&path).await {
-                tracing::warn!(error = %err, path = %path.display(), "failed to delete language-mismatch file from disk");
+            let recycle_config = crate::recycle_bin::config_from_file_path(&path);
+            let manifest = crate::recycle_bin::RecycleManifest {
+                recycled_at: chrono::Utc::now().to_rfc3339(),
+                original_path: path.display().to_string(),
+                size_bytes: tokio::fs::metadata(&path).await.map(|m| m.len()).unwrap_or(0),
+                title_id: Some(title_id.clone()),
+                reason: "language_mismatch".to_string(),
+            };
+            if let Err(err) = crate::recycle_bin::recycle_file(&recycle_config, &path, manifest).await {
+                tracing::warn!(error = %err, path = %path.display(), "failed to recycle language-mismatch file from disk");
             }
 
             let release_title = wanted_items

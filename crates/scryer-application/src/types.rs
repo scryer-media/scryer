@@ -61,6 +61,21 @@ pub struct TitleMediaFile {
     pub has_multiaudio: bool,
     pub duration_seconds: Option<i32>,
     pub container_format: Option<String>,
+    // Rich schema fields (populated during import from parsed release metadata)
+    pub scene_name: Option<String>,
+    pub release_group: Option<String>,
+    pub source_type: Option<String>,
+    pub resolution: Option<String>,
+    pub video_codec_parsed: Option<String>,
+    pub audio_codec_parsed: Option<String>,
+    pub acquisition_score: Option<i32>,
+    pub scoring_log: Option<String>,
+    pub indexer_source: Option<String>,
+    pub grabbed_release_title: Option<String>,
+    pub grabbed_at: Option<String>,
+    pub edition: Option<String>,
+    pub original_file_path: Option<String>,
+    pub release_hash: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -69,6 +84,7 @@ pub struct WantedItem {
     pub title_id: String,
     pub title_name: Option<String>,
     pub episode_id: Option<String>,
+    pub season_number: Option<String>,
     pub media_type: String,
     pub search_phase: String,
     pub next_search_at: Option<String>,
@@ -96,6 +112,30 @@ pub struct ReleaseDecision {
     pub score_delta: Option<i32>,
     pub explanation_json: Option<String>,
     pub created_at: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct PendingRelease {
+    pub id: String,
+    pub wanted_item_id: String,
+    pub title_id: String,
+    pub release_title: String,
+    pub release_url: Option<String>,
+    pub release_size_bytes: Option<i64>,
+    pub release_score: i32,
+    pub scoring_log_json: Option<String>,
+    pub indexer_source: Option<String>,
+    pub release_guid: Option<String>,
+    pub added_at: String,
+    pub delay_until: String,
+    pub status: String,
+    pub grabbed_at: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DownloadGrabResult {
+    pub job_id: String,
+    pub client_type: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -192,6 +232,15 @@ pub struct PrimaryCollectionSummary {
 }
 
 #[derive(Clone, Debug)]
+pub struct DiskSpaceInfo {
+    pub path: String,
+    pub label: String,
+    pub total_bytes: u64,
+    pub free_bytes: u64,
+    pub used_bytes: u64,
+}
+
+#[derive(Clone, Debug)]
 pub struct SystemHealth {
     pub service_ready: bool,
     pub db_path: String,
@@ -223,4 +272,46 @@ pub struct IndexerQueryStats {
     pub api_max: Option<u32>,
     pub grab_current: Option<u32>,
     pub grab_max: Option<u32>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BackupInfo {
+    pub filename: String,
+    pub size_bytes: u64,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug)]
+pub enum HealthCheckStatus {
+    Ok,
+    Warning,
+    Error,
+}
+
+impl HealthCheckStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Warning => "warning",
+            Self::Error => "error",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct HealthCheckResult {
+    pub source: String,
+    pub status: HealthCheckStatus,
+    pub message: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct HousekeepingReport {
+    pub orphaned_media_files: u32,
+    pub stale_release_decisions: u32,
+    pub stale_release_attempts: u32,
+    pub expired_event_outboxes: u32,
+    pub stale_history_events: u32,
+    pub recycled_purged: u32,
+    pub ran_at: String,
 }

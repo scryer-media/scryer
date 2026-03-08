@@ -1,9 +1,12 @@
 use std::collections::HashMap;
+use std::io::Write;
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
 use chrono::{DateTime, Utc};
-use scryer_application::{AppError, AppResult, DownloadClient};
+use flate2::write::GzEncoder;
+use flate2::Compression;
+use scryer_application::{AppError, AppResult, DownloadClient, DownloadGrabResult};
 use scryer_domain::{DownloadQueueItem, DownloadQueueState, Title};
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -127,6 +130,12 @@ impl NzbgetDownloadClient {
             .await
             .map_err(|err| AppError::Repository(format!("nzbget test call failed: {err}")))?;
         let status = response.status();
+
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(AppError::Repository(
+                "nzbget authentication failed: check username and password".into(),
+            ));
+        }
         if !status.is_success() {
             return Err(AppError::Repository(format!(
                 "nzbget test call returned status {status}"
@@ -162,7 +171,51 @@ impl NzbgetDownloadClient {
             Value::String(value) => value.as_str(),
             _ => "nzbget",
         });
-        Ok(version.to_string())
+        let version = version.to_string();
+
+        // Validate minimum version (v12+ required for append API)
+        if let Some(major) = parse_nzbget_major_version(&version) {
+            if major < 12 {
+                return Err(AppError::Repository(format!(
+                    "nzbget {version} is not supported; version 12.0+ is required"
+                )));
+            }
+        }
+
+        // Check KeepHistory config — if 0, completed downloads are immediately
+        // purged and auto-import will never see them.
+        match self.rpc_call("config", vec![]).await {
+            Ok(config_result) => {
+                if let Some(entries) = config_result.as_array() {
+                    let keep_history = entries.iter().find_map(|entry| {
+                        let obj = entry.as_object()?;
+                        let name = obj.get("Name").and_then(Value::as_str)?;
+                        if name.eq_ignore_ascii_case("KeepHistory") {
+                            obj.get("Value").and_then(Value::as_str).map(|v| v.to_string())
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some(kh) = keep_history {
+                        if let Ok(kh_val) = kh.parse::<i64>() {
+                            if kh_val == 0 {
+                                return Err(AppError::Repository(
+                                    "nzbget KeepHistory is set to 0 — completed downloads are \
+                                     immediately purged and cannot be auto-imported. Set \
+                                     KeepHistory to at least 1 in NZBGet settings."
+                                        .into(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            Err(err) => {
+                warn!(error = %err, "failed to read nzbget config for KeepHistory check");
+            }
+        }
+
+        Ok(version)
     }
 
     async fn fetch_and_encode_nzb(&self, source_hint: &str) -> AppResult<String> {
@@ -440,6 +493,28 @@ impl NzbgetDownloadClient {
             debug!("nzbget postqueue endpoint unavailable; skipping pp queue merge");
         }
 
+        // Global pause detection: when NZBGet's download queue is globally paused,
+        // all non-completed items should show as Paused.
+        if !items.is_empty() {
+            if let Ok(status_result) = self.rpc_call("status", vec![]).await {
+                let download_paused = status_result
+                    .get("DownloadPaused")
+                    .or_else(|| status_result.get("downloadPaused"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if download_paused {
+                    for item in &mut items {
+                        if matches!(
+                            item.state,
+                            DownloadQueueState::Queued | DownloadQueueState::Downloading
+                        ) {
+                            item.state = DownloadQueueState::Paused;
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(items)
     }
 
@@ -467,7 +542,7 @@ impl NzbgetDownloadClient {
                     return None;
                 }
 
-                let (state, attention_reason) = map_history_state(&status_upper);
+                let (state, attention_reason) = map_history_state(&status_upper, entry);
                 let history_ts = extract_i64_value(entry.get("HistoryTime").or_else(|| entry.get("time")));
                 if let Some(ts) = history_ts {
                     if ts < cutoff_ts {
@@ -524,7 +599,7 @@ impl DownloadClient for NzbgetDownloadClient {
         source_title: Option<String>,
         source_password: Option<String>,
         category: Option<String>,
-    ) -> AppResult<String> {
+    ) -> AppResult<DownloadGrabResult> {
         let job_id = scryer_domain::Id::new().0;
         let source_hint = source_hint
             .and_then(|value| {
@@ -620,11 +695,23 @@ impl DownloadClient for NzbgetDownloadClient {
             payload = %request_payload_for_log,
             "nzbget append request payload"
         );
+        let json_bytes = serde_json::to_vec(&request_payload).map_err(|err| {
+            AppError::Repository(format!("nzbget append payload serialization failed: {err}"))
+        })?;
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(&json_bytes).map_err(|err| {
+            AppError::Repository(format!("nzbget append gzip compression failed: {err}"))
+        })?;
+        let compressed = encoder.finish().map_err(|err| {
+            AppError::Repository(format!("nzbget append gzip finalization failed: {err}"))
+        })?;
+
         let mut request = self
             .http_client
             .post(&endpoint)
             .header("Content-Type", "application/json")
-            .json(&request_payload);
+            .header("Content-Encoding", "gzip")
+            .body(compressed);
 
         if let Some(username) = self.username.clone() {
             request = request.basic_auth(username, self.password.as_deref());
@@ -691,7 +778,10 @@ impl DownloadClient for NzbgetDownloadClient {
             "nzbget append succeeded"
         );
 
-        Ok(job_id)
+        Ok(DownloadGrabResult {
+            job_id,
+            client_type: "nzbget".to_string(),
+        })
     }
 
     async fn list_queue(&self) -> AppResult<Vec<DownloadQueueItem>> {
@@ -746,6 +836,20 @@ impl DownloadClient for NzbgetDownloadClient {
                     return None;
                 }
 
+                // Multi-field failure detection (mirrors Sonarr's cascade):
+                // Even when top-level Status is SUCCESS, individual stages may
+                // indicate problems that make the download unusable.
+                if let Some(reason) = check_history_stage_failure(entry) {
+                    let name = history_entry_name(entry);
+                    warn!(
+                        nzb_id,
+                        name = name.as_str(),
+                        reason = reason.as_str(),
+                        "skipping completed download due to stage failure"
+                    );
+                    return None;
+                }
+
                 let history_ts = extract_i64_value(
                     entry.get("HistoryTime").or_else(|| entry.get("time")),
                 );
@@ -755,12 +859,15 @@ impl DownloadClient for NzbgetDownloadClient {
                     }
                 }
 
+                // FinalDir is where files end up after NZBGet's move step;
+                // DestDir may point to a now-empty intermediate directory.
                 let dest_dir = entry
-                    .get("DestDir")
-                    .or_else(|| entry.get("destDir"))
-                    .or_else(|| entry.get("FinalDir"))
+                    .get("FinalDir")
                     .or_else(|| entry.get("finalDir"))
+                    .or_else(|| entry.get("DestDir"))
+                    .or_else(|| entry.get("destDir"))
                     .and_then(Value::as_str)
+                    .filter(|v| !v.is_empty())
                     .unwrap_or("")
                     .to_string();
 
@@ -768,12 +875,7 @@ impl DownloadClient for NzbgetDownloadClient {
                     return None;
                 }
 
-                let name = entry
-                    .get("Name")
-                    .or_else(|| entry.get("name"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("Unnamed download")
-                    .to_string();
+                let name = history_entry_name(entry);
 
                 let category = entry
                     .get("Category")
@@ -1092,22 +1194,116 @@ fn extract_remaining_seconds_from_entry(entry: &serde_json::Map<String, Value>) 
     Some(remaining.max(0))
 }
 
-fn map_history_state(status_upper: &str) -> (DownloadQueueState, Option<String>) {
+fn map_history_state(status_upper: &str, entry: &serde_json::Map<String, Value>) -> (DownloadQueueState, Option<String>) {
     if status_upper.starts_with("SUCCESS") {
+        // Even with SUCCESS status, check individual stage fields for failures
+        if let Some(reason) = check_history_stage_failure(entry) {
+            return (DownloadQueueState::Failed, Some(reason));
+        }
         (DownloadQueueState::Completed, None)
     } else if status_upper.starts_with("FAILURE") {
-        let reason = status_upper
-            .split_once('/')
-            .and_then(|(_, detail)| {
-                let detail = detail.trim();
-                (!detail.is_empty()).then_some(detail.to_string())
-            });
+        let reason = check_history_stage_failure(entry).or_else(|| {
+            status_upper
+                .split_once('/')
+                .and_then(|(_, detail)| {
+                    let detail = detail.trim();
+                    (!detail.is_empty()).then_some(detail.to_string())
+                })
+        });
         (DownloadQueueState::Failed, reason)
     } else if status_upper.starts_with("UNKNOWN") {
         (DownloadQueueState::Failed, Some("unknown failure".to_string()))
     } else {
         (DownloadQueueState::Completed, None)
     }
+}
+
+/// Extracts the Name field from a history entry.
+fn history_entry_name(entry: &serde_json::Map<String, Value>) -> String {
+    entry
+        .get("Name")
+        .or_else(|| entry.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("Unnamed download")
+        .to_string()
+}
+
+/// Reads a string field from an NZBGet history entry, trying PascalCase then camelCase.
+fn history_field_str<'a>(entry: &'a serde_json::Map<String, Value>, pascal: &str, camel: &str) -> Option<&'a str> {
+    entry.get(pascal).or_else(|| entry.get(camel)).and_then(Value::as_str)
+}
+
+/// Checks NZBGet's individual post-processing stage fields for failures.
+/// Returns Some(reason) if any stage indicates a problem, None if all stages passed.
+///
+/// Mirrors Sonarr's multi-field cascade:
+///   DeleteStatus → MarkStatus → ParStatus → UnpackStatus → ScriptStatus
+///
+/// Success values are "SUCCESS" and "NONE" (step was skipped/not applicable).
+fn check_history_stage_failure(entry: &serde_json::Map<String, Value>) -> Option<String> {
+    let delete_status = history_field_str(entry, "DeleteStatus", "deleteStatus").unwrap_or("NONE");
+    let mark_status = history_field_str(entry, "MarkStatus", "markStatus").unwrap_or("NONE");
+
+    // Manual deletion: user removed from NZBGet UI
+    if delete_status.eq_ignore_ascii_case("MANUAL") {
+        if mark_status.eq_ignore_ascii_case("BAD") {
+            return Some("marked bad and manually deleted".to_string());
+        }
+        // User-deleted but not marked bad — skip entirely (handled by caller via DELETED status)
+        return None;
+    }
+    if delete_status.eq_ignore_ascii_case("HEALTH") {
+        return Some("deleted due to health check failure".to_string());
+    }
+    if delete_status.eq_ignore_ascii_case("DUPE") {
+        return Some("deleted as duplicate".to_string());
+    }
+    if !is_nzbget_success_value(delete_status) {
+        return Some(format!("delete failed: {delete_status}"));
+    }
+
+    let par_status = history_field_str(entry, "ParStatus", "parStatus").unwrap_or("NONE");
+    if !is_nzbget_success_value(par_status) {
+        return Some(format!("par repair failed: {par_status}"));
+    }
+
+    let unpack_status = history_field_str(entry, "UnpackStatus", "unpackStatus").unwrap_or("NONE");
+    if unpack_status.eq_ignore_ascii_case("SPACE") {
+        return Some("unpack failed: disk space".to_string());
+    }
+    if !is_nzbget_success_value(unpack_status) {
+        return Some(format!("unpack failed: {unpack_status}"));
+    }
+
+    let move_status = history_field_str(entry, "MoveStatus", "moveStatus").unwrap_or("NONE");
+    if !is_nzbget_success_value(move_status) {
+        return Some(format!("move failed: {move_status}"));
+    }
+
+    let script_status = history_field_str(entry, "ScriptStatus", "scriptStatus").unwrap_or("NONE");
+    if !is_nzbget_success_value(script_status) {
+        return Some(format!("script failed: {script_status}"));
+    }
+
+    None
+}
+
+/// NZBGet considers "SUCCESS" and "NONE" (step skipped) as passing values.
+fn is_nzbget_success_value(value: &str) -> bool {
+    value.eq_ignore_ascii_case("SUCCESS") || value.eq_ignore_ascii_case("NONE")
+}
+
+/// Parses the major version number from an NZBGet version string.
+/// Handles formats like "24.3", "nzbget-24.3", "24.3-testing".
+fn parse_nzbget_major_version(version: &str) -> Option<u32> {
+    let cleaned = version
+        .trim()
+        .trim_start_matches("nzbget-")
+        .trim_start_matches("nzbget");
+    let first_segment = cleaned.split('.').next()?;
+    // Handle "24-testing" → "24"
+    let digits = first_segment.split('-').next()?;
+    digits.parse::<u32>().ok()
 }
 
 fn sanitize_filename_with_nzb_ext(name: &str) -> String {

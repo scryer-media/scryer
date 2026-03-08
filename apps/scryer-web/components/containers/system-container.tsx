@@ -3,6 +3,7 @@ import { memo, useCallback, useEffect, useState } from "react";
 import { useClient } from "urql";
 import { SystemView } from "@/components/views/system-view";
 import { systemHealthQuery } from "@/lib/graphql/queries";
+import { triggerRssSyncMutation } from "@/lib/graphql/mutations";
 import type { SystemHealth } from "@/components/root/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
@@ -13,6 +14,7 @@ export const SystemContainer = memo(function SystemContainer() {
   const client = useClient();
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null);
   const [systemLoading, setSystemLoading] = useState(false);
+  const [rssSyncing, setRssSyncing] = useState(false);
 
   const refreshSystem = useCallback(async () => {
     setSystemLoading(true);
@@ -28,6 +30,29 @@ export const SystemContainer = memo(function SystemContainer() {
     }
   }, [client, setGlobalStatus, t]);
 
+  const triggerRssSync = useCallback(async () => {
+    setRssSyncing(true);
+    try {
+      const { data, error } = await client.mutation(triggerRssSyncMutation, {}).toPromise();
+      if (error) throw error;
+      const report = data?.triggerRssSync;
+      if (report) {
+        setGlobalStatus(
+          t("system.rssSyncComplete", {
+            fetched: report.releasesFetched,
+            matched: report.releasesMatched,
+            grabbed: report.releasesGrabbed,
+            held: report.releasesHeld,
+          }),
+        );
+      }
+    } catch (error) {
+      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+    } finally {
+      setRssSyncing(false);
+    }
+  }, [client, setGlobalStatus, t]);
+
   useEffect(() => {
     void refreshSystem();
   }, [refreshSystem]);
@@ -38,6 +63,10 @@ export const SystemContainer = memo(function SystemContainer() {
         systemHealth,
         systemLoading,
         refreshSystem,
+        rssSync: {
+          syncing: rssSyncing,
+          triggerSync: triggerRssSync,
+        },
       }}
     />
   );

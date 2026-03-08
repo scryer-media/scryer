@@ -7,11 +7,12 @@ use serde_json::json;
 
 use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_error};
 use crate::mappers::{
-    from_activity_event, from_calendar_episode, from_collection, from_download_client_config,
-    from_episode, from_download_queue_item, from_event, from_indexer_config,
-    from_media_rename_plan, from_provider_type, from_release_decision, from_system_health,
-    from_title, from_title_media_file, from_title_release_blocklist_entry, from_wanted_item,
-    map_admin_setting, from_user, file_size_bytes_for_path,
+    from_activity_event, from_calendar_episode, from_collection, from_disk_space,
+    from_download_client_config, from_episode, from_download_queue_item, from_event,
+    from_health_check_result, from_indexer_config, from_media_rename_plan, from_pending_release,
+    from_provider_type, from_release_decision, from_system_health, from_title,
+    from_title_media_file, from_title_release_blocklist_entry, from_wanted_item,
+    map_admin_setting, from_user, file_size_bytes_for_path, from_backup_info,
 };
 use crate::types::*;
 use crate::utils::parse_facet;
@@ -526,6 +527,36 @@ impl QueryRoot {
         Ok(from_system_health(health))
     }
 
+    async fn health_checks(&self, ctx: &Context<'_>) -> GqlResult<Vec<HealthCheckPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {
+            return Err(async_graphql::Error::new("insufficient entitlements"));
+        }
+        let results = app.services.health_check_results.read().await;
+        Ok(results.iter().cloned().map(from_health_check_result).collect())
+    }
+
+    async fn disk_space(&self, ctx: &Context<'_>) -> GqlResult<Vec<DiskSpacePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let info = app.disk_space(&actor).await.map_err(to_gql_error)?;
+        Ok(info.into_iter().map(from_disk_space).collect())
+    }
+
+    async fn backups(&self, ctx: &Context<'_>) -> GqlResult<Vec<BackupInfoPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let backups = app.list_backups(&actor).await.map_err(to_gql_error)?;
+        Ok(backups.into_iter().map(from_backup_info).collect())
+    }
+
+    async fn pending_releases(&self, ctx: &Context<'_>) -> GqlResult<Vec<PendingReleasePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let releases = app.list_pending_releases().await.map_err(to_gql_error)?;
+        Ok(releases.into_iter().map(from_pending_release).collect())
+    }
+
     async fn import_history(
         &self,
         ctx: &Context<'_>,
@@ -921,6 +952,73 @@ impl QueryRoot {
             .await
             .map_err(to_gql_error)?;
         Ok(episodes.into_iter().map(from_calendar_episode).collect())
+    }
+
+    // ── Notifications ────────────────────────────────────────────────────
+
+    async fn notification_channels(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<NotificationChannelPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let channels = app
+            .list_notification_channels(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(channels
+            .into_iter()
+            .map(crate::mappers::from_notification_channel)
+            .collect())
+    }
+
+    async fn notification_subscriptions(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<NotificationSubscriptionPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let subs = app
+            .list_notification_subscriptions(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(subs
+            .into_iter()
+            .map(crate::mappers::from_notification_subscription)
+            .collect())
+    }
+
+    async fn notification_provider_types(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<ProviderTypePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let provider_types = app.available_notification_provider_types();
+        Ok(provider_types
+            .into_iter()
+            .map(|pt| {
+                let name = app
+                    .notification_provider_name(&pt)
+                    .unwrap_or_else(|| pt.clone());
+                let fields = app.notification_provider_config_fields(&pt);
+                from_provider_type(pt, name, fields, None)
+            })
+            .collect())
+    }
+
+    async fn notification_event_types(&self, ctx: &Context<'_>) -> GqlResult<Vec<String>> {
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        Ok(scryer_domain::NotificationEventType::all()
+            .iter()
+            .map(|e| e.as_str().to_string())
+            .collect())
     }
 
     // ── Service Logs ────────────────────────────────────────────────────

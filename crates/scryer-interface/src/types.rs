@@ -136,6 +136,30 @@ pub struct TitleMediaFilePayload {
     pub has_multiaudio: bool,
     pub duration_seconds: Option<i32>,
     pub container_format: Option<String>,
+    // Rich metadata (populated at import from parsed release name)
+    pub scene_name: Option<String>,
+    pub release_group: Option<String>,
+    pub source_type: Option<String>,
+    pub resolution: Option<String>,
+    pub video_codec_parsed: Option<String>,
+    pub audio_codec_parsed: Option<String>,
+    pub acquisition_score: Option<i32>,
+    pub scoring_log: Option<String>,
+    pub indexer_source: Option<String>,
+    pub grabbed_release_title: Option<String>,
+    pub grabbed_at: Option<String>,
+    pub edition: Option<String>,
+    pub original_file_path: Option<String>,
+    pub release_hash: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct DiskSpacePayload {
+    pub path: String,
+    pub label: String,
+    pub total_bytes: String,
+    pub free_bytes: String,
+    pub used_bytes: String,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -654,6 +678,14 @@ pub struct TestDownloadClientConnectionInput {
 }
 
 #[derive(InputObject)]
+pub struct TestIndexerConnectionInput {
+    pub provider_type: String,
+    pub base_url: String,
+    pub api_key: Option<String>,
+    pub config_json: Option<String>,
+}
+
+#[derive(InputObject)]
 pub struct DeleteTitleInput {
     pub title_id: String,
     pub delete_files_on_disk: Option<bool>,
@@ -1119,4 +1151,125 @@ pub struct ProviderTypePayload {
     pub name: String,
     pub config_fields: Vec<PluginConfigFieldPayload>,
     pub default_base_url: Option<String>,
+}
+
+// ── Notification types ─────────────────────────────────────────────────
+
+#[derive(SimpleObject, Clone)]
+pub struct NotificationChannelPayload {
+    pub id: String,
+    pub name: String,
+    pub channel_type: String,
+    pub config_json: String,
+    pub is_enabled: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct NotificationSubscriptionPayload {
+    pub id: String,
+    pub channel_id: String,
+    pub event_type: String,
+    pub scope: String,
+    pub scope_id: Option<String>,
+    pub is_enabled: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(InputObject)]
+pub struct CreateNotificationChannelInput {
+    pub name: String,
+    pub channel_type: String,
+    pub config_json: String,
+    pub is_enabled: Option<bool>,
+}
+
+#[derive(InputObject)]
+pub struct UpdateNotificationChannelInput {
+    pub id: String,
+    pub name: Option<String>,
+    pub config_json: Option<String>,
+    pub is_enabled: Option<bool>,
+}
+
+#[derive(InputObject)]
+pub struct CreateNotificationSubscriptionInput {
+    pub channel_id: String,
+    pub event_type: String,
+    pub scope: String,
+    pub scope_id: Option<String>,
+    pub is_enabled: Option<bool>,
+}
+
+#[derive(InputObject)]
+pub struct UpdateNotificationSubscriptionInput {
+    pub id: String,
+    pub event_type: Option<String>,
+    pub scope: Option<String>,
+    pub scope_id: Option<String>,
+    pub is_enabled: Option<bool>,
+}
+
+/// Notification provider type payload (reuses the same shape as indexer provider types)
+#[derive(SimpleObject, Clone)]
+pub struct NotificationProviderTypePayload {
+    pub provider_type: String,
+    pub name: String,
+    pub config_fields: Vec<PluginConfigFieldPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct BackupInfoPayload {
+    pub filename: String,
+    pub size_bytes: String,
+    pub created_at: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct HealthCheckPayload {
+    pub source: String,
+    pub status: String,
+    pub message: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct RssSyncReportPayload {
+    pub releases_fetched: i32,
+    pub releases_matched: i32,
+    pub releases_grabbed: i32,
+    pub releases_held: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct PendingReleasePayload {
+    pub id: String,
+    pub wanted_item_id: String,
+    pub title_id: String,
+    pub release_title: String,
+    pub release_url: Option<String>,
+    pub release_size_bytes: Option<String>,
+    pub release_score: i32,
+    pub scoring_log_json: Option<String>,
+    pub indexer_source: Option<String>,
+    pub added_at: String,
+    pub delay_until: String,
+    pub status: String,
+}
+
+#[derive(InputObject)]
+pub struct PendingReleaseActionInput {
+    pub id: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct HousekeepingReportPayload {
+    pub orphaned_media_files: i32,
+    pub stale_release_decisions: i32,
+    pub stale_release_attempts: i32,
+    pub expired_event_outboxes: i32,
+    pub stale_history_events: i32,
+    pub recycled_purged: i32,
+    pub ran_at: String,
 }

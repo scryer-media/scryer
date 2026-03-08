@@ -1,7 +1,12 @@
+use std::io::Write;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use flate2::write::GzEncoder;
+use flate2::Compression;
+use reqwest::multipart;
 use reqwest::Client;
-use scryer_application::{AppError, AppResult, DownloadClient};
+use scryer_application::{AppError, AppResult, DownloadClient, DownloadGrabResult};
 use scryer_domain::{CompletedDownload, DownloadQueueItem, DownloadQueueState, Title};
 use serde_json::Value;
 use tracing::debug;
@@ -72,6 +77,47 @@ impl SabnzbdDownloadClient {
         Ok(json)
     }
 
+    async fn fetch_nzb(&self, url: &str) -> AppResult<Vec<u8>> {
+        let response = self
+            .http_client
+            .get(url)
+            .header("User-Agent", "scryer/0.1")
+            .send()
+            .await
+            .map_err(|err| AppError::Repository(format!("nzb download request failed: {err}")))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.map_err(|err| {
+                AppError::Repository(format!("nzb download response read failed: {err}"))
+            })?;
+            let preview = body.chars().take(300).collect::<String>();
+            return Err(AppError::Repository(format!(
+                "nzb download failed with status {status}: {preview}"
+            )));
+        }
+
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|err| AppError::Repository(format!("nzb download body read failed: {err}")))?;
+        if bytes.is_empty() {
+            return Err(AppError::Repository(
+                "nzb download response body was empty".into(),
+            ));
+        }
+
+        let text = String::from_utf8_lossy(&bytes);
+        let trimmed = text.trim_start();
+        if !trimmed.starts_with('<') {
+            return Err(AppError::Repository(
+                "nzb download payload did not look like xml".into(),
+            ));
+        }
+
+        Ok(bytes.to_vec())
+    }
+
     pub async fn test_connection(&self) -> AppResult<String> {
         // First check connectivity with unauthenticated version call
         let url = self.api_url();
@@ -105,14 +151,30 @@ impl SabnzbdDownloadClient {
             .unwrap_or("sabnzbd")
             .to_string();
 
-        // Now validate the API key by making an authenticated request
+        // Check version >= 3.0.0
+        let mut warnings = Vec::new();
+        let version_parts: Vec<u32> = version
+            .split('.')
+            .filter_map(|p| p.parse().ok())
+            .collect();
+        if version_parts.len() >= 2 && version_parts[0] < 3 {
+            warnings.push(format!(
+                "SABnzbd {version} is outdated; version 3.0.0+ is recommended"
+            ));
+        }
+
+        // Validate the API key by making an authenticated request
         self.api_get(&[("mode", "queue"), ("limit", "0")])
             .await
             .map_err(|err| {
                 AppError::Repository(format!("sabnzbd api key validation failed: {err}"))
             })?;
 
-        Ok(version)
+        if warnings.is_empty() {
+            Ok(version)
+        } else {
+            Ok(format!("{version} ({})", warnings.join("; ")))
+        }
     }
 }
 
@@ -125,7 +187,7 @@ impl DownloadClient for SabnzbdDownloadClient {
         source_title: Option<String>,
         source_password: Option<String>,
         category: Option<String>,
-    ) -> AppResult<String> {
+    ) -> AppResult<DownloadGrabResult> {
         let source_hint = source_hint
             .and_then(|value| {
                 let value = value.trim().to_string();
@@ -147,31 +209,82 @@ impl DownloadClient for SabnzbdDownloadClient {
             .filter(|v| !v.is_empty())
             .unwrap_or(title.name.as_str());
 
-        let mut params: Vec<(&str, &str)> = vec![
-            ("mode", "addurl"),
-            ("name", &source_hint),
-            ("nzbname", nzb_name),
-        ];
+        let nzb_bytes = self.fetch_nzb(&source_hint).await?;
 
-        let category_value;
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(&nzb_bytes).map_err(|err| {
+            AppError::Repository(format!("sabnzbd nzb gzip compression failed: {err}"))
+        })?;
+        let compressed = encoder.finish().map_err(|err| {
+            AppError::Repository(format!("sabnzbd nzb gzip finalization failed: {err}"))
+        })?;
+
+        let nzb_filename = if nzb_name.to_ascii_lowercase().ends_with(".nzb") {
+            format!("{nzb_name}.gz")
+        } else {
+            format!("{nzb_name}.nzb.gz")
+        };
+
+        let nzb_part = multipart::Part::bytes(compressed)
+            .file_name(nzb_filename)
+            .mime_str("application/gzip")
+            .map_err(|err| AppError::Repository(format!("sabnzbd multipart build failed: {err}")))?;
+
+        let mut form = multipart::Form::new()
+            .text("apikey", self.api_key.clone())
+            .text("output", "json")
+            .text("mode", "addfile")
+            .text("nzbname", nzb_name.to_string())
+            .text("priority", "-1")
+            .part("nzbfile", nzb_part);
+
         if let Some(cat) = category.as_deref() {
             let trimmed = cat.trim();
             if !trimmed.is_empty() {
-                category_value = trimmed.to_string();
-                params.push(("cat", &category_value));
+                form = form.text("cat", trimmed.to_string());
             }
         }
 
-        let password_value;
         if let Some(pw) = source_password.as_deref() {
             let trimmed = pw.trim();
             if !trimmed.is_empty() && trimmed != "0" {
-                password_value = trimmed.to_string();
-                params.push(("password", &password_value));
+                form = form.text("password", trimmed.to_string());
             }
         }
 
-        let json = self.api_get(&params).await?;
+        let url = self.api_url();
+        let response = self
+            .http_client
+            .post(&url)
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|err| AppError::Repository(format!("sabnzbd addfile call failed: {err}")))?;
+
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|err| AppError::Repository(format!("sabnzbd addfile response read failed: {err}")))?;
+
+        if !status.is_success() {
+            let preview = body.chars().take(600).collect::<String>();
+            return Err(AppError::Repository(format!(
+                "sabnzbd addfile returned status {status}: {preview}"
+            )));
+        }
+
+        let json: Value = serde_json::from_str(&body).map_err(|err| {
+            AppError::Repository(format!("sabnzbd addfile returned non-json response: {err}"))
+        })?;
+
+        if let Some(false) = json.get("status").and_then(Value::as_bool) {
+            let error_msg = json
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error");
+            return Err(AppError::Repository(format!("sabnzbd addfile error: {error_msg}")));
+        }
 
         let nzo_id = json
             .get("nzo_ids")
@@ -180,17 +293,20 @@ impl DownloadClient for SabnzbdDownloadClient {
             .and_then(Value::as_str)
             .map(str::to_string)
             .ok_or_else(|| {
-                AppError::Repository("sabnzbd addurl did not return an nzo_id".into())
+                AppError::Repository("sabnzbd addfile did not return an nzo_id".into())
             })?;
 
         debug!(
             nzo_id = nzo_id.as_str(),
             title = title.name.as_str(),
             nzb_name = nzb_name,
-            "sabnzbd addurl succeeded"
+            "sabnzbd addfile succeeded"
         );
 
-        Ok(nzo_id)
+        Ok(DownloadGrabResult {
+            job_id: nzo_id,
+            client_type: "sabnzbd".to_string(),
+        })
     }
 
     async fn list_queue(&self) -> AppResult<Vec<DownloadQueueItem>> {
@@ -216,11 +332,16 @@ impl DownloadClient for SabnzbdDownloadClient {
                     .and_then(Value::as_str)?
                     .to_string();
 
-                let title_name = slot
+                let raw_filename = slot
                     .get("filename")
                     .and_then(Value::as_str)
-                    .unwrap_or("Unnamed download")
-                    .to_string();
+                    .unwrap_or("Unnamed download");
+                let (title_name, is_encrypted) =
+                    if let Some(stripped) = raw_filename.strip_prefix("ENCRYPTED / ") {
+                        (stripped.to_string(), true)
+                    } else {
+                        (raw_filename.to_string(), false)
+                    };
 
                 let status = slot
                     .get("status")
@@ -257,6 +378,13 @@ impl DownloadClient for SabnzbdDownloadClient {
                     None
                 };
 
+                let attention_required = is_encrypted;
+                let attention_reason = if is_encrypted {
+                    Some("ENCRYPTED".to_string())
+                } else {
+                    pp_status
+                };
+
                 Some(DownloadQueueItem {
                     id: nzo_id.clone(),
                     title_id: None,
@@ -271,8 +399,8 @@ impl DownloadClient for SabnzbdDownloadClient {
                     remaining_seconds,
                     queued_at: None,
                     last_updated_at: None,
-                    attention_required: false,
-                    attention_reason: pp_status,
+                    attention_required,
+                    attention_reason,
                     download_client_item_id: nzo_id,
                     import_status: None,
                     import_error_message: None,

@@ -108,6 +108,20 @@ export type TitleMediaFile = {
   hasMultiaudio: boolean;
   durationSeconds: number | null;
   containerFormat: string | null;
+  sceneName: string | null;
+  releaseGroup: string | null;
+  sourceType: string | null;
+  resolution: string | null;
+  videoCodecParsed: string | null;
+  audioCodecParsed: string | null;
+  acquisitionScore: number | null;
+  scoringLog: string | null;
+  indexerSource: string | null;
+  grabbedReleaseTitle: string | null;
+  grabbedAt: string | null;
+  edition: string | null;
+  originalFilePath: string | null;
+  releaseHash: string | null;
 };
 
 export type MediaRenamePlanItem = {
@@ -430,9 +444,9 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
   }, [title, renamePlan, refreshTitleDetail, client, setGlobalStatus, t]);
 
   // Subscribe to activity events via WebSocket — refresh title detail (including
-  // collection quality labels) when an import completes for this movie.
+  // collection quality labels) when an import or upgrade completes for this movie.
   const IMPORT_KINDS = React.useMemo(
-    () => new Set(["movie_downloaded", "series_episode_imported"]),
+    () => new Set(["movie_downloaded", "series_episode_imported", "file_upgraded"]),
     [],
   );
 

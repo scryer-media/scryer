@@ -499,6 +499,11 @@ export function MovieOverviewView({
                             <span className="rounded bg-accent px-1 py-0.5 text-card-foreground">{qualityHint}</span>
                           ) : null}
                           <span className="text-muted-foreground/60">Added {formatDate(col.createdAt)}</span>
+                          {mediaFile?.acquisitionScore != null ? (
+                            <span className="text-muted-foreground/60" title={mediaFile.scoringLog ?? undefined}>
+                              {t("mediaFile.score", { score: mediaFile.acquisitionScore })}
+                            </span>
+                          ) : null}
                         </div>
                         {mediaFile ? <MediaInfoBadges file={mediaFile} /> : null}
                       </div>

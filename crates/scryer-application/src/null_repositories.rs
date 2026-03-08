@@ -7,10 +7,13 @@ use scryer_domain::ImportRecord;
 use scryer_domain::RuleSet;
 
 use scryer_domain::PluginInstallation;
+use crate::InsertMediaFileInput;
 
 use crate::{
-    AppError, AppResult, FileImporter, ImportRepository, IndexerQueryStats,
-    IndexerStatsTracker, MediaFileRepository, PluginInstallationRepository, ReleaseDecision,
+    AppError, AppResult, DownloadSubmission, DownloadSubmissionRepository, FileImporter,
+    HousekeepingRepository, ImportRepository, IndexerQueryStats, IndexerStatsTracker,
+    MediaFileRepository, NotificationChannelRepository, NotificationSubscriptionRepository,
+    PendingRelease, PendingReleaseRepository, PluginInstallationRepository, ReleaseDecision,
     RuleSetRepository, SystemInfoProvider, TitleMediaFile, WantedItem, WantedItemRepository,
 };
 
@@ -55,10 +58,7 @@ pub struct NullMediaFileRepository;
 impl MediaFileRepository for NullMediaFileRepository {
     async fn insert_media_file(
         &self,
-        _title_id: &str,
-        _file_path: &str,
-        _size_bytes: i64,
-        _quality_label: Option<String>,
+        _input: &InsertMediaFileInput,
     ) -> AppResult<String> {
         Err(AppError::Repository("media file repository is not configured".to_string()))
     }
@@ -220,6 +220,9 @@ impl SystemInfoProvider for NullSystemInfoProvider {
     async fn smg_cert_expires_at(&self) -> AppResult<Option<String>> {
         Ok(None)
     }
+    async fn vacuum_into(&self, _dest_path: &str) -> AppResult<()> {
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -234,6 +237,78 @@ impl IndexerStatsTracker for NullIndexerStatsTracker {
     fn all_stats(&self) -> Vec<IndexerQueryStats> { vec![] }
 }
 
+#[derive(Default)]
+pub struct NullNotificationChannelRepository;
+
+#[async_trait]
+impl NotificationChannelRepository for NullNotificationChannelRepository {
+    async fn list_channels(&self) -> AppResult<Vec<scryer_domain::NotificationChannelConfig>> { Ok(vec![]) }
+    async fn get_channel(&self, _id: &str) -> AppResult<Option<scryer_domain::NotificationChannelConfig>> { Ok(None) }
+    async fn create_channel(&self, _config: scryer_domain::NotificationChannelConfig) -> AppResult<scryer_domain::NotificationChannelConfig> {
+        Err(AppError::Repository("notification channel repository is not configured".to_string()))
+    }
+    async fn update_channel(&self, _config: scryer_domain::NotificationChannelConfig) -> AppResult<scryer_domain::NotificationChannelConfig> {
+        Err(AppError::Repository("notification channel repository is not configured".to_string()))
+    }
+    async fn delete_channel(&self, _id: &str) -> AppResult<()> {
+        Err(AppError::Repository("notification channel repository is not configured".to_string()))
+    }
+}
+
+#[derive(Default)]
+pub struct NullNotificationSubscriptionRepository;
+
+#[async_trait]
+impl NotificationSubscriptionRepository for NullNotificationSubscriptionRepository {
+    async fn list_subscriptions(&self) -> AppResult<Vec<scryer_domain::NotificationSubscription>> { Ok(vec![]) }
+    async fn list_subscriptions_for_channel(&self, _channel_id: &str) -> AppResult<Vec<scryer_domain::NotificationSubscription>> { Ok(vec![]) }
+    async fn list_subscriptions_for_event(&self, _event_type: &str) -> AppResult<Vec<scryer_domain::NotificationSubscription>> { Ok(vec![]) }
+    async fn create_subscription(&self, _sub: scryer_domain::NotificationSubscription) -> AppResult<scryer_domain::NotificationSubscription> {
+        Err(AppError::Repository("notification subscription repository is not configured".to_string()))
+    }
+    async fn update_subscription(&self, _sub: scryer_domain::NotificationSubscription) -> AppResult<scryer_domain::NotificationSubscription> {
+        Err(AppError::Repository("notification subscription repository is not configured".to_string()))
+    }
+    async fn delete_subscription(&self, _id: &str) -> AppResult<()> {
+        Err(AppError::Repository("notification subscription repository is not configured".to_string()))
+    }
+}
+
+#[derive(Default)]
+pub struct NullHousekeepingRepository;
+
+#[async_trait]
+impl HousekeepingRepository for NullHousekeepingRepository {
+    async fn delete_release_decisions_older_than(&self, _days: i64) -> AppResult<u32> { Ok(0) }
+    async fn delete_release_attempts_older_than(&self, _days: i64) -> AppResult<u32> { Ok(0) }
+    async fn delete_dispatched_event_outboxes_older_than(&self, _days: i64) -> AppResult<u32> { Ok(0) }
+    async fn delete_history_events_older_than(&self, _days: i64) -> AppResult<u32> { Ok(0) }
+    async fn list_all_media_file_paths(&self) -> AppResult<Vec<(String, String)>> { Ok(vec![]) }
+    async fn delete_media_files_by_ids(&self, _ids: &[String]) -> AppResult<u32> { Ok(0) }
+}
+
+#[derive(Default)]
+pub struct NullDownloadSubmissionRepository;
+
+#[async_trait]
+impl DownloadSubmissionRepository for NullDownloadSubmissionRepository {
+    async fn record_submission(&self, _: DownloadSubmission) -> AppResult<()> { Ok(()) }
+    async fn find_by_client_item_id(&self, _: &str, _: &str) -> AppResult<Option<DownloadSubmission>> { Ok(None) }
+}
+
+pub struct NullPendingReleaseRepository;
+
+#[async_trait]
+impl PendingReleaseRepository for NullPendingReleaseRepository {
+    async fn insert_pending_release(&self, _: &PendingRelease) -> AppResult<String> { Ok(String::new()) }
+    async fn list_expired_pending_releases(&self, _: &str) -> AppResult<Vec<PendingRelease>> { Ok(vec![]) }
+    async fn list_waiting_pending_releases(&self) -> AppResult<Vec<PendingRelease>> { Ok(vec![]) }
+    async fn get_pending_release(&self, _: &str) -> AppResult<Option<PendingRelease>> { Ok(None) }
+    async fn list_pending_releases_for_wanted_item(&self, _: &str) -> AppResult<Vec<PendingRelease>> { Ok(vec![]) }
+    async fn update_pending_release_status(&self, _: &str, _: &str, _: Option<&str>) -> AppResult<()> { Ok(()) }
+    async fn supersede_pending_releases_for_wanted_item(&self, _: &str, _: &str) -> AppResult<()> { Ok(()) }
+}
+
 // ── Additional null impls for test bootstrapping ─────────────────────────────
 
 #[cfg(test)]
@@ -244,7 +319,7 @@ pub mod test_nulls {
         MediaFacet, Title, User,
     };
     use crate::{
-        AppError, AppResult, DownloadClient, DownloadClientConfigRepository, EventRepository,
+        AppError, AppResult, DownloadClient, DownloadClientConfigRepository, DownloadGrabResult, EventRepository,
         IndexerClient, IndexerRoutingPlan, IndexerSearchResponse, PrimaryCollectionSummary,
         QualityProfile, QualityProfileRepository, ReleaseAttemptRepository,
         ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature, SearchMode,
@@ -326,7 +401,7 @@ pub mod test_nulls {
 
     #[async_trait]
     impl DownloadClient for NullDownloadClient {
-        async fn submit_to_download_queue(&self, _: &Title, _: Option<String>, _: Option<String>, _: Option<String>, _: Option<String>) -> AppResult<String> {
+        async fn submit_to_download_queue(&self, _: &Title, _: Option<String>, _: Option<String>, _: Option<String>, _: Option<String>) -> AppResult<DownloadGrabResult> {
             Err(AppError::Repository("not configured".into()))
         }
     }

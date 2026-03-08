@@ -1,6 +1,6 @@
 use async_graphql::{Context, Error, Object, Result as GqlResult};
 use chrono::Utc;
-use scryer_application::{QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY};
+use scryer_application::{DELAY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY};
 use scryer_domain::Entitlement;
 use serde_json::json;
 
@@ -44,6 +44,15 @@ impl SettingsMutations {
             }
             if !updated_keys.iter().any(|key| key == key_name) {
                 updated_keys.push(key_name.to_string());
+            }
+
+            if key_name == DELAY_PROFILE_CATALOG_KEY {
+                scryer_application::parse_delay_profile_catalog(&item.value).map_err(|error| {
+                    Error::new(format!(
+                        "invalid delay profile catalog JSON for {DELAY_PROFILE_CATALOG_KEY}: {error}"
+                    ))
+                })?;
+                // Validated — fall through to normal upsert_setting_value below.
             }
 
             if key_name == QUALITY_PROFILE_CATALOG_KEY {

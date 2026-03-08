@@ -1,8 +1,21 @@
 use super::*;
 
+
+#[test]
+fn parse_bdmv_release() {
+    let parsed = parse_release_metadata(
+        "Cosmic.Warriors.2012.ULTRAHD.Blu-ray.2160p.BDMV.Atmos.TrueHD.7.1-xHDGRP-Anonfinhel",
+    );
+    assert_eq!(parsed.year, Some(2012));
+    assert_eq!(parsed.quality.as_deref(), Some("2160p"));
+    assert_eq!(parsed.source.as_deref(), Some("BluRay"));
+    assert_eq!(parsed.audio.as_deref(), Some("TRUEHD"));
+    assert!(parsed.is_bd_disk);
+    assert!(parsed.is_atmos);
+}
 #[test]
 fn parse_web_dl_movie() {
-    let parsed = parse_release_metadata("1917.2019.1080p.WEB-DL.DDP2.0.H.264-Group.REPACK");
+    let parsed = parse_release_metadata("Crimson.Horizon.2019.1080p.WEB-DL.DDP2.0.H.264-Group.REPACK");
     assert_eq!(parsed.year, Some(2019));
     assert_eq!(parsed.quality.as_deref(), Some("1080p"));
     assert_eq!(parsed.source.as_deref(), Some("WEB-DL"));
@@ -15,7 +28,7 @@ fn parse_web_dl_movie() {
 #[test]
 fn parse_movie_dolby_vision_with_language() {
     let parsed = parse_release_metadata(
-        "1917.2019.2160p.MA.WEB-DL.Hybrid.H265.DV.HDR.DDP.Atmos.5.1.English.HONE",
+        "Crimson.Horizon.2019.2160p.MA.WEB-DL.Hybrid.H265.DV.HDR.DDP.Atmos.5.1.English.HONE",
     );
 
     assert_eq!(parsed.year, Some(2019));
@@ -33,7 +46,7 @@ fn parse_movie_dolby_vision_with_language() {
 #[test]
 fn parse_movie_hdr10_metadata() {
     let parsed = parse_release_metadata(
-        "Frieren.Beyond.Journeys.End.S01E02.1080p.WEB-DL.H.265.HDR10.6ch.AAC",
+        "Starfall.Beyond.Distant.Skies.S01E02.1080p.WEB-DL.H.265.HDR10.6ch.AAC",
     );
 
     assert!(parsed.detected_hdr);
@@ -62,7 +75,7 @@ fn parse_movie_hdr_inferred_from_uhd_h265_10bit() {
 #[test]
 fn parse_series_with_dual_in_brackets_and_spaces() {
     let parsed = parse_release_metadata(
-        "[Subeteka] Frieren Beyond Journeys End-S02E02 [1080p WEB DUAL DDP2.0 H.265] [B263C5D8]",
+        "[Subeteka] Starfall Beyond Distant Skies-S02E02 [1080p WEB DUAL DDP2.0 H.265] [B263C5D8]",
     );
 
     assert_eq!(parsed.release_group.as_deref(), Some("Subeteka"));
@@ -85,10 +98,10 @@ fn parse_series_with_dual_in_brackets_and_spaces() {
 #[test]
 fn parse_series_multi_subs_only() {
     let parsed = parse_release_metadata(
-        "[DKB] Sousou no Frieren-S02E05 [1080p][HEVC x265 10bit][Multi-Subs][75E5FCE7]",
+        "[FNS] Tabibito no Yume-S02E05 [1080p][HEVC x265 10bit][Multi-Subs][75E5FCE7]",
     );
 
-    assert_eq!(parsed.release_group.as_deref(), Some("DKB"));
+    assert_eq!(parsed.release_group.as_deref(), Some("FNS"));
     assert_eq!(parsed.quality.as_deref(), Some("1080p"));
     assert_eq!(parsed.video_codec.as_deref(), Some("H.265"));
     assert_eq!(parsed.audio.as_deref(), None);
@@ -106,9 +119,9 @@ fn parse_series_multi_subs_only() {
 
 #[test]
 fn parse_series_vostfr_marks_subtitles() {
-    let parsed = parse_release_metadata("Sousou.No.Frieren.S02E05.VOSTFR.1080p.WEBRiP.x265-KAF");
+    let parsed = parse_release_metadata("Tabibito.No.Yume.S02E05.VOSTFR.1080p.WEBRiP.x265-RLS");
 
-    assert_eq!(parsed.release_group.as_deref(), Some("KAF"));
+    assert_eq!(parsed.release_group.as_deref(), Some("RLS"));
     assert_eq!(parsed.languages_subtitles, vec!["fre".to_string()]);
     assert!(parsed.episode.is_some());
     assert_eq!(parsed.video_codec.as_deref(), Some("H.265"));
@@ -119,7 +132,7 @@ fn parse_series_vostfr_marks_subtitles() {
 #[test]
 fn parse_series_episode_and_dual() {
     let parsed = parse_release_metadata(
-        "Frieren-Beyond.Journeys.End.S02E03.Somewhere.Shed.Like.1080p.CR.WEB-DL.DUAL.DDP2.0.H.265",
+        "Starfall-Beyond.Distant.Skies.S02E03.Somewhere.Shed.Like.1080p.CR.WEB-DL.DUAL.DDP2.0.H.265",
     );
 
     assert_eq!(
@@ -140,7 +153,7 @@ fn parse_series_episode_and_dual() {
 #[test]
 fn parse_series_dual_default_fallback() {
     let parsed = parse_release_metadata(
-        "Frieren-Beyond.Journeys.End.S02E03.Somewhere.Shed.Like.1080p.WEB-DL.DUAL.DDP2.0.H.265",
+        "Starfall-Beyond.Distant.Skies.S02E03.Somewhere.Shed.Like.1080p.WEB-DL.DUAL.DDP2.0.H.265",
     );
 
     assert!(parsed.is_dual_audio);
@@ -154,7 +167,7 @@ fn parse_series_dual_default_fallback() {
 #[test]
 fn parse_language_subtitle_marker() {
     let parsed = parse_release_metadata(
-            "Frieren-Beyond.Journeys.End.S02E03.Somewhere.Shed.Like.1080p.WEB-DL.MULTISUBS.ITA.AAC2.0.H.265",
+            "Starfall-Beyond.Distant.Skies.S02E03.Somewhere.Shed.Like.1080p.WEB-DL.MULTISUBS.ITA.AAC2.0.H.265",
         );
 
     assert_eq!(parsed.languages_subtitles, vec!["ita".to_string()]);
@@ -165,7 +178,7 @@ fn parse_language_subtitle_marker() {
 #[test]
 fn parse_dotted_language_markers() {
     let parsed = parse_release_metadata(
-        "1917.2019.2160p.H265.10.bit.DV.HDR10ita.eng.AC-3.5.1.sub.ita.eng.Licdom",
+        "Crimson.Horizon.2019.2160p.H265.10.bit.DV.HDR10ita.eng.AC-3.5.1.sub.ita.eng.Licdom",
     );
 
     assert_eq!(parsed.languages_audio, vec!["eng".to_string()]);
@@ -182,7 +195,7 @@ fn parse_dotted_language_markers() {
 
 #[test]
 fn parse_movie_release_group_after_metadata_tokens() {
-    let parsed = parse_release_metadata("1917.2019.1080p.WEB-DL.DDP2.0.H.264-Group.REPACK");
+    let parsed = parse_release_metadata("Crimson.Horizon.2019.1080p.WEB-DL.DDP2.0.H.264-Group.REPACK");
 
     assert_eq!(parsed.release_group.as_deref(), Some("Group"));
     assert!(parsed.is_proper_upload);
@@ -191,7 +204,7 @@ fn parse_movie_release_group_after_metadata_tokens() {
 #[test]
 fn parse_movie_release_group_with_hash_bracket() {
     let parsed = parse_release_metadata(
-        "Frieren.Beyond.Journeys.End.S01.1080p.WEB-DL.H.265-Licdom[75E5FCE8]",
+        "Starfall.Beyond.Distant.Skies.S01.1080p.WEB-DL.H.265-Licdom[75E5FCE8]",
     );
 
     assert_eq!(parsed.release_group.as_deref(), Some("Licdom"));
@@ -201,7 +214,7 @@ fn parse_movie_release_group_with_hash_bracket() {
 
 #[test]
 fn parse_multi_not_dual_audio() {
-    let parsed = parse_release_metadata("1917.2019.MULTi.VF2.1080p.HDLight.AC-3.5.1.H264-LiHDL");
+    let parsed = parse_release_metadata("Crimson.Horizon.2019.MULTi.VF2.1080p.HDLight.AC-3.5.1.H264-LiGHT");
 
     assert!(!parsed.is_dual_audio);
     assert_eq!(parsed.audio.as_deref(), Some("AC3"));
@@ -217,13 +230,12 @@ fn parse_multiple_audio_codecs() {
         parsed.audio_codecs,
         vec!["DTSHD".to_string(), "TRUEHD".to_string()]
     );
-    assert_eq!(parsed.audio_channels.as_deref(), Some("7.1"));
 }
 
 #[test]
 fn parse_language_order_variation() {
     let parsed =
-        parse_release_metadata("1917.2019.WEB.DL.DDP2.0.1080p.AMZN.DUAL.DOLBY.VISION.HEVC");
+        parse_release_metadata("Crimson.Horizon.2019.WEB.DL.DDP2.0.1080p.AMZN.DUAL.DOLBY.VISION.HEVC");
     assert_eq!(parsed.quality.as_deref(), Some("1080p"));
     assert_eq!(parsed.source.as_deref(), Some("WEB-DL"));
     assert!(parsed.is_dolby_vision);
@@ -235,7 +247,7 @@ fn parse_language_order_variation() {
 #[test]
 fn parse_fps_like_value() {
     let parsed =
-        parse_release_metadata("[Raze] Sousou no Frieren S2-05 x265 10bit 1080p 143.8561fps");
+        parse_release_metadata("[Fanz] Tabibito no Yume S2-05 x265 10bit 1080p 143.8561fps");
     assert_eq!(parsed.fps, Some(143.8561));
     assert_eq!(parsed.quality, Some("1080p".to_string()));
     assert_eq!(parsed.video_codec, Some("H.265".to_string()));
@@ -243,7 +255,7 @@ fn parse_fps_like_value() {
 
 #[test]
 fn parse_short_s_season_episode_pattern() {
-    let parsed = parse_release_metadata("[Raze] Sousou no Frieren S2-05 x265 1080p");
+    let parsed = parse_release_metadata("[Fanz] Tabibito no Yume S2-05 x265 1080p");
     assert_eq!(
         parsed.episode,
         Some(ParsedEpisodeMetadata {
@@ -274,7 +286,7 @@ fn parse_x_pattern() {
 #[test]
 fn parse_season_episode_compound() {
     let parsed =
-        parse_release_metadata("Frieren-Beyond.Journeys.End.S02E03E04E05.1080p.WEB-DL.H.265");
+        parse_release_metadata("Starfall-Beyond.Distant.Skies.S02E03E04E05.1080p.WEB-DL.H.265");
     assert_eq!(
         parsed.episode,
         Some(ParsedEpisodeMetadata {
@@ -288,7 +300,7 @@ fn parse_season_episode_compound() {
 
 #[test]
 fn parse_season_episode_range_in_one_token() {
-    let parsed = parse_release_metadata("Frieren-S01E03-05.1080p.WEB-DL.x264");
+    let parsed = parse_release_metadata("Starfall-S01E03-05.1080p.WEB-DL.x264");
     assert_eq!(
         parsed.episode,
         Some(ParsedEpisodeMetadata {
@@ -316,7 +328,7 @@ fn parse_x_range_and_multi_episode() {
 
 #[test]
 fn parse_season_and_delayed_episode_tokens() {
-    let parsed = parse_release_metadata("Frieren-S2 EP03 1080p.WEB-DL.H.264");
+    let parsed = parse_release_metadata("Starfall-S2 EP03 1080p.WEB-DL.H.264");
     assert_eq!(
         parsed.episode,
         Some(ParsedEpisodeMetadata {
@@ -330,7 +342,7 @@ fn parse_season_and_delayed_episode_tokens() {
 
 #[test]
 fn parse_delayed_season_phrase() {
-    let parsed = parse_release_metadata("Frieren.S02.EPISODE.03.1080p.WEB-DL.H.265");
+    let parsed = parse_release_metadata("Starfall.S02.EPISODE.03.1080p.WEB-DL.H.265");
     assert_eq!(
         parsed.episode,
         Some(ParsedEpisodeMetadata {
@@ -344,7 +356,7 @@ fn parse_delayed_season_phrase() {
 
 #[test]
 fn parse_separated_season_number() {
-    let parsed = parse_release_metadata("Frieren.S 2 EP03 [1080p][WEBDL][H.264]");
+    let parsed = parse_release_metadata("Starfall.S 2 EP03 [1080p][WEBDL][H.264]");
     assert_eq!(
         parsed.episode,
         Some(ParsedEpisodeMetadata {

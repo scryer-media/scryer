@@ -21,15 +21,17 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   ChevronDown,
   ChevronRight,
+  Download,
   Pause,
   Play,
   RefreshCw,
   RotateCcw,
   Search,
+  X,
 } from "lucide-react";
 import { CutoffUnmetView } from "@/components/views/cutoff-unmet-view";
 import type { CutoffUnmetItem } from "@/components/views/cutoff-unmet-view";
-import type { WantedItem, ReleaseDecisionItem } from "@/lib/types";
+import type { WantedItem, ReleaseDecisionItem, PendingReleaseItem } from "@/lib/types";
 import type { WantedTab } from "@/components/containers/wanted-container";
 
 const CalendarView = lazy(() =>
@@ -161,18 +163,27 @@ type CalendarViewState = {
   onEpisodeClick?: (episode: CalendarEpisodeItem) => void;
 };
 
+type PendingViewState = {
+  items: PendingReleaseItem[];
+  loading: boolean;
+  refreshItems: () => Promise<void>;
+  forceGrab: (id: string) => Promise<void>;
+  dismiss: (id: string) => Promise<void>;
+};
+
 type WantedViewProps = {
   tab: WantedTab;
   onTabChange: (tab: WantedTab) => void;
   wantedState: WantedViewState;
   cutoffState: CutoffUnmetViewState;
   calendarState: CalendarViewState;
+  pendingState: PendingViewState;
 };
 
 const TOGGLE_ITEM_CLASS =
   "h-full min-w-36 rounded-none px-6 text-base font-semibold first:rounded-l-xl last:rounded-r-xl data-[state=off]:bg-accent/80 data-[state=off]:text-foreground data-[state=off]:hover:bg-accent/80 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground data-[state=on]:border-0 data-[state=on]:shadow-none";
 
-export function WantedView({ tab, onTabChange, wantedState, cutoffState, calendarState }: WantedViewProps) {
+export function WantedView({ tab, onTabChange, wantedState, cutoffState, calendarState, pendingState }: WantedViewProps) {
   const t = useTranslate();
 
   return (
@@ -192,6 +203,9 @@ export function WantedView({ tab, onTabChange, wantedState, cutoffState, calenda
           </ToggleGroupItem>
           <ToggleGroupItem value="cutoff" size="lg" className={TOGGLE_ITEM_CLASS}>
             {t("wanted.tabCutoff")}
+          </ToggleGroupItem>
+          <ToggleGroupItem value="pending" size="lg" className={TOGGLE_ITEM_CLASS}>
+            {t("wanted.tabPending")}
           </ToggleGroupItem>
           <ToggleGroupItem value="calendar" size="lg" className={TOGGLE_ITEM_CLASS}>
             {t("wanted.tabCalendar")}
@@ -218,6 +232,8 @@ export function WantedView({ tab, onTabChange, wantedState, cutoffState, calenda
         </Suspense>
       ) : tab === "cutoff" ? (
         <CutoffUnmetView state={cutoffState} />
+      ) : tab === "pending" ? (
+        <PendingReleasesCard state={pendingState} />
       ) : (
         <WantedItemsCard state={wantedState} />
       )}
@@ -488,6 +504,107 @@ function WantedItemsCard({ state }: { state: WantedViewState }) {
             </Button>
           </div>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function formatTimeRemaining(delayUntil: string): string {
+  const target = new Date(delayUntil).getTime();
+  const now = Date.now();
+  const diff = target - now;
+  if (diff <= 0) return "now";
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+function PendingReleasesCard({ state }: { state: PendingViewState }) {
+  const t = useTranslate();
+  const { items, loading, refreshItems, forceGrab, dismiss } = state;
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <CardTitle>{t("pending.title")}</CardTitle>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => void refreshItems()}
+            disabled={loading}
+          >
+            <RefreshCw className="mr-1 h-3 w-3" />
+            {loading ? t("wanted.refreshing") : t("label.refresh")}
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t("pending.colRelease")}</TableHead>
+                <TableHead>{t("pending.colScore")}</TableHead>
+                <TableHead>{t("pending.colSize")}</TableHead>
+                <TableHead>{t("pending.colIndexer")}</TableHead>
+                <TableHead>{t("pending.colAddedAt")}</TableHead>
+                <TableHead>{t("pending.colDelayUntil")}</TableHead>
+                <TableHead>{t("pending.colActions")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {items.map((item) => (
+                <TableRow key={item.id}>
+                  <TableCell className="max-w-[300px] truncate text-sm" title={item.releaseTitle}>
+                    {item.releaseTitle}
+                  </TableCell>
+                  <TableCell>{item.releaseScore}</TableCell>
+                  <TableCell className="text-xs">
+                    {item.releaseSizeBytes ? formatBytes(Number(item.releaseSizeBytes)) : "—"}
+                  </TableCell>
+                  <TableCell className="text-xs">{item.indexerSource ?? "—"}</TableCell>
+                  <TableCell className="text-xs">{formatDate(item.addedAt)}</TableCell>
+                  <TableCell className="text-xs">
+                    <span title={formatDate(item.delayUntil)}>
+                      {formatTimeRemaining(item.delayUntil)}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex gap-1">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7"
+                        title={t("pending.forceGrab")}
+                        onClick={() => void forceGrab(item.id)}
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7"
+                        title={t("pending.dismiss")}
+                        onClick={() => void dismiss(item.id)}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {items.length === 0 && !loading && (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-center text-muted-foreground">
+                    {t("pending.noItems")}
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </div>
       </CardContent>
     </Card>
   );
