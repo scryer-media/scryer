@@ -22,7 +22,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 25
           cache: npm
           cache-dependency-path: apps/scryer-web/package-lock.json
       - name: Install dependencies
@@ -58,7 +58,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 25
           cache: npm
           cache-dependency-path: apps/scryer-web/package-lock.json
       - name: Install dependencies
@@ -150,13 +150,6 @@ jobs:
           else
             cargo build -p scryer --release --locked --target ${{ matrix.target }}
           fi
-      - name: Download ffprobe binary
-        run: |
-          FFPROBE_VERSION=$(cat .ffprobe-version)
-          mkdir -p dist/package
-          curl -fsSL -o dist/package/ffprobe \
-            "https://github.com/scryer-media/ffprobe-build/releases/download/${FFPROBE_VERSION}/ffprobe-${{ matrix.platform }}"
-          chmod +x dist/package/ffprobe
       - name: Package tarball
         run: |
           mkdir -p dist/package

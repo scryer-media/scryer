@@ -1,11 +1,13 @@
 use std::collections::HashSet;
 
 use async_trait::async_trait;
+use chrono::Utc;
 use scryer_domain::{Collection, MediaFacet, Title};
 
 use crate::{
-    ActivityKind, AnimeMapping, AppResult, EpisodeMetadata, MetadataGateway, RenameCollisionPolicy,
-    RenameMissingMetadataPolicy, RenamePlanItem, SeasonMetadata, TitleMetadataUpdate,
+    ActivityKind, AnimeMapping, AppResult, EpisodeMetadata, MetadataGateway, MovieMetadata,
+    RenameCollisionPolicy, RenameMissingMetadataPolicy, RenamePlanItem, SeasonMetadata,
+    SeriesMetadata, TitleMetadataUpdate,
 };
 
 /// Result of hydrating a title's metadata from a metadata gateway.
@@ -15,6 +17,73 @@ pub struct HydrationResult {
     pub seasons: Vec<SeasonMetadata>,
     pub episodes: Vec<EpisodeMetadata>,
     pub anime_mappings: Vec<AnimeMapping>,
+}
+
+fn non_empty(s: String) -> Option<String> {
+    if s.trim().is_empty() { None } else { Some(s) }
+}
+
+/// Build a [`HydrationResult`] from an already-fetched [`MovieMetadata`].
+///
+/// Shared by the single-title facet handler path and the bulk hydration loop.
+pub fn movie_to_hydration_result(movie: MovieMetadata, language: &str) -> HydrationResult {
+    let update = TitleMetadataUpdate {
+        year: movie.year.filter(|&y| y > 0),
+        overview: non_empty(movie.overview),
+        poster_url: non_empty(movie.poster_url),
+        sort_title: non_empty(movie.sort_title),
+        slug: non_empty(movie.slug),
+        imdb_id: non_empty(movie.imdb_id),
+        runtime_minutes: if movie.runtime_minutes > 0 { Some(movie.runtime_minutes) } else { None },
+        genres: movie.genres,
+        content_status: non_empty(movie.content_status),
+        language: non_empty(movie.language),
+        first_aired: None,
+        network: None,
+        studio: non_empty(movie.studio),
+        country: None,
+        aliases: vec![],
+        metadata_language: Some(language.to_string()),
+        metadata_fetched_at: Some(Utc::now().to_rfc3339()),
+        digital_release_date: movie.tmdb_release_date,
+        ..Default::default()
+    };
+    HydrationResult {
+        metadata_update: update,
+        seasons: vec![],
+        episodes: vec![],
+        anime_mappings: vec![],
+    }
+}
+
+/// Build a [`HydrationResult`] from an already-fetched [`SeriesMetadata`].
+pub fn series_to_hydration_result(series: SeriesMetadata, language: &str) -> HydrationResult {
+    let update = TitleMetadataUpdate {
+        year: series.year.filter(|&y| y > 0),
+        overview: non_empty(series.overview),
+        poster_url: non_empty(series.poster_url),
+        sort_title: non_empty(series.sort_name),
+        slug: non_empty(series.slug),
+        imdb_id: None,
+        runtime_minutes: if series.runtime_minutes > 0 { Some(series.runtime_minutes) } else { None },
+        genres: series.genres,
+        content_status: non_empty(series.content_status),
+        language: None,
+        first_aired: non_empty(series.first_aired),
+        network: non_empty(series.network),
+        studio: None,
+        country: non_empty(series.country),
+        aliases: series.aliases,
+        metadata_language: Some(language.to_string()),
+        metadata_fetched_at: Some(Utc::now().to_rfc3339()),
+        ..Default::default()
+    };
+    HydrationResult {
+        metadata_update: update,
+        seasons: series.seasons,
+        episodes: series.episodes,
+        anime_mappings: series.anime_mappings,
+    }
 }
 
 /// Configuration and strategies for a specific media facet.

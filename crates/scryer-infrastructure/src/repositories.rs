@@ -154,6 +154,21 @@ impl TitleRepository for SqliteServices {
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
+
+    async fn list_unhydrated(&self, limit: usize) -> AppResult<Vec<Title>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::ListUnhydratedTitles {
+                limit,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
 }
 
 #[async_trait]

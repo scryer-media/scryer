@@ -121,7 +121,7 @@ impl AppUseCase {
 
     /// Process pending releases whose delay has expired.
     /// Called periodically from the acquisition poller.
-    pub(crate) async fn process_expired_pending_releases(&self) -> AppResult<u32> {
+    pub async fn process_expired_pending_releases(&self) -> AppResult<u32> {
         let now = Utc::now();
         let now_str = now.to_rfc3339();
 

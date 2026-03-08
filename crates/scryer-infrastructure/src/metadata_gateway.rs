@@ -1,4 +1,5 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::fmt::Write as _;
 use std::sync::RwLock;
 use std::time::Duration;
 
@@ -553,6 +554,93 @@ impl MetadataGatewayClient {
             Err(err) => Err(AppError::Repository(err.to_string())),
         }
     }
+
+    /// POST a dynamic GraphQL query and return the `data` field as raw JSON.
+    /// Tolerates partial errors (some aliases may resolve while others fail).
+    async fn post_graphql_partial(
+        &self,
+        query: &str,
+    ) -> AppResult<serde_json::Value> {
+        let payload = json!({ "query": query });
+        let client = self.get_http_client().await;
+        let resp = client
+            .post(&self.endpoint)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| AppError::Repository(format!("bulk metadata request failed: {e}")))?;
+
+        let status = resp.status();
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| AppError::Repository(format!("bulk metadata read body: {e}")))?;
+
+        if !status.is_success() {
+            return Err(AppError::Repository(format!(
+                "bulk metadata request failed ({status}): {body}"
+            )));
+        }
+
+        let parsed: serde_json::Value = serde_json::from_str(&body)
+            .map_err(|e| AppError::Repository(format!("bulk metadata invalid JSON: {e}")))?;
+
+        if let Some(errors) = parsed.get("errors") {
+            if let Some(arr) = errors.as_array() {
+                for err in arr {
+                    let msg = err.get("message").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    debug!("bulk metadata partial error: {msg}");
+                }
+            }
+        }
+
+        parsed
+            .get("data")
+            .cloned()
+            .ok_or_else(|| AppError::Repository("bulk metadata: no data in response".into()))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bulk query builders (GraphQL aliases)
+// ---------------------------------------------------------------------------
+
+const MOVIE_FIELD_SELECTION: &str = "\
+    tvdb_id name slug year status overview poster_url language \
+    runtime_minutes sort_title imdb_id genres studio tmdb_release_date";
+
+const SERIES_FIELD_SELECTION: &str = "\
+    tvdb_id name sort_name slug status year first_aired overview network \
+    runtime_minutes poster_url country genres aliases \
+    seasons { tvdb_id number label episode_type } \
+    episodes { tvdb_id episode_number season_number name aired runtime_minutes \
+               is_filler is_recap overview absolute_number } \
+    anime_mappings { mal_id anilist_id anidb_id kitsu_id thetvdb_season score \
+                     anime_media_type global_media_type status \
+                     episode_mappings { tvdb_season episode_start episode_end } }";
+
+fn build_bulk_movie_query(tvdb_ids: &[i64], language: &str) -> String {
+    let mut q = String::from("query {\n");
+    for (i, &id) in tvdb_ids.iter().enumerate() {
+        let _ = write!(
+            q,
+            "  m{i}: movie(tvdbId: {id}, language: \"{language}\") {{ movie {{ {MOVIE_FIELD_SELECTION} }} }}\n"
+        );
+    }
+    q.push_str("}\n");
+    q
+}
+
+fn build_bulk_series_query(tvdb_ids: &[i64], language: &str) -> String {
+    let mut q = String::from("query {\n");
+    for (i, &id) in tvdb_ids.iter().enumerate() {
+        let _ = write!(
+            q,
+            "  s{i}: series(id: \"{id}\", includeEpisodes: true, language: \"{language}\") {{ series {{ {SERIES_FIELD_SELECTION} }} }}\n"
+        );
+    }
+    q.push_str("}\n");
+    q
 }
 
 #[derive(Deserialize)]
@@ -959,5 +1047,134 @@ impl MetadataGateway for MetadataGatewayClient {
                 })
                 .collect(),
         })
+    }
+
+    async fn get_movies_bulk(
+        &self,
+        tvdb_ids: &[i64],
+        language: &str,
+    ) -> AppResult<HashMap<i64, MovieMetadata>> {
+        if tvdb_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        // Deduplicate IDs
+        let unique: Vec<i64> = tvdb_ids.iter().copied().collect::<HashSet<_>>().into_iter().collect();
+        let query = build_bulk_movie_query(&unique, language);
+
+        info!(count = unique.len(), "bulk movie metadata request");
+        let data = self.post_graphql_partial(&query).await?;
+
+        let mut results = HashMap::new();
+        if let Some(obj) = data.as_object() {
+            for (_alias, value) in obj {
+                if value.is_null() {
+                    continue;
+                }
+                if let Ok(movie_result) = serde_json::from_value::<MovieResult>(value.clone()) {
+                    let m = movie_result.movie;
+                    results.insert(m.tvdb_id, MovieMetadata {
+                        tvdb_id: m.tvdb_id,
+                        name: m.name,
+                        slug: m.slug,
+                        year: m.year,
+                        content_status: m.status,
+                        overview: m.overview,
+                        poster_url: m.poster_url,
+                        language: m.language,
+                        runtime_minutes: m.runtime_minutes,
+                        sort_title: m.sort_title,
+                        imdb_id: m.imdb_id,
+                        genres: m.genres,
+                        studio: m.studio,
+                        tmdb_release_date: m.tmdb_release_date,
+                    });
+                }
+            }
+        }
+
+        info!(requested = unique.len(), resolved = results.len(), "bulk movie metadata complete");
+        Ok(results)
+    }
+
+    async fn get_series_bulk(
+        &self,
+        tvdb_ids: &[i64],
+        language: &str,
+    ) -> AppResult<HashMap<i64, SeriesMetadata>> {
+        if tvdb_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let unique: Vec<i64> = tvdb_ids.iter().copied().collect::<HashSet<_>>().into_iter().collect();
+        let query = build_bulk_series_query(&unique, language);
+
+        info!(count = unique.len(), "bulk series metadata request");
+        let data = self.post_graphql_partial(&query).await?;
+
+        let mut results = HashMap::new();
+        if let Some(obj) = data.as_object() {
+            for (_alias, value) in obj {
+                if value.is_null() {
+                    continue;
+                }
+                if let Ok(series_result) = serde_json::from_value::<SeriesResult>(value.clone()) {
+                    let s = series_result.series;
+                    results.insert(s.tvdb_id, SeriesMetadata {
+                        tvdb_id: s.tvdb_id,
+                        name: s.name,
+                        sort_name: s.sort_name,
+                        slug: s.slug,
+                        year: s.year,
+                        content_status: s.status,
+                        first_aired: s.first_aired,
+                        overview: s.overview,
+                        network: s.network,
+                        runtime_minutes: s.runtime_minutes,
+                        poster_url: s.poster_url,
+                        country: s.country,
+                        genres: s.genres,
+                        aliases: s.aliases,
+                        seasons: s.seasons.into_iter().map(|season| SeasonMetadata {
+                            tvdb_id: season.tvdb_id,
+                            number: season.number,
+                            label: season.label,
+                            episode_type: season.episode_type,
+                        }).collect(),
+                        episodes: s.episodes.into_iter().map(|ep| EpisodeMetadata {
+                            tvdb_id: ep.tvdb_id,
+                            episode_number: ep.episode_number,
+                            name: ep.name,
+                            aired: ep.aired,
+                            runtime_minutes: ep.runtime_minutes,
+                            is_filler: ep.is_filler,
+                            is_recap: ep.is_recap,
+                            overview: ep.overview,
+                            absolute_number: ep.absolute_number,
+                            season_number: ep.season_number,
+                        }).collect(),
+                        anime_mappings: s.anime_mappings.into_iter().map(|m| AnimeMapping {
+                            mal_id: m.mal_id,
+                            anilist_id: m.anilist_id,
+                            anidb_id: m.anidb_id,
+                            kitsu_id: m.kitsu_id,
+                            thetvdb_season: m.thetvdb_season,
+                            score: m.score,
+                            anime_media_type: m.anime_media_type.unwrap_or_default(),
+                            global_media_type: m.global_media_type.unwrap_or_default(),
+                            status: m.status.unwrap_or_default(),
+                            episode_mappings: m.episode_mappings.into_iter().map(|e| AnimeEpisodeMapping {
+                                tvdb_season: e.tvdb_season,
+                                episode_start: e.episode_start,
+                                episode_end: e.episode_end,
+                            }).collect(),
+                        }).collect(),
+                    });
+                }
+            }
+        }
+
+        info!(requested = unique.len(), resolved = results.len(), "bulk series metadata complete");
+        Ok(results)
     }
 }

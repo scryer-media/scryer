@@ -25,13 +25,17 @@ pub struct PostProcessingContext {
 /// event when it finishes (or fails or times out).
 pub fn spawn_post_processing(ctx: PostProcessingContext) {
     tokio::spawn(async move {
-        if let Err(err) = run(ctx).await {
+        if let Err(err) = run_post_processing(ctx).await {
             tracing::warn!(error = %err, "post-processing task error");
         }
     });
 }
 
-async fn run(ctx: PostProcessingContext) -> crate::AppResult<()> {
+/// Run a post-processing script for an imported file and await completion.
+///
+/// This is the same logic as [`spawn_post_processing`] but awaitable, which
+/// makes it suitable for integration tests that need deterministic results.
+pub async fn run_post_processing(ctx: PostProcessingContext) -> crate::AppResult<()> {
     let script_key = match ctx.facet {
         MediaFacet::Movie  => "post_processing.script.movie",
         MediaFacet::Tv     => "post_processing.script.series",

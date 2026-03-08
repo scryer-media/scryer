@@ -1,18 +1,13 @@
 use std::collections::HashSet;
 
 use async_trait::async_trait;
-use chrono::Utc;
 use scryer_domain::{Collection, MediaFacet, Title};
 
-use crate::facet_handler::{FacetHandler, HydrationResult};
+use crate::facet_handler::{series_to_hydration_result, FacetHandler, HydrationResult};
 use crate::{
     ActivityKind, AppResult, MetadataGateway, RenameCollisionPolicy,
-    RenameMissingMetadataPolicy, RenamePlanItem, TitleMetadataUpdate,
+    RenameMissingMetadataPolicy, RenamePlanItem,
 };
-
-fn non_empty(s: String) -> Option<String> {
-    if s.trim().is_empty() { None } else { Some(s) }
-}
 
 /// Handles both TV and Anime facets (they share series behavior
 /// with different scope IDs and rename templates).
@@ -110,32 +105,7 @@ impl FacetHandler for SeriesFacetHandler {
         language: &str,
     ) -> AppResult<HydrationResult> {
         let series = gateway.get_series(tvdb_id, language).await?;
-        let update = TitleMetadataUpdate {
-            year: series.year.filter(|&y| y > 0),
-            overview: non_empty(series.overview),
-            poster_url: non_empty(series.poster_url),
-            sort_title: non_empty(series.sort_name),
-            slug: non_empty(series.slug),
-            imdb_id: None,
-            runtime_minutes: if series.runtime_minutes > 0 { Some(series.runtime_minutes) } else { None },
-            genres: series.genres,
-            content_status: non_empty(series.content_status),
-            language: None,
-            first_aired: non_empty(series.first_aired),
-            network: non_empty(series.network),
-            studio: None,
-            country: non_empty(series.country),
-            aliases: series.aliases,
-            metadata_language: Some(language.to_string()),
-            metadata_fetched_at: Some(Utc::now().to_rfc3339()),
-            ..Default::default()
-        };
-        Ok(HydrationResult {
-            metadata_update: update,
-            seasons: series.seasons,
-            episodes: series.episodes,
-            anime_mappings: series.anime_mappings,
-        })
+        Ok(series_to_hydration_result(series, language))
     }
 
     fn build_rename_plan_item(

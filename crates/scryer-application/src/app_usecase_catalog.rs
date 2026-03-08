@@ -3,6 +3,7 @@ use scryer_domain::NotificationEventType;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
+use std::time::Duration;
 use tokio::fs;
 use tracing::{info, warn};
 
@@ -130,46 +131,17 @@ impl AppUseCase {
             .await;
         }
 
-        // Hydrate rich metadata from the metadata gateway
-        let title = self.hydrate_title_metadata(title).await;
-
-        // Create wanted items immediately so the background poller picks them up
-        // on the next 60-second tick. This runs regardless of whether metadata
-        // hydration succeeded — a movie without metadata can still be searched.
-        if title.monitored {
-            info!(
-                title_id = %title.id,
-                title_name = %title.name,
-                facet = ?title.facet,
-                "creating immediate wanted items for new monitored title"
-            );
-            let now = Utc::now();
-            if let Some(handler) = self.facet_registry.get(&title.facet) {
-                if handler.has_episodes() {
-                    self.sync_wanted_series_inner(&title, &now, true).await;
-                } else {
-                    self.sync_wanted_movie_inner(&title, &now, true).await;
-                }
-            }
-            self.services.acquisition_wake.notify_one();
-        } else {
-            info!(
-                title_id = %title.id,
-                title_name = %title.name,
-                "title not monitored, skipping wanted item creation"
-            );
-        }
+        // Wake the background hydration loop to fetch rich metadata from SMG.
+        // The title is already persisted — hydration happens asynchronously.
+        self.services.hydration_wake.notify_one();
 
         Ok(title)
     }
 
+    /// Hydrate a single title by fetching metadata from SMG.
+    /// Used for the interactive single-title path (e.g. user adds one title via UI).
     async fn hydrate_title_metadata(&self, title: Title) -> Title {
-        let tvdb_id = match title
-            .external_ids
-            .iter()
-            .find(|eid| eid.source == "tvdb")
-            .and_then(|eid| eid.value.parse::<i64>().ok())
-        {
+        let tvdb_id = match extract_tvdb_id(&title) {
             Some(id) => id,
             None => {
                 warn!(
@@ -188,72 +160,7 @@ impl AppUseCase {
         };
 
         match handler.hydrate_metadata(self.services.metadata_gateway.as_ref(), tvdb_id, language).await {
-            Ok(result) => {
-                if handler.has_episodes() {
-                    info!(
-                        title_id = %title.id,
-                        tvdb_id = tvdb_id,
-                        seasons = result.seasons.len(),
-                        episodes = result.episodes.len(),
-                        "received series metadata from gateway"
-                    );
-                }
-
-                // Build extra external IDs from the primary anime mapping only.
-                // Multi-season anime have one mapping per season (each with a
-                // different MAL/AniDB ID); we only want the primary entry.
-                let mut metadata_update = result.metadata_update;
-                if let Some(mapping) = result.anime_mappings.first() {
-                    if let Some(mal_id) = mapping.mal_id {
-                        metadata_update.extra_external_ids.push(ExternalId { source: "mal".to_string(), value: mal_id.to_string() });
-                    }
-                    if let Some(anilist_id) = mapping.anilist_id {
-                        metadata_update.extra_external_ids.push(ExternalId { source: "anilist".to_string(), value: anilist_id.to_string() });
-                    }
-                    if let Some(anidb_id) = mapping.anidb_id {
-                        metadata_update.extra_external_ids.push(ExternalId { source: "anidb".to_string(), value: anidb_id.to_string() });
-                    }
-                    if let Some(kitsu_id) = mapping.kitsu_id {
-                        metadata_update.extra_external_ids.push(ExternalId { source: "kitsu".to_string(), value: kitsu_id.to_string() });
-                    }
-                }
-
-                // Store anime-specific metadata as tags on the title
-                if let Some(primary) = result.anime_mappings.first() {
-                    if let Some(score) = primary.score {
-                        metadata_update.extra_tags.push(format!("scryer:mal-score:{score}"));
-                    }
-                    if !primary.anime_media_type.is_empty() {
-                        metadata_update.extra_tags.push(format!("scryer:anime-media-type:{}", primary.anime_media_type));
-                    }
-                    if !primary.status.is_empty() {
-                        metadata_update.extra_tags.push(format!("scryer:anime-status:{}", primary.status));
-                    }
-                }
-
-                let title = match self
-                    .services
-                    .titles
-                    .update_title_hydrated_metadata(&title.id, metadata_update)
-                    .await
-                {
-                    Ok(updated) => updated,
-                    Err(err) => {
-                        warn!(
-                            title_id = %title.id,
-                            error = %err,
-                            "failed to persist metadata"
-                        );
-                        title
-                    }
-                };
-
-                if !result.seasons.is_empty() || !result.episodes.is_empty() {
-                    self.create_series_seasons_and_episodes(&title, &result.seasons, &result.episodes, &result.anime_mappings).await;
-                }
-
-                title
-            }
+            Ok(result) => self.apply_hydration_result(title, result).await,
             Err(err) => {
                 warn!(
                     title_id = %title.id,
@@ -266,6 +173,81 @@ impl AppUseCase {
         }
     }
 
+    /// Apply a [`HydrationResult`] to a title: persist metadata, create
+    /// seasons/episodes, and enrich with anime mapping data.
+    async fn apply_hydration_result(
+        &self,
+        title: Title,
+        result: super::HydrationResult,
+    ) -> Title {
+        let has_episodes = self
+            .facet_registry
+            .get(&title.facet)
+            .map_or(false, |h| h.has_episodes());
+
+        if has_episodes {
+            info!(
+                title_id = %title.id,
+                seasons = result.seasons.len(),
+                episodes = result.episodes.len(),
+                "received series metadata from gateway"
+            );
+        }
+
+        // Build extra external IDs from the primary anime mapping only.
+        let mut metadata_update = result.metadata_update;
+        if let Some(mapping) = result.anime_mappings.first() {
+            if let Some(mal_id) = mapping.mal_id {
+                metadata_update.extra_external_ids.push(ExternalId { source: "mal".to_string(), value: mal_id.to_string() });
+            }
+            if let Some(anilist_id) = mapping.anilist_id {
+                metadata_update.extra_external_ids.push(ExternalId { source: "anilist".to_string(), value: anilist_id.to_string() });
+            }
+            if let Some(anidb_id) = mapping.anidb_id {
+                metadata_update.extra_external_ids.push(ExternalId { source: "anidb".to_string(), value: anidb_id.to_string() });
+            }
+            if let Some(kitsu_id) = mapping.kitsu_id {
+                metadata_update.extra_external_ids.push(ExternalId { source: "kitsu".to_string(), value: kitsu_id.to_string() });
+            }
+        }
+
+        // Store anime-specific metadata as tags on the title
+        if let Some(primary) = result.anime_mappings.first() {
+            if let Some(score) = primary.score {
+                metadata_update.extra_tags.push(format!("scryer:mal-score:{score}"));
+            }
+            if !primary.anime_media_type.is_empty() {
+                metadata_update.extra_tags.push(format!("scryer:anime-media-type:{}", primary.anime_media_type));
+            }
+            if !primary.status.is_empty() {
+                metadata_update.extra_tags.push(format!("scryer:anime-status:{}", primary.status));
+            }
+        }
+
+        let title = match self
+            .services
+            .titles
+            .update_title_hydrated_metadata(&title.id, metadata_update)
+            .await
+        {
+            Ok(updated) => updated,
+            Err(err) => {
+                warn!(
+                    title_id = %title.id,
+                    error = %err,
+                    "failed to persist metadata"
+                );
+                title
+            }
+        };
+
+        if !result.seasons.is_empty() || !result.episodes.is_empty() {
+            self.create_series_seasons_and_episodes(&title, &result.seasons, &result.episodes, &result.anime_mappings).await;
+        }
+
+        title
+    }
+
     async fn create_series_seasons_and_episodes(
         &self,
         title: &Title,
@@ -273,7 +255,11 @@ impl AppUseCase {
         episodes: &[EpisodeMetadata],
         anime_mappings: &[AnimeMapping],
     ) {
-        let monitor_type = extract_monitor_type(&title.tags);
+        let monitor_type = if title.monitored {
+            extract_monitor_type(&title.tags)
+        } else {
+            "none".to_string()
+        };
         info!(
             title_id = %title.id,
             monitor_type = %monitor_type,
@@ -1669,5 +1655,211 @@ fn derive_episode_type(
     match season_episode_type {
         Some("alternate") => "alternate".to_string(),
         _ => "standard".to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Background metadata hydration loop
+// ---------------------------------------------------------------------------
+
+/// How long to wait after a wake signal to let titles accumulate before
+/// draining.  Keeps the loop from firing per-title during bulk imports.
+const HYDRATION_COLLECT_WINDOW: Duration = Duration::from_millis(50);
+
+/// Safety cap so a single query doesn't pull the entire DB in a degenerate
+/// case.  In practice this is never hit during normal operation.
+const HYDRATION_MAX_BATCH: usize = 10_000;
+
+/// How long to wait before retrying titles that failed hydration (e.g. SMG
+/// was down).  Doubles on consecutive failures up to 5 minutes.
+const HYDRATION_RETRY_BASE: Duration = Duration::from_secs(10);
+const HYDRATION_RETRY_MAX: Duration = Duration::from_secs(300);
+
+fn extract_tvdb_id(title: &scryer_domain::Title) -> Option<i64> {
+    title
+        .external_ids
+        .iter()
+        .find(|eid| eid.source == "tvdb")
+        .and_then(|eid| eid.value.parse::<i64>().ok())
+}
+
+/// Spawns a background loop that hydrates titles whose `metadata_fetched_at`
+/// is NULL.
+///
+/// On each `hydration_wake` signal the loop sleeps for 50 ms to let more
+/// titles accumulate, then drains *all* unhydrated titles in a single pair
+/// of bulk GraphQL calls (one for movies, one for series) instead of N
+/// individual round-trips.
+///
+/// When the queue is empty the loop parks indefinitely until the next wake.
+/// If any titles fail hydration (e.g. SMG down), the loop retries with
+/// exponential backoff instead of parking.
+pub async fn start_background_hydration_loop(
+    app: AppUseCase,
+    token: tokio_util::sync::CancellationToken,
+) {
+    use scryer_domain::MediaFacet;
+
+    info!("background hydration loop started");
+
+    loop {
+        // Park until someone signals new work.
+        tokio::select! {
+            _ = token.cancelled() => {
+                info!("background hydration loop shutting down");
+                return;
+            }
+            _ = app.services.hydration_wake.notified() => {}
+        }
+
+        // Inner drain loop — retries with backoff on failures without
+        // re-entering the outer `notified()` wait (which could deadlock
+        // if a stale permit was already consumed).
+        let mut retry_delay = HYDRATION_RETRY_BASE;
+        'drain: loop {
+            // Let titles accumulate for a short window so bulk adds
+            // coalesce into a single drain pass.
+            tokio::time::sleep(HYDRATION_COLLECT_WINDOW).await;
+
+            if token.is_cancelled() {
+                return;
+            }
+
+            let batch = match app.services.titles.list_unhydrated(HYDRATION_MAX_BATCH).await {
+                Ok(titles) => titles,
+                Err(err) => {
+                    warn!(error = %err, "hydration loop: failed to list unhydrated titles");
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    continue 'drain;
+                }
+            };
+
+            if batch.is_empty() {
+                break 'drain;
+            }
+
+            let count = batch.len();
+            info!(count, "hydration loop: processing batch");
+
+            // ---- Partition by facet and extract TVDB IDs ----
+            let mut movie_titles: Vec<scryer_domain::Title> = Vec::new();
+            let mut series_titles: Vec<scryer_domain::Title> = Vec::new();
+            for title in batch {
+                match title.facet {
+                    MediaFacet::Movie => movie_titles.push(title),
+                    MediaFacet::Tv | MediaFacet::Anime | MediaFacet::Other => {
+                        series_titles.push(title)
+                    }
+                }
+            }
+
+            let mut had_failures = false;
+            let language = "eng";
+
+            // ---- Bulk-fetch movies (single GraphQL call) ----
+            if !movie_titles.is_empty() {
+                let tvdb_ids: Vec<i64> = movie_titles
+                    .iter()
+                    .filter_map(|t| extract_tvdb_id(t))
+                    .collect();
+
+                match app
+                    .services
+                    .metadata_gateway
+                    .get_movies_bulk(&tvdb_ids, language)
+                    .await
+                {
+                    Ok(metadata_map) => {
+                        for title in movie_titles {
+                            let tvdb_id = extract_tvdb_id(&title);
+                            if let Some(movie) = tvdb_id.and_then(|id| metadata_map.get(&id)) {
+                                let result =
+                                    super::movie_to_hydration_result(movie.clone(), language);
+                                let hydrated =
+                                    app.apply_hydration_result(title, result).await;
+                                sync_wanted_after_hydration(&app, &hydrated).await;
+                            } else {
+                                had_failures = true;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        warn!(error = %err, "hydration loop: bulk movie fetch failed");
+                        had_failures = true;
+                    }
+                }
+            }
+
+            // ---- Bulk-fetch series + anime (single GraphQL call) ----
+            if !series_titles.is_empty() {
+                let tvdb_ids: Vec<i64> = series_titles
+                    .iter()
+                    .filter_map(|t| extract_tvdb_id(t))
+                    .collect();
+
+                match app
+                    .services
+                    .metadata_gateway
+                    .get_series_bulk(&tvdb_ids, language)
+                    .await
+                {
+                    Ok(metadata_map) => {
+                        for title in series_titles {
+                            let tvdb_id = extract_tvdb_id(&title);
+                            if let Some(series) = tvdb_id.and_then(|id| metadata_map.get(&id)) {
+                                let result =
+                                    super::series_to_hydration_result(series.clone(), language);
+                                let hydrated =
+                                    app.apply_hydration_result(title, result).await;
+                                sync_wanted_after_hydration(&app, &hydrated).await;
+                            } else {
+                                had_failures = true;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        warn!(error = %err, "hydration loop: bulk series fetch failed");
+                        had_failures = true;
+                    }
+                }
+            }
+
+            info!(count, "hydration loop: batch complete");
+
+            if had_failures {
+                info!(
+                    retry_secs = retry_delay.as_secs(),
+                    "hydration loop: some titles failed, scheduling retry"
+                );
+                let new_work = tokio::select! {
+                    _ = token.cancelled() => return,
+                    _ = tokio::time::sleep(retry_delay) => false,
+                    _ = app.services.hydration_wake.notified() => true,
+                };
+                if new_work {
+                    retry_delay = HYDRATION_RETRY_BASE;
+                } else {
+                    retry_delay = (retry_delay * 2).min(HYDRATION_RETRY_MAX);
+                }
+                continue 'drain;
+            }
+        }
+
+        info!("hydration loop: queue drained, parking");
+    }
+}
+
+/// After successful hydration, sync wanted items for monitored titles.
+async fn sync_wanted_after_hydration(app: &AppUseCase, title: &scryer_domain::Title) {
+    if title.monitored && title.metadata_fetched_at.is_some() {
+        let now = Utc::now();
+        if let Some(handler) = app.facet_registry.get(&title.facet) {
+            if handler.has_episodes() {
+                app.sync_wanted_series_inner(title, &now, true).await;
+            } else {
+                app.sync_wanted_movie_inner(title, &now, true).await;
+            }
+        }
+        app.services.acquisition_wake.notify_one();
     }
 }

@@ -78,9 +78,7 @@ if git tag | grep -qx "$TAG_NAME"; then
 fi
 
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-FFPROBE_VERSION="$(cat "$REPO_ROOT/.ffprobe-version" 2>/dev/null || echo "not set")"
 echo "   Branch : $BRANCH"
-echo "   ffprobe: $FFPROBE_VERSION"
 
 if [[ -n "$(git status --porcelain)" ]]; then
     warn "Working tree has uncommitted changes:"
