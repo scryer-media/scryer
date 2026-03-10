@@ -301,6 +301,7 @@ fn plugin_capabilities_accessible() {
     let provider = scryer_plugins::load_indexer_plugins(&fixtures_dir).unwrap();
 
     let caps = provider.capabilities_for_provider("test");
+    assert!(caps.rss, "rss capability should default to true");
     // The test plugin should have some capabilities declared
     // (the default is all-true, so at minimum search should be true)
     assert!(caps.search, "search capability should be true");

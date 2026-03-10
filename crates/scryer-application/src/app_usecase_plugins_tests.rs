@@ -304,6 +304,18 @@ fn registry_entry(
     entry
 }
 
+fn registry_entry_with_type(
+    id: &str,
+    plugin_type: &str,
+    version: &str,
+    builtin: bool,
+    wasm_url: Option<&str>,
+) -> serde_json::Value {
+    let mut entry = registry_entry(id, version, builtin, wasm_url);
+    entry["plugin_type"] = serde_json::json!(plugin_type);
+    entry
+}
+
 fn make_indexer_config(provider_type: &str) -> IndexerConfig {
     let now = Utc::now();
     IndexerConfig {
@@ -431,6 +443,27 @@ async fn list_registry_entries_not_installed() {
         assert!(p.installed_version.is_none());
         assert!(!p.update_available);
     }
+}
+
+#[tokio::test]
+async fn list_available_prefers_specific_indexer_class_over_legacy_registry_type() {
+    let h = bootstrap_plugins(Some(MockPluginProvider::new()));
+    let mut installation = make_installation("torznab", "0.1.0", false, true);
+    installation.plugin_type = "torrent_indexer".to_string();
+    h.plugin_repo.installations.lock().await.push(installation);
+
+    let json = make_registry_json(&[registry_entry_with_type(
+        "torznab",
+        "indexer",
+        "0.2.0",
+        false,
+        Some("https://example.com/torznab.wasm"),
+    )]);
+    h.plugin_repo.store_registry_cache(&json).await.unwrap();
+
+    let result = h.app.list_available_plugins(&admin()).await.unwrap();
+    let torznab = result.iter().find(|p| p.id == "torznab").unwrap();
+    assert_eq!(torznab.plugin_type, "torrent_indexer");
 }
 
 #[tokio::test]

@@ -16,7 +16,14 @@ use crate::notification_adapter::WasmNotificationClient;
 use crate::types::PluginDescriptor;
 
 const SUPPORTED_SDK_MAJOR: &str = "0";
-const SUPPORTED_PLUGIN_TYPES: &[&str] = &["indexer", "notification", "download_client"];
+const SUPPORTED_PLUGIN_TYPES: &[&str] = &[
+    "indexer",
+    "usenet_indexer",
+    "torrent_indexer",
+    "notification",
+    "download_client",
+];
+const INDEXER_PLUGIN_TYPES: &[&str] = &["indexer", "usenet_indexer", "torrent_indexer"];
 
 struct LoadedPlugin {
     wasm_bytes: Vec<u8>,
@@ -40,7 +47,7 @@ impl WasmIndexerPluginProvider {
     pub fn with_external_bytes(mut self, wasm_bytes: &[u8]) -> Self {
         match load_from_bytes(wasm_bytes) {
             Ok((descriptor, bytes)) => {
-                if !validate_descriptor_for_type(&descriptor, Some("indexer")) {
+                if !validate_indexer_descriptor(&descriptor) {
                     return self;
                 }
 
@@ -114,7 +121,7 @@ impl WasmIndexerPluginProvider {
     pub fn with_builtin(mut self, wasm_bytes: &[u8]) -> Self {
         match load_from_bytes(wasm_bytes) {
             Ok((descriptor, bytes)) => {
-                if !validate_descriptor_for_type(&descriptor, Some("indexer")) {
+                if !validate_indexer_descriptor(&descriptor) {
                     return self;
                 }
 
@@ -252,11 +259,13 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
         self.plugins
             .get(&key)
             .map(|loaded| scryer_domain::IndexerProviderCapabilities {
+                rss: loaded.descriptor.capabilities.rss,
                 search: loaded.descriptor.capabilities.search,
                 imdb_search: loaded.descriptor.capabilities.imdb_search,
                 tvdb_search: loaded.descriptor.capabilities.tvdb_search,
             })
             .unwrap_or(scryer_domain::IndexerProviderCapabilities {
+                rss: true,
                 search: true,
                 imdb_search: true,
                 tvdb_search: true,
@@ -762,6 +771,15 @@ fn validate_descriptor_for_type(
     true
 }
 
+fn is_indexer_plugin_type(plugin_type: &str) -> bool {
+    INDEXER_PLUGIN_TYPES.contains(&plugin_type)
+}
+
+fn validate_indexer_descriptor(descriptor: &PluginDescriptor) -> bool {
+    validate_descriptor_for_type(descriptor, None)
+        && is_indexer_plugin_type(&descriptor.plugin_type)
+}
+
 /// Scan `plugins_dir` for subdirectories containing `plugin.wasm`, load each,
 /// call `describe()` to get the plugin descriptor, and return a provider that
 /// can create indexer clients for any loaded plugin type.
@@ -788,7 +806,7 @@ pub fn load_indexer_plugins(plugins_dir: &Path) -> Result<WasmIndexerPluginProvi
 
         match load_single_plugin(&wasm_path) {
             Ok((descriptor, wasm_bytes)) => {
-                if !validate_descriptor_for_type(&descriptor, Some("indexer")) {
+                if !validate_indexer_descriptor(&descriptor) {
                     continue;
                 }
 
@@ -855,6 +873,45 @@ fn load_single_plugin(wasm_path: &Path) -> Result<(PluginDescriptor, Vec<u8>), S
         .map_err(|e| format!("failed to read {}: {e}", wasm_path.display()))?;
 
     load_from_bytes(&wasm_bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn descriptor(plugin_type: &str) -> PluginDescriptor {
+        PluginDescriptor {
+            name: "Test".to_string(),
+            version: "0.1.0".to_string(),
+            sdk_version: "0.1".to_string(),
+            plugin_type: plugin_type.to_string(),
+            provider_type: "test".to_string(),
+            provider_aliases: vec![],
+            capabilities: crate::types::IndexerCapabilities::default(),
+            scoring_policies: vec![],
+            config_fields: vec![],
+            default_base_url: None,
+            allowed_hosts: vec![],
+            rate_limit_seconds: None,
+            notification_capabilities: None,
+            accepted_inputs: vec![],
+            isolation_modes: vec![],
+            download_client_capabilities: None,
+        }
+    }
+
+    #[test]
+    fn indexer_family_types_are_accepted() {
+        assert!(validate_indexer_descriptor(&descriptor("indexer")));
+        assert!(validate_indexer_descriptor(&descriptor("usenet_indexer")));
+        assert!(validate_indexer_descriptor(&descriptor("torrent_indexer")));
+    }
+
+    #[test]
+    fn non_indexer_types_are_rejected_for_indexer_provider() {
+        assert!(!validate_indexer_descriptor(&descriptor("notification")));
+        assert!(!validate_indexer_descriptor(&descriptor("download_client")));
+    }
 }
 
 /// Build the Extism allowed-hosts list for a plugin manifest.

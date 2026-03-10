@@ -190,7 +190,7 @@ pub(crate) async fn seed_builtin_query(
         "INSERT OR IGNORE INTO plugin_installations
             (id, plugin_id, name, description, version, plugin_type, provider_type,
              is_enabled, is_builtin, installed_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'indexer', ?, 1, 1, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, 'usenet_indexer', ?, 1, 1, ?, ?)",
     )
     .bind(&id)
     .bind(plugin_id)
@@ -200,6 +200,16 @@ pub(crate) async fn seed_builtin_query(
     .bind(provider_type)
     .bind(&now)
     .bind(&now)
+    .execute(pool)
+    .await
+    .map_err(|e| scryer_application::AppError::Repository(e.to_string()))?;
+
+    sqlx::query(
+        "UPDATE plugin_installations
+         SET plugin_type = 'usenet_indexer'
+         WHERE plugin_id = ? AND is_builtin = 1",
+    )
+    .bind(plugin_id)
     .execute(pool)
     .await
     .map_err(|e| scryer_application::AppError::Repository(e.to_string()))?;
