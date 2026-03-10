@@ -2,6 +2,10 @@ use super::*;
 use std::collections::HashSet;
 use tracing::warn;
 
+fn to_u64<T: Into<u64>>(value: T) -> u64 {
+    value.into()
+}
+
 impl AppUseCase {
     /// Run all health checks and return results.
     pub async fn run_health_checks(&self) -> Vec<HealthCheckResult> {
@@ -169,7 +173,7 @@ impl AppUseCase {
 
             if let Ok(stat) = nix::sys::statvfs::statvfs(path.as_str()) {
                 let block_size = stat.block_size();
-                let free = u64::from(stat.blocks_available()) * block_size;
+                let free = to_u64(stat.blocks_available()) * block_size;
                 let mb_100 = 100 * 1024 * 1024;
                 let mb_500 = 500 * 1024 * 1024;
 
