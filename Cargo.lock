@@ -3697,6 +3697,7 @@ dependencies = [
  "reqwest",
  "scryer-domain",
  "scryer-mediainfo",
+ "scryer-release-parser",
  "scryer-rules",
  "semver",
  "serde",
@@ -3811,6 +3812,10 @@ dependencies = [
  "tokio",
  "tracing",
 ]
+
+[[package]]
+name = "scryer-release-parser"
+version = "0.8.1"
 
 [[package]]
 name = "scryer-rules"
