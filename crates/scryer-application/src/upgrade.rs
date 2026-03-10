@@ -93,7 +93,12 @@ pub async fn execute_upgrade(
     // 4. Delete old media_files record
     let old_file_id = existing_file.id.clone();
     let old_episode_id = existing_file.episode_id.clone();
-    if let Err(err) = app.services.media_files.delete_media_file(&old_file_id).await {
+    if let Err(err) = app
+        .services
+        .media_files
+        .delete_media_file(&old_file_id)
+        .await
+    {
         tracing::warn!(error = %err, file_id = %old_file_id, "failed to delete old media file record during upgrade");
     }
 

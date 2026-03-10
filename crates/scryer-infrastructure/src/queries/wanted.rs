@@ -296,7 +296,9 @@ pub(crate) async fn count_wanted_items_query(
         .await
         .map_err(|err| AppError::Repository(err.to_string()))?;
 
-    let count: i64 = row.try_get("cnt").map_err(|e| AppError::Repository(e.to_string()))?;
+    let count: i64 = row
+        .try_get("cnt")
+        .map_err(|e| AppError::Repository(e.to_string()))?;
     Ok(count)
 }
 
@@ -354,38 +356,68 @@ pub(crate) async fn list_release_decisions_for_wanted_item_query(
 
 fn row_to_release_decision(row: &SqliteRow) -> AppResult<ReleaseDecision> {
     Ok(ReleaseDecision {
-        id: row.try_get("id").map_err(|e| AppError::Repository(e.to_string()))?,
-        wanted_item_id: row.try_get("wanted_item_id").map_err(|e| AppError::Repository(e.to_string()))?,
-        title_id: row.try_get("title_id").map_err(|e| AppError::Repository(e.to_string()))?,
-        release_title: row.try_get("release_title").map_err(|e| AppError::Repository(e.to_string()))?,
+        id: row
+            .try_get("id")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
+        wanted_item_id: row
+            .try_get("wanted_item_id")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
+        title_id: row
+            .try_get("title_id")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
+        release_title: row
+            .try_get("release_title")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
         release_url: row.try_get("release_url").unwrap_or(None),
         release_size_bytes: row.try_get("release_size_bytes").unwrap_or(None),
-        decision_code: row.try_get("decision_code").map_err(|e| AppError::Repository(e.to_string()))?,
-        candidate_score: row.try_get("candidate_score").map_err(|e| AppError::Repository(e.to_string()))?,
+        decision_code: row
+            .try_get("decision_code")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
+        candidate_score: row
+            .try_get("candidate_score")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
         current_score: row.try_get("current_score").unwrap_or(None),
         score_delta: row.try_get("score_delta").unwrap_or(None),
         explanation_json: row.try_get("explanation_json").unwrap_or(None),
-        created_at: row.try_get("created_at").map_err(|e| AppError::Repository(e.to_string()))?,
+        created_at: row
+            .try_get("created_at")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
     })
 }
 
 fn row_to_wanted_item(row: &SqliteRow) -> AppResult<WantedItem> {
     Ok(WantedItem {
-        id: row.try_get("id").map_err(|e| AppError::Repository(e.to_string()))?,
-        title_id: row.try_get("title_id").map_err(|e| AppError::Repository(e.to_string()))?,
+        id: row
+            .try_get("id")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
+        title_id: row
+            .try_get("title_id")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
         title_name: row.try_get("title_name").unwrap_or(None),
         episode_id: row.try_get("episode_id").unwrap_or(None),
         season_number: row.try_get("season_number").unwrap_or(None),
-        media_type: row.try_get("media_type").map_err(|e| AppError::Repository(e.to_string()))?,
-        search_phase: row.try_get("search_phase").map_err(|e| AppError::Repository(e.to_string()))?,
+        media_type: row
+            .try_get("media_type")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
+        search_phase: row
+            .try_get("search_phase")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
         next_search_at: row.try_get("next_search_at").unwrap_or(None),
         last_search_at: row.try_get("last_search_at").unwrap_or(None),
-        search_count: row.try_get("search_count").map_err(|e| AppError::Repository(e.to_string()))?,
+        search_count: row
+            .try_get("search_count")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
         baseline_date: row.try_get("baseline_date").unwrap_or(None),
-        status: row.try_get("status").map_err(|e| AppError::Repository(e.to_string()))?,
+        status: row
+            .try_get("status")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
         grabbed_release: row.try_get("grabbed_release").unwrap_or(None),
         current_score: row.try_get("current_score").unwrap_or(None),
-        created_at: row.try_get("created_at").map_err(|e| AppError::Repository(e.to_string()))?,
-        updated_at: row.try_get("updated_at").map_err(|e| AppError::Repository(e.to_string()))?,
+        created_at: row
+            .try_get("created_at")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
+        updated_at: row
+            .try_get("updated_at")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
     })
 }

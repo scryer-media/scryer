@@ -89,9 +89,9 @@ impl ExternalArrClient {
     /// Fetch download client configurations.
     pub async fn list_download_clients(&self) -> AppResult<Vec<ArrDownloadClient>> {
         let json = self.api_get("downloadclient").await?;
-        let arr = json
-            .as_array()
-            .ok_or_else(|| AppError::Repository("downloadclient response was not an array".into()))?;
+        let arr = json.as_array().ok_or_else(|| {
+            AppError::Repository("downloadclient response was not an array".into())
+        })?;
         Ok(arr
             .iter()
             .filter_map(|item| {
@@ -148,13 +148,14 @@ impl ExternalArrClient {
             .header("X-Api-Key", &self.api_key)
             .send()
             .await
-            .map_err(|err| AppError::Repository(format!("external api call to {path} failed: {err}")))?;
+            .map_err(|err| {
+                AppError::Repository(format!("external api call to {path} failed: {err}"))
+            })?;
 
         let status = response.status();
-        let body = response
-            .text()
-            .await
-            .map_err(|err| AppError::Repository(format!("external api response read failed: {err}")))?;
+        let body = response.text().await.map_err(|err| {
+            AppError::Repository(format!("external api response read failed: {err}"))
+        })?;
 
         if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(AppError::Repository("invalid API key".into()));

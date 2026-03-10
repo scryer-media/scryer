@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use async_graphql::{Context, Object, Result as GqlResult};
 use scryer_domain::{Entitlement, NewDownloadClientConfig, NewIndexerConfig};
 use scryer_infrastructure::external_import::{
-    self, ExternalArrClient, ArrDownloadClient, ArrIndexer,
+    self, ArrDownloadClient, ArrIndexer, ExternalArrClient,
 };
 
 use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx};
@@ -46,13 +46,12 @@ impl ExternalImportMutations {
         };
 
         // Map from dedup_key → index in payload vecs, so duplicates merge sources.
-        let mut dc_key_idx: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        let mut idx_key_idx: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut dc_key_idx: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        let mut idx_key_idx: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
 
-        for (conn_opt, source) in [
-            (&input.sonarr, "sonarr"),
-            (&input.radarr, "radarr"),
-        ] {
+        for (conn_opt, source) in [(&input.sonarr, "sonarr"), (&input.radarr, "radarr")] {
             let Some(conn) = conn_opt else { continue };
             let client = ExternalArrClient::new(conn.base_url.clone(), conn.api_key.clone());
             match client.test_connection().await {
@@ -78,9 +77,14 @@ impl ExternalImportMutations {
                         for dc in clients {
                             let mapped = map_download_client(&dc, source);
                             if let Some(&existing) = dc_key_idx.get(&mapped.dedup_key) {
-                                payload.download_clients[existing].sources.push(source.to_string());
+                                payload.download_clients[existing]
+                                    .sources
+                                    .push(source.to_string());
                             } else {
-                                dc_key_idx.insert(mapped.dedup_key.clone(), payload.download_clients.len());
+                                dc_key_idx.insert(
+                                    mapped.dedup_key.clone(),
+                                    payload.download_clients.len(),
+                                );
                                 payload.download_clients.push(mapped);
                             }
                         }
@@ -92,7 +96,8 @@ impl ExternalImportMutations {
                             if let Some(&existing) = idx_key_idx.get(&mapped.dedup_key) {
                                 payload.indexers[existing].sources.push(source.to_string());
                             } else {
-                                idx_key_idx.insert(mapped.dedup_key.clone(), payload.indexers.len());
+                                idx_key_idx
+                                    .insert(mapped.dedup_key.clone(), payload.indexers.len());
                                 payload.indexers.push(mapped);
                             }
                         }
@@ -125,8 +130,10 @@ impl ExternalImportMutations {
         let app = app_from_ctx(ctx)?;
         let db = settings_db_from_ctx(ctx)?;
 
-        let selected_dc_keys: HashSet<String> =
-            input.selected_download_client_dedup_keys.into_iter().collect();
+        let selected_dc_keys: HashSet<String> = input
+            .selected_download_client_dedup_keys
+            .into_iter()
+            .collect();
         let selected_idx_keys: HashSet<String> =
             input.selected_indexer_dedup_keys.into_iter().collect();
 
@@ -152,7 +159,9 @@ impl ExternalImportMutations {
                 )
                 .await
             {
-                result.errors.push(format!("failed to save movies path: {err}"));
+                result
+                    .errors
+                    .push(format!("failed to save movies path: {err}"));
             } else {
                 paths_saved = true;
             }
@@ -169,7 +178,9 @@ impl ExternalImportMutations {
                 )
                 .await
             {
-                result.errors.push(format!("failed to save series path: {err}"));
+                result
+                    .errors
+                    .push(format!("failed to save series path: {err}"));
             } else {
                 paths_saved = true;
             }
@@ -186,7 +197,9 @@ impl ExternalImportMutations {
                 )
                 .await
             {
-                result.errors.push(format!("failed to save anime path: {err}"));
+                result
+                    .errors
+                    .push(format!("failed to save anime path: {err}"));
             } else {
                 paths_saved = true;
             }
@@ -199,10 +212,7 @@ impl ExternalImportMutations {
         let mut seen_dc_keys: HashSet<String> = HashSet::new();
         let mut seen_idx_keys: HashSet<String> = HashSet::new();
 
-        for (conn_opt, source) in [
-            (&input.sonarr, "sonarr"),
-            (&input.radarr, "radarr"),
-        ] {
+        for (conn_opt, source) in [(&input.sonarr, "sonarr"), (&input.radarr, "radarr")] {
             let Some(conn) = conn_opt else { continue };
             let client = ExternalArrClient::new(conn.base_url.clone(), conn.api_key.clone());
 
@@ -238,7 +248,8 @@ impl ExternalImportMutations {
 
         // ── Create download clients ───────────────────────────────────────
         for (dc, _source) in &all_download_clients {
-            let Some(scryer_type) = external_import::map_download_client_type(&dc.implementation) else {
+            let Some(scryer_type) = external_import::map_download_client_type(&dc.implementation)
+            else {
                 continue;
             };
 
@@ -248,7 +259,11 @@ impl ExternalImportMutations {
             let url_base = external_import::field_str(&dc.fields, "urlBase").unwrap_or_default();
 
             let protocol = if use_ssl { "https" } else { "http" };
-            let port_part = if port.is_empty() { String::new() } else { format!(":{port}") };
+            let port_part = if port.is_empty() {
+                String::new()
+            } else {
+                format!(":{port}")
+            };
             let path_part = if url_base.is_empty() {
                 String::new()
             } else {
@@ -261,7 +276,10 @@ impl ExternalImportMutations {
             config_obj.insert("port".into(), serde_json::Value::String(port));
             config_obj.insert("use_ssl".into(), serde_json::Value::Bool(use_ssl));
             config_obj.insert("url_base".into(), serde_json::Value::String(url_base));
-            config_obj.insert("client_type".into(), serde_json::Value::String(scryer_type.to_string()));
+            config_obj.insert(
+                "client_type".into(),
+                serde_json::Value::String(scryer_type.to_string()),
+            );
 
             if scryer_type == "sabnzbd" {
                 if let Some(api_key) = external_import::field_str(&dc.fields, "apiKey") {
@@ -295,16 +313,15 @@ impl ExternalImportMutations {
                 Ok(config) => {
                     result.download_clients_created += 1;
                     if scryer_type == "nzbget" || scryer_type == "sabnzbd" {
-                        let _ = ensure_nzbget_routing_entry_for_client(
-                            &db, &config.id, &actor.id,
-                        )
-                        .await;
+                        let _ = ensure_nzbget_routing_entry_for_client(&db, &config.id, &actor.id)
+                            .await;
                     }
                 }
                 Err(err) => {
-                    result
-                        .errors
-                        .push(format!("failed to create download client '{}': {err}", dc.name));
+                    result.errors.push(format!(
+                        "failed to create download client '{}': {err}",
+                        dc.name
+                    ));
                 }
             }
         }
@@ -318,7 +335,9 @@ impl ExternalImportMutations {
 
         let mut auto_installed: HashSet<String> = HashSet::new();
         for (idx, _) in &all_indexers {
-            let Some(scryer_type) = external_import::map_indexer_provider_type(&idx.implementation, &idx.fields) else {
+            let Some(scryer_type) =
+                external_import::map_indexer_provider_type(&idx.implementation, &idx.fields)
+            else {
                 continue;
             };
             if available_providers.contains(scryer_type) || auto_installed.contains(scryer_type) {
@@ -339,22 +358,23 @@ impl ExternalImportMutations {
                     result.plugins_installed.push(inst.name);
                 }
                 Err(err) => {
-                    result.errors.push(format!(
-                        "failed to install {} plugin: {err}",
-                        scryer_type
-                    ));
+                    result
+                        .errors
+                        .push(format!("failed to install {} plugin: {err}", scryer_type));
                 }
             }
         }
 
         // ── Create indexers ───────────────────────────────────────────────
         for (idx, _source) in &all_indexers {
-            let Some(scryer_type) = external_import::map_indexer_provider_type(&idx.implementation, &idx.fields) else {
+            let Some(scryer_type) =
+                external_import::map_indexer_provider_type(&idx.implementation, &idx.fields)
+            else {
                 continue;
             };
 
-            let mut base_url = external_import::field_str(&idx.fields, "baseUrl")
-                .unwrap_or_default();
+            let mut base_url =
+                external_import::field_str(&idx.fields, "baseUrl").unwrap_or_default();
             let api_path = external_import::field_str(&idx.fields, "apiPath");
             if let Some(path) = &api_path {
                 if !path.is_empty() && !base_url.is_empty() {
@@ -434,7 +454,10 @@ impl ExternalImportMutations {
     }
 }
 
-fn map_download_client(dc: &ArrDownloadClient, source: &str) -> ExternalImportDownloadClientPayload {
+fn map_download_client(
+    dc: &ArrDownloadClient,
+    source: &str,
+) -> ExternalImportDownloadClientPayload {
     let scryer_type = external_import::map_download_client_type(&dc.implementation);
     let host = external_import::field_str(&dc.fields, "host");
     let port = external_import::field_str_or_number(&dc.fields, "port");

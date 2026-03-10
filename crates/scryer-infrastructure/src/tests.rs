@@ -403,14 +403,13 @@ async fn sqlite_show_queries_roundtrip() {
     assert_eq!(loaded_collection.id, collection.id);
     assert_eq!(episodes.len(), 1);
     assert_eq!(episodes[0].id, episode.id);
-    let loaded_episode =
-        <SqliteServices as scryer_application::ShowRepository>::get_episode_by_id(
-            &services,
-            &episode.id,
-        )
-        .await
-        .expect("get episode by id")
-        .expect("episode should exist");
+    let loaded_episode = <SqliteServices as scryer_application::ShowRepository>::get_episode_by_id(
+        &services,
+        &episode.id,
+    )
+    .await
+    .expect("get episode by id")
+    .expect("episode should exist");
     assert_eq!(loaded_episode.id, episode.id);
 
     let updated_collection =

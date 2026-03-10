@@ -3,7 +3,9 @@ mod common;
 use std::path::PathBuf;
 
 use common::TestContext;
-use scryer_application::{ActivityKind, ActivitySeverity, PostProcessingContext, run_post_processing};
+use scryer_application::{
+    run_post_processing, ActivityKind, ActivitySeverity, PostProcessingContext,
+};
 use scryer_domain::MediaFacet;
 
 // ---------------------------------------------------------------------------
@@ -19,11 +21,26 @@ async fn set_script(ctx: &TestContext, facet: MediaFacet, command: &str) {
         MediaFacet::Other => return,
     };
     ctx.db
-        .ensure_setting_definition("post_processing", "system", key, "string", "\"\"", false, None)
+        .ensure_setting_definition(
+            "post_processing",
+            "system",
+            key,
+            "string",
+            "\"\"",
+            false,
+            None,
+        )
         .await
         .expect("ensure setting definition");
     ctx.db
-        .upsert_setting_value("system", key, None, format!("\"{}\"", command), "test", None)
+        .upsert_setting_value(
+            "system",
+            key,
+            None,
+            format!("\"{}\"", command),
+            "test",
+            None,
+        )
         .await
         .expect("upsert setting value");
 }
@@ -32,7 +49,15 @@ async fn set_script(ctx: &TestContext, facet: MediaFacet, command: &str) {
 async fn set_timeout(ctx: &TestContext, secs: u64) {
     let key = "post_processing.timeout_secs";
     ctx.db
-        .ensure_setting_definition("post_processing", "system", key, "number", "1800", false, None)
+        .ensure_setting_definition(
+            "post_processing",
+            "system",
+            key,
+            "number",
+            "1800",
+            false,
+            None,
+        )
         .await
         .expect("ensure setting definition");
     ctx.db
@@ -42,7 +67,10 @@ async fn set_timeout(ctx: &TestContext, secs: u64) {
 }
 
 /// Build a PostProcessingContext for a movie import.
-fn movie_context(app: &scryer_application::AppUseCase, dest: &std::path::Path) -> PostProcessingContext {
+fn movie_context(
+    app: &scryer_application::AppUseCase,
+    dest: &std::path::Path,
+) -> PostProcessingContext {
     PostProcessingContext {
         app: app.clone(),
         actor_id: None,
@@ -131,8 +159,16 @@ async fn failed_script_records_warning_with_stderr() {
         .await
         .expect("should have activity event");
     assert_eq!(event.severity, ActivitySeverity::Warning);
-    assert!(event.message.contains("exit 42"), "message: {}", event.message);
-    assert!(event.message.contains("oh no"), "stderr should appear: {}", event.message);
+    assert!(
+        event.message.contains("exit 42"),
+        "message: {}",
+        event.message
+    );
+    assert!(
+        event.message.contains("oh no"),
+        "stderr should appear: {}",
+        event.message
+    );
 }
 
 /// A script that exceeds the timeout is killed and produces a timeout warning.
@@ -153,8 +189,16 @@ async fn timeout_kills_script_and_records_warning() {
         .await
         .expect("should have activity event");
     assert_eq!(event.severity, ActivitySeverity::Warning);
-    assert!(event.message.contains("timed out"), "message: {}", event.message);
-    assert!(event.message.contains("1s"), "should mention timeout duration: {}", event.message);
+    assert!(
+        event.message.contains("timed out"),
+        "message: {}",
+        event.message
+    );
+    assert!(
+        event.message.contains("1s"),
+        "should mention timeout duration: {}",
+        event.message
+    );
 }
 
 /// The script receives the correct environment variables.
@@ -189,15 +233,39 @@ async fn script_receives_environment_variables() {
     run_post_processing(pp_ctx).await.expect("run");
 
     let content = std::fs::read_to_string(&env_dump).expect("read env dump");
-    assert!(content.contains("SCRYER_EVENT=post_import"), "content:\n{content}");
-    assert!(content.contains("SCRYER_FACET=movie"), "content:\n{content}");
-    assert!(content.contains(&format!("SCRYER_FILE_PATH={}", dest_file.display())), "content:\n{content}");
-    assert!(content.contains("SCRYER_TITLE_NAME=Env Test Movie"), "content:\n{content}");
-    assert!(content.contains("SCRYER_TITLE_ID=title-env-test"), "content:\n{content}");
+    assert!(
+        content.contains("SCRYER_EVENT=post_import"),
+        "content:\n{content}"
+    );
+    assert!(
+        content.contains("SCRYER_FACET=movie"),
+        "content:\n{content}"
+    );
+    assert!(
+        content.contains(&format!("SCRYER_FILE_PATH={}", dest_file.display())),
+        "content:\n{content}"
+    );
+    assert!(
+        content.contains("SCRYER_TITLE_NAME=Env Test Movie"),
+        "content:\n{content}"
+    );
+    assert!(
+        content.contains("SCRYER_TITLE_ID=title-env-test"),
+        "content:\n{content}"
+    );
     assert!(content.contains("SCRYER_YEAR=2024"), "content:\n{content}");
-    assert!(content.contains("SCRYER_IMDB_ID=tt9999999"), "content:\n{content}");
-    assert!(content.contains("SCRYER_TVDB_ID=12345"), "content:\n{content}");
-    assert!(content.contains("SCRYER_QUALITY=720p"), "content:\n{content}");
+    assert!(
+        content.contains("SCRYER_IMDB_ID=tt9999999"),
+        "content:\n{content}"
+    );
+    assert!(
+        content.contains("SCRYER_TVDB_ID=12345"),
+        "content:\n{content}"
+    );
+    assert!(
+        content.contains("SCRYER_QUALITY=720p"),
+        "content:\n{content}"
+    );
 }
 
 /// The script's working directory is set to the parent of the imported file.
@@ -224,7 +292,9 @@ async fn script_working_directory_is_file_parent() {
 
     // On macOS, /tmp is a symlink to /private/tmp, so canonicalize both.
     let expected = dest_dir.path().canonicalize().expect("canonicalize dest");
-    let actual = PathBuf::from(&cwd).canonicalize().expect("canonicalize cwd");
+    let actual = PathBuf::from(&cwd)
+        .canonicalize()
+        .expect("canonicalize cwd");
     assert_eq!(actual, expected);
 }
 
@@ -328,7 +398,12 @@ async fn other_facet_is_noop() {
 async fn invalid_command_records_spawn_failure() {
     let ctx = TestContext::new().await;
     // /nonexistent/binary will fail to execute inside sh -c, giving exit 127
-    set_script(&ctx, MediaFacet::Movie, "/nonexistent/binary_that_does_not_exist_12345").await;
+    set_script(
+        &ctx,
+        MediaFacet::Movie,
+        "/nonexistent/binary_that_does_not_exist_12345",
+    )
+    .await;
 
     let dest_dir = tempfile::tempdir().expect("tempdir");
     let dest_file = dest_dir.path().join("Movie.mkv");
@@ -372,9 +447,17 @@ async fn stdout_is_drained_stderr_captured_on_failure() {
         .await
         .expect("should have activity event");
     assert_eq!(event.severity, ActivitySeverity::Warning);
-    assert!(event.message.contains("stderr detail"), "message: {}", event.message);
+    assert!(
+        event.message.contains("stderr detail"),
+        "message: {}",
+        event.message
+    );
     // stdout should NOT appear in the message
-    assert!(!event.message.contains("stdout line"), "stdout should not leak: {}", event.message);
+    assert!(
+        !event.message.contains("stdout line"),
+        "stdout should not leak: {}",
+        event.message
+    );
 }
 
 /// Season and episode env vars are populated for series imports.
@@ -408,9 +491,18 @@ async fn series_env_includes_season_and_episode() {
     run_post_processing(pp_ctx).await.expect("run");
 
     let content = std::fs::read_to_string(&env_dump).expect("read env dump");
-    assert!(content.contains("SCRYER_FACET=series"), "content:\n{content}");
+    assert!(
+        content.contains("SCRYER_FACET=series"),
+        "content:\n{content}"
+    );
     assert!(content.contains("SCRYER_SEASON=3"), "content:\n{content}");
     assert!(content.contains("SCRYER_EPISODE=7"), "content:\n{content}");
-    assert!(content.contains("SCRYER_TVDB_ID=99999"), "content:\n{content}");
-    assert!(content.contains("SCRYER_QUALITY=2160p"), "content:\n{content}");
+    assert!(
+        content.contains("SCRYER_TVDB_ID=99999"),
+        "content:\n{content}"
+    );
+    assert!(
+        content.contains("SCRYER_QUALITY=2160p"),
+        "content:\n{content}"
+    );
 }

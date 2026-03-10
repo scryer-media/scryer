@@ -35,31 +35,65 @@ impl NotificationClient for WasmNotificationClient {
             event_type: event_type.to_string(),
             title: title.to_string(),
             message: message.to_string(),
-            title_name: metadata.get("title_name").and_then(|v| v.as_str()).map(String::from),
-            title_year: metadata.get("title_year").and_then(|v| v.as_i64()).map(|v| v as i32),
-            title_facet: metadata.get("title_facet").and_then(|v| v.as_str()).map(String::from),
-            poster_url: metadata.get("poster_url").and_then(|v| v.as_str()).map(String::from),
-            episode_info: metadata.get("episode_info").and_then(|v| v.as_str()).map(String::from),
-            quality: metadata.get("quality").and_then(|v| v.as_str()).map(String::from),
-            release_title: metadata.get("release_title").and_then(|v| v.as_str()).map(String::from),
-            download_client: metadata.get("download_client").and_then(|v| v.as_str()).map(String::from),
-            file_path: metadata.get("file_path").and_then(|v| v.as_str()).map(String::from),
-            health_message: metadata.get("health_message").and_then(|v| v.as_str()).map(String::from),
-            application_version: metadata.get("application_version").and_then(|v| v.as_str()).map(String::from),
+            title_name: metadata
+                .get("title_name")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            title_year: metadata
+                .get("title_year")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32),
+            title_facet: metadata
+                .get("title_facet")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            poster_url: metadata
+                .get("poster_url")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            episode_info: metadata
+                .get("episode_info")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            quality: metadata
+                .get("quality")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            release_title: metadata
+                .get("release_title")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            download_client: metadata
+                .get("download_client")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            file_path: metadata
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            health_message: metadata
+                .get("health_message")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            application_version: metadata
+                .get("application_version")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             metadata: metadata.clone(),
         };
 
-        let input = serde_json::to_string(&request)
-            .map_err(|e| AppError::Repository(format!("failed to serialize notification request: {e}")))?;
+        let input = serde_json::to_string(&request).map_err(|e| {
+            AppError::Repository(format!("failed to serialize notification request: {e}"))
+        })?;
 
         let plugin_name = self.descriptor.name.clone();
         let channel_name = self.channel_name.clone();
 
         let plugin = Arc::clone(&self.plugin);
         let output = tokio::task::spawn_blocking(move || {
-            let mut guard = plugin.lock().map_err(|e| {
-                AppError::Repository(format!("plugin mutex poisoned: {e}"))
-            })?;
+            let mut guard = plugin
+                .lock()
+                .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
             guard
                 .call::<&str, String>("send_notification", &input)
                 .map_err(|e| {
@@ -67,9 +101,7 @@ impl NotificationClient for WasmNotificationClient {
                 })
         })
         .await
-        .map_err(|e| {
-            AppError::Repository(format!("notification plugin task panicked: {e}"))
-        })??;
+        .map_err(|e| AppError::Repository(format!("notification plugin task panicked: {e}")))??;
 
         let response: PluginNotificationResponse = serde_json::from_str(&output).map_err(|e| {
             warn!(
@@ -82,7 +114,9 @@ impl NotificationClient for WasmNotificationClient {
         })?;
 
         if !response.success {
-            let err_msg = response.error.unwrap_or_else(|| "unknown error".to_string());
+            let err_msg = response
+                .error
+                .unwrap_or_else(|| "unknown error".to_string());
             warn!(
                 plugin = plugin_name.as_str(),
                 channel = channel_name.as_str(),

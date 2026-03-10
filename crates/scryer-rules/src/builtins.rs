@@ -20,10 +20,7 @@ pub(crate) fn register_builtins(engine: &mut Engine) {
             "scryer.size_gib".to_string(),
             1,
             Box::new(|params: Vec<Value>| {
-                let bytes = params
-                    .first()
-                    .and_then(|v| v.as_i64().ok())
-                    .unwrap_or(0);
+                let bytes = params.first().and_then(|v| v.as_i64().ok()).unwrap_or(0);
                 let gib = (bytes as f64) / (1024.0 * 1024.0 * 1024.0);
                 Ok(Value::from(gib))
             }),

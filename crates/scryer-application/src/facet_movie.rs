@@ -5,8 +5,8 @@ use scryer_domain::{Collection, MediaFacet, Title};
 
 use crate::facet_handler::{movie_to_hydration_result, FacetHandler, HydrationResult};
 use crate::{
-    ActivityKind, AppResult, MetadataGateway, RenameCollisionPolicy,
-    RenameMissingMetadataPolicy, RenamePlanItem,
+    ActivityKind, AppResult, MetadataGateway, RenameCollisionPolicy, RenameMissingMetadataPolicy,
+    RenamePlanItem,
 };
 
 pub struct MovieFacetHandler;

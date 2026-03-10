@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
 use scryer_domain::ExternalId;
+use serde::{Deserialize, Serialize};
 
 use crate::quality_profile::QualityProfileDecision;
 use crate::release_parser::ParsedReleaseMetadata;

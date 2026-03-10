@@ -6,13 +6,15 @@ pub(crate) async fn delete_release_decisions_older_than_query(
     days: i64,
 ) -> AppResult<u32> {
     let modifier = format!("-{days} days");
-    let result = sqlx::query(
-        "DELETE FROM release_decisions WHERE created_at < datetime('now', ?)",
-    )
-    .bind(&modifier)
-    .execute(pool)
-    .await
-    .map_err(|e| AppError::Repository(format!("housekeeping: release_decisions cleanup failed: {e}")))?;
+    let result = sqlx::query("DELETE FROM release_decisions WHERE created_at < datetime('now', ?)")
+        .bind(&modifier)
+        .execute(pool)
+        .await
+        .map_err(|e| {
+            AppError::Repository(format!(
+                "housekeeping: release_decisions cleanup failed: {e}"
+            ))
+        })?;
 
     Ok(result.rows_affected() as u32)
 }
@@ -54,13 +56,13 @@ pub(crate) async fn delete_history_events_older_than_query(
     days: i64,
 ) -> AppResult<u32> {
     let modifier = format!("-{days} days");
-    let result = sqlx::query(
-        "DELETE FROM history_events WHERE created_at < datetime('now', ?)",
-    )
-    .bind(&modifier)
-    .execute(pool)
-    .await
-    .map_err(|e| AppError::Repository(format!("housekeeping: history_events cleanup failed: {e}")))?;
+    let result = sqlx::query("DELETE FROM history_events WHERE created_at < datetime('now', ?)")
+        .bind(&modifier)
+        .execute(pool)
+        .await
+        .map_err(|e| {
+            AppError::Repository(format!("housekeeping: history_events cleanup failed: {e}"))
+        })?;
 
     Ok(result.rows_affected() as u32)
 }
@@ -101,10 +103,9 @@ pub(crate) async fn delete_media_files_by_ids_query(
         query = query.bind(id);
     }
 
-    let result = query
-        .execute(pool)
-        .await
-        .map_err(|e| AppError::Repository(format!("housekeeping: delete media files failed: {e}")))?;
+    let result = query.execute(pool).await.map_err(|e| {
+        AppError::Repository(format!("housekeeping: delete media files failed: {e}"))
+    })?;
 
     Ok(result.rows_affected() as u32)
 }

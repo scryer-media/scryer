@@ -46,12 +46,7 @@ fn scryer_completed(
 
 /// Add a minimal movie Title to the DB, tagging `media_root` so import
 /// uses it as the destination library folder without needing settings.
-async fn add_movie_title(
-    ctx: &TestContext,
-    id: &str,
-    name: &str,
-    media_root: &str,
-) -> Title {
+async fn add_movie_title(ctx: &TestContext, id: &str, name: &str, media_root: &str) -> Title {
     let title = Title {
         id: id.to_string(),
         name: name.to_string(),
@@ -156,9 +151,7 @@ async fn import_returns_unmatched_when_title_not_found() {
         category: None,
         size_bytes: None,
         completed_at: None,
-        parameters: vec![
-            ("*scryer_title_id".to_string(), "nonexistent-id".to_string()),
-        ],
+        parameters: vec![("*scryer_title_id".to_string(), "nonexistent-id".to_string())],
     };
 
     let result = import_completed_download(&app, &user, &completed)
@@ -166,7 +159,10 @@ async fn import_returns_unmatched_when_title_not_found() {
         .expect("import_completed_download");
 
     assert_eq!(result.decision, ImportDecision::Unmatched);
-    assert_eq!(result.skip_reason, Some(ImportSkipReason::UnresolvedIdentity));
+    assert_eq!(
+        result.skip_reason,
+        Some(ImportSkipReason::UnresolvedIdentity)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -192,8 +188,12 @@ async fn import_fails_when_no_video_files_in_dest_dir() {
     )
     .await;
 
-    let completed =
-        scryer_completed("dl-no-video", source_dir.path().to_str().unwrap(), &title.id, "movie");
+    let completed = scryer_completed(
+        "dl-no-video",
+        source_dir.path().to_str().unwrap(),
+        &title.id,
+        "movie",
+    );
 
     let result = import_completed_download(&app, &user, &completed)
         .await
@@ -231,15 +231,26 @@ async fn import_movie_succeeds_and_copies_file() {
     )
     .await;
 
-    let completed =
-        scryer_completed("dl-movie-1", source_dir.path().to_str().unwrap(), &title.id, "movie");
+    let completed = scryer_completed(
+        "dl-movie-1",
+        source_dir.path().to_str().unwrap(),
+        &title.id,
+        "movie",
+    );
 
     let result = import_completed_download(&app, &user, &completed)
         .await
         .expect("import_completed_download");
 
-    assert_eq!(result.decision, ImportDecision::Imported, "expected Imported");
-    assert!(result.dest_path.is_some(), "dest_path should be set after import");
+    assert_eq!(
+        result.decision,
+        ImportDecision::Imported,
+        "expected Imported"
+    );
+    assert!(
+        result.dest_path.is_some(),
+        "dest_path should be set after import"
+    );
 
     // The imported file must physically exist.
     let dest_path = result.dest_path.unwrap();
@@ -277,8 +288,12 @@ async fn import_movie_second_attempt_is_deduped() {
     )
     .await;
 
-    let completed =
-        scryer_completed("dl-dedup-2", source_dir.path().to_str().unwrap(), &title.id, "movie");
+    let completed = scryer_completed(
+        "dl-dedup-2",
+        source_dir.path().to_str().unwrap(),
+        &title.id,
+        "movie",
+    );
 
     // First import — should succeed.
     let first = import_completed_download(&app, &user, &completed)

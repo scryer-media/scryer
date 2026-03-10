@@ -98,14 +98,12 @@ pub struct EmbeddedMigrationDescriptor {
     pub checksum: String,
 }
 
-#[derive(Clone, Copy, Debug)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub enum MigrationMode {
     ValidateOnly,
     #[default]
     Apply,
 }
-
 
 pub(crate) fn sqlite_url_with_create(path: &str) -> String {
     if path.starts_with("sqlite:") {

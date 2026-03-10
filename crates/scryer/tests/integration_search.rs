@@ -6,7 +6,7 @@ use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, ResponseTemplate};
 
 use common::{load_fixture, TestContext};
-use scryer_application::{IndexerClient, IndexerPluginProvider, MetadataGateway, SearchMode};
+use scryer_application::{IndexerClient, IndexerPluginProvider, SearchMode};
 
 /// Create an IndexerClient backed by the built-in nzbgeek WASM plugin,
 /// configured to talk to the given wiremock URI.
@@ -71,7 +71,10 @@ async fn nzbgeek_search_movie_by_category() {
         .results;
 
     assert_eq!(results.len(), 2);
-    assert!(results[0].title.contains("2160p"), "first result should be 4K");
+    assert!(
+        results[0].title.contains("2160p"),
+        "first result should be 4K"
+    );
 }
 
 #[tokio::test]
@@ -212,7 +215,11 @@ async fn nzbgeek_search_tv_by_anime_category() {
         )
         .await;
 
-    assert!(results.is_ok(), "anime category should use tvsearch: {:?}", results.err());
+    assert!(
+        results.is_ok(),
+        "anime category should use tvsearch: {:?}",
+        results.err()
+    );
 }
 
 #[tokio::test]
@@ -277,7 +284,11 @@ async fn nzbgeek_search_infers_movie_from_imdb_id() {
         )
         .await;
 
-    assert!(results.is_ok(), "should infer movie from imdb_id: {:?}", results.err());
+    assert!(
+        results.is_ok(),
+        "should infer movie from imdb_id: {:?}",
+        results.err()
+    );
 }
 
 #[tokio::test]
@@ -307,7 +318,11 @@ async fn nzbgeek_search_infers_tvsearch_from_tvdb_id() {
         )
         .await;
 
-    assert!(results.is_ok(), "should infer tvsearch from tvdb_id: {:?}", results.err());
+    assert!(
+        results.is_ok(),
+        "should infer tvsearch from tvdb_id: {:?}",
+        results.err()
+    );
 }
 
 #[tokio::test]
@@ -338,7 +353,11 @@ async fn nzbgeek_search_generic_without_ids() {
         )
         .await;
 
-    assert!(results.is_ok(), "generic search should work: {:?}", results.err());
+    assert!(
+        results.is_ok(),
+        "generic search should work: {:?}",
+        results.err()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -627,7 +646,10 @@ async fn nzbgeek_search_extracts_metadata_attributes() {
     assert_eq!(result.thumbs_up, Some(42), "thumbsup should be parsed");
     assert_eq!(result.thumbs_down, Some(3), "thumbsdown should be parsed");
     assert_eq!(result.nzbgeek_grabs, Some(128), "grabs should be parsed");
-    assert!(result.nzbgeek_languages.is_some(), "languages should be parsed");
+    assert!(
+        result.nzbgeek_languages.is_some(),
+        "languages should be parsed"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -671,16 +693,14 @@ async fn smg_search_tvdb_rich() {
     Mock::given(method("GET"))
         .and(path("/graphql"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(load_fixture("smg/search_tvdb_rich.json")),
+            ResponseTemplate::new(200).set_body_string(load_fixture("smg/search_tvdb_rich.json")),
         )
         .mount(&ctx.smg_server)
         .await;
     Mock::given(method("POST"))
         .and(path("/graphql"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(load_fixture("smg/search_tvdb_rich.json")),
+            ResponseTemplate::new(200).set_body_string(load_fixture("smg/search_tvdb_rich.json")),
         )
         .mount(&ctx.smg_server)
         .await;
@@ -695,8 +715,14 @@ async fn smg_search_tvdb_rich() {
 
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].name, "Test Movie Title");
-    assert!(results[0].poster_url.is_some(), "rich search should have poster");
-    assert!(results[0].overview.is_some(), "rich search should have overview");
+    assert!(
+        results[0].poster_url.is_some(),
+        "rich search should have poster"
+    );
+    assert!(
+        results[0].overview.is_some(),
+        "rich search should have overview"
+    );
 }
 
 #[tokio::test]

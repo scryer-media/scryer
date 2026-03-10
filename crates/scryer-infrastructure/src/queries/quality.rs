@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 
 use chrono::Utc;
-use scryer_application::{AppError, AppResult, QualityProfile, QualityProfileCriteria, ScoringConfig};
+use scryer_application::{
+    AppError, AppResult, QualityProfile, QualityProfileCriteria, ScoringConfig,
+};
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
 pub(crate) async fn list_quality_profiles_query(
@@ -16,15 +18,14 @@ pub(crate) async fn list_quality_profiles_query(
         ));
     }
 
-    let normalized_scope_id = scope_id
-        .and_then(|value| {
-            let value = value.trim().to_string();
-            if value.is_empty() {
-                None
-            } else {
-                Some(value)
-            }
-        });
+    let normalized_scope_id = scope_id.and_then(|value| {
+        let value = value.trim().to_string();
+        if value.is_empty() {
+            None
+        } else {
+            Some(value)
+        }
+    });
 
     let statement = if normalized_scope_id.is_some() {
         "SELECT id, name, scope, scope_id, archival_quality,
@@ -88,9 +89,7 @@ pub(crate) async fn list_quality_profiles_query(
         let allow_upgrades: i64 = row
             .try_get("allow_upgrades")
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        let prefer_dual_audio: i64 = row
-            .try_get("prefer_dual_audio")
-            .unwrap_or(0);
+        let prefer_dual_audio: i64 = row.try_get("prefer_dual_audio").unwrap_or(0);
         let required_audio_languages_json: String = row
             .try_get("required_audio_languages")
             .unwrap_or_else(|_| "[]".to_string());
@@ -197,15 +196,14 @@ pub(crate) async fn replace_quality_profiles_query(
         ));
     }
 
-    let normalized_scope_id = scope_id
-        .and_then(|value| {
-            let value = value.trim().to_string();
-            if value.is_empty() {
-                None
-            } else {
-                Some(value)
-            }
-        });
+    let normalized_scope_id = scope_id.and_then(|value| {
+        let value = value.trim().to_string();
+        if value.is_empty() {
+            None
+        } else {
+            Some(value)
+        }
+    });
 
     let now = Utc::now().to_rfc3339();
     let mut tx = pool
@@ -257,15 +255,14 @@ pub(crate) async fn upsert_quality_profiles_query(
         ));
     }
 
-    let normalized_scope_id = scope_id
-        .and_then(|value| {
-            let value = value.trim().to_string();
-            if value.is_empty() {
-                None
-            } else {
-                Some(value)
-            }
-        });
+    let normalized_scope_id = scope_id.and_then(|value| {
+        let value = value.trim().to_string();
+        if value.is_empty() {
+            None
+        } else {
+            Some(value)
+        }
+    });
 
     let now = Utc::now().to_rfc3339();
     let mut tx = pool
@@ -318,8 +315,8 @@ async fn upsert_quality_profile_query(
 
     clear_quality_profile_value_rows(tx, &id).await?;
 
-    let required_audio_languages_json =
-        serde_json::to_string(&criteria.required_audio_languages).unwrap_or_else(|_| "[]".to_string());
+    let required_audio_languages_json = serde_json::to_string(&criteria.required_audio_languages)
+        .unwrap_or_else(|_| "[]".to_string());
 
     let scoring_config = ScoringConfig {
         scoring_persona: criteria.scoring_persona.clone(),

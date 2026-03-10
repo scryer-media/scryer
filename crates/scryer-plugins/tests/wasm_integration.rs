@@ -41,7 +41,10 @@ fn test_indexer_creates_client() {
     let provider = scryer_plugins::load_indexer_plugins(&fixtures_dir).unwrap();
 
     let client = provider.client_for_provider(&test_config("test"));
-    assert!(client.is_some(), "should create a client for provider_type 'test'");
+    assert!(
+        client.is_some(),
+        "should create a client for provider_type 'test'"
+    );
 }
 
 #[test]
@@ -49,7 +52,9 @@ fn unknown_provider_returns_none() {
     let fixtures_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
     let provider = scryer_plugins::load_indexer_plugins(&fixtures_dir).unwrap();
 
-    assert!(provider.client_for_provider(&test_config("nonexistent")).is_none());
+    assert!(provider
+        .client_for_provider(&test_config("nonexistent"))
+        .is_none());
 }
 
 #[tokio::test]
@@ -59,7 +64,7 @@ async fn test_indexer_search() {
 
     let client = provider.client_for_provider(&test_config("test")).unwrap();
 
-    use scryer_application::{IndexerClient, SearchMode};
+    use scryer_application::SearchMode;
     let results = client
         .search(
             "Dune Part Two".to_string(),
@@ -118,8 +123,7 @@ fn external_overrides_builtin_same_provider() {
     // Load test fixture (provider_type = "test") as external, then try
     // loading it again as builtin — builtin should be skipped.
     let fixtures_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
-    let wasm_bytes =
-        std::fs::read(fixtures_dir.join("test-indexer/plugin.wasm")).unwrap();
+    let wasm_bytes = std::fs::read(fixtures_dir.join("test-indexer/plugin.wasm")).unwrap();
 
     let provider = scryer_plugins::WasmIndexerPluginProvider::empty()
         .with_external_bytes(&wasm_bytes)
@@ -232,8 +236,14 @@ fn dynamic_reload_plugins_disables_builtin() {
         .unwrap();
 
     let types = dynamic.available_provider_types();
-    assert!(!types.contains(&"nzbgeek".to_string()), "nzbgeek should be disabled");
-    assert!(types.contains(&"newznab".to_string()), "newznab should remain");
+    assert!(
+        !types.contains(&"nzbgeek".to_string()),
+        "nzbgeek should be disabled"
+    );
+    assert!(
+        types.contains(&"newznab".to_string()),
+        "newznab should remain"
+    );
 }
 
 #[test]
@@ -245,7 +255,10 @@ fn dynamic_client_cache_hit() {
     let config = test_config("nzbgeek");
     let c1 = dynamic.client_for_provider(&config).unwrap();
     let c2 = dynamic.client_for_provider(&config).unwrap();
-    assert!(Arc::ptr_eq(&c1, &c2), "same config should return cached client");
+    assert!(
+        Arc::ptr_eq(&c1, &c2),
+        "same config should return cached client"
+    );
 }
 
 #[test]
@@ -275,7 +288,9 @@ fn builtin_with_valid_descriptor_loads() {
         .with_builtin(scryer_plugins::builtins::NZBGEEK_WASM);
 
     assert!(
-        provider.available_provider_types().contains(&"nzbgeek".to_string()),
+        provider
+            .available_provider_types()
+            .contains(&"nzbgeek".to_string()),
         "NZBGEEK_WASM should register as 'nzbgeek'"
     );
 }

@@ -3,7 +3,10 @@ use scryer_domain::{Entitlement, NewDownloadClientConfig, NewIndexerConfig};
 use serde_json::{json, Map, Value};
 
 use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_error};
-use crate::mappers::{from_download_client_config, from_housekeeping_report, from_indexer_config, from_rss_sync_report};
+use crate::mappers::{
+    from_download_client_config, from_housekeeping_report, from_indexer_config,
+    from_rss_sync_report,
+};
 use crate::types::*;
 
 const SETTINGS_SCOPE_SYSTEM: &str = "system";
@@ -23,8 +26,7 @@ fn next_nzbget_routing_priority(routing_by_client: &Map<String, Value>) -> i64 {
         .values()
         .filter_map(|value| value.get("priority"))
         .filter_map(parse_nzbget_priority)
-        .max()
-        ;
+        .max();
 
     match max_explicit_priority {
         Some(max_priority) => max_priority + 1,
@@ -252,6 +254,7 @@ impl ConfigMutations {
         ctx: &Context<'_>,
         input: TestDownloadClientConnectionInput,
     ) -> GqlResult<bool> {
+        let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         if !actor.has_entitlement(&Entitlement::ManageConfig) {
             return Err(Error::new("insufficient entitlements"));
@@ -268,9 +271,8 @@ impl ConfigMutations {
         let config: Value = if config_json.is_empty() {
             json!({})
         } else {
-            serde_json::from_str(&config_json).map_err(|error| {
-                Error::new(format!("invalid client config_json: {error}"))
-            })?
+            serde_json::from_str(&config_json)
+                .map_err(|error| Error::new(format!("invalid client config_json: {error}")))?
         };
 
         match client_type.as_str() {
@@ -312,9 +314,37 @@ impl ConfigMutations {
                     .map_err(to_gql_error)?;
             }
             _ => {
-                return Err(Error::new(format!(
-                    "test connection is not supported for client type '{client_type}'"
-                )));
+                let provider = app
+                    .services
+                    .download_client_plugin_provider
+                    .as_ref()
+                    .ok_or_else(|| {
+                        Error::new(format!(
+                            "test connection is not supported for client type '{client_type}'"
+                        ))
+                    })?;
+                let plugin_config = scryer_domain::DownloadClientConfig {
+                    id: "test-download-client".to_string(),
+                    name: "Test Download Client".to_string(),
+                    client_type: client_type.clone(),
+                    base_url: Some(base_url),
+                    config_json: serde_json::to_string(&config).map_err(|error| {
+                        Error::new(format!("invalid client config_json: {error}"))
+                    })?,
+                    client_priority: 0,
+                    is_enabled: true,
+                    status: "unknown".to_string(),
+                    last_error: None,
+                    last_seen_at: None,
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                };
+                let client = provider.client_for_config(&plugin_config).ok_or_else(|| {
+                    Error::new(format!(
+                        "test connection is not supported for client type '{client_type}'"
+                    ))
+                })?;
+                client.test_connection().await.map_err(to_gql_error)?;
             }
         }
 

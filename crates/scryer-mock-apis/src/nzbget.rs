@@ -51,8 +51,7 @@ async fn jsonrpc_handler(
         }
     };
 
-    let response: Value =
-        serde_json::from_str(&fixture).expect("fixture should be valid JSON");
+    let response: Value = serde_json::from_str(&fixture).expect("fixture should be valid JSON");
     Json(response)
 }
 

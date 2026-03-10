@@ -9,11 +9,7 @@ use common::{load_fixture, TestContext};
 /// Execute a GraphQL operation directly against the schema, without going
 /// through the HTTP test server.  This gives full control over what data
 /// (e.g. `User`) is attached to the request.
-async fn schema_exec(
-    ctx: &TestContext,
-    query: &str,
-    user: Option<scryer_domain::User>,
-) -> Value {
+async fn schema_exec(ctx: &TestContext, query: &str, user: Option<scryer_domain::User>) -> Value {
     let mut req = async_graphql::Request::new(query);
     if let Some(u) = user {
         req = req.data(u);
@@ -66,6 +62,7 @@ async fn add_test_title(ctx: &TestContext, name: &str, facet: &str) -> String {
         .to_string()
 }
 
+#[allow(dead_code)]
 async fn mount_smg_mocks(ctx: &TestContext, fixture_path: &str) {
     let fixture = load_fixture(fixture_path);
     Mock::given(method("GET"))
@@ -130,10 +127,7 @@ async fn graphql_introspection_lists_title_fields() {
     let fields = body["data"]["__type"]["fields"]
         .as_array()
         .expect("should have fields");
-    let names: Vec<&str> = fields
-        .iter()
-        .filter_map(|f| f["name"].as_str())
-        .collect();
+    let names: Vec<&str> = fields.iter().filter_map(|f| f["name"].as_str()).collect();
     assert!(names.contains(&"id"), "TitlePayload should have id field");
     assert!(
         names.contains(&"name"),
@@ -357,10 +351,7 @@ async fn graphql_dev_auto_login() {
         body["data"]["devAutoLogin"]["token"].is_string(),
         "should return token"
     );
-    assert_eq!(
-        body["data"]["devAutoLogin"]["user"]["username"],
-        "admin"
-    );
+    assert_eq!(body["data"]["devAutoLogin"]["user"]["username"], "admin");
 }
 
 // ---------------------------------------------------------------------------
@@ -383,7 +374,12 @@ async fn graphql_download_queue_empty() {
 #[tokio::test]
 async fn graphql_system_health() {
     let ctx = TestContext::new().await;
-    let body = gql(&ctx, "{ systemHealth { serviceReady totalTitles } }", json!({})).await;
+    let body = gql(
+        &ctx,
+        "{ systemHealth { serviceReady totalTitles } }",
+        json!({}),
+    )
+    .await;
     assert_no_errors(&body);
     assert!(
         body["data"]["systemHealth"]["serviceReady"].is_boolean(),
@@ -398,12 +394,7 @@ async fn graphql_system_health() {
 #[tokio::test]
 async fn graphql_activity_events_empty() {
     let ctx = TestContext::new().await;
-    let body = gql(
-        &ctx,
-        "{ activityEvents { id kind severity } }",
-        json!({}),
-    )
-    .await;
+    let body = gql(&ctx, "{ activityEvents { id kind severity } }", json!({})).await;
     assert_no_errors(&body);
     assert!(body["data"]["activityEvents"].is_array());
 }
@@ -411,12 +402,7 @@ async fn graphql_activity_events_empty() {
 #[tokio::test]
 async fn graphql_title_events_empty() {
     let ctx = TestContext::new().await;
-    let body = gql(
-        &ctx,
-        r#"{ titleEvents { id eventType } }"#,
-        json!({}),
-    )
-    .await;
+    let body = gql(&ctx, r#"{ titleEvents { id eventType } }"#, json!({})).await;
     assert_no_errors(&body);
     assert!(body["data"]["titleEvents"].is_array());
 }
@@ -534,12 +520,7 @@ async fn graphql_indexers_empty() {
 #[tokio::test]
 async fn graphql_download_client_configs_empty() {
     let ctx = TestContext::new().await;
-    let body = gql(
-        &ctx,
-        "{ downloadClientConfigs { id name } }",
-        json!({}),
-    )
-    .await;
+    let body = gql(&ctx, "{ downloadClientConfigs { id name } }", json!({})).await;
     assert_no_errors(&body);
     assert!(body["data"]["downloadClientConfigs"].is_array());
 }
@@ -551,12 +532,7 @@ async fn graphql_download_client_configs_empty() {
 #[tokio::test]
 async fn graphql_wanted_items_empty() {
     let ctx = TestContext::new().await;
-    let body = gql(
-        &ctx,
-        "{ wantedItems { items { id } total } }",
-        json!({}),
-    )
-    .await;
+    let body = gql(&ctx, "{ wantedItems { items { id } total } }", json!({})).await;
     assert_no_errors(&body);
     assert_eq!(
         body["data"]["wantedItems"]["total"], 0,

@@ -46,13 +46,11 @@ impl AppUseCase {
             updated_at: now,
         };
 
-        let client = provider
-            .client_for_provider(&temp_config)
-            .ok_or_else(|| {
-                AppError::Validation(format!(
-                    "no indexer plugin available for provider type '{provider_type}'"
-                ))
-            })?;
+        let client = provider.client_for_provider(&temp_config).ok_or_else(|| {
+            AppError::Validation(format!(
+                "no indexer plugin available for provider type '{provider_type}'"
+            ))
+        })?;
 
         // Perform a minimal search to validate the full pipeline
         client
@@ -69,9 +67,7 @@ impl AppUseCase {
                 None,
             )
             .await
-            .map_err(|e| {
-                AppError::Repository(format!("indexer connection test failed: {e}"))
-            })?;
+            .map_err(|e| AppError::Repository(format!("indexer connection test failed: {e}")))?;
 
         Ok(())
     }

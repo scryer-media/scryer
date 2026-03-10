@@ -75,7 +75,10 @@ impl SqliteServices {
     pub async fn set_encryption_key(&self, key: crate::encryption::EncryptionKey) -> AppResult<()> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
-            .send(DbCommand::SetEncryptionKey { key, reply: reply_tx })
+            .send(DbCommand::SetEncryptionKey {
+                key,
+                reply: reply_tx,
+            })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
 
@@ -556,10 +559,7 @@ impl SqliteServices {
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
-    pub async fn delete_quality_profile(
-        &self,
-        profile_id: impl Into<String>,
-    ) -> AppResult<()> {
+    pub async fn delete_quality_profile(&self, profile_id: impl Into<String>) -> AppResult<()> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
             .send(DbCommand::DeleteQualityProfile {
@@ -634,9 +634,7 @@ impl SqliteServices {
     pub async fn list_pending_imports(&self) -> AppResult<Vec<ImportRecord>> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
-            .send(DbCommand::ListPendingImports {
-                reply: reply_tx,
-            })
+            .send(DbCommand::ListPendingImports { reply: reply_tx })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
 
@@ -678,11 +676,7 @@ impl SqliteServices {
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
-    pub async fn link_file_to_episode(
-        &self,
-        file_id: &str,
-        episode_id: &str,
-    ) -> AppResult<()> {
+    pub async fn link_file_to_episode(&self, file_id: &str, episode_id: &str) -> AppResult<()> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
             .send(DbCommand::LinkFileToEpisode {
@@ -898,10 +892,7 @@ impl SqliteServices {
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
-    pub async fn delete_wanted_items_for_title(
-        &self,
-        title_id: &str,
-    ) -> AppResult<()> {
+    pub async fn delete_wanted_items_for_title(&self, title_id: &str) -> AppResult<()> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
             .send(DbCommand::DeleteWantedItemsForTitle {
@@ -1233,9 +1224,7 @@ impl SqliteServices {
     ) -> AppResult<Vec<scryer_application::PendingRelease>> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
-            .send(DbCommand::ListWaitingPendingReleases {
-                reply: reply_tx,
-            })
+            .send(DbCommand::ListWaitingPendingReleases { reply: reply_tx })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
 
@@ -1281,5 +1270,4 @@ impl SqliteServices {
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
-
 }

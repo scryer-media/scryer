@@ -336,7 +336,11 @@ impl UserRulesEvaluator {
     ///
     /// Per-rule runtime errors are collected in `EvalResult::errors` rather
     /// than aborting the entire evaluation.
-    pub fn evaluate(&mut self, input: &UserRuleInput, facet: &str) -> Result<EvalResult, RulesError> {
+    pub fn evaluate(
+        &mut self,
+        input: &UserRuleInput,
+        facet: &str,
+    ) -> Result<EvalResult, RulesError> {
         let mut result = EvalResult {
             entries: Vec::new(),
             errors: Vec::new(),
@@ -410,12 +414,20 @@ impl UserRulesEvaluator {
                             value = n,
                             "score delta out of i32 range, clamping"
                         );
-                        if n > 0 { i32::MAX } else { i32::MIN }
+                        if n > 0 {
+                            i32::MAX
+                        } else {
+                            i32::MIN
+                        }
                     }
                 }
             } else if let Ok(f) = val.as_f64() {
                 if f.is_nan() || f.is_infinite() {
-                    warn!(rule_id, code = code.as_str(), "score delta is NaN/Inf, skipping");
+                    warn!(
+                        rule_id,
+                        code = code.as_str(),
+                        "score delta is NaN/Inf, skipping"
+                    );
                     continue;
                 }
                 f.clamp(i32::MIN as f64, i32::MAX as f64) as i32
@@ -535,8 +547,14 @@ mod tests {
 
         let result = evaluator.evaluate(&input, "movie").unwrap();
         assert_eq!(result.entries.len(), 2);
-        assert!(result.entries.iter().any(|e| e.code == "bonus_a" && e.delta == 100));
-        assert!(result.entries.iter().any(|e| e.code == "bonus_b" && e.delta == 200));
+        assert!(result
+            .entries
+            .iter()
+            .any(|e| e.code == "bonus_a" && e.delta == 100));
+        assert!(result
+            .entries
+            .iter()
+            .any(|e| e.code == "bonus_b" && e.delta == 200));
     }
 
     #[test]
@@ -706,13 +724,17 @@ mod tests {
     fn rewrite_does_not_duplicate_import() {
         let source = "package scryer.rules.user.old\nimport rego.v1\nscore_entry[\"x\"] := 1\n";
         let rewritten = rewrite_package_declaration(source, "r1234");
-        let import_count = rewritten.lines().filter(|l| l.trim() == "import rego.v1").count();
+        let import_count = rewritten
+            .lines()
+            .filter(|l| l.trim() == "import rego.v1")
+            .count();
         assert_eq!(import_count, 1);
     }
 
     #[test]
     fn strip_editor_source_removes_boilerplate() {
-        let stored = "package scryer.rules.user.rabc\nimport rego.v1\n\nscore_entry[\"bonus\"] := 100\n";
+        let stored =
+            "package scryer.rules.user.rabc\nimport rego.v1\n\nscore_entry[\"bonus\"] := 100\n";
         let stripped = strip_editor_source(stored);
         assert!(!stripped.contains("package "));
         assert!(!stripped.contains("import rego.v1"));
@@ -721,7 +743,8 @@ mod tests {
 
     #[test]
     fn strip_then_rewrite_roundtrip() {
-        let stored = "package scryer.rules.user.rabc\nimport rego.v1\n\nscore_entry[\"bonus\"] := 100\n";
+        let stored =
+            "package scryer.rules.user.rabc\nimport rego.v1\n\nscore_entry[\"bonus\"] := 100\n";
         let stripped = strip_editor_source(stored);
         let restored = rewrite_package_declaration(&stripped, "rabc");
         assert!(restored.contains("package scryer.rules.user.rabc"));
@@ -776,10 +799,10 @@ score_entry["nzbgeek_thumbs_down"] := penalty if {
         let mut evaluator = engine.evaluator();
         let mut input = test_input();
         // thumbs_down = 8 → penalty = -2400 - ((8-5).min(10) * 300) = -2400 - 900 = -3300
-        input.release.extra.insert(
-            "thumbs_down".to_string(),
-            serde_json::Value::from(8),
-        );
+        input
+            .release
+            .extra
+            .insert("thumbs_down".to_string(), serde_json::Value::from(8));
         let result = evaluator.evaluate(&input, "movie").unwrap();
         assert_eq!(result.entries.len(), 1);
         assert_eq!(result.entries[0].code, "nzbgeek_thumbs_down");
@@ -859,11 +882,7 @@ score_entry["nzbgeek_english_confirmed"] := 200 if {
             profile: ProfileDoc {
                 id: "4k".to_string(),
                 name: "4K".to_string(),
-                quality_tiers: vec![
-                    "2160P".to_string(),
-                    "1080P".to_string(),
-                    "720P".to_string(),
-                ],
+                quality_tiers: vec!["2160P".to_string(), "1080P".to_string(), "720P".to_string()],
                 archival_quality: Some("2160P".to_string()),
                 allow_unknown_quality: false,
                 source_allowlist: vec![],

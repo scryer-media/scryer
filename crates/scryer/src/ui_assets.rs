@@ -83,9 +83,15 @@ pub(crate) async fn serve_embedded_ui(request_path: &str, head_only: bool) -> Re
             let content_len = bytes.len().to_string();
             let response = Response::builder()
                 .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, infer_content_type(Path::new(relative_path)))
+                .header(
+                    header::CONTENT_TYPE,
+                    infer_content_type(Path::new(relative_path)),
+                )
                 .header(header::CONTENT_LENGTH, &content_len)
-                .header(header::CACHE_CONTROL, cache_control_for_asset(relative_path))
+                .header(
+                    header::CACHE_CONTROL,
+                    cache_control_for_asset(relative_path),
+                )
                 .body(if head_only {
                     Body::empty()
                 } else {
@@ -141,7 +147,11 @@ pub(crate) async fn serve_embedded_index(head_only: bool) -> Response {
     }
 }
 
-pub(crate) async fn serve_ui_path(dist_dir: &Path, request_path: &str, head_only: bool) -> Response {
+pub(crate) async fn serve_ui_path(
+    dist_dir: &Path,
+    request_path: &str,
+    head_only: bool,
+) -> Response {
     if !dist_dir.exists() {
         return index_page().await.into_response();
     }

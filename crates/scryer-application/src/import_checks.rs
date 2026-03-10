@@ -4,9 +4,9 @@
 //! `run_import_checks` executes them in order and short-circuits on the first
 //! `Reject`.
 
-use std::path::Path;
 #[cfg(unix)]
 use nix::libc;
+use std::path::Path;
 
 use crate::release_parser::ParsedReleaseMetadata;
 use crate::types::TitleMediaFile;
@@ -33,6 +33,10 @@ pub struct ImportCheckContext<'a> {
     pub parsed: &'a ParsedReleaseMetadata,
     #[allow(dead_code)]
     pub existing_files: &'a [TitleMediaFile],
+}
+
+fn to_u64<T: Into<u64>>(value: T) -> u64 {
+    value.into()
 }
 
 // ── Individual checks ────────────────────────────────────────────────────────
@@ -170,7 +174,7 @@ pub fn check_disk_space(ctx: &ImportCheckContext<'_>) -> ImportVerdict {
             let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
             let ret = unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) };
             if ret == 0 {
-                let available = stat.f_bavail as u64 * stat.f_frsize as u64;
+                let available = to_u64(stat.f_bavail) * to_u64(stat.f_frsize);
                 let required = ctx.source_size + 500 * 1024 * 1024;
                 if available < required {
                     return ImportVerdict::Reject {

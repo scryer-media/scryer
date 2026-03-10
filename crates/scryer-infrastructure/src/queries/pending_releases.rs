@@ -88,15 +88,13 @@ pub(crate) async fn update_pending_release_status_query(
     status: &str,
     grabbed_at: Option<&str>,
 ) -> AppResult<()> {
-    sqlx::query(
-        "UPDATE pending_releases SET status = ?, grabbed_at = ? WHERE id = ?",
-    )
-    .bind(status)
-    .bind(grabbed_at)
-    .bind(id)
-    .execute(pool)
-    .await
-    .map_err(|err| AppError::Repository(err.to_string()))?;
+    sqlx::query("UPDATE pending_releases SET status = ?, grabbed_at = ? WHERE id = ?")
+        .bind(status)
+        .bind(grabbed_at)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
 
     Ok(())
 }
@@ -165,19 +163,35 @@ pub(crate) async fn get_pending_release_query(
 
 fn row_to_pending_release(row: &SqliteRow) -> AppResult<PendingRelease> {
     Ok(PendingRelease {
-        id: row.try_get("id").map_err(|e| AppError::Repository(e.to_string()))?,
-        wanted_item_id: row.try_get("wanted_item_id").map_err(|e| AppError::Repository(e.to_string()))?,
-        title_id: row.try_get("title_id").map_err(|e| AppError::Repository(e.to_string()))?,
-        release_title: row.try_get("release_title").map_err(|e| AppError::Repository(e.to_string()))?,
+        id: row
+            .try_get("id")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
+        wanted_item_id: row
+            .try_get("wanted_item_id")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
+        title_id: row
+            .try_get("title_id")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
+        release_title: row
+            .try_get("release_title")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
         release_url: row.try_get("release_url").unwrap_or(None),
         release_size_bytes: row.try_get("release_size_bytes").unwrap_or(None),
-        release_score: row.try_get("release_score").map_err(|e| AppError::Repository(e.to_string()))?,
+        release_score: row
+            .try_get("release_score")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
         scoring_log_json: row.try_get("scoring_log_json").unwrap_or(None),
         indexer_source: row.try_get("indexer_source").unwrap_or(None),
         release_guid: row.try_get("release_guid").unwrap_or(None),
-        added_at: row.try_get("added_at").map_err(|e| AppError::Repository(e.to_string()))?,
-        delay_until: row.try_get("delay_until").map_err(|e| AppError::Repository(e.to_string()))?,
-        status: row.try_get("status").map_err(|e| AppError::Repository(e.to_string()))?,
+        added_at: row
+            .try_get("added_at")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
+        delay_until: row
+            .try_get("delay_until")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
+        status: row
+            .try_get("status")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
         grabbed_at: row.try_get("grabbed_at").unwrap_or(None),
     })
 }

@@ -2,8 +2,10 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
 use chrono::{DateTime, Utc};
 use reqwest::Client;
-use scryer_application::{AppError, AppResult, DownloadClient, DownloadGrabResult};
-use scryer_domain::{CompletedDownload, DownloadQueueItem, DownloadQueueState, Title};
+use scryer_application::{
+    AppError, AppResult, DownloadClient, DownloadClientAddRequest, DownloadGrabResult,
+};
+use scryer_domain::{CompletedDownload, DownloadQueueItem, DownloadQueueState};
 use serde_json::{json, Value};
 use tracing::debug;
 
@@ -102,10 +104,9 @@ impl WeaverDownloadClient {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response
-                .text()
-                .await
-                .map_err(|err| AppError::Repository(format!("nzb download response read failed: {err}")))?;
+            let body = response.text().await.map_err(|err| {
+                AppError::Repository(format!("nzb download response read failed: {err}"))
+            })?;
             let preview: String = body.chars().take(300).collect();
             return Err(AppError::Repository(format!(
                 "nzb download failed with status {status}: {preview}"
@@ -219,14 +220,8 @@ pub(crate) fn weaver_job_to_queue_item(job: &Value) -> Option<DownloadQueueItem>
         None
     };
 
-    let progress = job
-        .get("progress")
-        .and_then(Value::as_f64)
-        .unwrap_or(0.0);
-    let total_bytes = job
-        .get("totalBytes")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
+    let progress = job.get("progress").and_then(Value::as_f64).unwrap_or(0.0);
+    let total_bytes = job.get("totalBytes").and_then(Value::as_u64).unwrap_or(0);
 
     let (title_id, facet, is_scryer) = extract_scryer_metadata(job);
 
@@ -290,15 +285,14 @@ fn derive_nzb_filename(source_title: Option<&str>, source_hint: &str, title_name
 
 #[async_trait]
 impl DownloadClient for WeaverDownloadClient {
-    async fn submit_to_download_queue(
+    async fn submit_download(
         &self,
-        title: &Title,
-        source_hint: Option<String>,
-        source_title: Option<String>,
-        source_password: Option<String>,
-        category: Option<String>,
+        request: &DownloadClientAddRequest,
     ) -> AppResult<DownloadGrabResult> {
-        let source_hint = source_hint
+        let title = &request.title;
+        let source_hint = request
+            .source_hint
+            .clone()
             .and_then(|v| {
                 let v = v.trim().to_string();
                 (!v.is_empty()).then_some(v)
@@ -313,29 +307,32 @@ impl DownloadClient for WeaverDownloadClient {
             )));
         }
 
-        let normalized_source_title = source_title.and_then(|v| {
+        let normalized_source_title = request.source_title.clone().and_then(|v| {
             let t = v.trim().to_string();
             (!t.is_empty()).then_some(t)
         });
-        let nzb_filename =
-            derive_nzb_filename(normalized_source_title.as_deref(), &source_hint, &title.name);
+        let nzb_filename = derive_nzb_filename(
+            normalized_source_title.as_deref(),
+            &source_hint,
+            &title.name,
+        );
 
         let nzb_base64 = self.fetch_and_encode_nzb(&source_hint).await?;
 
-        let password = source_password
+        let password = request
+            .source_password
             .as_deref()
             .map(str::trim)
             .filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case("0"))
             .map(String::from);
 
-        let category = category
-            .and_then(|v| {
-                let v = v.trim().to_string();
-                (!v.is_empty()).then_some(v)
-            });
+        let category = request.category.clone().and_then(|v| {
+            let v = v.trim().to_string();
+            (!v.is_empty()).then_some(v)
+        });
 
-        let facet_str = serde_json::to_string(&title.facet)
-            .unwrap_or_else(|_| "\"other\"".to_string());
+        let facet_str =
+            serde_json::to_string(&title.facet).unwrap_or_else(|_| "\"other\"".to_string());
         let facet_str = facet_str.trim_matches('"');
 
         let mut metadata = vec![
@@ -398,15 +395,17 @@ impl DownloadClient for WeaverDownloadClient {
         })
     }
 
+    async fn test_connection(&self) -> AppResult<String> {
+        WeaverDownloadClient::test_connection(self).await
+    }
+
     async fn list_queue(&self) -> AppResult<Vec<DownloadQueueItem>> {
         let jobs = self.query_jobs(None).await?;
         Ok(jobs.iter().filter_map(weaver_job_to_queue_item).collect())
     }
 
     async fn list_history(&self) -> AppResult<Vec<DownloadQueueItem>> {
-        let jobs = self
-            .query_jobs(Some(&["COMPLETE", "FAILED"]))
-            .await?;
+        let jobs = self.query_jobs(Some(&["COMPLETE", "FAILED"])).await?;
         Ok(jobs.iter().filter_map(weaver_job_to_queue_item).collect())
     }
 

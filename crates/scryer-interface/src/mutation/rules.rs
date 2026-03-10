@@ -68,11 +68,7 @@ impl RulesMutations {
         Ok(crate::mappers::from_rule_set(rule_set))
     }
 
-    async fn delete_rule_set(
-        &self,
-        ctx: &Context<'_>,
-        id: String,
-    ) -> GqlResult<bool> {
+    async fn delete_rule_set(&self, ctx: &Context<'_>, id: String) -> GqlResult<bool> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
 
@@ -107,7 +103,9 @@ impl RulesMutations {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
 
-        let rule_set_id = input.rule_set_id.unwrap_or_else(|| "r_validation_test".to_string());
+        let rule_set_id = input
+            .rule_set_id
+            .unwrap_or_else(|| "r_validation_test".to_string());
         let result = app
             .validate_rule_set(&actor, &input.rego_source, &rule_set_id)
             .await

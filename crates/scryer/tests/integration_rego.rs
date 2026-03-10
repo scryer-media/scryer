@@ -176,11 +176,7 @@ fn test_input() -> scryer_rules::UserRuleInput {
         profile: scryer_rules::ProfileDoc {
             id: "test-profile".to_string(),
             name: "Test Profile".to_string(),
-            quality_tiers: vec![
-                "2160P".to_string(),
-                "1080P".to_string(),
-                "720P".to_string(),
-            ],
+            quality_tiers: vec!["2160P".to_string(), "1080P".to_string(), "720P".to_string()],
             archival_quality: None,
             allow_unknown_quality: false,
             source_allowlist: vec![],
@@ -220,7 +216,9 @@ fn test_input() -> scryer_rules::UserRuleInput {
 }
 
 /// Build a UserRuleInput with overrides.
-fn test_input_with(f: impl FnOnce(&mut scryer_rules::UserRuleInput)) -> scryer_rules::UserRuleInput {
+fn test_input_with(
+    f: impl FnOnce(&mut scryer_rules::UserRuleInput),
+) -> scryer_rules::UserRuleInput {
     let mut input = test_input();
     f(&mut input);
     input
@@ -674,7 +672,10 @@ async fn rego_engine_rebuilds_after_create() {
     // After creating, engine should have the user rule + any plugin-declared
     // scoring policies (e.g. nzbgeek_vote_penalty, nzbgeek_language_bonus).
     let engine = ctx.app.services.user_rules.read().unwrap();
-    assert!(engine.rule_count() >= 1, "engine should have at least 1 rule");
+    assert!(
+        engine.rule_count() >= 1,
+        "engine should have at least 1 rule"
+    );
 }
 
 #[tokio::test]
@@ -704,7 +705,11 @@ async fn rego_engine_conditional_fires() {
     });
     let result = evaluator.evaluate(&input, "movie").unwrap();
 
-    assert_eq!(result.entries.len(), 1, "should fire when dual_audio is true");
+    assert_eq!(
+        result.entries.len(),
+        1,
+        "should fire when dual_audio is true"
+    );
     assert_eq!(result.entries[0].code, "dual_audio_bonus");
     assert_eq!(result.entries[0].delta, 500);
 }

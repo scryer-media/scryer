@@ -1,6 +1,5 @@
 use super::*;
 
-
 #[test]
 fn parse_bdmv_release() {
     let parsed = parse_release_metadata(
@@ -15,7 +14,8 @@ fn parse_bdmv_release() {
 }
 #[test]
 fn parse_web_dl_movie() {
-    let parsed = parse_release_metadata("Crimson.Horizon.2019.1080p.WEB-DL.DDP2.0.H.264-Group.REPACK");
+    let parsed =
+        parse_release_metadata("Crimson.Horizon.2019.1080p.WEB-DL.DDP2.0.H.264-Group.REPACK");
     assert_eq!(parsed.year, Some(2019));
     assert_eq!(parsed.quality.as_deref(), Some("1080p"));
     assert_eq!(parsed.source.as_deref(), Some("WEB-DL"));
@@ -195,7 +195,8 @@ fn parse_dotted_language_markers() {
 
 #[test]
 fn parse_movie_release_group_after_metadata_tokens() {
-    let parsed = parse_release_metadata("Crimson.Horizon.2019.1080p.WEB-DL.DDP2.0.H.264-Group.REPACK");
+    let parsed =
+        parse_release_metadata("Crimson.Horizon.2019.1080p.WEB-DL.DDP2.0.H.264-Group.REPACK");
 
     assert_eq!(parsed.release_group.as_deref(), Some("Group"));
     assert!(parsed.is_proper_upload);
@@ -214,7 +215,8 @@ fn parse_movie_release_group_with_hash_bracket() {
 
 #[test]
 fn parse_multi_not_dual_audio() {
-    let parsed = parse_release_metadata("Crimson.Horizon.2019.MULTi.VF2.1080p.HDLight.AC-3.5.1.H264-LiGHT");
+    let parsed =
+        parse_release_metadata("Crimson.Horizon.2019.MULTi.VF2.1080p.HDLight.AC-3.5.1.H264-LiGHT");
 
     assert!(!parsed.is_dual_audio);
     assert_eq!(parsed.audio.as_deref(), Some("AC3"));
@@ -234,8 +236,9 @@ fn parse_multiple_audio_codecs() {
 
 #[test]
 fn parse_language_order_variation() {
-    let parsed =
-        parse_release_metadata("Crimson.Horizon.2019.WEB.DL.DDP2.0.1080p.AMZN.DUAL.DOLBY.VISION.HEVC");
+    let parsed = parse_release_metadata(
+        "Crimson.Horizon.2019.WEB.DL.DDP2.0.1080p.AMZN.DUAL.DOLBY.VISION.HEVC",
+    );
     assert_eq!(parsed.quality.as_deref(), Some("1080p"));
     assert_eq!(parsed.source.as_deref(), Some("WEB-DL"));
     assert!(parsed.is_dolby_vision);
@@ -440,9 +443,8 @@ fn parse_rife_triggers_ai_enhanced() {
 #[test]
 fn parse_ai_alone_does_not_trigger() {
     // "A.I." the movie should not trigger is_ai_enhanced
-    let parsed = parse_release_metadata(
-        "A.I.Artificial.Intelligence.2001.1080p.BluRay.H.264.DTS-GRP",
-    );
+    let parsed =
+        parse_release_metadata("A.I.Artificial.Intelligence.2001.1080p.BluRay.H.264.DTS-GRP");
     assert!(!parsed.is_ai_enhanced);
 }
 
@@ -460,9 +462,8 @@ fn parse_hfr_does_not_trigger_ai_enhanced() {
 
 #[test]
 fn parse_high_fps_triggers_ai_enhanced() {
-    let parsed = parse_release_metadata(
-        "[Raze] Phantom-Academy S2-09 x265 10bit 1080p 143.8561fps",
-    );
+    let parsed =
+        parse_release_metadata("[Raze] Phantom-Academy S2-09 x265 10bit 1080p 143.8561fps");
     assert!(parsed.is_ai_enhanced);
     assert_eq!(parsed.quality.as_deref(), Some("1080p"));
     assert!(parsed.fps.is_some_and(|f| f > 140.0));
@@ -470,9 +471,7 @@ fn parse_high_fps_triggers_ai_enhanced() {
 
 #[test]
 fn parse_normal_fps_does_not_trigger_ai_enhanced() {
-    let parsed = parse_release_metadata(
-        "Movie.2024.1080p.BluRay.H.264.DTS-GRP",
-    );
+    let parsed = parse_release_metadata("Movie.2024.1080p.BluRay.H.264.DTS-GRP");
     assert!(!parsed.is_ai_enhanced);
 }
 
@@ -528,9 +527,8 @@ fn parse_ai_enhanced_imax_rife() {
 
 #[test]
 fn parse_cr_webdl_anime() {
-    let parsed = parse_release_metadata(
-        "Gnosia.S01E20.World.of.Stars.1080p.CR.WEB-DL.AAC2.0.H.264-playWEB",
-    );
+    let parsed =
+        parse_release_metadata("Gnosia.S01E20.World.of.Stars.1080p.CR.WEB-DL.AAC2.0.H.264-playWEB");
     assert!(!parsed.is_ai_enhanced);
     assert_eq!(parsed.quality.as_deref(), Some("1080p"));
     assert_eq!(parsed.source.as_deref(), Some("WEB-DL"));
@@ -554,18 +552,15 @@ fn parse_netflix_complete_season() {
 
 #[test]
 fn parse_bracket_anime_hevc() {
-    let parsed = parse_release_metadata(
-        "[ASW] Release that Witch-02 [1080p HEVC][D80C2AF2]",
-    );
+    let parsed = parse_release_metadata("[ASW] Release that Witch-02 [1080p HEVC][D80C2AF2]");
     assert_eq!(parsed.quality.as_deref(), Some("1080p"));
     assert_eq!(parsed.video_codec.as_deref(), Some("H.265"));
 }
 
 #[test]
 fn parse_iplayer_hfr_webdl() {
-    let parsed = parse_release_metadata(
-        "Call.the.Midwife.S15E08.1080p.IP.WEB-DL.AAC2.0.HFR.H.264-SNAKE",
-    );
+    let parsed =
+        parse_release_metadata("Call.the.Midwife.S15E08.1080p.IP.WEB-DL.AAC2.0.HFR.H.264-SNAKE");
     assert!(!parsed.is_ai_enhanced);
     assert_eq!(parsed.quality.as_deref(), Some("1080p"));
     assert_eq!(parsed.source.as_deref(), Some("WEB-DL"));
@@ -575,9 +570,7 @@ fn parse_iplayer_hfr_webdl() {
 
 #[test]
 fn parse_av1_webrip() {
-    let parsed = parse_release_metadata(
-        "[Onalrie] Release that Witch-S01E02 [1080p WEBRip AV1]",
-    );
+    let parsed = parse_release_metadata("[Onalrie] Release that Witch-S01E02 [1080p WEBRip AV1]");
     assert_eq!(parsed.quality.as_deref(), Some("1080p"));
     assert_eq!(parsed.source.as_deref(), Some("WEB-DL"));
     assert_eq!(parsed.video_codec.as_deref(), Some("AV1"));
@@ -1135,14 +1128,30 @@ fn bulk_rss_feed_titles_parse_without_panic() {
     for title in &titles {
         let parsed = parse_release_metadata(title);
 
-        if parsed.quality.is_some() { stats.has_quality += 1; }
-        if parsed.source.is_some() { stats.has_source += 1; }
-        if parsed.video_codec.is_some() { stats.has_codec += 1; }
-        if parsed.audio.is_some() { stats.has_audio += 1; }
-        if parsed.release_group.is_some() { stats.has_group += 1; }
-        if parsed.year.is_some() { stats.has_year += 1; }
-        if parsed.is_ai_enhanced { stats.ai_enhanced += 1; }
-        if parsed.parse_confidence < 0.1 { stats.very_low_confidence += 1; }
+        if parsed.quality.is_some() {
+            stats.has_quality += 1;
+        }
+        if parsed.source.is_some() {
+            stats.has_source += 1;
+        }
+        if parsed.video_codec.is_some() {
+            stats.has_codec += 1;
+        }
+        if parsed.audio.is_some() {
+            stats.has_audio += 1;
+        }
+        if parsed.release_group.is_some() {
+            stats.has_group += 1;
+        }
+        if parsed.year.is_some() {
+            stats.has_year += 1;
+        }
+        if parsed.is_ai_enhanced {
+            stats.ai_enhanced += 1;
+        }
+        if parsed.parse_confidence < 0.1 {
+            stats.very_low_confidence += 1;
+        }
         stats.total += 1;
     }
 
@@ -1150,32 +1159,44 @@ fn bulk_rss_feed_titles_parse_without_panic() {
     // At least 70% of real NZB titles should have a detectable quality.
     assert!(
         stats.has_quality * 100 / stats.total >= 70,
-        "Quality detection rate too low: {}/{}", stats.has_quality, stats.total
+        "Quality detection rate too low: {}/{}",
+        stats.has_quality,
+        stats.total
     );
     // At least 60% should have a detectable source.
     assert!(
         stats.has_source * 100 / stats.total >= 60,
-        "Source detection rate too low: {}/{}", stats.has_source, stats.total
+        "Source detection rate too low: {}/{}",
+        stats.has_source,
+        stats.total
     );
     // At least 60% should have a detectable video codec.
     assert!(
         stats.has_codec * 100 / stats.total >= 60,
-        "Codec detection rate too low: {}/{}", stats.has_codec, stats.total
+        "Codec detection rate too low: {}/{}",
+        stats.has_codec,
+        stats.total
     );
     // At least 50% should have a detectable audio codec.
     assert!(
         stats.has_audio * 100 / stats.total >= 50,
-        "Audio detection rate too low: {}/{}", stats.has_audio, stats.total
+        "Audio detection rate too low: {}/{}",
+        stats.has_audio,
+        stats.total
     );
     // Very few titles should have near-zero confidence.
     assert!(
         stats.very_low_confidence * 100 / stats.total <= 10,
-        "Too many titles with very low confidence: {}/{}", stats.very_low_confidence, stats.total
+        "Too many titles with very low confidence: {}/{}",
+        stats.very_low_confidence,
+        stats.total
     );
     // AI enhanced should be rare in normal feeds — only the 143fps Raze title should trigger.
     assert!(
         stats.ai_enhanced <= 5,
-        "Too many AI enhanced detections (false positives?): {}/{}", stats.ai_enhanced, stats.total
+        "Too many AI enhanced detections (false positives?): {}/{}",
+        stats.ai_enhanced,
+        stats.total
     );
 }
 
@@ -1245,14 +1266,18 @@ fn verify_hevc_x265_encoding_coexistence() {
     assert_eq!(p.video_codec.as_deref(), Some("H.265"));
     assert_eq!(p.video_encoding.as_deref(), Some("x265"));
 
-    let p = parse_release_metadata("[DKB] Golden Kamuy-S05E10 [1080p][HEVC x265 10bit][Multi-Subs][8E03F257]");
+    let p = parse_release_metadata(
+        "[DKB] Golden Kamuy-S05E10 [1080p][HEVC x265 10bit][Multi-Subs][8E03F257]",
+    );
     assert_eq!(p.video_codec.as_deref(), Some("H.265"));
     assert_eq!(p.video_encoding.as_deref(), Some("x265"));
 }
 
 #[test]
 fn verify_hdrvivid_detection() {
-    let p = parse_release_metadata("Escape.from.the.Outland.2025.2160p.WEB-DL.HDRVivid.H.265.10bit.DDP5.1.Atmos-UBWEB");
+    let p = parse_release_metadata(
+        "Escape.from.the.Outland.2025.2160p.WEB-DL.HDRVivid.H.265.10bit.DDP5.1.Atmos-UBWEB",
+    );
     assert!(p.detected_hdr);
     assert!(p.is_atmos);
     assert_eq!(p.audio.as_deref(), Some("DDP"));
@@ -1271,7 +1296,9 @@ fn verify_complete_bluray_bd_flag() {
 
 #[test]
 fn verify_60fps_dotted_titles() {
-    let p = parse_release_metadata("Good.Songs.and.Daughters.S01.1989.2160p.WEB-DL.AAC.H.265.60fps-HDSWEB");
+    let p = parse_release_metadata(
+        "Good.Songs.and.Daughters.S01.1989.2160p.WEB-DL.AAC.H.265.60fps-HDSWEB",
+    );
     assert_eq!(p.fps, Some(60.0));
 }
 
@@ -1293,7 +1320,8 @@ fn streaming_service_amazon() {
 
 #[test]
 fn streaming_service_netflix() {
-    let p = parse_release_metadata("Stranger.Things.S04E01.2160p.NF.WEB-DL.DDP5.1.Atmos.H.265-FLUX");
+    let p =
+        parse_release_metadata("Stranger.Things.S04E01.2160p.NF.WEB-DL.DDP5.1.Atmos.H.265-FLUX");
     assert_eq!(p.streaming_service.as_deref(), Some("Netflix"));
 }
 
@@ -1311,7 +1339,8 @@ fn streaming_service_disney_plus() {
 
 #[test]
 fn streaming_service_hbo_max() {
-    let p = parse_release_metadata("The.Last.of.Us.S01E01.1080p.HMAX.WEB-DL.DDP5.1.Atmos.H.265-FLUX");
+    let p =
+        parse_release_metadata("The.Last.of.Us.S01E01.1080p.HMAX.WEB-DL.DDP5.1.Atmos.H.265-FLUX");
     assert_eq!(p.streaming_service.as_deref(), Some("HBO Max"));
 }
 
@@ -1435,7 +1464,11 @@ fn no_anime_version_for_normal_release() {
 #[test]
 fn verify_red_sparrow_bluray_not_webdl() {
     let p = parse_release_metadata("Red.Sparrow.2018.BluRay.1080p.DDP.5.1.x264-hallowed");
-    assert_eq!(p.source.as_deref(), Some("BluRay"), "RED should not trigger YouTube/WEB-DL");
+    assert_eq!(
+        p.source.as_deref(),
+        Some("BluRay"),
+        "RED should not trigger YouTube/WEB-DL"
+    );
     assert_eq!(p.quality.as_deref(), Some("1080p"));
     assert_eq!(p.audio.as_deref(), Some("DDP"));
     assert_eq!(p.audio_channels.as_deref(), Some("5.1"));
@@ -1463,7 +1496,11 @@ fn verify_youtube_still_detected() {
 fn verify_bare_dd_in_title_not_audio() {
     // "DD" is a movie title, not Dolby Digital — real audio is DDP later
     let p = parse_release_metadata("DD.Returns.2024.1080p.WEB-DL.DDP.5.1.H.264-GROUP");
-    assert_eq!(p.audio.as_deref(), Some("DDP"), "bare DD should not consume audio slot");
+    assert_eq!(
+        p.audio.as_deref(),
+        Some("DDP"),
+        "bare DD should not consume audio slot"
+    );
     assert_eq!(p.audio_channels.as_deref(), Some("5.1"));
 }
 

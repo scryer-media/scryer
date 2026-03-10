@@ -140,7 +140,8 @@ pub(crate) async fn get_latest_source_password_query(
         .map_err(|err| AppError::Repository(err.to_string()))?;
 
     match row {
-        Some(row) => Ok(row.try_get::<Option<String>, _>("source_password")
+        Some(row) => Ok(row
+            .try_get::<Option<String>, _>("source_password")
             .map_err(|err| AppError::Repository(err.to_string()))?),
         None => Ok(None),
     }
@@ -231,17 +232,39 @@ pub(crate) async fn get_import_by_source_ref_query(
 
     match row {
         Some(row) => Ok(Some(ImportRecord {
-            id: row.try_get("id").map_err(|e| AppError::Repository(e.to_string()))?,
-            source_system: row.try_get("source_system").map_err(|e| AppError::Repository(e.to_string()))?,
-            source_ref: row.try_get("source_ref").map_err(|e| AppError::Repository(e.to_string()))?,
-            import_type: row.try_get("import_type").map_err(|e| AppError::Repository(e.to_string()))?,
-            status: row.try_get("status").map_err(|e| AppError::Repository(e.to_string()))?,
-            payload_json: row.try_get("payload_json").map_err(|e| AppError::Repository(e.to_string()))?,
-            result_json: row.try_get("result_json").map_err(|e| AppError::Repository(e.to_string()))?,
-            started_at: row.try_get("started_at").map_err(|e| AppError::Repository(e.to_string()))?,
-            finished_at: row.try_get("finished_at").map_err(|e| AppError::Repository(e.to_string()))?,
-            created_at: row.try_get("created_at").map_err(|e| AppError::Repository(e.to_string()))?,
-            updated_at: row.try_get("updated_at").map_err(|e| AppError::Repository(e.to_string()))?,
+            id: row
+                .try_get("id")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            source_system: row
+                .try_get("source_system")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            source_ref: row
+                .try_get("source_ref")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            import_type: row
+                .try_get("import_type")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            status: row
+                .try_get("status")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            payload_json: row
+                .try_get("payload_json")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            result_json: row
+                .try_get("result_json")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            started_at: row
+                .try_get("started_at")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            finished_at: row
+                .try_get("finished_at")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            created_at: row
+                .try_get("created_at")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            updated_at: row
+                .try_get("updated_at")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
         })),
         None => Ok(None),
     }
@@ -306,9 +329,7 @@ pub(crate) async fn recover_stale_processing_imports_query(
     Ok(result.rows_affected())
 }
 
-pub(crate) async fn list_pending_imports_query(
-    pool: &SqlitePool,
-) -> AppResult<Vec<ImportRecord>> {
+pub(crate) async fn list_pending_imports_query(pool: &SqlitePool) -> AppResult<Vec<ImportRecord>> {
     let rows = sqlx::query(
         "SELECT id, source_system, source_ref, import_type, status,
                 payload_json, result_json, started_at, finished_at,
@@ -324,17 +345,39 @@ pub(crate) async fn list_pending_imports_query(
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
         out.push(ImportRecord {
-            id: row.try_get("id").map_err(|e| AppError::Repository(e.to_string()))?,
-            source_system: row.try_get("source_system").map_err(|e| AppError::Repository(e.to_string()))?,
-            source_ref: row.try_get("source_ref").map_err(|e| AppError::Repository(e.to_string()))?,
-            import_type: row.try_get("import_type").map_err(|e| AppError::Repository(e.to_string()))?,
-            status: row.try_get("status").map_err(|e| AppError::Repository(e.to_string()))?,
-            payload_json: row.try_get("payload_json").map_err(|e| AppError::Repository(e.to_string()))?,
-            result_json: row.try_get("result_json").map_err(|e| AppError::Repository(e.to_string()))?,
-            started_at: row.try_get("started_at").map_err(|e| AppError::Repository(e.to_string()))?,
-            finished_at: row.try_get("finished_at").map_err(|e| AppError::Repository(e.to_string()))?,
-            created_at: row.try_get("created_at").map_err(|e| AppError::Repository(e.to_string()))?,
-            updated_at: row.try_get("updated_at").map_err(|e| AppError::Repository(e.to_string()))?,
+            id: row
+                .try_get("id")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            source_system: row
+                .try_get("source_system")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            source_ref: row
+                .try_get("source_ref")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            import_type: row
+                .try_get("import_type")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            status: row
+                .try_get("status")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            payload_json: row
+                .try_get("payload_json")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            result_json: row
+                .try_get("result_json")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            started_at: row
+                .try_get("started_at")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            finished_at: row
+                .try_get("finished_at")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            created_at: row
+                .try_get("created_at")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            updated_at: row
+                .try_get("updated_at")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
         });
     }
 
@@ -362,17 +405,39 @@ pub(crate) async fn list_imports_query(
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
         out.push(ImportRecord {
-            id: row.try_get("id").map_err(|e| AppError::Repository(e.to_string()))?,
-            source_system: row.try_get("source_system").map_err(|e| AppError::Repository(e.to_string()))?,
-            source_ref: row.try_get("source_ref").map_err(|e| AppError::Repository(e.to_string()))?,
-            import_type: row.try_get("import_type").map_err(|e| AppError::Repository(e.to_string()))?,
-            status: row.try_get("status").map_err(|e| AppError::Repository(e.to_string()))?,
-            payload_json: row.try_get("payload_json").map_err(|e| AppError::Repository(e.to_string()))?,
-            result_json: row.try_get("result_json").map_err(|e| AppError::Repository(e.to_string()))?,
-            started_at: row.try_get("started_at").map_err(|e| AppError::Repository(e.to_string()))?,
-            finished_at: row.try_get("finished_at").map_err(|e| AppError::Repository(e.to_string()))?,
-            created_at: row.try_get("created_at").map_err(|e| AppError::Repository(e.to_string()))?,
-            updated_at: row.try_get("updated_at").map_err(|e| AppError::Repository(e.to_string()))?,
+            id: row
+                .try_get("id")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            source_system: row
+                .try_get("source_system")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            source_ref: row
+                .try_get("source_ref")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            import_type: row
+                .try_get("import_type")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            status: row
+                .try_get("status")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            payload_json: row
+                .try_get("payload_json")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            result_json: row
+                .try_get("result_json")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            started_at: row
+                .try_get("started_at")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            finished_at: row
+                .try_get("finished_at")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            created_at: row
+                .try_get("created_at")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            updated_at: row
+                .try_get("updated_at")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
         });
     }
 
@@ -525,11 +590,21 @@ pub(crate) async fn find_download_submission_query(
 
     match row {
         Some(row) => Ok(Some(DownloadSubmission {
-            title_id: row.try_get("title_id").map_err(|err| AppError::Repository(err.to_string()))?,
-            facet: row.try_get("facet").map_err(|err| AppError::Repository(err.to_string()))?,
-            download_client_type: row.try_get("download_client_type").map_err(|err| AppError::Repository(err.to_string()))?,
-            download_client_item_id: row.try_get("download_client_item_id").map_err(|err| AppError::Repository(err.to_string()))?,
-            source_title: row.try_get("source_title").map_err(|err| AppError::Repository(err.to_string()))?,
+            title_id: row
+                .try_get("title_id")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+            facet: row
+                .try_get("facet")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+            download_client_type: row
+                .try_get("download_client_type")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+            download_client_item_id: row
+                .try_get("download_client_item_id")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+            source_title: row
+                .try_get("source_title")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
         })),
         None => Ok(None),
     }

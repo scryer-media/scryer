@@ -21,8 +21,8 @@ impl DownloadMutations {
             input.source_hint,
             input.source_title,
         )
-            .await
-            .map_err(to_gql_error)
+        .await
+        .map_err(to_gql_error)
     }
 
     async fn queue_manual_import(
@@ -60,10 +60,12 @@ impl DownloadMutations {
         let completed = completed_downloads
             .into_iter()
             .find(|cd| cd.download_client_item_id == input.download_client_item_id)
-            .ok_or_else(|| Error::new(format!(
-                "completed download not found: {}",
-                input.download_client_item_id
-            )))?;
+            .ok_or_else(|| {
+                Error::new(format!(
+                    "completed download not found: {}",
+                    input.download_client_item_id
+                ))
+            })?;
 
         let import_result = app
             .trigger_manual_import(&actor, &completed, input.title_id.as_deref())
@@ -101,14 +103,10 @@ impl DownloadMutations {
             })
             .collect();
 
-        let results = scryer_application::execute_manual_import(
-            &app,
-            &actor,
-            &input.title_id,
-            mappings,
-        )
-        .await
-        .map_err(to_gql_error)?;
+        let results =
+            scryer_application::execute_manual_import(&app, &actor, &input.title_id, mappings)
+                .await
+                .map_err(to_gql_error)?;
 
         Ok(results
             .into_iter()

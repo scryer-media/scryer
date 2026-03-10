@@ -160,7 +160,10 @@ impl AppUseCase {
             return title;
         };
 
-        match handler.hydrate_metadata(self.services.metadata_gateway.as_ref(), tvdb_id, language).await {
+        match handler
+            .hydrate_metadata(self.services.metadata_gateway.as_ref(), tvdb_id, language)
+            .await
+        {
             Ok(result) => self.apply_hydration_result(title, result).await,
             Err(err) => {
                 warn!(
@@ -176,11 +179,7 @@ impl AppUseCase {
 
     /// Apply a [`HydrationResult`] to a title: persist metadata, create
     /// seasons/episodes, and enrich with anime mapping data.
-    async fn apply_hydration_result(
-        &self,
-        title: Title,
-        result: super::HydrationResult,
-    ) -> Title {
+    async fn apply_hydration_result(&self, title: Title, result: super::HydrationResult) -> Title {
         let has_episodes = self
             .facet_registry
             .get(&title.facet)
@@ -199,29 +198,48 @@ impl AppUseCase {
         let mut metadata_update = result.metadata_update;
         if let Some(mapping) = result.anime_mappings.first() {
             if let Some(mal_id) = mapping.mal_id {
-                metadata_update.extra_external_ids.push(ExternalId { source: "mal".to_string(), value: mal_id.to_string() });
+                metadata_update.extra_external_ids.push(ExternalId {
+                    source: "mal".to_string(),
+                    value: mal_id.to_string(),
+                });
             }
             if let Some(anilist_id) = mapping.anilist_id {
-                metadata_update.extra_external_ids.push(ExternalId { source: "anilist".to_string(), value: anilist_id.to_string() });
+                metadata_update.extra_external_ids.push(ExternalId {
+                    source: "anilist".to_string(),
+                    value: anilist_id.to_string(),
+                });
             }
             if let Some(anidb_id) = mapping.anidb_id {
-                metadata_update.extra_external_ids.push(ExternalId { source: "anidb".to_string(), value: anidb_id.to_string() });
+                metadata_update.extra_external_ids.push(ExternalId {
+                    source: "anidb".to_string(),
+                    value: anidb_id.to_string(),
+                });
             }
             if let Some(kitsu_id) = mapping.kitsu_id {
-                metadata_update.extra_external_ids.push(ExternalId { source: "kitsu".to_string(), value: kitsu_id.to_string() });
+                metadata_update.extra_external_ids.push(ExternalId {
+                    source: "kitsu".to_string(),
+                    value: kitsu_id.to_string(),
+                });
             }
         }
 
         // Store anime-specific metadata as tags on the title
         if let Some(primary) = result.anime_mappings.first() {
             if let Some(score) = primary.score {
-                metadata_update.extra_tags.push(format!("scryer:mal-score:{score}"));
+                metadata_update
+                    .extra_tags
+                    .push(format!("scryer:mal-score:{score}"));
             }
             if !primary.anime_media_type.is_empty() {
-                metadata_update.extra_tags.push(format!("scryer:anime-media-type:{}", primary.anime_media_type));
+                metadata_update.extra_tags.push(format!(
+                    "scryer:anime-media-type:{}",
+                    primary.anime_media_type
+                ));
             }
             if !primary.status.is_empty() {
-                metadata_update.extra_tags.push(format!("scryer:anime-status:{}", primary.status));
+                metadata_update
+                    .extra_tags
+                    .push(format!("scryer:anime-status:{}", primary.status));
             }
         }
 
@@ -243,7 +261,13 @@ impl AppUseCase {
         };
 
         if !result.seasons.is_empty() || !result.episodes.is_empty() {
-            self.create_series_seasons_and_episodes(&title, &result.seasons, &result.episodes, &result.anime_mappings).await;
+            self.create_series_seasons_and_episodes(
+                &title,
+                &result.seasons,
+                &result.episodes,
+                &result.anime_mappings,
+            )
+            .await;
         }
 
         title
@@ -312,10 +336,8 @@ impl AppUseCase {
         };
 
         // Seasons that have no episodes should not be auto-monitored.
-        let seasons_with_episodes: std::collections::HashSet<i32> = episodes
-            .iter()
-            .map(|ep| ep.season_number)
-            .collect();
+        let seasons_with_episodes: std::collections::HashSet<i32> =
+            episodes.iter().map(|ep| ep.season_number).collect();
 
         let mut season_number_to_collection: std::collections::HashMap<i32, String> =
             std::collections::HashMap::new();
@@ -342,7 +364,12 @@ impl AppUseCase {
                 created_at: Utc::now(),
             };
 
-            match self.services.shows.create_collection(collection.clone()).await {
+            match self
+                .services
+                .shows
+                .create_collection(collection.clone())
+                .await
+            {
                 Ok(created) => {
                     season_number_to_collection.insert(season.number, created.id);
                 }
@@ -461,10 +488,8 @@ impl AppUseCase {
                                 );
                                 for em in &movie.episode_mappings {
                                     for ep_num in em.episode_start..=em.episode_end {
-                                        interstitial_episode_lookup.insert(
-                                            (em.tvdb_season, ep_num),
-                                            created.id.clone(),
-                                        );
+                                        interstitial_episode_lookup
+                                            .insert((em.tvdb_season, ep_num), created.id.clone());
                                     }
                                 }
                             }
@@ -535,15 +560,23 @@ impl AppUseCase {
             // If this episode is routed to an interstitial collection, update the
             // collection label to the episode's name (once per collection).
             if let Some(ref cid) = collection_id {
-                if interstitial_episode_lookup
-                    .contains_key(&(ep.season_number, ep.episode_number))
+                if interstitial_episode_lookup.contains_key(&(ep.season_number, ep.episode_number))
                     && !ep.name.is_empty()
                     && labeled_collections.insert(cid.clone())
                 {
                     if let Err(err) = self
                         .services
                         .shows
-                        .update_collection(cid, None, None, Some(ep.name.clone()), None, None, None, None)
+                        .update_collection(
+                            cid,
+                            None,
+                            None,
+                            Some(ep.name.clone()),
+                            None,
+                            None,
+                            None,
+                            None,
+                        )
                         .await
                     {
                         warn!(
@@ -555,8 +588,13 @@ impl AppUseCase {
                 }
             }
 
-            let air_date = if ep.aired.is_empty() { None } else { Some(ep.aired.clone()) };
-            let episode_monitored = if (skip_filler && ep.is_filler) || (skip_recap && ep.is_recap) {
+            let air_date = if ep.aired.is_empty() {
+                None
+            } else {
+                Some(ep.aired.clone())
+            };
+            let episode_monitored = if (skip_filler && ep.is_filler) || (skip_recap && ep.is_recap)
+            {
                 false
             } else {
                 should_monitor_episode(
@@ -602,8 +640,16 @@ impl AppUseCase {
                 has_subtitle: false,
                 is_filler: ep.is_filler,
                 is_recap: ep.is_recap,
-                absolute_number: if ep.absolute_number.is_empty() { None } else { Some(ep.absolute_number.clone()) },
-                overview: if ep.overview.trim().is_empty() { None } else { Some(ep.overview.clone()) },
+                absolute_number: if ep.absolute_number.is_empty() {
+                    None
+                } else {
+                    Some(ep.absolute_number.clone())
+                },
+                overview: if ep.overview.trim().is_empty() {
+                    None
+                } else {
+                    Some(ep.overview.clone())
+                },
                 monitored: episode_monitored,
                 created_at: Utc::now(),
             };
@@ -677,9 +723,11 @@ impl AppUseCase {
                         source_password.clone(),
                     )
                     .await;
-                let facet_str = serde_json::to_string(&title.facet)
-                    .unwrap_or_else(|_| "\"other\"".to_string());
-                let _ = self.services.download_submissions
+                let facet_str =
+                    serde_json::to_string(&title.facet).unwrap_or_else(|_| "\"other\"".to_string());
+                let _ = self
+                    .services
+                    .download_submissions
                     .record_submission(DownloadSubmission {
                         title_id: title.id.clone(),
                         facet: facet_str.trim_matches('"').to_string(),
@@ -696,14 +744,14 @@ impl AppUseCase {
                     .services
                     .release_attempts
                     .record_release_attempt(
-                    Some(title.id.clone()),
-                    source_hint_for_attempt,
-                    source_title_for_attempt,
-                    ReleaseDownloadAttemptOutcome::Failed,
-                    Some(error_message),
-                    source_password,
-                )
-                .await;
+                        Some(title.id.clone()),
+                        source_hint_for_attempt,
+                        source_title_for_attempt,
+                        ReleaseDownloadAttemptOutcome::Failed,
+                        Some(error_message),
+                        source_password,
+                    )
+                    .await;
                 return Err(error);
             }
         };
@@ -794,14 +842,16 @@ impl AppUseCase {
                         Some(title.id.clone()),
                         source_hint_for_attempt.clone(),
                         source_title_for_attempt.clone(),
-                    ReleaseDownloadAttemptOutcome::Success,
-                    None,
-                    source_password.clone(),
-                )
-                .await;
-                let facet_str = serde_json::to_string(&title.facet)
-                    .unwrap_or_else(|_| "\"other\"".to_string());
-                let _ = self.services.download_submissions
+                        ReleaseDownloadAttemptOutcome::Success,
+                        None,
+                        source_password.clone(),
+                    )
+                    .await;
+                let facet_str =
+                    serde_json::to_string(&title.facet).unwrap_or_else(|_| "\"other\"".to_string());
+                let _ = self
+                    .services
+                    .download_submissions
                     .record_submission(DownloadSubmission {
                         title_id: title.id.clone(),
                         facet: facet_str.trim_matches('"').to_string(),
@@ -819,13 +869,13 @@ impl AppUseCase {
                     .release_attempts
                     .record_release_attempt(
                         Some(title.id.clone()),
-                    source_hint_for_attempt,
-                    source_title_for_attempt,
-                    ReleaseDownloadAttemptOutcome::Failed,
-                    Some(error_message),
-                    source_password,
-                )
-                .await;
+                        source_hint_for_attempt,
+                        source_title_for_attempt,
+                        ReleaseDownloadAttemptOutcome::Failed,
+                        Some(error_message),
+                        source_password,
+                    )
+                    .await;
                 return Err(error);
             }
         };
@@ -925,7 +975,16 @@ impl AppUseCase {
         let collection = self
             .services
             .shows
-            .update_collection(collection_id, None, None, None, None, None, None, Some(monitored))
+            .update_collection(
+                collection_id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(monitored),
+            )
             .await?;
         self.services
             .shows
@@ -936,7 +995,10 @@ impl AppUseCase {
                 Some(actor.id.clone()),
                 Some(collection.title_id.clone()),
                 EventType::TitleUpdated,
-                format!("collection {} monitoring set to {}", collection_id, monitored),
+                format!(
+                    "collection {} monitoring set to {}",
+                    collection_id, monitored
+                ),
             )
             .await?;
         Ok(collection)
@@ -953,7 +1015,20 @@ impl AppUseCase {
         let episode = self
             .services
             .shows
-            .update_episode(episode_id, None, None, None, None, None, None, None, None, None, Some(monitored), None)
+            .update_episode(
+                episode_id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(monitored),
+                None,
+            )
             .await?;
         self.services
             .record_event(
@@ -994,11 +1069,8 @@ impl AppUseCase {
             }
 
             let media_root = crate::recycle_bin::media_root_for_title(self, &title).await;
-            let recycle_config = crate::recycle_bin::resolve_recycle_config(
-                self,
-                media_root.as_deref(),
-            )
-            .await;
+            let recycle_config =
+                crate::recycle_bin::resolve_recycle_config(self, media_root.as_deref()).await;
 
             let mut delete_failures = Vec::new();
             for file_path in unique_paths {
@@ -1009,17 +1081,17 @@ impl AppUseCase {
                 let manifest = crate::recycle_bin::RecycleManifest {
                     recycled_at: chrono::Utc::now().to_rfc3339(),
                     original_path: file_path.clone(),
-                    size_bytes: fs::metadata(&file_path)
-                        .await
-                        .map(|m| m.len())
-                        .unwrap_or(0),
+                    size_bytes: fs::metadata(&file_path).await.map(|m| m.len()).unwrap_or(0),
                     title_id: Some(id.to_string()),
                     reason: "title_deleted".to_string(),
                 };
 
-                if let Err(error) =
-                    crate::recycle_bin::recycle_file(&recycle_config, Path::new(&file_path), manifest)
-                        .await
+                if let Err(error) = crate::recycle_bin::recycle_file(
+                    &recycle_config,
+                    Path::new(&file_path),
+                    manifest,
+                )
+                .await
                 {
                     warn!(
                         title_id = %id,
@@ -1072,7 +1144,12 @@ impl AppUseCase {
         }
 
         // Clean up wanted items for this title
-        if let Err(err) = self.services.wanted_items.delete_wanted_items_for_title(id).await {
+        if let Err(err) = self
+            .services
+            .wanted_items
+            .delete_wanted_items_for_title(id)
+            .await
+        {
             warn!(
                 title_id = %id,
                 error = %err,
@@ -1726,7 +1803,12 @@ pub async fn start_background_hydration_loop(
                 return;
             }
 
-            let batch = match app.services.titles.list_unhydrated(HYDRATION_MAX_BATCH).await {
+            let batch = match app
+                .services
+                .titles
+                .list_unhydrated(HYDRATION_MAX_BATCH)
+                .await
+            {
                 Ok(titles) => titles,
                 Err(err) => {
                     warn!(error = %err, "hydration loop: failed to list unhydrated titles");
@@ -1759,10 +1841,7 @@ pub async fn start_background_hydration_loop(
 
             // ---- Bulk-fetch movies (single GraphQL call) ----
             if !movie_titles.is_empty() {
-                let tvdb_ids: Vec<i64> = movie_titles
-                    .iter()
-                    .filter_map(extract_tvdb_id)
-                    .collect();
+                let tvdb_ids: Vec<i64> = movie_titles.iter().filter_map(extract_tvdb_id).collect();
 
                 match app
                     .services
@@ -1776,8 +1855,7 @@ pub async fn start_background_hydration_loop(
                             if let Some(movie) = tvdb_id.and_then(|id| metadata_map.get(&id)) {
                                 let result =
                                     super::movie_to_hydration_result(movie.clone(), language);
-                                let hydrated =
-                                    app.apply_hydration_result(title, result).await;
+                                let hydrated = app.apply_hydration_result(title, result).await;
                                 sync_wanted_after_hydration(&app, &hydrated).await;
                             } else {
                                 had_failures = true;
@@ -1793,10 +1871,7 @@ pub async fn start_background_hydration_loop(
 
             // ---- Bulk-fetch series + anime (single GraphQL call) ----
             if !series_titles.is_empty() {
-                let tvdb_ids: Vec<i64> = series_titles
-                    .iter()
-                    .filter_map(extract_tvdb_id)
-                    .collect();
+                let tvdb_ids: Vec<i64> = series_titles.iter().filter_map(extract_tvdb_id).collect();
 
                 match app
                     .services
@@ -1810,8 +1885,7 @@ pub async fn start_background_hydration_loop(
                             if let Some(series) = tvdb_id.and_then(|id| metadata_map.get(&id)) {
                                 let result =
                                     super::series_to_hydration_result(series.clone(), language);
-                                let hydrated =
-                                    app.apply_hydration_result(title, result).await;
+                                let hydrated = app.apply_hydration_result(title, result).await;
                                 sync_wanted_after_hydration(&app, &hydrated).await;
                             } else {
                                 had_failures = true;

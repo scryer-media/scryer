@@ -125,10 +125,7 @@ async fn run_subscription(
     };
     let ack_json: Value =
         serde_json::from_str(ack_text).map_err(|e| format!("invalid ack json: {e}"))?;
-    let msg_type = ack_json
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let msg_type = ack_json.get("type").and_then(Value::as_str).unwrap_or("");
     if msg_type != "connection_ack" {
         return Err(format!("expected connection_ack, got {msg_type}"));
     }
@@ -168,14 +165,8 @@ async fn run_subscription(
 
         match msg {
             Message::Text(text) => {
-                handle_ws_message(
-                    text.as_ref(),
-                    app,
-                    actor,
-                    &mut write,
-                    &mut imported_job_ids,
-                )
-                .await?;
+                handle_ws_message(text.as_ref(), app, actor, &mut write, &mut imported_job_ids)
+                    .await?;
             }
             Message::Ping(data) => {
                 let _ = write.send(Message::Pong(data)).await;

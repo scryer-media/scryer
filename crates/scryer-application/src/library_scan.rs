@@ -135,11 +135,8 @@ pub struct EpisodeMetadata {
 
 #[async_trait]
 pub trait MetadataGateway: Send + Sync {
-    async fn search_tvdb(
-        &self,
-        query: &str,
-        type_hint: &str,
-    ) -> AppResult<Vec<MetadataSearchItem>>;
+    async fn search_tvdb(&self, query: &str, type_hint: &str)
+        -> AppResult<Vec<MetadataSearchItem>>;
 
     async fn search_tvdb_rich(
         &self,

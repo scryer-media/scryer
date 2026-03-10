@@ -150,9 +150,7 @@ fn build_analysis(raw: RawContainer) -> MediaAnalysis {
         .map(|bps| (bps / 1000) as i32);
 
     // Extract profile + bit depth from codec private data
-    let codec_info = video_track
-        .map(extract_codec_info)
-        .unwrap_or_default();
+    let codec_info = video_track.map(extract_codec_info).unwrap_or_default();
 
     let video_bit_depth = codec_info.bit_depth;
     let video_profile = codec_info.profile;
@@ -173,16 +171,14 @@ fn build_analysis(raw: RawContainer) -> MediaAnalysis {
     let dovi_profile = dovi_info.as_ref().map(|d| d.profile);
     let dovi_bl_compat_id = dovi_info.as_ref().map(|d| d.bl_signal_compatibility_id);
 
-    let video_frame_rate = video_track
-        .and_then(|t| t.frame_rate_fps)
-        .and_then(|fps| {
-            if fps <= 0.0 {
-                return None;
-            }
-            let s = format!("{fps:.3}");
-            let s = s.trim_end_matches('0').trim_end_matches('.');
-            Some(s.to_owned())
-        });
+    let video_frame_rate = video_track.and_then(|t| t.frame_rate_fps).and_then(|fps| {
+        if fps <= 0.0 {
+            return None;
+        }
+        let s = format!("{fps:.3}");
+        let s = s.trim_end_matches('0').trim_end_matches('.');
+        Some(s.to_owned())
+    });
 
     // --- Audio ---
     let primary_audio = audio_tracks.first().copied();

@@ -102,10 +102,7 @@ fn toml_value_to_json_string(value: &toml::Value) -> String {
     }
 }
 
-pub(crate) async fn apply_dev_seed(
-    app: &AppUseCase,
-    db: &SqliteServices,
-) -> Result<(), String> {
+pub(crate) async fn apply_dev_seed(app: &AppUseCase, db: &SqliteServices) -> Result<(), String> {
     let seed_path = match std::env::var("SCRYER_DEV_SEED_FILE") {
         Ok(path) if !path.trim().is_empty() => path.trim().to_string(),
         _ => return Ok(()),
@@ -174,7 +171,12 @@ pub(crate) async fn apply_dev_seed(
 
         app.create_indexer_config(&actor, input)
             .await
-            .map_err(|e| format!("dev seed: failed to create indexer '{}': {e}", seed_indexer.name))?;
+            .map_err(|e| {
+                format!(
+                    "dev seed: failed to create indexer '{}': {e}",
+                    seed_indexer.name
+                )
+            })?;
 
         tracing::info!(name = %seed_indexer.name, "dev seed: created indexer");
     }
@@ -259,10 +261,7 @@ pub(crate) async fn apply_dev_seed(
     Ok(())
 }
 
-async fn apply_title_seed(
-    app: &AppUseCase,
-    actor: &scryer_domain::User,
-) -> Result<(), String> {
+async fn apply_title_seed(app: &AppUseCase, actor: &scryer_domain::User) -> Result<(), String> {
     let seed_path = match std::env::var("SCRYER_DEV_SEED_TITLES_FILE") {
         Ok(path) if !path.trim().is_empty() => path.trim().to_string(),
         _ => return Ok(()),
@@ -318,10 +317,7 @@ async fn apply_title_seed(
                 continue;
             }
 
-            let label = seed
-                .name
-                .as_deref()
-                .unwrap_or("unknown");
+            let label = seed.name.as_deref().unwrap_or("unknown");
 
             let request = NewTitle {
                 name: label.to_string(),
@@ -440,8 +436,7 @@ name = "Breaking Bad"
 tvdb_id = 267440
 name = "Attack on Titan"
 "#;
-        let config: SeedTitlesConfig =
-            toml::from_str(toml_str).expect("title seed should parse");
+        let config: SeedTitlesConfig = toml::from_str(toml_str).expect("title seed should parse");
         assert_eq!(config.movies.len(), 2);
         assert_eq!(config.series.len(), 1);
         assert_eq!(config.anime.len(), 1);

@@ -210,7 +210,10 @@ fn audio_weight_lookup_atmos_variants() {
 
     // Audiophile: Atmos variants are significantly higher
     let aud = build_weights(&ScoringPersona::Audiophile, &ScoringOverrides::default());
-    assert!(audio_weight_for_codec(&aud, "TRUEHD", true) > audio_weight_for_codec(&aud, "TRUEHD", false));
+    assert!(
+        audio_weight_for_codec(&aud, "TRUEHD", true)
+            > audio_weight_for_codec(&aud, "TRUEHD", false)
+    );
     assert!(audio_weight_for_codec(&aud, "DDP", true) > audio_weight_for_codec(&aud, "DDP", false));
 }
 

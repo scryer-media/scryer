@@ -13,7 +13,12 @@ impl AppUseCase {
         for title in &titles {
             if !title.monitored {
                 // Clean up wanted items for unmonitored titles
-                if let Err(err) = self.services.wanted_items.delete_wanted_items_for_title(&title.id).await {
+                if let Err(err) = self
+                    .services
+                    .wanted_items
+                    .delete_wanted_items_for_title(&title.id)
+                    .await
+                {
                     warn!(title_id = title.id.as_str(), error = %err, "failed to clean wanted items for unmonitored title");
                 }
                 continue;
@@ -35,9 +40,19 @@ impl AppUseCase {
         self.sync_wanted_movie_inner(title, now, false).await;
     }
 
-    pub(crate) async fn sync_wanted_movie_inner(&self, title: &Title, now: &DateTime<Utc>, immediate: bool) {
+    pub(crate) async fn sync_wanted_movie_inner(
+        &self,
+        title: &Title,
+        now: &DateTime<Utc>,
+        immediate: bool,
+    ) {
         // Check if movie already has a media file
-        let has_file = match self.services.media_files.list_media_files_for_title(&title.id).await {
+        let has_file = match self
+            .services
+            .media_files
+            .list_media_files_for_title(&title.id)
+            .await
+        {
             Ok(files) => !files.is_empty(),
             Err(_) => false,
         };
@@ -61,12 +76,7 @@ impl AppUseCase {
         // Determine baseline date for search scheduling
         let baseline_date = title.first_aired.clone();
 
-        let schedule = compute_search_schedule(
-            "movie",
-            baseline_date.as_deref(),
-            "primary",
-            now,
-        );
+        let schedule = compute_search_schedule("movie", baseline_date.as_deref(), "primary", now);
 
         // When immediate=true (called from add_title), set next_search_at to now
         // so the background poller picks it up on the next 60-second tick.
@@ -118,8 +128,18 @@ impl AppUseCase {
 
     /// Sync wanted items for a series. When `immediate` is true, sets `next_search_at = now`
     /// so the background poller picks up new items on the next 60-second tick.
-    pub(crate) async fn sync_wanted_series_inner(&self, title: &Title, now: &DateTime<Utc>, immediate: bool) {
-        let collections = match self.services.shows.list_collections_for_title(&title.id).await {
+    pub(crate) async fn sync_wanted_series_inner(
+        &self,
+        title: &Title,
+        now: &DateTime<Utc>,
+        immediate: bool,
+    ) {
+        let collections = match self
+            .services
+            .shows
+            .list_collections_for_title(&title.id)
+            .await
+        {
             Ok(c) => c,
             Err(err) => {
                 warn!(title_id = title.id.as_str(), error = %err, "failed to list collections for wanted sync");
@@ -144,7 +164,12 @@ impl AppUseCase {
                 continue;
             }
 
-            let episodes = match self.services.shows.list_episodes_for_collection(&collection.id).await {
+            let episodes = match self
+                .services
+                .shows
+                .list_episodes_for_collection(&collection.id)
+                .await
+            {
                 Ok(eps) => eps,
                 Err(_) => continue,
             };
@@ -160,12 +185,8 @@ impl AppUseCase {
 
                 let baseline_date = episode.air_date.clone();
 
-                let schedule = compute_search_schedule(
-                    "episode",
-                    baseline_date.as_deref(),
-                    "primary",
-                    now,
-                );
+                let schedule =
+                    compute_search_schedule("episode", baseline_date.as_deref(), "primary", now);
 
                 let next_search_at = if immediate {
                     now.to_rfc3339()
@@ -250,10 +271,8 @@ impl DownloadClientSnapshot {
                             || reason_upper == "PAR"
                             || reason_upper == "UNPACK"
                         {
-                            failed_titles.insert(
-                                item.title_name.to_ascii_lowercase(),
-                                reason_upper,
-                            );
+                            failed_titles
+                                .insert(item.title_name.to_ascii_lowercase(), reason_upper);
                         }
                     }
                 }
@@ -274,7 +293,8 @@ impl DownloadClientSnapshot {
 
     /// Returns true if a release with this title is currently queued/downloading.
     pub(crate) fn is_active(&self, release_title: &str) -> bool {
-        self.active_titles.contains(&release_title.to_ascii_lowercase())
+        self.active_titles
+            .contains(&release_title.to_ascii_lowercase())
     }
 
     /// If a release with this title failed in history with a blocklist-worthy
@@ -385,7 +405,12 @@ async fn process_due_wanted_items(app: &AppUseCase) {
     let now = Utc::now();
     let now_str = now.to_rfc3339();
 
-    let due_items = match app.services.wanted_items.list_due_wanted_items(&now_str, 50).await {
+    let due_items = match app
+        .services
+        .wanted_items
+        .list_due_wanted_items(&now_str, 50)
+        .await
+    {
         Ok(items) => {
             if !items.is_empty() {
                 info!(
@@ -418,9 +443,11 @@ async fn process_due_wanted_items(app: &AppUseCase) {
     // multiple times (e.g. a season pack matching several episode wanted items).
     let mut grabbed_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
     // Track (title_id, season_num) for which a season pack search was attempted this cycle.
-    let mut season_pack_attempted: std::collections::HashSet<(String, u32)> = std::collections::HashSet::new();
+    let mut season_pack_attempted: std::collections::HashSet<(String, u32)> =
+        std::collections::HashSet::new();
     // Track (title_id, season_num) for which a season pack was successfully grabbed this cycle.
-    let mut season_pack_grabbed: std::collections::HashSet<(String, u32)> = std::collections::HashSet::new();
+    let mut season_pack_grabbed: std::collections::HashSet<(String, u32)> =
+        std::collections::HashSet::new();
 
     // Count due episode items per (title_id, season_num). Season pack search is only
     // worthwhile when >= 2 episodes from the same season are due this cycle — mirroring
@@ -432,7 +459,9 @@ async fn process_due_wanted_items(app: &AppUseCase) {
             if let Some(sn) = item.season_number.as_deref() {
                 if let Ok(n) = sn.parse::<u32>() {
                     if n > 0 {
-                        *season_due_counts.entry((item.title_id.clone(), n)).or_insert(0) += 1;
+                        *season_due_counts
+                            .entry((item.title_id.clone(), n))
+                            .or_insert(0) += 1;
                     }
                 }
             }
@@ -441,13 +470,17 @@ async fn process_due_wanted_items(app: &AppUseCase) {
 
     for item in &due_items {
         if let Err(err) = process_single_wanted_item(
-            app, item, &now,
+            app,
+            item,
+            &now,
             &mut grabbed_urls,
             &mut season_pack_attempted,
             &mut season_pack_grabbed,
             &season_due_counts,
             &dl_snapshot,
-        ).await {
+        )
+        .await
+        {
             warn!(
                 wanted_item_id = item.id.as_str(),
                 title_id = item.title_id.as_str(),
@@ -464,17 +497,25 @@ async fn process_due_wanted_items(app: &AppUseCase) {
             &now,
         );
 
-        let new_status = if schedule.search_phase == "paused" { "paused" } else { "wanted" };
+        let new_status = if schedule.search_phase == "paused" {
+            "paused"
+        } else {
+            "wanted"
+        };
 
-        let _ = app.services.wanted_items.update_wanted_item_status(
-            &item.id,
-            new_status,
-            Some(&schedule.next_search_at),
-            Some(&now.to_rfc3339()),
-            item.search_count + 1,
-            item.current_score,
-            item.grabbed_release.as_deref(),
-        ).await;
+        let _ = app
+            .services
+            .wanted_items
+            .update_wanted_item_status(
+                &item.id,
+                new_status,
+                Some(&schedule.next_search_at),
+                Some(&now.to_rfc3339()),
+                item.search_count + 1,
+                item.current_score,
+                item.grabbed_release.as_deref(),
+            )
+            .await;
     }
 }
 
@@ -492,7 +533,10 @@ async fn process_single_wanted_item(
     let title = match app.services.titles.get_by_id(&item.title_id).await? {
         Some(t) => t,
         None => {
-            warn!(title_id = item.title_id.as_str(), "wanted item references missing title");
+            warn!(
+                title_id = item.title_id.as_str(),
+                "wanted item references missing title"
+            );
             return Ok(());
         }
     };
@@ -561,18 +605,24 @@ async fn process_single_wanted_item(
                     .await
                     .unwrap_or_default();
 
-                if let Some(best_pack) = pack_results
-                    .iter()
-                    .find(|r| r.quality_profile_decision.as_ref().map(|d| d.allowed).unwrap_or(false))
-                {
-                    let pack_url = best_pack.download_url.clone().or_else(|| best_pack.link.clone());
+                if let Some(best_pack) = pack_results.iter().find(|r| {
+                    r.quality_profile_decision
+                        .as_ref()
+                        .map(|d| d.allowed)
+                        .unwrap_or(false)
+                }) {
+                    let pack_url = best_pack
+                        .download_url
+                        .clone()
+                        .or_else(|| best_pack.link.clone());
                     let url_str = pack_url.as_deref().unwrap_or("").to_string();
 
                     if !url_str.is_empty() && grabbed_urls.insert(url_str.clone()) {
                         let download_cat = app.derive_download_category(&title.facet).await;
                         let pack_title = Some(best_pack.title.clone());
                         let pack_hint = normalize_release_attempt_hint(pack_url.as_deref());
-                        let pack_title_norm = normalize_release_attempt_title(pack_title.as_deref());
+                        let pack_title_norm =
+                            normalize_release_attempt_title(pack_title.as_deref());
                         let pack_password = normalize_release_password(
                             best_pack.nzbgeek_password_protected.as_deref(),
                         );
@@ -611,7 +661,9 @@ async fn process_single_wanted_item(
                                     .await;
                                 let facet_str = serde_json::to_string(&title.facet)
                                     .unwrap_or_else(|_| "\"other\"".to_string());
-                                let _ = app.services.download_submissions
+                                let _ = app
+                                    .services
+                                    .download_submissions
                                     .record_submission(DownloadSubmission {
                                         title_id: title.id.clone(),
                                         facet: facet_str.trim_matches('"').to_string(),
@@ -633,10 +685,7 @@ async fn process_single_wanted_item(
                                         ActivityKind::AcquisitionCandidateAccepted,
                                         format!(
                                             "season pack grabbed: {} S{:0>2} '{}' (score: {})",
-                                            title.name,
-                                            season_num,
-                                            best_pack.title,
-                                            pack_score,
+                                            title.name, season_num, best_pack.title, pack_score,
                                         ),
                                         ActivitySeverity::Success,
                                         vec![ActivityChannel::WebUi, ActivityChannel::Toast],
@@ -717,20 +766,23 @@ async fn process_single_wanted_item(
         .as_ref()
         .and_then(|ep| ep.absolute_number.as_deref())
         .and_then(|v| v.parse::<u32>().ok());
-    let results = match app.search_and_score_releases(
-        queries,
-        imdb_id,
-        tvdb_id,
-        Some(category.clone()),
-        &title.tags,
-        200,
-        "background_acquisition",
-        SearchMode::Auto,
-        runtime_minutes,
-        search_season,
-        search_episode,
-        absolute_episode,
-    ).await {
+    let results = match app
+        .search_and_score_releases(
+            queries,
+            imdb_id,
+            tvdb_id,
+            Some(category.clone()),
+            &title.tags,
+            200,
+            "background_acquisition",
+            SearchMode::Auto,
+            runtime_minutes,
+            search_season,
+            search_episode,
+            absolute_episode,
+        )
+        .await
+    {
         Ok(r) => r,
         Err(err) => {
             warn!(
@@ -743,14 +795,17 @@ async fn process_single_wanted_item(
     };
 
     // Emit search completed activity
-    let _ = app.services.record_activity_event(
-        None,
-        Some(title.id.clone()),
-        ActivityKind::AcquisitionSearchCompleted,
-        format!("{} results for '{}'", results.len(), title.name),
-        ActivitySeverity::Info,
-        vec![ActivityChannel::WebUi],
-    ).await;
+    let _ = app
+        .services
+        .record_activity_event(
+            None,
+            Some(title.id.clone()),
+            ActivityKind::AcquisitionSearchCompleted,
+            format!("{} results for '{}'", results.len(), title.name),
+            ActivitySeverity::Info,
+            vec![ActivityChannel::WebUi],
+        )
+        .await;
 
     if results.is_empty() {
         info!(
@@ -815,10 +870,14 @@ async fn process_single_wanted_item(
             );
 
             let hint = normalize_release_attempt_hint(
-                candidate.download_url.as_deref().or(candidate.link.as_deref()),
+                candidate
+                    .download_url
+                    .as_deref()
+                    .or(candidate.link.as_deref()),
             );
             let rel_title = normalize_release_attempt_title(Some(&candidate.title));
-            let password = normalize_release_password(candidate.nzbgeek_password_protected.as_deref());
+            let password =
+                normalize_release_password(candidate.nzbgeek_password_protected.as_deref());
 
             let _ = app
                 .services
@@ -882,14 +941,15 @@ async fn process_single_wanted_item(
         .unwrap_or(0);
 
     // Resolve quality profile to check allow_upgrades
-    let profile = app.resolve_quality_profile(
-        &title.tags,
-        title.imdb_id.as_deref(),
-        tvdb_id_from_external_ids(&title.external_ids).as_deref(),
-        Some(&category),
-    )
-    .await
-    .unwrap_or_else(|_| crate::quality_profile::default_quality_profile_for_search());
+    let profile = app
+        .resolve_quality_profile(
+            &title.tags,
+            title.imdb_id.as_deref(),
+            tvdb_id_from_external_ids(&title.external_ids).as_deref(),
+            Some(&category),
+        )
+        .await
+        .unwrap_or_else(|_| crate::quality_profile::default_quality_profile_for_search());
 
     // Cutoff tier check — skip upgrades if the existing file meets the cutoff quality
     if crate::quality_profile::has_reached_cutoff(
@@ -929,36 +989,55 @@ async fn process_single_wanted_item(
         current_score: item.current_score,
         score_delta: item.current_score.map(|c| candidate_score - c),
         explanation_json: best.quality_profile_decision.as_ref().map(|d| {
-            serde_json::to_string(&d.scoring_log.iter().map(|e| {
-                serde_json::json!({"code": e.code, "delta": e.delta})
-            }).collect::<Vec<_>>()).unwrap_or_default()
+            serde_json::to_string(
+                &d.scoring_log
+                    .iter()
+                    .map(|e| serde_json::json!({"code": e.code, "delta": e.delta}))
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap_or_default()
         }),
         created_at: now.to_rfc3339(),
     };
 
-    let _ = app.services.wanted_items.insert_release_decision(&decision_record).await;
+    let _ = app
+        .services
+        .wanted_items
+        .insert_release_decision(&decision_record)
+        .await;
 
     if !decision.is_accept() {
-        let _ = app.services.record_activity_event(
-            None,
-            Some(title.id.clone()),
-            ActivityKind::AcquisitionCandidateRejected,
-            format!("{}: '{}' ({})", decision.code(), best.title, title.name),
-            ActivitySeverity::Info,
-            vec![ActivityChannel::WebUi],
-        ).await;
+        let _ = app
+            .services
+            .record_activity_event(
+                None,
+                Some(title.id.clone()),
+                ActivityKind::AcquisitionCandidateRejected,
+                format!("{}: '{}' ({})", decision.code(), best.title, title.name),
+                ActivitySeverity::Info,
+                vec![ActivityChannel::WebUi],
+            )
+            .await;
         return Ok(());
     }
 
-    let _ = app.services.record_activity_event(
-        None,
-        Some(title.id.clone()),
-        ActivityKind::AcquisitionCandidateAccepted,
-        format!("'{}' score={} delta={} ({})", best.title, candidate_score,
-            decision_record.score_delta.unwrap_or(candidate_score), title.name),
-        ActivitySeverity::Success,
-        vec![ActivityChannel::WebUi, ActivityChannel::Toast],
-    ).await;
+    let _ = app
+        .services
+        .record_activity_event(
+            None,
+            Some(title.id.clone()),
+            ActivityKind::AcquisitionCandidateAccepted,
+            format!(
+                "'{}' score={} delta={} ({})",
+                best.title,
+                candidate_score,
+                decision_record.score_delta.unwrap_or(candidate_score),
+                title.name
+            ),
+            ActivitySeverity::Success,
+            vec![ActivityChannel::WebUi, ActivityChannel::Toast],
+        )
+        .await;
 
     // Submit to download client
     let source_hint = best.download_url.clone().or_else(|| best.link.clone());
@@ -979,16 +1058,21 @@ async fn process_single_wanted_item(
                 "score": candidate_score,
                 "grabbed_at": now.to_rfc3339(),
                 "deduplicated": true,
-            }).to_string();
-            let _ = app.services.wanted_items.update_wanted_item_status(
-                &item.id,
-                "grabbed",
-                None,
-                Some(&now.to_rfc3339()),
-                item.search_count + 1,
-                item.current_score,
-                Some(&grabbed_json),
-            ).await;
+            })
+            .to_string();
+            let _ = app
+                .services
+                .wanted_items
+                .update_wanted_item_status(
+                    &item.id,
+                    "grabbed",
+                    None,
+                    Some(&now.to_rfc3339()),
+                    item.search_count + 1,
+                    item.current_score,
+                    Some(&grabbed_json),
+                )
+                .await;
             return Ok(());
         }
     }
@@ -1019,7 +1103,9 @@ async fn process_single_wanted_item(
         "auto-grabbing release"
     );
 
-    let grab_result = app.services.download_client
+    let grab_result = app
+        .services
+        .download_client
         .submit_to_download_queue(
             &title,
             source_hint.clone(),
@@ -1040,7 +1126,9 @@ async fn process_single_wanted_item(
             }
 
             // Record as release attempt for blocklist tracking
-            let _ = app.services.release_attempts
+            let _ = app
+                .services
+                .release_attempts
                 .record_release_attempt(
                     Some(title.id.clone()),
                     source_hint_for_attempt.clone(),
@@ -1052,9 +1140,11 @@ async fn process_single_wanted_item(
                 .await;
 
             // Record download submission for auto-import matching
-            let facet_str = serde_json::to_string(&title.facet)
-                .unwrap_or_else(|_| "\"other\"".to_string());
-            let _ = app.services.download_submissions
+            let facet_str =
+                serde_json::to_string(&title.facet).unwrap_or_else(|_| "\"other\"".to_string());
+            let _ = app
+                .services
+                .download_submissions
                 .record_submission(DownloadSubmission {
                     title_id: title.id.clone(),
                     facet: facet_str.trim_matches('"').to_string(),
@@ -1069,26 +1159,34 @@ async fn process_single_wanted_item(
                 "title": best.title,
                 "score": candidate_score,
                 "grabbed_at": now.to_rfc3339(),
-            }).to_string();
+            })
+            .to_string();
 
-            let _ = app.services.wanted_items.update_wanted_item_status(
-                &item.id,
-                "grabbed",
-                None,
-                Some(&now.to_rfc3339()),
-                item.search_count + 1,
-                item.current_score,
-                Some(&grabbed_json),
-            ).await;
+            let _ = app
+                .services
+                .wanted_items
+                .update_wanted_item_status(
+                    &item.id,
+                    "grabbed",
+                    None,
+                    Some(&now.to_rfc3339()),
+                    item.search_count + 1,
+                    item.current_score,
+                    Some(&grabbed_json),
+                )
+                .await;
 
-            let _ = app.services.record_activity_event(
-                None,
-                Some(title.id.clone()),
-                ActivityKind::MovieDownloaded,
-                format!("auto-grabbed: {} (score: {})", best.title, candidate_score),
-                ActivitySeverity::Success,
-                vec![ActivityChannel::WebUi, ActivityChannel::Toast],
-            ).await;
+            let _ = app
+                .services
+                .record_activity_event(
+                    None,
+                    Some(title.id.clone()),
+                    ActivityKind::MovieDownloaded,
+                    format!("auto-grabbed: {} (score: {})", best.title, candidate_score),
+                    ActivitySeverity::Success,
+                    vec![ActivityChannel::WebUi, ActivityChannel::Toast],
+                )
+                .await;
         }
         Err(err) => {
             warn!(
@@ -1097,7 +1195,9 @@ async fn process_single_wanted_item(
                 "auto-grab download submission failed"
             );
 
-            let _ = app.services.release_attempts
+            let _ = app
+                .services
+                .release_attempts
                 .record_release_attempt(
                     Some(title.id.clone()),
                     source_hint_for_attempt,
@@ -1108,25 +1208,32 @@ async fn process_single_wanted_item(
                 )
                 .await;
 
-            let _ = app.services.record_activity_event(
-                None,
-                Some(title.id.clone()),
-                ActivityKind::AcquisitionDownloadFailed,
-                format!("download failed for '{}': {}", title.name, err),
-                ActivitySeverity::Error,
-                vec![ActivityChannel::WebUi, ActivityChannel::Toast],
-            ).await;
+            let _ = app
+                .services
+                .record_activity_event(
+                    None,
+                    Some(title.id.clone()),
+                    ActivityKind::AcquisitionDownloadFailed,
+                    format!("download failed for '{}': {}", title.name, err),
+                    ActivitySeverity::Error,
+                    vec![ActivityChannel::WebUi, ActivityChannel::Toast],
+                )
+                .await;
 
             // Re-queue for immediate re-search so the next cycle tries a different release
-            let _ = app.services.wanted_items.update_wanted_item_status(
-                &item.id,
-                "wanted",
-                Some(&now.to_rfc3339()),
-                Some(&now.to_rfc3339()),
-                item.search_count + 1,
-                item.current_score,
-                item.grabbed_release.as_deref(),
-            ).await;
+            let _ = app
+                .services
+                .wanted_items
+                .update_wanted_item_status(
+                    &item.id,
+                    "wanted",
+                    Some(&now.to_rfc3339()),
+                    Some(&now.to_rfc3339()),
+                    item.search_count + 1,
+                    item.current_score,
+                    item.grabbed_release.as_deref(),
+                )
+                .await;
 
             info!(
                 title = title.name.as_str(),
@@ -1190,7 +1297,14 @@ fn build_search_queries(
             if queries.is_empty() && imdb_id.is_some() {
                 queries.push(String::new());
             }
-            SearchQueryResult { queries, imdb_id, tvdb_id, category, season: None, episode: None }
+            SearchQueryResult {
+                queries,
+                imdb_id,
+                tvdb_id,
+                category,
+                season: None,
+                episode: None,
+            }
         }
         "episode" => {
             let mut queries = Vec::new();
@@ -1266,9 +1380,23 @@ fn build_search_queries(
                 }
             }
 
-            SearchQueryResult { queries, imdb_id, tvdb_id, category, season: season_param, episode: episode_param }
+            SearchQueryResult {
+                queries,
+                imdb_id,
+                tvdb_id,
+                category,
+                season: season_param,
+                episode: episode_param,
+            }
         }
-        _ => SearchQueryResult { queries: vec![], imdb_id: None, tvdb_id: None, category, season: None, episode: None },
+        _ => SearchQueryResult {
+            queries: vec![],
+            imdb_id: None,
+            tvdb_id: None,
+            category,
+            season: None,
+            episode: None,
+        },
     }
 }
 
@@ -1468,8 +1596,10 @@ pub async fn start_background_acquisition_poller(
 
     let mut poll_interval = tokio::time::interval(std::time::Duration::from_secs(60));
     let mut sync_interval = tokio::time::interval(std::time::Duration::from_secs(3600));
-    let mut metadata_refresh_interval = tokio::time::interval(std::time::Duration::from_secs(43200)); // 12h
-    let mut registry_refresh_interval = tokio::time::interval(std::time::Duration::from_secs(86400)); // 24h
+    let mut metadata_refresh_interval =
+        tokio::time::interval(std::time::Duration::from_secs(43200)); // 12h
+    let mut registry_refresh_interval =
+        tokio::time::interval(std::time::Duration::from_secs(86400)); // 24h
     let mut health_check_interval = tokio::time::interval(std::time::Duration::from_secs(21600)); // 6h
     let mut housekeeping_interval = tokio::time::interval(std::time::Duration::from_secs(86400)); // 24h
     let mut rss_sync_interval = tokio::time::interval(std::time::Duration::from_secs(900)); // 15min
@@ -1613,14 +1743,12 @@ pub(crate) fn is_movie_available_for_acquisition(
     now: &DateTime<Utc>,
 ) -> bool {
     match availability {
-        "in_cinemas" => {
-            title
-                .first_aired
-                .as_deref()
-                .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-                .map(|date| date <= now.date_naive())
-                .unwrap_or(false)
-        }
+        "in_cinemas" => title
+            .first_aired
+            .as_deref()
+            .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+            .map(|date| date <= now.date_naive())
+            .unwrap_or(false),
         "released" => {
             if let Some(ref digital) = title.digital_release_date {
                 chrono::NaiveDate::parse_from_str(digital, "%Y-%m-%d")

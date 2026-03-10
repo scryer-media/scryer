@@ -1,47 +1,48 @@
 #![allow(clippy::too_many_arguments)]
 
+mod acquisition_policy;
 mod activity;
-mod quality_profile;
-mod scoring_weights;
-mod release_group_db;
-mod release_parser;
-mod library_scan;
-mod library_rename;
-pub(crate) mod nfo;
-mod null_repositories;
-mod types;
-pub(crate) mod facet_handler;
-mod facet_movie;
-mod facet_series;
-mod facet_registry;
+mod app_usecase_acquisition;
 mod app_usecase_activity;
 mod app_usecase_admin;
-mod app_usecase_rules;
-mod app_usecase_catalog;
-pub(crate) mod app_usecase_library;
-mod app_usecase_discovery;
-mod app_usecase_integration;
-mod app_usecase_import;
-mod app_usecase_security;
-mod acquisition_policy;
-mod delay_profile;
-mod app_usecase_acquisition;
-mod app_usecase_indexer_test;
-pub(crate) mod app_usecase_rss;
-mod app_usecase_pending;
-mod app_usecase_notifications;
-mod app_usecase_plugins;
-mod app_usecase_housekeeping;
-pub mod app_usecase_post_processing;
-pub mod recycle_bin;
-pub(crate) mod import_checks;
-pub mod upgrade;
-mod app_usecase_health;
 mod app_usecase_backup;
+mod app_usecase_catalog;
+mod app_usecase_discovery;
+mod app_usecase_health;
+mod app_usecase_housekeeping;
+mod app_usecase_import;
+mod app_usecase_indexer_test;
+mod app_usecase_integration;
+pub(crate) mod app_usecase_library;
+mod app_usecase_notifications;
+mod app_usecase_pending;
+mod app_usecase_plugins;
+pub mod app_usecase_post_processing;
+pub(crate) mod app_usecase_rss;
+mod app_usecase_rules;
+mod app_usecase_security;
+mod delay_profile;
+pub(crate) mod facet_handler;
+mod facet_movie;
+mod facet_registry;
+mod facet_series;
+pub(crate) mod import_checks;
+mod library_rename;
+mod library_scan;
+pub(crate) mod nfo;
+mod null_repositories;
+mod quality_profile;
+pub mod recycle_bin;
+mod release_group_db;
+mod release_parser;
+mod scoring_weights;
+mod types;
+pub mod upgrade;
 
 use crate::activity::ActivityStream;
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
+use rand_core::OsRng;
 use scryer_domain::{
     CalendarEpisode, Collection, CompletedDownload, DownloadClientConfig, DownloadQueueItem,
     DownloadQueueState, Entitlement, Episode, EventType, ExternalId, HistoryEvent, Id,
@@ -49,51 +50,49 @@ use scryer_domain::{
     NewIndexerConfig, NewTitle, PluginInstallation, PolicyInput, PolicyOutput, RuleSet, Title,
     User,
 };
-use std::path::Path;
-use rand_core::OsRng;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
 pub type AppResult<T> = Result<T, AppError>;
 
 use crate::quality_profile::resolve_profile_id_for_title;
-pub use activity::{ActivityChannel, ActivityEvent, ActivityKind, ActivitySeverity};
 pub use acquisition_policy::AcquisitionThresholds;
+pub use activity::{ActivityChannel, ActivityEvent, ActivityKind, ActivitySeverity};
 pub use app_usecase_acquisition::start_background_acquisition_poller;
+pub use app_usecase_backup::BackupService;
 pub use app_usecase_catalog::start_background_hydration_loop;
-pub use app_usecase_integration::start_download_queue_poller;
-pub use app_usecase_plugins::RegistryPlugin;
-pub use library_scan::{
-    AnimeEpisodeMapping, AnimeMapping, EpisodeMetadata, LibraryFile, LibraryScanSummary,
-    LibraryScanner, MetadataGateway, MetadataSearchItem, MovieMetadata, MultiMetadataSearchResult,
-    RichMetadataSearchItem, SeasonMetadata, SeriesMetadata,
-};
 pub use app_usecase_import::{
     execute_manual_import, import_completed_download, preview_manual_import,
     try_import_completed_downloads, ManualImportFileMapping, ManualImportFilePreview,
     ManualImportFileResult, ManualImportPreview,
 };
-pub use library_rename::{
-    build_rename_plan_fingerprint, render_rename_template, LibraryRenamer,
-    NullLibraryRenamer, RenameApplyItemResult, RenameApplyResult, RenameApplyStatus,
-    RenameCollisionPolicy, RenameMissingMetadataPolicy, RenamePlan, RenamePlanItem,
-    RenameWriteAction,
-};
-pub use quality_profile::{
-    apply_age_scoring, apply_size_scoring_for_category, default_quality_profile_1080p_for_search,
-    default_quality_profile_for_search, evaluate_against_profile,
-    parse_profile_catalog_from_json, QualityProfile,
-    QualityProfileCriteria, QualityProfileDecision, ScoringConfig, ScoringEntry, ScoringSource,
-    BLOCK_SCORE, QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY,
-};
-pub use scoring_weights::{build_weights, ScoringOverrides, ScoringPersona, ScoringWeights};
+pub use app_usecase_integration::start_download_queue_poller;
+pub use app_usecase_plugins::RegistryPlugin;
+pub use app_usecase_post_processing::{run_post_processing, PostProcessingContext};
+pub use app_usecase_rss::RssSyncReport;
 pub use delay_profile::{
     parse_delay_profile_catalog, resolve_delay_profile, should_bypass_delay, DelayProfile,
     DELAY_PROFILE_CATALOG_KEY,
 };
-pub use release_parser::{parse_release_metadata, ParsedEpisodeMetadata, ParsedReleaseMetadata};
+pub use facet_handler::{
+    movie_to_hydration_result, series_to_hydration_result, FacetHandler, HydrationResult,
+};
+pub use facet_movie::MovieFacetHandler;
+pub use facet_registry::FacetRegistry;
+pub use facet_series::SeriesFacetHandler;
+pub use library_rename::{
+    build_rename_plan_fingerprint, render_rename_template, LibraryRenamer, NullLibraryRenamer,
+    RenameApplyItemResult, RenameApplyResult, RenameApplyStatus, RenameCollisionPolicy,
+    RenameMissingMetadataPolicy, RenamePlan, RenamePlanItem, RenameWriteAction,
+};
+pub use library_scan::{
+    AnimeEpisodeMapping, AnimeMapping, EpisodeMetadata, LibraryFile, LibraryScanSummary,
+    LibraryScanner, MetadataGateway, MetadataSearchItem, MovieMetadata, MultiMetadataSearchResult,
+    RichMetadataSearchItem, SeasonMetadata, SeriesMetadata,
+};
 pub use null_repositories::{
     NullDownloadSubmissionRepository, NullFileImporter, NullHousekeepingRepository,
     NullImportRepository, NullIndexerStatsTracker, NullMediaFileRepository,
@@ -101,6 +100,15 @@ pub use null_repositories::{
     NullPendingReleaseRepository, NullPluginInstallationRepository, NullRuleSetRepository,
     NullSettingsRepository, NullSystemInfoProvider, NullWantedItemRepository,
 };
+pub use quality_profile::{
+    apply_age_scoring, apply_size_scoring_for_category, default_quality_profile_1080p_for_search,
+    default_quality_profile_for_search, evaluate_against_profile, parse_profile_catalog_from_json,
+    QualityProfile, QualityProfileCriteria, QualityProfileDecision, ScoringConfig, ScoringEntry,
+    ScoringSource, BLOCK_SCORE, QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY,
+};
+pub use release_parser::{parse_release_metadata, ParsedEpisodeMetadata, ParsedReleaseMetadata};
+pub use scoring_weights::{build_weights, ScoringOverrides, ScoringPersona, ScoringWeights};
+pub(crate) use types::JwtClaims;
 pub use types::{
     BackupInfo, DiskSpaceInfo, DownloadGrabResult, HealthCheckResult, HealthCheckStatus,
     HousekeepingReport, IndexerQueryStats, IndexerSearchResponse, IndexerSearchResult,
@@ -108,21 +116,11 @@ pub use types::{
     ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature, SystemHealth, TitleMediaFile,
     TitleMetadataUpdate, TitleReleaseBlocklistEntry, WantedItem,
 };
-pub use app_usecase_rss::RssSyncReport;
-pub use app_usecase_post_processing::{PostProcessingContext, run_post_processing};
-pub use app_usecase_backup::BackupService;
-pub(crate) use types::JwtClaims;
-pub use facet_handler::{
-    movie_to_hydration_result, series_to_hydration_result, FacetHandler, HydrationResult,
-};
-pub use facet_movie::MovieFacetHandler;
-pub use facet_series::SeriesFacetHandler;
-pub use facet_registry::FacetRegistry;
 
 const SETTINGS_SCOPE_SYSTEM: &str = "system";
 const SETTINGS_SCOPE_MEDIA: &str = "media";
 const INHERIT_QUALITY_PROFILE_VALUE: &str = "__inherit__";
-const ALLOWED_DOWNLOAD_CLIENT_TYPES: [&str; 4] = ["nzbget", "sabnzbd", "qbittorrent", "weaver"];
+const NATIVE_DOWNLOAD_CLIENT_TYPES: [&str; 4] = ["nzbget", "sabnzbd", "qbittorrent", "weaver"];
 const INDEXER_PROVIDER_NZBGEEK: &str = "nzbgeek";
 
 #[derive(Debug, thiserror::Error)]
@@ -167,6 +165,7 @@ pub struct AppServices {
     pub indexer_stats: Arc<dyn IndexerStatsTracker>,
     pub user_rules: Arc<std::sync::RwLock<scryer_rules::UserRulesEngine>>,
     pub plugin_provider: Option<Arc<dyn IndexerPluginProvider>>,
+    pub download_client_plugin_provider: Option<Arc<dyn DownloadClientPluginProvider>>,
     pub notification_channels: Option<Arc<dyn NotificationChannelRepository>>,
     pub notification_subscriptions: Option<Arc<dyn NotificationSubscriptionRepository>>,
     pub notification_provider: Option<Arc<dyn NotificationPluginProvider>>,
@@ -225,8 +224,11 @@ impl AppServices {
             plugin_installations: Arc::new(NullPluginInstallationRepository),
             system_info: Arc::new(NullSystemInfoProvider),
             indexer_stats: Arc::new(NullIndexerStatsTracker),
-            user_rules: Arc::new(std::sync::RwLock::new(scryer_rules::UserRulesEngine::empty())),
+            user_rules: Arc::new(std::sync::RwLock::new(
+                scryer_rules::UserRulesEngine::empty(),
+            )),
             plugin_provider: None,
+            download_client_plugin_provider: None,
             notification_channels: None,
             notification_subscriptions: None,
             notification_provider: None,
@@ -543,10 +545,7 @@ pub struct DownloadSubmission {
 
 #[async_trait]
 pub trait DownloadSubmissionRepository: Send + Sync {
-    async fn record_submission(
-        &self,
-        submission: DownloadSubmission,
-    ) -> AppResult<()>;
+    async fn record_submission(&self, submission: DownloadSubmission) -> AppResult<()>;
 
     async fn find_by_client_item_id(
         &self,
@@ -582,22 +581,14 @@ pub trait ImportRepository: Send + Sync {
 
     async fn list_pending_imports(&self) -> AppResult<Vec<ImportRecord>>;
 
-    async fn is_already_imported(
-        &self,
-        source_system: &str,
-        source_ref: &str,
-    ) -> AppResult<bool>;
+    async fn is_already_imported(&self, source_system: &str, source_ref: &str) -> AppResult<bool>;
 
     async fn list_imports(&self, limit: usize) -> AppResult<Vec<ImportRecord>>;
 }
 
 #[async_trait]
 pub trait FileImporter: Send + Sync {
-    async fn import_file(
-        &self,
-        source: &Path,
-        dest: &Path,
-    ) -> AppResult<ImportFileResult>;
+    async fn import_file(&self, source: &Path, dest: &Path) -> AppResult<ImportFileResult>;
 }
 
 /// Parsed media properties from media analysis — application-layer DTO.
@@ -669,21 +660,11 @@ pub struct InsertMediaFileInput {
 
 #[async_trait]
 pub trait MediaFileRepository: Send + Sync {
-    async fn insert_media_file(
-        &self,
-        input: &InsertMediaFileInput,
-    ) -> AppResult<String>;
+    async fn insert_media_file(&self, input: &InsertMediaFileInput) -> AppResult<String>;
 
-    async fn link_file_to_episode(
-        &self,
-        file_id: &str,
-        episode_id: &str,
-    ) -> AppResult<()>;
+    async fn link_file_to_episode(&self, file_id: &str, episode_id: &str) -> AppResult<()>;
 
-    async fn list_media_files_for_title(
-        &self,
-        title_id: &str,
-    ) -> AppResult<Vec<TitleMediaFile>>;
+    async fn list_media_files_for_title(&self, title_id: &str) -> AppResult<Vec<TitleMediaFile>>;
 
     async fn update_media_file_analysis(
         &self,
@@ -691,11 +672,7 @@ pub trait MediaFileRepository: Send + Sync {
         analysis: MediaFileAnalysis,
     ) -> AppResult<()>;
 
-    async fn mark_scan_failed(
-        &self,
-        file_id: &str,
-        error: &str,
-    ) -> AppResult<()>;
+    async fn mark_scan_failed(&self, file_id: &str, error: &str) -> AppResult<()>;
 
     async fn delete_media_file(&self, file_id: &str) -> AppResult<()>;
 }
@@ -703,7 +680,11 @@ pub trait MediaFileRepository: Send + Sync {
 #[async_trait]
 pub trait WantedItemRepository: Send + Sync {
     async fn upsert_wanted_item(&self, item: &WantedItem) -> AppResult<String>;
-    async fn list_due_wanted_items(&self, now: &str, batch_limit: i64) -> AppResult<Vec<WantedItem>>;
+    async fn list_due_wanted_items(
+        &self,
+        now: &str,
+        batch_limit: i64,
+    ) -> AppResult<Vec<WantedItem>>;
     async fn update_wanted_item_status(
         &self,
         id: &str,
@@ -791,12 +772,32 @@ pub trait RuleSetRepository: Send + Sync {
 #[async_trait]
 pub trait PluginInstallationRepository: Send + Sync {
     async fn list_plugin_installations(&self) -> AppResult<Vec<PluginInstallation>>;
-    async fn get_plugin_installation(&self, plugin_id: &str) -> AppResult<Option<PluginInstallation>>;
-    async fn create_plugin_installation(&self, installation: &PluginInstallation, wasm_bytes: Option<&[u8]>) -> AppResult<PluginInstallation>;
-    async fn update_plugin_installation(&self, installation: &PluginInstallation, wasm_bytes: Option<&[u8]>) -> AppResult<PluginInstallation>;
+    async fn get_plugin_installation(
+        &self,
+        plugin_id: &str,
+    ) -> AppResult<Option<PluginInstallation>>;
+    async fn create_plugin_installation(
+        &self,
+        installation: &PluginInstallation,
+        wasm_bytes: Option<&[u8]>,
+    ) -> AppResult<PluginInstallation>;
+    async fn update_plugin_installation(
+        &self,
+        installation: &PluginInstallation,
+        wasm_bytes: Option<&[u8]>,
+    ) -> AppResult<PluginInstallation>;
     async fn delete_plugin_installation(&self, plugin_id: &str) -> AppResult<()>;
-    async fn get_enabled_plugin_wasm_bytes(&self) -> AppResult<Vec<(PluginInstallation, Option<Vec<u8>>)>>;
-    async fn seed_builtin(&self, plugin_id: &str, name: &str, description: &str, version: &str, provider_type: &str) -> AppResult<()>;
+    async fn get_enabled_plugin_wasm_bytes(
+        &self,
+    ) -> AppResult<Vec<(PluginInstallation, Option<Vec<u8>>)>>;
+    async fn seed_builtin(
+        &self,
+        plugin_id: &str,
+        name: &str,
+        description: &str,
+        version: &str,
+        provider_type: &str,
+    ) -> AppResult<()>;
     /// Store the JSON registry cache.
     async fn store_registry_cache(&self, json: &str) -> AppResult<()>;
     /// Retrieve the JSON registry cache. Returns None if never fetched.
@@ -862,7 +863,10 @@ pub trait IndexerPluginProvider: Send + Sync {
         Err("this provider does not support dynamic reload".to_string())
     }
     /// Returns the config field schema declared by the plugin for this provider type.
-    fn config_fields_for_provider(&self, _provider_type: &str) -> Vec<scryer_domain::ConfigFieldDef> {
+    fn config_fields_for_provider(
+        &self,
+        _provider_type: &str,
+    ) -> Vec<scryer_domain::ConfigFieldDef> {
         vec![]
     }
     /// Returns the human-readable plugin name for a given provider type.
@@ -882,12 +886,104 @@ pub trait IndexerPluginProvider: Send + Sync {
     }
     /// Returns the search capabilities declared by the plugin for a provider type.
     /// Defaults to all-true for backward compat with unknown providers.
-    fn capabilities_for_provider(&self, _provider_type: &str) -> scryer_domain::IndexerProviderCapabilities {
+    fn capabilities_for_provider(
+        &self,
+        _provider_type: &str,
+    ) -> scryer_domain::IndexerProviderCapabilities {
         scryer_domain::IndexerProviderCapabilities {
             search: true,
             imdb_search: true,
             tvdb_search: true,
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct DownloadClientAddRequest {
+    pub title: Title,
+    pub source_hint: Option<String>,
+    pub source_title: Option<String>,
+    pub source_password: Option<String>,
+    pub category: Option<String>,
+    pub download_directory: Option<String>,
+    pub release_title: Option<String>,
+    pub indexer_name: Option<String>,
+    pub info_hash_hint: Option<String>,
+    pub seed_goal_ratio: Option<f64>,
+    pub seed_goal_seconds: Option<i64>,
+    pub is_recent: Option<bool>,
+    pub season_pack: Option<bool>,
+}
+
+impl DownloadClientAddRequest {
+    pub fn from_legacy(
+        title: &Title,
+        source_hint: Option<String>,
+        source_title: Option<String>,
+        source_password: Option<String>,
+        category: Option<String>,
+    ) -> Self {
+        Self {
+            title: title.clone(),
+            source_hint,
+            source_title,
+            source_password,
+            category,
+            download_directory: None,
+            release_title: None,
+            indexer_name: None,
+            info_hash_hint: None,
+            seed_goal_ratio: None,
+            seed_goal_seconds: None,
+            is_recent: None,
+            season_pack: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct DownloadClientStatus {
+    pub version: Option<String>,
+    pub is_localhost: Option<bool>,
+    pub remote_output_roots: Vec<String>,
+    pub removes_completed_downloads: Option<bool>,
+    pub sorting_mode: Option<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct DownloadClientMarkImportedRequest {
+    pub client_item_id: String,
+    pub info_hash: Option<String>,
+    pub title_id: Option<String>,
+    pub title_name: Option<String>,
+    pub category: Option<String>,
+    pub imported_path: Option<String>,
+    pub download_path: Option<String>,
+}
+
+pub trait DownloadClientPluginProvider: Send + Sync {
+    fn client_for_config(&self, config: &DownloadClientConfig) -> Option<Arc<dyn DownloadClient>>;
+    fn available_provider_types(&self) -> Vec<String>;
+    fn config_fields_for_provider(
+        &self,
+        _provider_type: &str,
+    ) -> Vec<scryer_domain::ConfigFieldDef> {
+        vec![]
+    }
+    fn plugin_name_for_provider(&self, _provider_type: &str) -> Option<String> {
+        None
+    }
+    fn default_base_url_for_provider(&self, _provider_type: &str) -> Option<String> {
+        None
+    }
+    fn reload_plugins(
+        &self,
+        external_wasm_bytes: &[&[u8]],
+        disabled_builtins: &[String],
+    ) -> Result<(), String> {
+        let _ = (external_wasm_bytes, disabled_builtins);
+        Err("this provider does not support dynamic reload".to_string())
     }
 }
 
@@ -905,9 +1001,13 @@ pub trait NotificationClient: Send + Sync {
 }
 
 pub trait NotificationPluginProvider: Send + Sync {
-    fn client_for_channel(&self, config: &scryer_domain::NotificationChannelConfig) -> Option<Arc<dyn NotificationClient>>;
+    fn client_for_channel(
+        &self,
+        config: &scryer_domain::NotificationChannelConfig,
+    ) -> Option<Arc<dyn NotificationClient>>;
     fn available_provider_types(&self) -> Vec<String>;
-    fn config_fields_for_provider(&self, provider_type: &str) -> Vec<scryer_domain::ConfigFieldDef>;
+    fn config_fields_for_provider(&self, provider_type: &str)
+        -> Vec<scryer_domain::ConfigFieldDef>;
     fn plugin_name_for_provider(&self, provider_type: &str) -> Option<String>;
     fn reload_plugins(
         &self,
@@ -922,24 +1022,50 @@ pub trait NotificationPluginProvider: Send + Sync {
 #[async_trait]
 pub trait NotificationChannelRepository: Send + Sync {
     async fn list_channels(&self) -> AppResult<Vec<scryer_domain::NotificationChannelConfig>>;
-    async fn get_channel(&self, id: &str) -> AppResult<Option<scryer_domain::NotificationChannelConfig>>;
-    async fn create_channel(&self, config: scryer_domain::NotificationChannelConfig) -> AppResult<scryer_domain::NotificationChannelConfig>;
-    async fn update_channel(&self, config: scryer_domain::NotificationChannelConfig) -> AppResult<scryer_domain::NotificationChannelConfig>;
+    async fn get_channel(
+        &self,
+        id: &str,
+    ) -> AppResult<Option<scryer_domain::NotificationChannelConfig>>;
+    async fn create_channel(
+        &self,
+        config: scryer_domain::NotificationChannelConfig,
+    ) -> AppResult<scryer_domain::NotificationChannelConfig>;
+    async fn update_channel(
+        &self,
+        config: scryer_domain::NotificationChannelConfig,
+    ) -> AppResult<scryer_domain::NotificationChannelConfig>;
     async fn delete_channel(&self, id: &str) -> AppResult<()>;
 }
 
 #[async_trait]
 pub trait NotificationSubscriptionRepository: Send + Sync {
     async fn list_subscriptions(&self) -> AppResult<Vec<scryer_domain::NotificationSubscription>>;
-    async fn list_subscriptions_for_channel(&self, channel_id: &str) -> AppResult<Vec<scryer_domain::NotificationSubscription>>;
-    async fn list_subscriptions_for_event(&self, event_type: &str) -> AppResult<Vec<scryer_domain::NotificationSubscription>>;
-    async fn create_subscription(&self, sub: scryer_domain::NotificationSubscription) -> AppResult<scryer_domain::NotificationSubscription>;
-    async fn update_subscription(&self, sub: scryer_domain::NotificationSubscription) -> AppResult<scryer_domain::NotificationSubscription>;
+    async fn list_subscriptions_for_channel(
+        &self,
+        channel_id: &str,
+    ) -> AppResult<Vec<scryer_domain::NotificationSubscription>>;
+    async fn list_subscriptions_for_event(
+        &self,
+        event_type: &str,
+    ) -> AppResult<Vec<scryer_domain::NotificationSubscription>>;
+    async fn create_subscription(
+        &self,
+        sub: scryer_domain::NotificationSubscription,
+    ) -> AppResult<scryer_domain::NotificationSubscription>;
+    async fn update_subscription(
+        &self,
+        sub: scryer_domain::NotificationSubscription,
+    ) -> AppResult<scryer_domain::NotificationSubscription>;
     async fn delete_subscription(&self, id: &str) -> AppResult<()>;
 }
 
 #[async_trait]
 pub trait DownloadClient: Send + Sync {
+    async fn submit_download(
+        &self,
+        request: &DownloadClientAddRequest,
+    ) -> AppResult<DownloadGrabResult>;
+
     async fn submit_to_download_queue(
         &self,
         title: &Title,
@@ -947,7 +1073,16 @@ pub trait DownloadClient: Send + Sync {
         source_title: Option<String>,
         source_password: Option<String>,
         category: Option<String>,
-    ) -> AppResult<DownloadGrabResult>;
+    ) -> AppResult<DownloadGrabResult> {
+        let request = DownloadClientAddRequest::from_legacy(
+            title,
+            source_hint,
+            source_title,
+            source_password,
+            category,
+        );
+        self.submit_download(&request).await
+    }
 
     async fn list_queue(&self) -> AppResult<Vec<DownloadQueueItem>> {
         Err(AppError::Repository(
@@ -982,6 +1117,24 @@ pub trait DownloadClient: Send + Sync {
     async fn delete_queue_item(&self, _id: &str, _is_history: bool) -> AppResult<()> {
         Err(AppError::Repository(
             "delete is not supported for this download client".to_string(),
+        ))
+    }
+
+    async fn mark_imported(&self, _request: &DownloadClientMarkImportedRequest) -> AppResult<()> {
+        Err(AppError::Repository(
+            "mark_imported is not supported for this download client".to_string(),
+        ))
+    }
+
+    async fn get_client_status(&self) -> AppResult<DownloadClientStatus> {
+        Err(AppError::Repository(
+            "client status is not supported for this download client".to_string(),
+        ))
+    }
+
+    async fn test_connection(&self) -> AppResult<String> {
+        Err(AppError::Repository(
+            "test connection is not supported for this download client".to_string(),
         ))
     }
 }
@@ -1488,8 +1641,7 @@ mod tests {
             Ok(episodes
                 .iter()
                 .find(|ep| {
-                    ep.title_id == title_id
-                        && ep.episode_number.as_deref() == Some(episode_number)
+                    ep.title_id == title_id && ep.episode_number.as_deref() == Some(episode_number)
                 })
                 .cloned())
         }
@@ -1516,7 +1668,10 @@ mod tests {
             let collections = self.collections.lock().await;
             let mut out = Vec::new();
             for tid in title_ids {
-                if let Some(c) = collections.iter().find(|c| c.title_id == *tid && c.collection_index == "0") {
+                if let Some(c) = collections
+                    .iter()
+                    .find(|c| c.title_id == *tid && c.collection_index == "0")
+                {
                     out.push(PrimaryCollectionSummary {
                         title_id: tid.clone(),
                         label: c.label.clone(),
@@ -1865,10 +2020,7 @@ mod tests {
         ) -> AppResult<Vec<HistoryEvent>> {
             let mut events = self.store.lock().await.clone();
             if let Some(id) = title_id {
-                events = events
-                    .into_iter()
-                    .filter(|event| event.title_id.as_ref() == Some(&id))
-                    .collect();
+                events.retain(|event| event.title_id.as_ref() == Some(&id));
             }
             let start = usize::try_from(offset.max(0)).unwrap_or(0);
             let end = start.saturating_add(usize::try_from(limit.max(0)).unwrap_or(0));
@@ -1889,16 +2041,12 @@ mod tests {
 
     #[async_trait]
     impl DownloadClient for StubDownloadClient {
-    async fn submit_to_download_queue(
-        &self,
-        title: &Title,
-        _source_hint: Option<String>,
-        _source_title: Option<String>,
-        _source_password: Option<String>,
-        _category: Option<String>,
-    ) -> AppResult<DownloadGrabResult> {
+        async fn submit_download(
+            &self,
+            request: &DownloadClientAddRequest,
+        ) -> AppResult<DownloadGrabResult> {
             Ok(DownloadGrabResult {
-                job_id: format!("job-for-{}", title.id),
+                job_id: format!("job-for-{}", request.title.id),
                 client_type: "nzbget".to_string(),
             })
         }
@@ -1915,7 +2063,7 @@ mod tests {
         let settings = Arc::new(MockSettingsRepo);
         let quality_profiles = Arc::new(MockQualityProfileRepo);
         let download_client = Arc::new(StubDownloadClient);
-        let indexer_client = Arc::new(MockIndexerClient::default());
+        let indexer_client = Arc::new(MockIndexerClient);
 
         let services = AppServices::with_default_channels(
             titles,
@@ -1933,14 +2081,19 @@ mod tests {
         );
         let mut registry = FacetRegistry::new();
         registry.register(Arc::new(MovieFacetHandler));
-        registry.register(Arc::new(SeriesFacetHandler::new(scryer_domain::MediaFacet::Tv)));
-        registry.register(Arc::new(SeriesFacetHandler::new(scryer_domain::MediaFacet::Anime)));
+        registry.register(Arc::new(SeriesFacetHandler::new(
+            scryer_domain::MediaFacet::Tv,
+        )));
+        registry.register(Arc::new(SeriesFacetHandler::new(
+            scryer_domain::MediaFacet::Anime,
+        )));
         let app = AppUseCase::new(
             services,
             JwtAuthConfig {
                 issuer: "scryer-test".to_string(),
                 access_ttl_seconds: 3600,
-                jwt_hmac_secret: "dGVzdC1zZWNyZXQtZm9yLXVuaXQtdGVzdHMtb25seS0zMmJ5dGVzISE=".to_string(),
+                jwt_hmac_secret: "dGVzdC1zZWNyZXQtZm9yLXVuaXQtdGVzdHMtb25seS0zMmJ5dGVzISE="
+                    .to_string(),
             },
             Arc::new(registry),
         );
@@ -1961,9 +2114,8 @@ mod tests {
                     tags: vec![],
                     external_ids: vec![],
                     min_availability: None,
-                
+
                     ..Default::default()
-                
                 },
                 None,
                 None,
@@ -1987,9 +2139,8 @@ mod tests {
                 tags: vec![],
                 external_ids: vec![],
                 min_availability: None,
-            
+
                 ..Default::default()
-            
             },
         )
         .await
@@ -2004,9 +2155,8 @@ mod tests {
                 tags: vec![],
                 external_ids: vec![],
                 min_availability: None,
-            
+
                 ..Default::default()
-            
             },
         )
         .await
@@ -2111,9 +2261,8 @@ mod tests {
                     tags: vec![],
                     external_ids: vec![],
                     min_availability: None,
-                
+
                     ..Default::default()
-                
                 },
             )
             .await
@@ -2218,9 +2367,8 @@ mod tests {
                     tags: vec!["SciFi".into()],
                     external_ids: vec![],
                     min_availability: None,
-                
+
                     ..Default::default()
-                
                 },
             )
             .await
@@ -2257,9 +2405,8 @@ mod tests {
                     tags: vec![],
                     external_ids: vec![],
                     min_availability: None,
-                
+
                     ..Default::default()
-                
                 },
             )
             .await
@@ -2325,9 +2472,8 @@ mod tests {
                     tags: vec![],
                     external_ids: vec![],
                     min_availability: None,
-                
+
                     ..Default::default()
-                
                 },
             )
             .await
@@ -2370,9 +2516,8 @@ mod tests {
                     tags: vec![],
                     external_ids: vec![],
                     min_availability: None,
-                
+
                     ..Default::default()
-                
                 },
             )
             .await
@@ -2433,9 +2578,8 @@ mod tests {
                     tags: vec![],
                     external_ids: vec![],
                     min_availability: None,
-                
+
                     ..Default::default()
-                
                 },
             )
             .await
@@ -2479,9 +2623,8 @@ mod tests {
                     tags: vec![],
                     external_ids: vec![],
                     min_availability: None,
-                
+
                     ..Default::default()
-                
                 },
             )
             .await
@@ -2543,9 +2686,8 @@ mod tests {
                     tags: vec![],
                     external_ids: vec![],
                     min_availability: None,
-                
+
                     ..Default::default()
-                
                 },
             )
             .await
@@ -2600,9 +2742,8 @@ mod tests {
                     tags: vec![],
                     external_ids: vec![],
                     min_availability: None,
-                
+
                     ..Default::default()
-                
                 },
             )
             .await
@@ -2719,7 +2860,10 @@ mod tests {
         // Only "v1" prefix, no $ after it
         let bad_hash = "v1nope";
         let result = app.validate_password("anything", bad_hash);
-        assert!(result.is_err(), "malformed v1 hash (no $) should return Err");
+        assert!(
+            result.is_err(),
+            "malformed v1 hash (no $) should return Err"
+        );
     }
 
     #[test]
@@ -2728,7 +2872,10 @@ mod tests {
         // Has v1$salt but no third segment
         let bad_hash = "v1$somesalt";
         let result = app.validate_password("anything", bad_hash);
-        assert!(result.is_err(), "malformed v1 hash (no hash segment) should return Err");
+        assert!(
+            result.is_err(),
+            "malformed v1 hash (no hash segment) should return Err"
+        );
     }
 
     #[test]
@@ -2750,7 +2897,10 @@ mod tests {
             entitlements: vec![Entitlement::ViewCatalog],
         };
         let token = app.issue_access_token(&user).expect("issue token");
-        let decoded = app.authenticate_token(&token).await.expect("authenticate token");
+        let decoded = app
+            .authenticate_token(&token)
+            .await
+            .expect("authenticate token");
         assert_eq!(decoded.id, user.id);
         assert_eq!(decoded.username, user.username);
     }
@@ -2765,7 +2915,10 @@ mod tests {
             entitlements: vec![Entitlement::ViewCatalog, Entitlement::ManageTitle],
         };
         let token = app.issue_access_token(&user).expect("issue token");
-        let decoded = app.authenticate_token(&token).await.expect("authenticate token");
+        let decoded = app
+            .authenticate_token(&token)
+            .await
+            .expect("authenticate token");
         assert!(decoded.entitlements.contains(&Entitlement::ViewCatalog));
         assert!(decoded.entitlements.contains(&Entitlement::ManageTitle));
     }
@@ -2816,6 +2969,9 @@ mod tests {
         let key = jsonwebtoken::EncodingKey::from_secret(app.auth.jwt_hmac_secret.as_bytes());
         let bad_token = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
         let result = app.authenticate_token(&bad_token).await;
-        assert!(result.is_err(), "token with wrong issuer should be rejected");
+        assert!(
+            result.is_err(),
+            "token with wrong issuer should be rejected"
+        );
     }
 }

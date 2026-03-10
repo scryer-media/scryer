@@ -1,6 +1,5 @@
 use scryer_application::{
-    default_quality_profile_1080p_for_search, default_quality_profile_for_search,
-    QualityProfile,
+    default_quality_profile_1080p_for_search, default_quality_profile_for_search, QualityProfile,
 };
 use scryer_infrastructure::{SettingsValueRecord, SqliteServices};
 use serde_json::{json, Value};
@@ -30,18 +29,20 @@ pub(crate) const RENAME_TEMPLATE_SERIES_GLOBAL_KEY: &str = "rename.template.seri
 pub(crate) const RENAME_TEMPLATE_ANIME_GLOBAL_KEY: &str = "rename.template.anime.global";
 pub(crate) const RENAME_COLLISION_POLICY_KEY: &str = "rename.collision_policy";
 pub(crate) const RENAME_COLLISION_POLICY_GLOBAL_KEY: &str = "rename.collision_policy.global";
-pub(crate) const RENAME_COLLISION_POLICY_MOVIE_GLOBAL_KEY: &str = "rename.collision_policy.movie.global";
+pub(crate) const RENAME_COLLISION_POLICY_MOVIE_GLOBAL_KEY: &str =
+    "rename.collision_policy.movie.global";
 pub(crate) const RENAME_MISSING_METADATA_POLICY_KEY: &str = "rename.missing_metadata_policy";
-pub(crate) const RENAME_MISSING_METADATA_POLICY_GLOBAL_KEY: &str = "rename.missing_metadata_policy.global";
+pub(crate) const RENAME_MISSING_METADATA_POLICY_GLOBAL_KEY: &str =
+    "rename.missing_metadata_policy.global";
 pub(crate) const RENAME_MISSING_METADATA_POLICY_MOVIE_GLOBAL_KEY: &str =
     "rename.missing_metadata_policy.movie.global";
 pub(crate) const QUALITY_PROFILE_INHERIT_VALUE: &str = "__inherit__";
 pub(crate) const SETTINGS_CATEGORY_ACQUISITION: &str = "acquisition";
 pub(crate) const SETTINGS_CATEGORY_POST_PROCESSING: &str = "post_processing";
-pub(crate) const POST_PROCESSING_SCRIPT_MOVIE_KEY:  &str = "post_processing.script.movie";
+pub(crate) const POST_PROCESSING_SCRIPT_MOVIE_KEY: &str = "post_processing.script.movie";
 pub(crate) const POST_PROCESSING_SCRIPT_SERIES_KEY: &str = "post_processing.script.series";
-pub(crate) const POST_PROCESSING_SCRIPT_ANIME_KEY:  &str = "post_processing.script.anime";
-pub(crate) const POST_PROCESSING_TIMEOUT_KEY:       &str = "post_processing.timeout_secs";
+pub(crate) const POST_PROCESSING_SCRIPT_ANIME_KEY: &str = "post_processing.script.anime";
+pub(crate) const POST_PROCESSING_TIMEOUT_KEY: &str = "post_processing.timeout_secs";
 pub(crate) const SETUP_COMPLETE_KEY: &str = "setup.complete";
 
 #[derive(Debug)]
@@ -133,7 +134,8 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             scope: SETTINGS_SCOPE_SYSTEM,
             key_name: RENAME_TEMPLATE_ANIME_GLOBAL_KEY,
             data_type: "string",
-            default_value_json: "\"{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}\"",
+            default_value_json:
+                "\"{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}\"",
             is_sensitive: false,
         },
         ServiceSettingSeed {
@@ -531,7 +533,9 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
     ]
 }
 
-pub(crate) async fn seed_service_setting_definitions(database: &SqliteServices) -> Result<(), String> {
+pub(crate) async fn seed_service_setting_definitions(
+    database: &SqliteServices,
+) -> Result<(), String> {
     let definitions: Vec<scryer_infrastructure::SettingDefinitionSeed> = service_setting_seeds()
         .iter()
         .map(|seed| scryer_infrastructure::SettingDefinitionSeed {
@@ -551,23 +555,69 @@ pub(crate) async fn seed_service_setting_definitions(database: &SqliteServices) 
         .map_err(|error| format!("failed to batch seed setting definitions: {error}"))
 }
 
-pub(crate) async fn seed_service_settings_from_environment(database: &SqliteServices) -> Result<(), String> {
+pub(crate) async fn seed_service_settings_from_environment(
+    database: &SqliteServices,
+) -> Result<(), String> {
     let env_settings: Vec<(&str, &str, Option<Value>)> = vec![
-        (SETTINGS_SCOPE_SYSTEM, "nzbget.url", normalize_env_option("SCRYER_NZBGET_URL").map(Value::String)),
-        (SETTINGS_SCOPE_SYSTEM, "nzbget.username", normalize_env_option("SCRYER_NZBGET_USERNAME").map(Value::String)),
-        (SETTINGS_SCOPE_SYSTEM, "nzbget.password", normalize_env_option("SCRYER_NZBGET_PASSWORD").map(Value::String)),
-        (SETTINGS_SCOPE_SYSTEM, "nzbget.dupe_mode", normalize_env_option_with_legacy(["SCRYER_NZBGET_DUPE_MODE", "SCRYER_NZBGET_DUPEMODE"]).map(|v: String| Value::String(v.to_uppercase()))),
-        (SETTINGS_SCOPE_MEDIA, MOVIES_PATH_KEY, normalize_env_option("SCRYER_MOVIES_PATH").map(Value::String)),
-        (SETTINGS_SCOPE_MEDIA, SERIES_PATH_KEY, normalize_env_option("SCRYER_SERIES_PATH").map(Value::String)),
-        (SETTINGS_SCOPE_MEDIA, ANIME_PATH_KEY, normalize_env_option("SCRYER_ANIME_PATH").map(Value::String)),
-        (SETTINGS_SCOPE_SYSTEM, TLS_CERT_KEY, normalize_env_option("SCRYER_TLS_CERT").map(Value::String)),
-        (SETTINGS_SCOPE_SYSTEM, TLS_KEY_KEY, normalize_env_option("SCRYER_TLS_KEY").map(Value::String)),
+        (
+            SETTINGS_SCOPE_SYSTEM,
+            "nzbget.url",
+            normalize_env_option("SCRYER_NZBGET_URL").map(Value::String),
+        ),
+        (
+            SETTINGS_SCOPE_SYSTEM,
+            "nzbget.username",
+            normalize_env_option("SCRYER_NZBGET_USERNAME").map(Value::String),
+        ),
+        (
+            SETTINGS_SCOPE_SYSTEM,
+            "nzbget.password",
+            normalize_env_option("SCRYER_NZBGET_PASSWORD").map(Value::String),
+        ),
+        (
+            SETTINGS_SCOPE_SYSTEM,
+            "nzbget.dupe_mode",
+            normalize_env_option_with_legacy(["SCRYER_NZBGET_DUPE_MODE", "SCRYER_NZBGET_DUPEMODE"])
+                .map(|v: String| Value::String(v.to_uppercase())),
+        ),
+        (
+            SETTINGS_SCOPE_MEDIA,
+            MOVIES_PATH_KEY,
+            normalize_env_option("SCRYER_MOVIES_PATH").map(Value::String),
+        ),
+        (
+            SETTINGS_SCOPE_MEDIA,
+            SERIES_PATH_KEY,
+            normalize_env_option("SCRYER_SERIES_PATH").map(Value::String),
+        ),
+        (
+            SETTINGS_SCOPE_MEDIA,
+            ANIME_PATH_KEY,
+            normalize_env_option("SCRYER_ANIME_PATH").map(Value::String),
+        ),
+        (
+            SETTINGS_SCOPE_SYSTEM,
+            TLS_CERT_KEY,
+            normalize_env_option("SCRYER_TLS_CERT").map(Value::String),
+        ),
+        (
+            SETTINGS_SCOPE_SYSTEM,
+            TLS_KEY_KEY,
+            normalize_env_option("SCRYER_TLS_KEY").map(Value::String),
+        ),
     ];
 
     let entries: Vec<(String, String, String, String)> = env_settings
         .into_iter()
         .filter_map(|(scope, key, value)| {
-            value.map(|v| (scope.to_string(), key.to_string(), v.to_string(), "env".to_string()))
+            value.map(|v| {
+                (
+                    scope.to_string(),
+                    key.to_string(),
+                    v.to_string(),
+                    "env".to_string(),
+                )
+            })
         })
         .collect();
 
@@ -625,7 +675,10 @@ pub(crate) async fn normalize_media_path_setting(
     Ok(())
 }
 
-pub(crate) async fn normalize_quality_profile_settings(database: &SqliteServices, scope_ids: &[&str]) -> Result<(), String> {
+pub(crate) async fn normalize_quality_profile_settings(
+    database: &SqliteServices,
+    scope_ids: &[&str],
+) -> Result<(), String> {
     let mut profiles = database
         .list_quality_profiles(SETTINGS_SCOPE_SYSTEM, None)
         .await
@@ -837,12 +890,8 @@ async fn seed_scope_default_if_unset(
         })?;
 
     if record.as_ref().is_none_or(|r| r.value_json.is_none()) {
-        upsert_quality_profile_setting(
-            database,
-            Some(scope_id.to_string()),
-            default_profile_id,
-        )
-        .await?;
+        upsert_quality_profile_setting(database, Some(scope_id.to_string()), default_profile_id)
+            .await?;
     }
 
     Ok(())
@@ -917,12 +966,36 @@ pub(crate) async fn load_service_runtime_settings(
     database: &SqliteServices,
 ) -> Result<ServiceRuntimeSettings, String> {
     let keys = vec![
-        (SETTINGS_SCOPE_SYSTEM.to_string(), "nzbget.url".to_string(), None),
-        (SETTINGS_SCOPE_SYSTEM.to_string(), "nzbget.username".to_string(), None),
-        (SETTINGS_SCOPE_SYSTEM.to_string(), "nzbget.password".to_string(), None),
-        (SETTINGS_SCOPE_SYSTEM.to_string(), "nzbget.dupe_mode".to_string(), None),
-        (SETTINGS_SCOPE_SYSTEM.to_string(), TLS_CERT_KEY.to_string(), None),
-        (SETTINGS_SCOPE_SYSTEM.to_string(), TLS_KEY_KEY.to_string(), None),
+        (
+            SETTINGS_SCOPE_SYSTEM.to_string(),
+            "nzbget.url".to_string(),
+            None,
+        ),
+        (
+            SETTINGS_SCOPE_SYSTEM.to_string(),
+            "nzbget.username".to_string(),
+            None,
+        ),
+        (
+            SETTINGS_SCOPE_SYSTEM.to_string(),
+            "nzbget.password".to_string(),
+            None,
+        ),
+        (
+            SETTINGS_SCOPE_SYSTEM.to_string(),
+            "nzbget.dupe_mode".to_string(),
+            None,
+        ),
+        (
+            SETTINGS_SCOPE_SYSTEM.to_string(),
+            TLS_CERT_KEY.to_string(),
+            None,
+        ),
+        (
+            SETTINGS_SCOPE_SYSTEM.to_string(),
+            TLS_KEY_KEY.to_string(),
+            None,
+        ),
     ];
 
     let results = database

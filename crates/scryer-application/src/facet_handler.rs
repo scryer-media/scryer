@@ -20,7 +20,11 @@ pub struct HydrationResult {
 }
 
 fn non_empty(s: String) -> Option<String> {
-    if s.trim().is_empty() { None } else { Some(s) }
+    if s.trim().is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// Build a [`HydrationResult`] from an already-fetched [`MovieMetadata`].
@@ -34,7 +38,11 @@ pub fn movie_to_hydration_result(movie: MovieMetadata, language: &str) -> Hydrat
         sort_title: non_empty(movie.sort_title),
         slug: non_empty(movie.slug),
         imdb_id: non_empty(movie.imdb_id),
-        runtime_minutes: if movie.runtime_minutes > 0 { Some(movie.runtime_minutes) } else { None },
+        runtime_minutes: if movie.runtime_minutes > 0 {
+            Some(movie.runtime_minutes)
+        } else {
+            None
+        },
         genres: movie.genres,
         content_status: non_empty(movie.content_status),
         language: non_empty(movie.language),
@@ -65,7 +73,11 @@ pub fn series_to_hydration_result(series: SeriesMetadata, language: &str) -> Hyd
         sort_title: non_empty(series.sort_name),
         slug: non_empty(series.slug),
         imdb_id: None,
-        runtime_minutes: if series.runtime_minutes > 0 { Some(series.runtime_minutes) } else { None },
+        runtime_minutes: if series.runtime_minutes > 0 {
+            Some(series.runtime_minutes)
+        } else {
+            None
+        },
         genres: series.genres,
         content_status: non_empty(series.content_status),
         language: None,

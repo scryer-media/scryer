@@ -39,14 +39,19 @@ pub struct GroupEntry {
 /// 1. Try exact match on (name, source_context) derived from the release
 /// 2. Fall back to (name, Any) for groups that are tier-rated regardless of source
 /// 3. No match → None (caller applies `group_unknown_penalty`)
-pub fn lookup_group(name: &str, source: Option<&str>, is_remux: bool) -> Option<&'static GroupEntry> {
+pub fn lookup_group(
+    name: &str,
+    source: Option<&str>,
+    is_remux: bool,
+) -> Option<&'static GroupEntry> {
     let name_upper = name.to_ascii_uppercase();
     let ctx = source_to_context(source, is_remux);
 
     // Try source-specific match first
-    if let Some(entry) = GROUPS.iter().find(|g| {
-        g.name.eq_ignore_ascii_case(&name_upper) && g.source_context == ctx
-    }) {
+    if let Some(entry) = GROUPS
+        .iter()
+        .find(|g| g.name.eq_ignore_ascii_case(&name_upper) && g.source_context == ctx)
+    {
         return Some(entry);
     }
 
@@ -77,7 +82,7 @@ pub fn apply_release_group_scoring(
     group: Option<&str>,
     source: Option<&str>,
     is_remux: bool,
-) -> (& 'static str, i32) {
+) -> (&'static str, i32) {
     let Some(name) = group else {
         return ("group_unknown", weights.group_unknown_penalty);
     };
@@ -111,7 +116,11 @@ pub fn apply_release_group_scoring(
 
 macro_rules! group {
     ($name:expr, $tier:ident, $ctx:ident) => {
-        GroupEntry { name: $name, tier: GroupTier::$tier, source_context: SourceContext::$ctx }
+        GroupEntry {
+            name: $name,
+            tier: GroupTier::$tier,
+            source_context: SourceContext::$ctx,
+        }
     };
 }
 
@@ -150,7 +159,6 @@ static GROUPS: &[GroupEntry] = &[
     group!("TOMMY", Gold, Web),
     group!("ViSUM", Gold, Web),
     group!("ZoroSenpai", Gold, Web),
-
     // ── WEB Tier 02 (Silver) ─────────────────────────────────────────────────
     group!("3cTWeB", Silver, Web),
     group!("BTW", Silver, Web),
@@ -192,7 +200,6 @@ static GROUPS: &[GroupEntry] = &[
     group!("XEBEC", Silver, Web),
     group!("4KBEC", Silver, Web),
     group!("CEBEX", Silver, Web),
-
     // ── WEB Tier 03 (Bronze) ─────────────────────────────────────────────────
     group!("BLOOM", Bronze, Web),
     group!("Dooky", Bronze, Web),
@@ -205,7 +212,6 @@ static GROUPS: &[GroupEntry] = &[
     group!("SwAgLaNdEr", Bronze, Web),
     group!("T4H", Bronze, Web),
     group!("ViSiON", Bronze, Web),
-
     // ── HD BluRay Tier 01 (Gold) ─────────────────────────────────────────────
     group!("BBQ", Gold, BluRay),
     group!("BMF", Gold, BluRay),
@@ -230,7 +236,6 @@ static GROUPS: &[GroupEntry] = &[
     group!("VietHD", Gold, BluRay),
     group!("ZQ", Gold, BluRay),
     group!("ZoroSenpai", Gold, BluRay),
-
     // ── HD BluRay Tier 02 (Silver) ───────────────────────────────────────────
     group!("ATELiER", Silver, BluRay),
     group!("EA", Silver, BluRay),
@@ -240,7 +245,6 @@ static GROUPS: &[GroupEntry] = &[
     group!("QOQ", Silver, BluRay),
     group!("SA89", Silver, BluRay),
     group!("sbR", Silver, BluRay),
-
     // ── HD BluRay Tier 03 (Bronze) ───────────────────────────────────────────
     group!("BHDStudio", Bronze, BluRay),
     group!("hallowed", Bronze, BluRay),
@@ -250,16 +254,13 @@ static GROUPS: &[GroupEntry] = &[
     group!("playHD", Bronze, BluRay),
     group!("SPHD", Bronze, BluRay),
     group!("W4NK3R", Bronze, BluRay),
-
     // ── UHD BluRay Tier 01 (Gold) ────────────────────────────────────────────
     group!("CtrlHD", Gold, UhdBluRay),
     group!("MainFrame", Gold, UhdBluRay),
     group!("DON", Gold, UhdBluRay),
     group!("W4NK3R", Gold, UhdBluRay),
-
     // ── UHD BluRay Tier 02 (Silver) ──────────────────────────────────────────
     group!("HQMUX", Silver, UhdBluRay),
-
     // ── UHD BluRay Tier 03 (Bronze) ──────────────────────────────────────────
     group!("BHDStudio", Bronze, UhdBluRay),
     group!("hallowed", Bronze, UhdBluRay),
@@ -267,7 +268,6 @@ static GROUPS: &[GroupEntry] = &[
     group!("PTer", Bronze, UhdBluRay),
     group!("SPHD", Bronze, UhdBluRay),
     group!("WEBDV", Bronze, UhdBluRay),
-
     // ── Remux Tier 01 (Gold) ─────────────────────────────────────────────────
     group!("3L", Gold, Remux),
     group!("BiZKiT", Gold, Remux),
@@ -279,7 +279,6 @@ static GROUPS: &[GroupEntry] = &[
     group!("PmP", Gold, Remux),
     group!("WiLDCAT", Gold, Remux),
     group!("ZQ", Gold, Remux),
-
     // ── Remux Tier 02 (Silver) ───────────────────────────────────────────────
     group!("12GaugeShotgun", Silver, Remux),
     group!("ATELiER", Silver, Remux),
@@ -294,14 +293,12 @@ static GROUPS: &[GroupEntry] = &[
     group!("SURFINBIRD", Silver, Remux),
     group!("TEPES", Silver, Remux),
     group!("TRiToN", Silver, Remux),
-
     // ── Remux Tier 03 (Bronze) ───────────────────────────────────────────────
     group!("iFT", Bronze, Remux),
     group!("NTb", Bronze, Remux),
     group!("PTP", Bronze, Remux),
     group!("SumVision", Bronze, Remux),
     group!("TOA", Bronze, Remux),
-
     // ── Anime Tier 01 (Gold) — BD ────────────────────────────────────────────
     group!("DemiHuman", Gold, Anime),
     group!("FLE", Gold, Anime),
@@ -313,7 +310,6 @@ static GROUPS: &[GroupEntry] = &[
     group!("smol", Gold, Anime),
     group!("SoM", Gold, Anime),
     group!("ZR", Gold, Anime),
-
     // ── Anime Tier 02 (Silver) — BD ──────────────────────────────────────────
     group!("Aergia", Silver, Anime),
     group!("Arg0", Silver, Anime),
@@ -334,7 +330,6 @@ static GROUPS: &[GroupEntry] = &[
     group!("WAP", Silver, Anime),
     group!("YURI", Silver, Anime),
     group!("ZeroBuild", Silver, Anime),
-
     // ── Anime Tier 03 (Bronze) — BD ──────────────────────────────────────────
     group!("ARC", Bronze, Anime),
     group!("BBT-RMX", Bronze, Anime),
@@ -364,7 +359,6 @@ static GROUPS: &[GroupEntry] = &[
     group!("sgt", Bronze, Anime),
     group!("SubsMix", Bronze, Anime),
     group!("uba", Bronze, Anime),
-
     // ── Banned: LQ (Low Quality) groups ──────────────────────────────────────
     group!("24xHD", Banned, Any),
     group!("4K4U", Banned, Any),
@@ -432,7 +426,6 @@ static GROUPS: &[GroupEntry] = &[
     group!("EVO", Banned, Any),
     group!("D3US", Banned, Any),
     group!("PiRaTeS", Banned, Any),
-
     // ── Banned: Bad dual audio groups ─────────────────────────────────────────
     group!("alfaHD", Banned, Any),
     group!("BAT", Banned, Any),
@@ -465,7 +458,6 @@ static GROUPS: &[GroupEntry] = &[
     group!("ZNM", Banned, Any),
     group!("BiOMA", Banned, Any),
     group!("Cory", Banned, Any),
-
     // ── Banned: Anime LQ groups ──────────────────────────────────────────────
     group!("AnimeRG", Banned, Anime),
     group!("BakedFish", Banned, Anime),

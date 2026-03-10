@@ -4,8 +4,16 @@ use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use super::*;
 
 impl AppUseCase {
-    pub fn new(services: AppServices, auth: JwtAuthConfig, facet_registry: Arc<FacetRegistry>) -> Self {
-        Self { services, auth, facet_registry }
+    pub fn new(
+        services: AppServices,
+        auth: JwtAuthConfig,
+        facet_registry: Arc<FacetRegistry>,
+    ) -> Self {
+        Self {
+            services,
+            auth,
+            facet_registry,
+        }
     }
 
     pub(super) fn hash_password(&self, password: &str) -> AppResult<String> {
@@ -101,11 +109,7 @@ impl AppUseCase {
 
         // Old tokens lack embedded entitlements/username — fall back to DB lookup
         if claims.entitlements.is_empty() || claims.username.is_empty() {
-            let user = self
-                .services
-                .users
-                .get_by_id(&claims.sub)
-                .await?;
+            let user = self.services.users.get_by_id(&claims.sub).await?;
             return user.ok_or_else(|| AppError::Unauthorized("unknown token subject".into()));
         }
 

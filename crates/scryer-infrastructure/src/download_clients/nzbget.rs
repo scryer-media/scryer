@@ -6,13 +6,18 @@ use base64::{engine::general_purpose, Engine as _};
 use chrono::{DateTime, Utc};
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use scryer_application::{AppError, AppResult, DownloadClient, DownloadGrabResult};
-use scryer_domain::{DownloadQueueItem, DownloadQueueState, Title};
 use reqwest::Client;
+use scryer_application::{
+    AppError, AppResult, DownloadClient, DownloadClientAddRequest, DownloadGrabResult,
+};
+use scryer_domain::{DownloadQueueItem, DownloadQueueState};
 use serde_json::{json, Value};
 use tracing::{debug, warn};
 
-use super::{extract_f64_value, extract_i64_value, is_http_url, parse_duration_seconds, progress_percent_from_sizes, size_to_bytes};
+use super::{
+    extract_f64_value, extract_i64_value, is_http_url, parse_duration_seconds,
+    progress_percent_from_sizes, size_to_bytes,
+};
 
 #[derive(Clone)]
 pub struct NzbgetDownloadClient {
@@ -78,12 +83,9 @@ impl NzbgetDownloadClient {
             .map_err(|err| AppError::Repository(format!("nzbget rpc call failed: {err}")))?;
 
         let status = response.status();
-        let response_text = response
-            .text()
-            .await
-            .map_err(|err| {
-                AppError::Repository(format!("nzbget rpc call response read failed: {err}"))
-            })?;
+        let response_text = response.text().await.map_err(|err| {
+            AppError::Repository(format!("nzbget rpc call response read failed: {err}"))
+        })?;
 
         if !status.is_success() {
             let preview = response_text.chars().take(600).collect::<String>();
@@ -97,7 +99,10 @@ impl NzbgetDownloadClient {
         })?;
 
         if let Some(error) = response_json.get("error") {
-            let code = error.get("code").and_then(Value::as_i64).unwrap_or_default();
+            let code = error
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
             let message = error
                 .get("message")
                 .and_then(Value::as_str)
@@ -142,16 +147,20 @@ impl NzbgetDownloadClient {
             )));
         }
 
-        let response_text = response
-            .text()
-            .await
-            .map_err(|err| AppError::Repository(format!("nzbget test call response read failed: {err}")))?;
+        let response_text = response.text().await.map_err(|err| {
+            AppError::Repository(format!("nzbget test call response read failed: {err}"))
+        })?;
 
         let response_json: Value = serde_json::from_str(&response_text).map_err(|err| {
-            AppError::Repository(format!("nzbget test call returned non-json response: {err}"))
+            AppError::Repository(format!(
+                "nzbget test call returned non-json response: {err}"
+            ))
         })?;
         if let Some(error) = response_json.get("error") {
-            let code = error.get("code").and_then(Value::as_i64).unwrap_or_default();
+            let code = error
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
             let message = error
                 .get("message")
                 .and_then(Value::as_str)
@@ -167,10 +176,12 @@ impl NzbgetDownloadClient {
             ));
         }
 
-        let version = response_json.get("result").map_or("nzbget", |result| match result {
-            Value::String(value) => value.as_str(),
-            _ => "nzbget",
-        });
+        let version = response_json
+            .get("result")
+            .map_or("nzbget", |result| match result {
+                Value::String(value) => value.as_str(),
+                _ => "nzbget",
+            });
         let version = version.to_string();
 
         // Validate minimum version (v12+ required for append API)
@@ -191,7 +202,9 @@ impl NzbgetDownloadClient {
                         let obj = entry.as_object()?;
                         let name = obj.get("Name").and_then(Value::as_str)?;
                         if name.eq_ignore_ascii_case("KeepHistory") {
-                            obj.get("Value").and_then(Value::as_str).map(|v| v.to_string())
+                            obj.get("Value")
+                                .and_then(Value::as_str)
+                                .map(|v| v.to_string())
                         } else {
                             None
                         }
@@ -293,12 +306,13 @@ impl NzbgetDownloadClient {
                 let pp_stage = extract_postprocessing_stage_from_entry(group);
                 let state = queue_state_from_status(status);
 
-                let size_mb = extract_f64_value(
-                    group.get("FileSizeMB").or_else(|| group.get("fileSizeMB")),
-                )
-                .unwrap_or(0.0);
+                let size_mb =
+                    extract_f64_value(group.get("FileSizeMB").or_else(|| group.get("fileSizeMB")))
+                        .unwrap_or(0.0);
                 let remaining_mb = extract_f64_value(
-                    group.get("RemainingSizeMB").or_else(|| group.get("remainingSizeMB")),
+                    group
+                        .get("RemainingSizeMB")
+                        .or_else(|| group.get("remainingSizeMB")),
                 )
                 .unwrap_or(0.0);
 
@@ -323,7 +337,9 @@ impl NzbgetDownloadClient {
                     client_name: String::new(),
                     client_type: "nzbget".to_string(),
                     state,
-                    progress_percent: if state == DownloadQueueState::Downloading && pp_stage.is_some() {
+                    progress_percent: if state == DownloadQueueState::Downloading
+                        && pp_stage.is_some()
+                    {
                         extract_postprocessing_progress_from_entry(group).unwrap_or(0)
                     } else {
                         queue_progress
@@ -331,7 +347,9 @@ impl NzbgetDownloadClient {
                     size_bytes: size_to_bytes(size_mb),
                     remaining_seconds,
                     queued_at: extract_i64_value(
-                        group.get("MinPostTime").or_else(|| group.get("minPostTime")),
+                        group
+                            .get("MinPostTime")
+                            .or_else(|| group.get("minPostTime")),
                     )
                     .map(|value| value.to_string()),
                     last_updated_at: None,
@@ -394,7 +412,8 @@ impl NzbgetDownloadClient {
                     is_nzbget_postprocessing_status(&fallback).then(|| "POSTPROCESSING".to_string())
                 });
 
-                let progress_percent = extract_postprocessing_progress_from_entry(entry).unwrap_or(0);
+                let progress_percent =
+                    extract_postprocessing_progress_from_entry(entry).unwrap_or(0);
                 let remaining_seconds = extract_remaining_seconds_from_entry(entry);
 
                 let size_mb = extract_f64_value(
@@ -444,7 +463,8 @@ impl NzbgetDownloadClient {
                     if remaining_seconds.is_some() {
                         existing.remaining_seconds = remaining_seconds;
                     }
-                    if existing.title_name == "Unnamed download" && title_name != "Unnamed download" {
+                    if existing.title_name == "Unnamed download" && title_name != "Unnamed download"
+                    {
                         existing.title_name = title_name;
                     }
                     if state == DownloadQueueState::Downloading && pp_stage.is_some() {
@@ -543,7 +563,8 @@ impl NzbgetDownloadClient {
                 }
 
                 let (state, attention_reason) = map_history_state(&status_upper, entry);
-                let history_ts = extract_i64_value(entry.get("HistoryTime").or_else(|| entry.get("time")));
+                let history_ts =
+                    extract_i64_value(entry.get("HistoryTime").or_else(|| entry.get("time")));
                 if let Some(ts) = history_ts {
                     if ts < cutoff_ts {
                         return None;
@@ -556,10 +577,9 @@ impl NzbgetDownloadClient {
                     .and_then(Value::as_str)
                     .unwrap_or("Unnamed download")
                     .to_string();
-                let size_mb = extract_f64_value(
-                    entry.get("FileSizeMB").or_else(|| entry.get("fileSizeMB")),
-                )
-                .unwrap_or(0.0);
+                let size_mb =
+                    extract_f64_value(entry.get("FileSizeMB").or_else(|| entry.get("fileSizeMB")))
+                        .unwrap_or(0.0);
 
                 let (param_title_id, param_facet, is_scryer) = extract_nzbget_parameters(entry);
 
@@ -572,7 +592,11 @@ impl NzbgetDownloadClient {
                     client_name: String::new(),
                     client_type: "nzbget".to_string(),
                     state,
-                    progress_percent: if state == DownloadQueueState::Completed { 100 } else { 0 },
+                    progress_percent: if state == DownloadQueueState::Completed {
+                        100
+                    } else {
+                        0
+                    },
                     size_bytes: size_to_bytes(size_mb),
                     remaining_seconds: None,
                     queued_at: None,
@@ -592,16 +616,15 @@ impl NzbgetDownloadClient {
 
 #[async_trait]
 impl DownloadClient for NzbgetDownloadClient {
-    async fn submit_to_download_queue(
+    async fn submit_download(
         &self,
-        title: &Title,
-        source_hint: Option<String>,
-        source_title: Option<String>,
-        source_password: Option<String>,
-        category: Option<String>,
+        request: &DownloadClientAddRequest,
     ) -> AppResult<DownloadGrabResult> {
+        let title = &request.title;
         let job_id = scryer_domain::Id::new().0;
-        let source_hint = source_hint
+        let source_hint = request
+            .source_hint
+            .clone()
             .and_then(|value| {
                 let value = value.trim().to_string();
                 (!value.is_empty()).then_some(value)
@@ -616,13 +639,18 @@ impl DownloadClient for NzbgetDownloadClient {
             )));
         }
 
-        let normalized_source_title = source_title.and_then(|value| {
+        let normalized_source_title = request.source_title.clone().and_then(|value| {
             let trimmed = value.trim().to_string();
             (!trimmed.is_empty()).then_some(trimmed)
         });
-        let nzb_filename =
-            derive_nzb_filename(normalized_source_title.as_deref(), &source_hint, &title.name);
-        let category = category
+        let nzb_filename = derive_nzb_filename(
+            normalized_source_title.as_deref(),
+            &source_hint,
+            &title.name,
+        );
+        let category = request
+            .category
+            .clone()
             .and_then(|value| {
                 let value = value.trim().to_string();
                 (!value.is_empty()).then_some(value)
@@ -630,13 +658,15 @@ impl DownloadClient for NzbgetDownloadClient {
             .unwrap_or_default();
 
         let source_for_payload = self.fetch_and_encode_nzb(&source_hint).await?;
-        let source_password = source_password
+        let source_password = request
+            .source_password
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("0"))
             .map(str::to_string);
 
-        let facet_str = serde_json::to_string(&title.facet).unwrap_or_else(|_| "\"other\"".to_string());
+        let facet_str =
+            serde_json::to_string(&title.facet).unwrap_or_else(|_| "\"other\"".to_string());
         let facet_str = facet_str.trim_matches('"');
         // NZBGet append PPParameters: array of single-key objects where the
         // key is the parameter name and the value is the parameter value.
@@ -784,6 +814,10 @@ impl DownloadClient for NzbgetDownloadClient {
         })
     }
 
+    async fn test_connection(&self) -> AppResult<String> {
+        NzbgetDownloadClient::test_connection(self).await
+    }
+
     async fn list_queue(&self) -> AppResult<Vec<DownloadQueueItem>> {
         self.list_queue_for_client().await
     }
@@ -793,24 +827,28 @@ impl DownloadClient for NzbgetDownloadClient {
     }
 
     async fn pause_queue_item(&self, id: &str) -> AppResult<()> {
-        let nzb_id: i64 = id.parse().map_err(|_| {
-            AppError::Validation(format!("invalid nzbget queue id: {id}"))
-        })?;
+        let nzb_id: i64 = id
+            .parse()
+            .map_err(|_| AppError::Validation(format!("invalid nzbget queue id: {id}")))?;
         self.edit_queue("GroupPause", vec![nzb_id]).await
     }
 
     async fn resume_queue_item(&self, id: &str) -> AppResult<()> {
-        let nzb_id: i64 = id.parse().map_err(|_| {
-            AppError::Validation(format!("invalid nzbget queue id: {id}"))
-        })?;
+        let nzb_id: i64 = id
+            .parse()
+            .map_err(|_| AppError::Validation(format!("invalid nzbget queue id: {id}")))?;
         self.edit_queue("GroupResume", vec![nzb_id]).await
     }
 
     async fn delete_queue_item(&self, id: &str, is_history: bool) -> AppResult<()> {
-        let nzb_id: i64 = id.parse().map_err(|_| {
-            AppError::Validation(format!("invalid nzbget queue id: {id}"))
-        })?;
-        let command = if is_history { "HistoryDelete" } else { "GroupDelete" };
+        let nzb_id: i64 = id
+            .parse()
+            .map_err(|_| AppError::Validation(format!("invalid nzbget queue id: {id}")))?;
+        let command = if is_history {
+            "HistoryDelete"
+        } else {
+            "GroupDelete"
+        };
         self.edit_queue(command, vec![nzb_id]).await
     }
 
@@ -850,9 +888,8 @@ impl DownloadClient for NzbgetDownloadClient {
                     return None;
                 }
 
-                let history_ts = extract_i64_value(
-                    entry.get("HistoryTime").or_else(|| entry.get("time")),
-                );
+                let history_ts =
+                    extract_i64_value(entry.get("HistoryTime").or_else(|| entry.get("time")));
                 if let Some(ts) = history_ts {
                     if ts < cutoff_ts {
                         return None;
@@ -884,10 +921,9 @@ impl DownloadClient for NzbgetDownloadClient {
                     .map(|v| v.to_string())
                     .filter(|v| !v.is_empty());
 
-                let size_mb = extract_f64_value(
-                    entry.get("FileSizeMB").or_else(|| entry.get("fileSizeMB")),
-                )
-                .unwrap_or(0.0);
+                let size_mb =
+                    extract_f64_value(entry.get("FileSizeMB").or_else(|| entry.get("fileSizeMB")))
+                        .unwrap_or(0.0);
 
                 let parameters = entry
                     .get("Parameters")
@@ -914,9 +950,8 @@ impl DownloadClient for NzbgetDownloadClient {
                     })
                     .unwrap_or_default();
 
-                let completed_at = history_ts.map(|ts| {
-                    DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now)
-                });
+                let completed_at =
+                    history_ts.map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now));
 
                 Some(scryer_domain::CompletedDownload {
                     client_type: "nzbget".to_string(),
@@ -934,7 +969,9 @@ impl DownloadClient for NzbgetDownloadClient {
     }
 }
 
-fn extract_nzbget_parameters(entry: &serde_json::Map<String, Value>) -> (Option<String>, Option<String>, bool) {
+fn extract_nzbget_parameters(
+    entry: &serde_json::Map<String, Value>,
+) -> (Option<String>, Option<String>, bool) {
     let params = entry
         .get("Parameters")
         .or_else(|| entry.get("parameters"))
@@ -982,14 +1019,17 @@ fn extract_nzbget_parameters(entry: &serde_json::Map<String, Value>) -> (Option<
 fn extract_result_array(value: Value, preferred_key: &str) -> Option<Vec<Value>> {
     match value {
         Value::Array(items) => Some(items),
-        Value::Object(container) => {
-            container
-                .get(preferred_key)
-                .and_then(Value::as_array)
-                .cloned()
-                .or_else(|| container.get(&preferred_key.to_ascii_lowercase()).and_then(Value::as_array).cloned())
-                .or_else(|| container.get("items").and_then(Value::as_array).cloned())
-        }
+        Value::Object(container) => container
+            .get(preferred_key)
+            .and_then(Value::as_array)
+            .cloned()
+            .or_else(|| {
+                container
+                    .get(&preferred_key.to_ascii_lowercase())
+                    .and_then(Value::as_array)
+                    .cloned()
+            })
+            .or_else(|| container.get("items").and_then(Value::as_array).cloned()),
         _ => None,
     }
 }
@@ -997,9 +1037,9 @@ fn extract_result_array(value: Value, preferred_key: &str) -> Option<Vec<Value>>
 fn queue_state_from_status(status: &str) -> DownloadQueueState {
     let normalized = status.to_ascii_uppercase();
     match normalized.as_str() {
-        "DOWNLOADING" | "PP_QUEUED" | "LOADING_PARS" | "VERIFYING_SOURCES"
-        | "REPAIRING" | "VERIFYING_REPAIRED" | "RENAMING" | "UNPACKING" | "MOVING"
-        | "EXECUTING_SCRIPT" | "POSTPROCESSING" => DownloadQueueState::Downloading,
+        "DOWNLOADING" | "PP_QUEUED" | "LOADING_PARS" | "VERIFYING_SOURCES" | "REPAIRING"
+        | "VERIFYING_REPAIRED" | "RENAMING" | "UNPACKING" | "MOVING" | "EXECUTING_SCRIPT"
+        | "POSTPROCESSING" => DownloadQueueState::Downloading,
         "QUEUED" => DownloadQueueState::Queued,
         "PAUSED" | "PAUSED_DOWNLOAD" => DownloadQueueState::Paused,
         _ => DownloadQueueState::Queued,
@@ -1011,9 +1051,7 @@ fn is_nzbget_postprocessing_status(status: &str) -> bool {
 }
 
 fn find_nzbget_postprocessing_token(value: &str) -> Option<&'static str> {
-    let normalized = value
-        .to_ascii_uppercase()
-        .replace([' ', '-'], "_");
+    let normalized = value.to_ascii_uppercase().replace([' ', '-'], "_");
     const TOKENS: [&str; 10] = [
         "PP_QUEUED",
         "LOADING_PARS",
@@ -1032,7 +1070,9 @@ fn find_nzbget_postprocessing_token(value: &str) -> Option<&'static str> {
         .find(|token| normalized.contains(token))
 }
 
-fn extract_postprocessing_stage_from_entry(entry: &serde_json::Map<String, Value>) -> Option<String> {
+fn extract_postprocessing_stage_from_entry(
+    entry: &serde_json::Map<String, Value>,
+) -> Option<String> {
     let candidates = [
         entry.get("Status"),
         entry.get("status"),
@@ -1066,7 +1106,8 @@ fn extract_postprocessing_stage_from_entry(entry: &serde_json::Map<String, Value
         .or_else(|| entry.get("status"))
         .and_then(Value::as_str)
         .unwrap_or("");
-    let size_mb = extract_f64_value(entry.get("FileSizeMB").or_else(|| entry.get("fileSizeMB"))).unwrap_or(0.0);
+    let size_mb = extract_f64_value(entry.get("FileSizeMB").or_else(|| entry.get("fileSizeMB")))
+        .unwrap_or(0.0);
     let remaining_mb = extract_f64_value(
         entry
             .get("RemainingSizeMB")
@@ -1080,7 +1121,9 @@ fn extract_postprocessing_stage_from_entry(entry: &serde_json::Map<String, Value
     None
 }
 
-fn extract_postprocessing_progress_from_entry(entry: &serde_json::Map<String, Value>) -> Option<u8> {
+fn extract_postprocessing_progress_from_entry(
+    entry: &serde_json::Map<String, Value>,
+) -> Option<u8> {
     extract_postprocessing_progress_permille(entry)
         .map(|value| (value / 10.0).round().clamp(0.0, 100.0) as u8)
 }
@@ -1141,9 +1184,11 @@ fn extract_remaining_seconds_from_entry(entry: &serde_json::Map<String, Value>) 
             .or_else(|| entry.get("StageTimeSec"))
             .or_else(|| entry.get("stageTimeSec")),
     );
-    if let (Some(progress_permille), Some(stage_time_sec)) = (post_stage_progress, post_stage_time) {
+    if let (Some(progress_permille), Some(stage_time_sec)) = (post_stage_progress, post_stage_time)
+    {
         if progress_permille > 0.0 && stage_time_sec >= 0 {
-            let remaining = ((stage_time_sec as f64 / progress_permille) * (1000.0 - progress_permille))
+            let remaining = ((stage_time_sec as f64 / progress_permille)
+                * (1000.0 - progress_permille))
                 .round() as i64;
             return Some(remaining.max(0));
         }
@@ -1190,11 +1235,15 @@ fn extract_remaining_seconds_from_entry(entry: &serde_json::Map<String, Value>) 
         return None;
     }
 
-    let remaining = ((elapsed as f64) * f64::from(100 - progress) / f64::from(progress)).round() as i64;
+    let remaining =
+        ((elapsed as f64) * f64::from(100 - progress) / f64::from(progress)).round() as i64;
     Some(remaining.max(0))
 }
 
-fn map_history_state(status_upper: &str, entry: &serde_json::Map<String, Value>) -> (DownloadQueueState, Option<String>) {
+fn map_history_state(
+    status_upper: &str,
+    entry: &serde_json::Map<String, Value>,
+) -> (DownloadQueueState, Option<String>) {
     if status_upper.starts_with("SUCCESS") {
         // Even with SUCCESS status, check individual stage fields for failures
         if let Some(reason) = check_history_stage_failure(entry) {
@@ -1203,16 +1252,17 @@ fn map_history_state(status_upper: &str, entry: &serde_json::Map<String, Value>)
         (DownloadQueueState::Completed, None)
     } else if status_upper.starts_with("FAILURE") {
         let reason = check_history_stage_failure(entry).or_else(|| {
-            status_upper
-                .split_once('/')
-                .and_then(|(_, detail)| {
-                    let detail = detail.trim();
-                    (!detail.is_empty()).then_some(detail.to_string())
-                })
+            status_upper.split_once('/').and_then(|(_, detail)| {
+                let detail = detail.trim();
+                (!detail.is_empty()).then_some(detail.to_string())
+            })
         });
         (DownloadQueueState::Failed, reason)
     } else if status_upper.starts_with("UNKNOWN") {
-        (DownloadQueueState::Failed, Some("unknown failure".to_string()))
+        (
+            DownloadQueueState::Failed,
+            Some("unknown failure".to_string()),
+        )
     } else {
         (DownloadQueueState::Completed, None)
     }
@@ -1229,8 +1279,15 @@ fn history_entry_name(entry: &serde_json::Map<String, Value>) -> String {
 }
 
 /// Reads a string field from an NZBGet history entry, trying PascalCase then camelCase.
-fn history_field_str<'a>(entry: &'a serde_json::Map<String, Value>, pascal: &str, camel: &str) -> Option<&'a str> {
-    entry.get(pascal).or_else(|| entry.get(camel)).and_then(Value::as_str)
+fn history_field_str<'a>(
+    entry: &'a serde_json::Map<String, Value>,
+    pascal: &str,
+    camel: &str,
+) -> Option<&'a str> {
+    entry
+        .get(pascal)
+        .or_else(|| entry.get(camel))
+        .and_then(Value::as_str)
 }
 
 /// Checks NZBGet's individual post-processing stage fields for failures.

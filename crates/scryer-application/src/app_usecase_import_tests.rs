@@ -109,10 +109,7 @@ fn normalize_imdb_id_with_prefix() {
 
 #[test]
 fn normalize_imdb_id_digits_only() {
-    assert_eq!(
-        normalize_imdb_id("1234567"),
-        Some("tt1234567".to_string())
-    );
+    assert_eq!(normalize_imdb_id("1234567"), Some("tt1234567".to_string()));
 }
 
 #[test]
@@ -137,8 +134,12 @@ fn normalize_imdb_id_no_digits() {
 
 #[test]
 fn is_sample_file_detects_sample_in_stem() {
-    assert!(is_sample_file(std::path::Path::new("/media/episode.sample.mkv")));
-    assert!(is_sample_file(std::path::Path::new("/media/sample-show.mkv")));
+    assert!(is_sample_file(std::path::Path::new(
+        "/media/episode.sample.mkv"
+    )));
+    assert!(is_sample_file(std::path::Path::new(
+        "/media/sample-show.mkv"
+    )));
     assert!(is_sample_file(std::path::Path::new("/media/SAMPLE.mkv")));
 }
 
@@ -149,8 +150,12 @@ fn is_sample_file_allows_normal_video_file() {
     // nonexistent file returns Ok(0) via unwrap_or(false)... actually
     // std::fs::metadata on a non-existent path returns Err, so unwrap_or(false)
     // → false. So this test should pass.
-    assert!(!is_sample_file(std::path::Path::new("/nonexistent/Show.S01E01.1080p.mkv")));
-    assert!(!is_sample_file(std::path::Path::new("/nonexistent/Movie.2024.mkv")));
+    assert!(!is_sample_file(std::path::Path::new(
+        "/nonexistent/Show.S01E01.1080p.mkv"
+    )));
+    assert!(!is_sample_file(std::path::Path::new(
+        "/nonexistent/Movie.2024.mkv"
+    )));
 }
 
 // ── pick_largest_file ─────────────────────────────────────────────────────────
@@ -166,7 +171,7 @@ fn pick_largest_file_single_file_returns_it() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("only.mkv");
     std::fs::write(&path, b"content").expect("write");
-    let result = pick_largest_file(&[path.clone()]);
+    let result = pick_largest_file(std::slice::from_ref(&path));
     assert_eq!(result.expect("pick"), path);
 }
 
@@ -272,6 +277,7 @@ fn find_video_files_filters_samples_when_flag_set() {
     let main_path = dir.path().join("movie.mkv");
     let mut f = std::fs::OpenOptions::new()
         .create(true)
+        .truncate(true)
         .write(true)
         .open(&main_path)
         .expect("open main");

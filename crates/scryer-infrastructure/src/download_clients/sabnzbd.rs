@@ -6,8 +6,10 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use reqwest::multipart;
 use reqwest::Client;
-use scryer_application::{AppError, AppResult, DownloadClient, DownloadGrabResult};
-use scryer_domain::{CompletedDownload, DownloadQueueItem, DownloadQueueState, Title};
+use scryer_application::{
+    AppError, AppResult, DownloadClient, DownloadClientAddRequest, DownloadGrabResult,
+};
+use scryer_domain::{CompletedDownload, DownloadQueueItem, DownloadQueueState};
 use serde_json::Value;
 use tracing::debug;
 
@@ -35,10 +37,7 @@ impl SabnzbdDownloadClient {
 
     async fn api_get(&self, params: &[(&str, &str)]) -> AppResult<Value> {
         let url = self.api_url();
-        let mut query: Vec<(&str, &str)> = vec![
-            ("apikey", &self.api_key),
-            ("output", "json"),
-        ];
+        let mut query: Vec<(&str, &str)> = vec![("apikey", &self.api_key), ("output", "json")];
         query.extend_from_slice(params);
 
         let response = self
@@ -71,7 +70,9 @@ impl SabnzbdDownloadClient {
                 .get("error")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown error");
-            return Err(AppError::Repository(format!("sabnzbd api error: {error_msg}")));
+            return Err(AppError::Repository(format!(
+                "sabnzbd api error: {error_msg}"
+            )));
         }
 
         Ok(json)
@@ -136,13 +137,14 @@ impl SabnzbdDownloadClient {
             )));
         }
 
-        let body = response
-            .text()
-            .await
-            .map_err(|err| AppError::Repository(format!("sabnzbd test response read failed: {err}")))?;
+        let body = response.text().await.map_err(|err| {
+            AppError::Repository(format!("sabnzbd test response read failed: {err}"))
+        })?;
 
         let json: Value = serde_json::from_str(&body).map_err(|err| {
-            AppError::Repository(format!("sabnzbd test call returned non-json response: {err}"))
+            AppError::Repository(format!(
+                "sabnzbd test call returned non-json response: {err}"
+            ))
         })?;
 
         let version = json
@@ -153,10 +155,7 @@ impl SabnzbdDownloadClient {
 
         // Check version >= 3.0.0
         let mut warnings = Vec::new();
-        let version_parts: Vec<u32> = version
-            .split('.')
-            .filter_map(|p| p.parse().ok())
-            .collect();
+        let version_parts: Vec<u32> = version.split('.').filter_map(|p| p.parse().ok()).collect();
         if version_parts.len() >= 2 && version_parts[0] < 3 {
             warnings.push(format!(
                 "SABnzbd {version} is outdated; version 3.0.0+ is recommended"
@@ -180,15 +179,14 @@ impl SabnzbdDownloadClient {
 
 #[async_trait]
 impl DownloadClient for SabnzbdDownloadClient {
-    async fn submit_to_download_queue(
+    async fn submit_download(
         &self,
-        title: &Title,
-        source_hint: Option<String>,
-        source_title: Option<String>,
-        source_password: Option<String>,
-        category: Option<String>,
+        request: &DownloadClientAddRequest,
     ) -> AppResult<DownloadGrabResult> {
-        let source_hint = source_hint
+        let title = &request.title;
+        let source_hint = request
+            .source_hint
+            .clone()
             .and_then(|value| {
                 let value = value.trim().to_string();
                 (!value.is_empty()).then_some(value)
@@ -203,7 +201,8 @@ impl DownloadClient for SabnzbdDownloadClient {
             )));
         }
 
-        let nzb_name = source_title
+        let nzb_name = request
+            .source_title
             .as_deref()
             .map(str::trim)
             .filter(|v| !v.is_empty())
@@ -228,7 +227,9 @@ impl DownloadClient for SabnzbdDownloadClient {
         let nzb_part = multipart::Part::bytes(compressed)
             .file_name(nzb_filename)
             .mime_str("application/gzip")
-            .map_err(|err| AppError::Repository(format!("sabnzbd multipart build failed: {err}")))?;
+            .map_err(|err| {
+                AppError::Repository(format!("sabnzbd multipart build failed: {err}"))
+            })?;
 
         let mut form = multipart::Form::new()
             .text("apikey", self.api_key.clone())
@@ -238,14 +239,14 @@ impl DownloadClient for SabnzbdDownloadClient {
             .text("priority", "-1")
             .part("nzbfile", nzb_part);
 
-        if let Some(cat) = category.as_deref() {
+        if let Some(cat) = request.category.as_deref() {
             let trimmed = cat.trim();
             if !trimmed.is_empty() {
                 form = form.text("cat", trimmed.to_string());
             }
         }
 
-        if let Some(pw) = source_password.as_deref() {
+        if let Some(pw) = request.source_password.as_deref() {
             let trimmed = pw.trim();
             if !trimmed.is_empty() && trimmed != "0" {
                 form = form.text("password", trimmed.to_string());
@@ -262,10 +263,9 @@ impl DownloadClient for SabnzbdDownloadClient {
             .map_err(|err| AppError::Repository(format!("sabnzbd addfile call failed: {err}")))?;
 
         let status = response.status();
-        let body = response
-            .text()
-            .await
-            .map_err(|err| AppError::Repository(format!("sabnzbd addfile response read failed: {err}")))?;
+        let body = response.text().await.map_err(|err| {
+            AppError::Repository(format!("sabnzbd addfile response read failed: {err}"))
+        })?;
 
         if !status.is_success() {
             let preview = body.chars().take(600).collect::<String>();
@@ -283,7 +283,9 @@ impl DownloadClient for SabnzbdDownloadClient {
                 .get("error")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown error");
-            return Err(AppError::Repository(format!("sabnzbd addfile error: {error_msg}")));
+            return Err(AppError::Repository(format!(
+                "sabnzbd addfile error: {error_msg}"
+            )));
         }
 
         let nzo_id = json
@@ -309,6 +311,10 @@ impl DownloadClient for SabnzbdDownloadClient {
         })
     }
 
+    async fn test_connection(&self) -> AppResult<String> {
+        SabnzbdDownloadClient::test_connection(self).await
+    }
+
     async fn list_queue(&self) -> AppResult<Vec<DownloadQueueItem>> {
         let json = self.api_get(&[("mode", "queue")]).await?;
 
@@ -327,10 +333,7 @@ impl DownloadClient for SabnzbdDownloadClient {
             .filter_map(|slot| {
                 let slot = slot.as_object()?;
 
-                let nzo_id = slot
-                    .get("nzo_id")
-                    .and_then(Value::as_str)?
-                    .to_string();
+                let nzo_id = slot.get("nzo_id").and_then(Value::as_str)?.to_string();
 
                 let raw_filename = slot
                     .get("filename")
@@ -343,19 +346,20 @@ impl DownloadClient for SabnzbdDownloadClient {
                         (raw_filename.to_string(), false)
                     };
 
-                let status = slot
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
+                let status = slot.get("status").and_then(Value::as_str).unwrap_or("");
                 let state = sabnzbd_queue_state(status);
 
                 let percentage = slot
                     .get("percentage")
                     .and_then(|v| v.as_str().or_else(|| v.as_u64().map(|_| "")))
-                    .and_then(|s| if s.is_empty() {
-                        slot.get("percentage").and_then(Value::as_u64).map(|v| v as u8)
-                    } else {
-                        s.parse::<u8>().ok()
+                    .and_then(|s| {
+                        if s.is_empty() {
+                            slot.get("percentage")
+                                .and_then(Value::as_u64)
+                                .map(|v| v as u8)
+                        } else {
+                            s.parse::<u8>().ok()
+                        }
                     })
                     .unwrap_or(0);
 
@@ -412,7 +416,9 @@ impl DownloadClient for SabnzbdDownloadClient {
     }
 
     async fn list_history(&self) -> AppResult<Vec<DownloadQueueItem>> {
-        let json = self.api_get(&[("mode", "history"), ("limit", "50")]).await?;
+        let json = self
+            .api_get(&[("mode", "history"), ("limit", "50")])
+            .await?;
 
         let slots = json
             .get("history")
@@ -431,10 +437,7 @@ impl DownloadClient for SabnzbdDownloadClient {
             .filter_map(|slot| {
                 let slot = slot.as_object()?;
 
-                let nzo_id = slot
-                    .get("nzo_id")
-                    .and_then(Value::as_str)?
-                    .to_string();
+                let nzo_id = slot.get("nzo_id").and_then(Value::as_str)?.to_string();
 
                 let completed_ts = extract_i64_value(slot.get("completed"));
                 if let Some(ts) = completed_ts {
@@ -449,10 +452,7 @@ impl DownloadClient for SabnzbdDownloadClient {
                     .unwrap_or("Unnamed download")
                     .to_string();
 
-                let status = slot
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
+                let status = slot.get("status").and_then(Value::as_str).unwrap_or("");
                 let (state, attention_reason) = sabnzbd_history_state(status);
 
                 Some(DownloadQueueItem {
@@ -464,7 +464,11 @@ impl DownloadClient for SabnzbdDownloadClient {
                     client_name: String::new(),
                     client_type: "sabnzbd".to_string(),
                     state,
-                    progress_percent: if state == DownloadQueueState::Completed { 100 } else { 0 },
+                    progress_percent: if state == DownloadQueueState::Completed {
+                        100
+                    } else {
+                        0
+                    },
                     size_bytes: extract_i64_value(slot.get("bytes")),
                     remaining_seconds: None,
                     queued_at: extract_i64_value(slot.get("time_added")).map(|v| v.to_string()),
@@ -482,7 +486,9 @@ impl DownloadClient for SabnzbdDownloadClient {
     }
 
     async fn list_completed_downloads(&self) -> AppResult<Vec<CompletedDownload>> {
-        let json = self.api_get(&[("mode", "history"), ("limit", "50")]).await?;
+        let json = self
+            .api_get(&[("mode", "history"), ("limit", "50")])
+            .await?;
 
         let slots = json
             .get("history")
@@ -501,18 +507,12 @@ impl DownloadClient for SabnzbdDownloadClient {
             .filter_map(|slot| {
                 let slot = slot.as_object()?;
 
-                let status = slot
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
+                let status = slot.get("status").and_then(Value::as_str).unwrap_or("");
                 if !status.eq_ignore_ascii_case("Completed") {
                     return None;
                 }
 
-                let nzo_id = slot
-                    .get("nzo_id")
-                    .and_then(Value::as_str)?
-                    .to_string();
+                let nzo_id = slot.get("nzo_id").and_then(Value::as_str)?.to_string();
 
                 let completed_ts = extract_i64_value(slot.get("completed"));
                 if let Some(ts) = completed_ts {
@@ -546,9 +546,8 @@ impl DownloadClient for SabnzbdDownloadClient {
 
                 let size_bytes = extract_i64_value(slot.get("bytes"));
 
-                let completed_at = completed_ts.map(|ts| {
-                    DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now)
-                });
+                let completed_at =
+                    completed_ts.map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now));
 
                 Some(CompletedDownload {
                     client_type: "sabnzbd".to_string(),
@@ -582,8 +581,13 @@ impl DownloadClient for SabnzbdDownloadClient {
             self.api_get(&[("mode", "history"), ("name", "delete"), ("value", id)])
                 .await?;
         } else {
-            self.api_get(&[("mode", "queue"), ("name", "delete"), ("value", id), ("del_files", "1")])
-                .await?;
+            self.api_get(&[
+                ("mode", "queue"),
+                ("name", "delete"),
+                ("value", id),
+                ("del_files", "1"),
+            ])
+            .await?;
         }
         Ok(())
     }

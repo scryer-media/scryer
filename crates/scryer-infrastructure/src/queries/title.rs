@@ -5,7 +5,8 @@ use sqlx::{Row, SqlitePool};
 
 use super::common::parse_utc_datetime;
 
-const TITLE_COLUMNS: &str = "id, name, facet, monitored, tags, external_ids, created_by, created_at, \
+const TITLE_COLUMNS: &str =
+    "id, name, facet, monitored, tags, external_ids, created_by, created_at, \
     year, overview, poster_url, sort_title, slug, imdb_id, runtime_minutes, genres, \
     content_status, language, first_aired, network, studio, country, aliases, \
     metadata_language, metadata_fetched_at, min_availability, digital_release_date";
@@ -144,7 +145,8 @@ fn row_to_title(row: &sqlx::sqlite::SqliteRow) -> AppResult<Title> {
     let country: Option<String> = row.try_get("country").unwrap_or(None);
     let aliases_json: String = row.try_get("aliases").unwrap_or_else(|_| "[]".to_string());
     let metadata_language: Option<String> = row.try_get("metadata_language").unwrap_or(None);
-    let metadata_fetched_at_raw: Option<String> = row.try_get("metadata_fetched_at").unwrap_or(None);
+    let metadata_fetched_at_raw: Option<String> =
+        row.try_get("metadata_fetched_at").unwrap_or(None);
     let min_availability: Option<String> = row.try_get("min_availability").unwrap_or(None);
     let digital_release_date: Option<String> = row.try_get("digital_release_date").unwrap_or(None);
 
@@ -805,18 +807,10 @@ fn row_to_episode(row: &sqlx::sqlite::SqliteRow) -> AppResult<Episode> {
     let has_subtitle: i64 = row
         .try_get("has_subtitle")
         .map_err(|err| AppError::Repository(err.to_string()))?;
-    let is_filler: i64 = row
-        .try_get("is_filler")
-        .unwrap_or(0);
-    let is_recap: i64 = row
-        .try_get("is_recap")
-        .unwrap_or(0);
-    let absolute_number: Option<String> = row
-        .try_get("absolute_number")
-        .unwrap_or(None);
-    let overview: Option<String> = row
-        .try_get("overview")
-        .unwrap_or(None);
+    let is_filler: i64 = row.try_get("is_filler").unwrap_or(0);
+    let is_recap: i64 = row.try_get("is_recap").unwrap_or(0);
+    let absolute_number: Option<String> = row.try_get("absolute_number").unwrap_or(None);
+    let overview: Option<String> = row.try_get("overview").unwrap_or(None);
     let monitored: i64 = row
         .try_get("monitored")
         .map_err(|err| AppError::Repository(err.to_string()))?;
@@ -851,10 +845,10 @@ pub(crate) async fn create_title_query(pool: &SqlitePool, title: &Title) -> AppR
         serde_json::to_string(&title.tags).map_err(|err| AppError::Repository(err.to_string()))?;
     let ext_json = serde_json::to_string(&title.external_ids)
         .map_err(|err| AppError::Repository(err.to_string()))?;
-    let genres_json =
-        serde_json::to_string(&title.genres).map_err(|err| AppError::Repository(err.to_string()))?;
-    let aliases_json =
-        serde_json::to_string(&title.aliases).map_err(|err| AppError::Repository(err.to_string()))?;
+    let genres_json = serde_json::to_string(&title.genres)
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+    let aliases_json = serde_json::to_string(&title.aliases)
+        .map_err(|err| AppError::Repository(err.to_string()))?;
 
     sqlx::query(
         "INSERT INTO titles (
@@ -1032,14 +1026,15 @@ pub(crate) async fn update_title_hydrated_metadata_query(
 
     // Merge extra external IDs (e.g. anime mappings) into the title's external_ids JSON
     if !metadata.extra_external_ids.is_empty() {
-        let existing_json: String = sqlx::query_scalar("SELECT external_ids FROM titles WHERE id = ?")
-            .bind(id)
-            .fetch_one(pool)
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
+        let existing_json: String =
+            sqlx::query_scalar("SELECT external_ids FROM titles WHERE id = ?")
+                .bind(id)
+                .fetch_one(pool)
+                .await
+                .map_err(|err| AppError::Repository(err.to_string()))?;
 
-        let mut existing: Vec<ExternalId> = serde_json::from_str(&existing_json)
-            .unwrap_or_default();
+        let mut existing: Vec<ExternalId> =
+            serde_json::from_str(&existing_json).unwrap_or_default();
 
         for eid in &metadata.extra_external_ids {
             // Replace any existing entry with the same source so that
@@ -1062,15 +1057,13 @@ pub(crate) async fn update_title_hydrated_metadata_query(
 
     // Merge extra tags (e.g. anime metadata) into the title's tags JSON
     if !metadata.extra_tags.is_empty() {
-        let existing_json: String =
-            sqlx::query_scalar("SELECT tags FROM titles WHERE id = ?")
-                .bind(id)
-                .fetch_one(pool)
-                .await
-                .map_err(|err| AppError::Repository(err.to_string()))?;
+        let existing_json: String = sqlx::query_scalar("SELECT tags FROM titles WHERE id = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
 
-        let mut existing: Vec<String> =
-            serde_json::from_str(&existing_json).unwrap_or_default();
+        let mut existing: Vec<String> = serde_json::from_str(&existing_json).unwrap_or_default();
 
         for tag in &metadata.extra_tags {
             if let Some(colon_pos) = tag.rfind(':') {

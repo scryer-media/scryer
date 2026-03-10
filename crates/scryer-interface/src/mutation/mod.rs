@@ -1,3 +1,4 @@
+mod backup;
 mod collections;
 mod config;
 mod downloads;
@@ -10,7 +11,6 @@ mod settings;
 mod titles;
 mod users;
 mod wanted;
-mod backup;
 
 use async_graphql::MergedObject;
 

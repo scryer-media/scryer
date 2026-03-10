@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-pub use scryer_domain::{ConfigFieldDef, ConfigFieldOption};
 pub use scryer_domain::IndexerProviderCapabilities as IndexerCapabilities;
+pub use scryer_domain::{ConfigFieldDef, ConfigFieldOption};
 use serde::{Deserialize, Serialize};
 
 /// Returned by a plugin's `describe()` export.
@@ -51,6 +51,16 @@ pub struct PluginDescriptor {
     /// Notification-specific capabilities. Only present for `plugin_type: "notification"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notification_capabilities: Option<NotificationCapabilities>,
+    /// Download-client-specific accepted input kinds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accepted_inputs: Vec<String>,
+    /// Download-client-specific isolation modes such as category, tag, or directory.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub isolation_modes: Vec<String>,
+    /// Download-client-specific capabilities. Only present for
+    /// `plugin_type: "download_client"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_client_capabilities: Option<DownloadClientCapabilities>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +84,197 @@ pub struct NotificationCapabilities {
     /// Empty means all events are supported.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supported_events: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DownloadClientCapabilities {
+    #[serde(default)]
+    pub pause: bool,
+    #[serde(default)]
+    pub resume: bool,
+    #[serde(default)]
+    pub remove: bool,
+    #[serde(default)]
+    pub remove_with_data: bool,
+    #[serde(default)]
+    pub mark_imported: bool,
+    #[serde(default)]
+    pub prepare_for_import: bool,
+    #[serde(default)]
+    pub client_status: bool,
+    #[serde(default)]
+    pub queue_priority: bool,
+    #[serde(default)]
+    pub seed_limits: bool,
+    #[serde(default)]
+    pub start_paused: bool,
+    #[serde(default)]
+    pub force_start: bool,
+    #[serde(default)]
+    pub per_download_directory: bool,
+    #[serde(default)]
+    pub host_fs_required: bool,
+    #[serde(default)]
+    pub test_connection: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginDownloadClientAddRequest {
+    pub source: PluginDownloadSource,
+    pub release: PluginDownloadRelease,
+    pub title: PluginDownloadTitle,
+    pub routing: PluginDownloadRouting,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginDownloadSource {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnet_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub torrent_bytes_base64: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_password: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PluginDownloadRelease {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_recent: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub season_pack: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexer_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub info_hash_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed_goal_ratio: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed_goal_seconds: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginDownloadTitle {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_id: Option<String>,
+    pub title_name: String,
+    pub media_facet: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PluginDownloadRouting {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation_value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_directory: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginDownloadClientAddResponse {
+    pub client_item_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub info_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginDownloadItem {
+    pub client_item_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub info_hash: Option<String>,
+    pub title: String,
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_output_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_size_bytes: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remaining_size_bytes: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eta_seconds: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_percent: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub can_move_files: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub can_remove: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginCompletedDownload {
+    pub client_item_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub info_hash: Option<String>,
+    pub name: String,
+    pub dest_dir: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parameters: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginDownloadClientControlRequest {
+    pub action: String,
+    pub client_item_id: String,
+    #[serde(default)]
+    pub remove_data: bool,
+    #[serde(default)]
+    pub is_history: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginDownloadClientMarkImportedRequest {
+    pub client_item_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub info_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PluginDownloadClientStatus {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_localhost: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remote_output_roots: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removes_completed_downloads: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sorting_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// Sent to a notification plugin's `send_notification()` export.
@@ -236,7 +437,10 @@ mod tests {
         assert_eq!(desc.config_fields[0].field_type, "string");
         assert!(desc.config_fields[0].required);
         assert_eq!(desc.config_fields[0].default_value.as_deref(), Some("/api"));
-        assert_eq!(desc.config_fields[0].help_text.as_deref(), Some("Custom API endpoint path"));
+        assert_eq!(
+            desc.config_fields[0].help_text.as_deref(),
+            Some("Custom API endpoint path")
+        );
         assert_eq!(desc.config_fields[1].key, "auth_mode");
         assert_eq!(desc.config_fields[1].field_type, "select");
         assert_eq!(desc.config_fields[1].options.len(), 2);

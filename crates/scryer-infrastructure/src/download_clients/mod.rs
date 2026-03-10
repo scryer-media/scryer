@@ -58,7 +58,10 @@ fn read_config_bool(config: &Value, keys: &[&str], default_value: bool) -> bool 
     default_value
 }
 
-fn resolve_download_client_base_url(config: &DownloadClientConfig, json_config: &Value) -> Option<String> {
+fn resolve_download_client_base_url(
+    config: &DownloadClientConfig,
+    json_config: &Value,
+) -> Option<String> {
     if let Some(value) = config.base_url.as_deref() {
         let trimmed = value.trim();
         if !trimmed.is_empty() {

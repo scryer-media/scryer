@@ -22,8 +22,16 @@ pub fn run_init(args: Vec<String>) {
     let stdin = io::stdin();
     let mut reader = stdin.lock();
 
-    let movies_path = prompt(&mut reader, "Movies directory on this host", "/media/movies");
-    let series_path = prompt(&mut reader, "Series directory on this host", "/media/series");
+    let movies_path = prompt(
+        &mut reader,
+        "Movies directory on this host",
+        "/media/movies",
+    );
+    let series_path = prompt(
+        &mut reader,
+        "Series directory on this host",
+        "/media/series",
+    );
     let encryption_key = EncryptionKey::generate().to_base64();
 
     let compose = generate_compose(&movies_path, &series_path);
@@ -41,10 +49,11 @@ pub fn run_init(args: Vec<String>) {
             eprintln!("error: failed to write .env: {e}");
             std::process::exit(1);
         });
-        std::fs::set_permissions(".env", std::fs::Permissions::from_mode(0o600))
-            .unwrap_or_else(|e| {
+        std::fs::set_permissions(".env", std::fs::Permissions::from_mode(0o600)).unwrap_or_else(
+            |e| {
                 eprintln!("warning: could not set .env permissions to 600: {e}");
-            });
+            },
+        );
         eprintln!("wrote {compose_path}");
         eprintln!("wrote .env");
         eprintln!();

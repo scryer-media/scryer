@@ -33,7 +33,12 @@ impl UserMutations {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let user = app
-            .set_user_password(&actor, &input.user_id, input.password, input.current_password)
+            .set_user_password(
+                &actor,
+                &input.user_id,
+                input.password,
+                input.current_password,
+            )
             .await
             .map_err(to_gql_error)?;
         Ok(from_user(user))

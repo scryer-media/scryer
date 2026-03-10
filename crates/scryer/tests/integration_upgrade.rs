@@ -5,9 +5,7 @@ use std::sync::Arc;
 use common::TestContext;
 use scryer_application::recycle_bin::RecycleBinConfig;
 use scryer_application::upgrade::execute_upgrade;
-use scryer_application::{
-    ActivityKind, ActivitySeverity, InsertMediaFileInput, TitleRepository,
-};
+use scryer_application::{ActivityKind, ActivitySeverity, InsertMediaFileInput, TitleRepository};
 use scryer_domain::{MediaFacet, Title};
 use scryer_infrastructure::FsFileImporter;
 
@@ -146,17 +144,14 @@ async fn upgrade_replaces_old_file_with_new() {
     assert!(!old_path.exists(), "old file should be recycled");
 
     // Recycle dir should contain the recycled file
-    let recycle_entries: Vec<_> = std::fs::read_dir(recycle_dir.path())
-        .unwrap()
-        .collect();
-    assert!(!recycle_entries.is_empty(), "recycle bin should have entries");
+    let recycle_entries: Vec<_> = std::fs::read_dir(recycle_dir.path()).unwrap().collect();
+    assert!(
+        !recycle_entries.is_empty(),
+        "recycle bin should have entries"
+    );
 
     // DB should have the new file, not the old one
-    let files = ctx
-        .db
-        .list_media_files_for_title("title-1")
-        .await
-        .unwrap();
+    let files = ctx.db.list_media_files_for_title("title-1").await.unwrap();
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].id, outcome.new_file_id);
     assert_eq!(files[0].acquisition_score, Some(650));
@@ -210,7 +205,10 @@ async fn upgrade_restores_old_file_on_import_failure() {
     .await;
 
     // Should fail
-    assert!(result.is_err(), "upgrade should fail when source is missing");
+    assert!(
+        result.is_err(),
+        "upgrade should fail when source is missing"
+    );
 
     // Old file should be RESTORED (not lost)
     assert!(

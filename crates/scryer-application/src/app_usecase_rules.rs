@@ -1,6 +1,6 @@
 use super::*;
 use scryer_domain::RuleSet;
-use scryer_rules::validation::{ValidationResult, validate_user_rule};
+use scryer_rules::validation::{validate_user_rule, ValidationResult};
 
 impl AppUseCase {
     pub async fn list_rule_sets(&self, actor: &User) -> AppResult<Vec<RuleSet>> {
@@ -33,9 +33,7 @@ impl AppUseCase {
         let validation = validate_user_rule(&rewritten_source, &id)
             .map_err(|e| AppError::Validation(format!("rule validation failed: {e}")))?;
         if !validation.valid {
-            return Err(AppError::Validation(
-                validation.errors.join("; "),
-            ));
+            return Err(AppError::Validation(validation.errors.join("; ")));
         }
 
         let now = Utc::now();
@@ -95,10 +93,18 @@ impl AppUseCase {
             }
             rule_set.rego_source = rewritten;
         }
-        if let Some(n) = name { rule_set.name = n; }
-        if let Some(d) = description { rule_set.description = d; }
-        if let Some(f) = applied_facets { rule_set.applied_facets = f; }
-        if let Some(p) = priority { rule_set.priority = p; }
+        if let Some(n) = name {
+            rule_set.name = n;
+        }
+        if let Some(d) = description {
+            rule_set.description = d;
+        }
+        if let Some(f) = applied_facets {
+            rule_set.applied_facets = f;
+        }
+        if let Some(p) = priority {
+            rule_set.priority = p;
+        }
         rule_set.updated_at = Utc::now();
 
         self.services.rule_sets.update_rule_set(&rule_set).await?;
@@ -202,7 +208,8 @@ impl AppUseCase {
                     "including plugin-supplied scoring policies"
                 );
                 for mut p in plugin_policies {
-                    p.rego_source = scryer_rules::rewrite_package_declaration(&p.rego_source, &p.id);
+                    p.rego_source =
+                        scryer_rules::rewrite_package_declaration(&p.rego_source, &p.id);
                     policies.push(p);
                 }
             }

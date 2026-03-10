@@ -6,14 +6,30 @@ use sqlx::{Row, SqlitePool};
 use super::common::parse_utc_datetime;
 
 fn row_to_subscription(row: &sqlx::sqlite::SqliteRow) -> AppResult<NotificationSubscription> {
-    let id: String = row.try_get("id").map_err(|e| AppError::Repository(e.to_string()))?;
-    let channel_id: String = row.try_get("channel_id").map_err(|e| AppError::Repository(e.to_string()))?;
-    let event_type: String = row.try_get("event_type").map_err(|e| AppError::Repository(e.to_string()))?;
-    let scope: String = row.try_get("scope").map_err(|e| AppError::Repository(e.to_string()))?;
-    let scope_id: Option<String> = row.try_get("scope_id").map_err(|e| AppError::Repository(e.to_string()))?;
-    let is_enabled: i64 = row.try_get("is_enabled").map_err(|e| AppError::Repository(e.to_string()))?;
-    let created_at_raw: String = row.try_get("created_at").map_err(|e| AppError::Repository(e.to_string()))?;
-    let updated_at_raw: String = row.try_get("updated_at").map_err(|e| AppError::Repository(e.to_string()))?;
+    let id: String = row
+        .try_get("id")
+        .map_err(|e| AppError::Repository(e.to_string()))?;
+    let channel_id: String = row
+        .try_get("channel_id")
+        .map_err(|e| AppError::Repository(e.to_string()))?;
+    let event_type: String = row
+        .try_get("event_type")
+        .map_err(|e| AppError::Repository(e.to_string()))?;
+    let scope: String = row
+        .try_get("scope")
+        .map_err(|e| AppError::Repository(e.to_string()))?;
+    let scope_id: Option<String> = row
+        .try_get("scope_id")
+        .map_err(|e| AppError::Repository(e.to_string()))?;
+    let is_enabled: i64 = row
+        .try_get("is_enabled")
+        .map_err(|e| AppError::Repository(e.to_string()))?;
+    let created_at_raw: String = row
+        .try_get("created_at")
+        .map_err(|e| AppError::Repository(e.to_string()))?;
+    let updated_at_raw: String = row
+        .try_get("updated_at")
+        .map_err(|e| AppError::Repository(e.to_string()))?;
 
     Ok(NotificationSubscription {
         id,
@@ -116,7 +132,10 @@ pub(crate) async fn update_notification_subscription_query(
     .map_err(|e| AppError::Repository(e.to_string()))?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("notification subscription {}", sub.id)));
+        return Err(AppError::NotFound(format!(
+            "notification subscription {}",
+            sub.id
+        )));
     }
 
     Ok(sub.clone())
@@ -133,7 +152,9 @@ pub(crate) async fn delete_notification_subscription_query(
         .map_err(|e| AppError::Repository(e.to_string()))?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("notification subscription {id}")));
+        return Err(AppError::NotFound(format!(
+            "notification subscription {id}"
+        )));
     }
     Ok(())
 }

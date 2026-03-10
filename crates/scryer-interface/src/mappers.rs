@@ -6,8 +6,8 @@ use scryer_application::{
     ScoringEntry, ScoringSource, SystemHealth, TitleReleaseBlocklistEntry,
 };
 use scryer_domain::{
-    CalendarEpisode, DownloadQueueItem, PluginInstallation, PolicyOutput, RuleSet,
-    Collection, DownloadClientConfig, Episode, HistoryEvent, IndexerConfig, Title, User,
+    CalendarEpisode, Collection, DownloadClientConfig, DownloadQueueItem, Episode, HistoryEvent,
+    IndexerConfig, PluginInstallation, PolicyOutput, RuleSet, Title, User,
 };
 use scryer_infrastructure::{SettingsValueRecord, WorkflowOperationRecord};
 use scryer_rules;
@@ -147,9 +147,7 @@ pub(crate) fn from_parsed_release(result: ParsedReleaseMetadata) -> ParsedReleas
     }
 }
 
-pub(crate) fn from_parsed_episode(
-    episode: ParsedEpisodeMetadata,
-) -> ParsedEpisodePayload {
+pub(crate) fn from_parsed_episode(episode: ParsedEpisodeMetadata) -> ParsedEpisodePayload {
     ParsedEpisodePayload {
         season: episode.season.map(|value| value as i32),
         episode_numbers: episode
@@ -305,9 +303,7 @@ pub(crate) fn from_title(title: Title) -> TitlePayload {
     }
 }
 
-pub(crate) fn from_library_scan_summary(
-    summary: LibraryScanSummary,
-) -> LibraryScanSummaryPayload {
+pub(crate) fn from_library_scan_summary(summary: LibraryScanSummary) -> LibraryScanSummaryPayload {
     LibraryScanSummaryPayload {
         scanned: summary.scanned as i32,
         matched: summary.matched as i32,
@@ -330,7 +326,11 @@ pub(crate) fn from_media_rename_plan(plan: RenamePlan) -> MediaRenamePlanPayload
         noop: plan.noop as i32,
         conflicts: plan.conflicts as i32,
         errors: plan.errors as i32,
-        items: plan.items.into_iter().map(from_media_rename_plan_item).collect(),
+        items: plan
+            .items
+            .into_iter()
+            .map(from_media_rename_plan_item)
+            .collect(),
     }
 }
 
@@ -442,7 +442,9 @@ pub(crate) fn from_calendar_episode(ep: CalendarEpisode) -> CalendarEpisodePaylo
     }
 }
 
-pub(crate) fn from_title_media_file(file: scryer_application::TitleMediaFile) -> TitleMediaFilePayload {
+pub(crate) fn from_title_media_file(
+    file: scryer_application::TitleMediaFile,
+) -> TitleMediaFilePayload {
     TitleMediaFilePayload {
         id: file.id,
         title_id: file.title_id,

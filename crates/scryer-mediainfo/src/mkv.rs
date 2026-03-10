@@ -13,8 +13,7 @@ const BITRATE_SAMPLE_SECONDS: f64 = 30.0;
 
 /// Parse an MKV/WebM file into a [`RawContainer`].
 pub(crate) fn parse_mkv(path: &Path) -> Result<RawContainer, MediaInfoError> {
-    let file = std::fs::File::open(path)
-        .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+    let file = std::fs::File::open(path).map_err(|e| MediaInfoError::Io(e.to_string()))?;
     let mut mkv = MatroskaFile::open(file)
         .map_err(|e| MediaInfoError::Parse(format!("matroska open: {e}")))?;
 
@@ -30,10 +29,7 @@ pub(crate) fn parse_mkv(path: &Path) -> Result<RawContainer, MediaInfoError> {
     // duration() is in TimestampScale units; multiply by timestamp_scale to
     // get nanoseconds, then divide by 1e9 to get seconds.
     let timestamp_scale_ns = mkv.info().timestamp_scale().get() as f64;
-    let duration_seconds = mkv
-        .info()
-        .duration()
-        .map(|d| d * timestamp_scale_ns / 1e9);
+    let duration_seconds = mkv.info().duration().map(|d| d * timestamp_scale_ns / 1e9);
 
     // -- tracks ----------------------------------------------------------
     let mut tracks: Vec<RawTrack> = Vec::new();
@@ -79,9 +75,8 @@ pub(crate) fn parse_mkv(path: &Path) -> Result<RawContainer, MediaInfoError> {
                     raw.height = Some(video.pixel_height().get() as i32);
 
                     if let Some(colour) = video.colour() {
-                        raw.color_transfer = colour
-                            .transfer_characteristics()
-                            .map(transfer_to_itu_value);
+                        raw.color_transfer =
+                            colour.transfer_characteristics().map(transfer_to_itu_value);
                     }
                 }
 

@@ -7,12 +7,12 @@ use serde_json::json;
 
 use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_error};
 use crate::mappers::{
-    from_activity_event, from_calendar_episode, from_collection, from_disk_space,
-    from_download_client_config, from_episode, from_download_queue_item, from_event,
-    from_health_check_result, from_indexer_config, from_media_rename_plan, from_pending_release,
-    from_provider_type, from_release_decision, from_system_health, from_title,
-    from_title_media_file, from_title_release_blocklist_entry, from_wanted_item,
-    map_admin_setting, from_user, file_size_bytes_for_path, from_backup_info,
+    file_size_bytes_for_path, from_activity_event, from_backup_info, from_calendar_episode,
+    from_collection, from_disk_space, from_download_client_config, from_download_queue_item,
+    from_episode, from_event, from_health_check_result, from_indexer_config,
+    from_media_rename_plan, from_pending_release, from_provider_type, from_release_decision,
+    from_system_health, from_title, from_title_media_file, from_title_release_blocklist_entry,
+    from_user, from_wanted_item, map_admin_setting,
 };
 use crate::types::*;
 use crate::utils::parse_facet;
@@ -42,10 +42,8 @@ impl QueryRoot {
             .list_primary_collection_summaries(&actor, &title_ids)
             .await
             .map_err(to_gql_error)?;
-        let summary_map: std::collections::HashMap<&str, _> = summaries
-            .iter()
-            .map(|s| (s.title_id.as_str(), s))
-            .collect();
+        let summary_map: std::collections::HashMap<&str, _> =
+            summaries.iter().map(|s| (s.title_id.as_str(), s)).collect();
 
         Ok(titles
             .into_iter()
@@ -220,7 +218,8 @@ impl QueryRoot {
                 &actor,
                 PolicyInput {
                     title_id: input.title_id,
-                    facet: parse_facet(Some(input.facet)).unwrap_or(scryer_domain::MediaFacet::Other),
+                    facet: parse_facet(Some(input.facet))
+                        .unwrap_or(scryer_domain::MediaFacet::Other),
                     has_existing_file: input.has_existing_file,
                     candidate_quality: input.candidate_quality,
                     requested_mode: input.requested_mode,
@@ -234,9 +233,7 @@ impl QueryRoot {
             .await
             .map_err(to_gql_error)?;
 
-        Ok(crate::mappers::from_policy(
-            decision,
-        ))
+        Ok(crate::mappers::from_policy(decision))
     }
 
     async fn search_indexers(
@@ -256,7 +253,10 @@ impl QueryRoot {
             .await
             .map_err(to_gql_error)?;
 
-        Ok(results.into_iter().map(crate::mappers::from_search_result).collect())
+        Ok(results
+            .into_iter()
+            .map(crate::mappers::from_search_result)
+            .collect())
     }
 
     async fn search_indexers_episode(
@@ -289,7 +289,10 @@ impl QueryRoot {
             .await
             .map_err(to_gql_error)?;
 
-        Ok(results.into_iter().map(crate::mappers::from_search_result).collect())
+        Ok(results
+            .into_iter()
+            .map(crate::mappers::from_search_result)
+            .collect())
     }
 
     async fn search_indexers_season(
@@ -306,19 +309,14 @@ impl QueryRoot {
         let actor = actor_from_ctx(ctx)?;
         let limit = limit.unwrap_or(200).clamp(1, 200) as usize;
         let results = app
-            .search_indexers_season(
-                &actor,
-                title,
-                season,
-                imdb_id,
-                tvdb_id,
-                category,
-                limit,
-            )
+            .search_indexers_season(&actor, title, season, imdb_id, tvdb_id, category, limit)
             .await
             .map_err(to_gql_error)?;
 
-        Ok(results.into_iter().map(crate::mappers::from_search_result).collect())
+        Ok(results
+            .into_iter()
+            .map(crate::mappers::from_search_result)
+            .collect())
     }
 
     async fn title_events(
@@ -490,7 +488,10 @@ impl QueryRoot {
             .list_download_client_configs(&actor, client_type)
             .await
             .map_err(to_gql_error)?;
-        Ok(configs.into_iter().map(from_download_client_config).collect())
+        Ok(configs
+            .into_iter()
+            .map(from_download_client_config)
+            .collect())
     }
 
     async fn download_client_config(
@@ -536,7 +537,11 @@ impl QueryRoot {
             return Err(async_graphql::Error::new("insufficient entitlements"));
         }
         let results = app.services.health_check_results.read().await;
-        Ok(results.iter().cloned().map(from_health_check_result).collect())
+        Ok(results
+            .iter()
+            .cloned()
+            .map(from_health_check_result)
+            .collect())
     }
 
     async fn disk_space(&self, ctx: &Context<'_>) -> GqlResult<Vec<DiskSpacePayload>> {
@@ -594,13 +599,10 @@ impl QueryRoot {
             return Err(async_graphql::Error::new("insufficient entitlements"));
         }
 
-        let preview = scryer_application::preview_manual_import(
-            &app,
-            &download_client_item_id,
-            &title_id,
-        )
-        .await
-        .map_err(to_gql_error)?;
+        let preview =
+            scryer_application::preview_manual_import(&app, &download_client_item_id, &title_id)
+                .await
+                .map_err(to_gql_error)?;
 
         Ok(ManualImportPreviewPayload {
             files: preview
@@ -612,11 +614,7 @@ impl QueryRoot {
                     size_bytes: f.size_bytes.to_string(),
                     quality: f.quality,
                     parsed_season: f.parsed_season.map(|v| v as i32),
-                    parsed_episodes: f
-                        .parsed_episodes
-                        .into_iter()
-                        .map(|v| v as i32)
-                        .collect(),
+                    parsed_episodes: f.parsed_episodes.into_iter().map(|v| v as i32).collect(),
                     suggested_episode_id: f.suggested_episode_id,
                     suggested_episode_label: f.suggested_episode_label,
                 })
@@ -679,11 +677,7 @@ impl QueryRoot {
             return Err(async_graphql::Error::new("insufficient entitlements"));
         }
         let decisions = app
-            .list_release_decisions(
-                wanted_item_id.as_deref(),
-                title_id.as_deref(),
-                limit,
-            )
+            .list_release_decisions(wanted_item_id.as_deref(), title_id.as_deref(), limit)
             .await
             .map_err(to_gql_error)?;
         Ok(decisions.into_iter().map(from_release_decision).collect())
@@ -702,18 +696,11 @@ impl QueryRoot {
             .collect())
     }
 
-    async fn rule_set(
-        &self,
-        ctx: &Context<'_>,
-        id: String,
-    ) -> GqlResult<Option<RuleSetPayload>> {
+    async fn rule_set(&self, ctx: &Context<'_>, id: String) -> GqlResult<Option<RuleSetPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
 
-        let rule_set = app
-            .get_rule_set(&actor, &id)
-            .await
-            .map_err(to_gql_error)?;
+        let rule_set = app.get_rule_set(&actor, &id).await.map_err(to_gql_error)?;
         Ok(rule_set.map(crate::mappers::from_rule_set))
     }
 
@@ -744,6 +731,24 @@ impl QueryRoot {
             return Err(Error::new("insufficient entitlements"));
         }
         let provider_types = app.available_indexer_provider_types();
+        Ok(provider_types
+            .into_iter()
+            .map(|(pt, name, fields, default_base_url)| {
+                from_provider_type(pt, name, fields, default_base_url)
+            })
+            .collect())
+    }
+
+    async fn download_client_provider_types(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<ProviderTypePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let provider_types = app.available_download_client_provider_types();
         Ok(provider_types
             .into_iter()
             .map(|(pt, name, fields, default_base_url)| {
@@ -1034,7 +1039,9 @@ impl QueryRoot {
             .get_setting_with_defaults("system", "setup.complete", None)
             .await
         {
-            Ok(Some(record)) => record.value_json.as_deref().map(|v| v.trim_matches('"')) == Some("true"),
+            Ok(Some(record)) => {
+                record.value_json.as_deref().map(|v| v.trim_matches('"')) == Some("true")
+            }
             _ => false,
         };
 

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::sync::Arc;
 
 use async_graphql_axum::GraphQLRequest;
@@ -59,10 +61,9 @@ impl TestContext {
         .expect("failed to seed jwt setting definition");
 
         // Generate JWT HMAC secret via the standard bootstrap path
-        let jwt_hmac_secret =
-            scryer_infrastructure::jwt_keys::ensure_jwt_hmac_secret(&db, None)
-                .await
-                .expect("failed to generate JWT HMAC secret");
+        let jwt_hmac_secret = scryer_infrastructure::jwt_keys::ensure_jwt_hmac_secret(&db, None)
+            .await
+            .expect("failed to generate JWT HMAC secret");
 
         // Real clients pointed at wiremock URLs
         let nzbget = NzbgetDownloadClient::new(
@@ -74,13 +75,12 @@ impl TestContext {
 
         // Build indexer client backed by built-in WASM plugins (using DynamicPluginProvider
         // so reload_plugins works in integration tests)
-        let plugin_provider: Arc<dyn IndexerPluginProvider> = Arc::new(
-            scryer_plugins::DynamicPluginProvider::new(
+        let plugin_provider: Arc<dyn IndexerPluginProvider> =
+            Arc::new(scryer_plugins::DynamicPluginProvider::new(
                 scryer_plugins::WasmIndexerPluginProvider::empty()
                     .with_builtin(scryer_plugins::builtins::NZBGEEK_WASM)
                     .with_builtin(scryer_plugins::builtins::NEWZNAB_WASM),
-            ),
-        );
+            ));
         let indexer_stats: Arc<dyn scryer_application::IndexerStatsTracker> =
             Arc::new(scryer_infrastructure::InMemoryIndexerStatsTracker::new());
         let indexer_client = MultiIndexerSearchClient::new(

@@ -25,7 +25,10 @@ pub(crate) async fn bootstrap_admin_password(app_use_case: &AppUseCase) {
         return;
     }
 
-    match app_use_case.bootstrap_user_password(&admin.id, "admin").await {
+    match app_use_case
+        .bootstrap_user_password(&admin.id, "admin")
+        .await
+    {
         Ok(_) => tracing::info!("admin password bootstrapped (change it in Settings > Users)"),
         Err(error) => tracing::warn!(error = %error, "failed to set admin password"),
     }

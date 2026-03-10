@@ -9,8 +9,10 @@ use tokio::sync::Mutex;
 struct MockPluginInstallationRepo {
     installations: Arc<Mutex<Vec<PluginInstallation>>>,
     registry_cache: Arc<Mutex<Option<String>>>,
-    seeded: Arc<Mutex<Vec<(String, String, String, String, String)>>>,
+    seeded: Arc<Mutex<Vec<SeededPluginRecord>>>,
 }
+
+type SeededPluginRecord = (String, String, String, String, String);
 
 impl MockPluginInstallationRepo {
     fn new() -> Self {
@@ -28,7 +30,10 @@ impl PluginInstallationRepository for MockPluginInstallationRepo {
         Ok(self.installations.lock().await.clone())
     }
 
-    async fn get_plugin_installation(&self, plugin_id: &str) -> AppResult<Option<PluginInstallation>> {
+    async fn get_plugin_installation(
+        &self,
+        plugin_id: &str,
+    ) -> AppResult<Option<PluginInstallation>> {
         let list = self.installations.lock().await;
         Ok(list.iter().find(|i| i.plugin_id == plugin_id).cloned())
     }
@@ -49,7 +54,10 @@ impl PluginInstallationRepository for MockPluginInstallationRepo {
         _wasm_bytes: Option<&[u8]>,
     ) -> AppResult<PluginInstallation> {
         let mut list = self.installations.lock().await;
-        if let Some(existing) = list.iter_mut().find(|i| i.plugin_id == installation.plugin_id) {
+        if let Some(existing) = list
+            .iter_mut()
+            .find(|i| i.plugin_id == installation.plugin_id)
+        {
             *existing = installation.clone();
         }
         Ok(installation.clone())
@@ -241,7 +249,12 @@ fn viewer() -> User {
     }
 }
 
-fn make_installation(plugin_id: &str, version: &str, builtin: bool, enabled: bool) -> PluginInstallation {
+fn make_installation(
+    plugin_id: &str,
+    version: &str,
+    builtin: bool,
+    enabled: bool,
+) -> PluginInstallation {
     let now = Utc::now();
     PluginInstallation {
         id: scryer_domain::Id::new().0,
@@ -268,7 +281,12 @@ fn make_registry_json(entries: &[serde_json::Value]) -> String {
     .to_string()
 }
 
-fn registry_entry(id: &str, version: &str, builtin: bool, wasm_url: Option<&str>) -> serde_json::Value {
+fn registry_entry(
+    id: &str,
+    version: &str,
+    builtin: bool,
+    wasm_url: Option<&str>,
+) -> serde_json::Value {
     let mut entry = serde_json::json!({
         "id": id,
         "name": format!("{id} Plugin"),
@@ -418,7 +436,12 @@ async fn list_registry_entries_not_installed() {
 #[tokio::test]
 async fn list_installed_and_in_registry() {
     let h = bootstrap_plugins(Some(MockPluginProvider::new()));
-    let json = make_registry_json(&[registry_entry("alpha", "0.2.0", false, Some("https://example.com/a.wasm"))]);
+    let json = make_registry_json(&[registry_entry(
+        "alpha",
+        "0.2.0",
+        false,
+        Some("https://example.com/a.wasm"),
+    )]);
     h.plugin_repo.store_registry_cache(&json).await.unwrap();
     h.plugin_repo
         .installations
@@ -599,14 +622,22 @@ async fn toggle_disables_enabled_plugin() {
 #[tokio::test]
 async fn toggle_not_found() {
     let h = bootstrap_plugins(Some(MockPluginProvider::new()));
-    let err = h.app.toggle_plugin(&admin(), "nonexistent", true).await.unwrap_err();
+    let err = h
+        .app
+        .toggle_plugin(&admin(), "nonexistent", true)
+        .await
+        .unwrap_err();
     assert!(matches!(err, AppError::NotFound(_)));
 }
 
 #[tokio::test]
 async fn toggle_auth_rejects_viewer() {
     let h = bootstrap_plugins(Some(MockPluginProvider::new()));
-    let err = h.app.toggle_plugin(&viewer(), "alpha", true).await.unwrap_err();
+    let err = h
+        .app
+        .toggle_plugin(&viewer(), "alpha", true)
+        .await
+        .unwrap_err();
     assert!(matches!(err, AppError::Unauthorized(_)));
 }
 
@@ -646,13 +677,20 @@ async fn uninstall_deletes_indexer_configs() {
     h.app.uninstall_plugin(&admin(), "alpha").await.unwrap();
 
     let configs = h.indexer_config_repo.store.lock().await;
-    assert!(configs.is_empty(), "indexer configs should be deleted on uninstall");
+    assert!(
+        configs.is_empty(),
+        "indexer configs should be deleted on uninstall"
+    );
 }
 
 #[tokio::test]
 async fn uninstall_not_found() {
     let h = bootstrap_plugins(Some(MockPluginProvider::new()));
-    let err = h.app.uninstall_plugin(&admin(), "nonexistent").await.unwrap_err();
+    let err = h
+        .app
+        .uninstall_plugin(&admin(), "nonexistent")
+        .await
+        .unwrap_err();
     assert!(matches!(err, AppError::NotFound(_)));
 }
 
@@ -665,10 +703,16 @@ async fn uninstall_builtin_rejected() {
         .await
         .push(make_installation("nzbgeek", "0.2.0", true, true));
 
-    let err = h.app.uninstall_plugin(&admin(), "nzbgeek").await.unwrap_err();
+    let err = h
+        .app
+        .uninstall_plugin(&admin(), "nzbgeek")
+        .await
+        .unwrap_err();
     assert!(matches!(err, AppError::Validation(_)));
     match err {
-        AppError::Validation(msg) => assert!(msg.contains("disable"), "expected 'disable' hint: {msg}"),
+        AppError::Validation(msg) => {
+            assert!(msg.contains("disable"), "expected 'disable' hint: {msg}")
+        }
         _ => panic!("expected Validation error"),
     }
 }
@@ -676,7 +720,11 @@ async fn uninstall_builtin_rejected() {
 #[tokio::test]
 async fn uninstall_auth_rejects_viewer() {
     let h = bootstrap_plugins(Some(MockPluginProvider::new()));
-    let err = h.app.uninstall_plugin(&viewer(), "alpha").await.unwrap_err();
+    let err = h
+        .app
+        .uninstall_plugin(&viewer(), "alpha")
+        .await
+        .unwrap_err();
     assert!(matches!(err, AppError::Unauthorized(_)));
 }
 
@@ -696,7 +744,12 @@ async fn install_registry_not_loaded() {
 #[tokio::test]
 async fn install_not_in_registry() {
     let h = bootstrap_plugins(Some(MockPluginProvider::new()));
-    let json = make_registry_json(&[registry_entry("beta", "1.0.0", false, Some("https://example.com/b.wasm"))]);
+    let json = make_registry_json(&[registry_entry(
+        "beta",
+        "1.0.0",
+        false,
+        Some("https://example.com/b.wasm"),
+    )]);
     h.plugin_repo.store_registry_cache(&json).await.unwrap();
 
     let err = h.app.install_plugin(&admin(), "alpha").await.unwrap_err();
@@ -739,7 +792,11 @@ async fn install_auth_rejects_viewer() {
 #[tokio::test]
 async fn upgrade_not_found() {
     let h = bootstrap_plugins(Some(MockPluginProvider::new()));
-    let err = h.app.upgrade_plugin(&admin(), "nonexistent").await.unwrap_err();
+    let err = h
+        .app
+        .upgrade_plugin(&admin(), "nonexistent")
+        .await
+        .unwrap_err();
     assert!(matches!(err, AppError::NotFound(_)));
 }
 
@@ -796,7 +853,12 @@ async fn upgrade_already_at_latest() {
         .lock()
         .await
         .push(make_installation("alpha", "0.2.0", false, true));
-    let json = make_registry_json(&[registry_entry("alpha", "0.2.0", false, Some("https://example.com/a.wasm"))]);
+    let json = make_registry_json(&[registry_entry(
+        "alpha",
+        "0.2.0",
+        false,
+        Some("https://example.com/a.wasm"),
+    )]);
     h.plugin_repo.store_registry_cache(&json).await.unwrap();
 
     let err = h.app.upgrade_plugin(&admin(), "alpha").await.unwrap_err();

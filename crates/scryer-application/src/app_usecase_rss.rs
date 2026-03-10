@@ -147,10 +147,10 @@ impl AppUseCase {
                 String::new(), // empty query = RSS feed
                 None,
                 None,
-                None,  // no category filter
+                None, // no category filter
                 None,
-                None,  // no routing filter
-                500,   // generous limit for RSS
+                None, // no routing filter
+                500,  // generous limit for RSS
                 SearchMode::Auto,
                 None,
                 None,
@@ -274,7 +274,13 @@ impl AppUseCase {
             if has_episodes {
                 // For series: match each release to a specific episode's wanted item
                 self.process_rss_series_releases(
-                    &title, releases, &dl_snapshot, &delay_profiles, &mut grabbed_urls, &mut report, &now,
+                    &title,
+                    releases,
+                    &dl_snapshot,
+                    &delay_profiles,
+                    &mut grabbed_urls,
+                    &mut report,
+                    &now,
                 )
                 .await;
             } else {
@@ -286,7 +292,14 @@ impl AppUseCase {
                     // Already grabbed — only proceed if upgrade is possible
                 }
                 self.process_rss_title_releases(
-                    &title, &wanted, releases, &dl_snapshot, &delay_profiles, &mut grabbed_urls, &mut report, &now,
+                    &title,
+                    &wanted,
+                    releases,
+                    &dl_snapshot,
+                    &delay_profiles,
+                    &mut grabbed_urls,
+                    &mut report,
+                    &now,
                 )
                 .await;
             }
@@ -301,10 +314,14 @@ impl AppUseCase {
         );
 
         metrics::counter!("scryer_rss_sync_total").increment(1);
-        metrics::histogram!("scryer_rss_sync_duration_seconds").record(sync_start.elapsed().as_secs_f64());
-        metrics::counter!("scryer_rss_releases_fetched_total").increment(report.releases_fetched as u64);
-        metrics::counter!("scryer_rss_releases_matched_total").increment(report.releases_matched as u64);
-        metrics::counter!("scryer_rss_releases_grabbed_total").increment(report.releases_grabbed as u64);
+        metrics::histogram!("scryer_rss_sync_duration_seconds")
+            .record(sync_start.elapsed().as_secs_f64());
+        metrics::counter!("scryer_rss_releases_fetched_total")
+            .increment(report.releases_fetched as u64);
+        metrics::counter!("scryer_rss_releases_matched_total")
+            .increment(report.releases_matched as u64);
+        metrics::counter!("scryer_rss_releases_grabbed_total")
+            .increment(report.releases_grabbed as u64);
 
         Ok(report)
     }
@@ -358,7 +375,15 @@ impl AppUseCase {
 
         // Try to grab the best candidate using the same logic as acquisition
         self.try_grab_rss_release(
-            title, wanted, &scored, &category, dl_snapshot, delay_profiles, grabbed_urls, report, now,
+            title,
+            wanted,
+            &scored,
+            &category,
+            dl_snapshot,
+            delay_profiles,
+            grabbed_urls,
+            report,
+            now,
         )
         .await;
     }
@@ -400,15 +425,14 @@ impl AppUseCase {
 
         for ((season, episode_numbers), episode_releases) in &by_episode {
             // Find the wanted item for this specific episode
-            let episode_id = if let (Some(season_num), Some(ep_num)) =
-                (season, episode_numbers.first())
-            {
-                // Look up the episode by season/episode number
-                self.find_episode_id_for_title(&title.id, *season_num, *ep_num)
-                    .await
-            } else {
-                None
-            };
+            let episode_id =
+                if let (Some(season_num), Some(ep_num)) = (season, episode_numbers.first()) {
+                    // Look up the episode by season/episode number
+                    self.find_episode_id_for_title(&title.id, *season_num, *ep_num)
+                        .await
+                } else {
+                    None
+                };
 
             let episode_id = match episode_id {
                 Some(id) => id,
@@ -562,13 +586,14 @@ impl AppUseCase {
             }
 
             let parsed = parse_release_metadata(&result.title);
-            let persona = quality_profile.criteria.resolve_persona(category.as_deref());
+            let persona = quality_profile
+                .criteria
+                .resolve_persona(category.as_deref());
             let weights = crate::scoring_weights::build_weights(
                 persona,
                 &quality_profile.criteria.scoring_overrides,
             );
-            let mut decision =
-                evaluate_against_profile(&quality_profile, &parsed, false, &weights);
+            let mut decision = evaluate_against_profile(&quality_profile, &parsed, false, &weights);
             apply_age_scoring(&mut decision, result.published_at.as_deref());
             crate::quality_profile::apply_size_scoring_for_category(
                 &mut decision,
@@ -596,9 +621,7 @@ impl AppUseCase {
                             decision.log_with_source(
                                 &entry.code,
                                 entry.delta,
-                                crate::quality_profile::ScoringSource::UserRule(
-                                    entry.rule_set_id,
-                                ),
+                                crate::quality_profile::ScoringSource::UserRule(entry.rule_set_id),
                             );
                         }
                     }
@@ -782,11 +805,9 @@ impl AppUseCase {
         }
 
         // Check delay profile — hold release instead of grabbing immediately
-        if let Some(dp) = crate::delay_profile::resolve_delay_profile(
-            delay_profiles,
-            &title.tags,
-            &title.facet,
-        ) {
+        if let Some(dp) =
+            crate::delay_profile::resolve_delay_profile(delay_profiles, &title.tags, &title.facet)
+        {
             if !crate::delay_profile::should_bypass_delay(dp, candidate_score) {
                 // Hold release as pending instead of grabbing
                 let scoring_json = best.quality_profile_decision.as_ref().map(|d| {
@@ -888,8 +909,8 @@ impl AppUseCase {
                     )
                     .await;
 
-                let facet_str = serde_json::to_string(&title.facet)
-                    .unwrap_or_else(|_| "\"other\"".to_string());
+                let facet_str =
+                    serde_json::to_string(&title.facet).unwrap_or_else(|_| "\"other\"".to_string());
                 let _ = self
                     .services
                     .download_submissions
@@ -1011,7 +1032,12 @@ mod tests {
         }
     }
 
-    fn make_title_with_aliases(id: &str, name: &str, year: Option<i32>, aliases: Vec<&str>) -> Title {
+    fn make_title_with_aliases(
+        id: &str,
+        name: &str,
+        year: Option<i32>,
+        aliases: Vec<&str>,
+    ) -> Title {
         let mut t = make_title(id, name, year);
         t.aliases = aliases.into_iter().map(|s| s.to_string()).collect();
         t
@@ -1040,10 +1066,7 @@ mod tests {
 
     #[test]
     fn normalize_underscores() {
-        assert_eq!(
-            normalize_for_matching("the_dark_knight"),
-            "the dark knight"
-        );
+        assert_eq!(normalize_for_matching("the_dark_knight"), "the dark knight");
     }
 
     #[test]
