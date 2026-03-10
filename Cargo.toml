@@ -2,6 +2,7 @@
 members = [
     "crates/scryer-domain",
     "crates/scryer-application",
+    "crates/scryer-release-parser",
     "crates/scryer-infrastructure",
     "crates/scryer-interface",
     "crates/scryer-rules",

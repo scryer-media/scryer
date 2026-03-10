@@ -2,7 +2,7 @@
 #
 # release.sh — pre-release validation and tagging script
 #
-# Validates: cargo clippy · cargo test · tsc --noEmit
+# Validates: cargo clippy (host + linux ci target) · cargo audit · cargo test · tsc --noEmit
 # Then:      bumps crates/scryer version · signed tag · push
 #
 # Usage:
@@ -91,9 +91,9 @@ fi
 ok "Pre-flight OK"
 
 # ── Rust clippy (before cargo update so failures don't dirty Cargo.lock) ───────
-step "Running cargo clippy (--workspace -D warnings)"
+step "Running cargo clippy (host + linux ci target)"
 
-cargo clippy --workspace -- -D warnings 2>&1 || die "Clippy errors — fix before releasing"
+"$REPO_ROOT/scripts/clippy-ci.sh" 2>&1 || die "Clippy errors — fix before releasing"
 
 ok "Clippy passed"
 
@@ -129,11 +129,12 @@ ok "Cargo.lock updated"
 step "Running cargo audit"
 
 if ! command -v cargo-audit &>/dev/null; then
-    warn "cargo-audit not installed — skipping (run: cargo install cargo-audit)"
-else
-    cargo audit 2>&1 || die "cargo audit found vulnerabilities — fix before releasing"
-    ok "cargo audit passed"
+    warn "cargo-audit not installed — installing"
+    cargo install --locked cargo-audit 2>&1 || die "failed to install cargo-audit"
 fi
+
+cargo audit 2>&1 || die "cargo audit found vulnerabilities — fix before releasing"
+ok "cargo audit passed"
 
 # ── Rust tests ─────────────────────────────────────────────────────────────────
 step "Running Rust tests (cargo test --workspace)"
