@@ -96,11 +96,13 @@ pub(crate) struct LibraryMutations;
 
 #[Object]
 impl LibraryMutations {
-    async fn scan_movie_library(&self, ctx: &Context<'_>) -> GqlResult<LibraryScanSummaryPayload> {
+    async fn scan_library(&self, ctx: &Context<'_>, facet: String) -> GqlResult<LibraryScanSummaryPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
+        let facet = parse_facet(Some(facet))
+            .ok_or_else(|| Error::new("invalid facet for scanLibrary"))?;
         let summary = app
-            .scan_movie_library(&actor)
+            .scan_library(&actor, facet)
             .await
             .map_err(to_gql_error)?;
         Ok(from_library_scan_summary(summary))

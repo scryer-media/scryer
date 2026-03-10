@@ -1,10 +1,19 @@
 import { useTranslate } from "@/lib/context/translate-context";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 export type AudioStreamDetail = {
   codec: string | null;
   channels: number | null;
   language: string | null;
   bitrateKbps: number | null;
+};
+
+export type SubtitleStreamDetail = {
+  codec: string | null;
+  language: string | null;
+  name: string | null;
+  forced: boolean;
+  default: boolean;
 };
 
 export type MediaInfoFile = {
@@ -24,6 +33,7 @@ export type MediaInfoFile = {
   audioStreams: AudioStreamDetail[];
   subtitleLanguages: string[];
   subtitleCodecs: string[];
+  subtitleStreams: SubtitleStreamDetail[];
   hasMultiaudio: boolean;
   durationSeconds: number | null;
   containerFormat: string | null;
@@ -81,6 +91,30 @@ function resolveAudioChannels(channels: number | null): string | null {
   return `${channels}ch`;
 }
 
+let displayNamesCache: Intl.DisplayNames | null = null;
+
+function formatLanguage(code: string | null): string {
+  if (!code) return "?";
+  try {
+    displayNamesCache ??= new Intl.DisplayNames(undefined, { type: "language" });
+    return displayNamesCache.of(code) ?? code;
+  } catch {
+    return code;
+  }
+}
+
+function resolveSubtitleCodec(codec: string | null): string {
+  if (!codec) return "?";
+  const c = codec.toLowerCase();
+  if (c === "subrip" || c === "srt") return "SRT";
+  if (c === "ass" || c === "ssa") return "ASS";
+  if (c === "hdmv_pgs_subtitle" || c === "pgs" || c === "pgssub") return "PGS";
+  if (c === "dvd_subtitle" || c === "dvdsub" || c === "vobsub") return "VobSub";
+  if (c === "webvtt" || c === "vtt") return "WebVTT";
+  if (c === "mov_text") return "TX3G";
+  return codec.toUpperCase();
+}
+
 function resolveSourceType(source: string): string | null {
   const s = source.toLowerCase();
   if (s === "bluray" || s === "blu-ray") return "BluRay";
@@ -118,13 +152,76 @@ function Badge({
   );
 }
 
+function AudioTracksPopover({ streams }: { streams: AudioStreamDetail[] }) {
+  const t = useTranslate();
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="cursor-pointer rounded border border-violet-500/40 bg-violet-500/20 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 hover:bg-violet-500/30 dark:border-violet-500/30 dark:bg-violet-500/15 dark:text-violet-300 dark:hover:bg-violet-500/25"
+        >
+          {t("mediaFile.audioCount", { count: streams.length })}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto max-w-xs p-2" align="start">
+        <div className="max-h-60 space-y-1 overflow-y-auto">
+          {streams.map((stream, i) => (
+            <div key={i} className="flex items-center gap-2 rounded px-2 py-1 text-xs even:bg-muted/50">
+              <span className="min-w-[5rem] font-medium">{formatLanguage(stream.language)}</span>
+              <span className="text-muted-foreground">{resolveAudioCodec(stream.codec) ?? "?"}</span>
+              <span className="text-muted-foreground">{resolveAudioChannels(stream.channels) ?? "?"}</span>
+              {stream.bitrateKbps ? (
+                <span className="text-muted-foreground/60">{stream.bitrateKbps} kbps</span>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function SubtitleTracksPopover({ streams }: { streams: SubtitleStreamDetail[] }) {
+  const t = useTranslate();
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="cursor-pointer rounded border border-border bg-muted/50 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-muted dark:hover:bg-muted/80"
+        >
+          {t("mediaFile.subtitleCount", { count: streams.length })}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto max-w-md p-2" align="start">
+        <div className="max-h-60 space-y-1 overflow-y-auto">
+          {streams.map((track, i) => (
+            <div key={i} className="flex items-center gap-2 rounded px-2 py-1 text-xs even:bg-muted/50">
+              <span className="min-w-[5rem] font-medium">{formatLanguage(track.language)}</span>
+              <span className="text-muted-foreground">{resolveSubtitleCodec(track.codec)}</span>
+              {track.forced ? (
+                <span className="text-muted-foreground/60">[Forced]</span>
+              ) : null}
+              {track.default ? (
+                <span className="text-muted-foreground/60">[Default]</span>
+              ) : null}
+              {track.name ? (
+                <span className="truncate text-muted-foreground/60">{track.name}</span>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export function MediaInfoBadges({ file }: { file: MediaInfoFile }) {
   const t = useTranslate();
 
   const resolution = resolveResolution(file.videoWidth, file.videoHeight);
   const videoCodec = resolveVideoCodec(file.videoCodec);
-  const audioCodec = resolveAudioCodec(file.audioCodec);
-  const audioChannels = resolveAudioChannels(file.audioChannels);
 
   const hdrColor = (): "indigo" | "violet" | "cyan" | "teal" => {
     if (file.videoHdrFormat === "Dolby Vision") return "indigo";
@@ -134,23 +231,36 @@ export function MediaInfoBadges({ file }: { file: MediaInfoFile }) {
   };
 
   const sourceType = file.sourceType ? resolveSourceType(file.sourceType) : null;
-  const hasTechInfo = resolution || videoCodec || file.videoHdrFormat || audioCodec || audioChannels || file.hasMultiaudio || sourceType || file.releaseGroup || file.edition;
+  const hasVideo = !!(resolution || videoCodec || file.videoHdrFormat);
+  const hasRelease = !!(sourceType || file.edition);
+  const hasAudioStreams = file.audioStreams.length > 0;
+  const hasSubtitles = file.subtitleStreams.length > 0 || file.subtitleLanguages.length > 0;
   const isPendingScan = file.scanStatus === "imported";
   const isScanFailed = file.scanStatus === "scan_failed";
 
-  if (!hasTechInfo && !isPendingScan && !isScanFailed) return null;
+  if (!hasVideo && !hasRelease && !hasAudioStreams && !hasSubtitles && !isPendingScan && !isScanFailed) return null;
 
   return (
-    <div className="flex flex-wrap gap-1">
+    <div className="flex flex-wrap items-center gap-1">
       {resolution ? <Badge color="sky">{resolution}</Badge> : null}
       {videoCodec ? <Badge color="blue">{videoCodec}</Badge> : null}
       {file.videoHdrFormat ? <Badge color={hdrColor()}>{file.videoHdrFormat}</Badge> : null}
       {sourceType ? <Badge color="teal">{sourceType}</Badge> : null}
-      {audioCodec ? <Badge color="violet">{audioCodec}</Badge> : null}
-      {audioChannels ? <Badge color="purple">{audioChannels}</Badge> : null}
-      {file.hasMultiaudio ? <Badge color="purple">Multi-Audio</Badge> : null}
       {file.edition ? <Badge color="cyan">{file.edition}</Badge> : null}
-      {file.releaseGroup ? <Badge color="indigo">{file.releaseGroup}</Badge> : null}
+      {hasAudioStreams ? <AudioTracksPopover streams={file.audioStreams} /> : null}
+      {hasSubtitles ? (
+        <SubtitleTracksPopover
+          streams={file.subtitleStreams.length > 0
+            ? file.subtitleStreams
+            : file.subtitleLanguages.map((lang, i) => ({
+                language: lang,
+                codec: file.subtitleCodecs[i] ?? null,
+                name: null,
+                forced: false,
+                default: false,
+              }))}
+        />
+      ) : null}
       {isPendingScan ? <Badge color="amber">{t("mediaFile.pendingScan")}</Badge> : null}
       {isScanFailed ? <Badge color="red">{t("mediaFile.scanFailed")}</Badge> : null}
     </div>

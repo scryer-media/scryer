@@ -1,6 +1,7 @@
 export * from "./admin-settings";
 export * from "./activity";
 export * from "./download-clients";
+export * from "./external-import";
 export * from "./download-queue";
 export * from "./import-history";
 export * from "./indexers";

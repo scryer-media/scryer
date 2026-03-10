@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use scryer_application::{
     default_quality_profile_1080p_for_search, default_quality_profile_for_search,
     QualityProfile,
@@ -15,6 +13,7 @@ pub(crate) const SETTINGS_CATEGORY_SERVICE: &str = "service";
 pub(crate) const SETTINGS_CATEGORY_MEDIA: &str = "media";
 pub(crate) const MOVIES_PATH_KEY: &str = "movies.path";
 pub(crate) const SERIES_PATH_KEY: &str = "series.path";
+pub(crate) const ANIME_PATH_KEY: &str = "anime.path";
 pub(crate) const QUALITY_PROFILE_ID_KEY: &str = "quality.profile_id";
 pub(crate) const QUALITY_PROFILE_CATALOG_KEY: &str = "quality.profiles";
 pub(crate) const NZBGET_CATEGORY_SETTING_KEY: &str = "nzbget.category";
@@ -43,6 +42,7 @@ pub(crate) const POST_PROCESSING_SCRIPT_MOVIE_KEY:  &str = "post_processing.scri
 pub(crate) const POST_PROCESSING_SCRIPT_SERIES_KEY: &str = "post_processing.script.series";
 pub(crate) const POST_PROCESSING_SCRIPT_ANIME_KEY:  &str = "post_processing.script.anime";
 pub(crate) const POST_PROCESSING_TIMEOUT_KEY:       &str = "post_processing.timeout_secs";
+pub(crate) const SETUP_COMPLETE_KEY: &str = "setup.complete";
 
 #[derive(Debug)]
 pub(crate) struct ServiceSettingSeed {
@@ -102,6 +102,14 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             key_name: SERIES_PATH_KEY,
             data_type: "string",
             default_value_json: "\"/media/series\"",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_MEDIA,
+            key_name: ANIME_PATH_KEY,
+            data_type: "string",
+            default_value_json: "\"/media/anime\"",
             is_sensitive: false,
         },
         ServiceSettingSeed {
@@ -478,6 +486,15 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             default_value_json: "\"false\"",
             is_sensitive: false,
         },
+        // Setup wizard
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SERVICE,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: SETUP_COMPLETE_KEY,
+            data_type: "boolean",
+            default_value_json: "false",
+            is_sensitive: false,
+        },
         // Post-processing scripts
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_POST_PROCESSING,
@@ -542,6 +559,7 @@ pub(crate) async fn seed_service_settings_from_environment(database: &SqliteServ
         (SETTINGS_SCOPE_SYSTEM, "nzbget.dupe_mode", normalize_env_option_with_legacy(["SCRYER_NZBGET_DUPE_MODE", "SCRYER_NZBGET_DUPEMODE"]).map(|v: String| Value::String(v.to_uppercase()))),
         (SETTINGS_SCOPE_MEDIA, MOVIES_PATH_KEY, normalize_env_option("SCRYER_MOVIES_PATH").map(Value::String)),
         (SETTINGS_SCOPE_MEDIA, SERIES_PATH_KEY, normalize_env_option("SCRYER_SERIES_PATH").map(Value::String)),
+        (SETTINGS_SCOPE_MEDIA, ANIME_PATH_KEY, normalize_env_option("SCRYER_ANIME_PATH").map(Value::String)),
         (SETTINGS_SCOPE_SYSTEM, TLS_CERT_KEY, normalize_env_option("SCRYER_TLS_CERT").map(Value::String)),
         (SETTINGS_SCOPE_SYSTEM, TLS_KEY_KEY, normalize_env_option("SCRYER_TLS_KEY").map(Value::String)),
     ];
@@ -708,30 +726,26 @@ pub(crate) fn merge_default_quality_profiles(
     mut profiles: Vec<QualityProfile>,
     default_profiles: Vec<QualityProfile>,
 ) -> (Vec<QualityProfile>, bool) {
-    let mut has_changes = false;
-    let mut known_ids = HashSet::new();
-    for profile in &profiles {
-        let id = profile.id.trim().to_string();
-        if !id.is_empty() {
-            known_ids.insert(id);
-        }
+    // Only seed defaults into an empty catalog. If profiles already exist
+    // (wizard-created, user-created, or previously seeded), leave them alone.
+    // This prevents the bootstrap from re-adding the basic 4K/1080P defaults
+    // after the setup wizard has replaced them with per-facet profiles.
+    if !profiles.is_empty() {
+        profiles.sort_by(|a, b| a.id.cmp(&b.id));
+        return (profiles, false);
     }
 
     for profile in default_profiles {
-        if known_ids.insert(profile.id.clone()) {
-            profiles.push(profile);
-            has_changes = true;
-        }
+        profiles.push(profile);
     }
 
     profiles.sort_by(|a, b| a.id.cmp(&b.id));
 
     if profiles.is_empty() {
         profiles.push(default_quality_profile_for_search());
-        has_changes = true;
     }
 
-    (profiles, has_changes)
+    (profiles, true)
 }
 
 pub(crate) async fn normalize_quality_profile_id_setting(

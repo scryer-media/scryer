@@ -242,9 +242,11 @@ impl AppUseCase {
         let dl_snapshot = super::app_usecase_acquisition::DownloadClientSnapshot::fetch(self).await;
         let delay_profiles = self.load_delay_profiles().await;
         let mut grabbed_urls: HashSet<String> = HashSet::new();
-        let mut report = RssSyncReport::default();
-        report.releases_fetched = total_new;
-        report.releases_matched = matched_count;
+        let mut report = RssSyncReport {
+            releases_fetched: total_new,
+            releases_matched: matched_count,
+            ..Default::default()
+        };
 
         // For each matched title, score and potentially grab
         for (title_id, releases) in &matched_by_title {
@@ -560,8 +562,13 @@ impl AppUseCase {
             }
 
             let parsed = parse_release_metadata(&result.title);
+            let persona = quality_profile.criteria.resolve_persona(category.as_deref());
+            let weights = crate::scoring_weights::build_weights(
+                persona,
+                &quality_profile.criteria.scoring_overrides,
+            );
             let mut decision =
-                evaluate_against_profile(&quality_profile, &parsed, false);
+                evaluate_against_profile(&quality_profile, &parsed, false, &weights);
             apply_age_scoring(&mut decision, result.published_at.as_deref());
             crate::quality_profile::apply_size_scoring_for_category(
                 &mut decision,
@@ -569,6 +576,7 @@ impl AppUseCase {
                 result.size_bytes,
                 category.as_deref(),
                 runtime_minutes,
+                &weights,
             );
 
             if !user_rules_engine.is_empty() {
@@ -719,6 +727,15 @@ impl AppUseCase {
             )
             .await
             .unwrap_or_else(|_| crate::quality_profile::default_quality_profile_for_search());
+
+        // Cutoff tier check
+        if crate::quality_profile::has_reached_cutoff(
+            wanted.grabbed_release.as_deref(),
+            profile.criteria.cutoff_tier.as_deref(),
+            &profile.criteria.quality_tiers,
+        ) {
+            return;
+        }
 
         let thresholds = AcquisitionThresholds::default();
         let decision = evaluate_upgrade(

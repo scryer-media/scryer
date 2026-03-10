@@ -6,7 +6,6 @@ use super::*;
 use crate::nfo::parse_nfo;
 use tracing::info;
 
-const MOVIES_PATH_KEY: &str = "movies.path";
 const METADATA_TYPE_MOVIE: &str = "movie";
 const RENAME_TEMPLATE_KEY: &str = "rename.template";
 const RENAME_COLLISION_POLICY_KEY: &str = "rename.collision_policy";
@@ -353,19 +352,26 @@ impl AppUseCase {
         Ok(result)
     }
 
-    pub async fn scan_movie_library(&self, actor: &User) -> AppResult<LibraryScanSummary> {
+    pub async fn scan_library(&self, actor: &User, facet: MediaFacet) -> AppResult<LibraryScanSummary> {
         require(actor, &Entitlement::ManageTitle)?;
+
+        let path_key = match facet {
+            MediaFacet::Movie => "movies.path",
+            MediaFacet::Tv => "series.path",
+            MediaFacet::Anime => "anime.path",
+            MediaFacet::Other => "series.path",
+        };
 
         let Some(library_path) = self
             .read_setting_string_value_for_scope(
                 super::SETTINGS_SCOPE_MEDIA,
-                MOVIES_PATH_KEY,
+                path_key,
                 None,
             )
             .await?
         else {
             return Err(AppError::Validation(
-                "movies library path is not configured".into(),
+                format!("{path_key} is not configured"),
             ));
         };
 
@@ -373,7 +379,7 @@ impl AppUseCase {
         let existing_titles = self
             .services
             .titles
-            .list(Some(MediaFacet::Movie), None)
+            .list(Some(facet.clone()), None)
             .await?;
         let mut existing_titles_by_name: HashMap<String, Title> = HashMap::new();
         let mut existing_titles_by_tvdb_id: HashMap<String, Title> = HashMap::new();
@@ -429,7 +435,7 @@ impl AppUseCase {
 
                     let new_title = NewTitle {
                         name,
-                        facet: MediaFacet::Movie,
+                        facet: facet.clone(),
                         monitored: true,
                         tags: vec![],
                         external_ids,
@@ -468,10 +474,14 @@ impl AppUseCase {
                 continue;
             }
 
+            let metadata_type = match facet {
+                MediaFacet::Movie => METADATA_TYPE_MOVIE,
+                _ => "series",
+            };
             let results = self
                 .services
                 .metadata_gateway
-                .search_tvdb(&query, METADATA_TYPE_MOVIE)
+                .search_tvdb(&query, metadata_type)
                 .await?;
 
             let Some(selected) = select_best_match(&results, year_hint) else {
@@ -492,7 +502,7 @@ impl AppUseCase {
             } else {
                 let new_title = NewTitle {
                     name: selected.name.clone(),
-                    facet: MediaFacet::Movie,
+                    facet: facet.clone(),
                     monitored: true,
                     tags: vec![],
                     external_ids: vec![ExternalId {
@@ -518,7 +528,7 @@ impl AppUseCase {
             imported = summary.imported,
             skipped = summary.skipped,
             unmatched = summary.unmatched,
-            "movie library scan completed"
+            "library scan completed"
         );
 
         Ok(summary)

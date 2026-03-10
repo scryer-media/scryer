@@ -622,9 +622,9 @@ const SERIES_FIELD_SELECTION: &str = "\
 fn build_bulk_movie_query(tvdb_ids: &[i64], language: &str) -> String {
     let mut q = String::from("query {\n");
     for (i, &id) in tvdb_ids.iter().enumerate() {
-        let _ = write!(
+        let _ = writeln!(
             q,
-            "  m{i}: movie(tvdbId: {id}, language: \"{language}\") {{ movie {{ {MOVIE_FIELD_SELECTION} }} }}\n"
+            "  m{i}: movie(tvdbId: {id}, language: \"{language}\") {{ movie {{ {MOVIE_FIELD_SELECTION} }} }}"
         );
     }
     q.push_str("}\n");
@@ -634,9 +634,9 @@ fn build_bulk_movie_query(tvdb_ids: &[i64], language: &str) -> String {
 fn build_bulk_series_query(tvdb_ids: &[i64], language: &str) -> String {
     let mut q = String::from("query {\n");
     for (i, &id) in tvdb_ids.iter().enumerate() {
-        let _ = write!(
+        let _ = writeln!(
             q,
-            "  s{i}: series(id: \"{id}\", includeEpisodes: true, language: \"{language}\") {{ series {{ {SERIES_FIELD_SELECTION} }} }}\n"
+            "  s{i}: series(id: \"{id}\", includeEpisodes: true, language: \"{language}\") {{ series {{ {SERIES_FIELD_SELECTION} }} }}"
         );
     }
     q.push_str("}\n");

@@ -264,17 +264,14 @@ impl AppUseCase {
         } else {
             self.services.download_client.list_queue().await?
         };
-        let history_items = if include_history_only {
+        let history_items = if include_history_only || include_all_activity {
             self.services.download_client.list_history().await?
         } else {
             Vec::new()
         };
 
-        let mut items: Vec<DownloadQueueItem> = if include_history_only {
-            history_items
-        } else {
-            queue_items
-        };
+        let mut items: Vec<DownloadQueueItem> = queue_items;
+        items.extend(history_items);
 
         // Enrich items with download_submissions data (for SABnzbd which
         // cannot embed metadata in the download itself). This populates
@@ -299,7 +296,9 @@ impl AppUseCase {
             .into_iter()
             .filter(|item| include_history_only || include_all_activity || item.is_scryer_origin)
             .filter(|item| {
-                if include_history_only {
+                if include_all_activity {
+                    true
+                } else if include_history_only {
                     item.state == DownloadQueueState::Completed
                         || item.state == DownloadQueueState::ImportPending
                         || item.state == DownloadQueueState::Failed
@@ -313,9 +312,15 @@ impl AppUseCase {
             })
             .map(|item| {
                 let mut mapped = item;
-                mapped.client_id = primary_client.id.clone();
-                mapped.client_name = primary_client.name.clone();
-                mapped.client_type = primary_client.client_type.clone();
+                if mapped.client_id.is_empty() {
+                    mapped.client_id = primary_client.id.clone();
+                }
+                if mapped.client_name.is_empty() {
+                    mapped.client_name = primary_client.name.clone();
+                }
+                if mapped.client_type.is_empty() {
+                    mapped.client_type = primary_client.client_type.clone();
+                }
                 mapped.attention_required = matches!(
                     mapped.state,
                     DownloadQueueState::Failed | DownloadQueueState::ImportPending
@@ -728,6 +733,18 @@ impl AppUseCase {
 
         Ok(())
     }
+
+    pub async fn reorder_download_clients(
+        &self,
+        actor: &User,
+        ordered_ids: Vec<String>,
+    ) -> AppResult<()> {
+        require(actor, &Entitlement::ManageConfig)?;
+        self.services
+            .download_client_configs
+            .reorder(ordered_ids)
+            .await
+    }
 }
 
 pub async fn start_download_queue_poller(
@@ -757,7 +774,7 @@ pub async fn start_download_queue_poller(
                         crate::app_usecase_import::try_import_completed_downloads(&app, &actor, &items).await;
 
                         // Emit download queue gauge by state
-                        let mut counts = [0u64; 6];
+                        let mut counts = [0u64; 9];
                         for item in &items {
                             match item.state {
                                 scryer_domain::DownloadQueueState::Queued => counts[0] += 1,
@@ -766,9 +783,12 @@ pub async fn start_download_queue_poller(
                                 scryer_domain::DownloadQueueState::Completed => counts[3] += 1,
                                 scryer_domain::DownloadQueueState::ImportPending => counts[4] += 1,
                                 scryer_domain::DownloadQueueState::Failed => counts[5] += 1,
+                                scryer_domain::DownloadQueueState::Verifying => counts[6] += 1,
+                                scryer_domain::DownloadQueueState::Repairing => counts[7] += 1,
+                                scryer_domain::DownloadQueueState::Extracting => counts[8] += 1,
                             }
                         }
-                        let labels = ["queued", "downloading", "paused", "completed", "import_pending", "failed"];
+                        let labels = ["queued", "downloading", "paused", "completed", "import_pending", "failed", "verifying", "repairing", "extracting"];
                         for (label, &count) in labels.iter().zip(&counts) {
                             metrics::gauge!("scryer_download_queue_items", "state" => *label).set(count as f64);
                         }
@@ -800,6 +820,7 @@ fn parse_sort_value(left: Option<&str>, right: Option<&str>) -> std::cmp::Orderi
 fn queue_state_sort_rank(state: &DownloadQueueState) -> u8 {
     match state {
         DownloadQueueState::Downloading => 0,
+        DownloadQueueState::Verifying | DownloadQueueState::Repairing | DownloadQueueState::Extracting => 0,
         DownloadQueueState::Queued => 1,
         DownloadQueueState::Paused => 2,
         DownloadQueueState::ImportPending => 3,

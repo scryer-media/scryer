@@ -1,5 +1,6 @@
 pub(crate) mod commands;
 mod download_clients;
+pub mod external_import;
 mod file_importer;
 mod indexer_stats;
 mod library_scanner;
@@ -22,7 +23,8 @@ pub use file_importer::FsFileImporter;
 pub use indexer_stats::InMemoryIndexerStatsTracker;
 pub use download_clients::{
     MultiIndexerSearchClient, NzbgetDownloadClient, SabnzbdDownloadClient,
-    PrioritizedDownloadClientRouter,
+    PrioritizedDownloadClientRouter, WeaverDownloadClient,
+    start_weaver_subscription_bridge,
 };
 pub use library_renamer::FileSystemLibraryRenamer;
 pub use library_scanner::FileSystemLibraryScanner;

@@ -316,6 +316,7 @@ struct TestHarness {
 
 fn bootstrap_plugins(provider: Option<MockPluginProvider>) -> TestHarness {
     use crate::null_repositories::test_nulls::*;
+    use crate::null_repositories::NullSettingsRepository;
     use crate::types::JwtAuthConfig;
 
     let plugin_repo = Arc::new(MockPluginInstallationRepo::new());

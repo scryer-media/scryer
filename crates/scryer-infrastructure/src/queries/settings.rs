@@ -572,12 +572,20 @@ pub(crate) async fn batch_upsert_settings_if_not_overridden_query(
         .map_err(|err| AppError::Repository(err.to_string()))?;
 
     for (scope, key_name, value_json, source) in &to_write {
-        let (definition_id, is_sensitive) =
-            get_setting_definition_meta_query(pool, scope, key_name)
-                .await?
-                .ok_or_else(|| {
-                    AppError::Validation(format!("unknown setting key: {scope}.{key_name}"))
-                })?;
+        let (definition_id, is_sensitive) = {
+            let row = sqlx::query_as::<_, (String, String, i64)>(
+                "SELECT id, category, is_sensitive FROM settings_definitions WHERE scope = ? AND key_name = ?",
+            )
+            .bind(scope.as_str())
+            .bind(key_name.as_str())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+            row.map(|(id, _cat, sensitive)| (id, sensitive != 0))
+        }
+            .ok_or_else(|| {
+                AppError::Validation(format!("unknown setting key: {scope}.{key_name}"))
+            })?;
 
         let stored_value = if is_sensitive {
             if let Some(key) = encryption_key {

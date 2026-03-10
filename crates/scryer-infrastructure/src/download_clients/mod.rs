@@ -2,6 +2,8 @@ mod multi_indexer;
 mod nzbget;
 mod router;
 mod sabnzbd;
+pub(crate) mod weaver;
+pub mod weaver_subscription;
 
 use scryer_application::{AppError, AppResult};
 use scryer_domain::DownloadClientConfig;
@@ -11,6 +13,8 @@ pub use multi_indexer::MultiIndexerSearchClient;
 pub use nzbget::NzbgetDownloadClient;
 pub use router::PrioritizedDownloadClientRouter;
 pub use sabnzbd::SabnzbdDownloadClient;
+pub use weaver::WeaverDownloadClient;
+pub use weaver_subscription::start_weaver_subscription_bridge;
 
 fn parse_download_client_config_json(raw: &str) -> AppResult<Value> {
     let trimmed = raw.trim();

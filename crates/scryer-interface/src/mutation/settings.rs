@@ -358,4 +358,23 @@ impl SettingsMutations {
         })
     }
 
+    /// Mark the setup wizard as complete.
+    async fn complete_setup(&self, ctx: &Context<'_>) -> GqlResult<bool> {
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let db = settings_db_from_ctx(ctx)?;
+        db.upsert_setting_value(
+            "system",
+            "setup.complete",
+            None,
+            "true",
+            "setup-wizard",
+            Some(actor.id),
+        )
+        .await
+        .map_err(to_gql_error)?;
+        Ok(true)
+    }
 }

@@ -29,7 +29,7 @@ pub(crate) fn parse_ts(path: &Path) -> Result<RawContainer, MediaInfoError> {
     let es_entries = parse_pmt(&mut file, pmt_pid)?;
 
     // Step 3: Build tracks from PMT stream info
-    let tracks: Vec<RawTrack> = es_entries.iter().map(|es| build_track(es)).collect();
+    let tracks: Vec<RawTrack> = es_entries.iter().map(build_track).collect();
 
     // Step 4: Estimate duration from first and last PTS values
     let duration_seconds = estimate_duration(&mut file, file_size, &es_entries);
@@ -176,12 +176,10 @@ fn parse_pmt<T: Read + Seek>(
         }
         packets_scanned += 1;
 
-        if buf[0] != SYNC_BYTE {
-            if !resync(stream, &mut buf)? {
-                return Err(MediaInfoError::Parse(
-                    "could not sync to TS packets for PMT".into(),
-                ));
-            }
+        if buf[0] != SYNC_BYTE && !resync(stream, &mut buf)? {
+            return Err(MediaInfoError::Parse(
+                "could not sync to TS packets for PMT".into(),
+            ));
         }
 
         let pid = ts_pid(&buf);
@@ -280,6 +278,9 @@ fn build_track(es: &EsEntry) -> RawTrack {
         color_transfer: None,
         dovi_config: None,
         has_hdr10plus: false,
+        name: None,
+        forced: false,
+        default_track: false,
     }
 }
 

@@ -2,6 +2,8 @@
 
 mod activity;
 mod quality_profile;
+mod scoring_weights;
+mod release_group_db;
 mod release_parser;
 mod library_scan;
 mod library_rename;
@@ -80,12 +82,13 @@ pub use library_rename::{
     RenameWriteAction,
 };
 pub use quality_profile::{
-    apply_age_scoring, default_quality_profile_1080p_for_search,
+    apply_age_scoring, apply_size_scoring_for_category, default_quality_profile_1080p_for_search,
     default_quality_profile_for_search, evaluate_against_profile,
     parse_profile_catalog_from_json, QualityProfile,
-    QualityProfileCriteria, QualityProfileDecision, ScoringEntry, ScoringSource, BLOCK_SCORE,
-    QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY,
+    QualityProfileCriteria, QualityProfileDecision, ScoringConfig, ScoringEntry, ScoringSource,
+    BLOCK_SCORE, QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY,
 };
+pub use scoring_weights::{build_weights, ScoringOverrides, ScoringPersona, ScoringWeights};
 pub use delay_profile::{
     parse_delay_profile_catalog, resolve_delay_profile, should_bypass_delay, DelayProfile,
     DELAY_PROFILE_CATALOG_KEY,
@@ -96,7 +99,7 @@ pub use null_repositories::{
     NullImportRepository, NullIndexerStatsTracker, NullMediaFileRepository,
     NullNotificationChannelRepository, NullNotificationSubscriptionRepository,
     NullPendingReleaseRepository, NullPluginInstallationRepository, NullRuleSetRepository,
-    NullSystemInfoProvider, NullWantedItemRepository,
+    NullSettingsRepository, NullSystemInfoProvider, NullWantedItemRepository,
 };
 pub use types::{
     BackupInfo, DiskSpaceInfo, DownloadGrabResult, HealthCheckResult, HealthCheckStatus,
@@ -119,7 +122,7 @@ pub use facet_registry::FacetRegistry;
 const SETTINGS_SCOPE_SYSTEM: &str = "system";
 const SETTINGS_SCOPE_MEDIA: &str = "media";
 const INHERIT_QUALITY_PROFILE_VALUE: &str = "__inherit__";
-const ALLOWED_DOWNLOAD_CLIENT_TYPES: [&str; 3] = ["nzbget", "sabnzbd", "qbittorrent"];
+const ALLOWED_DOWNLOAD_CLIENT_TYPES: [&str; 4] = ["nzbget", "sabnzbd", "qbittorrent", "weaver"];
 const INDEXER_PROVIDER_NZBGEEK: &str = "nzbgeek";
 
 #[derive(Debug, thiserror::Error)]
@@ -444,6 +447,7 @@ pub trait DownloadClientConfigRepository: Send + Sync {
         is_enabled: Option<bool>,
     ) -> AppResult<DownloadClientConfig>;
     async fn delete(&self, id: &str) -> AppResult<()>;
+    async fn reorder(&self, ordered_ids: Vec<String>) -> AppResult<()>;
 }
 
 #[async_trait]
@@ -606,6 +610,16 @@ pub struct AudioStreamDetail {
     pub bitrate_kbps: Option<i32>,
 }
 
+/// A single subtitle stream, mirroring `scryer_mediainfo::SubtitleStreamDetail`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SubtitleStreamDetail {
+    pub codec: Option<String>,
+    pub language: Option<String>,
+    pub name: Option<String>,
+    pub forced: bool,
+    pub default: bool,
+}
+
 /// Mirrors `scryer_mediainfo::MediaAnalysis` without depending on that crate.
 pub struct MediaFileAnalysis {
     pub video_codec: Option<String>,
@@ -623,6 +637,7 @@ pub struct MediaFileAnalysis {
     pub audio_streams: Vec<AudioStreamDetail>,
     pub subtitle_languages: Vec<String>,
     pub subtitle_codecs: Vec<String>,
+    pub subtitle_streams: Vec<SubtitleStreamDetail>,
     pub has_multiaudio: bool,
     pub duration_seconds: Option<i32>,
     pub container_format: Option<String>,
@@ -1784,6 +1799,16 @@ mod tests {
                 .position(|entry| entry.id == id)
                 .ok_or_else(|| AppError::NotFound(format!("download client config {id}")))?;
             entries.remove(position);
+            Ok(())
+        }
+
+        async fn reorder(&self, ordered_ids: Vec<String>) -> AppResult<()> {
+            let mut entries = self.store.lock().await;
+            for (index, id) in ordered_ids.iter().enumerate() {
+                if let Some(entry) = entries.iter_mut().find(|e| &e.id == id) {
+                    entry.client_priority = index as i64;
+                }
+            }
             Ok(())
         }
     }

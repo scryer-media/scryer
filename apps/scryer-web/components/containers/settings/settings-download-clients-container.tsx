@@ -5,6 +5,7 @@ import { SettingsDownloadClientsSection } from "@/components/views/settings/sett
 import {
   deleteDownloadClientMutation,
   createDownloadClientMutation,
+  reorderDownloadClientsMutation,
   testDownloadClientConnectionMutation,
   updateDownloadClientMutation,
 } from "@/lib/graphql/mutations";
@@ -37,6 +38,8 @@ export function SettingsDownloadClientsContainer() {
   const [mutatingDownloadClientId, setMutatingDownloadClientId] = useState<string | null>(null);
   const [isTestingDownloadClientConnection, setIsTestingDownloadClientConnection] = useState(false);
   const [pendingDeleteDownloadClient, setPendingDeleteDownloadClient] = useState<DownloadClientRecord | null>(null);
+  const [downloadClientOrder, setDownloadClientOrder] = useState<string[]>([]);
+  const [isSavingOrder, setIsSavingOrder] = useState(false);
 
   const getDownloadClientErrorMessage = useCallback(
     (error: unknown, fallback: string) => (error instanceof Error ? error.message : fallback),
@@ -55,7 +58,9 @@ export function SettingsDownloadClientsContainer() {
     try {
       const { data, error } = await client.query(downloadClientsQuery, {}).toPromise();
       if (error) throw error;
-      setSettingsDownloadClients(data.downloadClientConfigs || []);
+      const clients: DownloadClientRecord[] = data.downloadClientConfigs || [];
+      setSettingsDownloadClients(clients);
+      setDownloadClientOrder(clients.map((c) => c.id));
     } catch (error) {
       setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
     }
@@ -197,6 +202,34 @@ export function SettingsDownloadClientsContainer() {
     }
   };
 
+  const moveDownloadClient = useCallback((clientId: string, direction: "up" | "down") => {
+    setDownloadClientOrder((prev) => {
+      const index = prev.indexOf(clientId);
+      if (index < 0) return prev;
+      const nextIndex = direction === "up" ? index - 1 : index + 1;
+      if (nextIndex < 0 || nextIndex >= prev.length) return prev;
+      const next = [...prev];
+      [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+      return next;
+    });
+  }, []);
+
+  const saveDownloadClientOrder = useCallback(async () => {
+    setIsSavingOrder(true);
+    try {
+      const { error } = await client.mutation(reorderDownloadClientsMutation, {
+        input: { ids: downloadClientOrder },
+      }).toPromise();
+      if (error) throw error;
+      setGlobalStatus(t("status.downloadClientOrderSaved"));
+      await refreshDownloadClients();
+    } catch (error) {
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+    } finally {
+      setIsSavingOrder(false);
+    }
+  }, [client, downloadClientOrder, refreshDownloadClients, setGlobalStatus, t]);
+
   const editDownloadClient = useCallback((downloadClient: DownloadClientRecord) => {
     setEditingDownloadClientId(downloadClient.id);
     setDownloadClientDraft(buildDownloadClientDraftFromRecord(downloadClient));
@@ -266,6 +299,10 @@ export function SettingsDownloadClientsContainer() {
         editDownloadClient={editDownloadClient}
         toggleDownloadClientEnabled={toggleDownloadClientEnabled}
         deleteDownloadClient={deleteDownloadClient}
+        downloadClientOrder={downloadClientOrder}
+        moveDownloadClient={moveDownloadClient}
+        saveDownloadClientOrder={saveDownloadClientOrder}
+        isSavingOrder={isSavingOrder}
       />
       <ConfirmDialog
         open={pendingDeleteDownloadClient !== null}

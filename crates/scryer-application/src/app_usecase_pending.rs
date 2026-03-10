@@ -329,6 +329,15 @@ impl AppUseCase {
             .await
             .unwrap_or_else(|_| crate::quality_profile::default_quality_profile_for_search());
 
+        // Cutoff tier check
+        if crate::quality_profile::has_reached_cutoff(
+            wanted.grabbed_release.as_deref(),
+            profile.criteria.cutoff_tier.as_deref(),
+            &profile.criteria.quality_tiers,
+        ) {
+            return Ok(false);
+        }
+
         let thresholds = AcquisitionThresholds::default();
         let decision = crate::acquisition_policy::evaluate_upgrade(
             pr.release_score,

@@ -81,6 +81,7 @@ impl AppUseCase {
         runtime_minutes: Option<i32>,
         season: Option<u32>,
         episode: Option<u32>,
+        absolute_episode: Option<u32>,
     ) -> AppResult<Vec<IndexerSearchResult>> {
         let quality_profile = self
             .resolve_quality_profile(
@@ -219,8 +220,45 @@ impl AppUseCase {
             }
 
             let parsed_release_metadata = parse_release_metadata(&result.title);
+
+            // Post-filter: skip results whose parsed season/episode doesn't match
+            // the requested values. Indexers don't always respect API params.
+            if let Some(ref ep_meta) = parsed_release_metadata.episode {
+                if let Some(wanted_season) = season {
+                    if let Some(parsed_season) = ep_meta.season {
+                        if parsed_season != wanted_season {
+                            continue;
+                        }
+                    }
+                }
+                if let Some(wanted_episode) = episode {
+                    // For SxxExx-style releases, check episode_numbers
+                    if !ep_meta.episode_numbers.is_empty()
+                        && !ep_meta.episode_numbers.contains(&wanted_episode)
+                    {
+                        continue;
+                    }
+                    // For absolute-numbered releases (common in anime), check
+                    // against the known absolute episode number from TVDB
+                    if ep_meta.episode_numbers.is_empty() {
+                        if let (Some(parsed_abs), Some(wanted_abs)) =
+                            (ep_meta.absolute_episode, absolute_episode)
+                        {
+                            if parsed_abs != wanted_abs {
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+
+            let persona = quality_profile.criteria.resolve_persona(category.as_deref());
+            let weights = crate::scoring_weights::build_weights(
+                persona,
+                &quality_profile.criteria.scoring_overrides,
+            );
             let mut decision =
-                evaluate_against_profile(&quality_profile, &parsed_release_metadata, false);
+                evaluate_against_profile(&quality_profile, &parsed_release_metadata, false, &weights);
             apply_age_scoring(&mut decision, result.published_at.as_deref());
             crate::quality_profile::apply_size_scoring_for_category(
                 &mut decision,
@@ -228,6 +266,7 @@ impl AppUseCase {
                 result.size_bytes,
                 category.as_deref(),
                 runtime_minutes,
+                &weights,
             );
             // ── User rules (additive, after all built-in scoring) ───────
             // NZBGeek vote scoring is now handled by plugin-declared Rego
@@ -321,11 +360,14 @@ impl AppUseCase {
         tvdb_id: Option<String>,
         category: Option<String>,
         limit: usize,
+        season: Option<u32>,
+        episode: Option<u32>,
+        absolute_episode: Option<u32>,
     ) -> AppResult<Vec<IndexerSearchResult>> {
         self.search_and_score_releases(
             queries, imdb_id, tvdb_id, category,
             &[], limit, &actor.id, SearchMode::Interactive, None,
-            None, None,
+            season, episode, absolute_episode,
         ).await
     }
 
@@ -372,6 +414,9 @@ impl AppUseCase {
                 normalized_tvdb_id.clone(),
                 normalized_category.clone(),
                 limit.max(1),
+                None,
+                None,
+                None,
             )
             .await;
 
@@ -428,6 +473,7 @@ impl AppUseCase {
         imdb_id: Option<String>,
         tvdb_id: Option<String>,
         category: Option<String>,
+        absolute_episode: Option<u32>,
         limit: usize,
     ) -> AppResult<Vec<IndexerSearchResult>> {
         require(actor, &Entitlement::ViewCatalog)?;
@@ -479,6 +525,9 @@ impl AppUseCase {
                 normalized_tvdb_id.clone(),
                 normalized_category.clone(),
                 limit,
+                Some(season_num as u32),
+                Some(episode_num as u32),
+                absolute_episode,
             )
             .await?;
 
@@ -562,6 +611,9 @@ impl AppUseCase {
                 normalized_tvdb_id.clone(),
                 normalized_category.clone(),
                 limit,
+                Some(season_num as u32),
+                None,
+                None,
             )
             .await?;
 
@@ -897,6 +949,14 @@ pub(crate) fn build_user_rule_input(
             is_remux: parsed.is_remux,
             is_bd_disk: parsed.is_bd_disk,
             is_proper_upload: parsed.is_proper_upload,
+            is_repack: parsed.is_repack,
+            is_ai_enhanced: parsed.is_ai_enhanced,
+            is_hardcoded_subs: parsed.is_hardcoded_subs,
+            is_hdr10plus: parsed.is_hdr10plus,
+            is_hlg: parsed.is_hlg,
+            streaming_service: parsed.streaming_service.clone(),
+            edition: parsed.edition.clone(),
+            anime_version: parsed.anime_version,
             release_group: parsed.release_group.clone(),
             year: parsed.year,
             parse_confidence: parsed.parse_confidence,

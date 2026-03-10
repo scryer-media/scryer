@@ -14,7 +14,8 @@ use crate::{
     HousekeepingRepository, ImportRepository, IndexerQueryStats, IndexerStatsTracker,
     MediaFileRepository, NotificationChannelRepository, NotificationSubscriptionRepository,
     PendingRelease, PendingReleaseRepository, PluginInstallationRepository, ReleaseDecision,
-    RuleSetRepository, SystemInfoProvider, TitleMediaFile, WantedItem, WantedItemRepository,
+    RuleSetRepository, SettingsRepository, SystemInfoProvider, TitleMediaFile, WantedItem,
+    WantedItemRepository,
 };
 
 #[derive(Default)]
@@ -309,6 +310,14 @@ impl PendingReleaseRepository for NullPendingReleaseRepository {
     async fn supersede_pending_releases_for_wanted_item(&self, _: &str, _: &str) -> AppResult<()> { Ok(()) }
 }
 
+#[derive(Default)]
+pub struct NullSettingsRepository;
+
+#[async_trait]
+impl SettingsRepository for NullSettingsRepository {
+    async fn get_setting_json(&self, _: &str, _: &str, _: Option<String>) -> AppResult<Option<String>> { Ok(None) }
+}
+
 // ── Additional null impls for test bootstrapping ─────────────────────────────
 
 #[cfg(test)]
@@ -323,7 +332,7 @@ pub mod test_nulls {
         IndexerClient, IndexerRoutingPlan, IndexerSearchResponse, PrimaryCollectionSummary,
         QualityProfile, QualityProfileRepository, ReleaseAttemptRepository,
         ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature, SearchMode,
-        SettingsRepository, ShowRepository, TitleMetadataUpdate, TitleReleaseBlocklistEntry,
+        ShowRepository, TitleMetadataUpdate, TitleReleaseBlocklistEntry,
         TitleRepository, UserRepository,
     };
 
@@ -417,6 +426,7 @@ pub mod test_nulls {
         async fn create(&self, _: DownloadClientConfig) -> AppResult<DownloadClientConfig> { Err(AppError::Repository("not configured".into())) }
         async fn update(&self, _: &str, _: Option<String>, _: Option<String>, _: Option<String>, _: Option<String>, _: Option<bool>) -> AppResult<DownloadClientConfig> { Err(AppError::Repository("not configured".into())) }
         async fn delete(&self, _: &str) -> AppResult<()> { Ok(()) }
+        async fn reorder(&self, _: Vec<String>) -> AppResult<()> { Ok(()) }
     }
 
     #[derive(Default)]
@@ -428,14 +438,6 @@ pub mod test_nulls {
         async fn list_failed_release_signatures(&self, _: usize) -> AppResult<Vec<ReleaseDownloadFailureSignature>> { Ok(vec![]) }
         async fn list_failed_release_signatures_for_title(&self, _: &str, _: usize) -> AppResult<Vec<TitleReleaseBlocklistEntry>> { Ok(vec![]) }
         async fn get_latest_source_password(&self, _: Option<&str>, _: Option<&str>, _: Option<&str>) -> AppResult<Option<String>> { Ok(None) }
-    }
-
-    #[derive(Default)]
-    pub struct NullSettingsRepository;
-
-    #[async_trait]
-    impl SettingsRepository for NullSettingsRepository {
-        async fn get_setting_json(&self, _: &str, _: &str, _: Option<String>) -> AppResult<Option<String>> { Ok(None) }
     }
 
     #[derive(Default)]

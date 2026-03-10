@@ -188,6 +188,9 @@ pub struct NewDownloadClientConfig {
 pub enum DownloadQueueState {
     Queued,
     Downloading,
+    Verifying,
+    Repairing,
+    Extracting,
     Paused,
     Completed,
     ImportPending,
@@ -730,7 +733,7 @@ impl NotificationEventType {
         ]
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "grab" => Some(Self::Grab),
             "download" => Some(Self::Download),
@@ -748,6 +751,14 @@ impl NotificationEventType {
             "test" => Some(Self::Test),
             _ => None,
         }
+    }
+}
+
+impl std::str::FromStr for NotificationEventType {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s).ok_or(())
     }
 }
 

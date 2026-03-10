@@ -138,6 +138,7 @@ pub(crate) fn from_parsed_release(result: ParsedReleaseMetadata) -> ParsedReleas
         is_proper_upload: result.is_proper_upload,
         is_remux: result.is_remux,
         is_bd_disk: result.is_bd_disk,
+        is_ai_enhanced: result.is_ai_enhanced,
         parser_version: result.parser_version.to_string(),
         parse_confidence: result.parse_confidence,
         missing_fields: result.missing_fields,
@@ -475,6 +476,17 @@ pub(crate) fn from_title_media_file(file: scryer_application::TitleMediaFile) ->
             .collect(),
         subtitle_languages: file.subtitle_languages,
         subtitle_codecs: file.subtitle_codecs,
+        subtitle_streams: file
+            .subtitle_streams
+            .into_iter()
+            .map(|s| crate::types::SubtitleStreamDetailPayload {
+                codec: s.codec,
+                language: s.language,
+                name: s.name,
+                forced: s.forced,
+                default: s.default,
+            })
+            .collect(),
         has_multiaudio: file.has_multiaudio,
         duration_seconds: file.duration_seconds,
         container_format: file.container_format,

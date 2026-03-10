@@ -25,6 +25,12 @@ pub(crate) struct RawTrack {
     pub channels: Option<i32>,
     pub bit_rate_bps: Option<i64>,
     pub language: Option<String>,
+    /// Human-readable track name from the container (e.g. "Commentary", "Forced").
+    pub name: Option<String>,
+    /// MKV FlagForced — subtitle eligible for automatic selection.
+    pub forced: bool,
+    /// MKV FlagDefault — player should prefer this track.
+    pub default_track: bool,
     pub frame_rate_fps: Option<f64>,
     /// ITU-T H.273 TransferCharacteristics value (16 = SMPTE 2084/PQ,
     /// 18 = ARIB STD-B67/HLG).

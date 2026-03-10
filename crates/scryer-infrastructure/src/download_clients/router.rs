@@ -1,27 +1,31 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use scryer_application::{AppError, AppResult, DownloadClient, DownloadClientConfigRepository, DownloadGrabResult};
-use scryer_domain::{DownloadClientConfig, DownloadQueueItem, Title};
+use scryer_application::{AppError, AppResult, DownloadClient, DownloadClientConfigRepository, DownloadGrabResult, SettingsRepository};
+use scryer_domain::{DownloadClientConfig, DownloadQueueItem, MediaFacet, Title};
 use tracing::warn;
 
 use super::nzbget::NzbgetDownloadClient;
 use super::sabnzbd::SabnzbdDownloadClient;
+use super::weaver::WeaverDownloadClient;
 use super::{parse_download_client_config_json, read_config_string, resolve_download_client_base_url};
 
 #[derive(Clone)]
 pub struct PrioritizedDownloadClientRouter {
     download_client_configs: Arc<dyn DownloadClientConfigRepository>,
+    settings: Arc<dyn SettingsRepository>,
     fallback_client: Arc<dyn DownloadClient>,
 }
 
 impl PrioritizedDownloadClientRouter {
     pub fn new(
         download_client_configs: Arc<dyn DownloadClientConfigRepository>,
+        settings: Arc<dyn SettingsRepository>,
         fallback_client: Arc<dyn DownloadClient>,
     ) -> Self {
         Self {
             download_client_configs,
+            settings,
             fallback_client,
         }
     }
@@ -35,6 +39,53 @@ impl PrioritizedDownloadClientRouter {
             .filter(|config| config.is_enabled)
             .collect::<Vec<_>>();
         clients.sort_by_key(|config| config.client_priority);
+        Ok(clients)
+    }
+
+    /// Return enabled clients ordered by per-facet routing priority.
+    /// Falls back to global `client_priority` if the facet has no routing config.
+    async fn list_clients_for_facet(&self, facet: &MediaFacet) -> AppResult<Vec<DownloadClientConfig>> {
+        let scope_id = match facet {
+            MediaFacet::Movie => "movie",
+            MediaFacet::Tv => "series",
+            MediaFacet::Anime => "anime",
+            _ => return self.list_enabled_clients_by_priority().await,
+        };
+
+        let routing_json = self
+            .settings
+            .get_setting_json("system", "nzbget.client_routing", Some(scope_id.to_string()))
+            .await?;
+
+        let mut clients = self
+            .download_client_configs
+            .list(None)
+            .await?
+            .into_iter()
+            .filter(|config| config.is_enabled)
+            .collect::<Vec<_>>();
+
+        match routing_json {
+            Some(json_str) => {
+                // JSON key insertion order = priority (requires serde_json preserve_order)
+                let ordered_ids: Vec<String> = serde_json::from_str::<serde_json::Value>(&json_str)
+                    .ok()
+                    .and_then(|v| v.as_object().map(|obj| obj.keys().cloned().collect()))
+                    .unwrap_or_default();
+
+                if ordered_ids.is_empty() {
+                    clients.sort_by_key(|c| c.client_priority);
+                } else {
+                    clients.sort_by_key(|c| {
+                        ordered_ids.iter().position(|id| id == &c.id).unwrap_or(usize::MAX)
+                    });
+                }
+            }
+            None => {
+                clients.sort_by_key(|c| c.client_priority);
+            }
+        }
+
         Ok(clients)
     }
 
@@ -76,6 +127,18 @@ impl PrioritizedDownloadClientRouter {
                 let client = SabnzbdDownloadClient::new(base_url, api_key);
                 Ok(Arc::new(client))
             }
+            "weaver" => {
+                let parsed_config = parse_download_client_config_json(&config.config_json)?;
+                let base_url = resolve_download_client_base_url(config, &parsed_config)
+                    .ok_or_else(|| {
+                        AppError::Validation(format!(
+                            "download client {} has no valid base URL",
+                            config.id
+                        ))
+                    })?;
+                let client = WeaverDownloadClient::new(base_url);
+                Ok(Arc::new(client))
+            }
             _ => Err(AppError::Validation(format!(
                 "unsupported download client type '{}' for config {}",
                 config.client_type, config.id
@@ -94,12 +157,13 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         source_password: Option<String>,
         category: Option<String>,
     ) -> AppResult<DownloadGrabResult> {
-        let clients = match self.list_enabled_clients_by_priority().await {
+        let clients = match self.list_clients_for_facet(&title.facet).await {
             Ok(configs) => configs,
             Err(error) => {
                 warn!(
                     error = %error,
                     title = title.name.as_str(),
+                    facet = ?title.facet,
                     "failed to load prioritized download clients; falling back to default client"
                 );
                 return self
@@ -189,60 +253,75 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
 
     async fn list_queue(&self) -> AppResult<Vec<DownloadQueueItem>> {
         let clients = self.list_enabled_clients_by_priority().await?;
-        let mut last_error: Option<AppError> = None;
+        if clients.is_empty() {
+            return self.fallback_client.list_queue().await;
+        }
+        let mut all_items = Vec::new();
         for config in clients {
             let client = match Self::client_from_config(&config) {
                 Ok(client) => client,
                 Err(error) => {
-                    last_error = Some(error);
+                    tracing::warn!(client_id = %config.id, error = %error, "skipping client for queue listing");
                     continue;
                 }
             };
             match client.list_queue().await {
-                Ok(items) => return Ok(items),
+                Ok(mut items) => {
+                    for item in &mut items {
+                        item.client_id = config.id.clone();
+                        item.client_name = config.name.clone();
+                    }
+                    all_items.extend(items);
+                }
                 Err(error) => {
-                    last_error = Some(error);
+                    tracing::warn!(client_id = %config.id, error = %error, "failed to list queue");
                 }
             }
         }
-        if let Some(error) = last_error {
-            return Err(error);
-        }
-        self.fallback_client.list_queue().await
+        Ok(all_items)
     }
 
     async fn list_history(&self) -> AppResult<Vec<DownloadQueueItem>> {
         let clients = self.list_enabled_clients_by_priority().await?;
-        let mut last_error: Option<AppError> = None;
+        if clients.is_empty() {
+            return self.fallback_client.list_history().await;
+        }
+        let mut all_items = Vec::new();
         for config in clients {
             let client = match Self::client_from_config(&config) {
                 Ok(client) => client,
                 Err(error) => {
-                    last_error = Some(error);
+                    tracing::warn!(client_id = %config.id, error = %error, "skipping client for history listing");
                     continue;
                 }
             };
             match client.list_history().await {
-                Ok(items) => return Ok(items),
+                Ok(mut items) => {
+                    for item in &mut items {
+                        item.client_id = config.id.clone();
+                        item.client_name = config.name.clone();
+                    }
+                    all_items.extend(items);
+                }
                 Err(error) => {
-                    last_error = Some(error);
+                    tracing::warn!(client_id = %config.id, error = %error, "failed to list history");
                 }
             }
         }
-        if let Some(error) = last_error {
-            return Err(error);
-        }
-        self.fallback_client.list_history().await
+        Ok(all_items)
     }
 
     async fn list_completed_downloads(&self) -> AppResult<Vec<scryer_domain::CompletedDownload>> {
         let clients = self.list_enabled_clients_by_priority().await?;
-        let mut last_error: Option<AppError> = None;
+        if clients.is_empty() {
+            return self.fallback_client.list_completed_downloads().await;
+        }
+        let mut all_items = Vec::new();
         for config in clients {
             let client = match Self::client_from_config(&config) {
                 Ok(client) => client,
                 Err(error) => {
-                    last_error = Some(error);
+                    tracing::warn!(client_id = %config.id, error = %error, "skipping client for completed downloads");
                     continue;
                 }
             };
@@ -251,17 +330,14 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                     for item in &mut items {
                         item.client_id = config.id.clone();
                     }
-                    return Ok(items);
+                    all_items.extend(items);
                 }
                 Err(error) => {
-                    last_error = Some(error);
+                    tracing::warn!(client_id = %config.id, error = %error, "failed to list completed downloads");
                 }
             }
         }
-        if let Some(error) = last_error {
-            return Err(error);
-        }
-        self.fallback_client.list_completed_downloads().await
+        Ok(all_items)
     }
 
     async fn pause_queue_item(&self, id: &str) -> AppResult<()> {

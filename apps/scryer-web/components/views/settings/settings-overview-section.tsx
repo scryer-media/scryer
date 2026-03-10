@@ -1,4 +1,4 @@
-import { Loader2, Shield } from "lucide-react";
+import { Loader2, Rocket, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -54,6 +54,16 @@ export function SettingsOverviewSection({
             ))}
           </SelectContent>
         </Select>
+      </div>
+
+      <div className="border-t border-border pt-6">
+        <a
+          href="/setup?reentry=1"
+          className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
+        >
+          <Rocket className="h-4 w-4" />
+          {t("settings.runSetupWizard")}
+        </a>
       </div>
 
       {setTlsCertPath && setTlsKeyPath && onTlsSave ? (

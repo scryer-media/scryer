@@ -1,6 +1,6 @@
 
 import * as React from "react";
-import { Edit, Server, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Edit, Server, Trash2 } from "lucide-react";
 import { InfoHelp } from "@/components/common/info-help";
 import { RenderBooleanIcon } from "@/components/common/boolean-icon";
 import { Button } from "@/components/ui/button";
@@ -117,6 +117,10 @@ export type SettingsDownloadClientsSectionProps = {
   editDownloadClient: (downloadClient: DownloadClientRecord) => void;
   toggleDownloadClientEnabled: (downloadClient: DownloadClientRecord) => Promise<void>;
   deleteDownloadClient: (downloadClient: DownloadClientRecord) => Promise<void>;
+  downloadClientOrder: string[];
+  moveDownloadClient: (clientId: string, direction: "up" | "down") => void;
+  saveDownloadClientOrder: () => Promise<void> | void;
+  isSavingOrder: boolean;
 };
 
 const DOWNLOAD_CLIENT_TYPE_OPTIONS: DownloadClientTypeOption[] = [
@@ -187,11 +191,32 @@ export function SettingsDownloadClientsSection({
   editDownloadClient,
   toggleDownloadClientEnabled,
   deleteDownloadClient,
+  downloadClientOrder,
+  moveDownloadClient,
+  saveDownloadClientOrder,
+  isSavingOrder,
 }: SettingsDownloadClientsSectionProps) {
   const t = useTranslate();
   const urlPreview = buildUrlPreview(downloadClientDraft);
   const normalizedClientType = downloadClientDraft.clientType.trim().toLowerCase();
   const hasApiKeyField = normalizedClientType === "sabnzbd";
+
+  const clientById = React.useMemo(
+    () => Object.fromEntries(settingsDownloadClients.map((c) => [c.id, c])),
+    [settingsDownloadClients],
+  );
+  const orderedClients = React.useMemo(() => {
+    if (downloadClientOrder.length === 0) return settingsDownloadClients;
+    const ordered: DownloadClientRecord[] = [];
+    for (const id of downloadClientOrder) {
+      const c = clientById[id];
+      if (c) ordered.push(c);
+    }
+    for (const c of settingsDownloadClients) {
+      if (!downloadClientOrder.includes(c.id)) ordered.push(c);
+    }
+    return ordered;
+  }, [downloadClientOrder, clientById, settingsDownloadClients]);
   const hasOptionalCredentials = normalizedClientType === "nzbget";
   const optionalCredentialLabel = hasOptionalCredentials ? " (optional)" : "";
 
@@ -207,6 +232,7 @@ export function SettingsDownloadClientsSection({
           <Table>
             <TableHeader>
                 <TableRow>
+                  <TableHead>{t("settings.downloadClientPriority")}</TableHead>
                   <TableHead>{t("settings.downloadClientName")}</TableHead>
                   <TableHead className="text-center align-middle">
                     {t("settings.downloadClientType")}
@@ -217,9 +243,36 @@ export function SettingsDownloadClientsSection({
                 </TableRow>
             </TableHeader>
             <TableBody>
-              {settingsDownloadClients.map((client) => {
+              {orderedClients.map((client, index) => {
                 return (
                   <TableRow key={client.id}>
+                  <TableCell>
+                    <div className="flex items-center gap-1">
+                      <span className="w-4 text-center text-muted-foreground">{index + 1}</span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        type="button"
+                        className="border border-border bg-card/80 hover:bg-accent h-7 w-7 p-0"
+                        aria-label={`${t("label.moveUp")} ${client.name}`}
+                        onClick={() => moveDownloadClient(client.id, "up")}
+                        disabled={isSavingOrder || index === 0}
+                      >
+                        <ChevronUp className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        type="button"
+                        className="border border-border bg-card/80 hover:bg-accent h-7 w-7 p-0"
+                        aria-label={`${t("label.moveDown")} ${client.name}`}
+                        onClick={() => moveDownloadClient(client.id, "down")}
+                        disabled={isSavingOrder || index >= orderedClients.length - 1}
+                      >
+                        <ChevronDown className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </TableCell>
                   <TableCell>{client.name}</TableCell>
                   <TableCell className="text-center align-middle">
                     <span className="inline-flex items-center justify-center">
@@ -271,9 +324,9 @@ export function SettingsDownloadClientsSection({
                   </TableRow>
                 );
               })}
-              {settingsDownloadClients.length === 0 ? (
+              {orderedClients.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-muted-foreground">
+                  <TableCell colSpan={6} className="text-muted-foreground">
                     {t("settings.noDownloadClientsFound")}
                   </TableCell>
                 </TableRow>
@@ -281,6 +334,17 @@ export function SettingsDownloadClientsSection({
             </TableBody>
           </Table>
         </div>
+        {orderedClients.length > 1 ? (
+          <div className="mt-2 flex justify-end px-1">
+            <Button
+              size="sm"
+              onClick={() => void saveDownloadClientOrder()}
+              disabled={isSavingOrder || orderedClients.length === 0}
+            >
+              {isSavingOrder ? t("label.saving") : t("label.saveOrder")}
+            </Button>
+          </div>
+        ) : null}
       </div>
 
       <Card>
@@ -415,39 +479,43 @@ export function SettingsDownloadClientsSection({
                   />
                 </label>
               ) : null}
-              <label>
-                <Label className="mb-2 block">
-                  {t("settings.downloadClientUsername")}
-                  {optionalCredentialLabel}
-                </Label>
-                <Input
-                  value={downloadClientDraft.username}
-                  onChange={(event) =>
-                    setDownloadClientDraft((prev: DownloadClientDraft) => ({
-                      ...prev,
-                      username: event.target.value,
-                    }))
-                  }
-                  placeholder={t("form.usernamePlaceholder")}
-                />
-              </label>
-              <label>
-                <Label className="mb-2 block">
-                  {t("settings.downloadClientPassword")}
-                  {optionalCredentialLabel}
-                </Label>
-                <Input
-                  value={downloadClientDraft.password}
-                  onChange={(event) =>
-                    setDownloadClientDraft((prev: DownloadClientDraft) => ({
-                      ...prev,
-                      password: event.target.value,
-                    }))
-                  }
-                  placeholder={t("form.passwordPlaceholder")}
-                  type="password"
-                />
-              </label>
+              {!hasApiKeyField ? (
+                <>
+                  <label>
+                    <Label className="mb-2 block">
+                      {t("settings.downloadClientUsername")}
+                      {optionalCredentialLabel}
+                    </Label>
+                    <Input
+                      value={downloadClientDraft.username}
+                      onChange={(event) =>
+                        setDownloadClientDraft((prev: DownloadClientDraft) => ({
+                          ...prev,
+                          username: event.target.value,
+                        }))
+                      }
+                      placeholder={t("form.usernamePlaceholder")}
+                    />
+                  </label>
+                  <label>
+                    <Label className="mb-2 block">
+                      {t("settings.downloadClientPassword")}
+                      {optionalCredentialLabel}
+                    </Label>
+                    <Input
+                      value={downloadClientDraft.password}
+                      onChange={(event) =>
+                        setDownloadClientDraft((prev: DownloadClientDraft) => ({
+                          ...prev,
+                          password: event.target.value,
+                        }))
+                      }
+                      placeholder={t("form.passwordPlaceholder")}
+                      type="password"
+                    />
+                  </label>
+                </>
+              ) : null}
               <details className="md:col-span-3 rounded-xl border border-border bg-card p-3" open>
                 <summary className="cursor-pointer select-none text-sm font-medium text-card-foreground">
                   {t("qualityProfile.otherOptions")}

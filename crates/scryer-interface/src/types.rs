@@ -108,6 +108,15 @@ pub struct AudioStreamDetailPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+pub struct SubtitleStreamDetailPayload {
+    pub codec: Option<String>,
+    pub language: Option<String>,
+    pub name: Option<String>,
+    pub forced: bool,
+    pub default: bool,
+}
+
+#[derive(SimpleObject, Clone)]
 pub struct TitleMediaFilePayload {
     pub id: String,
     pub title_id: String,
@@ -133,6 +142,7 @@ pub struct TitleMediaFilePayload {
     pub audio_streams: Vec<AudioStreamDetailPayload>,
     pub subtitle_languages: Vec<String>,
     pub subtitle_codecs: Vec<String>,
+    pub subtitle_streams: Vec<SubtitleStreamDetailPayload>,
     pub has_multiaudio: bool,
     pub duration_seconds: Option<i32>,
     pub container_format: Option<String>,
@@ -286,6 +296,7 @@ pub struct ParsedReleasePayload {
     pub is_proper_upload: bool,
     pub is_remux: bool,
     pub is_bd_disk: bool,
+    pub is_ai_enhanced: bool,
     pub parser_version: String,
     pub parse_confidence: f32,
     pub missing_fields: Vec<String>,
@@ -668,6 +679,11 @@ pub struct UpdateDownloadClientConfigInput {
 #[derive(InputObject)]
 pub struct DeleteDownloadClientConfigInput {
     pub id: String,
+}
+
+#[derive(InputObject)]
+pub struct ReorderDownloadClientConfigsInput {
+    pub ids: Vec<String>,
 }
 
 #[derive(InputObject)]
@@ -1272,4 +1288,96 @@ pub struct HousekeepingReportPayload {
     pub stale_history_events: i32,
     pub recycled_purged: i32,
     pub ran_at: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct SetupStatusPayload {
+    pub setup_complete: bool,
+    pub has_download_clients: bool,
+    pub has_indexers: bool,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct DirectoryEntryPayload {
+    pub name: String,
+    pub path: String,
+}
+
+// ── External Import (Sonarr/Radarr) ────────────────────────────────────────
+
+#[derive(InputObject)]
+pub struct ExternalImportConnectionInput {
+    pub base_url: String,
+    pub api_key: String,
+}
+
+#[derive(InputObject)]
+pub struct PreviewExternalImportInput {
+    pub sonarr: Option<ExternalImportConnectionInput>,
+    pub radarr: Option<ExternalImportConnectionInput>,
+}
+
+#[derive(InputObject)]
+pub struct ExecuteExternalImportInput {
+    pub sonarr: Option<ExternalImportConnectionInput>,
+    pub radarr: Option<ExternalImportConnectionInput>,
+    pub selected_movies_path: Option<String>,
+    pub selected_series_path: Option<String>,
+    pub selected_anime_path: Option<String>,
+    pub selected_download_client_dedup_keys: Vec<String>,
+    pub selected_indexer_dedup_keys: Vec<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct ExternalImportPreviewPayload {
+    pub sonarr_connected: bool,
+    pub radarr_connected: bool,
+    pub sonarr_version: Option<String>,
+    pub radarr_version: Option<String>,
+    pub root_folders: Vec<ExternalImportRootFolderPayload>,
+    pub download_clients: Vec<ExternalImportDownloadClientPayload>,
+    pub indexers: Vec<ExternalImportIndexerPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct ExternalImportRootFolderPayload {
+    pub source: String,
+    pub path: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct ExternalImportDownloadClientPayload {
+    pub sources: Vec<String>,
+    pub name: String,
+    pub implementation: String,
+    pub scryer_client_type: Option<String>,
+    pub host: Option<String>,
+    pub port: Option<String>,
+    pub use_ssl: bool,
+    pub url_base: Option<String>,
+    pub username: Option<String>,
+    pub api_key: Option<String>,
+    pub dedup_key: String,
+    pub supported: bool,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct ExternalImportIndexerPayload {
+    pub sources: Vec<String>,
+    pub name: String,
+    pub implementation: String,
+    pub scryer_provider_type: Option<String>,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub dedup_key: String,
+    pub supported: bool,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct ExternalImportResultPayload {
+    pub media_paths_saved: bool,
+    pub download_clients_created: i32,
+    pub indexers_created: i32,
+    pub plugins_installed: Vec<String>,
+    pub errors: Vec<String>,
 }

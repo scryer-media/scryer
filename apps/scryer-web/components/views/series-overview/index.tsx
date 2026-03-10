@@ -156,6 +156,9 @@ export function SeriesOverviewView({
         || collection?.collectionIndex?.trim().replace(/\D+/g, "")
         || "1";
       const episodeNum = episode.episodeNumber?.trim().replace(/\D+/g, "") || "1";
+      const absoluteEpisode = episode.absoluteNumber
+        ? parseInt(episode.absoluteNumber.replace(/\D+/g, ""), 10) || null
+        : null;
 
       client.query(searchSeriesEpisodeQuery, {
         title: title.name,
@@ -163,6 +166,7 @@ export function SeriesOverviewView({
         episode: episodeNum,
         tvdbId,
         category: title.facet,
+        absoluteEpisode,
         limit: 25,
       }).toPromise()
         .then(({ data, error: queryError }) => {

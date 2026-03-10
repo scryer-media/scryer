@@ -17,12 +17,14 @@ export type Release = {
     videoEncoding?: string | null;
     audio?: string | null;
     isDualAudio: boolean;
+    isAtmos: boolean;
     isDolbyVision: boolean;
     detectedHdr: boolean;
     parseConfidence: number;
     isProperUpload: boolean;
     isRemux: boolean;
     isBdDisk: boolean;
+    isAiEnhanced: boolean;
   } | null;
   qualityProfileDecision?: {
     allowed: boolean;

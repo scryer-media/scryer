@@ -1137,6 +1137,21 @@ impl SqliteServices {
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
+    pub async fn reorder_download_client_configs(&self, ordered_ids: Vec<String>) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::ReorderDownloadClientConfigs {
+                ordered_ids,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
     pub async fn insert_pending_release(
         &self,
         release: &scryer_application::PendingRelease,

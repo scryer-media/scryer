@@ -268,6 +268,7 @@ impl QueryRoot {
         imdb_id: Option<String>,
         tvdb_id: Option<String>,
         category: Option<String>,
+        absolute_episode: Option<i32>,
         limit: Option<i32>,
     ) -> GqlResult<Vec<IndexerSearchResultPayload>> {
         let app = app_from_ctx(ctx)?;
@@ -282,6 +283,7 @@ impl QueryRoot {
                 imdb_id,
                 tvdb_id,
                 category,
+                absolute_episode.map(|v| v as u32),
                 limit,
             )
             .await
@@ -1022,6 +1024,76 @@ impl QueryRoot {
     }
 
     // ── Service Logs ────────────────────────────────────────────────────
+
+    async fn setup_status(&self, ctx: &Context<'_>) -> GqlResult<SetupStatusPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let db = settings_db_from_ctx(ctx)?;
+
+        let setup_complete = match db
+            .get_setting_with_defaults("system", "setup.complete", None)
+            .await
+        {
+            Ok(Some(record)) => record.value_json.as_deref().map(|v| v.trim_matches('"')) == Some("true"),
+            _ => false,
+        };
+
+        let has_download_clients = !app
+            .list_download_client_configs(&actor, None)
+            .await
+            .map_err(to_gql_error)?
+            .is_empty();
+
+        let has_indexers = !app
+            .list_indexer_configs(&actor, None)
+            .await
+            .map_err(to_gql_error)?
+            .is_empty();
+
+        Ok(SetupStatusPayload {
+            setup_complete,
+            has_download_clients,
+            has_indexers,
+        })
+    }
+
+    async fn browse_path(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default_with = "String::from(\"/\")")] path: String,
+    ) -> GqlResult<Vec<DirectoryEntryPayload>> {
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let target = std::path::Path::new(&path);
+        if !target.is_absolute() {
+            return Err(Error::new("path must be absolute"));
+        }
+        let read_dir = std::fs::read_dir(target)
+            .map_err(|e| Error::new(format!("cannot read directory: {e}")))?;
+        let mut entries: Vec<DirectoryEntryPayload> = Vec::new();
+        for entry in read_dir.flatten() {
+            let ft = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            if !ft.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let full_path = entry.path().to_string_lossy().into_owned();
+            entries.push(DirectoryEntryPayload {
+                name,
+                path: full_path,
+            });
+        }
+        entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        Ok(entries)
+    }
 
     async fn service_logs(
         &self,

@@ -7,7 +7,7 @@ use wiremock::matchers::{body_json_string, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use common::{load_fixture, TestContext};
-use scryer_application::{DownloadClient, DownloadClientConfigRepository};
+use scryer_application::{DownloadClient, DownloadClientConfigRepository, NullSettingsRepository};
 use scryer_domain::DownloadClientConfig;
 use scryer_infrastructure::{NzbgetDownloadClient, PrioritizedDownloadClientRouter, SabnzbdDownloadClient};
 
@@ -629,7 +629,7 @@ async fn mount_list_queue_mocks(server: &MockServer) {
 /// Create a router backed by the test DB, with `fallback_uri` as the fallback client.
 fn build_router(ctx: &TestContext, fallback_uri: String) -> PrioritizedDownloadClientRouter {
     let fallback = NzbgetDownloadClient::new(fallback_uri, None, None, "SCORE".to_string());
-    PrioritizedDownloadClientRouter::new(Arc::new(ctx.db.clone()), Arc::new(fallback))
+    PrioritizedDownloadClientRouter::new(Arc::new(ctx.db.clone()), Arc::new(NullSettingsRepository), Arc::new(fallback))
 }
 
 #[tokio::test]
@@ -657,11 +657,9 @@ async fn router_routes_to_highest_priority_client() {
         .await
         .expect("priority-1 client should succeed");
 
+    // Aggregation: primary returns 2 items, secondary has no mocks so its
+    // request fails and is skipped — total is still 2 from primary.
     assert_eq!(items.len(), 2, "should return items from the primary client");
-    assert!(
-        second_server.received_requests().await.unwrap().is_empty(),
-        "secondary client should not have been contacted"
-    );
 }
 
 #[tokio::test]
@@ -706,7 +704,7 @@ async fn router_uses_fallback_when_no_clients_configured() {
     let fallback =
         NzbgetDownloadClient::new(ctx.nzbget_server.uri(), None, None, "SCORE".to_string());
     let router =
-        PrioritizedDownloadClientRouter::new(Arc::new(ctx.db.clone()), Arc::new(fallback));
+        PrioritizedDownloadClientRouter::new(Arc::new(ctx.db.clone()), Arc::new(NullSettingsRepository), Arc::new(fallback));
 
     let items = router
         .list_queue()
@@ -807,7 +805,7 @@ async fn router_disabled_clients_are_not_used() {
     let fallback =
         NzbgetDownloadClient::new(fallback_server.uri(), None, None, "SCORE".to_string());
     let router =
-        PrioritizedDownloadClientRouter::new(Arc::new(ctx.db.clone()), Arc::new(fallback));
+        PrioritizedDownloadClientRouter::new(Arc::new(ctx.db.clone()), Arc::new(NullSettingsRepository), Arc::new(fallback));
 
     let items = router
         .list_queue()

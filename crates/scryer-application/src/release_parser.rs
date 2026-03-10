@@ -25,10 +25,18 @@ pub struct ParsedReleaseMetadata {
     pub is_atmos: bool,
     pub is_dolby_vision: bool,
     pub detected_hdr: bool,
+    pub is_hdr10plus: bool,
+    pub is_hlg: bool,
     pub fps: Option<f32>,
     pub is_proper_upload: bool,
+    pub is_repack: bool,
     pub is_remux: bool,
     pub is_bd_disk: bool,
+    pub is_ai_enhanced: bool,
+    pub is_hardcoded_subs: bool,
+    pub streaming_service: Option<String>,
+    pub edition: Option<String>,
+    pub anime_version: Option<u32>,
     pub episode: Option<ParsedEpisodeMetadata>,
     pub parser_version: &'static str,
     pub parse_confidence: f32,
@@ -413,6 +421,10 @@ impl ParsedReleaseMetadata {
             score += 80;
         }
 
+        if self.is_ai_enhanced {
+            score += 100;
+        }
+
         score
     }
 }
@@ -481,29 +493,56 @@ fn parse_quality(token: &str) -> Option<&'static str> {
     }
 }
 
-fn parse_source(token: &str, next: Option<&str>) -> Option<&'static str> {
+struct SourceResult {
+    source: &'static str,
+    service: Option<&'static str>,
+}
+
+fn parse_source(token: &str, next: Option<&str>) -> Option<SourceResult> {
     let upper = token;
-    if upper == "AMZN" || upper == "NF" || upper == "BILI" || upper == "ATVP" || upper == "HULU" {
-        return Some("WEB-DL");
-    }
-    if upper == "AMAZON" || upper == "NETFLIX" || upper == "HOTSTAR" || upper == "ITUNES" {
-        return Some("WEB-DL");
+
+    // Streaming service tokens → WEB-DL with identified service
+    let service = match upper {
+        "AMZN" | "AMAZON" => Some("Amazon"),
+        "NF" | "NETFLIX" => Some("Netflix"),
+        "ATVP" | "APTV" => Some("Apple TV+"),
+        "DSNP" | "DNSP" => Some("Disney+"),
+        "HMAX" | "HBO" => Some("HBO Max"),
+        "PMTP" | "PARAMOUNT" => Some("Paramount+"),
+        "PCOK" | "PEACOCK" => Some("Peacock"),
+        "HULU" => Some("Hulu"),
+        "CR" => Some("Crunchyroll"),
+        "FUNI" | "FUNIMATION" => Some("Funimation"),
+        "HIDIVE" => Some("HIDIVE"),
+        "STAN" => Some("Stan"),
+        "IT" | "ITUNES" => Some("iTunes"),
+        "BILI" => Some("Bilibili"),
+        "HOTSTAR" => Some("Hotstar"),
+        "BBC" | "BBCI" | "IPLAYER" => Some("BBC iPlayer"),
+        "YOUTUBE" => Some("YouTube"),
+        "ROKU" => Some("Roku"),
+        "CRAV" => Some("Crave"),
+        _ => None,
+    };
+
+    if let Some(svc) = service {
+        return Some(SourceResult { source: "WEB-DL", service: Some(svc) });
     }
 
     if upper == "WEB" && next.is_some_and(|next| next == "DL") {
-        return Some("WEB-DL");
+        return Some(SourceResult { source: "WEB-DL", service: None });
     }
 
     match upper {
-        "WEB" | "WEBDL" | "WEB-DL" | "WEBRIP" | "WEBHLS" => Some("WEB-DL"),
-        "WEBD" => Some("WEB-DL"),
-        "BLURAY" if next == Some("RAY") => Some("BluRay"),
-        "BLURAY" | "BLU" | "BD" | "UHD" => Some("BluRay"),
-        "HDTV" | "HDTVRIP" => Some("HDTV"),
-        "DVDRIP" | "DVD" => Some("DVD"),
-        "CR" => Some("WEB-DL"),
-        "BBC" => Some("WEB-DL"),
-        "ITUNES" => Some("WEB-DL"),
+        "WEB" | "WEBDL" | "WEB-DL" | "WEBRIP" | "WEBHLS" | "WEBD" => {
+            Some(SourceResult { source: "WEB-DL", service: None })
+        }
+        "BLURAY" if next == Some("RAY") => Some(SourceResult { source: "BluRay", service: None }),
+        "BLURAY" | "BLURAYRIP" | "BLU" | "BD" | "BDRIP" | "BRRIP" | "BR" | "UHD" => {
+            Some(SourceResult { source: "BluRay", service: None })
+        }
+        "HDTV" | "HDTVRIP" => Some(SourceResult { source: "HDTV", service: None }),
+        "DVDRIP" | "DVD" => Some(SourceResult { source: "DVD", service: None }),
         _ => None,
     }
 }
@@ -630,6 +669,7 @@ fn is_release_group_token(token: &str) -> bool {
             | "HDR10"
             | "HDR10PLUS"
             | "HDR10P"
+            | "HDRVIVID"
             | "X264"
             | "X265"
             | "H.264"
@@ -642,11 +682,13 @@ fn is_release_group_token(token: &str) -> bool {
             | "FLAC"
             | "OPUS"
             | "ATMOS"
+            | "DD"
             | "DDP"
             | "AC3"
             | "DTS"
             | "EAC3"
             | "TRUEHD"
+            | "PCM"
     )
 }
 
@@ -988,25 +1030,53 @@ fn split_release_token(token: &str) -> Vec<String> {
                 continue;
             }
 
-            if (current.starts_with("DDP")
+            let is_audio_codec = current.starts_with("DDP")
                 || current.starts_with("DD+")
+                || current.starts_with("DD")
                 || current.starts_with("AAC")
                 || current.starts_with("AC-3")
-                || current == "AC3")
-                && is_digit_str(next_value)
-            {
-                if current.starts_with("AC-3") || current == "AC3" {
-                    if let Some(third_value) = third {
-                        if is_digit_str(third_value) {
-                            parts.push(format!("{current}.{next_value}.{third_value}"));
+                || current == "AC3";
+
+            if is_audio_codec && is_digit_str(next_value) {
+                // Try three-token merge for channel specs like AAC.2.0 or AC3.5.1
+                if let Some(third_value) = third {
+                    if is_digit_str(third_value) {
+                        parts.push(format!("{current}.{next_value}.{third_value}"));
+                        index += 3;
+                        continue;
+                    }
+                    // Handle "digit-GROUP" suffix: AAC.2.0-DBTV → "AAC.2.0" + "DBTV"
+                    if let Some(hyphen_idx) = third_value.find('-') {
+                        let digit_part = &third_value[..hyphen_idx];
+                        let tail = &third_value[hyphen_idx + 1..];
+                        if !digit_part.is_empty() && is_digit_str(digit_part) {
+                            parts.push(format!("{current}.{next_value}.{digit_part}"));
+                            if !tail.is_empty() {
+                                parts.push(tail.to_string());
+                            }
                             index += 3;
                             continue;
                         }
                     }
-                } else {
-                    parts.push(format!("{current}.{next_value}"));
-                    index += 2;
-                    continue;
+                }
+                parts.push(format!("{current}.{next_value}"));
+                index += 2;
+                continue;
+            }
+
+            // Handle "digit-GROUP" in next token: DDP5.1-GROUP → "DDP5.1" + "GROUP"
+            if is_audio_codec {
+                if let Some(hyphen_idx) = next_value.find('-') {
+                    let digit_part = &next_value[..hyphen_idx];
+                    let tail = &next_value[hyphen_idx + 1..];
+                    if !digit_part.is_empty() && is_digit_str(digit_part) {
+                        parts.push(format!("{current}.{digit_part}"));
+                        if !tail.is_empty() {
+                            parts.push(tail.to_string());
+                        }
+                        index += 2;
+                        continue;
+                    }
                 }
             }
         }
@@ -1053,11 +1123,11 @@ fn parse_audio(raw_token: &str, next: Option<&str>) -> Option<ParsedAudio> {
         return None;
     }
 
-    if token.starts_with("DDP") || token.starts_with("DD+") || token == "DD" || token == "DD5" {
+    // Dolby Digital Plus (DDP / DD+ / EAC3) — must check before plain DD
+    if token.starts_with("DDP") || token.starts_with("DD+") {
         let suffix = token
             .trim_start_matches("DDP")
-            .trim_start_matches("DD+")
-            .trim_start_matches("DD");
+            .trim_start_matches("DD+");
         let channels = parse_channels(suffix).or_else(|| next.and_then(parse_channels));
         return Some(ParsedAudio {
             codec: "DDP",
@@ -1077,11 +1147,18 @@ fn parse_audio(raw_token: &str, next: Option<&str>) -> Option<ParsedAudio> {
         });
     }
 
-    if token.starts_with("DD") && parse_channels(token).is_some() {
-        return Some(ParsedAudio {
-            codec: "DDP",
-            channels: parse_channels(token).or_else(|| next.and_then(parse_channels)),
-        });
+    // Dolby Digital (DD) — plain DD without + or P suffix.
+    // Bare "DD" with no channel info is too ambiguous (common in titles like "DD Returns"),
+    // so require either suffix digits or channel info from the next token.
+    if token.starts_with("DD") {
+        let suffix = token.trim_start_matches("DD");
+        let channels = parse_channels(suffix).or_else(|| next.and_then(parse_channels));
+        if !suffix.is_empty() || channels.is_some() {
+            return Some(ParsedAudio {
+                codec: "DD",
+                channels,
+            });
+        }
     }
 
     if token.starts_with("EAC3") || token.starts_with("E-AC-3") || token.starts_with("EAC") {
@@ -1091,11 +1168,21 @@ fn parse_audio(raw_token: &str, next: Option<&str>) -> Option<ParsedAudio> {
         });
     }
 
-    if token.starts_with("DTS-HD")
-        || token.starts_with("DTSHD")
-        || token.starts_with("DTS-MA")
-        || token.starts_with("DTSMA")
-    {
+    if token.starts_with("DTS-X") || token.starts_with("DTSX") {
+        return Some(ParsedAudio {
+            codec: "DTSX",
+            channels: parse_channels(token).or_else(|| next.and_then(parse_channels)),
+        });
+    }
+
+    if token.starts_with("DTS-MA") || token.starts_with("DTSMA") {
+        return Some(ParsedAudio {
+            codec: "DTSMA",
+            channels: parse_channels(token).or_else(|| next.and_then(parse_channels)),
+        });
+    }
+
+    if token.starts_with("DTS-HD") || token.starts_with("DTSHD") {
         return Some(ParsedAudio {
             codec: "DTSHD",
             channels: parse_channels(token).or_else(|| next.and_then(parse_channels)),
@@ -1144,7 +1231,7 @@ fn parse_audio(raw_token: &str, next: Option<&str>) -> Option<ParsedAudio> {
         });
     }
 
-    if token == "LPCM" {
+    if token == "LPCM" || token.starts_with("PCM") {
         return Some(ParsedAudio {
             codec: "PCM",
             channels: parse_channels(token).or_else(|| next.and_then(parse_channels)),
@@ -1183,6 +1270,17 @@ fn parse_fps(raw_title: &str) -> Option<f32> {
     for chunk in parts {
         if let Some(prefix) = chunk.strip_suffix("FPS") {
             let prefix = prefix.trim();
+            if let Ok(fps) = prefix.parse::<f32>() {
+                if (10.0..=300.0).contains(&fps) {
+                    return Some(fps);
+                }
+            }
+        }
+    }
+
+    // Dot-separated titles: split on dots and hyphens to find "60FPS" or "60fps" tokens
+    for chunk in upper.split(['.', '-', '_']) {
+        if let Some(prefix) = chunk.strip_suffix("FPS") {
             if let Ok(fps) = prefix.parse::<f32>() {
                 if (10.0..=300.0).contains(&fps) {
                     return Some(fps);
@@ -1235,6 +1333,7 @@ fn is_noise_token(token: &str) -> bool {
             | "HDR10"
             | "HDR10PLUS"
             | "HDR10P"
+            | "HDRVIVID"
             | "SEASON"
             | "EPISODE"
             | "GROUP"
@@ -1246,7 +1345,10 @@ fn is_noise_token(token: &str) -> bool {
             | "HULU"
             | "BD"
             | "BLURAY"
+            | "BLURAYRIP"
             | "BDRIP"
+            | "BRRIP"
+            | "BR"
             | "BD25"
             | "BD50"
             | "BDMV"
@@ -1260,6 +1362,12 @@ fn is_noise_token(token: &str) -> bool {
             | "WEBRIP"
             | "HDCAM"
             | "CAM"
+            | "AI"
+            | "ENHANCED"
+            | "AIENHANCED"
+            | "RIFE"
+            | "HFR"
+            | "PCM"
     ) || is_language_token(token)
 }
 
@@ -1564,6 +1672,30 @@ pub fn parse_series_episode(raw_title: &str) -> Option<ParsedEpisodeMetadata> {
     })
 }
 
+/// Parse anime version suffix (e.g. "V2", "01V2", "05V3").
+/// Returns the version number if found (2-9).
+fn parse_anime_version(token: &str) -> Option<u32> {
+    // Pure "V2", "V3" etc.
+    if token.len() >= 2 && token.starts_with('V') {
+        if let Ok(ver) = token[1..].parse::<u32>() {
+            if (2..=9).contains(&ver) {
+                return Some(ver);
+            }
+        }
+    }
+    // "01V2", "05V3" — digits followed by V and a single digit
+    if let Some(pos) = token.find('V') {
+        if pos > 0 && token[..pos].chars().all(|c| c.is_ascii_digit()) {
+            if let Ok(ver) = token[pos + 1..].parse::<u32>() {
+                if (2..=9).contains(&ver) {
+                    return Some(ver);
+                }
+            }
+        }
+    }
+    None
+}
+
 pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
     let tokens = split_title(raw_title);
     let mut parsed = ParsedReleaseMetadata {
@@ -1584,10 +1716,18 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
         is_dual_audio: false,
         is_dolby_vision: false,
         detected_hdr: false,
+        is_hdr10plus: false,
+        is_hlg: false,
         fps: parse_fps(raw_title),
         is_proper_upload: false,
+        is_repack: false,
         is_remux: false,
         is_bd_disk: false,
+        is_ai_enhanced: false,
+        is_hardcoded_subs: false,
+        streaming_service: None,
+        edition: None,
+        anime_version: None,
         episode: None,
         parser_version: RELEASE_PARSER_VERSION,
         parse_confidence: 0.0,
@@ -1606,8 +1746,53 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
 
         if token == "PROPER" || token == "REPACK" {
             parsed.is_proper_upload = true;
+            if token == "REPACK" {
+                parsed.is_repack = true;
+            }
             i += 1;
             continue;
+        }
+
+        // Anime version detection (v2, v3, etc. — also handles "01V2" style)
+        if let Some(ver) = parse_anime_version(token) {
+            parsed.anime_version = Some(ver);
+            parsed.is_proper_upload = true;
+            i += 1;
+            continue;
+        }
+
+        // Hardcoded subtitles
+        if token == "HC" || token == "HARDCODED" || token == "HARDSUBBED" || token == "HARDSUB" {
+            parsed.is_hardcoded_subs = true;
+            i += 1;
+            continue;
+        }
+
+        // Edition detection
+        if parsed.edition.is_none() {
+            let edition = match token {
+                "IMAX" if next == Some("ENHANCED") => {
+                    i += 1;
+                    Some("IMAX Enhanced")
+                }
+                "IMAX" => Some("IMAX"),
+                "EXTENDED" => Some("Extended"),
+                "UNRATED" => Some("Unrated"),
+                "THEATRICAL" => Some("Theatrical"),
+                "CRITERION" => Some("Criterion"),
+                "REMASTERED" | "REMASTER" => Some("Remaster"),
+                "HYBRID" => Some("Hybrid"),
+                "DIRECTORS" | "DIRECTOR" if next == Some("CUT") => {
+                    i += 1;
+                    Some("Director's Cut")
+                }
+                _ => None,
+            };
+            if let Some(ed) = edition {
+                parsed.edition = Some(ed.to_string());
+                i += 1;
+                continue;
+            }
         }
 
         if token == "REMUX" {
@@ -1616,9 +1801,29 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
             continue;
         }
 
-        if token == "BD25" || token == "BD50"
-            || token == "BDMV" || token == "BDRIP" {
+        if token == "BD25" || token == "BD50" || token == "BDMV" {
             parsed.is_bd_disk = true;
+            i += 1;
+            continue;
+        }
+
+        // COMPLETE BLURAY / COMPLETE UHD BLURAY = full disc
+        if token == "COMPLETE" {
+            let next2 = tokens.get(i + 2).map(|t| t.as_str());
+            if matches!(next, Some("BLURAY") | Some("BLU"))
+                || (next == Some("UHD") && matches!(next2, Some("BLURAY") | Some("BLU")))
+            {
+                parsed.is_bd_disk = true;
+            }
+        }
+
+        if token == "AI" && next == Some("ENHANCED") {
+            parsed.is_ai_enhanced = true;
+            i += 2;
+            continue;
+        }
+        if token == "AIENHANCED" || token == "RIFE" {
+            parsed.is_ai_enhanced = true;
             i += 1;
             continue;
         }
@@ -1706,9 +1911,16 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
             || token == "HDR10PLUS"
             || token == "HDR10+"
             || token == "HDR10P"
+            || token == "HDRVIVID"
             || token == "HLG"
         {
             parsed.detected_hdr = true;
+            if token == "HDR10PLUS" || token == "HDR10+" || token == "HDR10P" {
+                parsed.is_hdr10plus = true;
+            }
+            if token == "HLG" {
+                parsed.is_hlg = true;
+            }
             i += 1;
             continue;
         }
@@ -1726,8 +1938,11 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
         }
 
         if parsed.source.is_none() {
-            if let Some(source) = parse_source(token, next) {
-                parsed.source = Some(source.to_string());
+            if let Some(result) = parse_source(token, next) {
+                parsed.source = Some(result.source.to_string());
+                if let Some(service) = result.service {
+                    parsed.streaming_service = Some(service.to_string());
+                }
             }
         }
 
@@ -1735,6 +1950,13 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
             let (codec, encoding) = parse_video(token);
             if codec.is_some() {
                 parsed.video_codec = codec;
+                parsed.video_encoding = encoding;
+            }
+        } else if parsed.video_encoding.is_none() {
+            // Codec already set (e.g., HEVC → H.265) but encoding not yet captured.
+            // Check if this token is an encoding indicator like x265.
+            let (_, encoding) = parse_video(token);
+            if encoding.is_some() {
                 parsed.video_encoding = encoding;
             }
         }
@@ -1752,7 +1974,7 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
                 }
             }
             if audio.channels.is_none()
-                && matches!(audio.codec, "DDP" | "AAC" | "AC3" | "DTS" | "DTSHD")
+                && matches!(audio.codec, "DDP" | "DD" | "AAC" | "AC3" | "DTS" | "DTSHD" | "DTSMA" | "DTSX" | "TRUEHD" | "EAC3" | "PCM")
             {
                 // Some feeds separate channel information into subsequent tokens
                 // (for example "DDP.ATMOS.5.1").
@@ -1833,6 +2055,17 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
     }
 
     if parsed.fps.is_some() {
+        confidence += 0.05;
+    }
+
+    // FPS above 60 is almost certainly AI frame interpolation (RIFE etc.)
+    if let Some(fps) = parsed.fps {
+        if fps > 60.0 {
+            parsed.is_ai_enhanced = true;
+        }
+    }
+
+    if parsed.is_ai_enhanced {
         confidence += 0.05;
     }
 

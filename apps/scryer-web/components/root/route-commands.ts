@@ -59,7 +59,7 @@ export function buildRouteCommands({ t, onNavigate }: BuildRouteCommandsArgs): R
       description: t(f.settingsLabelKey),
       keywords: [f.viewId, f.id, "settings", "media", "paths", "folder"],
       icon: Settings,
-      onSelect: buildNavigate(onNavigate, f.viewId as ViewId, undefined, "settings"),
+      onSelect: buildNavigate(onNavigate, f.viewId as ViewId, undefined, "general"),
     },
   ]);
 

@@ -107,7 +107,8 @@ pub(crate) async fn list_media_files_for_title_query(
                 mf.duration_seconds, mf.container_format,
                 mf.audio_languages_json, mf.audio_streams_json,
                 mf.subtitle_languages_json,
-                mf.subtitle_codecs_json, mf.has_multiaudio,
+                mf.subtitle_codecs_json, mf.subtitle_streams_json,
+                mf.has_multiaudio,
                 mf.scene_name, mf.release_group, mf.source_type, mf.resolution,
                 mf.video_codec_parsed, mf.audio_codec_parsed,
                 mf.acquisition_score, mf.scoring_log,
@@ -187,6 +188,11 @@ fn row_to_title_media_file(row: &SqliteRow) -> AppResult<TitleMediaFile> {
         .unwrap_or(None)
         .and_then(|json| serde_json::from_str(&json).ok())
         .unwrap_or_default();
+    let subtitle_streams: Vec<scryer_application::SubtitleStreamDetail> = row
+        .try_get::<Option<String>, _>("subtitle_streams_json")
+        .unwrap_or(None)
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default();
 
     // Rich schema fields (added by migration 0037)
     let scene_name: Option<String> = row.try_get("scene_name").unwrap_or(None);
@@ -228,6 +234,7 @@ fn row_to_title_media_file(row: &SqliteRow) -> AppResult<TitleMediaFile> {
         audio_streams,
         subtitle_languages,
         subtitle_codecs,
+        subtitle_streams,
         has_multiaudio: has_multiaudio != 0,
         duration_seconds,
         container_format,
@@ -261,6 +268,8 @@ pub(crate) async fn update_media_file_analysis_query(
         .unwrap_or_else(|_| "[]".to_string());
     let subtitle_codecs_json = serde_json::to_string(&analysis.subtitle_codecs)
         .unwrap_or_else(|_| "[]".to_string());
+    let subtitle_streams_json = serde_json::to_string(&analysis.subtitle_streams)
+        .unwrap_or_else(|_| "[]".to_string());
 
     sqlx::query(
         "UPDATE media_files SET
@@ -282,6 +291,7 @@ pub(crate) async fn update_media_file_analysis_query(
             audio_streams_json = ?,
             subtitle_languages_json = ?,
             subtitle_codecs_json = ?,
+            subtitle_streams_json = ?,
             has_multiaudio = ?,
             scan_status = 'scanned'
          WHERE id = ?",
@@ -304,6 +314,7 @@ pub(crate) async fn update_media_file_analysis_query(
     .bind(&audio_streams_json)
     .bind(&subtitle_languages_json)
     .bind(&subtitle_codecs_json)
+    .bind(&subtitle_streams_json)
     .bind(if analysis.has_multiaudio { 1i64 } else { 0i64 })
     .bind(file_id)
     .execute(pool)

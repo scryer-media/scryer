@@ -99,6 +99,12 @@ function SearchResultRow({
         result.parsedRelease.isBdDisk
           ? { label: "BD", className: "bg-rose-500/20 text-rose-300" }
           : null,
+        result.parsedRelease.isAiEnhanced
+          ? { label: "AI Enhanced", className: "bg-red-500/20 text-red-300" }
+          : null,
+        result.parsedRelease.isAtmos
+          ? { label: "Atmos", className: "bg-purple-500/20 text-purple-300" }
+          : null,
       ]
         .filter(Boolean)
         .filter((value) => value !== null && value !== undefined && typeof value === "object")

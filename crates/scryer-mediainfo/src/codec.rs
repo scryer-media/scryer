@@ -155,7 +155,7 @@ pub(crate) fn extract_h265_info(codec_private: &[u8]) -> CodecInfo {
 /// - Byte 0: marker(1) | version(7) — must be 0x81
 /// - Byte 1: seq_profile(3) | seq_level_idx_0(5)
 /// - Byte 2: seq_tier_0(1) | high_bitdepth(1) | twelve_bit(1) | monochrome(1) |
-///           chroma_subsampling_x(1) | chroma_subsampling_y(1) | chroma_sample_position(2)
+///   chroma_subsampling_x(1) | chroma_subsampling_y(1) | chroma_sample_position(2)
 /// - Byte 3: initial_presentation_delay fields
 pub(crate) fn extract_av1_info(codec_private: &[u8]) -> CodecInfo {
     if codec_private.len() < 4 {
@@ -206,7 +206,7 @@ pub(crate) struct DoviConfigInfo {
 /// - Byte 0: dv_version_major
 /// - Byte 1: dv_version_minor
 /// - Byte 2-3: dv_profile(7) | dv_level(6) | rpu_present_flag(1) |
-///             el_present_flag(1) | bl_present_flag(1)
+///   el_present_flag(1) | bl_present_flag(1)
 /// - Byte 4: dv_bl_signal_compatibility_id(4) | reserved(4)
 pub(crate) fn parse_dovi_config(data: &[u8]) -> Option<DoviConfigInfo> {
     if data.len() < 5 {
@@ -502,6 +502,9 @@ mod tests {
             color_transfer: Some(16),
             dovi_config: Some(vec![0x01]),
             has_hdr10plus: false,
+            name: None,
+            forced: false,
+            default_track: false,
         };
         // DV takes priority over color_transfer
         assert_eq!(detect_hdr_format(&track).as_deref(), Some("Dolby Vision"));
@@ -523,6 +526,9 @@ mod tests {
             color_transfer: Some(16),
             dovi_config: None,
             has_hdr10plus: false,
+            name: None,
+            forced: false,
+            default_track: false,
         };
         assert_eq!(detect_hdr_format(&track).as_deref(), Some("HDR10"));
     }
@@ -543,6 +549,9 @@ mod tests {
             color_transfer: Some(16),
             dovi_config: None,
             has_hdr10plus: true,
+            name: None,
+            forced: false,
+            default_track: false,
         };
         // HDR10+ takes priority over HDR10
         assert_eq!(detect_hdr_format(&track).as_deref(), Some("HDR10+"));
@@ -564,6 +573,9 @@ mod tests {
             color_transfer: Some(18),
             dovi_config: None,
             has_hdr10plus: false,
+            name: None,
+            forced: false,
+            default_track: false,
         };
         assert_eq!(detect_hdr_format(&track).as_deref(), Some("HLG"));
     }
@@ -584,6 +596,9 @@ mod tests {
             color_transfer: Some(1),
             dovi_config: None,
             has_hdr10plus: false,
+            name: None,
+            forced: false,
+            default_track: false,
         };
         assert_eq!(detect_hdr_format(&track), None);
     }

@@ -32,7 +32,7 @@ fn next_nzbget_routing_priority(routing_by_client: &Map<String, Value>) -> i64 {
     }
 }
 
-async fn ensure_nzbget_routing_entry_for_client(
+pub(crate) async fn ensure_nzbget_routing_entry_for_client(
     db: &scryer_infrastructure::SqliteServices,
     client_id: &str,
     actor_id: &str,
@@ -229,6 +229,19 @@ impl ConfigMutations {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         app.delete_download_client_config(&actor, &input.id)
+            .await
+            .map_err(to_gql_error)
+            .map(|_| true)
+    }
+
+    async fn reorder_download_client_configs(
+        &self,
+        ctx: &Context<'_>,
+        input: ReorderDownloadClientConfigsInput,
+    ) -> GqlResult<bool> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        app.reorder_download_clients(&actor, input.ids)
             .await
             .map_err(to_gql_error)
             .map(|_| true)

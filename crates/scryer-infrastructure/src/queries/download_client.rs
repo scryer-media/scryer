@@ -270,3 +270,29 @@ pub(crate) async fn delete_download_client_config_query(
 
     Ok(())
 }
+
+pub(crate) async fn reorder_download_client_configs_query(
+    pool: &SqlitePool,
+    ordered_ids: &[String],
+) -> AppResult<()> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    for (index, id) in ordered_ids.iter().enumerate() {
+        sqlx::query("UPDATE download_clients SET client_priority = ?, updated_at = ? WHERE id = ?")
+            .bind(index as i64)
+            .bind(Utc::now().to_rfc3339())
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+    }
+
+    tx.commit()
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(())
+}

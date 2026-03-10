@@ -36,6 +36,20 @@ services:
         nzbget -s -o OutputMode=loggable -o WebDir=/usr/share/nzbget/webui -o ConfigTemplate=/usr/share/nzbget/webui/nzbget.conf -o MainDir=/media -o DestDir=/media/completed -o InterDir=/media/inter -o NzbDir=/media/nzb -o QueueDir=/media/queue -o TempDir=/media/tmp -o LogFile=/media/logs/nzbget.log -o CertStore=/etc/ssl/certs/ca-certificates.crt -c /config/nzbget.conf
       '
 
+  sabnzbd:
+    image: lscr.io/linuxserver/sabnzbd:latest
+    container_name: scryer-sabnzbd
+    environment:
+      PUID: 1000
+      PGID: 1000
+      TZ: Etc/UTC
+      HOST_WHITELIST: localhost,sabnzbd,scryer-sabnzbd
+    ports:
+      - "8085:8080"
+    volumes:
+      - ./tmp/sabnzbd/config:/config
+      - ./tmp/scryer-media:/media
+
   # smg:
   #   build:
   #     context: ./apps/scryer-metadata-gateway
@@ -72,7 +86,7 @@ services:
       SCRYER_MOVIES_PATH: /media/movies
       SCRYER_SERIES_PATH: /media/series
       RUST_LOG: "info,scryer_infrastructure::metadata_gateway=debug"
-      SCRYER_DEV_AUTO_LOGIN: "true"
+      # SCRYER_DEV_AUTO_LOGIN: "true"
     command: >
       sh -c '
         set -eu

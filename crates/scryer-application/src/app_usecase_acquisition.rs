@@ -556,6 +556,7 @@ async fn process_single_wanted_item(
                         title.runtime_minutes,
                         Some(season_num),
                         None, // episode=None signals a season pack search
+                        None, // no absolute episode for season packs
                     )
                     .await
                     .unwrap_or_default();
@@ -712,6 +713,10 @@ async fn process_single_wanted_item(
         .or(title.runtime_minutes);
 
     // Search and score releases
+    let absolute_episode = episode
+        .as_ref()
+        .and_then(|ep| ep.absolute_number.as_deref())
+        .and_then(|v| v.parse::<u32>().ok());
     let results = match app.search_and_score_releases(
         queries,
         imdb_id,
@@ -724,6 +729,7 @@ async fn process_single_wanted_item(
         runtime_minutes,
         search_season,
         search_episode,
+        absolute_episode,
     ).await {
         Ok(r) => r,
         Err(err) => {
@@ -884,6 +890,20 @@ async fn process_single_wanted_item(
     )
     .await
     .unwrap_or_else(|_| crate::quality_profile::default_quality_profile_for_search());
+
+    // Cutoff tier check — skip upgrades if the existing file meets the cutoff quality
+    if crate::quality_profile::has_reached_cutoff(
+        item.grabbed_release.as_deref(),
+        profile.criteria.cutoff_tier.as_deref(),
+        &profile.criteria.quality_tiers,
+    ) {
+        tracing::debug!(
+            title_id = title.id.as_str(),
+            cutoff = profile.criteria.cutoff_tier.as_deref().unwrap_or(""),
+            "cutoff quality reached, skipping upgrade"
+        );
+        return Ok(());
+    }
 
     // Evaluate upgrade decision
     let thresholds = AcquisitionThresholds::default();
