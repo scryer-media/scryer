@@ -180,12 +180,14 @@ export const searchQuery = `query SearchIndexers($query: String!, $imdbId: Strin
       videoEncoding
       audio
       isDualAudio
+      isAtmos
       isDolbyVision
       detectedHdr
       parseConfidence
       isProperUpload
       isRemux
       isBdDisk
+      isAiEnhanced
     }
     qualityProfileDecision {
       allowed
@@ -201,8 +203,8 @@ export const searchQuery = `query SearchIndexers($query: String!, $imdbId: Strin
   }
 }`;
 
-export const searchSeriesEpisodeQuery = `query SearchIndexersEpisode($title: String!, $season: String!, $episode: String!, $imdbId: String, $tvdbId: String, $category: String, $limit: Int) {
-  searchIndexersEpisode(title: $title, season: $season, episode: $episode, imdbId: $imdbId, tvdbId: $tvdbId, category: $category, limit: $limit) {
+export const searchSeriesEpisodeQuery = `query SearchIndexersEpisode($title: String!, $season: String!, $episode: String!, $imdbId: String, $tvdbId: String, $category: String, $absoluteEpisode: Int, $limit: Int) {
+  searchIndexersEpisode(title: $title, season: $season, episode: $episode, imdbId: $imdbId, tvdbId: $tvdbId, category: $category, absoluteEpisode: $absoluteEpisode, limit: $limit) {
     source
     title
     link
@@ -221,12 +223,14 @@ export const searchSeriesEpisodeQuery = `query SearchIndexersEpisode($title: Str
       videoEncoding
       audio
       isDualAudio
+      isAtmos
       isDolbyVision
       detectedHdr
       parseConfidence
       isProperUpload
       isRemux
       isBdDisk
+      isAiEnhanced
     }
     qualityProfileDecision {
       allowed
@@ -262,12 +266,14 @@ export const searchSeasonQuery = `query SearchIndexersSeason($title: String!, $s
       videoEncoding
       audio
       isDualAudio
+      isAtmos
       isDolbyVision
       detectedHdr
       parseConfidence
       isProperUpload
       isRemux
       isBdDisk
+      isAiEnhanced
     }
     qualityProfileDecision {
       allowed
@@ -289,6 +295,7 @@ export const titlesQuery = `query Titles($facet: String, $query: String) {
     name
     facet
     monitored
+    tags
     posterUrl
     qualityTier
     sizeBytes
@@ -365,6 +372,13 @@ export const titleMediaFilesQuery = `query TitleMediaFiles($titleId: String!) {
     }
     subtitleLanguages
     subtitleCodecs
+    subtitleStreams {
+      codec
+      language
+      name
+      forced
+      default
+    }
     hasMultiaudio
     durationSeconds
     containerFormat
@@ -1022,5 +1036,22 @@ export const calendarEpisodesQuery = `query CalendarEpisodes($startDate: String!
     episodeTitle
     airDate
     monitored
+  }
+}`;
+
+// ── Setup Wizard ──────────────────────────────────────────────────────
+
+export const setupStatusQuery = `query SetupStatus {
+  setupStatus {
+    setupComplete
+    hasDownloadClients
+    hasIndexers
+  }
+}`;
+
+export const browsePathQuery = `query BrowsePath($path: String!) {
+  browsePath(path: $path) {
+    name
+    path
   }
 }`;

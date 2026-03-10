@@ -38,6 +38,16 @@ pub(crate) struct RawQualityProfileCriteria {
     pub prefer_dual_audio: bool,
     #[serde(default)]
     pub required_audio_languages: Vec<String>,
+    #[serde(default)]
+    pub scoring_persona: scryer_application::ScoringPersona,
+    #[serde(default)]
+    pub scoring_overrides: scryer_application::ScoringOverrides,
+    #[serde(default)]
+    pub cutoff_tier: Option<String>,
+    #[serde(default)]
+    pub min_score_to_grab: Option<i32>,
+    #[serde(default)]
+    pub facet_persona_overrides: HashMap<String, scryer_application::ScoringPersona>,
 }
 
 #[derive(Deserialize)]
@@ -77,6 +87,11 @@ pub(crate) fn parse_profile_catalog_from_json(
                     allow_upgrades: criteria.allow_upgrades,
                     prefer_dual_audio: criteria.prefer_dual_audio,
                     required_audio_languages: criteria.required_audio_languages,
+                    scoring_persona: criteria.scoring_persona,
+                    scoring_overrides: criteria.scoring_overrides,
+                    cutoff_tier: criteria.cutoff_tier,
+                    min_score_to_grab: criteria.min_score_to_grab,
+                    facet_persona_overrides: criteria.facet_persona_overrides,
                 },
             }
         })
@@ -163,6 +178,11 @@ mod tests {
                 allow_upgrades: true,
                 prefer_dual_audio: false,
                 required_audio_languages: vec![],
+                scoring_persona: scryer_application::ScoringPersona::default(),
+                scoring_overrides: scryer_application::ScoringOverrides::default(),
+                cutoff_tier: None,
+                min_score_to_grab: None,
+                facet_persona_overrides: HashMap::new(),
             },
         }
     }

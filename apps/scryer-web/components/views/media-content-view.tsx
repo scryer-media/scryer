@@ -20,16 +20,18 @@ import type { ViewCategoryId } from "./media-content/indexer-category-picker";
 import { MediaLibrarySettingsPanel } from "./media-content/media-library-settings-panel";
 import { IndexerRoutingPanel } from "./media-content/indexer-routing-panel";
 import { DownloadClientRoutingPanel } from "./media-content/download-client-routing-panel";
-import { RulesRoutingPanel } from "./media-content/rules-routing-panel";
-import { RenameSettingsForm } from "./media-content/rename-settings-form";
+import { GeneralSettingsPanel } from "./media-content/general-settings-panel";
+import { QualitySettingsPanel } from "./media-content/quality-settings-panel";
+import { RenameSettingsPanel } from "./media-content/rename-settings-panel";
 import { AddTitleForm } from "./media-content/add-title-form";
 import { PosterGrid } from "./media-content/poster-grid";
 import { TitleTable } from "./media-content/title-table";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { RuleSetRecord } from "@/lib/types/rule-sets";
+import type { ParsedQualityProfileEntry, ScoringPersonaId } from "@/lib/types/quality-profiles";
 
 type Facet = "movie" | "tv" | "anime";
-type ContentSettingsSection = "overview" | "settings";
+type ContentSettingsSection = "overview" | "settings" | "general" | "quality" | "renaming" | "routing";
 
 type ParsedQualityProfile = {
   id: string;
@@ -59,6 +61,8 @@ export function MediaContentView({
     setSeriesPath: (value: string) => void;
     mediaSettingsLoading: boolean;
     qualityProfiles: ParsedQualityProfile[];
+    qualityProfileEntries: ParsedQualityProfileEntry[];
+    qualityProfilesText: string;
     qualityProfileParseError: string;
     globalQualityProfileId: string;
     categoryQualityProfileOverrides: Record<ViewCategoryId, string>;
@@ -108,6 +112,7 @@ export function MediaContentView({
     >;
     qualityProfileInheritValue: string;
     toProfileOptions: (profiles: ParsedQualityProfile[]) => QualityProfileOption[];
+    handleFacetPersonaSave: (persona: ScoringPersonaId | null) => Promise<void>;
     updateCategoryMediaProfileSettings: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
     mediaSettingsSaving: boolean;
     titleNameForQueue: string;
@@ -169,7 +174,7 @@ export function MediaContentView({
     onToggleRuleFacet: (ruleSetId: string, enabled: boolean) => void;
     libraryScanLoading: boolean;
     libraryScanSummary: LibraryScanSummary | null;
-    scanMovieLibrary: () => Promise<void> | void;
+    scanLibrary: () => Promise<void> | void;
     onOpenOverview: (targetView: ViewId, titleId: string) => void;
     deleteCatalogTitle: (title: TitleRecord) => void;
     isDeletingCatalogTitleById: Record<string, boolean>;
@@ -186,6 +191,7 @@ export function MediaContentView({
     setSeriesPath,
     mediaSettingsLoading,
     qualityProfiles,
+    qualityProfileEntries,
     qualityProfileParseError,
     globalQualityProfileId,
     categoryQualityProfileOverrides,
@@ -213,6 +219,7 @@ export function MediaContentView({
     setPlexmatchWriteOnImport,
     qualityProfileInheritValue,
     toProfileOptions,
+    handleFacetPersonaSave,
     updateCategoryMediaProfileSettings,
     mediaSettingsSaving,
     titleNameForQueue,
@@ -265,13 +272,9 @@ export function MediaContentView({
     setIndexerEnabledForScope,
     updateIndexerRoutingForScope,
     moveIndexerInScope,
-    ruleSets,
-    rulesLoading,
-    rulesSaving,
-    onToggleRuleFacet,
     libraryScanLoading,
     libraryScanSummary,
-    scanMovieLibrary,
+    scanLibrary,
     onOpenOverview,
     deleteCatalogTitle,
     isDeletingCatalogTitleById,
@@ -474,8 +477,8 @@ export function MediaContentView({
   }, [refreshTitles]);
 
   const handleLibraryScan = React.useCallback(() => {
-    void scanMovieLibrary();
-  }, [scanMovieLibrary]);
+    void scanLibrary();
+  }, [scanLibrary]);
 
   const handleDeleteCatalogTitle = React.useCallback(
     (title: TitleRecord) => {
@@ -486,7 +489,66 @@ export function MediaContentView({
 
   return (
     <div className="space-y-4">
-      {contentSettingsSection === "settings" ? (
+      {contentSettingsSection === "quality" ? (
+        <QualitySettingsPanel
+          contentSettingsLabel={contentSettingsLabel}
+          mediaSettingsLoading={mediaSettingsLoading}
+          mediaSettingsSaving={mediaSettingsSaving}
+          qualityProfiles={qualityProfiles}
+          qualityProfileEntries={qualityProfileEntries}
+          qualityProfileParseError={qualityProfileParseError}
+          categoryQualityProfileOverrides={categoryQualityProfileOverrides}
+          activeQualityScopeId={activeQualityScopeId}
+          globalQualityProfileId={globalQualityProfileId}
+          qualityProfileInheritValue={qualityProfileInheritValue}
+          toProfileOptions={toProfileOptions}
+          handleQualityProfileOverrideChange={handleQualityProfileOverrideChange}
+          onFacetPersonaSave={handleFacetPersonaSave}
+          updateCategoryMediaProfileSettings={updateCategoryMediaProfileSettings}
+        />
+      ) : contentSettingsSection === "renaming" ? (
+        <RenameSettingsPanel
+          activeQualityScopeId={activeQualityScopeId}
+          mediaSettingsLoading={mediaSettingsLoading}
+          mediaSettingsSaving={mediaSettingsSaving}
+          categoryRenameTemplates={categoryRenameTemplates}
+          handleRenameTemplateChange={handleRenameTemplateChange}
+          categoryRenameCollisionPolicies={categoryRenameCollisionPolicies}
+          handleRenameCollisionPolicyChange={handleRenameCollisionPolicyChange}
+          categoryRenameMissingMetadataPolicies={categoryRenameMissingMetadataPolicies}
+          handleRenameMissingMetadataPolicyChange={handleRenameMissingMetadataPolicyChange}
+          categoryPreferredSubGroup={categoryPreferredSubGroup}
+          handlePreferredSubGroupChange={handlePreferredSubGroupChange}
+          updateCategoryMediaProfileSettings={updateCategoryMediaProfileSettings}
+        />
+      ) : contentSettingsSection === "routing" ? (
+        <div className="space-y-4">
+          <IndexerRoutingPanel
+            scopeLabel={scopeLabel}
+            activeQualityScopeId={activeQualityScopeId}
+            indexers={indexers}
+            activeScopeIndexerRouting={activeScopeIndexerRouting}
+            activeScopeIndexerRoutingOrder={activeScopeIndexerRoutingOrder}
+            indexerRoutingLoading={indexerRoutingLoading}
+            indexerRoutingSaving={indexerRoutingSaving}
+            onEnabledChange={handleIndexerEnabledChange}
+            onCategoriesChange={handleIndexerCategoriesChange}
+            onMoveUp={moveIndexerUp}
+            onMoveDown={moveIndexerDown}
+          />
+          <DownloadClientRoutingPanel
+            scopeLabel={scopeLabel}
+            downloadClients={downloadClients}
+            activeScopeRouting={activeScopeRouting}
+            activeScopeRoutingOrder={activeScopeRoutingOrder}
+            downloadClientRoutingLoading={downloadClientRoutingLoading}
+            downloadClientRoutingSaving={downloadClientRoutingSaving}
+            updateDownloadClientRoutingForScope={updateDownloadClientRoutingForScope}
+            moveDownloadClientInScope={moveDownloadClientInScope}
+            saveDownloadClientRouting={saveDownloadClientRouting}
+          />
+        </div>
+      ) : contentSettingsSection === "settings" || contentSettingsSection === "general" ? (
         <div className="space-y-4">
           {view === "movies" || view === "series" ? (
             <MediaLibrarySettingsPanel
@@ -503,23 +565,10 @@ export function MediaContentView({
               onScan={handleLibraryScan}
             />
           ) : null}
-
-          <RenameSettingsForm
-            contentSettingsLabel={contentSettingsLabel}
-            mediaSettingsLoading={mediaSettingsLoading}
-            qualityProfiles={qualityProfiles}
-            qualityProfileParseError={qualityProfileParseError}
-            categoryQualityProfileOverrides={categoryQualityProfileOverrides}
+          <GeneralSettingsPanel
             activeQualityScopeId={activeQualityScopeId}
-            qualityProfileInheritValue={qualityProfileInheritValue}
-            toProfileOptions={toProfileOptions}
-            handleQualityProfileOverrideChange={handleQualityProfileOverrideChange}
-            categoryRenameTemplates={categoryRenameTemplates}
-            handleRenameTemplateChange={handleRenameTemplateChange}
-            categoryRenameCollisionPolicies={categoryRenameCollisionPolicies}
-            handleRenameCollisionPolicyChange={handleRenameCollisionPolicyChange}
-            categoryRenameMissingMetadataPolicies={categoryRenameMissingMetadataPolicies}
-            handleRenameMissingMetadataPolicyChange={handleRenameMissingMetadataPolicyChange}
+            mediaSettingsLoading={mediaSettingsLoading}
+            mediaSettingsSaving={mediaSettingsSaving}
             categoryFillerPolicies={categoryFillerPolicies}
             handleFillerPolicyChange={handleFillerPolicyChange}
             categoryRecapPolicies={categoryRecapPolicies}
@@ -528,50 +577,12 @@ export function MediaContentView({
             handleMonitorSpecialsChange={handleMonitorSpecialsChange}
             categoryInterSeasonMovies={categoryInterSeasonMovies}
             handleInterSeasonMoviesChange={handleInterSeasonMoviesChange}
-            categoryPreferredSubGroup={categoryPreferredSubGroup}
-            handlePreferredSubGroupChange={handlePreferredSubGroupChange}
             nfoWriteOnImport={nfoWriteOnImport}
             handleNfoWriteChange={handleNfoWriteChange}
             plexmatchWriteOnImport={plexmatchWriteOnImport}
             handlePlexmatchWriteChange={handlePlexmatchWriteChange}
             updateCategoryMediaProfileSettings={updateCategoryMediaProfileSettings}
-            mediaSettingsSaving={mediaSettingsSaving}
           />
-
-          <IndexerRoutingPanel
-            scopeLabel={scopeLabel}
-            activeQualityScopeId={activeQualityScopeId}
-            indexers={indexers}
-            activeScopeIndexerRouting={activeScopeIndexerRouting}
-            activeScopeIndexerRoutingOrder={activeScopeIndexerRoutingOrder}
-            indexerRoutingLoading={indexerRoutingLoading}
-            indexerRoutingSaving={indexerRoutingSaving}
-            onEnabledChange={handleIndexerEnabledChange}
-            onCategoriesChange={handleIndexerCategoriesChange}
-            onMoveUp={moveIndexerUp}
-            onMoveDown={moveIndexerDown}
-          />
-
-          <DownloadClientRoutingPanel
-            scopeLabel={scopeLabel}
-            downloadClients={downloadClients}
-            activeScopeRouting={activeScopeRouting}
-            activeScopeRoutingOrder={activeScopeRoutingOrder}
-            downloadClientRoutingLoading={downloadClientRoutingLoading}
-            downloadClientRoutingSaving={downloadClientRoutingSaving}
-            updateDownloadClientRoutingForScope={updateDownloadClientRoutingForScope}
-            moveDownloadClientInScope={moveDownloadClientInScope}
-            saveDownloadClientRouting={saveDownloadClientRouting}
-          />
-
-          <RulesRoutingPanel
-            facet={activeQualityScopeId}
-            ruleSets={ruleSets}
-            loading={rulesLoading}
-            saving={rulesSaving}
-            onToggleFacet={onToggleRuleFacet}
-          />
-
         </div>
       ) : (
         view === "movies" || view === "series" || view === "anime" ? (
@@ -616,7 +627,9 @@ export function MediaContentView({
                   const effectiveId = (!overrideId || overrideId === qualityProfileInheritValue)
                     ? globalQualityProfileId
                     : overrideId;
-                  return qualityProfiles.find((p) => p.id === effectiveId)?.name ?? null;
+                  return qualityProfiles.find((p) => p.id === effectiveId)?.name
+                    ?? qualityProfiles[0]?.name
+                    ?? null;
                 })();
 
                 if (viewMode === "poster") {
@@ -625,6 +638,7 @@ export function MediaContentView({
                       titles={monitoredTitles}
                       isMovieView={isMovieView}
                       resolvedProfileName={resolvedProfileName}
+                      qualityProfiles={qualityProfiles}
                       onOpenOverview={onOpenOverview}
                       onDelete={handleDeleteCatalogTitle}
                       onAutoQueue={queueExisting}
@@ -640,6 +654,7 @@ export function MediaContentView({
                     titles={monitoredTitles}
                     titleLoading={titleLoading}
                     resolvedProfileName={resolvedProfileName}
+                    qualityProfiles={qualityProfiles}
                     onOpenOverview={onOpenOverview}
                     onDelete={handleDeleteCatalogTitle}
                     onAutoQueue={queueExisting}

@@ -3,6 +3,23 @@ export type ParsedQualityProfile = {
   name: string;
 };
 
+export type ScoringPersonaId = "Balanced" | "Audiophile" | "Efficient" | "Compatible";
+
+export type QualityTargetId = "4k" | "1080p";
+
+export type FacetQualityPrefs = {
+  quality: QualityTargetId;
+  persona: ScoringPersonaId;
+};
+
+export type ScoringOverridesPayload = {
+  allow_x265_non4k?: boolean | null;
+  block_dv_without_fallback?: boolean | null;
+  prefer_compact_encodes?: boolean | null;
+  prefer_lossless_audio?: boolean | null;
+  block_upscaled?: boolean | null;
+};
+
 export type QualityProfileCriteriaPayload = {
   quality_tiers: string[];
   archival_quality: string | null;
@@ -20,6 +37,11 @@ export type QualityProfileCriteriaPayload = {
   prefer_dual_audio: boolean;
   allow_bd_disk: boolean;
   allow_upgrades: boolean;
+  scoring_persona: ScoringPersonaId;
+  scoring_overrides: ScoringOverridesPayload;
+  cutoff_tier: string | null;
+  min_score_to_grab: number | null;
+  facet_persona_overrides: Record<string, ScoringPersonaId>;
 };
 
 export type ParsedQualityProfileEntry = ParsedQualityProfile & {
@@ -50,6 +72,11 @@ export type QualityProfileDraft = {
   prefer_dual_audio: boolean;
   allow_bd_disk: boolean;
   allow_upgrades: boolean;
+  scoring_persona: ScoringPersonaId;
+  scoring_overrides: ScoringOverridesPayload;
+  cutoff_tier: string;
+  min_score_to_grab: number | null;
+  facet_persona_overrides: Record<string, ScoringPersonaId>;
 };
 
 export type JsonPrimitive = string | number | boolean | null;

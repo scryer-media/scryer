@@ -231,6 +231,10 @@ pub(crate) enum DbCommand {
         id: String,
         reply: Sender<AppResult<()>>,
     },
+    ReorderDownloadClientConfigs {
+        ordered_ids: Vec<String>,
+        reply: Sender<AppResult<()>>,
+    },
     EnsureSettingDefinition {
         category: String,
         scope: String,
@@ -964,6 +968,9 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 }
                 DbCommand::DeleteDownloadClientConfig { id, reply } => {
                     let _ = reply.send(delete_download_client_config_query(&pool, &id).await);
+                }
+                DbCommand::ReorderDownloadClientConfigs { ordered_ids, reply } => {
+                    let _ = reply.send(reorder_download_client_configs_query(&pool, &ordered_ids).await);
                 }
                 DbCommand::EnsureSettingDefinition {
                     category,

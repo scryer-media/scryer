@@ -4,11 +4,15 @@ import { Button } from "@/components/ui/button";
 import { Loader2, Trash2, Zap } from "lucide-react";
 import type { ViewId } from "@/components/root/types";
 import type { TitleRecord } from "@/lib/types";
+import type { ParsedQualityProfile } from "@/lib/types/quality-profiles";
+
+const QP_TAG_PREFIX = "scryer:quality-profile:";
 
 type PosterGridProps = {
   titles: TitleRecord[];
   isMovieView: boolean;
   resolvedProfileName: string | null;
+  qualityProfiles: ParsedQualityProfile[];
   onOpenOverview: (targetView: ViewId, titleId: string) => void;
   onDelete: (title: TitleRecord) => void;
   onAutoQueue: (title: TitleRecord) => void;
@@ -20,6 +24,7 @@ export function PosterGrid({
   titles,
   isMovieView,
   resolvedProfileName,
+  qualityProfiles,
   onOpenOverview,
   onDelete,
   onAutoQueue,
@@ -59,6 +64,7 @@ export function PosterGrid({
           title={title}
           isMovieView={isMovieView}
           resolvedProfileName={resolvedProfileName}
+          qualityProfiles={qualityProfiles}
           onOpenOverview={onOpenOverview}
           onDelete={onDelete}
           onAutoQueue={handleAutoQueue}
@@ -75,6 +81,7 @@ type PosterCardProps = {
   title: TitleRecord;
   isMovieView: boolean;
   resolvedProfileName: string | null;
+  qualityProfiles: ParsedQualityProfile[];
   onOpenOverview: (targetView: ViewId, titleId: string) => void;
   onDelete: (title: TitleRecord) => void;
   onAutoQueue: (title: TitleRecord) => void;
@@ -87,6 +94,7 @@ function PosterCard({
   title,
   isMovieView,
   resolvedProfileName,
+  qualityProfiles,
   onOpenOverview,
   onDelete,
   onAutoQueue,
@@ -97,7 +105,15 @@ function PosterCard({
   const t = useTranslate();
   const qualityLabel = isMovieView
     ? title.qualityTier
-    : resolvedProfileName;
+    : (() => {
+        const tag = title.tags?.find((tg) => tg.startsWith(QP_TAG_PREFIX));
+        if (tag) {
+          const id = tag.slice(QP_TAG_PREFIX.length);
+          const match = qualityProfiles.find((p) => p.id === id);
+          if (match) return match.name;
+        }
+        return resolvedProfileName;
+      })();
 
   return (
     <div className="cv-auto-poster group relative">

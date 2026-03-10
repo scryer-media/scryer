@@ -97,6 +97,27 @@ cargo clippy --workspace -- -D warnings 2>&1 || die "Clippy errors — fix befor
 
 ok "Clippy passed"
 
+# ── Release group database validation (AI-assisted) ──────────────────────────
+step "Validating release group database"
+
+# PROMPT_FILE="$REPO_ROOT/scripts/prompts/validate-release-data.md"
+# if [[ -f "$PROMPT_FILE" ]] && command -v claude &>/dev/null; then
+#     echo "   Spawning Claude to validate release group data..."
+#     claude -p "$(cat "$PROMPT_FILE")" \
+#         --model claude-opus-4-6 \
+#         --max-turns 30 \
+#         --allowedTools "Read,Edit,Write,Glob,Grep,Bash(cargo nextest*),Bash(ls*),WebFetch,WebSearch" \
+#         2>&1 || warn "Release group validation encountered errors — review changes manually"
+#     ok "Release group validation complete"
+# else
+#     if ! command -v claude &>/dev/null; then
+#         warn "claude CLI not found — skipping release group validation"
+#     else
+#         warn "Prompt file not found at $PROMPT_FILE — skipping"
+#     fi
+# fi
+warn "Claude release group validation temporarily disabled — skipping"
+
 # ── cargo update (bump Cargo.lock to latest compatible deps) ───────────────────
 step "Updating Cargo.lock (cargo update)"
 

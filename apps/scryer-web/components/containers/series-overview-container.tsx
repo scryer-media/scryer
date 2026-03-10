@@ -134,6 +134,7 @@ export type EpisodeMediaFile = {
   audioStreams: { codec: string | null; channels: number | null; language: string | null; bitrateKbps: number | null }[];
   subtitleLanguages: string[];
   subtitleCodecs: string[];
+  subtitleStreams: { codec: string | null; language: string | null; name: string | null; forced: boolean; default: boolean }[];
   hasMultiaudio: boolean;
   durationSeconds: number | null;
   containerFormat: string | null;
@@ -557,24 +558,30 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     [],
   );
 
+  // Use a ref for title so the effect only fires on new subscription data,
+  // not when refreshMediaFiles() updates state (which would loop).
+  const titleRef = React.useRef(title);
+  titleRef.current = title;
+
   const [activitySub] = useSubscription({
     query: activitySubscriptionQuery,
     pause: !title,
   });
 
   React.useEffect(() => {
-    if (!title || !activitySub.data?.activityEvents) return;
+    const currentTitle = titleRef.current;
+    if (!currentTitle || !activitySub.data?.activityEvents) return;
     const rawEvents = collectActivityEventsFromPayload(activitySub.data.activityEvents);
     for (const raw of rawEvents) {
       const activity = normalizeActivityEvent(
         raw as Partial<ReturnType<typeof normalizeActivityEvent>>,
       );
-      if (activity.titleId === title.id && IMPORT_KINDS.has(activity.kind)) {
+      if (activity.titleId === currentTitle.id && IMPORT_KINDS.has(activity.kind)) {
         void refreshMediaFiles();
         return;
       }
     }
-  }, [title, IMPORT_KINDS, refreshMediaFiles, activitySub.data]);
+  }, [IMPORT_KINDS, refreshMediaFiles, activitySub.data]);
 
   return (
     <>

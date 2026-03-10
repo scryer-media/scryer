@@ -156,7 +156,7 @@ impl AppUseCase {
     ) -> AppResult<NotificationSubscription> {
         crate::require(actor, &scryer_domain::Entitlement::ManageConfig)?;
 
-        if NotificationEventType::from_str(&event_type).is_none() {
+        if NotificationEventType::parse(&event_type).is_none() {
             return Err(AppError::Validation(format!(
                 "unknown notification event type: {event_type}"
             )));
@@ -205,7 +205,7 @@ impl AppUseCase {
             .ok_or_else(|| AppError::NotFound(format!("notification subscription {id}")))?;
 
         if let Some(et) = event_type {
-            if NotificationEventType::from_str(&et).is_none() {
+            if NotificationEventType::parse(&et).is_none() {
                 return Err(AppError::Validation(format!(
                     "unknown notification event type: {et}"
                 )));

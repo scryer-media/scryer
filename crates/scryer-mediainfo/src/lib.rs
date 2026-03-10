@@ -44,6 +44,16 @@ pub struct AudioStreamDetail {
     pub bitrate_kbps: Option<i32>,
 }
 
+/// A single subtitle stream extracted from media analysis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubtitleStreamDetail {
+    pub codec: Option<String>,
+    pub language: Option<String>,
+    pub name: Option<String>,
+    pub forced: bool,
+    pub default: bool,
+}
+
 /// Parsed media properties.
 #[derive(Debug, Clone)]
 pub struct MediaAnalysis {
@@ -74,6 +84,8 @@ pub struct MediaAnalysis {
     pub subtitle_languages: Vec<String>,
     /// Codec names for all subtitle streams
     pub subtitle_codecs: Vec<String>,
+    /// All subtitle streams with per-stream details
+    pub subtitle_streams: Vec<SubtitleStreamDetail>,
     pub has_multiaudio: bool,
     pub duration_seconds: Option<i32>,
     pub container_format: Option<String>,
@@ -139,7 +151,7 @@ fn build_analysis(raw: RawContainer) -> MediaAnalysis {
 
     // Extract profile + bit depth from codec private data
     let codec_info = video_track
-        .map(|t| extract_codec_info(t))
+        .map(extract_codec_info)
         .unwrap_or_default();
 
     let video_bit_depth = codec_info.bit_depth;
@@ -216,6 +228,21 @@ fn build_analysis(raw: RawContainer) -> MediaAnalysis {
         .filter_map(|t| t.codec_name.clone())
         .collect();
 
+    let subtitle_streams: Vec<SubtitleStreamDetail> = subtitle_tracks
+        .iter()
+        .map(|t| SubtitleStreamDetail {
+            codec: t.codec_name.clone(),
+            language: t
+                .language
+                .as_deref()
+                .filter(|l| !l.is_empty() && *l != "und")
+                .map(str::to_owned),
+            name: t.name.clone(),
+            forced: t.forced,
+            default: t.default_track,
+        })
+        .collect();
+
     // --- Container ---
     let duration_seconds = raw.duration_seconds.map(|d| d as i32);
     let container_format = Some(raw.format_name.clone());
@@ -241,6 +268,7 @@ fn build_analysis(raw: RawContainer) -> MediaAnalysis {
         audio_streams,
         subtitle_languages,
         subtitle_codecs,
+        subtitle_streams,
         has_multiaudio,
         duration_seconds,
         container_format,

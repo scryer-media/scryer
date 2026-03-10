@@ -7,9 +7,10 @@ use std::time::Duration;
 use tokio::fs;
 use tracing::{info, warn};
 
-/// Extract the first non-empty `category` value from a `nzbget.client_routing` JSON
-/// blob, which has the shape `{ "client_id": { "category": "Movies", ... }, ... }`.
-fn extract_first_nzbget_category(raw_json: &str) -> Option<String> {
+/// Extract the `category` from the highest-priority client in a `nzbget.client_routing`
+/// JSON blob (`{ "client_id": { "category": "Movies", ... }, ... }`).
+/// With `serde_json` `preserve_order`, the first key is the highest-priority client.
+fn extract_highest_priority_nzbget_category(raw_json: &str) -> Option<String> {
     let parsed: serde_json::Value = serde_json::from_str(raw_json).ok()?;
     let obj = parsed.as_object()?;
     for (_client_id, config) in obj {
@@ -183,7 +184,7 @@ impl AppUseCase {
         let has_episodes = self
             .facet_registry
             .get(&title.facet)
-            .map_or(false, |h| h.has_episodes());
+            .is_some_and(|h| h.has_episodes());
 
         if has_episodes {
             info!(
@@ -871,7 +872,7 @@ impl AppUseCase {
             .read_setting_string_value("nzbget.client_routing", Some(scope_id))
             .await
         {
-            if let Some(cat) = extract_first_nzbget_category(&raw_json) {
+            if let Some(cat) = extract_highest_priority_nzbget_category(&raw_json) {
                 return cat;
             }
         }
@@ -1760,7 +1761,7 @@ pub async fn start_background_hydration_loop(
             if !movie_titles.is_empty() {
                 let tvdb_ids: Vec<i64> = movie_titles
                     .iter()
-                    .filter_map(|t| extract_tvdb_id(t))
+                    .filter_map(extract_tvdb_id)
                     .collect();
 
                 match app
@@ -1794,7 +1795,7 @@ pub async fn start_background_hydration_loop(
             if !series_titles.is_empty() {
                 let tvdb_ids: Vec<i64> = series_titles
                     .iter()
-                    .filter_map(|t| extract_tvdb_id(t))
+                    .filter_map(extract_tvdb_id)
                     .collect();
 
                 match app

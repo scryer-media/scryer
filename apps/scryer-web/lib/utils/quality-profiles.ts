@@ -8,6 +8,8 @@ import type {
   QualityProfileDraft,
   ProfileListChoice,
   ProfileRawRecord,
+  ScoringPersonaId,
+  ScoringOverridesPayload,
 } from "@/lib/types";
 
 type ProfileCatalogParseResult = {
@@ -70,8 +72,57 @@ export function normalizeQualityProfileEntry(rawEntry: unknown): ParsedQualityPr
       prefer_dual_audio: readBoolean(criteria.prefer_dual_audio, false),
       allow_bd_disk: readBoolean(criteria.allow_bd_disk, false),
       allow_upgrades: readBoolean(criteria.allow_upgrades, false),
+      scoring_persona: readScoringPersona(criteria.scoring_persona),
+      scoring_overrides: readScoringOverrides(criteria.scoring_overrides),
+      cutoff_tier: typeof criteria.cutoff_tier === "string" && criteria.cutoff_tier.trim()
+        ? criteria.cutoff_tier.trim().toUpperCase()
+        : null,
+      min_score_to_grab: typeof criteria.min_score_to_grab === "number"
+        ? criteria.min_score_to_grab
+        : null,
+      facet_persona_overrides: readFacetPersonaOverrides(criteria.facet_persona_overrides),
     },
   };
+}
+
+const VALID_PERSONAS = new Set<ScoringPersonaId>(["Balanced", "Audiophile", "Efficient", "Compatible"]);
+
+function readScoringPersona(raw: unknown): ScoringPersonaId {
+  if (typeof raw === "string" && VALID_PERSONAS.has(raw as ScoringPersonaId)) {
+    return raw as ScoringPersonaId;
+  }
+  return "Balanced";
+}
+
+function readFacetPersonaOverrides(raw: unknown): Record<string, ScoringPersonaId> {
+  if (!raw || typeof raw !== "object") return {};
+  const obj = raw as Record<string, unknown>;
+  const result: Record<string, ScoringPersonaId> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (typeof value === "string" && VALID_PERSONAS.has(value as ScoringPersonaId)) {
+      result[key] = value as ScoringPersonaId;
+    }
+  }
+  return result;
+}
+
+function readScoringOverrides(raw: unknown): ScoringOverridesPayload {
+  if (!raw || typeof raw !== "object") return {};
+  const obj = raw as Record<string, unknown>;
+  const result: ScoringOverridesPayload = {};
+  const keys = [
+    "allow_x265_non4k",
+    "block_dv_without_fallback",
+    "prefer_compact_encodes",
+    "prefer_lossless_audio",
+    "block_upscaled",
+  ] as const;
+  for (const key of keys) {
+    if (typeof obj[key] === "boolean") {
+      result[key] = obj[key] as boolean;
+    }
+  }
+  return result;
 }
 
 export function resolveQualityProfileCatalogState(rawValue: string): ProfileCatalogParseResult {
@@ -228,6 +279,11 @@ export function buildQualityProfileTemplate(profileId: string, profileName: stri
     prefer_dual_audio: false,
     allow_bd_disk: true,
     allow_upgrades: true,
+    scoring_persona: "Balanced",
+    scoring_overrides: {},
+    cutoff_tier: "",
+    min_score_to_grab: null,
+    facet_persona_overrides: {},
   };
 }
 
@@ -292,6 +348,17 @@ export function toQualityProfileDraft(
     allow_bd_disk: typeof entry.criteria.allow_bd_disk === "boolean" ? entry.criteria.allow_bd_disk : true,
     allow_upgrades:
       typeof entry.criteria.allow_upgrades === "boolean" ? entry.criteria.allow_upgrades : true,
+    scoring_persona: readScoringPersona(entry.criteria.scoring_persona),
+    scoring_overrides: readScoringOverrides(entry.criteria.scoring_overrides),
+    cutoff_tier:
+      typeof entry.criteria.cutoff_tier === "string" && entry.criteria.cutoff_tier.trim()
+        ? entry.criteria.cutoff_tier.trim().toUpperCase()
+        : "",
+    min_score_to_grab:
+      typeof entry.criteria.min_score_to_grab === "number"
+        ? entry.criteria.min_score_to_grab
+        : null,
+    facet_persona_overrides: readFacetPersonaOverrides(entry.criteria.facet_persona_overrides),
   };
 }
 
@@ -326,6 +393,11 @@ export function qualityProfileCatalogEntryFromDraft(draft: QualityProfileDraft):
       prefer_dual_audio: draft.prefer_dual_audio,
       allow_bd_disk: draft.allow_bd_disk,
       allow_upgrades: draft.allow_upgrades,
+      scoring_persona: draft.scoring_persona,
+      scoring_overrides: draft.scoring_overrides,
+      cutoff_tier: draft.cutoff_tier || null,
+      min_score_to_grab: draft.min_score_to_grab,
+      facet_persona_overrides: draft.facet_persona_overrides,
     },
   };
 }

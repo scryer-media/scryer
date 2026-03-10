@@ -163,6 +163,7 @@ function MainContent({
 export default function HomePage() {
   const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
+  const [setupChecked, setSetupChecked] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -170,7 +171,29 @@ export default function HomePage() {
     }
   }, [authLoading, user, navigate]);
 
-  if (authLoading) {
+  // Check if setup wizard needs to run (first-run detection).
+  useEffect(() => {
+    if (authLoading || !user || setupChecked) return;
+    (async () => {
+      try {
+        const { data } = await import("@/lib/graphql/urql-client").then(
+          (mod) => mod.backendClient.query(
+            `query SetupStatus { setupStatus { setupComplete } }`,
+            {},
+          ).toPromise(),
+        );
+        if (data?.setupStatus?.setupComplete === false) {
+          navigate("/setup", { replace: true });
+          return;
+        }
+      } catch {
+        // If the query fails (e.g., old backend), skip the check
+      }
+      setSetupChecked(true);
+    })();
+  }, [authLoading, user, setupChecked, navigate]);
+
+  if (authLoading || (!setupChecked && user)) {
     return (
         <div className="flex min-h-screen items-center justify-center bg-background text-foreground">
         <Loader2 className="h-6 w-6 animate-spin text-emerald-700 dark:text-emerald-300" />
@@ -204,7 +227,7 @@ function AuthenticatedHomePage() {
         ? parseSettingsSectionFromPath(segments[1] ?? null)
         : "general";
       const parsedContentSection: ContentSettingsSection = isMediaView(parsedView)
-        ? parseContentSectionFromPath(segments[1] ?? null)
+        ? parseContentSectionFromPath(segments[1] ?? null, segments[2] ?? null)
         : "overview";
       return { parsedView, parsedSettingsSection, parsedContentSection };
     }, [pathname]);

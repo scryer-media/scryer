@@ -39,9 +39,9 @@ fn list_backup_files(backup_dir: &Path) -> Vec<(String, u64, String)> {
         let mtime = meta
             .modified()
             .ok()
-            .and_then(|t| {
+            .map(|t| {
                 let dt: chrono::DateTime<chrono::Utc> = t.into();
-                Some(dt.to_rfc3339())
+                dt.to_rfc3339()
             })
             .unwrap_or_default();
         entries.push((filename.to_string(), meta.len(), mtime));

@@ -77,6 +77,9 @@ pub(crate) fn parse_mp4(path: &Path) -> Result<RawContainer, MediaInfoError> {
             color_transfer: None,
             dovi_config: None,
             has_hdr10plus: false,
+            name: None,
+            forced: false,
+            default_track: false,
         };
 
         match first_entry {

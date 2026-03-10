@@ -193,6 +193,42 @@ pub async fn import_completed_download(
         .update_import_status(&import_id, "processing", None)
         .await?;
 
+    // From here on, any error must update the import record to "failed" rather than
+    // propagating via `?`. Otherwise the record stays "processing" indefinitely.
+    match run_import(app, actor, &import_id, completed, started_at).await {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            let result = ImportResult {
+                import_id: import_id.to_string(),
+                decision: ImportDecision::Failed,
+                skip_reason: None,
+                title_id: None,
+                source_path: completed.dest_dir.clone(),
+                dest_path: None,
+                file_size_bytes: None,
+                link_type: None,
+                error_message: Some(error.to_string()),
+                started_at,
+                completed_at: Utc::now(),
+            };
+            let result_json = serde_json::to_string(&result).ok();
+            let _ = app
+                .services
+                .imports
+                .update_import_status(&import_id, "failed", result_json)
+                .await;
+            Ok(result)
+        }
+    }
+}
+
+async fn run_import(
+    app: &AppUseCase,
+    actor: &User,
+    import_id: &str,
+    completed: &CompletedDownload,
+    started_at: chrono::DateTime<Utc>,
+) -> AppResult<ImportResult> {
     // 2. TITLE MATCHING
     let mut title = None;
     if let Some(title_id) = extract_parameter(&completed.parameters, "*scryer_title_id") {
@@ -235,7 +271,7 @@ pub async fn import_completed_download(
         Some(t) => t,
         None => {
             let result = ImportResult {
-                import_id: import_id.clone(),
+                import_id: import_id.to_string(),
                 decision: ImportDecision::Unmatched,
                 skip_reason: Some(ImportSkipReason::UnresolvedIdentity),
                 title_id: None,
@@ -253,7 +289,7 @@ pub async fn import_completed_download(
             let result_json = serde_json::to_string(&result).ok();
             app.services
                 .imports
-                .update_import_status(&import_id, "failed", result_json)
+                .update_import_status(import_id, "failed", result_json)
                 .await?;
 
             let unmatched_msg = format!("Could not match download '{}' to any monitored title", completed.name);
@@ -285,7 +321,7 @@ pub async fn import_completed_download(
     // Validate supported facets
     if !matches!(title.facet, MediaFacet::Movie | MediaFacet::Tv | MediaFacet::Anime) {
         let result = ImportResult {
-            import_id: import_id.clone(),
+            import_id: import_id.to_string(),
             decision: ImportDecision::Skipped,
             skip_reason: Some(ImportSkipReason::PolicyMismatch),
             title_id: Some(title.id.clone()),
@@ -304,7 +340,7 @@ pub async fn import_completed_download(
         let result_json = serde_json::to_string(&result).ok();
         app.services
             .imports
-            .update_import_status(&import_id, "skipped", result_json)
+            .update_import_status(import_id, "skipped", result_json)
             .await?;
         return Ok(result);
     }
@@ -316,7 +352,7 @@ pub async fn import_completed_download(
 
     if video_files.is_empty() {
         let result = ImportResult {
-            import_id: import_id.clone(),
+            import_id: import_id.to_string(),
             decision: ImportDecision::Failed,
             skip_reason: Some(ImportSkipReason::NoVideoFiles),
             title_id: Some(title.id.clone()),
@@ -331,16 +367,16 @@ pub async fn import_completed_download(
         let result_json = serde_json::to_string(&result).ok();
         app.services
             .imports
-            .update_import_status(&import_id, "failed", result_json)
+            .update_import_status(import_id, "failed", result_json)
             .await?;
         return Ok(result);
     }
 
     // Branch on facet: movies import the single largest file, series import all episode files
     if is_series {
-        import_series_download(app, actor, &title, &import_id, completed, &video_files, started_at).await
+        import_series_download(app, actor, &title, import_id, completed, &video_files, started_at).await
     } else {
-        import_movie_download(app, actor, &title, &import_id, completed, &video_files, started_at).await
+        import_movie_download(app, actor, &title, import_id, completed, &video_files, started_at).await
     }
 }
 
@@ -442,7 +478,12 @@ async fn import_movie_download(
             .resolve_quality_profile(&title.tags, title.imdb_id.as_deref(), tvdb_id, Some(category_hint))
             .await
         {
-            let new_decision = evaluate_against_profile(&quality_profile, &parsed, true);
+            let persona = quality_profile.criteria.resolve_persona(Some(category_hint));
+            let weights = crate::scoring_weights::build_weights(
+                persona,
+                &quality_profile.criteria.scoring_overrides,
+            );
+            let new_decision = evaluate_against_profile(&quality_profile, &parsed, true, &weights);
             let new_score = new_decision.preference_score;
 
             // Find the best existing file by acquisition_score
@@ -917,7 +958,12 @@ async fn import_single_episode_file(
             .resolve_quality_profile(&title.tags, title.imdb_id.as_deref(), tvdb_id, Some(category_hint))
             .await
         {
-            let new_decision = evaluate_against_profile(&quality_profile, &parsed, true);
+            let persona = quality_profile.criteria.resolve_persona(Some(category_hint));
+            let weights = crate::scoring_weights::build_weights(
+                persona,
+                &quality_profile.criteria.scoring_overrides,
+            );
+            let new_decision = evaluate_against_profile(&quality_profile, &parsed, true, &weights);
             let new_score = new_decision.preference_score;
             let dest_str = dest_path.to_string_lossy();
 
@@ -978,7 +1024,7 @@ async fn import_single_episode_file(
         imdb_id: title.external_ids.iter().find(|e| e.source == "imdb").map(|e| e.value.clone()),
         tvdb_id: title.external_ids.iter().find(|e| e.source == "tvdb").map(|e| e.value.clone()),
         season: Some(season),
-        episode: ep_meta.episode_numbers.first().copied().map(|n| n as u32),
+        episode: ep_meta.episode_numbers.first().copied(),
         quality: parsed.quality.clone(),
     });
 
@@ -1263,31 +1309,62 @@ fn normalize_imdb_id(raw_imdb_id: &str) -> Option<String> {
 }
 
 /// Recursively find all video files under `dir`, optionally filtering out samples.
+///
+/// `dir` is usually a directory, but SABnzbd sometimes reports the file path
+/// itself as the completed download's `storage` field. If the path has a video
+/// extension and cannot be opened as a directory, we treat it as a single-file
+/// result.
 pub(crate) fn find_video_files(dir: &Path, filter_samples: bool) -> AppResult<Vec<PathBuf>> {
     let mut video_files = Vec::new();
     let mut dirs_to_visit = vec![dir.to_path_buf()];
 
     while let Some(current_dir) = dirs_to_visit.pop() {
-        let entries = std::fs::read_dir(&current_dir).map_err(|e| {
-            AppError::Repository(format!(
-                "failed to read directory {}: {}",
-                current_dir.display(),
-                e
-            ))
-        })?;
+        let entries = match std::fs::read_dir(&current_dir) {
+            Ok(entries) => entries,
+            Err(_) if current_dir == dir && is_video_file(dir) => {
+                // The top-level path has a video extension but can't be read as
+                // a directory — it's a file path, not a directory path.
+                tracing::info!(
+                    path = %dir.display(),
+                    "download path is a video file, not a directory"
+                );
+                if !filter_samples || !is_sample_file(dir) {
+                    video_files.push(dir.to_path_buf());
+                }
+                return Ok(video_files);
+            }
+            Err(e) if current_dir == dir => {
+                // Top-level directory must be readable.
+                return Err(AppError::Repository(format!(
+                    "failed to read directory {}: {}",
+                    current_dir.display(),
+                    e
+                )));
+            }
+            Err(e) => {
+                // Subdirectory failures (encoding issues, stale mounts, not-actually-a-dir)
+                // should not abort the entire scan.
+                tracing::warn!(
+                    path = %current_dir.display(),
+                    error = %e,
+                    "skipping unreadable path during video file scan"
+                );
+                continue;
+            }
+        };
 
-        for entry in entries {
-            let entry = entry.map_err(|e| {
-                AppError::Repository(format!("failed to read directory entry: {}", e))
-            })?;
+        for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
-                dirs_to_visit.push(path);
-            } else if path.is_file() && is_video_file(&path) {
+            // Check video extension first — some filesystem mounts (NFS, CIFS,
+            // Docker volumes) incorrectly report files with non-ASCII names as
+            // directories, so we must not rely on is_dir() alone.
+            if is_video_file(&path) {
                 if filter_samples && is_sample_file(&path) {
                     continue;
                 }
                 video_files.push(path);
+            } else if path.is_dir() {
+                dirs_to_visit.push(path);
             }
         }
     }
@@ -1936,6 +2013,17 @@ pub(crate) async fn run_media_analysis(
             .collect(),
         subtitle_languages: analysis.subtitle_languages,
         subtitle_codecs: analysis.subtitle_codecs,
+        subtitle_streams: analysis
+            .subtitle_streams
+            .into_iter()
+            .map(|s| crate::SubtitleStreamDetail {
+                codec: s.codec,
+                language: s.language,
+                name: s.name,
+                forced: s.forced,
+                default: s.default,
+            })
+            .collect(),
         has_multiaudio: analysis.has_multiaudio,
         duration_seconds: analysis.duration_seconds,
         container_format: analysis.container_format,

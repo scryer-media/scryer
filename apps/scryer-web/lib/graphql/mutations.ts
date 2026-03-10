@@ -132,6 +132,10 @@ export const deleteDownloadClientMutation = `mutation DeleteDownloadClient($inpu
   deleteDownloadClientConfig(input: $input)
 }`;
 
+export const reorderDownloadClientsMutation = `mutation ReorderDownloadClients($input: ReorderDownloadClientConfigsInput!) {
+  reorderDownloadClientConfigs(input: $input)
+}`;
+
 export const addTitleMutation = `mutation AddTitle($input: AddTitleInput!) {
   addTitle(input: $input) {
     title { id name facet minAvailability }
@@ -146,8 +150,8 @@ export const addTitleAndQueueMutation = `mutation AddTitleAndQueue($input: AddTi
   }
 }`;
 
-export const scanMovieLibraryMutation = `mutation ScanMovieLibrary {
-  scanMovieLibrary {
+export const scanLibraryMutation = `mutation ScanLibrary($facet: String!) {
+  scanLibrary(facet: $facet) {
     scanned
     matched
     imported
@@ -544,6 +548,43 @@ export const toggleRuleSetMutation = `mutation ToggleRuleSet($input: ToggleRuleS
 export const validateRuleSetMutation = `mutation ValidateRuleSet($input: ValidateRuleSetInput!) {
   validateRuleSet(input: $input) {
     valid
+    errors
+  }
+}`;
+
+// ── Setup Wizard ──────────────────────────────────────────────────────
+
+export const completeSetupMutation = `mutation CompleteSetup {
+  completeSetup
+}`;
+
+// ── External Import (Sonarr/Radarr) ──────────────────────────────────
+
+export const previewExternalImportMutation = `mutation PreviewExternalImport($input: PreviewExternalImportInput!) {
+  previewExternalImport(input: $input) {
+    sonarrConnected
+    radarrConnected
+    sonarrVersion
+    radarrVersion
+    rootFolders { source path }
+    downloadClients {
+      sources name implementation scryerClientType
+      host port useSsl urlBase username apiKey
+      dedupKey supported
+    }
+    indexers {
+      sources name implementation scryerProviderType
+      baseUrl apiKey dedupKey supported
+    }
+  }
+}`;
+
+export const executeExternalImportMutation = `mutation ExecuteExternalImport($input: ExecuteExternalImportInput!) {
+  executeExternalImport(input: $input) {
+    mediaPathsSaved
+    downloadClientsCreated
+    indexersCreated
+    pluginsInstalled
     errors
   }
 }`;

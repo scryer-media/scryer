@@ -63,6 +63,9 @@ pub(crate) fn parse_mkv(path: &Path) -> Result<RawContainer, MediaInfoError> {
                 .or_else(|| entry.language())
                 .filter(|l| !l.is_empty() && *l != "und")
                 .map(str::to_owned),
+            name: entry.name().map(str::to_owned),
+            forced: entry.flag_forced(),
+            default_track: entry.flag_default(),
             frame_rate_fps: None,
             color_transfer: None,
             dovi_config: None,

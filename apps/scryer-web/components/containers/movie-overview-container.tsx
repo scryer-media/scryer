@@ -11,7 +11,7 @@ import {
 import {
   applyMediaRenameMutation,
   queueExistingMutation,
-  scanMovieLibraryMutation,
+  scanLibraryMutation,
   updateTitleMutation,
 } from "@/lib/graphql/mutations";
 import type { AdminSetting } from "@/lib/types/admin-settings";
@@ -105,6 +105,7 @@ export type TitleMediaFile = {
   audioStreams: { codec: string | null; channels: number | null; language: string | null; bitrateKbps: number | null }[];
   subtitleLanguages: string[];
   subtitleCodecs: string[];
+  subtitleStreams: { codec: string | null; language: string | null; name: string | null; forced: boolean; default: boolean }[];
   hasMultiaudio: boolean;
   durationSeconds: number | null;
   containerFormat: string | null;
@@ -369,13 +370,13 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
 
   const scanLibrary = React.useCallback(async () => {
     try {
-      const { data, error } = await client.mutation(scanMovieLibraryMutation, {}).toPromise();
+      const { data, error } = await client.mutation(scanLibraryMutation, { facet: "movie" }).toPromise();
       if (error) throw error;
       setGlobalStatus(
         t("settings.libraryScanSuccess", {
-          imported: data.scanMovieLibrary.imported,
-          skipped: data.scanMovieLibrary.skipped,
-          unmatched: data.scanMovieLibrary.unmatched,
+          imported: data.scanLibrary.imported,
+          skipped: data.scanLibrary.skipped,
+          unmatched: data.scanLibrary.unmatched,
         }),
       );
       await refreshTitleDetail();
@@ -450,24 +451,30 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
     [],
   );
 
+  // Use a ref for title so the effect only fires on new subscription data,
+  // not when refreshTitleDetail() updates the title state (which would loop).
+  const titleRef = React.useRef(title);
+  titleRef.current = title;
+
   const [activitySub] = useSubscription({
     query: activitySubscriptionQuery,
     pause: !title,
   });
 
   React.useEffect(() => {
-    if (!title || !activitySub.data?.activityEvents) return;
+    const currentTitle = titleRef.current;
+    if (!currentTitle || !activitySub.data?.activityEvents) return;
     const rawEvents = collectActivityEventsFromPayload(activitySub.data.activityEvents);
     for (const raw of rawEvents) {
       const activity = normalizeActivityEvent(
         raw as Partial<ReturnType<typeof normalizeActivityEvent>>,
       );
-      if (activity.titleId === title.id && IMPORT_KINDS.has(activity.kind)) {
+      if (activity.titleId === currentTitle.id && IMPORT_KINDS.has(activity.kind)) {
         void refreshTitleDetail();
         return;
       }
     }
-  }, [title, IMPORT_KINDS, refreshTitleDetail, activitySub.data]);
+  }, [IMPORT_KINDS, refreshTitleDetail, activitySub.data]);
 
   return (
     <MovieOverviewView

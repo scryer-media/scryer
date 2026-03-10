@@ -29,7 +29,9 @@ pub struct ImportCheckContext<'a> {
     pub source_path: &'a Path,
     pub dest_path: &'a Path,
     pub source_size: u64,
+    #[allow(dead_code)]
     pub parsed: &'a ParsedReleaseMetadata,
+    #[allow(dead_code)]
     pub existing_files: &'a [TitleMediaFile],
 }
 

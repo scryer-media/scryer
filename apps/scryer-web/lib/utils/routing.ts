@@ -3,7 +3,7 @@ import type { ContentSettingsSection, SettingsSection, ViewId } from "@/componen
 import { normalizeLocale } from "@/lib/i18n";
 import { AVAILABLE_LANGUAGES } from "@/lib/i18n";
 import { URL_PATH_SEGMENTS } from "@/lib/constants/settings";
-import { SETTINGS_SECTION_PATH_TO_ID, CONTENT_SECTION_PATH_TO_ID } from "@/lib/constants/settings";
+import { SETTINGS_SECTION_PATH_TO_ID, CONTENT_SECTION_PATH_TO_ID, CONTENT_SETTINGS_SUB_PAGE_PATH_TO_ID } from "@/lib/constants/settings";
 import { isMediaView } from "@/lib/facets/registry";
 
 export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
@@ -13,6 +13,7 @@ export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
   indexers: "indexers",
   downloadClients: "download-clients",
   qualityProfiles: "quality-profiles",
+  delayProfiles: "delay-profiles",
   acquisition: "acquisition",
   rules: "rules",
   plugins: "plugins",
@@ -23,6 +24,10 @@ export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
 export const CONTENT_SECTION_PATH: Record<ContentSettingsSection, string> = {
   overview: "overview",
   settings: "settings",
+  general: "settings/general",
+  quality: "settings/quality",
+  renaming: "settings/renaming",
+  routing: "settings/routing",
 };
 
 export function buildViewPath(
@@ -62,9 +67,15 @@ export function parseSettingsSectionFromPath(value: string | null): SettingsSect
   return SETTINGS_SECTION_PATH_TO_ID[value] ?? "profile";
 }
 
-export function parseContentSectionFromPath(value: string | null): ContentSettingsSection {
+export function parseContentSectionFromPath(value: string | null, subValue?: string | null): ContentSettingsSection {
   if (!value) {
     return "overview";
+  }
+  if (value === "settings" && subValue) {
+    return CONTENT_SETTINGS_SUB_PAGE_PATH_TO_ID[subValue] ?? "general";
+  }
+  if (value === "settings") {
+    return "general";
   }
   return CONTENT_SECTION_PATH_TO_ID[value] ?? "overview";
 }

@@ -19,6 +19,9 @@ import {
 } from "@/components/ui/table";
 import type { ViewId } from "@/components/root/types";
 import type { Release, TitleRecord } from "@/lib/types";
+import type { ParsedQualityProfile } from "@/lib/types/quality-profiles";
+
+const QP_TAG_PREFIX = "scryer:quality-profile:";
 
 function bytesToReadable(raw: number | null | undefined) {
   if (!raw || raw <= 0) {
@@ -41,6 +44,7 @@ type TitleTableProps = {
   titles: TitleRecord[];
   titleLoading: boolean;
   resolvedProfileName: string | null;
+  qualityProfiles: ParsedQualityProfile[];
   onOpenOverview: (targetView: ViewId, titleId: string) => void;
   onDelete: (title: TitleRecord) => void;
   onAutoQueue: (title: TitleRecord) => void;
@@ -49,11 +53,26 @@ type TitleTableProps = {
   isDeletingById: Record<string, boolean>;
 };
 
+function resolveTitleProfileName(
+  item: TitleRecord,
+  profiles: ParsedQualityProfile[],
+  fallback: string | null,
+): string | null {
+  const tag = item.tags?.find((t) => t.startsWith(QP_TAG_PREFIX));
+  if (tag) {
+    const id = tag.slice(QP_TAG_PREFIX.length);
+    const match = profiles.find((p) => p.id === id);
+    if (match) return match.name;
+  }
+  return fallback;
+}
+
 export function TitleTable({
   view,
   titles,
   titleLoading,
   resolvedProfileName,
+  qualityProfiles,
   onOpenOverview,
   onDelete,
   onAutoQueue,
@@ -190,7 +209,7 @@ export function TitleTable({
           <TableCell className="align-middle">
             {isMovieView
               ? (item.qualityTier || t("label.unknown"))
-              : (resolvedProfileName || t("label.default"))}
+              : (resolveTitleProfileName(item, qualityProfiles, resolvedProfileName) || t("label.unknown"))}
           </TableCell>
           {isMovieView ? <TableCell className="align-middle">{bytesToReadable(item.sizeBytes)}</TableCell> : null}
           <TableCell className="align-middle">{item.monitored ? t("label.yes") : t("label.no")}</TableCell>

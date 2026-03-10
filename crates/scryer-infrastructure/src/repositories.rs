@@ -825,6 +825,10 @@ impl DownloadClientConfigRepository for SqliteServices {
     async fn delete(&self, id: &str) -> AppResult<()> {
         self.delete_download_client_config(id).await
     }
+
+    async fn reorder(&self, ordered_ids: Vec<String>) -> AppResult<()> {
+        self.reorder_download_client_configs(ordered_ids).await
+    }
 }
 
 #[async_trait]

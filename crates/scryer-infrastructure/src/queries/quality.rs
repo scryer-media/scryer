@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use chrono::Utc;
-use scryer_application::{AppError, AppResult, QualityProfile, QualityProfileCriteria};
+use scryer_application::{AppError, AppResult, QualityProfile, QualityProfileCriteria, ScoringConfig};
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
 pub(crate) async fn list_quality_profiles_query(
@@ -30,7 +30,7 @@ pub(crate) async fn list_quality_profiles_query(
         "SELECT id, name, scope, scope_id, archival_quality,
                 allow_unknown_quality, atmos_preferred, dolby_vision_allowed,
                 detected_hdr_allowed, prefer_remux, allow_bd_disk, allow_upgrades,
-                prefer_dual_audio, required_audio_languages
+                prefer_dual_audio, required_audio_languages, scoring_config
            FROM quality_profiles
           WHERE scope = ?
             AND scope_id = ?
@@ -39,7 +39,7 @@ pub(crate) async fn list_quality_profiles_query(
         "SELECT id, name, scope, scope_id, archival_quality,
                 allow_unknown_quality, atmos_preferred, dolby_vision_allowed,
                 detected_hdr_allowed, prefer_remux, allow_bd_disk, allow_upgrades,
-                prefer_dual_audio, required_audio_languages
+                prefer_dual_audio, required_audio_languages, scoring_config
            FROM quality_profiles
           WHERE scope = ?
             AND scope_id IS NULL
@@ -96,6 +96,11 @@ pub(crate) async fn list_quality_profiles_query(
             .unwrap_or_else(|_| "[]".to_string());
         let required_audio_languages: Vec<String> =
             serde_json::from_str(&required_audio_languages_json).unwrap_or_default();
+        let scoring_config_json: String = row
+            .try_get("scoring_config")
+            .unwrap_or_else(|_| "{}".to_string());
+        let scoring_config: ScoringConfig =
+            serde_json::from_str(&scoring_config_json).unwrap_or_default();
 
         let quality_tiers = list_quality_profile_quality_tiers_query(pool, &id).await?;
         let source_allowlist = list_quality_profile_source_allowlist_query(pool, &id).await?;
@@ -137,6 +142,11 @@ pub(crate) async fn list_quality_profiles_query(
                 allow_upgrades: allow_upgrades != 0,
                 prefer_dual_audio: prefer_dual_audio != 0,
                 required_audio_languages,
+                scoring_persona: scoring_config.scoring_persona,
+                scoring_overrides: scoring_config.scoring_overrides,
+                cutoff_tier: scoring_config.cutoff_tier,
+                min_score_to_grab: scoring_config.min_score_to_grab,
+                facet_persona_overrides: scoring_config.facet_persona_overrides,
             },
         };
         out.push(profile);
@@ -311,12 +321,23 @@ async fn upsert_quality_profile_query(
     let required_audio_languages_json =
         serde_json::to_string(&criteria.required_audio_languages).unwrap_or_else(|_| "[]".to_string());
 
+    let scoring_config = ScoringConfig {
+        scoring_persona: criteria.scoring_persona.clone(),
+        scoring_overrides: criteria.scoring_overrides.clone(),
+        cutoff_tier: criteria.cutoff_tier.clone(),
+        min_score_to_grab: criteria.min_score_to_grab,
+        facet_persona_overrides: criteria.facet_persona_overrides.clone(),
+    };
+    let scoring_config_json =
+        serde_json::to_string(&scoring_config).unwrap_or_else(|_| "{}".to_string());
+
     sqlx::query(
         "INSERT INTO quality_profiles
             (id, name, scope, scope_id, archival_quality, allow_unknown_quality,
              atmos_preferred, dolby_vision_allowed, detected_hdr_allowed, prefer_remux,
-             allow_bd_disk, allow_upgrades, prefer_dual_audio, required_audio_languages, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             allow_bd_disk, allow_upgrades, prefer_dual_audio, required_audio_languages,
+             scoring_config, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             scope = excluded.scope,
@@ -330,7 +351,8 @@ async fn upsert_quality_profile_query(
             allow_bd_disk = excluded.allow_bd_disk,
             allow_upgrades = excluded.allow_upgrades,
             prefer_dual_audio = excluded.prefer_dual_audio,
-            required_audio_languages = excluded.required_audio_languages",
+            required_audio_languages = excluded.required_audio_languages,
+            scoring_config = excluded.scoring_config",
     )
     .bind(id.as_str())
     .bind(name)
@@ -370,6 +392,7 @@ async fn upsert_quality_profile_query(
         0_i64
     })
     .bind(&required_audio_languages_json)
+    .bind(&scoring_config_json)
     .bind(now)
     .execute(&mut **tx)
     .await

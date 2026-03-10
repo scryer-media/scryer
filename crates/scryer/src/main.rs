@@ -26,6 +26,7 @@ use scryer_infrastructure::{
     FileSystemLibraryRenamer, FileSystemLibraryScanner, MetadataGatewayClient, MigrationMode,
     MultiIndexerSearchClient, NzbgetDownloadClient,
     PrioritizedDownloadClientRouter, SmgEnrollmentConfig, SqliteServices,
+    WeaverDownloadClient, start_weaver_subscription_bridge,
 };
 use scryer_interface::{build_schema_with_log_buffer, LogBuffer};
 use tokio::net::TcpListener;
@@ -342,6 +343,7 @@ async fn bootstrap_application(
     let indexer_configs: Arc<dyn scryer_application::IndexerConfigRepository> = Arc::new(db.clone());
     let release_attempts = Arc::new(db.clone());
     let download_client_configs = Arc::new(db.clone());
+    let settings_for_router: Arc<dyn scryer_application::SettingsRepository> = Arc::new(db.clone());
     let fallback_download_client = Arc::new(NzbgetDownloadClient::new(
         runtime_settings.nzbget_url,
         runtime_settings.nzbget_username,
@@ -350,6 +352,7 @@ async fn bootstrap_application(
     ));
     let download_client = Arc::new(PrioritizedDownloadClientRouter::new(
         download_client_configs.clone(),
+        settings_for_router,
         fallback_download_client,
     ));
     let indexer_stats: Arc<dyn scryer_application::IndexerStatsTracker> =
@@ -513,7 +516,21 @@ async fn bootstrap_application(
             move || log_buf_subscribe.subscribe(),
         )),
     );
-    tokio::spawn(start_download_queue_poller(app_use_case.clone(), shutdown_token.child_token()));
+    // Use push-based WebSocket subscription for weaver; fall back to HTTP
+    // polling for NZBGet/SABnzbd.
+    match resolve_weaver_ws_url(&app_use_case).await {
+        Some(ws_url) => {
+            tracing::info!(url = ws_url.as_str(), "using weaver subscription bridge for download queue");
+            tokio::spawn(start_weaver_subscription_bridge(
+                app_use_case.clone(),
+                shutdown_token.child_token(),
+                ws_url,
+            ));
+        }
+        None => {
+            tokio::spawn(start_download_queue_poller(app_use_case.clone(), shutdown_token.child_token()));
+        }
+    }
     tokio::spawn(start_background_acquisition_poller(app_use_case.clone(), shutdown_token.child_token()));
     tokio::spawn(start_background_hydration_loop(app_use_case.clone(), shutdown_token.child_token()));
 
@@ -732,4 +749,25 @@ pub(crate) fn normalize_env_option_with_legacy<'a>(
     }
 
     None
+}
+
+/// Check if the primary download client is weaver and return its WebSocket URL.
+async fn resolve_weaver_ws_url(app: &AppUseCase) -> Option<String> {
+    let configs = app.services.download_client_configs.list(None).await.ok()?;
+    let primary = configs
+        .into_iter()
+        .filter(|c| c.is_enabled)
+        .min_by_key(|c| c.client_priority)?;
+
+    if !primary.client_type.trim().eq_ignore_ascii_case("weaver") {
+        return None;
+    }
+
+    let base_url = primary.base_url.as_deref()?.trim();
+    if base_url.is_empty() {
+        return None;
+    }
+
+    let client = WeaverDownloadClient::new(base_url.to_string());
+    Some(client.ws_url())
 }

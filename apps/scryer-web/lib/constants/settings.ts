@@ -98,6 +98,13 @@ export const CONTENT_SECTION_PATH_TO_ID: Record<string, ContentSettingsSection> 
   media: "settings",
 };
 
+export const CONTENT_SETTINGS_SUB_PAGE_PATH_TO_ID: Record<string, ContentSettingsSection> = {
+  general: "general",
+  quality: "quality",
+  renaming: "renaming",
+  routing: "routing",
+};
+
 export const viewToFacet: Record<string, Facet> = Object.fromEntries(
   FACET_REGISTRY.map((f) => [f.viewId, f.id]),
 );

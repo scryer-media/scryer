@@ -12,7 +12,7 @@ export type SettingsSection =
   | "plugins"
   | "notifications"
   | "post-processing";
-export type ContentSettingsSection = "overview" | "settings";
+export type ContentSettingsSection = "overview" | "settings" | "general" | "quality" | "renaming" | "routing";
 
 export type Translate = (
   key: string,

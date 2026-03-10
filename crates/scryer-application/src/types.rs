@@ -58,6 +58,7 @@ pub struct TitleMediaFile {
     pub audio_streams: Vec<crate::AudioStreamDetail>,
     pub subtitle_languages: Vec<String>,
     pub subtitle_codecs: Vec<String>,
+    pub subtitle_streams: Vec<crate::SubtitleStreamDetail>,
     pub has_multiaudio: bool,
     pub duration_seconds: Option<i32>,
     pub container_format: Option<String>,

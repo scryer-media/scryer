@@ -18,12 +18,23 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
+import { PERSONA_OVERRIDE_DEFAULTS } from "@/lib/constants/quality-profiles";
 
 type ViewCategoryId = "movie" | "series" | "anime";
 
 type ParsedQualityProfile = {
   id: string;
   name: string;
+};
+
+type ScoringPersonaId = "Balanced" | "Audiophile" | "Efficient" | "Compatible";
+
+type ScoringOverridesPayload = {
+  allow_x265_non4k?: boolean | null;
+  block_dv_without_fallback?: boolean | null;
+  prefer_compact_encodes?: boolean | null;
+  prefer_lossless_audio?: boolean | null;
+  block_upscaled?: boolean | null;
 };
 
 type QualityProfileCriteriaPayload = {
@@ -43,6 +54,11 @@ type QualityProfileCriteriaPayload = {
   prefer_dual_audio: boolean;
   allow_bd_disk: boolean;
   allow_upgrades: boolean;
+  scoring_persona: ScoringPersonaId;
+  scoring_overrides: ScoringOverridesPayload;
+  cutoff_tier: string | null;
+  min_score_to_grab: number | null;
+  facet_persona_overrides: Record<string, ScoringPersonaId>;
 };
 
 type QualityProfileDraft = {
@@ -64,6 +80,11 @@ type QualityProfileDraft = {
   prefer_dual_audio: boolean;
   allow_bd_disk: boolean;
   allow_upgrades: boolean;
+  scoring_persona: ScoringPersonaId;
+  scoring_overrides: ScoringOverridesPayload;
+  cutoff_tier: string;
+  min_score_to_grab: number | null;
+  facet_persona_overrides: Record<string, ScoringPersonaId>;
 };
 
 type QualityProfileListField =
@@ -690,158 +711,303 @@ export function SettingsQualityProfilesSection({
 
           <details className="rounded-xl border border-border bg-card p-3" open>
             <summary className="cursor-pointer select-none text-sm font-medium text-card-foreground">
-              {t("qualityProfile.otherOptions")}
-            </summary>
-            <div className="mt-3 space-y-3">
-              <label className="mb-2 flex items-center gap-3">
-                <Checkbox
-                  checked={qualityProfileDraft.allow_unknown_quality}
-                  onCheckedChange={(checked) =>
-                    updateQualityProfileDraft({
-                      allow_unknown_quality: checked === true,
-                    })
-                  }
+              <span className="inline-flex items-center gap-2">
+                {t("qualityProfile.scoringAndPreferences")}
+                <InfoHelp
+                  ariaLabel={t("qualityProfile.scoringAndPreferences")}
+                  text={t("qualityProfile.scoringAndPreferencesInfo")}
                 />
-                <span className="inline-flex items-center gap-2 text-sm">
-                  {t("qualityProfile.allowUnknownQuality")}
+              </span>
+            </summary>
+            <div className="mt-3 space-y-4">
+              {/* Persona */}
+              <label className="space-y-2">
+                <Label className="inline-flex items-center gap-2">
+                  {t("qualityProfile.scoringPersona")}
                   <InfoHelp
-                    ariaLabel={t("qualityProfile.allowUnknownQuality")}
-                    text={t("qualityProfile.allowUnknownQualityInfo")}
+                    ariaLabel={t("qualityProfile.scoringPersona")}
+                    text={t("qualityProfile.scoringPersonaInfo")}
                   />
-                </span>
+                </Label>
+                <Select
+                  value={qualityProfileDraft.scoring_persona}
+                  onValueChange={(v) =>
+                    updateQualityProfileDraft({ scoring_persona: v as ScoringPersonaId, scoring_overrides: {} })
+                  }
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Balanced">{t("qualityProfile.personaBalanced")}</SelectItem>
+                    <SelectItem value="Audiophile">{t("qualityProfile.personaAudiophile")}</SelectItem>
+                    <SelectItem value="Efficient">{t("qualityProfile.personaEfficient")}</SelectItem>
+                    <SelectItem value="Compatible">{t("qualityProfile.personaCompatible")}</SelectItem>
+                  </SelectContent>
+                </Select>
               </label>
+
+              {/* Preferences */}
               <div className="space-y-3">
                 <label className="mb-2 flex items-center gap-3">
                   <Checkbox
-                    checked={qualityProfileDraft.detected_hdr_allowed}
+                    checked={qualityProfileDraft.allow_unknown_quality}
                     onCheckedChange={(checked) =>
                       updateQualityProfileDraft({
-                        detected_hdr_allowed: checked === true,
-                        ...(checked === true ? {} : { dolby_vision_allowed: false }),
+                        allow_unknown_quality: checked === true,
                       })
                     }
                   />
                   <span className="inline-flex items-center gap-2 text-sm">
-                    {t("qualityProfile.detectedHdrAllowed")}
+                    {t("qualityProfile.allowUnknownQuality")}
                     <InfoHelp
-                      ariaLabel={t("qualityProfile.detectedHdrAllowed")}
-                      text={t("qualityProfile.detectedHdrAllowedInfo")}
+                      ariaLabel={t("qualityProfile.allowUnknownQuality")}
+                      text={t("qualityProfile.allowUnknownQualityInfo")}
                     />
                   </span>
                 </label>
-                <div
-                  className={`ml-8 flex items-center gap-3 ${
-                    qualityProfileDraft.detected_hdr_allowed ? "" : "opacity-60"
-                  }`}
-                >
+                <div className="space-y-3">
+                  <label className="mb-2 flex items-center gap-3">
+                    <Checkbox
+                      checked={qualityProfileDraft.detected_hdr_allowed}
+                      onCheckedChange={(checked) =>
+                        updateQualityProfileDraft({
+                          detected_hdr_allowed: checked === true,
+                          ...(checked === true ? {} : { dolby_vision_allowed: false }),
+                        })
+                      }
+                    />
+                    <span className="inline-flex items-center gap-2 text-sm">
+                      {t("qualityProfile.detectedHdrAllowed")}
+                      <InfoHelp
+                        ariaLabel={t("qualityProfile.detectedHdrAllowed")}
+                        text={t("qualityProfile.detectedHdrAllowedInfo")}
+                      />
+                    </span>
+                  </label>
+                  <div
+                    className={`ml-8 flex items-center gap-3 ${
+                      qualityProfileDraft.detected_hdr_allowed ? "" : "opacity-60"
+                    }`}
+                  >
+                    <Checkbox
+                      checked={
+                        qualityProfileDraft.detected_hdr_allowed
+                          ? qualityProfileDraft.dolby_vision_allowed
+                          : false
+                      }
+                      onCheckedChange={(checked) =>
+                        updateQualityProfileDraft({
+                          dolby_vision_allowed: checked === true,
+                        })
+                      }
+                      disabled={!qualityProfileDraft.detected_hdr_allowed}
+                      aria-disabled={!qualityProfileDraft.detected_hdr_allowed}
+                    />
+                    <span className="inline-flex items-center gap-2 text-sm">
+                      {t("qualityProfile.dolbyVisionAllowed")}
+                      <InfoHelp
+                        ariaLabel={t("qualityProfile.dolbyVisionAllowed")}
+                        text={t("qualityProfile.dolbyVisionInfo")}
+                      />
+                    </span>
+                  </div>
+                </div>
+                <label className="mb-2 flex items-center gap-3">
                   <Checkbox
-                    checked={
-                      qualityProfileDraft.detected_hdr_allowed
-                        ? qualityProfileDraft.dolby_vision_allowed
-                        : false
-                    }
+                    checked={qualityProfileDraft.atmos_preferred}
                     onCheckedChange={(checked) =>
                       updateQualityProfileDraft({
-                        dolby_vision_allowed: checked === true,
+                        atmos_preferred: checked === true,
                       })
                     }
-                    disabled={!qualityProfileDraft.detected_hdr_allowed}
-                    aria-disabled={!qualityProfileDraft.detected_hdr_allowed}
                   />
                   <span className="inline-flex items-center gap-2 text-sm">
-                    {t("qualityProfile.dolbyVisionAllowed")}
+                    {t("qualityProfile.atmosPreferred")}
                     <InfoHelp
-                      ariaLabel={t("qualityProfile.dolbyVisionAllowed")}
-                      text={t("qualityProfile.dolbyVisionInfo")}
+                      ariaLabel={t("qualityProfile.atmosPreferred")}
+                      text={t("qualityProfile.atmosPreferredInfo")}
                     />
                   </span>
+                </label>
+                <label className="mb-2 flex items-center gap-3">
+                  <Checkbox
+                    checked={qualityProfileDraft.prefer_remux}
+                    onCheckedChange={(checked) =>
+                      updateQualityProfileDraft({
+                        prefer_remux: checked === true,
+                      })
+                    }
+                  />
+                  <span className="inline-flex items-center gap-2 text-sm">
+                    {t("qualityProfile.preferRemux")}
+                    <InfoHelp
+                      ariaLabel={t("qualityProfile.preferRemux")}
+                      text={t("qualityProfile.preferRemuxInfo")}
+                    />
+                  </span>
+                </label>
+                <label className="mb-2 flex items-center gap-3">
+                  <Checkbox
+                    checked={qualityProfileDraft.prefer_dual_audio}
+                    onCheckedChange={(checked) =>
+                      updateQualityProfileDraft({
+                        prefer_dual_audio: checked === true,
+                      })
+                    }
+                  />
+                  <span className="inline-flex items-center gap-2 text-sm">
+                    {t("qualityProfile.preferDualAudio")}
+                    <InfoHelp
+                      ariaLabel={t("qualityProfile.preferDualAudio")}
+                      text={t("qualityProfile.preferDualAudioInfo")}
+                    />
+                  </span>
+                </label>
+                <label className="mb-2 flex items-center gap-3">
+                  <Checkbox
+                    checked={qualityProfileDraft.allow_bd_disk}
+                    onCheckedChange={(checked) =>
+                      updateQualityProfileDraft({
+                        allow_bd_disk: checked === true,
+                      })
+                    }
+                  />
+                  <span className="inline-flex items-center gap-2 text-sm">
+                    {t("qualityProfile.allowBdDisk")}
+                    <InfoHelp
+                      ariaLabel={t("qualityProfile.allowBdDisk")}
+                      text={t("qualityProfile.allowBdDiskInfo")}
+                    />
+                  </span>
+                </label>
+              </div>
+
+              {/* Scoring overrides */}
+              <details className="rounded-lg border border-border/50 p-2">
+                <summary className="cursor-pointer select-none text-xs font-medium text-muted-foreground">
+                  <span className="inline-flex items-center gap-2">
+                    {t("qualityProfile.scoringOverrides")}
+                    <InfoHelp
+                      ariaLabel={t("qualityProfile.scoringOverrides")}
+                      text={t("qualityProfile.scoringOverridesInfo")}
+                    />
+                  </span>
+                </summary>
+                <div className="mt-3 space-y-3">
+                  {([
+                    ["allow_x265_non4k", "qualityProfile.overrideAllowX265Non4k", "qualityProfile.overrideAllowX265Non4kInfo"],
+                    ["block_dv_without_fallback", "qualityProfile.overrideBlockDvNoFallback", "qualityProfile.overrideBlockDvNoFallbackInfo"],
+                    ["prefer_compact_encodes", "qualityProfile.overridePreferCompact", "qualityProfile.overridePreferCompactInfo"],
+                    ["prefer_lossless_audio", "qualityProfile.overridePreferLossless", "qualityProfile.overridePreferLosslessInfo"],
+                    ["block_upscaled", "qualityProfile.overrideBlockUpscaled", "qualityProfile.overrideBlockUpscaledInfo"],
+                  ] as const).map(([key, labelKey, infoKey]) => {
+                    const explicitValue = qualityProfileDraft.scoring_overrides[key as keyof ScoringOverridesPayload];
+                    const personaDefault = PERSONA_OVERRIDE_DEFAULTS[qualityProfileDraft.scoring_persona]?.[key] ?? false;
+                    const effectiveValue = explicitValue ?? personaDefault;
+                    return (
+                      <div key={key} className="flex items-center gap-3">
+                        <Select
+                          value={effectiveValue ? "true" : "false"}
+                          onValueChange={(v) => {
+                            const newValue = v === "true";
+                            const nextOverrides = { ...qualityProfileDraft.scoring_overrides };
+                            if (newValue === personaDefault) {
+                              delete nextOverrides[key as keyof ScoringOverridesPayload];
+                            } else {
+                              (nextOverrides as Record<string, boolean>)[key] = newValue;
+                            }
+                            updateQualityProfileDraft({ scoring_overrides: nextOverrides });
+                          }}
+                        >
+                          <SelectTrigger className="w-28 shrink-0">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="true">{t("label.yes")}</SelectItem>
+                            <SelectItem value="false">{t("label.no")}</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <span className="inline-flex items-center gap-2 text-sm">
+                          {t(labelKey)}
+                          <InfoHelp ariaLabel={t(labelKey)} text={t(infoKey)} />
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </details>
+
+              {/* Upgrade behavior */}
+              <div className="space-y-3">
+                <label className="mb-2 flex items-center gap-3">
+                  <Checkbox
+                    checked={qualityProfileDraft.allow_upgrades}
+                    onCheckedChange={(checked) =>
+                      updateQualityProfileDraft({
+                        allow_upgrades: checked === true,
+                      })
+                    }
+                  />
+                  <span className="inline-flex items-center gap-2 text-sm">
+                    {t("qualityProfile.allowUpgrades")}
+                    <InfoHelp
+                      ariaLabel={t("qualityProfile.allowUpgrades")}
+                      text={t("qualityProfile.allowUpgradesInfo")}
+                    />
+                  </span>
+                </label>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label className="space-y-2">
+                    <Label className="inline-flex items-center gap-2">
+                      {t("qualityProfile.cutoffTier")}
+                      <InfoHelp
+                        ariaLabel={t("qualityProfile.cutoffTier")}
+                        text={t("qualityProfile.cutoffTierInfo")}
+                      />
+                    </Label>
+                    <Select
+                      value={qualityProfileDraft.cutoff_tier || "__none__"}
+                      onValueChange={(v) =>
+                        updateQualityProfileDraft({ cutoff_tier: v === "__none__" ? "" : v })
+                      }
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">{t("qualityProfile.cutoffNone")}</SelectItem>
+                        {activeQualityProfileTierOptions.map((tier) => (
+                          <SelectItem key={tier} value={tier}>
+                            {getQualityTierLabel(tier)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </label>
+
+                  <label className="space-y-2">
+                    <Label className="inline-flex items-center gap-2">
+                      {t("qualityProfile.minScoreToGrab")}
+                      <InfoHelp
+                        ariaLabel={t("qualityProfile.minScoreToGrab")}
+                        text={t("qualityProfile.minScoreToGrabInfo")}
+                      />
+                    </Label>
+                    <Input
+                      type="number"
+                      placeholder={t("qualityProfile.minScorePlaceholder")}
+                      value={qualityProfileDraft.min_score_to_grab ?? ""}
+                      onChange={(event) => {
+                        const raw = event.target.value.trim();
+                        updateQualityProfileDraft({
+                          min_score_to_grab: raw === "" ? null : Number(raw),
+                        });
+                      }}
+                    />
+                  </label>
                 </div>
               </div>
-              <label className="mb-2 flex items-center gap-3">
-                <Checkbox
-                  checked={qualityProfileDraft.atmos_preferred}
-                  onCheckedChange={(checked) =>
-                    updateQualityProfileDraft({
-                      atmos_preferred: checked === true,
-                    })
-                  }
-                />
-                <span className="inline-flex items-center gap-2 text-sm">
-                  {t("qualityProfile.atmosPreferred")}
-                  <InfoHelp
-                    ariaLabel={t("qualityProfile.atmosPreferred")}
-                    text={t("qualityProfile.atmosPreferredInfo")}
-                  />
-                </span>
-              </label>
-              <label className="mb-2 flex items-center gap-3">
-                <Checkbox
-                  checked={qualityProfileDraft.prefer_remux}
-                  onCheckedChange={(checked) =>
-                    updateQualityProfileDraft({
-                      prefer_remux: checked === true,
-                    })
-                  }
-                />
-                <span className="inline-flex items-center gap-2 text-sm">
-                  {t("qualityProfile.preferRemux")}
-                  <InfoHelp
-                    ariaLabel={t("qualityProfile.preferRemux")}
-                    text={t("qualityProfile.preferRemuxInfo")}
-                  />
-                </span>
-              </label>
-              <label className="mb-2 flex items-center gap-3">
-                <Checkbox
-                  checked={qualityProfileDraft.prefer_dual_audio}
-                  onCheckedChange={(checked) =>
-                    updateQualityProfileDraft({
-                      prefer_dual_audio: checked === true,
-                    })
-                  }
-                />
-                <span className="inline-flex items-center gap-2 text-sm">
-                  {t("qualityProfile.preferDualAudio")}
-                  <InfoHelp
-                    ariaLabel={t("qualityProfile.preferDualAudio")}
-                    text={t("qualityProfile.preferDualAudioInfo")}
-                  />
-                </span>
-              </label>
-              <label className="mb-2 flex items-center gap-3">
-                <Checkbox
-                  checked={qualityProfileDraft.allow_bd_disk}
-                  onCheckedChange={(checked) =>
-                    updateQualityProfileDraft({
-                      allow_bd_disk: checked === true,
-                    })
-                  }
-                />
-                <span className="inline-flex items-center gap-2 text-sm">
-                  {t("qualityProfile.allowBdDisk")}
-                  <InfoHelp
-                    ariaLabel={t("qualityProfile.allowBdDisk")}
-                    text={t("qualityProfile.allowBdDiskInfo")}
-                  />
-                </span>
-              </label>
-              <label className="mb-2 flex items-center gap-3">
-                <Checkbox
-                  checked={qualityProfileDraft.allow_upgrades}
-                  onCheckedChange={(checked) =>
-                    updateQualityProfileDraft({
-                      allow_upgrades: checked === true,
-                    })
-                  }
-                />
-                <span className="inline-flex items-center gap-2 text-sm">
-                  {t("qualityProfile.allowUpgrades")}
-                  <InfoHelp
-                    ariaLabel={t("qualityProfile.allowUpgrades")}
-                    text={t("qualityProfile.allowUpgradesInfo")}
-                  />
-                </span>
-              </label>
             </div>
           </details>
 
@@ -945,12 +1111,17 @@ export function SettingsQualityProfilesSection({
                 ariaLabel={t("settings.qualityProfileOverrideHelp")}
               />
             </CardTitle>
-            {Object.values(qualityCategoryLabels).length === 0 ? null : null}
+            <div className="hidden gap-2 sm:grid sm:grid-cols-2">
+              <span className="text-xs text-muted-foreground">{t("qualityProfile.editProfile")}</span>
+              <span className="text-xs text-muted-foreground">{t("qualityProfile.scoringPersona")}</span>
+            </div>
             {Object.keys(qualityCategoryLabels).map((scopeKey) => {
               const scopeId = scopeKey as ViewCategoryId;
+              const overridePersona = qualityProfileDraft.facet_persona_overrides[scopeId];
               return (
-                <label key={scopeId} className="space-y-2">
+                <div key={scopeId} className="space-y-2">
                   <Label>{qualityCategoryLabels[scopeId]}</Label>
+                  <div className="grid gap-2 sm:grid-cols-2">
                     <Select
                       value={categoryQualityProfileDrafts[scopeId]}
                       onValueChange={(v) =>
@@ -961,25 +1132,49 @@ export function SettingsQualityProfilesSection({
                         categoryQualityProfileSaving[scopeId]
                       }
                     >
-                    <SelectTrigger
-                      className="w-full"
-                      onBlur={() => handleCategoryProfileOverrideBlur(scopeId)}
+                      <SelectTrigger
+                        className="w-full"
+                        onBlur={() => handleCategoryProfileOverrideBlur(scopeId)}
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {[
+                          {
+                            value: qualityProfileInheritValue,
+                            label: t("settings.qualityProfileInheritLabel"),
+                          },
+                          ...toProfileOptions(qualityProfiles),
+                        ].map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Select
+                      value={overridePersona ?? "__default__"}
+                      onValueChange={(v) => {
+                        const next = { ...qualityProfileDraft.facet_persona_overrides };
+                        if (v === "__default__") {
+                          delete next[scopeId];
+                        } else {
+                          next[scopeId] = v as ScoringPersonaId;
+                        }
+                        updateQualityProfileDraft({ facet_persona_overrides: next });
+                      }}
                     >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {[
-                        {
-                          value: qualityProfileInheritValue,
-                          label: t("settings.qualityProfileInheritLabel"),
-                        },
-                        ...toProfileOptions(qualityProfiles),
-                      ].map((opt) => (
-                        <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </label>
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__default__">{t("qualityProfile.facetPersonaUseDefault")}</SelectItem>
+                        <SelectItem value="Balanced">{t("qualityProfile.personaBalanced")}</SelectItem>
+                        <SelectItem value="Audiophile">{t("qualityProfile.personaAudiophile")}</SelectItem>
+                        <SelectItem value="Efficient">{t("qualityProfile.personaEfficient")}</SelectItem>
+                        <SelectItem value="Compatible">{t("qualityProfile.personaCompatible")}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
               );
             })}
           </div>

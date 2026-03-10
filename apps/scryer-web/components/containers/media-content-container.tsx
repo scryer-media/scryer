@@ -5,19 +5,25 @@ import {
   addTitleMutation,
   addTitleAndQueueMutation,
   queueExistingMutation,
-  scanMovieLibraryMutation,
+  scanLibraryMutation,
   deleteTitleMutation,
   updateRuleSetMutation,
+  saveAdminSettingsMutation,
 } from "@/lib/graphql/mutations";
 import { titlesQuery, ruleSetsQuery } from "@/lib/graphql/queries";
 import {
   CATEGORY_SCOPE_MAP,
+  QUALITY_PROFILE_CATALOG_KEY,
   QUALITY_PROFILE_INHERIT_VALUE,
   viewToFacet,
 } from "@/lib/constants/settings";
 import { useClient } from "urql";
 import type { ContentSettingsSection, ViewId } from "@/components/root/types";
-import { toProfileOptions } from "@/lib/utils/quality-profiles";
+import {
+  normalizeQualityProfilesForSave,
+  parseQualityProfileCatalogEntries,
+  toProfileOptions,
+} from "@/lib/utils/quality-profiles";
 import { useDownloadClientRouting } from "@/lib/hooks/use-download-client-routing";
 import { useIndexerRouting } from "@/lib/hooks/use-indexer-routing";
 import { useMediaSettings } from "@/lib/hooks/use-media-settings";
@@ -28,6 +34,7 @@ import type {
   TitleRecord,
   RuleSetRecord,
 } from "@/lib/types";
+import type { ScoringPersonaId } from "@/lib/types/quality-profiles";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
@@ -84,6 +91,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     mediaSettingsLoading,
     mediaSettingsSaving,
     qualityProfiles,
+    qualityProfileEntries,
+    qualityProfilesText,
     qualityProfileParseError,
     globalQualityProfileId,
     categoryQualityProfileOverrides,
@@ -558,14 +567,14 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     setLibraryScanLoading(true);
     setGlobalStatus(t("settings.libraryScanRunning"));
     try {
-      const { data, error } = await client.mutation(scanMovieLibraryMutation, {}).toPromise();
+      const { data, error } = await client.mutation(scanLibraryMutation, { facet: activeFacet }).toPromise();
       if (error) throw error;
-      setLibraryScanSummary(data.scanMovieLibrary);
+      setLibraryScanSummary(data.scanLibrary);
       setGlobalStatus(
         t("settings.libraryScanSuccess", {
-          imported: data.scanMovieLibrary.imported,
-          skipped: data.scanMovieLibrary.skipped,
-          unmatched: data.scanMovieLibrary.unmatched,
+          imported: data.scanLibrary.imported,
+          skipped: data.scanLibrary.skipped,
+          unmatched: data.scanLibrary.unmatched,
         }),
       );
       await refreshTitles();
@@ -574,7 +583,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     } finally {
       setLibraryScanLoading(false);
     }
-  }, [refreshTitles, client, setGlobalStatus, t, setLibraryScanLoading, setLibraryScanSummary]);
+  }, [activeFacet, refreshTitles, client, setGlobalStatus, t, setLibraryScanLoading, setLibraryScanSummary]);
 
   React.useEffect(() => {
     if (!titleStatus) {
@@ -582,14 +591,47 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     }
   }, [t, titleStatus, setTitleStatus]);
 
+  const handleFacetPersonaSave = React.useCallback(
+    async (persona: ScoringPersonaId | null) => {
+      const entries = parseQualityProfileCatalogEntries(qualityProfilesText);
+      const overrideId = categoryQualityProfileOverrides[activeQualityScopeId];
+      const effectiveProfileId = (!overrideId || overrideId === QUALITY_PROFILE_INHERIT_VALUE)
+        ? globalQualityProfileId
+        : overrideId;
+      const entry = entries.find((e) => e.id === effectiveProfileId);
+      if (!entry) return;
+      const nextOverrides = { ...entry.criteria.facet_persona_overrides };
+      if (persona === null) {
+        delete nextOverrides[activeQualityScopeId];
+      } else {
+        nextOverrides[activeQualityScopeId] = persona;
+      }
+      const updatedEntry = {
+        ...entry,
+        criteria: { ...entry.criteria, facet_persona_overrides: nextOverrides },
+      };
+      const catalogPatchText = normalizeQualityProfilesForSave(
+        JSON.stringify([updatedEntry]),
+      );
+      await client.mutation(saveAdminSettingsMutation, {
+        input: {
+          scope: "system",
+          items: [{ keyName: QUALITY_PROFILE_CATALOG_KEY, value: catalogPatchText }],
+        },
+      }).toPromise();
+      await refreshMediaSettings();
+    },
+    [qualityProfilesText, categoryQualityProfileOverrides, activeQualityScopeId, globalQualityProfileId, client, refreshMediaSettings],
+  );
+
   React.useEffect(() => {
     if (view !== "movies" && view !== "series" && view !== "anime") {
       return;
     }
 
     void refreshTitles();
+    void refreshMediaSettings();
     if (contentSettingsSection === "settings") {
-      void refreshMediaSettings();
       void refreshDownloadClientRouting();
       void refreshIndexerRouting();
       void refreshRuleSets();
@@ -617,6 +659,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           setSeriesPath,
           mediaSettingsLoading,
           qualityProfiles: qualityProfiles,
+          qualityProfileEntries,
+          qualityProfilesText,
           qualityProfileParseError,
           globalQualityProfileId,
           categoryQualityProfileOverrides,
@@ -644,6 +688,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           setPlexmatchWriteOnImport,
           qualityProfileInheritValue: QUALITY_PROFILE_INHERIT_VALUE,
           toProfileOptions,
+          handleFacetPersonaSave,
           updateCategoryMediaProfileSettings,
           mediaSettingsSaving,
           titleNameForQueue,
@@ -703,7 +748,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           libraryScanLoading,
           libraryScanSummary,
           onOpenOverview,
-          scanMovieLibrary: handleLibraryScan,
+          scanLibrary: handleLibraryScan,
           deleteCatalogTitle: requestDeleteTitle,
           isDeletingCatalogTitleById: deleteTitleLoadingById,
         }}

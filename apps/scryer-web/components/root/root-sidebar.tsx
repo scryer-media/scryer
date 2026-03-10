@@ -25,6 +25,8 @@ import {
   SidebarProvider,
   SidebarSeparator,
 } from "@/components/ui/sidebar";
+import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
+import { ChevronRight } from "lucide-react";
 
 type NavItem = {
   id: ViewId;
@@ -107,29 +109,23 @@ const settingsEntries: Array<{
   },
 ];
 
-function getMediaSectionChildren(
-  viewId: ViewId,
-  t: Translate,
-): Array<{
-  id: ContentSettingsSection;
-  label: string;
-}> {
-  if (viewId === "movies") {
-    return [
-      { id: "overview", label: t("title.manageMovies") },
-      { id: "settings", label: t("settings.moviesSettings") },
-    ];
-  }
-  if (viewId === "series") {
-    return [
-      { id: "overview", label: t("title.manageSeries") },
-      { id: "settings", label: t("settings.seriesSettings") },
-    ];
-  }
-  return [
-    { id: "overview", label: t("nav.anime") },
-    { id: "settings", label: t("settings.animeSettings") },
-  ];
+const MEDIA_SETTINGS_SUB_PAGES: Array<{ id: ContentSettingsSection; labelKey: string }> = [
+  { id: "general", labelKey: "facetSettings.general" },
+  { id: "quality", labelKey: "facetSettings.quality" },
+  { id: "renaming", labelKey: "facetSettings.renaming" },
+  { id: "routing", labelKey: "facetSettings.routing" },
+];
+
+function isSettingsSubPage(section: ContentSettingsSection): boolean {
+  return section === "settings" || section === "general" || section === "quality" || section === "renaming" || section === "routing";
+}
+
+function getMediaOverviewLabel(_viewId: ViewId, t: Translate): string {
+  return t("nav.library");
+}
+
+function getMediaSettingsLabel(_viewId: ViewId, t: Translate): string {
+  return t("nav.settings");
 }
 
 export const RootSidebar = React.memo(function RootSidebar({
@@ -258,18 +254,49 @@ export const RootSidebar = React.memo(function RootSidebar({
                                   </SidebarMenuSubButton>
                                 </SidebarMenuSubItem>
                               ))
-                            : getMediaSectionChildren(item.id, t).map((entry) => (
-                                <SidebarMenuSubItem key={`${item.id}-${entry.id}`}>
+                            : (
+                              <>
+                                <SidebarMenuSubItem>
                                   <SidebarMenuSubButton
-                                    isActive={contentSettingsSection === entry.id}
+                                    isActive={contentSettingsSection === "overview"}
                                     onClick={(event) => {
-                                      handleNavigate(event, item.id, undefined, entry.id);
+                                      handleNavigate(event, item.id, undefined, "overview");
                                     }}
                                   >
-                                    {entry.label}
+                                    {getMediaOverviewLabel(item.id, t)}
                                   </SidebarMenuSubButton>
                                 </SidebarMenuSubItem>
-                              ))}
+                                <SidebarMenuSubItem>
+                                  <Collapsible open={isSettingsSubPage(contentSettingsSection)}>
+                                    <SidebarMenuSubButton
+                                      isActive={isSettingsSubPage(contentSettingsSection)}
+                                      onClick={(event) => {
+                                        handleNavigate(event, item.id, undefined, "general");
+                                      }}
+                                    >
+                                      {getMediaSettingsLabel(item.id, t)}
+                                      <ChevronRight className={`ml-auto h-3 w-3 transition-transform ${isSettingsSubPage(contentSettingsSection) ? "rotate-90" : ""}`} />
+                                    </SidebarMenuSubButton>
+                                    <CollapsibleContent>
+                                      <SidebarMenuSub>
+                                        {MEDIA_SETTINGS_SUB_PAGES.map((subPage) => (
+                                          <SidebarMenuSubItem key={subPage.id}>
+                                            <SidebarMenuSubButton
+                                              isActive={contentSettingsSection === subPage.id}
+                                              onClick={(event) => {
+                                                handleNavigate(event, item.id, undefined, subPage.id);
+                                              }}
+                                            >
+                                              {t(subPage.labelKey)}
+                                            </SidebarMenuSubButton>
+                                          </SidebarMenuSubItem>
+                                        ))}
+                                      </SidebarMenuSub>
+                                    </CollapsibleContent>
+                                  </Collapsible>
+                                </SidebarMenuSubItem>
+                              </>
+                            )}
                         </SidebarMenuSub>
                       </SidebarGroupContent>
                     ) : null}

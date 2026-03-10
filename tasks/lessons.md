@@ -23,6 +23,10 @@
 - Frontend types are manually defined (no codegen). Check `TitleMediaFile` in movie-overview-container, `EpisodeMediaFile` in series-overview-container, and `MediaInfoFile` in media-info-badges for media file schema changes.
 - Don't declare a schema change "done" until the frontend builds clean with the new fields flowing end-to-end.
 
+## UI Organization
+- **Per-facet/per-category settings belong in the per-category section**, not in a general settings section. When a feature varies by media type (movie/series/anime), put its UI alongside the existing per-category controls (e.g. "Default category profiles"), not inside the profile editor's general scoring section.
+- **Don't mix preset selection with fine-tuning knobs** in the same visible section. If a user picks a persona preset, showing override toggles right next to it is confusing — collapse advanced overrides behind a sub-`<details>`.
+
 ## urql / Frontend Caching
 - `cacheExchange` was removed from both `backendClient` and `smgClient` — the network layer handles caching naturally.
 - Don't add per-query `requestPolicy` overrides; the exchange-level removal is the correct fix.

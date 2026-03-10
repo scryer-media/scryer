@@ -242,6 +242,9 @@ fn parse_video_stream(strh: &[u8], strf: &[u8]) -> RawTrack {
         color_transfer: None,
         dovi_config: None,
         has_hdr10plus: false,
+        name: None,
+        forced: false,
+        default_track: false,
     }
 }
 
@@ -277,6 +280,9 @@ fn parse_audio_stream(_strh: &[u8], strf: &[u8]) -> RawTrack {
         color_transfer: None,
         dovi_config: None,
         has_hdr10plus: false,
+        name: None,
+        forced: false,
+        default_track: false,
     }
 }
 

@@ -33,6 +33,7 @@ import {
 } from "@/lib/constants/settings";
 import type { ViewId } from "@/components/root/types";
 import type { SearchableQualityProfileBody } from "@/lib/utils/media-content";
+import type { ParsedQualityProfileEntry } from "@/lib/types/quality-profiles";
 import {
   coerceProfileSetting,
   isValidProfileSelection,
@@ -55,6 +56,8 @@ export type UseMediaSettingsResult = {
   mediaSettingsLoading: boolean;
   mediaSettingsSaving: boolean;
   qualityProfiles: SearchableQualityProfileBody[];
+  qualityProfileEntries: ParsedQualityProfileEntry[];
+  qualityProfilesText: string;
   qualityProfileParseError: string;
   globalQualityProfileId: string;
   categoryQualityProfileOverrides: Record<ViewCategoryId, string>;
@@ -140,6 +143,8 @@ export function useMediaSettings({
   const [mediaSettingsLoading, setMediaSettingsLoading] = React.useState(false);
   const [mediaSettingsSaving, setMediaSettingsSaving] = React.useState(false);
   const [qualityProfiles, setQualityProfiles] = React.useState<SearchableQualityProfileBody[]>([]);
+  const [qualityProfileEntries, setQualityProfileEntries] = React.useState<ParsedQualityProfileEntry[]>([]);
+  const [qualityProfilesText, setQualityProfilesText] = React.useState("");
   const [qualityProfileParseError, setQualityProfileParseError] = React.useState("");
   const [globalQualityProfileId, setGlobalQualityProfileId] = React.useState("");
   const [categoryQualityProfileOverrides, setCategoryQualityProfileOverrides] = React.useState<
@@ -230,6 +235,9 @@ export function useMediaSettings({
       setQualityProfileParseError((currentParseError) =>
         currentParseError === nextParseError ? currentParseError : nextParseError,
       );
+
+      setQualityProfileEntries(resolved.entries);
+      setQualityProfilesText(resolved.text);
 
       return resolved.profiles;
     },
@@ -867,6 +875,8 @@ export function useMediaSettings({
     mediaSettingsLoading,
     mediaSettingsSaving,
     qualityProfiles,
+    qualityProfileEntries,
+    qualityProfilesText,
     qualityProfileParseError,
     globalQualityProfileId,
     categoryQualityProfileOverrides,

@@ -1,6 +1,7 @@
 mod collections;
 mod config;
 mod downloads;
+mod external_import;
 mod library;
 mod notifications;
 mod plugins;
@@ -27,4 +28,5 @@ pub struct MutationRoot(
     plugins::PluginMutations,
     notifications::NotificationMutations,
     backup::BackupMutations,
+    external_import::ExternalImportMutations,
 );

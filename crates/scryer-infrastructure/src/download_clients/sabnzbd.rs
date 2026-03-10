@@ -596,8 +596,10 @@ fn sabnzbd_queue_state(status: &str) -> DownloadQueueState {
         "QUEUED" | "FETCHING" | "PROPAGATING" | "GRABBING" => DownloadQueueState::Queued,
         "PAUSED" => DownloadQueueState::Paused,
         // Post-processing stages reported in queue (SABnzbd 4.x can show these)
-        "VERIFYING" | "QUICKCHECK" | "REPAIRING" | "EXTRACTING"
-        | "MOVING" | "RUNNING" => DownloadQueueState::Downloading,
+        "VERIFYING" | "QUICKCHECK" => DownloadQueueState::Verifying,
+        "REPAIRING" => DownloadQueueState::Repairing,
+        "EXTRACTING" => DownloadQueueState::Extracting,
+        "MOVING" | "RUNNING" => DownloadQueueState::Downloading,
         _ => DownloadQueueState::Queued,
     }
 }
@@ -621,8 +623,10 @@ fn sabnzbd_history_state(status: &str) -> (DownloadQueueState, Option<String>) {
         "FAILED" => (DownloadQueueState::Failed, None),
         "QUEUED" => (DownloadQueueState::Queued, None),
         // Active post-processing stages in history
-        "VERIFYING" | "QUICKCHECK" | "REPAIRING" | "EXTRACTING"
-        | "MOVING" | "RUNNING" => (DownloadQueueState::Downloading, None),
+        "VERIFYING" | "QUICKCHECK" => (DownloadQueueState::Verifying, None),
+        "REPAIRING" => (DownloadQueueState::Repairing, None),
+        "EXTRACTING" => (DownloadQueueState::Extracting, None),
+        "MOVING" | "RUNNING" => (DownloadQueueState::Downloading, None),
         _ => {
             if normalized.starts_with("FAILED") {
                 let reason = status

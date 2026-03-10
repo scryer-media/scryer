@@ -10,6 +10,7 @@ export type TitleRecord = {
   name: string;
   facet: string;
   monitored: boolean;
+  tags: string[];
   externalIds: ExternalId[];
   qualityTier?: string | null;
   sizeBytes?: number | null;
