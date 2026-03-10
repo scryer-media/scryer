@@ -1,14 +1,15 @@
 use crate::{
     app_usecase_post_processing::{spawn_post_processing, PostProcessingContext},
+    evaluate_against_profile,
     nfo::{render_episode_nfo, render_movie_nfo, render_plexmatch, render_tvshow_nfo},
     parse_release_metadata, render_rename_template, require, ActivityChannel, ActivityKind,
-    ActivitySeverity, AppError, AppResult, AppUseCase, evaluate_against_profile,
-};
-use scryer_domain::{
-    Collection, CompletedDownload, DownloadQueueItem, DownloadQueueState, Entitlement, EventType,
-    Id, ImportDecision, ImportResult, ImportSkipReason, MediaFacet, User, is_video_file,
+    ActivitySeverity, AppError, AppResult, AppUseCase,
 };
 use chrono::Utc;
+use scryer_domain::{
+    is_video_file, Collection, CompletedDownload, DownloadQueueItem, DownloadQueueState,
+    Entitlement, EventType, Id, ImportDecision, ImportResult, ImportSkipReason, MediaFacet, User,
+};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -18,17 +19,30 @@ const RENAME_TEMPLATE_SERIES_GLOBAL_KEY: &str = "rename.template.series.global";
 
 /// Called from the download queue poller on every tick (currently 2 seconds).
 /// Filters completed items, checks dedup, fetches CompletedDownload data, and triggers import.
-pub async fn try_import_completed_downloads(app: &AppUseCase, actor: &User, items: &[DownloadQueueItem]) {
+pub async fn try_import_completed_downloads(
+    app: &AppUseCase,
+    actor: &User,
+    items: &[DownloadQueueItem],
+) {
     // TODO: increase to 600 (10 minutes) for production — large NAS copies can take a while
-    match app.services.imports.recover_stale_processing_imports(120).await {
+    match app
+        .services
+        .imports
+        .recover_stale_processing_imports(120)
+        .await
+    {
         Ok(recovered) if recovered > 0 => {
             tracing::warn!(recovered, "recovered stale processing imports → failed");
-            let _ = app.services
+            let _ = app
+                .services
                 .record_activity_event(
                     Some(actor.id.clone()),
                     None,
                     ActivityKind::SystemNotice,
-                    format!("{} stale import(s) recovered as failed — check import history", recovered),
+                    format!(
+                        "{} stale import(s) recovered as failed — check import history",
+                        recovered
+                    ),
                     ActivitySeverity::Warning,
                     vec![ActivityChannel::WebUi],
                 )
@@ -43,7 +57,9 @@ pub async fn try_import_completed_downloads(app: &AppUseCase, actor: &User, item
     let completed_items: Vec<&DownloadQueueItem> = items
         .iter()
         .filter(|item| item.state == DownloadQueueState::Completed)
-        .filter(|item| item.import_status.is_none() || item.import_status.as_deref() == Some("failed"))
+        .filter(|item| {
+            item.import_status.is_none() || item.import_status.as_deref() == Some("failed")
+        })
         .collect();
 
     if completed_items.is_empty() {
@@ -51,7 +67,12 @@ pub async fn try_import_completed_downloads(app: &AppUseCase, actor: &User, item
     }
 
     // Fetch completed downloads from the download client (single RPC call)
-    let completed_downloads = match app.services.download_client.list_completed_downloads().await {
+    let completed_downloads = match app
+        .services
+        .download_client
+        .list_completed_downloads()
+        .await
+    {
         Ok(downloads) => downloads,
         Err(error) => {
             tracing::warn!(error = %error, "failed to fetch completed downloads for import");
@@ -62,7 +83,12 @@ pub async fn try_import_completed_downloads(app: &AppUseCase, actor: &User, item
     for item in completed_items {
         // Check dedup
         let source_ref = &item.download_client_item_id;
-        match app.services.imports.is_already_imported(&item.client_type, source_ref).await {
+        match app
+            .services
+            .imports
+            .is_already_imported(&item.client_type, source_ref)
+            .await
+        {
             Ok(true) => continue,
             Ok(false) => {}
             Err(error) => {
@@ -93,7 +119,9 @@ pub async fn try_import_completed_downloads(app: &AppUseCase, actor: &User, item
             completed.clone()
         } else {
             // Fallback: look up the download_submissions table
-            match app.services.download_submissions
+            match app
+                .services
+                .download_submissions
                 .find_by_client_item_id(&completed.client_type, &completed.download_client_item_id)
                 .await
             {
@@ -122,7 +150,8 @@ pub async fn try_import_completed_downloads(app: &AppUseCase, actor: &User, item
                     completed.name
                 );
                 metrics::counter!("scryer_imports_total", "decision" => result.decision.as_str(), "facet" => facet_label.clone()).increment(1);
-                metrics::histogram!("scryer_import_duration_seconds", "facet" => facet_label).record(import_start.elapsed().as_secs_f64());
+                metrics::histogram!("scryer_import_duration_seconds", "facet" => facet_label)
+                    .record(import_start.elapsed().as_secs_f64());
             }
             Err(error) => {
                 tracing::warn!(
@@ -131,7 +160,8 @@ pub async fn try_import_completed_downloads(app: &AppUseCase, actor: &User, item
                     "import failed for completed download"
                 );
                 metrics::counter!("scryer_imports_total", "decision" => "error", "facet" => facet_label.clone()).increment(1);
-                metrics::histogram!("scryer_import_duration_seconds", "facet" => facet_label).record(import_start.elapsed().as_secs_f64());
+                metrics::histogram!("scryer_import_duration_seconds", "facet" => facet_label)
+                    .record(import_start.elapsed().as_secs_f64());
             }
         }
     }
@@ -174,7 +204,11 @@ pub async fn import_completed_download(
             .as_deref()
             .and_then(|f| app.facet_registry.all().find(|h| h.facet_id() == f))
             .is_some_and(|h| h.has_episodes());
-        if is_episode { "tv_download" } else { "movie_download" }
+        if is_episode {
+            "tv_download"
+        } else {
+            "movie_download"
+        }
     };
     let import_id = app
         .services
@@ -292,9 +326,13 @@ async fn run_import(
                 .update_import_status(import_id, "failed", result_json)
                 .await?;
 
-            let unmatched_msg = format!("Could not match download '{}' to any monitored title", completed.name);
+            let unmatched_msg = format!(
+                "Could not match download '{}' to any monitored title",
+                completed.name
+            );
 
-            let _ = app.services
+            let _ = app
+                .services
                 .record_event(
                     Some(actor.id.clone()),
                     None,
@@ -319,7 +357,10 @@ async fn run_import(
     };
 
     // Validate supported facets
-    if !matches!(title.facet, MediaFacet::Movie | MediaFacet::Tv | MediaFacet::Anime) {
+    if !matches!(
+        title.facet,
+        MediaFacet::Movie | MediaFacet::Tv | MediaFacet::Anime
+    ) {
         let result = ImportResult {
             import_id: import_id.to_string(),
             decision: ImportDecision::Skipped,
@@ -331,8 +372,7 @@ async fn run_import(
             link_type: None,
             error_message: Some(format!(
                 "title '{}' has unsupported facet '{:?}', skipping import",
-                title.name,
-                title.facet
+                title.name, title.facet
             )),
             started_at,
             completed_at: Utc::now(),
@@ -374,9 +414,27 @@ async fn run_import(
 
     // Branch on facet: movies import the single largest file, series import all episode files
     if is_series {
-        import_series_download(app, actor, &title, import_id, completed, &video_files, started_at).await
+        import_series_download(
+            app,
+            actor,
+            &title,
+            import_id,
+            completed,
+            &video_files,
+            started_at,
+        )
+        .await
     } else {
-        import_movie_download(app, actor, &title, import_id, completed, &video_files, started_at).await
+        import_movie_download(
+            app,
+            actor,
+            &title,
+            import_id,
+            completed,
+            &video_files,
+            started_at,
+        )
+        .await
     }
 }
 
@@ -398,8 +456,7 @@ async fn import_movie_download(
         .map(|m| m.len() as i64)
         .unwrap_or(0);
 
-    let (media_root, rename_template) =
-        resolve_import_paths(app, title).await?;
+    let (media_root, rename_template) = resolve_import_paths(app, title).await?;
 
     let parsed = parse_release_metadata(
         source_video
@@ -417,10 +474,7 @@ async fn import_movie_download(
     let tokens = build_rename_tokens(title, &parsed, &ext);
     let rendered_filename = render_rename_template(&rename_template, &tokens);
 
-    let year_str = parsed
-        .year
-        .map(|y| format!(" ({})", y))
-        .unwrap_or_default();
+    let year_str = parsed.year.map(|y| format!(" ({})", y)).unwrap_or_default();
     let title_folder = format!("{}{}", title.name, year_str);
 
     let dest_path = PathBuf::from(&media_root)
@@ -446,7 +500,9 @@ async fn import_movie_download(
         let skip_reason = Some(match code {
             "duplicate_file" => ImportSkipReason::DuplicateFile,
             "insufficient_disk_space" => ImportSkipReason::DiskFull,
-            "invalid_extension" | "sample_file" | "sample_directory" => ImportSkipReason::NoVideoFiles,
+            "invalid_extension" | "sample_file" | "sample_directory" => {
+                ImportSkipReason::NoVideoFiles
+            }
             _ => ImportSkipReason::PolicyMismatch,
         });
         let result = ImportResult {
@@ -472,13 +528,24 @@ async fn import_movie_download(
 
     // Upgrade check: if there are existing files, score and compare
     if !existing_files.is_empty() {
-        let tvdb_id = title.external_ids.iter().find(|e| e.source == "tvdb").map(|e| e.value.as_str());
+        let tvdb_id = title
+            .external_ids
+            .iter()
+            .find(|e| e.source == "tvdb")
+            .map(|e| e.value.as_str());
         let category_hint = facet_to_category_hint(&title.facet);
         if let Ok(quality_profile) = app
-            .resolve_quality_profile(&title.tags, title.imdb_id.as_deref(), tvdb_id, Some(category_hint))
+            .resolve_quality_profile(
+                &title.tags,
+                title.imdb_id.as_deref(),
+                tvdb_id,
+                Some(category_hint),
+            )
             .await
         {
-            let persona = quality_profile.criteria.resolve_persona(Some(category_hint));
+            let persona = quality_profile
+                .criteria
+                .resolve_persona(Some(category_hint));
             let weights = crate::scoring_weights::build_weights(
                 persona,
                 &quality_profile.criteria.scoring_overrides,
@@ -487,15 +554,16 @@ async fn import_movie_download(
             let new_score = new_decision.preference_score;
 
             // Find the best existing file by acquisition_score
-            if let Some(existing_file) = existing_files.iter().max_by_key(|f| f.acquisition_score.unwrap_or(0)) {
+            if let Some(existing_file) = existing_files
+                .iter()
+                .max_by_key(|f| f.acquisition_score.unwrap_or(0))
+            {
                 let old_score = existing_file.acquisition_score.unwrap_or(0);
                 if new_score > old_score {
                     let media_root_opt = crate::recycle_bin::media_root_for_title(app, title).await;
-                    let recycle_config = crate::recycle_bin::resolve_recycle_config(
-                        app,
-                        media_root_opt.as_deref(),
-                    )
-                    .await;
+                    let recycle_config =
+                        crate::recycle_bin::resolve_recycle_config(app, media_root_opt.as_deref())
+                            .await;
 
                     match crate::upgrade::execute_upgrade(
                         app,
@@ -563,8 +631,16 @@ async fn import_movie_download(
         facet: title.facet.clone(),
         dest_path: dest_path.clone(),
         year: title.year,
-        imdb_id: title.external_ids.iter().find(|e| e.source == "imdb").map(|e| e.value.clone()),
-        tvdb_id: title.external_ids.iter().find(|e| e.source == "tvdb").map(|e| e.value.clone()),
+        imdb_id: title
+            .external_ids
+            .iter()
+            .find(|e| e.source == "imdb")
+            .map(|e| e.value.clone()),
+        tvdb_id: title
+            .external_ids
+            .iter()
+            .find(|e| e.source == "tvdb")
+            .map(|e| e.value.clone()),
         season: None,
         episode: None,
         quality: parsed.quality.clone(),
@@ -627,14 +703,29 @@ async fn import_movie_download(
     };
 
     if let Some(ref file_id) = media_file_id {
-        let tvdb_id = title.external_ids.iter().find(|e| e.source == "tvdb").map(|e| e.value.as_str());
+        let tvdb_id = title
+            .external_ids
+            .iter()
+            .find(|e| e.source == "tvdb")
+            .map(|e| e.value.as_str());
         let category_hint = facet_to_category_hint(&title.facet);
         let required_audio_languages = app
-            .resolve_quality_profile(&title.tags, title.imdb_id.as_deref(), tvdb_id, Some(category_hint))
+            .resolve_quality_profile(
+                &title.tags,
+                title.imdb_id.as_deref(),
+                tvdb_id,
+                Some(category_hint),
+            )
             .await
             .map(|p| p.criteria.required_audio_languages)
             .unwrap_or_default();
-        spawn_media_analysis(app, file_id.clone(), dest_path.clone(), title.id.clone(), required_audio_languages);
+        spawn_media_analysis(
+            app,
+            file_id.clone(),
+            dest_path.clone(),
+            title.id.clone(),
+            required_audio_languages,
+        );
     }
 
     // Create collection record (so the movie overview UI can show the file)
@@ -685,14 +776,23 @@ async fn import_movie_download(
         file_result.strategy.as_str(),
         dest_path.display()
     );
-    let _ = app.services
-        .record_event(Some(actor.id.clone()), Some(title.id.clone()), EventType::ActionCompleted, event_message.clone())
+    let _ = app
+        .services
+        .record_event(
+            Some(actor.id.clone()),
+            Some(title.id.clone()),
+            EventType::ActionCompleted,
+            event_message.clone(),
+        )
         .await;
     app.services
         .record_activity_event(
-            Some(actor.id.clone()), Some(title.id.clone()),
-            ActivityKind::MovieDownloaded, event_message,
-            ActivitySeverity::Success, vec![ActivityChannel::WebUi],
+            Some(actor.id.clone()),
+            Some(title.id.clone()),
+            ActivityKind::MovieDownloaded,
+            event_message,
+            ActivitySeverity::Success,
+            vec![ActivityChannel::WebUi],
         )
         .await?;
 
@@ -712,8 +812,7 @@ async fn import_series_download(
     video_files: &[PathBuf],
     started_at: chrono::DateTime<Utc>,
 ) -> AppResult<ImportResult> {
-    let (media_root, rename_template) =
-        resolve_import_paths(app, title).await?;
+    let (media_root, rename_template) = resolve_import_paths(app, title).await?;
     let title_folder = title.name.clone();
 
     // Check NFO write setting (non-fatal, opt-in)
@@ -790,7 +889,13 @@ async fn import_series_download(
 
     for source_video in video_files {
         match import_single_episode_file(
-            app, title, &media_root, &rename_template, &title_folder, source_video, nfo_enabled,
+            app,
+            title,
+            &media_root,
+            &rename_template,
+            &title_folder,
+            source_video,
+            nfo_enabled,
         )
         .await
         {
@@ -818,7 +923,10 @@ async fn import_series_download(
     let error_message = if failed_count > 0 || skipped_count > 0 {
         Some(format!(
             "{imported_count} imported, {skipped_count} skipped, {failed_count} failed{}",
-            last_error.as_ref().map(|e| format!(". Last error: {e}")).unwrap_or_default()
+            last_error
+                .as_ref()
+                .map(|e| format!(". Last error: {e}"))
+                .unwrap_or_default()
         ))
     } else {
         None
@@ -850,14 +958,23 @@ async fn import_series_download(
         video_files.len(),
         title.name
     );
-    let _ = app.services
-        .record_event(Some(actor.id.clone()), Some(title.id.clone()), EventType::ActionCompleted, event_message.clone())
+    let _ = app
+        .services
+        .record_event(
+            Some(actor.id.clone()),
+            Some(title.id.clone()),
+            EventType::ActionCompleted,
+            event_message.clone(),
+        )
         .await;
     app.services
         .record_activity_event(
-            Some(actor.id.clone()), Some(title.id.clone()),
-            ActivityKind::SeriesEpisodeImported, event_message,
-            ActivitySeverity::Success, vec![ActivityChannel::WebUi],
+            Some(actor.id.clone()),
+            Some(title.id.clone()),
+            ActivityKind::SeriesEpisodeImported,
+            event_message,
+            ActivitySeverity::Success,
+            vec![ActivityChannel::WebUi],
         )
         .await?;
 
@@ -895,7 +1012,11 @@ async fn import_single_episode_file(
     // Must have episode info to proceed
     let ep_meta = match parsed.episode.as_ref() {
         Some(ep) if !ep.episode_numbers.is_empty() => ep,
-        Some(ep) if ep.absolute_episode.is_some() && title.facet == scryer_domain::MediaFacet::Anime => ep,
+        Some(ep)
+            if ep.absolute_episode.is_some() && title.facet == scryer_domain::MediaFacet::Anime =>
+        {
+            ep
+        }
         _ => {
             tracing::debug!(
                 file = %source_video.display(),
@@ -945,20 +1066,33 @@ async fn import_single_episode_file(
         parsed: &parsed,
         existing_files: &existing_files,
     };
-    if let crate::import_checks::ImportVerdict::Reject { reason, code } = crate::import_checks::run_import_checks(&check_ctx) {
+    if let crate::import_checks::ImportVerdict::Reject { reason, code } =
+        crate::import_checks::run_import_checks(&check_ctx)
+    {
         tracing::debug!(file = %dest_path.display(), %code, %reason, "skipping episode file");
         return Ok(false);
     }
 
     // Upgrade check for episodes: find existing file for same dest path
     if !existing_files.is_empty() {
-        let tvdb_id = title.external_ids.iter().find(|e| e.source == "tvdb").map(|e| e.value.as_str());
+        let tvdb_id = title
+            .external_ids
+            .iter()
+            .find(|e| e.source == "tvdb")
+            .map(|e| e.value.as_str());
         let category_hint = facet_to_category_hint(&title.facet);
         if let Ok(quality_profile) = app
-            .resolve_quality_profile(&title.tags, title.imdb_id.as_deref(), tvdb_id, Some(category_hint))
+            .resolve_quality_profile(
+                &title.tags,
+                title.imdb_id.as_deref(),
+                tvdb_id,
+                Some(category_hint),
+            )
             .await
         {
-            let persona = quality_profile.criteria.resolve_persona(Some(category_hint));
+            let persona = quality_profile
+                .criteria
+                .resolve_persona(Some(category_hint));
             let weights = crate::scoring_weights::build_weights(
                 persona,
                 &quality_profile.criteria.scoring_overrides,
@@ -968,10 +1102,14 @@ async fn import_single_episode_file(
             let dest_str = dest_path.to_string_lossy();
 
             // Find an existing file at the same dest path (or matching episode)
-            if let Some(existing_file) = existing_files.iter().find(|f| f.file_path == dest_str.as_ref()) {
+            if let Some(existing_file) = existing_files
+                .iter()
+                .find(|f| f.file_path == dest_str.as_ref())
+            {
                 let old_score = existing_file.acquisition_score.unwrap_or(0);
                 if new_score > old_score {
-                    let recycle_config = crate::recycle_bin::resolve_recycle_config(app, Some(media_root)).await;
+                    let recycle_config =
+                        crate::recycle_bin::resolve_recycle_config(app, Some(media_root)).await;
 
                     match crate::upgrade::execute_upgrade(
                         app,
@@ -1021,8 +1159,16 @@ async fn import_single_episode_file(
         facet: title.facet.clone(),
         dest_path: dest_path.clone(),
         year: title.year,
-        imdb_id: title.external_ids.iter().find(|e| e.source == "imdb").map(|e| e.value.clone()),
-        tvdb_id: title.external_ids.iter().find(|e| e.source == "tvdb").map(|e| e.value.clone()),
+        imdb_id: title
+            .external_ids
+            .iter()
+            .find(|e| e.source == "imdb")
+            .map(|e| e.value.clone()),
+        tvdb_id: title
+            .external_ids
+            .iter()
+            .find(|e| e.source == "tvdb")
+            .map(|e| e.value.clone()),
         season: Some(season),
         episode: ep_meta.episode_numbers.first().copied(),
         quality: parsed.quality.clone(),
@@ -1082,14 +1228,29 @@ async fn import_single_episode_file(
         .await?;
 
     {
-        let tvdb_id = title.external_ids.iter().find(|e| e.source == "tvdb").map(|e| e.value.as_str());
+        let tvdb_id = title
+            .external_ids
+            .iter()
+            .find(|e| e.source == "tvdb")
+            .map(|e| e.value.as_str());
         let category_hint = facet_to_category_hint(&title.facet);
         let required_audio_languages = app
-            .resolve_quality_profile(&title.tags, title.imdb_id.as_deref(), tvdb_id, Some(category_hint))
+            .resolve_quality_profile(
+                &title.tags,
+                title.imdb_id.as_deref(),
+                tvdb_id,
+                Some(category_hint),
+            )
             .await
             .map(|p| p.criteria.required_audio_languages)
             .unwrap_or_default();
-        spawn_media_analysis(app, media_file_id.clone(), dest_path.clone(), title.id.clone(), required_audio_languages);
+        spawn_media_analysis(
+            app,
+            media_file_id.clone(),
+            dest_path.clone(),
+            title.id.clone(),
+            required_audio_languages,
+        );
     }
 
     // Link to ALL matching episodes (supports multi-episode files like S01E01E02)
@@ -1173,13 +1334,18 @@ async fn resolve_import_paths(
     title: &scryer_domain::Title,
 ) -> AppResult<(String, String)> {
     let handler = app.facet_registry.get(&title.facet);
-    let media_root_key = handler.map(|h| h.library_path_key()).unwrap_or(SERIES_PATH_KEY);
-    let rename_template_key = handler.map(|h| h.rename_template_key()).unwrap_or(RENAME_TEMPLATE_SERIES_GLOBAL_KEY);
-    let media_root_default = handler.map(|h| h.default_library_path()).unwrap_or("/media/series");
-    let rename_template_default =
-        handler
-            .map(|h| h.default_rename_template())
-            .unwrap_or("{title} - S{season:2}E{episode:2} - {quality}.{ext}");
+    let media_root_key = handler
+        .map(|h| h.library_path_key())
+        .unwrap_or(SERIES_PATH_KEY);
+    let rename_template_key = handler
+        .map(|h| h.rename_template_key())
+        .unwrap_or(RENAME_TEMPLATE_SERIES_GLOBAL_KEY);
+    let media_root_default = handler
+        .map(|h| h.default_library_path())
+        .unwrap_or("/media/series");
+    let rename_template_default = handler
+        .map(|h| h.default_rename_template())
+        .unwrap_or("{title} - S{season:2}E{episode:2} - {quality}.{ext}");
 
     let media_root = {
         let default_root = app
@@ -1196,7 +1362,11 @@ async fn resolve_import_paths(
     };
 
     let rename_template = app
-        .read_setting_string_value_for_scope(super::SETTINGS_SCOPE_SYSTEM, rename_template_key, None)
+        .read_setting_string_value_for_scope(
+            super::SETTINGS_SCOPE_SYSTEM,
+            rename_template_key,
+            None,
+        )
         .await?
         .unwrap_or_else(|| rename_template_default.to_string());
 
@@ -1225,23 +1395,59 @@ pub(crate) fn build_rename_tokens(
 ) -> BTreeMap<String, String> {
     let mut tokens = BTreeMap::new();
     tokens.insert("title".to_string(), title.name.clone());
-    tokens.insert("year".to_string(), parsed.year.map(|y| y.to_string()).unwrap_or_default());
-    tokens.insert("quality".to_string(), parsed.quality.clone().unwrap_or_else(|| "Unknown".to_string()));
-    tokens.insert("source".to_string(), parsed.source.clone().unwrap_or_default());
-    tokens.insert("video_codec".to_string(), parsed.video_codec.clone().unwrap_or_default());
-    tokens.insert("audio".to_string(), parsed.audio.clone().unwrap_or_default());
-    tokens.insert("release_group".to_string(), parsed.release_group.clone().unwrap_or_default());
+    tokens.insert(
+        "year".to_string(),
+        parsed.year.map(|y| y.to_string()).unwrap_or_default(),
+    );
+    tokens.insert(
+        "quality".to_string(),
+        parsed
+            .quality
+            .clone()
+            .unwrap_or_else(|| "Unknown".to_string()),
+    );
+    tokens.insert(
+        "source".to_string(),
+        parsed.source.clone().unwrap_or_default(),
+    );
+    tokens.insert(
+        "video_codec".to_string(),
+        parsed.video_codec.clone().unwrap_or_default(),
+    );
+    tokens.insert(
+        "audio".to_string(),
+        parsed.audio.clone().unwrap_or_default(),
+    );
+    tokens.insert(
+        "release_group".to_string(),
+        parsed.release_group.clone().unwrap_or_default(),
+    );
     tokens.insert(
         "season".to_string(),
-        parsed.episode.as_ref().and_then(|e| e.season).map(|v| v.to_string()).unwrap_or_default(),
+        parsed
+            .episode
+            .as_ref()
+            .and_then(|e| e.season)
+            .map(|v| v.to_string())
+            .unwrap_or_default(),
     );
     tokens.insert(
         "episode".to_string(),
-        parsed.episode.as_ref().and_then(|e| e.episode_numbers.first().copied()).map(|v| v.to_string()).unwrap_or_default(),
+        parsed
+            .episode
+            .as_ref()
+            .and_then(|e| e.episode_numbers.first().copied())
+            .map(|v| v.to_string())
+            .unwrap_or_default(),
     );
     tokens.insert(
         "absolute_episode".to_string(),
-        parsed.episode.as_ref().and_then(|e| e.absolute_episode).map(|v| v.to_string()).unwrap_or_default(),
+        parsed
+            .episode
+            .as_ref()
+            .and_then(|e| e.absolute_episode)
+            .map(|v| v.to_string())
+            .unwrap_or_default(),
     );
     tokens.insert("episode_title".to_string(), String::new());
     tokens.insert("ext".to_string(), ext.to_string());
@@ -1258,21 +1464,31 @@ async fn mark_wanted_completed(
     episode_id: Option<&str>,
     imported_score: Option<i32>,
 ) {
-    match app.services.wanted_items.get_wanted_item_for_title(title_id, episode_id).await {
+    match app
+        .services
+        .wanted_items
+        .get_wanted_item_for_title(title_id, episode_id)
+        .await
+    {
         Ok(Some(wanted)) => {
             let now = Utc::now();
             let now_str = now.to_rfc3339();
             let score = imported_score.or(wanted.current_score);
 
-            if let Err(err) = app.services.wanted_items.update_wanted_item_status(
-                &wanted.id,
-                "completed",
-                None,
-                Some(&now_str),
-                wanted.search_count,
-                score,
-                wanted.grabbed_release.as_deref(),
-            ).await {
+            if let Err(err) = app
+                .services
+                .wanted_items
+                .update_wanted_item_status(
+                    &wanted.id,
+                    "completed",
+                    None,
+                    Some(&now_str),
+                    wanted.search_count,
+                    score,
+                    wanted.grabbed_release.as_deref(),
+                )
+                .await
+            {
                 tracing::warn!(error = %err, title_id = %title_id, "failed to mark wanted item completed");
             }
         }
@@ -1296,10 +1512,7 @@ fn extract_parameter(params: &[(String, String)], key: &str) -> Option<String> {
 }
 
 fn normalize_imdb_id(raw_imdb_id: &str) -> Option<String> {
-    let digits: String = raw_imdb_id
-        .chars()
-        .filter(|c| c.is_ascii_digit())
-        .collect();
+    let digits: String = raw_imdb_id.chars().filter(|c| c.is_ascii_digit()).collect();
 
     if digits.is_empty() {
         return None;
@@ -1471,9 +1684,7 @@ pub async fn preview_manual_import(
             .and_then(|f| f.to_str())
             .unwrap_or("unknown")
             .to_string();
-        let size = std::fs::metadata(path)
-            .map(|m| m.len() as i64)
-            .unwrap_or(0);
+        let size = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0);
 
         let stem = path
             .file_stem()
@@ -1643,15 +1854,9 @@ pub async fn execute_manual_import(
         };
 
         // Parse release metadata for quality/codec tokens
-        let stem = source
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
+        let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         let parsed = parse_release_metadata(stem);
-        let ext = source
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("mkv");
+        let ext = source.extension().and_then(|e| e.to_str()).unwrap_or("mkv");
 
         let season_num: u32 = episode
             .season_number
@@ -1698,10 +1903,7 @@ pub async fn execute_manual_import(
             .await
         {
             Ok(file_result) => {
-                let quality_label = mapping
-                    .quality
-                    .clone()
-                    .or_else(|| parsed.quality.clone());
+                let quality_label = mapping.quality.clone().or_else(|| parsed.quality.clone());
 
                 // Record media file with rich metadata
                 let media_file_input = crate::InsertMediaFileInput {
@@ -1849,7 +2051,9 @@ pub(crate) async fn run_media_analysis(
         Ok(a) => a,
         Err(err) => {
             tracing::warn!(error = %err, file_id = %file_id, "media analysis failed");
-            let _ = media_files.mark_scan_failed(&file_id, &err.to_string()).await;
+            let _ = media_files
+                .mark_scan_failed(&file_id, &err.to_string())
+                .await;
             return;
         }
     };
@@ -1866,7 +2070,10 @@ pub(crate) async fn run_media_analysis(
         let manifest = crate::recycle_bin::RecycleManifest {
             recycled_at: chrono::Utc::now().to_rfc3339(),
             original_path: path.display().to_string(),
-            size_bytes: tokio::fs::metadata(&path).await.map(|m| m.len()).unwrap_or(0),
+            size_bytes: tokio::fs::metadata(&path)
+                .await
+                .map(|m| m.len())
+                .unwrap_or(0),
             title_id: Some(title_id.clone()),
             reason: "invalid_file".to_string(),
         };
@@ -1899,7 +2106,10 @@ pub(crate) async fn run_media_analysis(
         let _ = media_files.delete_media_file(&file_id).await;
 
         // Reset the wanted item so it re-searches
-        if let Ok(Some(item)) = wanted_items.get_wanted_item_for_title(&title_id, None).await {
+        if let Ok(Some(item)) = wanted_items
+            .get_wanted_item_for_title(&title_id, None)
+            .await
+        {
             let _ = wanted_items
                 .update_wanted_item_status(
                     &item.id,
@@ -1939,11 +2149,16 @@ pub(crate) async fn run_media_analysis(
             let manifest = crate::recycle_bin::RecycleManifest {
                 recycled_at: chrono::Utc::now().to_rfc3339(),
                 original_path: path.display().to_string(),
-                size_bytes: tokio::fs::metadata(&path).await.map(|m| m.len()).unwrap_or(0),
+                size_bytes: tokio::fs::metadata(&path)
+                    .await
+                    .map(|m| m.len())
+                    .unwrap_or(0),
                 title_id: Some(title_id.clone()),
                 reason: "language_mismatch".to_string(),
             };
-            if let Err(err) = crate::recycle_bin::recycle_file(&recycle_config, &path, manifest).await {
+            if let Err(err) =
+                crate::recycle_bin::recycle_file(&recycle_config, &path, manifest).await
+            {
                 tracing::warn!(error = %err, path = %path.display(), "failed to recycle language-mismatch file from disk");
             }
 
@@ -1969,7 +2184,10 @@ pub(crate) async fn run_media_analysis(
 
             let _ = media_files.delete_media_file(&file_id).await;
 
-            if let Ok(Some(item)) = wanted_items.get_wanted_item_for_title(&title_id, None).await {
+            if let Ok(Some(item)) = wanted_items
+                .get_wanted_item_for_title(&title_id, None)
+                .await
+            {
                 let _ = wanted_items
                     .update_wanted_item_status(
                         &item.id,
@@ -2032,7 +2250,9 @@ pub(crate) async fn run_media_analysis(
 
     if let Err(err) = media_files.update_media_file_analysis(&file_id, dto).await {
         tracing::warn!(error = %err, file_id = %file_id, "failed to store media analysis");
-        let _ = media_files.mark_scan_failed(&file_id, &err.to_string()).await;
+        let _ = media_files
+            .mark_scan_failed(&file_id, &err.to_string())
+            .await;
     }
 }
 

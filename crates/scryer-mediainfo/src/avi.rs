@@ -5,8 +5,7 @@ use std::path::Path;
 
 /// Parse an AVI (RIFF) container and extract stream metadata.
 pub(crate) fn parse_avi(path: &Path) -> Result<RawContainer, MediaInfoError> {
-    let mut file =
-        std::fs::File::open(path).map_err(|e| MediaInfoError::Io(e.to_string()))?;
+    let mut file = std::fs::File::open(path).map_err(|e| MediaInfoError::Io(e.to_string()))?;
 
     let riff_chunk = riff::Chunk::read(&mut file, 0)
         .map_err(|e| MediaInfoError::Parse(format!("failed to read RIFF header: {e}")))?;
@@ -291,8 +290,8 @@ fn map_video_fourcc(fcc: &str) -> &'static str {
     match fcc {
         "H264" | "h264" | "X264" | "x264" | "avc1" | "AVC1" => "h264",
         "HEVC" | "hevc" | "H265" | "h265" | "hvc1" | "HVC1" | "hev1" | "HEV1" => "hevc",
-        "XVID" | "xvid" | "DX50" | "dx50" | "DIVX" | "divx" | "DIV3" | "div3" | "DIV4"
-        | "div4" | "DIV5" | "div5" | "MP4V" | "mp4v" | "FMP4" | "fmp4" => "mpeg4",
+        "XVID" | "xvid" | "DX50" | "dx50" | "DIVX" | "divx" | "DIV3" | "div3" | "DIV4" | "div4"
+        | "DIV5" | "div5" | "MP4V" | "mp4v" | "FMP4" | "fmp4" => "mpeg4",
         "MJPG" | "mjpg" => "mjpeg",
         "WVC1" | "wvc1" => "vc1",
         "WMV3" | "wmv3" => "wmv3",

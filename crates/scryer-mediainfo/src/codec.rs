@@ -271,9 +271,7 @@ pub(crate) fn scan_hevc_frame_for_hdr10plus(frame: &[u8], nal_length_size: usize
         if nal_data.len() >= 3 {
             let nal_type = (nal_data[0] >> 1) & 0x3F;
             // PREFIX_SEI_NUT = 39, SUFFIX_SEI_NUT = 40
-            if (nal_type == 39 || nal_type == 40)
-                && check_sei_for_hdr10plus(&nal_data[2..])
-            {
+            if (nal_type == 39 || nal_type == 40) && check_sei_for_hdr10plus(&nal_data[2..]) {
                 return true;
             }
         }
@@ -381,19 +379,34 @@ mod tests {
 
     #[test]
     fn normalize_mkv_video_codecs() {
-        assert_eq!(normalize_codec_name("V_MPEG4/ISO/AVC").as_deref(), Some("h264"));
-        assert_eq!(normalize_codec_name("V_MPEGH/ISO/HEVC").as_deref(), Some("hevc"));
+        assert_eq!(
+            normalize_codec_name("V_MPEG4/ISO/AVC").as_deref(),
+            Some("h264")
+        );
+        assert_eq!(
+            normalize_codec_name("V_MPEGH/ISO/HEVC").as_deref(),
+            Some("hevc")
+        );
         assert_eq!(normalize_codec_name("V_AV1").as_deref(), Some("av1"));
         assert_eq!(normalize_codec_name("V_VP9").as_deref(), Some("vp9"));
-        assert_eq!(normalize_codec_name("V_MPEG4/ISO/SP").as_deref(), Some("mpeg4"));
+        assert_eq!(
+            normalize_codec_name("V_MPEG4/ISO/SP").as_deref(),
+            Some("mpeg4")
+        );
         assert_eq!(normalize_codec_name("V_MS/VFW/FOURCC"), None);
     }
 
     #[test]
     fn normalize_mkv_audio_codecs() {
         assert_eq!(normalize_codec_name("A_AAC").as_deref(), Some("aac"));
-        assert_eq!(normalize_codec_name("A_AAC/MPEG2/LC").as_deref(), Some("aac"));
-        assert_eq!(normalize_codec_name("A_AAC/MPEG4/LC/SBR").as_deref(), Some("aac"));
+        assert_eq!(
+            normalize_codec_name("A_AAC/MPEG2/LC").as_deref(),
+            Some("aac")
+        );
+        assert_eq!(
+            normalize_codec_name("A_AAC/MPEG4/LC/SBR").as_deref(),
+            Some("aac")
+        );
         assert_eq!(normalize_codec_name("A_AC3").as_deref(), Some("ac3"));
         assert_eq!(normalize_codec_name("A_EAC3").as_deref(), Some("eac3"));
         assert_eq!(normalize_codec_name("A_TRUEHD").as_deref(), Some("truehd"));
@@ -401,19 +414,37 @@ mod tests {
         assert_eq!(normalize_codec_name("A_FLAC").as_deref(), Some("flac"));
         assert_eq!(normalize_codec_name("A_OPUS").as_deref(), Some("opus"));
         assert_eq!(normalize_codec_name("A_VORBIS").as_deref(), Some("vorbis"));
-        assert_eq!(normalize_codec_name("A_PCM/INT/LIT").as_deref(), Some("pcm"));
-        assert_eq!(normalize_codec_name("A_PCM/FLOAT/IEEE").as_deref(), Some("pcm"));
+        assert_eq!(
+            normalize_codec_name("A_PCM/INT/LIT").as_deref(),
+            Some("pcm")
+        );
+        assert_eq!(
+            normalize_codec_name("A_PCM/FLOAT/IEEE").as_deref(),
+            Some("pcm")
+        );
         assert_eq!(normalize_codec_name("A_MPEG/L3").as_deref(), Some("mp3"));
     }
 
     #[test]
     fn normalize_mkv_subtitle_codecs() {
-        assert_eq!(normalize_codec_name("S_TEXT/UTF8").as_deref(), Some("subrip"));
+        assert_eq!(
+            normalize_codec_name("S_TEXT/UTF8").as_deref(),
+            Some("subrip")
+        );
         assert_eq!(normalize_codec_name("S_TEXT/ASS").as_deref(), Some("ass"));
         assert_eq!(normalize_codec_name("S_TEXT/SSA").as_deref(), Some("ass"));
-        assert_eq!(normalize_codec_name("S_HDMV/PGS").as_deref(), Some("hdmv_pgs_subtitle"));
-        assert_eq!(normalize_codec_name("S_VOBSUB").as_deref(), Some("dvd_subtitle"));
-        assert_eq!(normalize_codec_name("S_TEXT/WEBVTT").as_deref(), Some("webvtt"));
+        assert_eq!(
+            normalize_codec_name("S_HDMV/PGS").as_deref(),
+            Some("hdmv_pgs_subtitle")
+        );
+        assert_eq!(
+            normalize_codec_name("S_VOBSUB").as_deref(),
+            Some("dvd_subtitle")
+        );
+        assert_eq!(
+            normalize_codec_name("S_TEXT/WEBVTT").as_deref(),
+            Some("webvtt")
+        );
     }
 
     #[test]
@@ -634,12 +665,12 @@ mod tests {
         // NAL header: 0x4E (type=39 PREFIX_SEI, layer_id=0), 0x01 (temporal_id_plus1=1)
         // SEI: payload_type=4, payload_size=7, country=0xB5, provider=0x003C, oriented=0x0001, filler
         let sei_payload = [
-            0x04,                         // payload_type = 4
-            0x07,                         // payload_size = 7
-            0xB5,                         // country_code (USA)
-            0x00, 0x3C,                   // provider_code (Samsung)
-            0x00, 0x01,                   // provider_oriented_code (HDR10+)
-            0x04, 0x00,                   // application_identifier + filler
+            0x04, // payload_type = 4
+            0x07, // payload_size = 7
+            0xB5, // country_code (USA)
+            0x00, 0x3C, // provider_code (Samsung)
+            0x00, 0x01, // provider_oriented_code (HDR10+)
+            0x04, 0x00, // application_identifier + filler
         ];
         let nal_header = [0x4E, 0x01]; // PREFIX_SEI_NUT
         let nal_len = (nal_header.len() + sei_payload.len()) as u32;

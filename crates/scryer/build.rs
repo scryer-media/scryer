@@ -10,12 +10,18 @@ fn main() {
 
     if let Some(raw_dir) = env::var_os("SCRYER_EMBED_UI_DIR") {
         let configured_dir = PathBuf::from(raw_dir);
-        let embed_dir = configured_dir
-            .canonicalize()
-            .unwrap_or_else(|error| panic!("invalid SCRYER_EMBED_UI_DIR '{}': {error}", configured_dir.display()));
+        let embed_dir = configured_dir.canonicalize().unwrap_or_else(|error| {
+            panic!(
+                "invalid SCRYER_EMBED_UI_DIR '{}': {error}",
+                configured_dir.display()
+            )
+        });
 
         if !embed_dir.is_dir() {
-            panic!("SCRYER_EMBED_UI_DIR must point to a directory: {}", embed_dir.display());
+            panic!(
+                "SCRYER_EMBED_UI_DIR must point to a directory: {}",
+                embed_dir.display()
+            );
         }
 
         let index_html = embed_dir.join("index.html");
@@ -49,7 +55,10 @@ fn main() {
         for (_, file_path) in &entries {
             println!("cargo:rerun-if-changed={}", file_path.display());
         }
-        println!("cargo:rustc-env=SCRYER_EMBED_UI_DIR={}", embed_dir.display());
+        println!(
+            "cargo:rustc-env=SCRYER_EMBED_UI_DIR={}",
+            embed_dir.display()
+        );
     } else {
         output.push_str("pub const HAS_EMBEDDED_WEB_UI: bool = false;\n");
         output.push_str("pub static EMBEDDED_WEB_FILES: &[(&str, &[u8])] = &[];\n");

@@ -300,7 +300,8 @@ pub(crate) async fn get_setting_with_defaults_query(
         ));
     }
 
-    let rows = list_settings_with_defaults_query(pool, &scope, scope_id.clone(), encryption_key).await?;
+    let rows =
+        list_settings_with_defaults_query(pool, &scope, scope_id.clone(), encryption_key).await?;
     let result = rows.into_iter().find(|row| row.key_name == key_name);
     Ok(result)
 }
@@ -340,8 +341,9 @@ pub(crate) async fn upsert_setting_value_query(
     // Encrypt sensitive values before storing
     let stored_value = if is_sensitive {
         if let Some(key) = encryption_key {
-            crate::encryption::encrypt_value(key, &value_json)
-                .map_err(|e| AppError::Repository(format!("failed to encrypt setting value: {e}")))?
+            crate::encryption::encrypt_value(key, &value_json).map_err(|e| {
+                AppError::Repository(format!("failed to encrypt setting value: {e}"))
+            })?
         } else {
             value_json.clone()
         }
@@ -350,15 +352,14 @@ pub(crate) async fn upsert_setting_value_query(
     };
 
     let now = Utc::now().to_rfc3339();
-    let normalized_scope_id = scope_id
-        .and_then(|value| {
-            let value = value.trim().to_string();
-            if value.is_empty() {
-                None
-            } else {
-                Some(value)
-            }
-        });
+    let normalized_scope_id = scope_id.and_then(|value| {
+        let value = value.trim().to_string();
+        if value.is_empty() {
+            None
+        } else {
+            Some(value)
+        }
+    });
 
     sqlx::query(
         "INSERT INTO settings_values
@@ -412,7 +413,8 @@ pub(crate) async fn get_setting_definition_meta_query(
     }
 
     if rows.len() > 1 {
-        let mut categories: Vec<String> = rows.drain(..).map(|(_id, category, _)| category).collect();
+        let mut categories: Vec<String> =
+            rows.drain(..).map(|(_id, category, _)| category).collect();
         categories.sort();
         categories.dedup();
         return Err(AppError::Validation(format!(

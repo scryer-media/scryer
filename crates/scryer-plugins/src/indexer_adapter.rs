@@ -51,8 +51,9 @@ impl IndexerClient for WasmIndexerClient {
             episode,
         };
 
-        let input = serde_json::to_string(&request)
-            .map_err(|e| AppError::Repository(format!("failed to serialize plugin request: {e}")))?;
+        let input = serde_json::to_string(&request).map_err(|e| {
+            AppError::Repository(format!("failed to serialize plugin request: {e}"))
+        })?;
 
         let plugin_name = self.descriptor.name.clone();
         let indexer_name = self.indexer_name.clone();
@@ -62,19 +63,15 @@ impl IndexerClient for WasmIndexerClient {
         // satisfies spawn_blocking's 'static + Send requirements.
         let plugin = Arc::clone(&self.plugin);
         let output = tokio::task::spawn_blocking(move || {
-            let mut guard = plugin.lock().map_err(|e| {
-                AppError::Repository(format!("plugin mutex poisoned: {e}"))
-            })?;
+            let mut guard = plugin
+                .lock()
+                .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
             guard
                 .call::<&str, String>("search", &input)
-                .map_err(|e| {
-                    AppError::Repository(format!("plugin search() failed: {e}"))
-                })
+                .map_err(|e| AppError::Repository(format!("plugin search() failed: {e}")))
         })
         .await
-        .map_err(|e| {
-            AppError::Repository(format!("plugin task panicked: {e}"))
-        })??;
+        .map_err(|e| AppError::Repository(format!("plugin task panicked: {e}")))??;
 
         let response: PluginSearchResponse = serde_json::from_str(&output).map_err(|e| {
             warn!(
@@ -91,12 +88,23 @@ impl IndexerClient for WasmIndexerClient {
             .results
             .into_iter()
             .map(|r| {
-                let thumbs_up = r.extra.get("thumbs_up").and_then(|v| v.as_i64()).map(|v| v as i32);
-                let thumbs_down = r.extra.get("thumbs_down").and_then(|v| v.as_i64()).map(|v| v as i32);
-                let subtitles: Option<Vec<String>> = r.extra.get("subtitles").and_then(|v| {
-                    serde_json::from_value(v.clone()).ok()
-                });
-                let password_protected = r.extra.get("password")
+                let thumbs_up = r
+                    .extra
+                    .get("thumbs_up")
+                    .and_then(|v| v.as_i64())
+                    .map(|v| v as i32);
+                let thumbs_down = r
+                    .extra
+                    .get("thumbs_down")
+                    .and_then(|v| v.as_i64())
+                    .map(|v| v as i32);
+                let subtitles: Option<Vec<String>> = r
+                    .extra
+                    .get("subtitles")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok());
+                let password_protected = r
+                    .extra
+                    .get("password")
                     .or_else(|| r.extra.get("password_protected"))
                     .and_then(|v| v.as_str())
                     .map(String::from);

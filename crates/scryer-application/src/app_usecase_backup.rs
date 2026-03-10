@@ -5,14 +5,9 @@ use tracing::{info, warn};
 /// Resolves the backup directory from the configured database path.
 fn backup_dir_from_db_path(db_path: &str) -> PathBuf {
     // db_path is like "sqlite:///data/scryer.db" or "/data/scryer.db"
-    let raw = db_path
-        .strip_prefix("sqlite://")
-        .unwrap_or(db_path);
+    let raw = db_path.strip_prefix("sqlite://").unwrap_or(db_path);
     let db_file = Path::new(raw);
-    db_file
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("backups")
+    db_file.parent().unwrap_or(Path::new(".")).join("backups")
 }
 
 /// Helper: list backup files sorted newest-first.
@@ -120,7 +115,11 @@ impl AppUseCase {
         require(actor, &Entitlement::ManageConfig)?;
 
         // Sanitize filename — must match expected pattern
-        if !filename.starts_with("scryer_backup_") || !filename.ends_with(".db") || filename.contains('/') || filename.contains('\\') {
+        if !filename.starts_with("scryer_backup_")
+            || !filename.ends_with(".db")
+            || filename.contains('/')
+            || filename.contains('\\')
+        {
             return Err(AppError::Validation("invalid backup filename".into()));
         }
 
@@ -160,7 +159,11 @@ impl AppUseCase {
     /// Auto-backup if enough time has passed since the last backup.
     pub async fn auto_backup_if_due(&self) -> AppResult<()> {
         let interval_hours: u64 = self
-            .read_setting_string_value_for_scope(SETTINGS_SCOPE_SYSTEM, "backup.interval_hours", None)
+            .read_setting_string_value_for_scope(
+                SETTINGS_SCOPE_SYSTEM,
+                "backup.interval_hours",
+                None,
+            )
             .await?
             .and_then(|v| v.parse().ok())
             .unwrap_or(24);
@@ -170,7 +173,11 @@ impl AppUseCase {
         }
 
         let retention_count: usize = self
-            .read_setting_string_value_for_scope(SETTINGS_SCOPE_SYSTEM, "backup.retention_count", None)
+            .read_setting_string_value_for_scope(
+                SETTINGS_SCOPE_SYSTEM,
+                "backup.retention_count",
+                None,
+            )
             .await?
             .and_then(|v| v.parse().ok())
             .unwrap_or(7);

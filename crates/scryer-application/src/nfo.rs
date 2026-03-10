@@ -93,7 +93,8 @@ pub(crate) fn parse_nfo(content: &str) -> NfoMetadata {
 
 /// Render a Kodi-compatible `<movie>` NFO for the given Title.
 pub(crate) fn render_movie_nfo(title: &Title) -> String {
-    let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>\n<movie>\n");
+    let mut out =
+        String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>\n<movie>\n");
 
     push_element(&mut out, "title", &title.name);
 
@@ -129,7 +130,8 @@ pub(crate) fn render_movie_nfo(title: &Title) -> String {
 
 /// Render a Kodi-compatible `<tvshow>` NFO for the given series Title.
 pub(crate) fn render_tvshow_nfo(title: &Title) -> String {
-    let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>\n<tvshow>\n");
+    let mut out =
+        String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>\n<tvshow>\n");
 
     push_element(&mut out, "title", &title.name);
 
@@ -160,7 +162,9 @@ pub(crate) fn render_tvshow_nfo(title: &Title) -> String {
 
 /// Render a Kodi-compatible `<episodedetails>` NFO.
 pub(crate) fn render_episode_nfo(title: &Title, episode: &Episode) -> String {
-    let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>\n<episodedetails>\n");
+    let mut out = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>\n<episodedetails>\n",
+    );
 
     if let Some(ref ep_title) = episode.title {
         if !ep_title.is_empty() {
@@ -191,9 +195,16 @@ pub(crate) fn render_episode_nfo(title: &Title, episode: &Episode) -> String {
     }
 
     // Episode-level uniqueid: use the series TVDB ID (episodes don't have their own)
-    if let Some(eid) = title.external_ids.iter().find(|e| e.source.eq_ignore_ascii_case("tvdb")) {
+    if let Some(eid) = title
+        .external_ids
+        .iter()
+        .find(|e| e.source.eq_ignore_ascii_case("tvdb"))
+    {
         if !eid.value.is_empty() {
-            out.push_str(&format!("  <uniqueid type=\"tvdb\" default=\"true\">{}</uniqueid>\n", xml_escape(&eid.value)));
+            out.push_str(&format!(
+                "  <uniqueid type=\"tvdb\" default=\"true\">{}</uniqueid>\n",
+                xml_escape(&eid.value)
+            ));
         }
     }
 
@@ -212,7 +223,11 @@ pub(crate) fn render_plexmatch(title: &Title) -> String {
         out.push_str(&format!("year: {year}\n"));
     }
 
-    if let Some(eid) = title.external_ids.iter().find(|e| e.source.eq_ignore_ascii_case("tvdb")) {
+    if let Some(eid) = title
+        .external_ids
+        .iter()
+        .find(|e| e.source.eq_ignore_ascii_case("tvdb"))
+    {
         if !eid.value.is_empty() {
             out.push_str(&format!("tvdbid: {}\n", eid.value));
         }
@@ -224,7 +239,11 @@ pub(crate) fn render_plexmatch(title: &Title) -> String {
         }
     }
 
-    if let Some(eid) = title.external_ids.iter().find(|e| e.source.eq_ignore_ascii_case("tmdb")) {
+    if let Some(eid) = title
+        .external_ids
+        .iter()
+        .find(|e| e.source.eq_ignore_ascii_case("tmdb"))
+    {
         if !eid.value.is_empty() {
             out.push_str(&format!("tmdbid: {}\n", eid.value));
         }
@@ -307,7 +326,10 @@ fn extract_imdb_url_id(content: &str) -> Option<String> {
     if !rest.starts_with("tt") {
         return None;
     }
-    let id: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+    let id: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric())
+        .collect();
     if id.len() > 2 {
         Some(id)
     } else {
@@ -367,7 +389,11 @@ fn push_element(out: &mut String, tag: &str, value: &str) {
 }
 
 fn push_uniqueids(out: &mut String, title: &Title) {
-    if let Some(eid) = title.external_ids.iter().find(|e| e.source.eq_ignore_ascii_case("tvdb")) {
+    if let Some(eid) = title
+        .external_ids
+        .iter()
+        .find(|e| e.source.eq_ignore_ascii_case("tvdb"))
+    {
         if !eid.value.is_empty() {
             out.push_str(&format!(
                 "  <uniqueid type=\"tvdb\" default=\"true\">{}</uniqueid>\n",
@@ -383,7 +409,11 @@ fn push_uniqueids(out: &mut String, title: &Title) {
             ));
         }
     }
-    if let Some(eid) = title.external_ids.iter().find(|e| e.source.eq_ignore_ascii_case("tmdb")) {
+    if let Some(eid) = title
+        .external_ids
+        .iter()
+        .find(|e| e.source.eq_ignore_ascii_case("tmdb"))
+    {
         if !eid.value.is_empty() {
             out.push_str(&format!(
                 "  <uniqueid type=\"tmdb\">{}</uniqueid>\n",
@@ -411,8 +441,14 @@ mod tests {
             monitored: true,
             tags: vec![],
             external_ids: vec![
-                ExternalId { source: "tvdb".into(), value: "12345".into() },
-                ExternalId { source: "tmdb".into(), value: "603".into() },
+                ExternalId {
+                    source: "tvdb".into(),
+                    value: "12345".into(),
+                },
+                ExternalId {
+                    source: "tmdb".into(),
+                    value: "603".into(),
+                },
             ],
             created_by: None,
             created_at: Utc::now(),

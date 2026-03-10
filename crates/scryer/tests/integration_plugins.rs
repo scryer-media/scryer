@@ -1,7 +1,7 @@
 mod common;
 
 use common::TestContext;
-use scryer_application::{IndexerConfigRepository, IndexerPluginProvider, PluginInstallationRepository};
+use scryer_application::{IndexerConfigRepository, PluginInstallationRepository};
 use scryer_domain::User;
 
 fn admin() -> User {
@@ -35,7 +35,11 @@ async fn seed_builtins_idempotent() {
     ctx.app.seed_builtin_plugins().await.unwrap();
 
     let installations = ctx.db.list_plugin_installations().await.unwrap();
-    assert_eq!(installations.len(), 2, "should not duplicate on second seed");
+    assert_eq!(
+        installations.len(),
+        2,
+        "should not duplicate on second seed"
+    );
 }
 
 // ── list_available_plugins ───────────────────────────────────────────────────
@@ -110,7 +114,11 @@ async fn toggle_builtin_disables_and_rebuilds() {
     assert!(types_before.contains(&"nzbgeek".to_string()));
 
     // Disable nzbgeek
-    let toggled = ctx.app.toggle_plugin(&admin(), "nzbgeek", false).await.unwrap();
+    let toggled = ctx
+        .app
+        .toggle_plugin(&admin(), "nzbgeek", false)
+        .await
+        .unwrap();
     assert!(!toggled.is_enabled);
 
     // After toggle, reload_plugins is called → nzbgeek should be gone from provider types
@@ -131,7 +139,11 @@ async fn toggle_builtin_disables_and_rebuilds() {
     );
 
     // Re-enable
-    let re_enabled = ctx.app.toggle_plugin(&admin(), "nzbgeek", true).await.unwrap();
+    let re_enabled = ctx
+        .app
+        .toggle_plugin(&admin(), "nzbgeek", true)
+        .await
+        .unwrap();
     assert!(re_enabled.is_enabled);
 
     let types_final = ctx
@@ -162,7 +174,10 @@ async fn toggle_updates_timestamp() {
     // Small delay to ensure timestamp difference
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    ctx.app.toggle_plugin(&admin(), "nzbgeek", false).await.unwrap();
+    ctx.app
+        .toggle_plugin(&admin(), "nzbgeek", false)
+        .await
+        .unwrap();
 
     let after = ctx
         .db

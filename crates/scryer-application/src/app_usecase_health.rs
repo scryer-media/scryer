@@ -169,7 +169,7 @@ impl AppUseCase {
 
             if let Ok(stat) = nix::sys::statvfs::statvfs(path.as_str()) {
                 let block_size = stat.block_size();
-                let free = stat.blocks_available() as u64 * block_size;
+                let free = u64::from(stat.blocks_available()) * block_size;
                 let mb_100 = 100 * 1024 * 1024;
                 let mb_500 = 500 * 1024 * 1024;
 
@@ -208,8 +208,7 @@ impl AppUseCase {
             return vec![];
         };
 
-        let days_remaining =
-            (expires.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_days();
+        let days_remaining = (expires.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_days();
 
         if days_remaining < 0 {
             return vec![HealthCheckResult {

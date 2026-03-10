@@ -1,8 +1,8 @@
+use crate::{ActivityChannel, ActivityKind, ActivitySeverity, AppUseCase};
+use scryer_domain::MediaFacet;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::io::AsyncReadExt;
-use scryer_domain::MediaFacet;
-use crate::{ActivityChannel, ActivityKind, ActivitySeverity, AppUseCase};
 
 pub struct PostProcessingContext {
     /// Cheap clone of AppUseCase — all internal fields are Arc.
@@ -37,10 +37,10 @@ pub fn spawn_post_processing(ctx: PostProcessingContext) {
 /// makes it suitable for integration tests that need deterministic results.
 pub async fn run_post_processing(ctx: PostProcessingContext) -> crate::AppResult<()> {
     let script_key = match ctx.facet {
-        MediaFacet::Movie  => "post_processing.script.movie",
-        MediaFacet::Tv     => "post_processing.script.series",
-        MediaFacet::Anime  => "post_processing.script.anime",
-        MediaFacet::Other  => return Ok(()),
+        MediaFacet::Movie => "post_processing.script.movie",
+        MediaFacet::Tv => "post_processing.script.series",
+        MediaFacet::Anime => "post_processing.script.anime",
+        MediaFacet::Other => return Ok(()),
     };
 
     let command = ctx
@@ -63,24 +63,36 @@ pub async fn run_post_processing(ctx: PostProcessingContext) -> crate::AppResult
         .unwrap_or(1800);
 
     let facet_str = match ctx.facet {
-        MediaFacet::Movie  => "movie",
-        MediaFacet::Tv     => "series",
-        MediaFacet::Anime  => "anime",
-        MediaFacet::Other  => "other",
+        MediaFacet::Movie => "movie",
+        MediaFacet::Tv => "series",
+        MediaFacet::Anime => "anime",
+        MediaFacet::Other => "other",
     };
 
     let envs: Vec<(&'static str, String)> = vec![
-        ("SCRYER_EVENT",      "post_import".into()),
-        ("SCRYER_FACET",      facet_str.into()),
-        ("SCRYER_FILE_PATH",  ctx.dest_path.to_string_lossy().into_owned()),
+        ("SCRYER_EVENT", "post_import".into()),
+        ("SCRYER_FACET", facet_str.into()),
+        (
+            "SCRYER_FILE_PATH",
+            ctx.dest_path.to_string_lossy().into_owned(),
+        ),
         ("SCRYER_TITLE_NAME", ctx.title_name.clone()),
-        ("SCRYER_TITLE_ID",   ctx.title_id.clone()),
-        ("SCRYER_YEAR",       ctx.year.map(|y| y.to_string()).unwrap_or_default()),
-        ("SCRYER_IMDB_ID",    ctx.imdb_id.unwrap_or_default()),
-        ("SCRYER_TVDB_ID",    ctx.tvdb_id.unwrap_or_default()),
-        ("SCRYER_SEASON",     ctx.season.map(|s| s.to_string()).unwrap_or_default()),
-        ("SCRYER_EPISODE",    ctx.episode.map(|e| e.to_string()).unwrap_or_default()),
-        ("SCRYER_QUALITY",    ctx.quality.unwrap_or_default()),
+        ("SCRYER_TITLE_ID", ctx.title_id.clone()),
+        (
+            "SCRYER_YEAR",
+            ctx.year.map(|y| y.to_string()).unwrap_or_default(),
+        ),
+        ("SCRYER_IMDB_ID", ctx.imdb_id.unwrap_or_default()),
+        ("SCRYER_TVDB_ID", ctx.tvdb_id.unwrap_or_default()),
+        (
+            "SCRYER_SEASON",
+            ctx.season.map(|s| s.to_string()).unwrap_or_default(),
+        ),
+        (
+            "SCRYER_EPISODE",
+            ctx.episode.map(|e| e.to_string()).unwrap_or_default(),
+        ),
+        ("SCRYER_QUALITY", ctx.quality.unwrap_or_default()),
     ];
 
     let cwd = ctx
@@ -122,7 +134,9 @@ pub async fn run_post_processing(ctx: PostProcessingContext) -> crate::AppResult
                 ctx.title_name
             );
             tracing::warn!(%message);
-            let _ = ctx.app.services
+            let _ = ctx
+                .app
+                .services
                 .record_activity_event(
                     ctx.actor_id,
                     Some(ctx.title_id),
@@ -155,20 +169,14 @@ pub async fn run_post_processing(ctx: PostProcessingContext) -> crate::AppResult
         }
     });
 
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(timeout_secs),
-        child.wait(),
-    )
-    .await
-    {
+    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), child.wait()).await {
         Ok(Ok(status)) => {
             if status.success() {
-                let message = format!(
-                    "Post-processing succeeded for '{}'",
-                    ctx.title_name
-                );
+                let message = format!("Post-processing succeeded for '{}'", ctx.title_name);
                 tracing::info!(%message);
-                let _ = ctx.app.services
+                let _ = ctx
+                    .app
+                    .services
                     .record_activity_event(
                         ctx.actor_id,
                         Some(ctx.title_id),
@@ -190,7 +198,9 @@ pub async fn run_post_processing(ctx: PostProcessingContext) -> crate::AppResult
                     ctx.title_name
                 );
                 tracing::warn!(%message);
-                let _ = ctx.app.services
+                let _ = ctx
+                    .app
+                    .services
                     .record_activity_event(
                         ctx.actor_id,
                         Some(ctx.title_id),
@@ -203,12 +213,11 @@ pub async fn run_post_processing(ctx: PostProcessingContext) -> crate::AppResult
             }
         }
         Ok(Err(err)) => {
-            let message = format!(
-                "Post-processing I/O error for '{}': {err}",
-                ctx.title_name
-            );
+            let message = format!("Post-processing I/O error for '{}': {err}", ctx.title_name);
             tracing::warn!(%message);
-            let _ = ctx.app.services
+            let _ = ctx
+                .app
+                .services
                 .record_activity_event(
                     ctx.actor_id,
                     Some(ctx.title_id),
@@ -226,7 +235,9 @@ pub async fn run_post_processing(ctx: PostProcessingContext) -> crate::AppResult
                 ctx.title_name
             );
             tracing::warn!(%message);
-            let _ = ctx.app.services
+            let _ = ctx
+                .app
+                .services
                 .record_activity_event(
                     ctx.actor_id,
                     Some(ctx.title_id),

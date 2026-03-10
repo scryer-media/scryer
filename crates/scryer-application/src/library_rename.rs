@@ -67,7 +67,6 @@ impl RenameCollisionPolicy {
     }
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
@@ -85,7 +84,6 @@ impl RenameMissingMetadataPolicy {
         }
     }
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenamePlanItem {

@@ -7,8 +7,7 @@ use crate::Id;
 
 pub const ACTIVITY_EVENT_LIMIT: usize = 100;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum ActivityKind {
     SettingSaved,
     MovieFetched,
@@ -26,9 +25,7 @@ pub enum ActivityKind {
     SystemNotice,
 }
 
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum ActivitySeverity {
     #[default]
     Info,
@@ -36,7 +33,6 @@ pub enum ActivitySeverity {
     Warning,
     Error,
 }
-
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ActivityChannel {

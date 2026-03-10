@@ -38,10 +38,14 @@ impl AppUseCase {
         crate::require(actor, &scryer_domain::Entitlement::ManageConfig)?;
 
         if name.trim().is_empty() {
-            return Err(AppError::Validation("channel name must not be empty".into()));
+            return Err(AppError::Validation(
+                "channel name must not be empty".into(),
+            ));
         }
         if channel_type.trim().is_empty() {
-            return Err(AppError::Validation("channel_type must not be empty".into()));
+            return Err(AppError::Validation(
+                "channel_type must not be empty".into(),
+            ));
         }
 
         let now = Utc::now();
@@ -112,18 +116,20 @@ impl AppUseCase {
             .await?
             .ok_or_else(|| AppError::NotFound(format!("notification channel {id}")))?;
 
-        let provider = self.services.notification_provider.as_ref().ok_or_else(|| {
-            AppError::Repository("notification plugin provider is not configured".into())
-        })?;
-
-        let client = provider
-            .client_for_channel(&channel)
+        let provider = self
+            .services
+            .notification_provider
+            .as_ref()
             .ok_or_else(|| {
-                AppError::NotFound(format!(
-                    "no notification plugin for channel type '{}'",
-                    channel.channel_type
-                ))
+                AppError::Repository("notification plugin provider is not configured".into())
             })?;
+
+        let client = provider.client_for_channel(&channel).ok_or_else(|| {
+            AppError::NotFound(format!(
+                "no notification plugin for channel type '{}'",
+                channel.channel_type
+            ))
+        })?;
 
         let metadata = HashMap::new();
         client
@@ -330,10 +336,7 @@ impl AppUseCase {
             .unwrap_or_default()
     }
 
-    pub fn notification_provider_name(
-        &self,
-        provider_type: &str,
-    ) -> Option<String> {
+    pub fn notification_provider_name(&self, provider_type: &str) -> Option<String> {
         self.services
             .notification_provider
             .as_ref()

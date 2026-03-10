@@ -228,7 +228,10 @@ async fn process_expired_skips_when_none_expired() {
     // delay_until is 6 hours from now — not expired
     seed_pending_release(&ctx, &wi.id, "title-1", 500, 6, "waiting").await;
 
-    let count = app.process_expired_pending_releases().await.expect("process");
+    let count = app
+        .process_expired_pending_releases()
+        .await
+        .expect("process");
     assert_eq!(count, 0);
 }
 
@@ -247,7 +250,10 @@ async fn process_expired_marks_expired_when_wanted_item_gone() {
         .await
         .expect("delete wanted");
 
-    let count = app.process_expired_pending_releases().await.expect("process");
+    let count = app
+        .process_expired_pending_releases()
+        .await
+        .expect("process");
     assert_eq!(count, 0);
 
     // PR should be marked expired
@@ -264,7 +270,10 @@ async fn process_expired_supersedes_when_already_grabbed() {
     let wi = seed_wanted_item(&ctx, "title-1", "grabbed").await;
     let pr = seed_pending_release(&ctx, &wi.id, "title-1", 500, -1, "waiting").await;
 
-    let count = app.process_expired_pending_releases().await.expect("process");
+    let count = app
+        .process_expired_pending_releases()
+        .await
+        .expect("process");
     assert_eq!(count, 0);
 
     // PR should be superseded (wanted item already grabbed)

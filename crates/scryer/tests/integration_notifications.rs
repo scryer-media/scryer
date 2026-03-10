@@ -1,8 +1,8 @@
 mod common;
 
-use std::sync::Arc;
 use common::TestContext;
 use scryer_application::AppError;
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -245,14 +245,7 @@ async fn delete_subscription() {
         .unwrap();
 
     let sub = app
-        .create_notification_subscription(
-            &user,
-            ch.id,
-            "grab".into(),
-            "global".into(),
-            None,
-            true,
-        )
+        .create_notification_subscription(&user, ch.id, "grab".into(), "global".into(), None, true)
         .await
         .unwrap();
 
@@ -325,14 +318,7 @@ async fn update_subscription_rejects_unknown_event_type() {
         .unwrap();
 
     let sub = app
-        .create_notification_subscription(
-            &user,
-            ch.id,
-            "grab".into(),
-            "global".into(),
-            None,
-            true,
-        )
+        .create_notification_subscription(&user, ch.id, "grab".into(), "global".into(), None, true)
         .await
         .unwrap();
 

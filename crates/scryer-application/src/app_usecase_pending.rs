@@ -21,11 +21,12 @@ impl AppUseCase {
             .flatten();
 
         match json {
-            Some(raw) => crate::delay_profile::parse_delay_profile_catalog(&raw)
-                .unwrap_or_else(|e| {
+            Some(raw) => {
+                crate::delay_profile::parse_delay_profile_catalog(&raw).unwrap_or_else(|e| {
                     warn!(error = %e, "failed to parse delay profile catalog");
                     vec![]
-                }),
+                })
+            }
             None => vec![],
         }
     }
@@ -72,9 +73,7 @@ impl AppUseCase {
             .await
             .unwrap_or_default();
 
-        let dominated = existing
-            .iter()
-            .all(|e| e.release_score <= release_score);
+        let dominated = existing.iter().all(|e| e.release_score <= release_score);
 
         if !dominated {
             info!(
@@ -139,7 +138,10 @@ impl AppUseCase {
         let mut by_wanted: std::collections::HashMap<String, Vec<PendingRelease>> =
             std::collections::HashMap::new();
         for pr in expired {
-            by_wanted.entry(pr.wanted_item_id.clone()).or_default().push(pr);
+            by_wanted
+                .entry(pr.wanted_item_id.clone())
+                .or_default()
+                .push(pr);
         }
 
         let mut grabbed_count = 0u32;
@@ -196,10 +198,7 @@ impl AppUseCase {
                         let _ = self
                             .services
                             .pending_releases
-                            .supersede_pending_releases_for_wanted_item(
-                                &wanted_item_id,
-                                &pr.id,
-                            )
+                            .supersede_pending_releases_for_wanted_item(&wanted_item_id, &pr.id)
                             .await;
                         grabbed = true;
                         grabbed_count += 1;
@@ -241,17 +240,28 @@ impl AppUseCase {
 
     /// List all pending releases that are waiting to be grabbed.
     pub async fn list_pending_releases(&self) -> AppResult<Vec<PendingRelease>> {
-        self.services.pending_releases.list_waiting_pending_releases().await
+        self.services
+            .pending_releases
+            .list_waiting_pending_releases()
+            .await
     }
 
     /// Force-grab a pending release immediately, ignoring the delay.
     pub async fn force_grab_pending_release(&self, id: &str) -> AppResult<bool> {
-        let pr = self.services.pending_releases.get_pending_release(id).await?;
+        let pr = self
+            .services
+            .pending_releases
+            .get_pending_release(id)
+            .await?;
         let Some(pr) = pr else {
-            return Err(AppError::Repository(format!("pending release {id} not found")));
+            return Err(AppError::Repository(format!(
+                "pending release {id} not found"
+            )));
         };
         if pr.status != "waiting" {
-            return Err(AppError::Repository(format!("pending release {id} is not in waiting status")));
+            return Err(AppError::Repository(format!(
+                "pending release {id} is not in waiting status"
+            )));
         }
         let now = Utc::now();
         let wanted = self
@@ -267,14 +277,25 @@ impl AppUseCase {
 
     /// Dismiss a pending release (set status to dismissed).
     pub async fn dismiss_pending_release(&self, id: &str) -> AppResult<bool> {
-        let pr = self.services.pending_releases.get_pending_release(id).await?;
+        let pr = self
+            .services
+            .pending_releases
+            .get_pending_release(id)
+            .await?;
         let Some(pr) = pr else {
-            return Err(AppError::Repository(format!("pending release {id} not found")));
+            return Err(AppError::Repository(format!(
+                "pending release {id} not found"
+            )));
         };
         if pr.status != "waiting" {
-            return Err(AppError::Repository(format!("pending release {id} is not in waiting status")));
+            return Err(AppError::Repository(format!(
+                "pending release {id} is not in waiting status"
+            )));
         }
-        self.services.pending_releases.update_pending_release_status(id, "dismissed", None).await?;
+        self.services
+            .pending_releases
+            .update_pending_release_status(id, "dismissed", None)
+            .await?;
         Ok(true)
     }
 
@@ -397,7 +418,11 @@ impl AppUseCase {
                         .unwrap_or_else(|_| "\"other\"".to_string())
                         .trim_matches('"')
                         .to_string();
-                    let indexer_label = pr.indexer_source.as_deref().unwrap_or("unknown").to_string();
+                    let indexer_label = pr
+                        .indexer_source
+                        .as_deref()
+                        .unwrap_or("unknown")
+                        .to_string();
                     metrics::counter!("scryer_grabs_total", "indexer" => indexer_label, "facet" => facet_label).increment(1);
                 }
 
@@ -414,8 +439,8 @@ impl AppUseCase {
                     )
                     .await;
 
-                let facet_str = serde_json::to_string(&title.facet)
-                    .unwrap_or_else(|_| "\"other\"".to_string());
+                let facet_str =
+                    serde_json::to_string(&title.facet).unwrap_or_else(|_| "\"other\"".to_string());
                 let _ = self
                     .services
                     .download_submissions

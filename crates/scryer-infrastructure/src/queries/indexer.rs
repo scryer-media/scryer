@@ -39,12 +39,8 @@ fn row_to_indexer_config(
     let is_enabled: i64 = row
         .try_get("is_enabled")
         .map_err(|err| AppError::Repository(err.to_string()))?;
-    let enable_interactive_search: i64 = row
-        .try_get("enable_interactive_search")
-        .unwrap_or(1);
-    let enable_auto_search: i64 = row
-        .try_get("enable_auto_search")
-        .unwrap_or(1);
+    let enable_interactive_search: i64 = row.try_get("enable_interactive_search").unwrap_or(1);
+    let enable_auto_search: i64 = row.try_get("enable_auto_search").unwrap_or(1);
     let last_health_status: Option<String> = row
         .try_get("last_health_status")
         .map_err(|err| AppError::Repository(err.to_string()))?;
@@ -58,16 +54,15 @@ fn row_to_indexer_config(
     let updated_at_raw: String = row
         .try_get("updated_at")
         .map_err(|err| AppError::Repository(err.to_string()))?;
-    let config_json_raw: Option<String> = row
-        .try_get("config_json")
-        .unwrap_or(None);
+    let config_json_raw: Option<String> = row.try_get("config_json").unwrap_or(None);
 
     // Decrypt config_json if encrypted
     let config_json = match config_json_raw {
         Some(v) if crate::encryption::is_encrypted(&v) => {
             if let Some(key) = encryption_key {
-                Some(crate::encryption::decrypt_value(key, &v)
-                    .map_err(|e| AppError::Repository(format!("failed to decrypt config_json: {e}")))?)
+                Some(crate::encryption::decrypt_value(key, &v).map_err(|e| {
+                    AppError::Repository(format!("failed to decrypt config_json: {e}"))
+                })?)
             } else {
                 Some(v)
             }
@@ -76,17 +71,19 @@ fn row_to_indexer_config(
     };
 
     // Decrypt api_key_encrypted if it's encrypted
-    let api_key_encrypted = match api_key_encrypted {
-        Some(v) if crate::encryption::is_encrypted(&v) => {
-            if let Some(key) = encryption_key {
-                Some(crate::encryption::decrypt_value(key, &v)
-                    .map_err(|e| AppError::Repository(format!("failed to decrypt API key: {e}")))?)
-            } else {
-                Some(v)
+    let api_key_encrypted =
+        match api_key_encrypted {
+            Some(v) if crate::encryption::is_encrypted(&v) => {
+                if let Some(key) = encryption_key {
+                    Some(crate::encryption::decrypt_value(key, &v).map_err(|e| {
+                        AppError::Repository(format!("failed to decrypt API key: {e}"))
+                    })?)
+                } else {
+                    Some(v)
+                }
             }
-        }
-        other => other,
-    };
+            other => other,
+        };
 
     Ok(IndexerConfig {
         id,
@@ -190,7 +187,8 @@ pub(crate) async fn get_indexer_config_query(
     .await
     .map_err(|err| AppError::Repository(err.to_string()))?;
 
-    row.map(|row| row_to_indexer_config(&row, encryption_key)).transpose()
+    row.map(|row| row_to_indexer_config(&row, encryption_key))
+        .transpose()
 }
 
 pub(crate) async fn create_indexer_config_query(
@@ -199,7 +197,8 @@ pub(crate) async fn create_indexer_config_query(
     encryption_key: Option<&EncryptionKey>,
 ) -> AppResult<IndexerConfig> {
     let stored_api_key = maybe_encrypt_api_key(encryption_key, config.api_key_encrypted.as_ref())?;
-    let stored_config_json = maybe_encrypt_config_json(encryption_key, config.config_json.as_ref())?;
+    let stored_config_json =
+        maybe_encrypt_config_json(encryption_key, config.config_json.as_ref())?;
 
     sqlx::query(
         "INSERT INTO indexers
@@ -326,14 +325,18 @@ pub(crate) async fn update_indexer_config_query(
         statement = statement.bind(if is_enabled { 1_i64 } else { 0_i64 });
     }
     if let Some(enable_interactive_search) = enable_interactive_search {
-        statement = statement.bind(if enable_interactive_search { 1_i64 } else { 0_i64 });
+        statement = statement.bind(if enable_interactive_search {
+            1_i64
+        } else {
+            0_i64
+        });
     }
     if let Some(enable_auto_search) = enable_auto_search {
         statement = statement.bind(if enable_auto_search { 1_i64 } else { 0_i64 });
     }
     if let Some(config_json) = config_json {
-        let stored = maybe_encrypt_config_json(encryption_key, Some(&config_json))?
-            .unwrap_or_default();
+        let stored =
+            maybe_encrypt_config_json(encryption_key, Some(&config_json))?.unwrap_or_default();
         statement = statement.bind(stored);
     }
 

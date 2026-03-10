@@ -7,9 +7,23 @@ impl AppUseCase {
             return Err(AppError::Validation("client type is required".into()));
         }
 
-        if ALLOWED_DOWNLOAD_CLIENT_TYPES
+        if NATIVE_DOWNLOAD_CLIENT_TYPES
             .iter()
             .any(|value| value.eq(&normalized.as_str()))
+        {
+            return Ok(normalized);
+        }
+
+        if self
+            .services
+            .download_client_plugin_provider
+            .as_ref()
+            .is_some_and(|provider| {
+                provider
+                    .available_provider_types()
+                    .into_iter()
+                    .any(|value| value == normalized)
+            })
         {
             return Ok(normalized);
         }
@@ -340,7 +354,10 @@ impl AppUseCase {
 
         if include_history_only {
             merged.sort_by(|left, right| {
-                parse_sort_value(right.last_updated_at.as_deref(), left.last_updated_at.as_deref())
+                parse_sort_value(
+                    right.last_updated_at.as_deref(),
+                    left.last_updated_at.as_deref(),
+                )
             });
             merged.truncate(50);
         } else {
@@ -353,16 +370,18 @@ impl AppUseCase {
                 }
 
                 match left.state {
-                    DownloadQueueState::Downloading => {
-                        right.progress_percent
-                            .cmp(&left.progress_percent)
-                            .then_with(|| left.id.cmp(&right.id))
-                    }
+                    DownloadQueueState::Downloading => right
+                        .progress_percent
+                        .cmp(&left.progress_percent)
+                        .then_with(|| left.id.cmp(&right.id)),
                     DownloadQueueState::Queued | DownloadQueueState::Paused => {
                         parse_sort_value(left.queued_at.as_deref(), right.queued_at.as_deref())
                     }
-                    _ => parse_sort_value(left.last_updated_at.as_deref(), right.last_updated_at.as_deref())
-                        .reverse(),
+                    _ => parse_sort_value(
+                        left.last_updated_at.as_deref(),
+                        right.last_updated_at.as_deref(),
+                    )
+                    .reverse(),
                 }
             });
         }
@@ -371,7 +390,9 @@ impl AppUseCase {
         for item in &mut merged {
             if !matches!(
                 item.state,
-                DownloadQueueState::Completed | DownloadQueueState::Failed | DownloadQueueState::ImportPending
+                DownloadQueueState::Completed
+                    | DownloadQueueState::Failed
+                    | DownloadQueueState::ImportPending
             ) {
                 continue;
             }
@@ -384,7 +405,9 @@ impl AppUseCase {
                 item.import_status = Some(record.status);
                 // Extract error_message from result_json for visibility
                 if let Some(ref result_json) = record.result_json {
-                    if let Ok(result) = serde_json::from_str::<scryer_domain::ImportResult>(result_json) {
+                    if let Ok(result) =
+                        serde_json::from_str::<scryer_domain::ImportResult>(result_json)
+                    {
                         if let Some(ref error_msg) = result.error_message {
                             item.import_error_message = Some(error_msg.clone());
                             item.attention_reason = Some(error_msg.clone());
@@ -451,7 +474,10 @@ impl AppUseCase {
                 Some(actor.id.clone()),
                 title_id.clone(),
                 EventType::ActionTriggered,
-                format!("manual import queued for {} ({source_ref})", normalized_client_type),
+                format!(
+                    "manual import queued for {} ({source_ref})",
+                    normalized_client_type
+                ),
             )
             .await?;
         self.record_activity_event(
@@ -478,7 +504,11 @@ impl AppUseCase {
         // If a title_id override is provided, inject it into the parameters
         let mut completed = completed.clone();
         if let Some(title_id) = override_title_id {
-            if !completed.parameters.iter().any(|(k, _)| k == "*scryer_title_id") {
+            if !completed
+                .parameters
+                .iter()
+                .any(|(k, _)| k == "*scryer_title_id")
+            {
                 completed
                     .parameters
                     .push(("*scryer_title_id".to_string(), title_id.to_string()));
@@ -593,11 +623,7 @@ impl AppUseCase {
             .filter(|value| !value.is_empty());
         let config_json = self.normalize_download_client_config_json(input.config_json)?;
 
-        let existing = self
-            .services
-            .download_client_configs
-            .list(None)
-            .await?;
+        let existing = self.services.download_client_configs.list(None).await?;
         let client_priority = existing
             .into_iter()
             .map(|entry| entry.client_priority)
@@ -820,7 +846,9 @@ fn parse_sort_value(left: Option<&str>, right: Option<&str>) -> std::cmp::Orderi
 fn queue_state_sort_rank(state: &DownloadQueueState) -> u8 {
     match state {
         DownloadQueueState::Downloading => 0,
-        DownloadQueueState::Verifying | DownloadQueueState::Repairing | DownloadQueueState::Extracting => 0,
+        DownloadQueueState::Verifying
+        | DownloadQueueState::Repairing
+        | DownloadQueueState::Extracting => 0,
         DownloadQueueState::Queued => 1,
         DownloadQueueState::Paused => 2,
         DownloadQueueState::ImportPending => 3,

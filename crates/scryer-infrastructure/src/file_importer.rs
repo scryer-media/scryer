@@ -25,11 +25,7 @@ fn is_cross_device_error(err: &std::io::Error) -> bool {
 
 #[async_trait]
 impl FileImporter for FsFileImporter {
-    async fn import_file(
-        &self,
-        source: &Path,
-        dest: &Path,
-    ) -> AppResult<ImportFileResult> {
+    async fn import_file(&self, source: &Path, dest: &Path) -> AppResult<ImportFileResult> {
         let source = source.to_path_buf();
         let dest = dest.to_path_buf();
 
@@ -137,10 +133,7 @@ impl FileImporter for FsFileImporter {
                 Ok(()) => {
                     // Verify destination size matches
                     let dest_meta = std::fs::metadata(&dest).map_err(|e| {
-                        AppError::Repository(format!(
-                            "copy succeeded but dest stat failed: {}",
-                            e
-                        ))
+                        AppError::Repository(format!("copy succeeded but dest stat failed: {}", e))
                     })?;
 
                     if dest_meta.len() != size {

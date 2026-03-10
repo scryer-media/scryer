@@ -29,9 +29,7 @@ pub(crate) async fn splash_health_handler(State(state): State<SplashState>) -> R
         BootstrapStatus::Migrating => {
             Json(serde_json::json!({"status": "migrating"})).into_response()
         }
-        BootstrapStatus::Ready(_) => {
-            Json(serde_json::json!({"status": "ok"})).into_response()
-        }
+        BootstrapStatus::Ready(_) => Json(serde_json::json!({"status": "ok"})).into_response(),
         BootstrapStatus::Failed(message) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"status": "error", "message": message})),

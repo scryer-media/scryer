@@ -1,6 +1,8 @@
 use async_graphql::{Context, Error, Object, Result as GqlResult};
 use chrono::Utc;
-use scryer_application::{DELAY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY};
+use scryer_application::{
+    DELAY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY,
+};
 use scryer_domain::Entitlement;
 use serde_json::json;
 
@@ -34,7 +36,11 @@ impl SettingsMutations {
             return Err(Error::new("at least one setting update item is required"));
         }
 
-        let mut profile_catalog_update: Option<(String, Option<String>, Vec<scryer_application::QualityProfile>)> = None;
+        let mut profile_catalog_update: Option<(
+            String,
+            Option<String>,
+            Vec<scryer_application::QualityProfile>,
+        )> = None;
         let mut updated_keys = Vec::with_capacity(input.items.len());
         let mut quality_profiles_json: Option<String> = None;
         for item in input.items {
@@ -175,8 +181,8 @@ impl SettingsMutations {
             .await
             .map_err(to_gql_error)?;
         if let Some(record) = &global_setting {
-            let effective: String = serde_json::from_str(&record.effective_value_json)
-                .unwrap_or_default();
+            let effective: String =
+                serde_json::from_str(&record.effective_value_json).unwrap_or_default();
             if effective.trim() == profile_id {
                 return Err(Error::new(
                     "cannot delete this profile because it is set as the global default quality profile",
@@ -198,10 +204,9 @@ impl SettingsMutations {
                 if record.value_json.is_none() {
                     continue;
                 }
-                let value: String = serde_json::from_str(
-                    record.value_json.as_deref().unwrap_or("\"\""),
-                )
-                .unwrap_or_default();
+                let value: String =
+                    serde_json::from_str(record.value_json.as_deref().unwrap_or("\"\""))
+                        .unwrap_or_default();
                 if value.trim() == profile_id {
                     return Err(Error::new(format!(
                         "cannot delete this profile because it is set as the quality profile override for {scope_id}",
@@ -222,9 +227,8 @@ impl SettingsMutations {
             .list_quality_profiles("system", None)
             .await
             .map_err(to_gql_error)?;
-        let catalog_text = serde_json::to_string(&remaining_profiles).map_err(|error| {
-            Error::new(format!("failed to encode quality profiles: {error}"))
-        })?;
+        let catalog_text = serde_json::to_string(&remaining_profiles)
+            .map_err(|error| Error::new(format!("failed to encode quality profiles: {error}")))?;
         db.upsert_setting_value(
             "system".to_string(),
             QUALITY_PROFILE_CATALOG_KEY.to_string(),
@@ -282,7 +286,9 @@ impl SettingsMutations {
         let limit = if input.limit > 0 {
             input.limit
         } else {
-            return Err(Error::new("limit is required and must be greater than zero"));
+            return Err(Error::new(
+                "limit is required and must be greater than zero",
+            ));
         };
 
         let source = input.source.trim();
@@ -316,19 +322,15 @@ impl SettingsMutations {
         ))
     }
 
-    async fn login(
-        &self,
-        ctx: &Context<'_>,
-        input: LoginInput,
-    ) -> GqlResult<LoginPayload> {
+    async fn login(&self, ctx: &Context<'_>, input: LoginInput) -> GqlResult<LoginPayload> {
         let app = app_from_ctx(ctx)?;
         let user = app
             .authenticate_credentials(&input.username, &input.password)
             .await
             .map_err(to_gql_error)?;
         let token = app.issue_access_token(&user).map_err(to_gql_error)?;
-        let expires_at = (Utc::now() + chrono::Duration::seconds(app.token_lifetime()))
-            .to_rfc3339();
+        let expires_at =
+            (Utc::now() + chrono::Duration::seconds(app.token_lifetime())).to_rfc3339();
         Ok(LoginPayload {
             token,
             user: from_user(user),
@@ -349,8 +351,8 @@ impl SettingsMutations {
             .await
             .map_err(to_gql_error)?;
         let token = app.issue_access_token(&user).map_err(to_gql_error)?;
-        let expires_at = (Utc::now() + chrono::Duration::seconds(app.token_lifetime()))
-            .to_rfc3339();
+        let expires_at =
+            (Utc::now() + chrono::Duration::seconds(app.token_lifetime())).to_rfc3339();
         Ok(LoginPayload {
             token,
             user: from_user(user),

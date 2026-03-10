@@ -17,12 +17,10 @@ impl Default for FileSystemLibraryScanner {
 
 impl FileSystemLibraryScanner {
     pub fn new() -> Self {
-        let allowed_extensions = [
-            "mkv", "mp4", "avi", "mov", "wmv", "m4v", "webm",
-        ]
-        .into_iter()
-        .map(|ext| ext.to_string())
-        .collect();
+        let allowed_extensions = ["mkv", "mp4", "avi", "mov", "wmv", "m4v", "webm"]
+            .into_iter()
+            .map(|ext| ext.to_string())
+            .collect();
 
         Self { allowed_extensions }
     }

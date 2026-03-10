@@ -49,11 +49,7 @@ impl NotificationMutations {
         Ok(from_notification_channel(channel))
     }
 
-    async fn delete_notification_channel(
-        &self,
-        ctx: &Context<'_>,
-        id: String,
-    ) -> GqlResult<bool> {
+    async fn delete_notification_channel(&self, ctx: &Context<'_>, id: String) -> GqlResult<bool> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         app.delete_notification_channel(&actor, &id)
@@ -62,11 +58,7 @@ impl NotificationMutations {
             .map(|_| true)
     }
 
-    async fn test_notification_channel(
-        &self,
-        ctx: &Context<'_>,
-        id: String,
-    ) -> GqlResult<bool> {
+    async fn test_notification_channel(&self, ctx: &Context<'_>, id: String) -> GqlResult<bool> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         app.test_notification_channel(&actor, &id)

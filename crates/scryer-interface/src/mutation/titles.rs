@@ -61,7 +61,11 @@ impl TitleMutations {
                 .map(|tag| {
                     let trimmed = tag.trim().to_string();
                     // Preserve case for structured scryer: tags (they may contain paths)
-                    if trimmed.starts_with("scryer:") { trimmed } else { trimmed.to_lowercase() }
+                    if trimmed.starts_with("scryer:") {
+                        trimmed
+                    } else {
+                        trimmed.to_lowercase()
+                    }
                 })
                 .filter(|tag| !tag.is_empty())
                 .collect::<Vec<_>>()
@@ -74,11 +78,7 @@ impl TitleMutations {
         Ok(from_title(title))
     }
 
-    async fn delete_title(
-        &self,
-        ctx: &Context<'_>,
-        input: DeleteTitleInput,
-    ) -> GqlResult<bool> {
+    async fn delete_title(&self, ctx: &Context<'_>, input: DeleteTitleInput) -> GqlResult<bool> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         app.delete_title(

@@ -126,10 +126,7 @@ mod tests {
 
     #[test]
     fn priority_ordering() {
-        let profiles = vec![
-            make_profile("low", 100, 12),
-            make_profile("high", 10, 6),
-        ];
+        let profiles = vec![make_profile("low", 100, 12), make_profile("high", 10, 6)];
         let result = resolve_delay_profile(&profiles, &[], &MediaFacet::Tv);
         assert_eq!(result.unwrap().id, "high");
     }

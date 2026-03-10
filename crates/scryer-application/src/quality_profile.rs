@@ -1,6 +1,8 @@
-use crate::release_parser::ParsedReleaseMetadata;
 use crate::release_group_db::apply_release_group_scoring;
-use crate::scoring_weights::{audio_weight_for_codec, ScoringOverrides, ScoringPersona, ScoringWeights};
+use crate::release_parser::ParsedReleaseMetadata;
+use crate::scoring_weights::{
+    audio_weight_for_codec, ScoringOverrides, ScoringPersona, ScoringWeights,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -292,7 +294,9 @@ fn quality_profile_from_raw(raw: RawQualityProfile) -> QualityProfile {
             allow_bd_disk: criteria.allow_bd_disk,
             allow_upgrades: criteria.allow_upgrades,
             prefer_dual_audio: criteria.prefer_dual_audio,
-            required_audio_languages: criteria.required_audio_languages.into_iter()
+            required_audio_languages: criteria
+                .required_audio_languages
+                .into_iter()
                 .map(|l| l.trim().to_ascii_uppercase())
                 .filter(|l| !l.is_empty())
                 .collect(),
@@ -603,16 +607,16 @@ pub fn evaluate_against_profile(
         if all_blocklisted {
             d.log("audio_codec_in_profile_blocklist", BLOCK_SCORE);
         } else if has_allowlist_match {
-            if let Some(best_idx) = c
-                .audio_codec_allowlist
-                .iter()
-                .enumerate()
-                .find_map(|(idx, allow)| {
-                    audio_codecs
-                        .iter()
-                        .any(|codec| codec == allow)
-                        .then_some(idx)
-                })
+            if let Some(best_idx) =
+                c.audio_codec_allowlist
+                    .iter()
+                    .enumerate()
+                    .find_map(|(idx, allow)| {
+                        audio_codecs
+                            .iter()
+                            .any(|codec| codec == allow)
+                            .then_some(idx)
+                    })
             {
                 let bonus = (60_i32 - best_idx as i32 * 15).max(0);
                 d.log(&format!("audio_codec_preferred_{best_idx}"), bonus);
@@ -696,7 +700,10 @@ pub fn evaluate_against_profile(
         if release.is_dual_audio {
             d.log("dual_audio_preferred_match", weights.dual_audio_bonus);
         } else {
-            d.log("dual_audio_preferred_missing", weights.dual_audio_missing_penalty);
+            d.log(
+                "dual_audio_preferred_missing",
+                weights.dual_audio_missing_penalty,
+            );
         }
     } else if release.is_dual_audio {
         d.log("dual_audio", weights.dual_audio_present);
@@ -874,10 +881,7 @@ fn normalize_media_size_category(category_hint: Option<&str>) -> MediaSizeCatego
     }
 }
 
-fn expected_size_gib_for_quality(
-    quality: Option<&str>,
-    media_category: MediaSizeCategory,
-) -> f64 {
+fn expected_size_gib_for_quality(quality: Option<&str>, media_category: MediaSizeCategory) -> f64 {
     match media_category {
         MediaSizeCategory::Movie => match quality {
             Some("2160P") => 22.0,
@@ -966,7 +970,10 @@ pub fn apply_size_scoring_for_category(
         r if r >= 1.8 => ("size_very_large_for_quality", weights.size_very_large),
         r if r >= 1.35 => ("size_large_for_quality", weights.size_large),
         r if r >= 1.0 => ("size_expected_for_quality", weights.size_expected),
-        r if r >= 0.75 => ("size_slightly_small_for_quality", weights.size_slightly_small),
+        r if r >= 0.75 => (
+            "size_slightly_small_for_quality",
+            weights.size_slightly_small,
+        ),
         r if r >= 0.55 => ("size_small_for_quality", weights.size_small),
         r if r >= 0.35 => ("size_very_small_for_quality", weights.size_very_small),
         _ => ("size_tiny_for_quality", weights.size_tiny),
@@ -1239,10 +1246,24 @@ mod tests {
         let release = parse_release_metadata("Movie.2021.2160p.BluRay.Remux.H.265.DTSHD.Atmos");
 
         let mut small = evaluate_against_profile(&profile, &release, false, &w);
-        apply_size_scoring_for_category(&mut small, &release, Some(7 * 1024 * 1024 * 1024), None, None, &w);
+        apply_size_scoring_for_category(
+            &mut small,
+            &release,
+            Some(7 * 1024 * 1024 * 1024),
+            None,
+            None,
+            &w,
+        );
 
         let mut large = evaluate_against_profile(&profile, &release, false, &w);
-        apply_size_scoring_for_category(&mut large, &release, Some(45 * 1024 * 1024 * 1024), None, None, &w);
+        apply_size_scoring_for_category(
+            &mut large,
+            &release,
+            Some(45 * 1024 * 1024 * 1024),
+            None,
+            None,
+            &w,
+        );
 
         assert!(large.preference_score > small.preference_score);
         assert!(large.preference_score - small.preference_score >= 900);
@@ -1284,7 +1305,8 @@ mod tests {
         let w = balanced_weights();
 
         let plausible_uhd = parse_release_metadata("Movie.2021.2160p.BluRay.Remux.H.265.DTSHD");
-        let mut plausible_uhd_decision = evaluate_against_profile(&profile, &plausible_uhd, false, &w);
+        let mut plausible_uhd_decision =
+            evaluate_against_profile(&profile, &plausible_uhd, false, &w);
         apply_size_scoring_for_category(
             &mut plausible_uhd_decision,
             &plausible_uhd,

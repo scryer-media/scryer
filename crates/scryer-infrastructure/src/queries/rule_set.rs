@@ -52,10 +52,7 @@ pub(crate) async fn get_rule_set_by_id_query(
     }
 }
 
-pub(crate) async fn insert_rule_set_query(
-    pool: &SqlitePool,
-    rule_set: &RuleSet,
-) -> AppResult<()> {
+pub(crate) async fn insert_rule_set_query(pool: &SqlitePool, rule_set: &RuleSet) -> AppResult<()> {
     let facets_json = serde_json::to_string(&rule_set.applied_facets)
         .map_err(|e| AppError::Repository(e.to_string()))?;
 
@@ -80,10 +77,7 @@ pub(crate) async fn insert_rule_set_query(
     Ok(())
 }
 
-pub(crate) async fn update_rule_set_query(
-    pool: &SqlitePool,
-    rule_set: &RuleSet,
-) -> AppResult<()> {
+pub(crate) async fn update_rule_set_query(pool: &SqlitePool, rule_set: &RuleSet) -> AppResult<()> {
     let facets_json = serde_json::to_string(&rule_set.applied_facets)
         .map_err(|e| AppError::Repository(e.to_string()))?;
 
@@ -144,14 +138,16 @@ fn row_to_rule_set(row: &sqlx::sqlite::SqliteRow) -> AppResult<RuleSet> {
     use chrono::{DateTime, Utc};
     use scryer_domain::MediaFacet;
 
-    let facets_json: String = row.try_get("applied_facets")
+    let facets_json: String = row
+        .try_get("applied_facets")
         .map_err(|e| AppError::Repository(e.to_string()))?;
-    let applied_facets: Vec<MediaFacet> = serde_json::from_str(&facets_json)
-        .unwrap_or_default();
+    let applied_facets: Vec<MediaFacet> = serde_json::from_str(&facets_json).unwrap_or_default();
 
-    let created_str: String = row.try_get("created_at")
+    let created_str: String = row
+        .try_get("created_at")
         .map_err(|e| AppError::Repository(e.to_string()))?;
-    let updated_str: String = row.try_get("updated_at")
+    let updated_str: String = row
+        .try_get("updated_at")
         .map_err(|e| AppError::Repository(e.to_string()))?;
 
     let created_at = DateTime::parse_from_rfc3339(&created_str)
@@ -161,16 +157,27 @@ fn row_to_rule_set(row: &sqlx::sqlite::SqliteRow) -> AppResult<RuleSet> {
         .map(|dt| dt.with_timezone(&Utc))
         .unwrap_or_else(|_| Utc::now());
 
-    let enabled_int: i32 = row.try_get("enabled")
+    let enabled_int: i32 = row
+        .try_get("enabled")
         .map_err(|e| AppError::Repository(e.to_string()))?;
 
     Ok(RuleSet {
-        id: row.try_get("id").map_err(|e| AppError::Repository(e.to_string()))?,
-        name: row.try_get("name").map_err(|e| AppError::Repository(e.to_string()))?,
-        description: row.try_get("description").map_err(|e| AppError::Repository(e.to_string()))?,
-        rego_source: row.try_get("rego_source").map_err(|e| AppError::Repository(e.to_string()))?,
+        id: row
+            .try_get("id")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
+        name: row
+            .try_get("name")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
+        description: row
+            .try_get("description")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
+        rego_source: row
+            .try_get("rego_source")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
         enabled: enabled_int != 0,
-        priority: row.try_get("priority").map_err(|e| AppError::Repository(e.to_string()))?,
+        priority: row
+            .try_get("priority")
+            .map_err(|e| AppError::Repository(e.to_string()))?,
         applied_facets,
         created_at,
         updated_at,

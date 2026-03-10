@@ -5,8 +5,8 @@ use scryer_domain::{Collection, MediaFacet, Title};
 
 use crate::facet_handler::{series_to_hydration_result, FacetHandler, HydrationResult};
 use crate::{
-    ActivityKind, AppResult, MetadataGateway, RenameCollisionPolicy,
-    RenameMissingMetadataPolicy, RenamePlanItem,
+    ActivityKind, AppResult, MetadataGateway, RenameCollisionPolicy, RenameMissingMetadataPolicy,
+    RenamePlanItem,
 };
 
 /// Handles both TV and Anime facets (they share series behavior
@@ -67,7 +67,9 @@ impl FacetHandler for SeriesFacetHandler {
 
     fn default_rename_template(&self) -> &str {
         match self.media_facet {
-            MediaFacet::Anime => "{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}",
+            MediaFacet::Anime => {
+                "{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}"
+            }
             _ => "{title} - S{season:2}E{episode:2} - {quality}.{ext}",
         }
     }

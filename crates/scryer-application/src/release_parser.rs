@@ -138,8 +138,7 @@ fn parse_named_season_token(token: &str) -> Option<u32> {
         if rest.is_empty() {
             return None;
         }
-        let rest =
-            rest.trim_start_matches(['-', '.', '_', ':']);
+        let rest = rest.trim_start_matches(['-', '.', '_', ':']);
         let (season, rest) = parse_leading_digits(rest)?;
         if rest
             .trim_matches(|ch: char| ch == '-' || ch == '.' || ch == '_' || ch == ':')
@@ -526,23 +525,42 @@ fn parse_source(token: &str, next: Option<&str>) -> Option<SourceResult> {
     };
 
     if let Some(svc) = service {
-        return Some(SourceResult { source: "WEB-DL", service: Some(svc) });
+        return Some(SourceResult {
+            source: "WEB-DL",
+            service: Some(svc),
+        });
     }
 
     if upper == "WEB" && next.is_some_and(|next| next == "DL") {
-        return Some(SourceResult { source: "WEB-DL", service: None });
+        return Some(SourceResult {
+            source: "WEB-DL",
+            service: None,
+        });
     }
 
     match upper {
-        "WEB" | "WEBDL" | "WEB-DL" | "WEBRIP" | "WEBHLS" | "WEBD" => {
-            Some(SourceResult { source: "WEB-DL", service: None })
-        }
-        "BLURAY" if next == Some("RAY") => Some(SourceResult { source: "BluRay", service: None }),
+        "WEB" | "WEBDL" | "WEB-DL" | "WEBRIP" | "WEBHLS" | "WEBD" => Some(SourceResult {
+            source: "WEB-DL",
+            service: None,
+        }),
+        "BLURAY" if next == Some("RAY") => Some(SourceResult {
+            source: "BluRay",
+            service: None,
+        }),
         "BLURAY" | "BLURAYRIP" | "BLU" | "BD" | "BDRIP" | "BRRIP" | "BR" | "UHD" => {
-            Some(SourceResult { source: "BluRay", service: None })
+            Some(SourceResult {
+                source: "BluRay",
+                service: None,
+            })
         }
-        "HDTV" | "HDTVRIP" => Some(SourceResult { source: "HDTV", service: None }),
-        "DVDRIP" | "DVD" => Some(SourceResult { source: "DVD", service: None }),
+        "HDTV" | "HDTVRIP" => Some(SourceResult {
+            source: "HDTV",
+            service: None,
+        }),
+        "DVDRIP" | "DVD" => Some(SourceResult {
+            source: "DVD",
+            service: None,
+        }),
         _ => None,
     }
 }
@@ -632,11 +650,7 @@ fn extract_delimited_sections(raw_title: &str, open: char, close: char) -> Vec<S
 }
 
 fn extract_release_group_from_delimiters(raw_title: &str) -> Option<String> {
-    for (open, close) in [
-        ('[', ']'),
-        ('(', ')'),
-        ('{', '}'),
-    ] {
+    for (open, close) in [('[', ']'), ('(', ')'), ('{', '}')] {
         for candidate in extract_delimited_sections(raw_title, open, close) {
             if let Some(normalized) = normalize_release_group_candidate(&candidate) {
                 return Some(normalized);
@@ -1006,9 +1020,7 @@ fn split_release_token(token: &str) -> Vec<String> {
         let third = raw_parts.get(index + 2).map(|value| value.as_str());
 
         if let Some(next_value) = next {
-            if (current == "H" || current == "X")
-                && (next_value == "264" || next_value == "265")
-            {
+            if (current == "H" || current == "X") && (next_value == "264" || next_value == "265") {
                 parts.push(format!("{current}.{next_value}"));
                 index += 2;
                 continue;
@@ -1125,9 +1137,7 @@ fn parse_audio(raw_token: &str, next: Option<&str>) -> Option<ParsedAudio> {
 
     // Dolby Digital Plus (DDP / DD+ / EAC3) — must check before plain DD
     if token.starts_with("DDP") || token.starts_with("DD+") {
-        let suffix = token
-            .trim_start_matches("DDP")
-            .trim_start_matches("DD+");
+        let suffix = token.trim_start_matches("DDP").trim_start_matches("DD+");
         let channels = parse_channels(suffix).or_else(|| next.and_then(parse_channels));
         return Some(ParsedAudio {
             codec: "DDP",
@@ -1136,9 +1146,7 @@ fn parse_audio(raw_token: &str, next: Option<&str>) -> Option<ParsedAudio> {
     }
 
     if token.starts_with("AC3") || token.starts_with("AC-3") {
-        let suffix = token
-            .trim_start_matches("AC-3")
-            .trim_start_matches("AC3");
+        let suffix = token.trim_start_matches("AC-3").trim_start_matches("AC3");
         return Some(ParsedAudio {
             codec: "AC3",
             channels: parse_channels(suffix)
@@ -1407,8 +1415,7 @@ fn parse_episode_token(token: &str) -> Option<(Option<u32>, Vec<u32>)> {
     if token.starts_with('S') {
         let (_, tail) = token.split_at(1);
         let (season, rest) = parse_leading_digits(tail)?;
-        let rest =
-            rest.trim_start_matches(['-', '.', '_', ':']);
+        let rest = rest.trim_start_matches(['-', '.', '_', ':']);
         if rest.is_empty() {
             return None;
         }
@@ -1459,8 +1466,7 @@ pub fn parse_series_episode(raw_title: &str) -> Option<ParsedEpisodeMetadata> {
                 .iter()
                 .all(|value| is_reasonable_episode_number(*value))
             {
-                let raw = if token.starts_with('S') && token.contains('-') && !token.contains('E')
-                {
+                let raw = if token.starts_with('S') && token.contains('-') && !token.contains('E') {
                     token.replace('-', " ")
                 } else if token.contains('X')
                     && token.chars().any(|character| character.is_ascii_digit())
@@ -1652,14 +1658,16 @@ pub fn parse_series_episode(raw_title: &str) -> Option<ParsedEpisodeMetadata> {
             continue;
         }
 
-        if is_digit_str(token) && idx > 0 && parse_quality(token).is_none()
+        if is_digit_str(token)
+            && idx > 0
+            && parse_quality(token).is_none()
             && is_reasonable_episode_number(token.parse::<u32>().ok()?)
-                && (token.len() <= 3 || (token.len() == 4 && parse_year(token).is_none()))
-            {
-                if let Ok(episode) = token.parse::<u32>() {
-                    pending_absolute = Some((episode, token.to_string()));
-                }
+            && (token.len() <= 3 || (token.len() == 4 && parse_year(token).is_none()))
+        {
+            if let Ok(episode) = token.parse::<u32>() {
+                pending_absolute = Some((episode, token.to_string()));
             }
+        }
     }
 
     pending_absolute.and_then(|(episode, raw)| {
@@ -1850,9 +1858,9 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
             explicit_language_seen = true;
             if parsed.languages_subtitles.is_empty()
                 || !parsed
-                .languages_subtitles
-                .iter()
-                .any(|value| value.eq_ignore_ascii_case("fre"))
+                    .languages_subtitles
+                    .iter()
+                    .any(|value| value.eq_ignore_ascii_case("fre"))
             {
                 parsed.languages_subtitles.push("fre".to_string());
             }
@@ -1974,7 +1982,20 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
                 }
             }
             if audio.channels.is_none()
-                && matches!(audio.codec, "DDP" | "DD" | "AAC" | "AC3" | "DTS" | "DTSHD" | "DTSMA" | "DTSX" | "TRUEHD" | "EAC3" | "PCM")
+                && matches!(
+                    audio.codec,
+                    "DDP"
+                        | "DD"
+                        | "AAC"
+                        | "AC3"
+                        | "DTS"
+                        | "DTSHD"
+                        | "DTSMA"
+                        | "DTSX"
+                        | "TRUEHD"
+                        | "EAC3"
+                        | "PCM"
+                )
             {
                 // Some feeds separate channel information into subsequent tokens
                 // (for example "DDP.ATMOS.5.1").
@@ -2019,9 +2040,11 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
     parsed.audio_codecs = dedupe_keep_order(parsed.audio_codecs);
 
     if parsed.languages_audio.is_empty()
-        && default_dual_applied && parsed.languages_subtitles.is_empty() {
-            parsed.languages_audio = vec!["eng".to_string(), "jpn".to_string()];
-        }
+        && default_dual_applied
+        && parsed.languages_subtitles.is_empty()
+    {
+        parsed.languages_audio = vec!["eng".to_string(), "jpn".to_string()];
+    }
 
     let mut confidence = 0.35f32;
     if parsed.quality.is_some() {

@@ -5,11 +5,11 @@ use async_graphql::{
 use scryer_domain::DownloadQueueState;
 use tokio::sync::broadcast::error::RecvError;
 
+use crate::context::LogBuffer;
 use crate::context::{actor_from_ctx, app_from_ctx};
 use crate::mappers::from_activity_event;
 use crate::mappers::from_download_queue_item;
 use crate::types::{ActivityEventPayload, DownloadQueueItemPayload};
-use crate::context::LogBuffer;
 
 pub struct SubscriptionRoot;
 
@@ -43,7 +43,10 @@ impl SubscriptionRoot {
             }
         };
 
-        tracing::debug!("activity_events: subscription started for user {}", actor.id);
+        tracing::debug!(
+            "activity_events: subscription started for user {}",
+            actor.id
+        );
 
         let stream = unfold(receiver, move |mut receiver| async move {
             loop {
@@ -97,7 +100,10 @@ impl SubscriptionRoot {
             }
         };
 
-        tracing::debug!("download_queue sub: subscription started for user {}", actor.id);
+        tracing::debug!(
+            "download_queue sub: subscription started for user {}",
+            actor.id
+        );
 
         let include_all_activity = include_all_activity.unwrap_or(false);
         let include_history_only = include_history_only.unwrap_or(false);
@@ -114,8 +120,9 @@ impl SubscriptionRoot {
                                 .filter(|item| {
                                     matches!(
                                         item.state,
-                                        DownloadQueueState::Completed | DownloadQueueState::Failed
-                                        | DownloadQueueState::ImportPending
+                                        DownloadQueueState::Completed
+                                            | DownloadQueueState::Failed
+                                            | DownloadQueueState::ImportPending
                                     )
                                 })
                                 .collect()
@@ -140,7 +147,9 @@ impl SubscriptionRoot {
                         return Some((payloads, receiver));
                     }
                     Err(RecvError::Lagged(n)) => {
-                        tracing::debug!("download_queue sub: receiver lagged, skipped {n} messages");
+                        tracing::debug!(
+                            "download_queue sub: receiver lagged, skipped {n} messages"
+                        );
                         continue;
                     }
                     Err(RecvError::Closed) => {
@@ -178,7 +187,10 @@ impl SubscriptionRoot {
             }
         };
 
-        tracing::debug!("service_log_lines: subscription started for user {}", actor.id);
+        tracing::debug!(
+            "service_log_lines: subscription started for user {}",
+            actor.id
+        );
 
         let stream = unfold(receiver, move |mut receiver| async move {
             loop {
@@ -202,7 +214,9 @@ impl SubscriptionRoot {
 
 fn parse_sort_value_desc(left: Option<&str>, right: Option<&str>) -> std::cmp::Ordering {
     fn parse(value: Option<&str>) -> i64 {
-        value.and_then(|value| value.parse::<i64>().ok()).unwrap_or(0)
+        value
+            .and_then(|value| value.parse::<i64>().ok())
+            .unwrap_or(0)
     }
 
     parse(left).cmp(&parse(right))

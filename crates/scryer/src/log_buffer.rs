@@ -108,4 +108,3 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBufferWriter {
         self.buffer.clone()
     }
 }
-

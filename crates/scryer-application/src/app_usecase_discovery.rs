@@ -1,8 +1,8 @@
 use super::*;
 use crate::quality_profile::ScoringSource;
 use serde_json::Value;
-use tracing::{info, warn};
 use tokio::task::JoinSet;
+use tracing::{info, warn};
 
 const INDEXER_ROUTING_KEY: &str = "indexer.routing";
 
@@ -39,12 +39,21 @@ pub(crate) fn is_indexer_http_error(error: &AppError) -> bool {
 }
 
 fn release_search_key(result: &IndexerSearchResult) -> String {
-    if let Some(download_url) = result.download_url.as_deref().map(str::trim).filter(|value| !value.is_empty())
+    if let Some(download_url) = result
+        .download_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
     {
         return download_url.to_string();
     }
 
-    if let Some(link) = result.link.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(link) = result
+        .link
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         return link.to_string();
     }
 
@@ -97,9 +106,7 @@ impl AppUseCase {
             tvdb_id.as_deref(),
             category.as_deref(),
         );
-        let indexer_routing = self
-            .resolve_indexer_routing(scope_id.as_deref())
-            .await;
+        let indexer_routing = self.resolve_indexer_routing(scope_id.as_deref()).await;
 
         // If routing exists and every indexer is disabled, skip the search entirely.
         if let Some(ref plan) = indexer_routing {
@@ -132,7 +139,18 @@ impl AppUseCase {
 
             set.spawn(async move {
                 indexer_client
-                    .search(query, imdb_id, tvdb_id, category, None, indexer_routing, limit, mode, season, episode)
+                    .search(
+                        query,
+                        imdb_id,
+                        tvdb_id,
+                        category,
+                        None,
+                        indexer_routing,
+                        limit,
+                        mode,
+                        season,
+                        episode,
+                    )
                     .await
             });
         }
@@ -169,7 +187,8 @@ impl AppUseCase {
         }
 
         if raw_results.is_empty() && query_failures > 0 {
-            let details = first_failure.unwrap_or_else(|| "all indexer search queries failed".to_string());
+            let details =
+                first_failure.unwrap_or_else(|| "all indexer search queries failed".to_string());
             return Err(AppError::Repository(details));
         }
 
@@ -188,7 +207,9 @@ impl AppUseCase {
 
         let failed_source_hints: std::collections::HashSet<String> = failed_signatures
             .iter()
-            .filter_map(|signature| normalize_release_attempt_hint(signature.source_hint.as_deref()))
+            .filter_map(|signature| {
+                normalize_release_attempt_hint(signature.source_hint.as_deref())
+            })
             .collect();
         let failed_source_titles: std::collections::HashSet<String> = failed_signatures
             .iter()
@@ -252,13 +273,19 @@ impl AppUseCase {
                 }
             }
 
-            let persona = quality_profile.criteria.resolve_persona(category.as_deref());
+            let persona = quality_profile
+                .criteria
+                .resolve_persona(category.as_deref());
             let weights = crate::scoring_weights::build_weights(
                 persona,
                 &quality_profile.criteria.scoring_overrides,
             );
-            let mut decision =
-                evaluate_against_profile(&quality_profile, &parsed_release_metadata, false, &weights);
+            let mut decision = evaluate_against_profile(
+                &quality_profile,
+                &parsed_release_metadata,
+                false,
+                &weights,
+            );
             apply_age_scoring(&mut decision, result.published_at.as_deref());
             crate::quality_profile::apply_size_scoring_for_category(
                 &mut decision,
@@ -365,10 +392,20 @@ impl AppUseCase {
         absolute_episode: Option<u32>,
     ) -> AppResult<Vec<IndexerSearchResult>> {
         self.search_and_score_releases(
-            queries, imdb_id, tvdb_id, category,
-            &[], limit, &actor.id, SearchMode::Interactive, None,
-            season, episode, absolute_episode,
-        ).await
+            queries,
+            imdb_id,
+            tvdb_id,
+            category,
+            &[],
+            limit,
+            &actor.id,
+            SearchMode::Interactive,
+            None,
+            season,
+            episode,
+            absolute_episode,
+        )
+        .await
     }
 
     pub async fn search_indexers(
@@ -430,11 +467,13 @@ impl AppUseCase {
         }
         let activity_media_label = normalized_category
             .as_deref()
-            .map(|category| match category.trim().to_ascii_lowercase().as_str() {
-                "series" | "tv" => "series",
-                "anime" => "anime",
-                _ => "movie",
-            })
+            .map(
+                |category| match category.trim().to_ascii_lowercase().as_str() {
+                    "series" | "tv" => "series",
+                    "anime" => "anime",
+                    _ => "movie",
+                },
+            )
             .unwrap_or("movie");
 
         let results = results?;
@@ -483,7 +522,9 @@ impl AppUseCase {
         let episode = episode.trim();
 
         if normalized_title.is_empty() || season.is_empty() || episode.is_empty() {
-            return Err(AppError::Validation("title, season, and episode are required".into()));
+            return Err(AppError::Validation(
+                "title, season, and episode are required".into(),
+            ));
         }
 
         let normalized_imdb_id = normalize_imdb_id(imdb_id);
@@ -492,8 +533,14 @@ impl AppUseCase {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
 
-        let season_digits: String = season.chars().filter(|value| value.is_ascii_digit()).collect();
-        let episode_digits: String = episode.chars().filter(|value| value.is_ascii_digit()).collect();
+        let season_digits: String = season
+            .chars()
+            .filter(|value| value.is_ascii_digit())
+            .collect();
+        let episode_digits: String = episode
+            .chars()
+            .filter(|value| value.is_ascii_digit())
+            .collect();
 
         if season_digits.is_empty() || episode_digits.is_empty() {
             return Err(AppError::Validation(
@@ -587,19 +634,21 @@ impl AppUseCase {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
 
-        let season_digits: String = season.chars().filter(|value| value.is_ascii_digit()).collect();
+        let season_digits: String = season
+            .chars()
+            .filter(|value| value.is_ascii_digit())
+            .collect();
         if season_digits.is_empty() {
-            return Err(AppError::Validation("season must include a numeric value".into()));
+            return Err(AppError::Validation(
+                "season must include a numeric value".into(),
+            ));
         }
 
         let season_num = season_digits
             .parse::<usize>()
             .map_err(|_| AppError::Validation("invalid season value".into()))?;
 
-        let mut queries = vec![
-            format!("S{:0>2}", season_num),
-            format!("S{}", season_num),
-        ];
+        let mut queries = vec![format!("S{:0>2}", season_num), format!("S{}", season_num)];
         let mut unique = std::collections::HashSet::new();
         queries.retain(|value| unique.insert(value.to_ascii_lowercase()));
 
@@ -675,7 +724,9 @@ pub(crate) fn is_release_blocklisted(
 }
 
 fn normalize_imdb_id(raw: Option<String>) -> Option<String> {
-    let value = raw.map(|value| value.trim().to_string()).filter(|value| !value.is_empty())?;
+    let value = raw
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())?;
 
     if let Some(tt_index) = value.to_ascii_lowercase().find("tt") {
         let suffix: String = value[tt_index + 2..]
@@ -695,11 +746,10 @@ fn normalize_imdb_id(raw: Option<String>) -> Option<String> {
 }
 
 fn normalize_numeric_id(raw: Option<String>) -> Option<String> {
-    let value = raw.map(|value| value.trim().to_string()).filter(|value| !value.is_empty())?;
-    let digits: String = value
-        .chars()
-        .filter(|ch| ch.is_ascii_digit())
-        .collect();
+    let value = raw
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())?;
+    let digits: String = value.chars().filter(|ch| ch.is_ascii_digit()).collect();
 
     if digits.is_empty() {
         None
@@ -850,10 +900,7 @@ impl AppUseCase {
     /// Returns `None` if no routing is configured (caller falls back to
     /// hardcoded defaults). Returns `Some(vec![])` if all indexers are
     /// disabled for this scope (caller should skip search).
-    async fn resolve_indexer_routing(
-        &self,
-        scope_id: Option<&str>,
-    ) -> Option<IndexerRoutingPlan> {
+    async fn resolve_indexer_routing(&self, scope_id: Option<&str>) -> Option<IndexerRoutingPlan> {
         let scope_id = scope_id?;
 
         let raw_json = match self
@@ -904,7 +951,10 @@ impl AppUseCase {
 
             entries.insert(
                 indexer_id.clone(),
-                IndexerRoutingEntry { enabled, categories },
+                IndexerRoutingEntry {
+                    enabled,
+                    categories,
+                },
             );
         }
 

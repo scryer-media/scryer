@@ -141,10 +141,7 @@ pub async fn recycle_file(
 /// Restore a file from the recycle bin to its original location.
 ///
 /// Used by the upgrade workflow to roll back on import failure.
-pub async fn restore_from_recycle(
-    recycled_path: &Path,
-    original_path: &Path,
-) -> AppResult<()> {
+pub async fn restore_from_recycle(recycled_path: &Path, original_path: &Path) -> AppResult<()> {
     if !recycled_path.exists() {
         return Err(AppError::Repository(format!(
             "recycled file not found: {}",
@@ -208,9 +205,11 @@ pub async fn purge_expired(config: &RecycleBinConfig) -> AppResult<u32> {
         ))
     })?;
 
-    while let Some(entry) = entries.next_entry().await.map_err(|e| {
-        AppError::Repository(format!("failed to read recycle bin entry: {}", e))
-    })? {
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| AppError::Repository(format!("failed to read recycle bin entry: {}", e)))?
+    {
         let path = entry.path();
         if !path.is_dir() {
             continue;
@@ -279,18 +278,18 @@ pub async fn media_root_for_title(
     title: &scryer_domain::Title,
 ) -> Option<String> {
     let handler = app.facet_registry.get(&title.facet);
-    let path_key = handler.map(|h| h.library_path_key()).unwrap_or("series.path");
-    let default_path = handler.map(|h| h.default_library_path()).unwrap_or("/media/series");
+    let path_key = handler
+        .map(|h| h.library_path_key())
+        .unwrap_or("series.path");
+    let default_path = handler
+        .map(|h| h.default_library_path())
+        .unwrap_or("/media/series");
 
-    app.read_setting_string_value_for_scope(
-        crate::SETTINGS_SCOPE_MEDIA,
-        path_key,
-        None,
-    )
-    .await
-    .ok()
-    .flatten()
-    .or_else(|| Some(default_path.to_string()))
+    app.read_setting_string_value_for_scope(crate::SETTINGS_SCOPE_MEDIA, path_key, None)
+        .await
+        .ok()
+        .flatten()
+        .or_else(|| Some(default_path.to_string()))
 }
 
 /// Resolve recycle bin configuration from application settings.
@@ -315,11 +314,7 @@ pub async fn resolve_recycle_config(
         .unwrap_or(true);
 
     let custom_path = app
-        .read_setting_string_value_for_scope(
-            crate::SETTINGS_SCOPE_MEDIA,
-            "recycle_bin.path",
-            None,
-        )
+        .read_setting_string_value_for_scope(crate::SETTINGS_SCOPE_MEDIA, "recycle_bin.path", None)
         .await
         .ok()
         .flatten()
@@ -361,8 +356,8 @@ pub fn config_from_file_path(file_path: &Path) -> RecycleBinConfig {
     // Walk up to the grandparent as a rough media root estimate.
     // e.g. /media/movies/Movie (2024)/Movie.mkv → /media/movies/
     let base = file_path
-        .parent()                   // Movie (2024)/
-        .and_then(|p| p.parent())   // /media/movies/
+        .parent() // Movie (2024)/
+        .and_then(|p| p.parent()) // /media/movies/
         .unwrap_or_else(|| Path::new("/tmp"));
 
     RecycleBinConfig {
@@ -498,7 +493,9 @@ mod tests {
         )
         .await
         .unwrap();
-        tokio::fs::write(old_dir.join("old.mkv"), b"old").await.unwrap();
+        tokio::fs::write(old_dir.join("old.mkv"), b"old")
+            .await
+            .unwrap();
 
         // Create a "fresh" entry (recycled just now)
         let new_dir = recycle_dir.join("20260307_120000000_def456");
@@ -516,7 +513,9 @@ mod tests {
         )
         .await
         .unwrap();
-        tokio::fs::write(new_dir.join("new.mkv"), b"new").await.unwrap();
+        tokio::fs::write(new_dir.join("new.mkv"), b"new")
+            .await
+            .unwrap();
 
         let config = test_config(&recycle_dir);
         let purged = purge_expired(&config).await.unwrap();

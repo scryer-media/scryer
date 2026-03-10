@@ -32,13 +32,32 @@ impl AppUseCase {
             recent_event_preview.push(event.message.clone());
         }
 
-        let db_migration_version = self.services.system_info.current_migration_version().await.ok().flatten();
-        let db_pending_migrations = self.services.system_info.pending_migration_count().await.unwrap_or(0);
-        let smg_cert_expires_at = self.services.system_info.smg_cert_expires_at().await.ok().flatten();
+        let db_migration_version = self
+            .services
+            .system_info
+            .current_migration_version()
+            .await
+            .ok()
+            .flatten();
+        let db_pending_migrations = self
+            .services
+            .system_info
+            .pending_migration_count()
+            .await
+            .unwrap_or(0);
+        let smg_cert_expires_at = self
+            .services
+            .system_info
+            .smg_cert_expires_at()
+            .await
+            .ok()
+            .flatten();
         let smg_cert_days_remaining = smg_cert_expires_at.as_deref().and_then(|expires_str| {
             chrono::DateTime::parse_from_rfc3339(expires_str)
                 .ok()
-                .map(|expires| (expires.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_days())
+                .map(|expires| {
+                    (expires.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_days()
+                })
         });
 
         let indexer_stats = self.services.indexer_stats.all_stats();
@@ -78,11 +97,7 @@ impl AppUseCase {
 
         for (key, default, label) in &path_keys {
             let path = self
-                .read_setting_string_value_for_scope(
-                    SETTINGS_SCOPE_MEDIA,
-                    key,
-                    None,
-                )
+                .read_setting_string_value_for_scope(SETTINGS_SCOPE_MEDIA, key, None)
                 .await?
                 .unwrap_or_else(|| default.to_string());
 
@@ -93,8 +108,8 @@ impl AppUseCase {
             match nix::sys::statvfs::statvfs(path.as_str()) {
                 Ok(stat) => {
                     let block_size = stat.block_size();
-                    let total = stat.blocks() as u64 * block_size;
-                    let free = stat.blocks_available() as u64 * block_size;
+                    let total = u64::from(stat.blocks()) * block_size;
+                    let free = u64::from(stat.blocks_available()) * block_size;
                     let used = total.saturating_sub(free);
                     results.push(DiskSpaceInfo {
                         path,
@@ -247,7 +262,9 @@ impl AppUseCase {
                 .as_deref()
                 .ok_or_else(|| AppError::Validation("account has no password set".into()))?;
             if !self.validate_password(&current, hash)? {
-                return Err(AppError::Unauthorized("current password is incorrect".into()));
+                return Err(AppError::Unauthorized(
+                    "current password is incorrect".into(),
+                ));
             }
         } else {
             require(actor, &Entitlement::ManageConfig)?;

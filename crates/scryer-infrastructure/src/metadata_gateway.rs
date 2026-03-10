@@ -4,13 +4,13 @@ use std::sync::RwLock;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use reqwest::Client;
 use ring::digest;
 use scryer_application::{
     AnimeEpisodeMapping, AnimeMapping, AppError, AppResult, EpisodeMetadata, MetadataGateway,
     MetadataSearchItem, MovieMetadata, MultiMetadataSearchResult, RichMetadataSearchItem,
     SeasonMetadata, SeriesMetadata,
 };
-use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
 use tracing::{debug, info, warn};
@@ -244,7 +244,10 @@ impl MetadataGatewayClient {
 
         // Derive registration URL from GraphQL endpoint
         let registration_url = if endpoint.ends_with("/graphql") {
-            format!("{}/api/register", &endpoint[..endpoint.len() - "/graphql".len()])
+            format!(
+                "{}/api/register",
+                &endpoint[..endpoint.len() - "/graphql".len()]
+            )
         } else {
             format!("{}/api/register", endpoint.trim_end_matches('/'))
         };
@@ -374,16 +377,20 @@ impl MetadataGatewayClient {
         let cache_key = format!("{hash}:{variables_str}");
 
         // Check for a cached ETag to send If-None-Match
-        let cached_etag = self.apq_cache.read().unwrap()
+        let cached_etag = self
+            .apq_cache
+            .read()
+            .unwrap()
             .get(&cache_key)
             .map(|e| e.etag.clone());
 
         debug!(endpoint = %self.endpoint, hash, has_etag = cached_etag.is_some(), "APQ GET request");
 
         let client = self.get_http_client().await;
-        let mut req = client
-            .get(&self.endpoint)
-            .query(&[("extensions", &extensions_str), ("variables", &variables_str)]);
+        let mut req = client.get(&self.endpoint).query(&[
+            ("extensions", &extensions_str),
+            ("variables", &variables_str),
+        ]);
         if let Some(ref etag) = cached_etag {
             req = req.header(reqwest::header::IF_NONE_MATCH, etag);
         }
@@ -392,38 +399,47 @@ impl MetadataGatewayClient {
         match get_result {
             Ok(resp) if resp.status() == reqwest::StatusCode::NOT_MODIFIED => {
                 // 304: serve from our local cache
-                let body = self.apq_cache.read().unwrap()
+                let body = self
+                    .apq_cache
+                    .read()
+                    .unwrap()
                     .get(&cache_key)
                     .map(|e| e.body.clone())
                     .ok_or_else(|| AppError::Repository("APQ 304 but no cached body".into()))?;
                 debug!(hash, "APQ 304 — serving from ETag cache");
                 let parsed: GraphqlResponse<T> = serde_json::from_str(&body)
                     .map_err(|e| AppError::Repository(format!("APQ cache: invalid JSON: {e}")))?;
-                parsed.data
+                parsed
+                    .data
                     .ok_or_else(|| AppError::Repository("APQ cache: empty data".into()))
             }
             Ok(resp) if resp.status().is_success() => {
-                let etag = resp.headers()
+                let etag = resp
+                    .headers()
                     .get(reqwest::header::ETAG)
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string());
-                let raw = resp.text().await
+                let raw = resp
+                    .text()
+                    .await
                     .map_err(|e| AppError::Repository(e.to_string()))?;
 
-                let parsed: GraphqlResponse<T> = serde_json::from_str(&raw).map_err(|e| {
-                    AppError::Repository(format!("APQ GET: invalid JSON: {e}"))
-                })?;
+                let parsed: GraphqlResponse<T> = serde_json::from_str(&raw)
+                    .map_err(|e| AppError::Repository(format!("APQ GET: invalid JSON: {e}")))?;
 
                 // Check for PersistedQueryNotFound before caching
                 if let Some(ref errors) = parsed.errors {
-                    let is_not_found = errors.iter().any(|e|
-                        e.message.contains("PersistedQueryNotFound")
-                    );
+                    let is_not_found = errors
+                        .iter()
+                        .any(|e| e.message.contains("PersistedQueryNotFound"));
                     if is_not_found {
                         debug!(hash, "APQ cache miss, registering via POST");
-                        return self.execute_graphql_apq_register(query, &extensions, &variables).await;
+                        return self
+                            .execute_graphql_apq_register(query, &extensions, &variables)
+                            .await;
                     }
-                    let msg = errors.first()
+                    let msg = errors
+                        .first()
                         .map(|e| e.message.as_str())
                         .unwrap_or("metadata gateway returned errors");
                     return Err(AppError::Repository(msg.to_string()));
@@ -431,21 +447,26 @@ impl MetadataGatewayClient {
 
                 // Store ETag + body for future conditional requests (evicts oldest beyond 1000)
                 if let Some(etag) = etag {
-                    self.apq_cache.write().unwrap()
+                    self.apq_cache
+                        .write()
+                        .unwrap()
                         .insert(cache_key, ApqCacheEntry { etag, body: raw });
                 }
 
-                parsed.data
+                parsed
+                    .data
                     .ok_or_else(|| AppError::Repository("APQ GET: empty data".into()))
             }
             Ok(resp) => {
                 let status = resp.status();
                 debug!(status = %status, hash, "APQ GET failed, falling back to POST");
-                self.execute_graphql_apq_register(query, &extensions, &variables).await
+                self.execute_graphql_apq_register(query, &extensions, &variables)
+                    .await
             }
             Err(err) => {
                 debug!(error = %err, hash, "APQ GET network error, falling back to POST");
-                self.execute_graphql_apq_register(query, &extensions, &variables).await
+                self.execute_graphql_apq_register(query, &extensions, &variables)
+                    .await
             }
         }
     }
@@ -511,16 +532,9 @@ impl MetadataGatewayClient {
             .ok_or_else(|| AppError::Repository("metadata gateway returned empty data".into()))
     }
 
-    async fn send_with_retry(
-        &self,
-        payload: &serde_json::Value,
-    ) -> AppResult<reqwest::Response> {
+    async fn send_with_retry(&self, payload: &serde_json::Value) -> AppResult<reqwest::Response> {
         let client = self.get_http_client().await;
-        let result = client
-            .post(&self.endpoint)
-            .json(payload)
-            .send()
-            .await;
+        let result = client.post(&self.endpoint).json(payload).send().await;
 
         match result {
             Ok(resp) if !resp.status().is_server_error() => Ok(resp),
@@ -536,7 +550,9 @@ impl MetadataGatewayClient {
                     .json(payload)
                     .send()
                     .await
-                    .map_err(|err| AppError::Repository(format!("metadata gateway retry failed: {err}")))
+                    .map_err(|err| {
+                        AppError::Repository(format!("metadata gateway retry failed: {err}"))
+                    })
             }
             Err(err) if err.is_timeout() || err.is_connect() => {
                 tracing::warn!(
@@ -549,7 +565,9 @@ impl MetadataGatewayClient {
                     .json(payload)
                     .send()
                     .await
-                    .map_err(|err| AppError::Repository(format!("metadata gateway retry failed: {err}")))
+                    .map_err(|err| {
+                        AppError::Repository(format!("metadata gateway retry failed: {err}"))
+                    })
             }
             Err(err) => Err(AppError::Repository(err.to_string())),
         }
@@ -557,10 +575,7 @@ impl MetadataGatewayClient {
 
     /// POST a dynamic GraphQL query and return the `data` field as raw JSON.
     /// Tolerates partial errors (some aliases may resolve while others fail).
-    async fn post_graphql_partial(
-        &self,
-        query: &str,
-    ) -> AppResult<serde_json::Value> {
+    async fn post_graphql_partial(&self, query: &str) -> AppResult<serde_json::Value> {
         let payload = json!({ "query": query });
         let client = self.get_http_client().await;
         let resp = client
@@ -588,7 +603,10 @@ impl MetadataGatewayClient {
         if let Some(errors) = parsed.get("errors") {
             if let Some(arr) = errors.as_array() {
                 for err in arr {
-                    let msg = err.get("message").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    let msg = err
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
                     debug!("bulk metadata partial error: {msg}");
                 }
             }
@@ -1059,7 +1077,12 @@ impl MetadataGateway for MetadataGatewayClient {
         }
 
         // Deduplicate IDs
-        let unique: Vec<i64> = tvdb_ids.iter().copied().collect::<HashSet<_>>().into_iter().collect();
+        let unique: Vec<i64> = tvdb_ids
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
         let query = build_bulk_movie_query(&unique, language);
 
         info!(count = unique.len(), "bulk movie metadata request");
@@ -1073,27 +1096,34 @@ impl MetadataGateway for MetadataGatewayClient {
                 }
                 if let Ok(movie_result) = serde_json::from_value::<MovieResult>(value.clone()) {
                     let m = movie_result.movie;
-                    results.insert(m.tvdb_id, MovieMetadata {
-                        tvdb_id: m.tvdb_id,
-                        name: m.name,
-                        slug: m.slug,
-                        year: m.year,
-                        content_status: m.status,
-                        overview: m.overview,
-                        poster_url: m.poster_url,
-                        language: m.language,
-                        runtime_minutes: m.runtime_minutes,
-                        sort_title: m.sort_title,
-                        imdb_id: m.imdb_id,
-                        genres: m.genres,
-                        studio: m.studio,
-                        tmdb_release_date: m.tmdb_release_date,
-                    });
+                    results.insert(
+                        m.tvdb_id,
+                        MovieMetadata {
+                            tvdb_id: m.tvdb_id,
+                            name: m.name,
+                            slug: m.slug,
+                            year: m.year,
+                            content_status: m.status,
+                            overview: m.overview,
+                            poster_url: m.poster_url,
+                            language: m.language,
+                            runtime_minutes: m.runtime_minutes,
+                            sort_title: m.sort_title,
+                            imdb_id: m.imdb_id,
+                            genres: m.genres,
+                            studio: m.studio,
+                            tmdb_release_date: m.tmdb_release_date,
+                        },
+                    );
                 }
             }
         }
 
-        info!(requested = unique.len(), resolved = results.len(), "bulk movie metadata complete");
+        info!(
+            requested = unique.len(),
+            resolved = results.len(),
+            "bulk movie metadata complete"
+        );
         Ok(results)
     }
 
@@ -1106,7 +1136,12 @@ impl MetadataGateway for MetadataGatewayClient {
             return Ok(HashMap::new());
         }
 
-        let unique: Vec<i64> = tvdb_ids.iter().copied().collect::<HashSet<_>>().into_iter().collect();
+        let unique: Vec<i64> = tvdb_ids
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
         let query = build_bulk_series_query(&unique, language);
 
         info!(count = unique.len(), "bulk series metadata request");
@@ -1120,61 +1155,84 @@ impl MetadataGateway for MetadataGatewayClient {
                 }
                 if let Ok(series_result) = serde_json::from_value::<SeriesResult>(value.clone()) {
                     let s = series_result.series;
-                    results.insert(s.tvdb_id, SeriesMetadata {
-                        tvdb_id: s.tvdb_id,
-                        name: s.name,
-                        sort_name: s.sort_name,
-                        slug: s.slug,
-                        year: s.year,
-                        content_status: s.status,
-                        first_aired: s.first_aired,
-                        overview: s.overview,
-                        network: s.network,
-                        runtime_minutes: s.runtime_minutes,
-                        poster_url: s.poster_url,
-                        country: s.country,
-                        genres: s.genres,
-                        aliases: s.aliases,
-                        seasons: s.seasons.into_iter().map(|season| SeasonMetadata {
-                            tvdb_id: season.tvdb_id,
-                            number: season.number,
-                            label: season.label,
-                            episode_type: season.episode_type,
-                        }).collect(),
-                        episodes: s.episodes.into_iter().map(|ep| EpisodeMetadata {
-                            tvdb_id: ep.tvdb_id,
-                            episode_number: ep.episode_number,
-                            name: ep.name,
-                            aired: ep.aired,
-                            runtime_minutes: ep.runtime_minutes,
-                            is_filler: ep.is_filler,
-                            is_recap: ep.is_recap,
-                            overview: ep.overview,
-                            absolute_number: ep.absolute_number,
-                            season_number: ep.season_number,
-                        }).collect(),
-                        anime_mappings: s.anime_mappings.into_iter().map(|m| AnimeMapping {
-                            mal_id: m.mal_id,
-                            anilist_id: m.anilist_id,
-                            anidb_id: m.anidb_id,
-                            kitsu_id: m.kitsu_id,
-                            thetvdb_season: m.thetvdb_season,
-                            score: m.score,
-                            anime_media_type: m.anime_media_type.unwrap_or_default(),
-                            global_media_type: m.global_media_type.unwrap_or_default(),
-                            status: m.status.unwrap_or_default(),
-                            episode_mappings: m.episode_mappings.into_iter().map(|e| AnimeEpisodeMapping {
-                                tvdb_season: e.tvdb_season,
-                                episode_start: e.episode_start,
-                                episode_end: e.episode_end,
-                            }).collect(),
-                        }).collect(),
-                    });
+                    results.insert(
+                        s.tvdb_id,
+                        SeriesMetadata {
+                            tvdb_id: s.tvdb_id,
+                            name: s.name,
+                            sort_name: s.sort_name,
+                            slug: s.slug,
+                            year: s.year,
+                            content_status: s.status,
+                            first_aired: s.first_aired,
+                            overview: s.overview,
+                            network: s.network,
+                            runtime_minutes: s.runtime_minutes,
+                            poster_url: s.poster_url,
+                            country: s.country,
+                            genres: s.genres,
+                            aliases: s.aliases,
+                            seasons: s
+                                .seasons
+                                .into_iter()
+                                .map(|season| SeasonMetadata {
+                                    tvdb_id: season.tvdb_id,
+                                    number: season.number,
+                                    label: season.label,
+                                    episode_type: season.episode_type,
+                                })
+                                .collect(),
+                            episodes: s
+                                .episodes
+                                .into_iter()
+                                .map(|ep| EpisodeMetadata {
+                                    tvdb_id: ep.tvdb_id,
+                                    episode_number: ep.episode_number,
+                                    name: ep.name,
+                                    aired: ep.aired,
+                                    runtime_minutes: ep.runtime_minutes,
+                                    is_filler: ep.is_filler,
+                                    is_recap: ep.is_recap,
+                                    overview: ep.overview,
+                                    absolute_number: ep.absolute_number,
+                                    season_number: ep.season_number,
+                                })
+                                .collect(),
+                            anime_mappings: s
+                                .anime_mappings
+                                .into_iter()
+                                .map(|m| AnimeMapping {
+                                    mal_id: m.mal_id,
+                                    anilist_id: m.anilist_id,
+                                    anidb_id: m.anidb_id,
+                                    kitsu_id: m.kitsu_id,
+                                    thetvdb_season: m.thetvdb_season,
+                                    score: m.score,
+                                    anime_media_type: m.anime_media_type.unwrap_or_default(),
+                                    global_media_type: m.global_media_type.unwrap_or_default(),
+                                    status: m.status.unwrap_or_default(),
+                                    episode_mappings: m
+                                        .episode_mappings
+                                        .into_iter()
+                                        .map(|e| AnimeEpisodeMapping {
+                                            tvdb_season: e.tvdb_season,
+                                            episode_start: e.episode_start,
+                                            episode_end: e.episode_end,
+                                        })
+                                        .collect(),
+                                })
+                                .collect(),
+                        },
+                    );
                 }
             }
         }
 
-        info!(requested = unique.len(), resolved = results.len(), "bulk series metadata complete");
+        info!(
+            requested = unique.len(),
+            resolved = results.len(),
+            "bulk series metadata complete"
+        );
         Ok(results)
     }
 }

@@ -9,7 +9,9 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use common::{load_fixture, TestContext};
 use scryer_application::{DownloadClient, DownloadClientConfigRepository, NullSettingsRepository};
 use scryer_domain::DownloadClientConfig;
-use scryer_infrastructure::{NzbgetDownloadClient, PrioritizedDownloadClientRouter, SabnzbdDownloadClient};
+use scryer_infrastructure::{
+    NzbgetDownloadClient, PrioritizedDownloadClientRouter, SabnzbdDownloadClient,
+};
 
 fn new_nzbget_client(uri: &str) -> scryer_infrastructure::NzbgetDownloadClient {
     scryer_infrastructure::NzbgetDownloadClient::new(
@@ -29,7 +31,9 @@ async fn nzbget_test_connection_returns_version() {
     let ctx = TestContext::new().await;
     Mock::given(method("POST"))
         .and(path("/jsonrpc"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(load_fixture("nzbget/version.json")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(load_fixture("nzbget/version.json")),
+        )
         .mount(&ctx.nzbget_server)
         .await;
 
@@ -273,7 +277,10 @@ async fn nzbget_list_history_maps_success_status() {
         .unwrap();
 
     // First item has SUCCESS/ALL status
-    let success_item = items.iter().find(|i| i.title_name.contains("Completed")).unwrap();
+    let success_item = items
+        .iter()
+        .find(|i| i.title_name.contains("Completed"))
+        .unwrap();
     assert_eq!(
         format!("{:?}", success_item.state),
         "Completed",
@@ -281,7 +288,10 @@ async fn nzbget_list_history_maps_success_status() {
     );
 
     // Second item has FAILURE/HEALTH status
-    let failed_item = items.iter().find(|i| i.title_name.contains("Failed")).unwrap();
+    let failed_item = items
+        .iter()
+        .find(|i| i.title_name.contains("Failed"))
+        .unwrap();
     assert_eq!(
         format!("{:?}", failed_item.state),
         "Failed",
@@ -492,16 +502,9 @@ async fn nzbget_submit_download() {
         .submit_to_download_queue(&title, Some(source_hint), None, None, None)
         .await;
 
-    assert!(
-        result.is_ok(),
-        "submit should succeed: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "submit should succeed: {:?}", result.err());
     let grab = result.unwrap();
-    assert!(
-        !grab.job_id.is_empty(),
-        "should return a non-empty job ID"
-    );
+    assert!(!grab.job_id.is_empty(), "should return a non-empty job ID");
 }
 
 #[tokio::test]
@@ -629,7 +632,12 @@ async fn mount_list_queue_mocks(server: &MockServer) {
 /// Create a router backed by the test DB, with `fallback_uri` as the fallback client.
 fn build_router(ctx: &TestContext, fallback_uri: String) -> PrioritizedDownloadClientRouter {
     let fallback = NzbgetDownloadClient::new(fallback_uri, None, None, "SCORE".to_string());
-    PrioritizedDownloadClientRouter::new(Arc::new(ctx.db.clone()), Arc::new(NullSettingsRepository), Arc::new(fallback))
+    PrioritizedDownloadClientRouter::new(
+        Arc::new(ctx.db.clone()),
+        Arc::new(NullSettingsRepository),
+        Arc::new(fallback),
+        None,
+    )
 }
 
 #[tokio::test]
@@ -659,7 +667,11 @@ async fn router_routes_to_highest_priority_client() {
 
     // Aggregation: primary returns 2 items, secondary has no mocks so its
     // request fails and is skipped — total is still 2 from primary.
-    assert_eq!(items.len(), 2, "should return items from the primary client");
+    assert_eq!(
+        items.len(),
+        2,
+        "should return items from the primary client"
+    );
 }
 
 #[tokio::test]
@@ -686,7 +698,11 @@ async fn router_falls_back_to_next_client_on_primary_failure() {
         .await
         .expect("secondary client should succeed after primary fails");
 
-    assert_eq!(items.len(), 2, "should return items from the secondary client");
+    assert_eq!(
+        items.len(),
+        2,
+        "should return items from the secondary client"
+    );
     assert!(
         !second_server.received_requests().await.unwrap().is_empty(),
         "secondary client should have been contacted"
@@ -703,8 +719,12 @@ async fn router_uses_fallback_when_no_clients_configured() {
     // The fallback is pointed at the only mocked server.
     let fallback =
         NzbgetDownloadClient::new(ctx.nzbget_server.uri(), None, None, "SCORE".to_string());
-    let router =
-        PrioritizedDownloadClientRouter::new(Arc::new(ctx.db.clone()), Arc::new(NullSettingsRepository), Arc::new(fallback));
+    let router = PrioritizedDownloadClientRouter::new(
+        Arc::new(ctx.db.clone()),
+        Arc::new(NullSettingsRepository),
+        Arc::new(fallback),
+        None,
+    );
 
     let items = router
         .list_queue()
@@ -795,7 +815,12 @@ async fn router_disabled_clients_are_not_used() {
 
     // Disabled client at priority 1 — should be filtered out.
     ctx.db
-        .create(router_config("disabled", &ctx.nzbget_server.uri(), 1, false))
+        .create(router_config(
+            "disabled",
+            &ctx.nzbget_server.uri(),
+            1,
+            false,
+        ))
         .await
         .unwrap();
 
@@ -804,8 +829,12 @@ async fn router_disabled_clients_are_not_used() {
     mount_list_queue_mocks(&fallback_server).await;
     let fallback =
         NzbgetDownloadClient::new(fallback_server.uri(), None, None, "SCORE".to_string());
-    let router =
-        PrioritizedDownloadClientRouter::new(Arc::new(ctx.db.clone()), Arc::new(NullSettingsRepository), Arc::new(fallback));
+    let router = PrioritizedDownloadClientRouter::new(
+        Arc::new(ctx.db.clone()),
+        Arc::new(NullSettingsRepository),
+        Arc::new(fallback),
+        None,
+    );
 
     let items = router
         .list_queue()
@@ -814,7 +843,12 @@ async fn router_disabled_clients_are_not_used() {
 
     assert_eq!(items.len(), 2);
     // Disabled client's server received no requests.
-    assert!(ctx.nzbget_server.received_requests().await.unwrap().is_empty());
+    assert!(ctx
+        .nzbget_server
+        .received_requests()
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 // ===========================================================================
@@ -965,7 +999,10 @@ async fn sabnzbd_list_queue_item_has_correct_fields() {
 
     let second = &items[1];
     assert_eq!(second.download_client_item_id, "SABnzbd_nzo_xyz789");
-    assert!(matches!(second.state, scryer_domain::DownloadQueueState::Queued));
+    assert!(matches!(
+        second.state,
+        scryer_domain::DownloadQueueState::Queued
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -1037,12 +1074,24 @@ async fn sabnzbd_list_history_maps_statuses() {
         .await
         .unwrap();
 
-    let completed = items.iter().find(|i| i.title_name.contains("Completed")).unwrap();
-    assert!(matches!(completed.state, scryer_domain::DownloadQueueState::Completed));
+    let completed = items
+        .iter()
+        .find(|i| i.title_name.contains("Completed"))
+        .unwrap();
+    assert!(matches!(
+        completed.state,
+        scryer_domain::DownloadQueueState::Completed
+    ));
     assert_eq!(completed.progress_percent, 100);
 
-    let failed = items.iter().find(|i| i.title_name.contains("Failed")).unwrap();
-    assert!(matches!(failed.state, scryer_domain::DownloadQueueState::Failed));
+    let failed = items
+        .iter()
+        .find(|i| i.title_name.contains("Failed"))
+        .unwrap();
+    assert!(matches!(
+        failed.state,
+        scryer_domain::DownloadQueueState::Failed
+    ));
     assert!(failed.attention_required);
 }
 
@@ -1127,8 +1176,7 @@ async fn sabnzbd_delete_queue_item() {
         .and(query_param("mode", "queue"))
         .and(query_param("name", "delete"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(load_fixture("sabnzbd/delete_success.json")),
+            ResponseTemplate::new(200).set_body_string(load_fixture("sabnzbd/delete_success.json")),
         )
         .mount(&server)
         .await;
@@ -1147,8 +1195,7 @@ async fn sabnzbd_delete_history_item() {
         .and(query_param("mode", "history"))
         .and(query_param("name", "delete"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(load_fixture("sabnzbd/delete_success.json")),
+            ResponseTemplate::new(200).set_body_string(load_fixture("sabnzbd/delete_success.json")),
         )
         .mount(&server)
         .await;
@@ -1176,7 +1223,8 @@ async fn sabnzbd_submit_download() {
     Mock::given(method("GET"))
         .and(path("/getnzb"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_bytes(b"<?xml version=\"1.0\"?><nzb></nzb>".to_vec()),
+            ResponseTemplate::new(200)
+                .set_body_bytes(b"<?xml version=\"1.0\"?><nzb></nzb>".to_vec()),
         )
         .mount(&server)
         .await;
@@ -1222,7 +1270,13 @@ async fn sabnzbd_submit_download() {
 
     let nzb_url = format!("{}/getnzb?id=abc123&apikey=xyz", server.uri());
     let result = new_sabnzbd_client(&server.uri())
-        .submit_to_download_queue(&title, Some(nzb_url), None, None, Some("movies".to_string()))
+        .submit_to_download_queue(
+            &title,
+            Some(nzb_url),
+            None,
+            None,
+            Some("movies".to_string()),
+        )
         .await;
 
     assert!(result.is_ok(), "submit should succeed: {:?}", result.err());

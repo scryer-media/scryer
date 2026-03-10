@@ -123,7 +123,11 @@ fn add_docker_loopback_aliases(origin: &str, origins: &mut Vec<String>) {
     }
 }
 
-pub(crate) async fn cors_handler(request: Request<Body>, next: Next, policy: CorsConfig) -> Response {
+pub(crate) async fn cors_handler(
+    request: Request<Body>,
+    next: Next,
+    policy: CorsConfig,
+) -> Response {
     let origin = request
         .headers()
         .get(header::ORIGIN)
@@ -255,11 +259,7 @@ pub(crate) async fn index_page() -> impl IntoResponse {
 }
 
 pub(crate) async fn graphiql_handler() -> impl IntoResponse {
-    axum::response::Html(
-        GraphiQLSource::build()
-            .endpoint("/graphql")
-            .finish(),
-    )
+    axum::response::Html(GraphiQLSource::build().endpoint("/graphql").finish())
 }
 
 pub(crate) async fn graphql_ws_handler(
@@ -292,14 +292,20 @@ pub(crate) async fn graphql_ws_handler(
                         .get("Authorization")
                         .and_then(|v| v.as_str())
                         .and_then(|raw| {
-                            let stripped = raw.strip_prefix("Bearer ").or_else(|| raw.strip_prefix("bearer "))?;
+                            let stripped = raw
+                                .strip_prefix("Bearer ")
+                                .or_else(|| raw.strip_prefix("bearer "))?;
                             Some(stripped.trim())
                         });
                     if let Some(token) = token {
                         match app_for_init.authenticate_token(token).await {
-                            Ok(user) => { data.insert(user); }
+                            Ok(user) => {
+                                data.insert(user);
+                            }
                             Err(e) => {
-                                return Err(async_graphql::Error::new(format!("authentication failed: {e}")));
+                                return Err(async_graphql::Error::new(format!(
+                                    "authentication failed: {e}"
+                                )));
                             }
                         }
                     }
@@ -335,13 +341,9 @@ pub(crate) async fn graphql_handler(
             async_graphql::BatchRequest::Single(req) => {
                 async_graphql::BatchRequest::Single(req.data(user))
             }
-            async_graphql::BatchRequest::Batch(reqs) => {
-                async_graphql::BatchRequest::Batch(
-                    reqs.into_iter()
-                        .map(|req| req.data(user.clone()))
-                        .collect(),
-                )
-            }
+            async_graphql::BatchRequest::Batch(reqs) => async_graphql::BatchRequest::Batch(
+                reqs.into_iter().map(|req| req.data(user.clone())).collect(),
+            ),
         }
     } else {
         batch
@@ -363,10 +365,7 @@ pub(crate) async fn graphql_handler(
         .unwrap()
 }
 
-async fn resolve_actor(
-    state: &AuthState,
-    headers: &HeaderMap,
-) -> Option<scryer_domain::User> {
+async fn resolve_actor(state: &AuthState, headers: &HeaderMap) -> Option<scryer_domain::User> {
     if state.dev_auto_login {
         state.app.find_or_create_default_user().await.ok()
     } else {

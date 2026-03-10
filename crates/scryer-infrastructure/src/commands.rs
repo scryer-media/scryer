@@ -1,8 +1,3 @@
-use scryer_application::{AppError, AppResult, PendingRelease, PrimaryCollectionSummary, ReleaseDecision, ReleaseDownloadAttemptOutcome, TitleMetadataUpdate, WantedItem};
-use scryer_domain::{CalendarEpisode, Collection, DownloadClientConfig, Episode, HistoryEvent, ImportRecord, IndexerConfig, MediaFacet, PluginInstallation, RuleSet, Title, User};
-use scryer_application::QualityProfile;
-use sqlx::SqlitePool;
-use tokio::sync::mpsc;
 use crate::types::{
     MigrationStatus, ReleaseDownloadFailureSignatureRecord, SettingDefinitionSeed,
     SettingsDefinitionRecord, SettingsValueRecord, TitleReleaseBlocklistRecord,
@@ -12,10 +7,21 @@ use crate::{
     migrations,
     queries::{
         download_client::*, event::*, housekeeping, indexer::*, notification_channel,
-        notification_subscription, plugin_installation::*, quality::*,
-        rule_set::*, settings::*, title::*, user::*, workflow::*,
+        notification_subscription, plugin_installation::*, quality::*, rule_set::*, settings::*,
+        title::*, user::*, workflow::*,
     },
 };
+use scryer_application::QualityProfile;
+use scryer_application::{
+    AppError, AppResult, PendingRelease, PrimaryCollectionSummary, ReleaseDecision,
+    ReleaseDownloadAttemptOutcome, TitleMetadataUpdate, WantedItem,
+};
+use scryer_domain::{
+    CalendarEpisode, Collection, DownloadClientConfig, Episode, HistoryEvent, ImportRecord,
+    IndexerConfig, MediaFacet, PluginInstallation, RuleSet, Title, User,
+};
+use sqlx::SqlitePool;
+use tokio::sync::mpsc;
 
 use tokio::sync::oneshot::Sender;
 
@@ -688,8 +694,7 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     monitored,
                     reply,
                 } => {
-                    let _ =
-                        reply.send(update_title_monitored_query(&pool, &id, monitored).await);
+                    let _ = reply.send(update_title_monitored_query(&pool, &id, monitored).await);
                 }
                 DbCommand::UpdateTitleMetadata {
                     id,
@@ -707,24 +712,21 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     metadata,
                     reply,
                 } => {
-                    let _ = reply.send(
-                        update_title_hydrated_metadata_query(&pool, &id, metadata).await,
-                    );
+                    let _ = reply
+                        .send(update_title_hydrated_metadata_query(&pool, &id, metadata).await);
                 }
                 DbCommand::ListCollectionsForTitle { title_id, reply } => {
-                    let _ =
-                        reply.send(list_collections_for_title_query(&pool, &title_id).await);
+                    let _ = reply.send(list_collections_for_title_query(&pool, &title_id).await);
                 }
                 DbCommand::ListPrimaryCollectionSummaries { title_ids, reply } => {
-                    let _ =
-                        reply.send(list_primary_collection_summaries_query(&pool, &title_ids).await);
+                    let _ = reply
+                        .send(list_primary_collection_summaries_query(&pool, &title_ids).await);
                 }
                 DbCommand::GetCollectionById {
                     collection_id,
                     reply,
                 } => {
-                    let _ =
-                        reply.send(get_collection_by_id_query(&pool, &collection_id).await);
+                    let _ = reply.send(get_collection_by_id_query(&pool, &collection_id).await);
                 }
                 DbCommand::CreateCollection { collection, reply } => {
                     let _ = reply.send(create_collection_query(&pool, &collection).await);
@@ -769,8 +771,8 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     collection_id,
                     reply,
                 } => {
-                    let _ = reply
-                        .send(list_episodes_for_collection_query(&pool, &collection_id).await);
+                    let _ =
+                        reply.send(list_episodes_for_collection_query(&pool, &collection_id).await);
                 }
                 DbCommand::GetEpisodeById { episode_id, reply } => {
                     let _ = reply.send(get_episode_by_id_query(&pool, &episode_id).await);
@@ -856,21 +858,15 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     reply,
                 } => {
                     let _ = reply
-                        .send(update_user_entitlements_query(
-                            &pool,
-                            &id,
-                            &entitlements_json,
-                        )
-                        .await);
+                        .send(update_user_entitlements_query(&pool, &id, &entitlements_json).await);
                 }
                 DbCommand::UpdateUserPassword {
                     id,
                     password_hash,
                     reply,
                 } => {
-                    let _ = reply.send(
-                        update_user_password_query(&pool, &id, &password_hash).await,
-                    );
+                    let _ =
+                        reply.send(update_user_password_query(&pool, &id, &password_hash).await);
                 }
                 DbCommand::DeleteUser { id, reply } => {
                     let _ = reply.send(delete_user_query(&pool, &id).await);
@@ -879,14 +875,19 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     provider_type,
                     reply,
                 } => {
-                    let _ =
-                        reply.send(list_indexer_configs_query(&pool, provider_type, encryption_key.as_ref()).await);
+                    let _ = reply.send(
+                        list_indexer_configs_query(&pool, provider_type, encryption_key.as_ref())
+                            .await,
+                    );
                 }
                 DbCommand::GetIndexerConfig { id, reply } => {
-                    let _ = reply.send(get_indexer_config_query(&pool, &id, encryption_key.as_ref()).await);
+                    let _ = reply
+                        .send(get_indexer_config_query(&pool, &id, encryption_key.as_ref()).await);
                 }
                 DbCommand::CreateIndexerConfig { config, reply } => {
-                    let _ = reply.send(create_indexer_config_query(&pool, &config, encryption_key.as_ref()).await);
+                    let _ = reply.send(
+                        create_indexer_config_query(&pool, &config, encryption_key.as_ref()).await,
+                    );
                 }
                 DbCommand::UpdateIndexerConfig {
                     id,
@@ -925,22 +926,35 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     provider_type,
                     reply,
                 } => {
-                    let _ = reply.send(
-                        touch_indexer_last_error_query(&pool, &provider_type).await,
-                    );
+                    let _ = reply.send(touch_indexer_last_error_query(&pool, &provider_type).await);
                 }
                 DbCommand::DeleteIndexerConfig { id, reply } => {
                     let _ = reply.send(delete_indexer_config_query(&pool, &id).await);
                 }
                 DbCommand::ListDownloadClientConfigs { client_type, reply } => {
-                    let _ = reply
-                        .send(list_download_client_configs_query(&pool, client_type, encryption_key.as_ref()).await);
+                    let _ = reply.send(
+                        list_download_client_configs_query(
+                            &pool,
+                            client_type,
+                            encryption_key.as_ref(),
+                        )
+                        .await,
+                    );
                 }
                 DbCommand::GetDownloadClientConfig { id, reply } => {
-                    let _ = reply.send(get_download_client_config_query(&pool, &id, encryption_key.as_ref()).await);
+                    let _ = reply.send(
+                        get_download_client_config_query(&pool, &id, encryption_key.as_ref()).await,
+                    );
                 }
                 DbCommand::CreateDownloadClientConfig { config, reply } => {
-                    let _ = reply.send(create_download_client_config_query(&pool, &config, encryption_key.as_ref()).await);
+                    let _ = reply.send(
+                        create_download_client_config_query(
+                            &pool,
+                            &config,
+                            encryption_key.as_ref(),
+                        )
+                        .await,
+                    );
                 }
                 DbCommand::UpdateDownloadClientConfig {
                     id,
@@ -951,26 +965,26 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     is_enabled,
                     reply,
                 } => {
-                    let _ = reply
-                        .send(
-                            update_download_client_config_query(
-                                &pool,
-                                &id,
-                                name,
-                                client_type,
-                                base_url,
-                                config_json,
-                                is_enabled,
-                                encryption_key.as_ref(),
-                            )
-                            .await,
-                        );
+                    let _ = reply.send(
+                        update_download_client_config_query(
+                            &pool,
+                            &id,
+                            name,
+                            client_type,
+                            base_url,
+                            config_json,
+                            is_enabled,
+                            encryption_key.as_ref(),
+                        )
+                        .await,
+                    );
                 }
                 DbCommand::DeleteDownloadClientConfig { id, reply } => {
                     let _ = reply.send(delete_download_client_config_query(&pool, &id).await);
                 }
                 DbCommand::ReorderDownloadClientConfigs { ordered_ids, reply } => {
-                    let _ = reply.send(reorder_download_client_configs_query(&pool, &ordered_ids).await);
+                    let _ = reply
+                        .send(reorder_download_client_configs_query(&pool, &ordered_ids).await);
                 }
                 DbCommand::EnsureSettingDefinition {
                     category,
@@ -982,47 +996,61 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     validation_json,
                     reply,
                 } => {
-                    let _ = reply
-                        .send(
-                            ensure_setting_definition_query(
-                                &pool,
-                                &category,
-                                &scope,
-                                &key_name,
-                                &data_type,
-                                &default_value_json,
-                                is_sensitive,
-                                validation_json,
-                            )
-                            .await,
-                        );
+                    let _ = reply.send(
+                        ensure_setting_definition_query(
+                            &pool,
+                            &category,
+                            &scope,
+                            &key_name,
+                            &data_type,
+                            &default_value_json,
+                            is_sensitive,
+                            validation_json,
+                        )
+                        .await,
+                    );
                 }
                 DbCommand::BatchEnsureSettingDefinitions { definitions, reply } => {
-                    let _ = reply.send(
-                        batch_ensure_setting_definitions_query(&pool, &definitions).await,
-                    );
+                    let _ = reply
+                        .send(batch_ensure_setting_definitions_query(&pool, &definitions).await);
                 }
                 DbCommand::BatchGetSettingsWithDefaults { keys, reply } => {
                     let _ = reply.send(
-                        batch_get_settings_with_defaults_query(&pool, &keys, encryption_key.as_ref()).await,
+                        batch_get_settings_with_defaults_query(
+                            &pool,
+                            &keys,
+                            encryption_key.as_ref(),
+                        )
+                        .await,
                     );
                 }
                 DbCommand::BatchUpsertSettingsIfNotOverridden { entries, reply } => {
                     let _ = reply.send(
-                        batch_upsert_settings_if_not_overridden_query(&pool, &entries, encryption_key.as_ref()).await,
+                        batch_upsert_settings_if_not_overridden_query(
+                            &pool,
+                            &entries,
+                            encryption_key.as_ref(),
+                        )
+                        .await,
                     );
                 }
                 DbCommand::ListSettingDefinitions { scope, reply } => {
-                    let _ = reply
-                        .send(list_setting_definitions_query(&pool, scope).await);
+                    let _ = reply.send(list_setting_definitions_query(&pool, scope).await);
                 }
                 DbCommand::ListSettingsWithValues {
                     scope,
                     scope_id,
                     reply,
                 } => {
-                    let _ = reply
-                        .send(list_settings_with_defaults_query(&pool, &scope, scope_id, encryption_key.as_ref()).await);
+                    let _ = reply.send(
+                        list_settings_with_defaults_query(
+                            &pool,
+                            &scope,
+                            scope_id,
+                            encryption_key.as_ref(),
+                        )
+                        .await,
+                    );
                 }
                 DbCommand::GetSettingWithDefaults {
                     scope,
@@ -1031,7 +1059,14 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     reply,
                 } => {
                     let _ = reply.send(
-                        get_setting_with_defaults_query(&pool, &scope, &key_name, scope_id, encryption_key.as_ref()).await,
+                        get_setting_with_defaults_query(
+                            &pool,
+                            &scope,
+                            &key_name,
+                            scope_id,
+                            encryption_key.as_ref(),
+                        )
+                        .await,
                     );
                 }
                 DbCommand::UpsertSettingValue {
@@ -1071,7 +1106,8 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     reply,
                 } => {
                     let _ = reply.send(
-                        replace_quality_profiles_query(&pool, &scope, scope_id, profiles_json).await,
+                        replace_quality_profiles_query(&pool, &scope, scope_id, profiles_json)
+                            .await,
                     );
                 }
                 DbCommand::UpsertQualityProfiles {
@@ -1084,13 +1120,8 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                         upsert_quality_profiles_query(&pool, &scope, scope_id, profiles_json).await,
                     );
                 }
-                DbCommand::DeleteQualityProfile {
-                    profile_id,
-                    reply,
-                } => {
-                    let _ = reply.send(
-                        delete_quality_profile_query(&pool, &profile_id).await,
-                    );
+                DbCommand::DeleteQualityProfile { profile_id, reply } => {
+                    let _ = reply.send(delete_quality_profile_query(&pool, &profile_id).await);
                 }
                 DbCommand::ListAppliedMigrations { reply } => {
                     let _ = reply.send(migrations::list_applied_migrations(&pool).await);
@@ -1217,9 +1248,8 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     );
                 }
                 DbCommand::ListFailedReleaseDownloadAttempts { limit, reply } => {
-                    let _ = reply.send(
-                        list_failed_release_download_attempts_query(&pool, limit).await,
-                    );
+                    let _ =
+                        reply.send(list_failed_release_download_attempts_query(&pool, limit).await);
                 }
                 DbCommand::ListFailedReleaseDownloadAttemptsForTitle {
                     title_id,
@@ -1228,9 +1258,7 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 } => {
                     let _ = reply.send(
                         list_failed_release_download_attempts_for_title_query(
-                            &pool,
-                            &title_id,
-                            limit,
+                            &pool, &title_id, limit,
                         )
                         .await,
                     );
@@ -1258,9 +1286,8 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     stale_seconds,
                     reply,
                 } => {
-                    let _ = reply.send(
-                        recover_stale_processing_imports_query(&pool, stale_seconds).await,
-                    );
+                    let _ = reply
+                        .send(recover_stale_processing_imports_query(&pool, stale_seconds).await);
                 }
                 DbCommand::ListPendingImports { reply } => {
                     let _ = reply.send(list_pending_imports_query(&pool).await);
@@ -1268,15 +1295,9 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 DbCommand::ListImports { limit, reply } => {
                     let _ = reply.send(list_imports_query(&pool, limit).await);
                 }
-                DbCommand::InsertMediaFile {
-                    input,
-                    reply,
-                } => {
+                DbCommand::InsertMediaFile { input, reply } => {
                     let _ = reply.send(
-                        crate::queries::media_file::insert_media_file_query(
-                            &pool, &input,
-                        )
-                        .await,
+                        crate::queries::media_file::insert_media_file_query(&pool, &input).await,
                     );
                 }
                 DbCommand::LinkFileToEpisode {
@@ -1286,7 +1307,9 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 } => {
                     let _ = reply.send(
                         crate::queries::media_file::link_file_to_episode_query(
-                            &pool, &file_id, &episode_id,
+                            &pool,
+                            &file_id,
+                            &episode_id,
                         )
                         .await,
                     );
@@ -1299,7 +1322,11 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                         .await,
                     );
                 }
-                DbCommand::UpdateMediaFileAnalysis { file_id, analysis, reply } => {
+                DbCommand::UpdateMediaFileAnalysis {
+                    file_id,
+                    analysis,
+                    reply,
+                } => {
                     let _ = reply.send(
                         crate::queries::media_file::update_media_file_analysis_query(
                             &pool, &file_id, &analysis,
@@ -1307,18 +1334,19 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                         .await,
                     );
                 }
-                DbCommand::MarkMediaFileScanFailed { file_id, error, reply } => {
+                DbCommand::MarkMediaFileScanFailed {
+                    file_id,
+                    error,
+                    reply,
+                } => {
                     let _ = reply.send(
-                        crate::queries::media_file::mark_scan_failed_query(
-                            &pool, &file_id, &error,
-                        )
-                        .await,
+                        crate::queries::media_file::mark_scan_failed_query(&pool, &file_id, &error)
+                            .await,
                     );
                 }
                 DbCommand::DeleteMediaFile { file_id, reply } => {
                     let _ = reply.send(
-                        crate::queries::media_file::delete_media_file_query(&pool, &file_id)
-                            .await,
+                        crate::queries::media_file::delete_media_file_query(&pool, &file_id).await,
                     );
                 }
                 DbCommand::FindEpisodeByTitleAndNumbers {
@@ -1329,7 +1357,10 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 } => {
                     let _ = reply.send(
                         find_episode_by_title_and_numbers_query(
-                            &pool, &title_id, &season_number, &episode_number,
+                            &pool,
+                            &title_id,
+                            &season_number,
+                            &episode_number,
                         )
                         .await,
                     );
@@ -1341,53 +1372,90 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 } => {
                     let _ = reply.send(
                         find_episode_by_title_and_absolute_number_query(
-                            &pool, &title_id, &absolute_number,
+                            &pool,
+                            &title_id,
+                            &absolute_number,
                         )
                         .await,
                     );
                 }
-                DbCommand::ListEpisodesInDateRange { start_date, end_date, reply } => {
+                DbCommand::ListEpisodesInDateRange {
+                    start_date,
+                    end_date,
+                    reply,
+                } => {
                     let _ = reply.send(
                         list_episodes_in_date_range_query(&pool, &start_date, &end_date).await,
                     );
                 }
                 DbCommand::UpsertWantedItem { item, reply } => {
-                    let _ = reply.send(
-                        crate::queries::wanted::upsert_wanted_item_query(&pool, &item).await,
-                    );
+                    let _ = reply
+                        .send(crate::queries::wanted::upsert_wanted_item_query(&pool, &item).await);
                 }
-                DbCommand::ListDueWantedItems { now, batch_limit, reply } => {
+                DbCommand::ListDueWantedItems {
+                    now,
+                    batch_limit,
+                    reply,
+                } => {
                     let _ = reply.send(
-                        crate::queries::wanted::list_due_wanted_items_query(&pool, &now, batch_limit).await,
+                        crate::queries::wanted::list_due_wanted_items_query(
+                            &pool,
+                            &now,
+                            batch_limit,
+                        )
+                        .await,
                     );
                 }
                 DbCommand::UpdateWantedItemStatus {
-                    id, status, next_search_at, last_search_at,
-                    search_count, current_score, grabbed_release, reply,
+                    id,
+                    status,
+                    next_search_at,
+                    last_search_at,
+                    search_count,
+                    current_score,
+                    grabbed_release,
+                    reply,
                 } => {
                     let _ = reply.send(
                         crate::queries::wanted::update_wanted_item_status_query(
-                            &pool, &id, &status,
-                            next_search_at.as_deref(), last_search_at.as_deref(),
-                            search_count, current_score, grabbed_release.as_deref(),
-                        ).await,
+                            &pool,
+                            &id,
+                            &status,
+                            next_search_at.as_deref(),
+                            last_search_at.as_deref(),
+                            search_count,
+                            current_score,
+                            grabbed_release.as_deref(),
+                        )
+                        .await,
                     );
                 }
-                DbCommand::GetWantedItemForTitle { title_id, episode_id, reply } => {
+                DbCommand::GetWantedItemForTitle {
+                    title_id,
+                    episode_id,
+                    reply,
+                } => {
                     let _ = reply.send(
                         crate::queries::wanted::get_wanted_item_for_title_query(
-                            &pool, &title_id, episode_id.as_deref(),
-                        ).await,
+                            &pool,
+                            &title_id,
+                            episode_id.as_deref(),
+                        )
+                        .await,
                     );
                 }
                 DbCommand::DeleteWantedItemsForTitle { title_id, reply } => {
                     let _ = reply.send(
-                        crate::queries::wanted::delete_wanted_items_for_title_query(&pool, &title_id).await,
+                        crate::queries::wanted::delete_wanted_items_for_title_query(
+                            &pool, &title_id,
+                        )
+                        .await,
                     );
                 }
                 DbCommand::InsertReleaseDecision { decision, reply } => {
                     let _ = reply.send(
-                        crate::queries::wanted::insert_release_decision_query(&pool, &decision).await,
+                        crate::queries::wanted::insert_release_decision_query(&pool, &decision)
+                            .await,
                     );
                 }
                 DbCommand::GetWantedItemById { id, reply } => {
@@ -1395,34 +1463,66 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                         crate::queries::wanted::get_wanted_item_by_id_query(&pool, &id).await,
                     );
                 }
-                DbCommand::ListWantedItems { status, media_type, title_id, limit, offset, reply } => {
+                DbCommand::ListWantedItems {
+                    status,
+                    media_type,
+                    title_id,
+                    limit,
+                    offset,
+                    reply,
+                } => {
                     let _ = reply.send(
                         crate::queries::wanted::list_wanted_items_query(
-                            &pool, status.as_deref(), media_type.as_deref(),
-                            title_id.as_deref(), limit, offset,
-                        ).await,
+                            &pool,
+                            status.as_deref(),
+                            media_type.as_deref(),
+                            title_id.as_deref(),
+                            limit,
+                            offset,
+                        )
+                        .await,
                     );
                 }
-                DbCommand::CountWantedItems { status, media_type, title_id, reply } => {
+                DbCommand::CountWantedItems {
+                    status,
+                    media_type,
+                    title_id,
+                    reply,
+                } => {
                     let _ = reply.send(
                         crate::queries::wanted::count_wanted_items_query(
-                            &pool, status.as_deref(), media_type.as_deref(),
+                            &pool,
+                            status.as_deref(),
+                            media_type.as_deref(),
                             title_id.as_deref(),
-                        ).await,
+                        )
+                        .await,
                     );
                 }
-                DbCommand::ListReleaseDecisionsForTitle { title_id, limit, reply } => {
+                DbCommand::ListReleaseDecisionsForTitle {
+                    title_id,
+                    limit,
+                    reply,
+                } => {
                     let _ = reply.send(
                         crate::queries::wanted::list_release_decisions_for_title_query(
                             &pool, &title_id, limit,
-                        ).await,
+                        )
+                        .await,
                     );
                 }
-                DbCommand::ListReleaseDecisionsForWantedItem { wanted_item_id, limit, reply } => {
+                DbCommand::ListReleaseDecisionsForWantedItem {
+                    wanted_item_id,
+                    limit,
+                    reply,
+                } => {
                     let _ = reply.send(
                         crate::queries::wanted::list_release_decisions_for_wanted_item_query(
-                            &pool, &wanted_item_id, limit,
-                        ).await,
+                            &pool,
+                            &wanted_item_id,
+                            limit,
+                        )
+                        .await,
                     );
                 }
                 // ── Pending Releases ──────────────────────────────────────
@@ -1430,31 +1530,49 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     let _ = reply.send(
                         crate::queries::pending_releases::insert_pending_release_query(
                             &pool, &release,
-                        ).await,
+                        )
+                        .await,
                     );
                 }
                 DbCommand::ListExpiredPendingReleases { now, reply } => {
                     let _ = reply.send(
                         crate::queries::pending_releases::list_expired_pending_releases_query(
                             &pool, &now,
-                        ).await,
+                        )
+                        .await,
                     );
                 }
-                DbCommand::ListPendingReleasesForWantedItem { wanted_item_id, reply } => {
+                DbCommand::ListPendingReleasesForWantedItem {
+                    wanted_item_id,
+                    reply,
+                } => {
                     let _ = reply.send(
                         crate::queries::pending_releases::list_pending_releases_for_wanted_item_query(
                             &pool, &wanted_item_id,
                         ).await,
                     );
                 }
-                DbCommand::UpdatePendingReleaseStatus { id, status, grabbed_at, reply } => {
+                DbCommand::UpdatePendingReleaseStatus {
+                    id,
+                    status,
+                    grabbed_at,
+                    reply,
+                } => {
                     let _ = reply.send(
                         crate::queries::pending_releases::update_pending_release_status_query(
-                            &pool, &id, &status, grabbed_at.as_deref(),
-                        ).await,
+                            &pool,
+                            &id,
+                            &status,
+                            grabbed_at.as_deref(),
+                        )
+                        .await,
                     );
                 }
-                DbCommand::SupersedePendingReleasesForWantedItem { wanted_item_id, except_id, reply } => {
+                DbCommand::SupersedePendingReleasesForWantedItem {
+                    wanted_item_id,
+                    except_id,
+                    reply,
+                } => {
                     let _ = reply.send(
                         crate::queries::pending_releases::supersede_pending_releases_for_wanted_item_query(
                             &pool, &wanted_item_id, &except_id,
@@ -1465,14 +1583,14 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     let _ = reply.send(
                         crate::queries::pending_releases::list_waiting_pending_releases_query(
                             &pool,
-                        ).await,
+                        )
+                        .await,
                     );
                 }
                 DbCommand::GetPendingRelease { id, reply } => {
                     let _ = reply.send(
-                        crate::queries::pending_releases::get_pending_release_query(
-                            &pool, &id,
-                        ).await,
+                        crate::queries::pending_releases::get_pending_release_query(&pool, &id)
+                            .await,
                     );
                 }
                 // ── Rule Sets ──────────────────────────────────────────────
@@ -1494,12 +1612,24 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 DbCommand::DeleteRuleSet { id, reply } => {
                     let _ = reply.send(delete_rule_set_query(&pool, &id).await);
                 }
-                DbCommand::RecordRuleSetHistory { id, rule_set_id, action, rego_source, actor_id, reply } => {
+                DbCommand::RecordRuleSetHistory {
+                    id,
+                    rule_set_id,
+                    action,
+                    rego_source,
+                    actor_id,
+                    reply,
+                } => {
                     let _ = reply.send(
                         insert_rule_set_history_query(
-                            &pool, &id, &rule_set_id, &action,
-                            rego_source.as_deref(), actor_id.as_deref(),
-                        ).await,
+                            &pool,
+                            &id,
+                            &rule_set_id,
+                            &action,
+                            rego_source.as_deref(),
+                            actor_id.as_deref(),
+                        )
+                        .await,
                     );
                 }
                 // ── Plugin Installations ─────────────────────────────────
@@ -1509,13 +1639,33 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 DbCommand::GetPluginInstallation { plugin_id, reply } => {
                     let _ = reply.send(get_plugin_installation_query(&pool, &plugin_id).await);
                 }
-                DbCommand::CreatePluginInstallation { installation, wasm_bytes, reply } => {
+                DbCommand::CreatePluginInstallation {
+                    installation,
+                    wasm_bytes,
+                    reply,
+                } => {
                     let _ = reply.send(
-                        create_plugin_installation_query(&pool, &installation, wasm_bytes.as_deref()).await,
+                        create_plugin_installation_query(
+                            &pool,
+                            &installation,
+                            wasm_bytes.as_deref(),
+                        )
+                        .await,
                     );
                 }
-                DbCommand::UpdatePluginInstallation { installation, wasm_bytes, reply } => {
-                    let _ = reply.send(update_plugin_installation_query(&pool, &installation, wasm_bytes.as_deref()).await);
+                DbCommand::UpdatePluginInstallation {
+                    installation,
+                    wasm_bytes,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        update_plugin_installation_query(
+                            &pool,
+                            &installation,
+                            wasm_bytes.as_deref(),
+                        )
+                        .await,
+                    );
                 }
                 DbCommand::DeletePluginInstallation { plugin_id, reply } => {
                     let _ = reply.send(delete_plugin_installation_query(&pool, &plugin_id).await);
@@ -1523,9 +1673,24 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 DbCommand::GetEnabledPluginWasmBytes { reply } => {
                     let _ = reply.send(get_enabled_plugin_wasm_bytes_query(&pool).await);
                 }
-                DbCommand::SeedBuiltinPlugin { plugin_id, name, description, version, provider_type, reply } => {
+                DbCommand::SeedBuiltinPlugin {
+                    plugin_id,
+                    name,
+                    description,
+                    version,
+                    provider_type,
+                    reply,
+                } => {
                     let _ = reply.send(
-                        seed_builtin_query(&pool, &plugin_id, &name, &description, &version, &provider_type).await,
+                        seed_builtin_query(
+                            &pool,
+                            &plugin_id,
+                            &name,
+                            &description,
+                            &version,
+                            &provider_type,
+                        )
+                        .await,
                     );
                 }
                 DbCommand::StoreRegistryCache { json, reply } => {
@@ -1537,22 +1702,41 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 // ── Notification Channels ────────────────────────────────
                 DbCommand::ListNotificationChannels { reply } => {
                     let _ = reply.send(
-                        notification_channel::list_notification_channels_query(&pool, encryption_key.as_ref()).await,
+                        notification_channel::list_notification_channels_query(
+                            &pool,
+                            encryption_key.as_ref(),
+                        )
+                        .await,
                     );
                 }
                 DbCommand::GetNotificationChannel { id, reply } => {
                     let _ = reply.send(
-                        notification_channel::get_notification_channel_query(&pool, &id, encryption_key.as_ref()).await,
+                        notification_channel::get_notification_channel_query(
+                            &pool,
+                            &id,
+                            encryption_key.as_ref(),
+                        )
+                        .await,
                     );
                 }
                 DbCommand::CreateNotificationChannel { config, reply } => {
                     let _ = reply.send(
-                        notification_channel::create_notification_channel_query(&pool, &config, encryption_key.as_ref()).await,
+                        notification_channel::create_notification_channel_query(
+                            &pool,
+                            &config,
+                            encryption_key.as_ref(),
+                        )
+                        .await,
                     );
                 }
                 DbCommand::UpdateNotificationChannel { config, reply } => {
                     let _ = reply.send(
-                        notification_channel::update_notification_channel_query(&pool, &config, encryption_key.as_ref()).await,
+                        notification_channel::update_notification_channel_query(
+                            &pool,
+                            &config,
+                            encryption_key.as_ref(),
+                        )
+                        .await,
                     );
                 }
                 DbCommand::DeleteNotificationChannel { id, reply } => {
@@ -1563,7 +1747,8 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 // ── Notification Subscriptions ───────────────────────────
                 DbCommand::ListNotificationSubscriptions { reply } => {
                     let _ = reply.send(
-                        notification_subscription::list_notification_subscriptions_query(&pool).await,
+                        notification_subscription::list_notification_subscriptions_query(&pool)
+                            .await,
                     );
                 }
                 DbCommand::ListNotificationSubscriptionsForChannel { channel_id, reply } => {
@@ -1573,22 +1758,35 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 }
                 DbCommand::ListNotificationSubscriptionsForEvent { event_type, reply } => {
                     let _ = reply.send(
-                        notification_subscription::list_notification_subscriptions_for_event_query(&pool, &event_type).await,
+                        notification_subscription::list_notification_subscriptions_for_event_query(
+                            &pool,
+                            &event_type,
+                        )
+                        .await,
                     );
                 }
                 DbCommand::CreateNotificationSubscription { sub, reply } => {
                     let _ = reply.send(
-                        notification_subscription::create_notification_subscription_query(&pool, &sub).await,
+                        notification_subscription::create_notification_subscription_query(
+                            &pool, &sub,
+                        )
+                        .await,
                     );
                 }
                 DbCommand::UpdateNotificationSubscription { sub, reply } => {
                     let _ = reply.send(
-                        notification_subscription::update_notification_subscription_query(&pool, &sub).await,
+                        notification_subscription::update_notification_subscription_query(
+                            &pool, &sub,
+                        )
+                        .await,
                     );
                 }
                 DbCommand::DeleteNotificationSubscription { id, reply } => {
                     let _ = reply.send(
-                        notification_subscription::delete_notification_subscription_query(&pool, &id).await,
+                        notification_subscription::delete_notification_subscription_query(
+                            &pool, &id,
+                        )
+                        .await,
                     );
                 }
                 // ── Housekeeping ────────────────────────────────────────
@@ -1604,7 +1802,10 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 }
                 DbCommand::DeleteDispatchedEventOutboxesOlderThan { days, reply } => {
                     let _ = reply.send(
-                        housekeeping::delete_dispatched_event_outboxes_older_than_query(&pool, days).await,
+                        housekeeping::delete_dispatched_event_outboxes_older_than_query(
+                            &pool, days,
+                        )
+                        .await,
                     );
                 }
                 DbCommand::DeleteHistoryEventsOlderThan { days, reply } => {
@@ -1613,14 +1814,11 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     );
                 }
                 DbCommand::ListAllMediaFilePaths { reply } => {
-                    let _ = reply.send(
-                        housekeeping::list_all_media_file_paths_query(&pool).await,
-                    );
+                    let _ = reply.send(housekeeping::list_all_media_file_paths_query(&pool).await);
                 }
                 DbCommand::DeleteMediaFilesByIds { ids, reply } => {
-                    let _ = reply.send(
-                        housekeeping::delete_media_files_by_ids_query(&pool, &ids).await,
-                    );
+                    let _ = reply
+                        .send(housekeeping::delete_media_files_by_ids_query(&pool, &ids).await);
                 }
             }
         }

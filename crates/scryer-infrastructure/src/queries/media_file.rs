@@ -204,7 +204,8 @@ fn row_to_title_media_file(row: &SqliteRow) -> AppResult<TitleMediaFile> {
     let acquisition_score: Option<i32> = row.try_get("acquisition_score").unwrap_or(None);
     let scoring_log: Option<String> = row.try_get("scoring_log").unwrap_or(None);
     let indexer_source: Option<String> = row.try_get("indexer_source").unwrap_or(None);
-    let grabbed_release_title: Option<String> = row.try_get("grabbed_release_title").unwrap_or(None);
+    let grabbed_release_title: Option<String> =
+        row.try_get("grabbed_release_title").unwrap_or(None);
     let grabbed_at: Option<String> = row.try_get("grabbed_at").unwrap_or(None);
     let edition: Option<String> = row.try_get("edition").unwrap_or(None);
     let original_file_path: Option<String> = row.try_get("original_file_path").unwrap_or(None);
@@ -260,16 +261,16 @@ pub(crate) async fn update_media_file_analysis_query(
     file_id: &str,
     analysis: &MediaFileAnalysis,
 ) -> AppResult<()> {
-    let audio_languages_json = serde_json::to_string(&analysis.audio_languages)
-        .unwrap_or_else(|_| "[]".to_string());
-    let audio_streams_json = serde_json::to_string(&analysis.audio_streams)
-        .unwrap_or_else(|_| "[]".to_string());
-    let subtitle_languages_json = serde_json::to_string(&analysis.subtitle_languages)
-        .unwrap_or_else(|_| "[]".to_string());
-    let subtitle_codecs_json = serde_json::to_string(&analysis.subtitle_codecs)
-        .unwrap_or_else(|_| "[]".to_string());
-    let subtitle_streams_json = serde_json::to_string(&analysis.subtitle_streams)
-        .unwrap_or_else(|_| "[]".to_string());
+    let audio_languages_json =
+        serde_json::to_string(&analysis.audio_languages).unwrap_or_else(|_| "[]".to_string());
+    let audio_streams_json =
+        serde_json::to_string(&analysis.audio_streams).unwrap_or_else(|_| "[]".to_string());
+    let subtitle_languages_json =
+        serde_json::to_string(&analysis.subtitle_languages).unwrap_or_else(|_| "[]".to_string());
+    let subtitle_codecs_json =
+        serde_json::to_string(&analysis.subtitle_codecs).unwrap_or_else(|_| "[]".to_string());
+    let subtitle_streams_json =
+        serde_json::to_string(&analysis.subtitle_streams).unwrap_or_else(|_| "[]".to_string());
 
     sqlx::query(
         "UPDATE media_files SET
@@ -329,14 +330,12 @@ pub(crate) async fn mark_scan_failed_query(
     file_id: &str,
     error: &str,
 ) -> AppResult<()> {
-    sqlx::query(
-        "UPDATE media_files SET scan_status = 'scan_failed', scan_error = ? WHERE id = ?",
-    )
-    .bind(error)
-    .bind(file_id)
-    .execute(pool)
-    .await
-    .map_err(|err| AppError::Repository(err.to_string()))?;
+    sqlx::query("UPDATE media_files SET scan_status = 'scan_failed', scan_error = ? WHERE id = ?")
+        .bind(error)
+        .bind(file_id)
+        .execute(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
 
     Ok(())
 }

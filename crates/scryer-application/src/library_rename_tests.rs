@@ -262,11 +262,17 @@ fn apply_status_as_str() {
 fn collision_policy_as_str() {
     assert_eq!(RenameCollisionPolicy::Skip.as_str(), "skip");
     assert_eq!(RenameCollisionPolicy::Error.as_str(), "error");
-    assert_eq!(RenameCollisionPolicy::ReplaceIfBetter.as_str(), "replace_if_better");
+    assert_eq!(
+        RenameCollisionPolicy::ReplaceIfBetter.as_str(),
+        "replace_if_better"
+    );
 }
 
 #[test]
 fn missing_metadata_policy_as_str() {
     assert_eq!(RenameMissingMetadataPolicy::Skip.as_str(), "skip");
-    assert_eq!(RenameMissingMetadataPolicy::FallbackTitle.as_str(), "fallback_title");
+    assert_eq!(
+        RenameMissingMetadataPolicy::FallbackTitle.as_str(),
+        "fallback_title"
+    );
 }

@@ -6,14 +6,21 @@ impl AppUseCase {
         info!("starting housekeeping");
 
         // 1. Orphaned media files (file_path no longer exists on disk)
-        let all_files = self.services.housekeeping.list_all_media_file_paths().await?;
+        let all_files = self
+            .services
+            .housekeeping
+            .list_all_media_file_paths()
+            .await?;
         let orphan_ids: Vec<String> = all_files
             .into_iter()
             .filter(|(_, path)| !std::path::Path::new(path).exists())
             .map(|(id, _)| id)
             .collect();
         let orphaned_media_files = if !orphan_ids.is_empty() {
-            self.services.housekeeping.delete_media_files_by_ids(&orphan_ids).await?
+            self.services
+                .housekeeping
+                .delete_media_files_by_ids(&orphan_ids)
+                .await?
         } else {
             0
         };
@@ -60,8 +67,7 @@ impl AppUseCase {
                 .ok()
                 .flatten()
                 .unwrap_or_else(|| default.to_string());
-            let config =
-                crate::recycle_bin::resolve_recycle_config(self, Some(&media_root)).await;
+            let config = crate::recycle_bin::resolve_recycle_config(self, Some(&media_root)).await;
             match crate::recycle_bin::purge_expired(&config).await {
                 Ok(n) => recycled_purged += n,
                 Err(e) => info!(error = %e, media_root = %media_root, "recycle bin purge failed"),

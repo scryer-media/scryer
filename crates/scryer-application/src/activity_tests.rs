@@ -113,11 +113,26 @@ fn activity_kind_as_str_all_variants() {
     assert_eq!(ActivityKind::MovieFetched.as_str(), "movie_fetched");
     assert_eq!(ActivityKind::MovieAdded.as_str(), "movie_added");
     assert_eq!(ActivityKind::MovieDownloaded.as_str(), "movie_downloaded");
-    assert_eq!(ActivityKind::SeriesEpisodeImported.as_str(), "series_episode_imported");
-    assert_eq!(ActivityKind::AcquisitionSearchCompleted.as_str(), "acquisition_search_completed");
-    assert_eq!(ActivityKind::AcquisitionCandidateAccepted.as_str(), "acquisition_candidate_accepted");
-    assert_eq!(ActivityKind::AcquisitionCandidateRejected.as_str(), "acquisition_candidate_rejected");
-    assert_eq!(ActivityKind::AcquisitionDownloadFailed.as_str(), "acquisition_download_failed");
+    assert_eq!(
+        ActivityKind::SeriesEpisodeImported.as_str(),
+        "series_episode_imported"
+    );
+    assert_eq!(
+        ActivityKind::AcquisitionSearchCompleted.as_str(),
+        "acquisition_search_completed"
+    );
+    assert_eq!(
+        ActivityKind::AcquisitionCandidateAccepted.as_str(),
+        "acquisition_candidate_accepted"
+    );
+    assert_eq!(
+        ActivityKind::AcquisitionCandidateRejected.as_str(),
+        "acquisition_candidate_rejected"
+    );
+    assert_eq!(
+        ActivityKind::AcquisitionDownloadFailed.as_str(),
+        "acquisition_download_failed"
+    );
     assert_eq!(ActivityKind::SystemNotice.as_str(), "system_notice");
 }
 

@@ -4,17 +4,26 @@ use super::*;
 
 #[test]
 fn extracts_404_from_error_message() {
-    assert_eq!(extract_http_status_from_message("request failed with status 404"), Some(404));
+    assert_eq!(
+        extract_http_status_from_message("request failed with status 404"),
+        Some(404)
+    );
 }
 
 #[test]
 fn extracts_503_from_error_message() {
-    assert_eq!(extract_http_status_from_message("HTTP status 503 Service Unavailable"), Some(503));
+    assert_eq!(
+        extract_http_status_from_message("HTTP status 503 Service Unavailable"),
+        Some(503)
+    );
 }
 
 #[test]
 fn extracts_status_case_insensitive() {
-    assert_eq!(extract_http_status_from_message("received STATUS 429 too many requests"), Some(429));
+    assert_eq!(
+        extract_http_status_from_message("received STATUS 429 too many requests"),
+        Some(429)
+    );
 }
 
 #[test]

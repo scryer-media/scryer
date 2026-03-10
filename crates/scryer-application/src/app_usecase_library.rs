@@ -123,7 +123,11 @@ impl AppUseCase {
         let template = self.read_rename_template(handler.as_ref()).await?;
         let collision_policy = self.read_collision_policy(handler.as_ref()).await?;
         let missing_metadata_policy = self.read_missing_metadata_policy(handler.as_ref()).await?;
-        let collections = self.services.shows.list_collections_for_title(&title.id).await?;
+        let collections = self
+            .services
+            .shows
+            .list_collections_for_title(&title.id)
+            .await?;
         let plan = build_rename_plan_for_facet(
             handler.as_ref(),
             &title,
@@ -169,7 +173,11 @@ impl AppUseCase {
         let mut planned_targets = HashSet::new();
         let mut items = Vec::new();
         for title in titles {
-            let mut collections = self.services.shows.list_collections_for_title(&title.id).await?;
+            let mut collections = self
+                .services
+                .shows
+                .list_collections_for_title(&title.id)
+                .await?;
             collections.sort_by(|left, right| left.id.cmp(&right.id));
 
             for collection in collections {
@@ -217,7 +225,9 @@ impl AppUseCase {
     ) -> AppResult<RenameApplyResult> {
         require(actor, &Entitlement::ManageTitle)?;
 
-        let preview = self.preview_rename_for_title(actor, title_id, facet).await?;
+        let preview = self
+            .preview_rename_for_title(actor, title_id, facet)
+            .await?;
         if preview.fingerprint != plan_fingerprint {
             return Err(AppError::Validation("rename_stale_plan".into()));
         }
@@ -352,7 +362,11 @@ impl AppUseCase {
         Ok(result)
     }
 
-    pub async fn scan_library(&self, actor: &User, facet: MediaFacet) -> AppResult<LibraryScanSummary> {
+    pub async fn scan_library(
+        &self,
+        actor: &User,
+        facet: MediaFacet,
+    ) -> AppResult<LibraryScanSummary> {
         require(actor, &Entitlement::ManageTitle)?;
 
         let path_key = match facet {
@@ -363,24 +377,20 @@ impl AppUseCase {
         };
 
         let Some(library_path) = self
-            .read_setting_string_value_for_scope(
-                super::SETTINGS_SCOPE_MEDIA,
-                path_key,
-                None,
-            )
+            .read_setting_string_value_for_scope(super::SETTINGS_SCOPE_MEDIA, path_key, None)
             .await?
         else {
-            return Err(AppError::Validation(
-                format!("{path_key} is not configured"),
-            ));
+            return Err(AppError::Validation(format!(
+                "{path_key} is not configured"
+            )));
         };
 
-        let files = self.services.library_scanner.scan_library(&library_path).await?;
-        let existing_titles = self
+        let files = self
             .services
-            .titles
-            .list(Some(facet.clone()), None)
+            .library_scanner
+            .scan_library(&library_path)
             .await?;
+        let existing_titles = self.services.titles.list(Some(facet.clone()), None).await?;
         let mut existing_titles_by_name: HashMap<String, Title> = HashMap::new();
         let mut existing_titles_by_tvdb_id: HashMap<String, Title> = HashMap::new();
 
@@ -407,7 +417,8 @@ impl AppUseCase {
 
             // --- Fast path: NFO provides a TVDB ID, skip gateway search ---
             if let Some(tvdb_id) = nfo_meta.as_ref().and_then(|m| m.tvdb_id.as_deref()) {
-                let title = if let Some(existing) = existing_titles_by_tvdb_id.get(tvdb_id).cloned() {
+                let title = if let Some(existing) = existing_titles_by_tvdb_id.get(tvdb_id).cloned()
+                {
                     existing
                 } else {
                     let (fallback_query, _) = extract_library_query(&file.path, &library_path);
@@ -451,19 +462,22 @@ impl AppUseCase {
                 };
 
                 summary.matched += 1;
-                self.track_movie_file_in_collection(&title, &file, &mut summary).await;
+                self.track_movie_file_in_collection(&title, &file, &mut summary)
+                    .await;
                 continue;
             }
 
             // --- Normal path: search metadata gateway ---
             // Use NFO title/year if available, otherwise folder/filename heuristics.
             let (query, year_hint) = if let Some(ref meta) = nfo_meta {
-                let title_str = meta.title.clone().unwrap_or_else(|| {
-                    extract_library_query(&file.path, &library_path).0
-                });
-                let year = meta.year.map(|y| y as u32).or_else(|| {
-                    extract_library_query(&file.path, &library_path).1
-                });
+                let title_str = meta
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| extract_library_query(&file.path, &library_path).0);
+                let year = meta
+                    .year
+                    .map(|y| y as u32)
+                    .or_else(|| extract_library_query(&file.path, &library_path).1);
                 (title_str, year)
             } else {
                 extract_library_query(&file.path, &library_path)
@@ -519,7 +533,8 @@ impl AppUseCase {
                 title
             };
 
-            self.track_movie_file_in_collection(&title, &file, &mut summary).await;
+            self.track_movie_file_in_collection(&title, &file, &mut summary)
+                .await;
         }
 
         info!(
@@ -627,7 +642,10 @@ impl AppUseCase {
         Ok(handler.default_rename_template().to_string())
     }
 
-    async fn read_collision_policy(&self, handler: &dyn crate::FacetHandler) -> AppResult<RenameCollisionPolicy> {
+    async fn read_collision_policy(
+        &self,
+        handler: &dyn crate::FacetHandler,
+    ) -> AppResult<RenameCollisionPolicy> {
         let scoped = self
             .read_setting_string_value(RENAME_COLLISION_POLICY_KEY, Some(handler.rename_scope_id()))
             .await?;
@@ -658,7 +676,10 @@ impl AppUseCase {
         Ok(DEFAULT_COLLISION_POLICY)
     }
 
-    async fn read_missing_metadata_policy(&self, handler: &dyn crate::FacetHandler) -> AppResult<RenameMissingMetadataPolicy> {
+    async fn read_missing_metadata_policy(
+        &self,
+        handler: &dyn crate::FacetHandler,
+    ) -> AppResult<RenameMissingMetadataPolicy> {
         let scoped = self
             .read_setting_string_value(
                 RENAME_MISSING_METADATA_POLICY_KEY,
@@ -777,7 +798,12 @@ fn build_rename_plan_from_items(
     let total = items.len();
     let renamable = items
         .iter()
-        .filter(|item| matches!(item.write_action, RenameWriteAction::Move | RenameWriteAction::Replace))
+        .filter(|item| {
+            matches!(
+                item.write_action,
+                RenameWriteAction::Move | RenameWriteAction::Replace
+            )
+        })
         .count();
     let noop = items
         .iter()
@@ -889,7 +915,10 @@ pub(crate) fn build_movie_rename_plan_item(
             .cloned()
             .unwrap_or_default(),
     );
-    tokens.insert("source".to_string(), parsed.source.clone().unwrap_or_default());
+    tokens.insert(
+        "source".to_string(),
+        parsed.source.clone().unwrap_or_default(),
+    );
     tokens.insert(
         "video_codec".to_string(),
         parsed.video_codec.clone().unwrap_or_default(),
@@ -926,7 +955,11 @@ pub(crate) fn build_movie_rename_plan_item(
         rendered = split_title_and_year_hint(&title.name).0;
     }
 
-    if !extension.is_empty() && !rendered.to_ascii_lowercase().ends_with(&format!(".{extension}")) {
+    if !extension.is_empty()
+        && !rendered
+            .to_ascii_lowercase()
+            .ends_with(&format!(".{extension}"))
+    {
         rendered = format!("{rendered}.{extension}");
     }
 
@@ -1099,7 +1132,13 @@ pub(crate) fn build_series_rename_plan_item(
     tokens.insert("title".to_string(), title_token.clone());
     tokens.insert("year".to_string(), year_token.unwrap_or_default());
     tokens.insert("season".to_string(), season);
-    tokens.insert("season_order".to_string(), collection.narrative_order.clone().unwrap_or_else(|| collection.collection_index.clone()));
+    tokens.insert(
+        "season_order".to_string(),
+        collection
+            .narrative_order
+            .clone()
+            .unwrap_or_else(|| collection.collection_index.clone()),
+    );
     tokens.insert("episode".to_string(), episode.clone());
     tokens.insert(
         "absolute_episode".to_string(),
@@ -1112,7 +1151,10 @@ pub(crate) fn build_series_rename_plan_item(
     );
     tokens.insert("episode_title".to_string(), String::new());
     tokens.insert("quality".to_string(), quality);
-    tokens.insert("source".to_string(), parsed.source.clone().unwrap_or_default());
+    tokens.insert(
+        "source".to_string(),
+        parsed.source.clone().unwrap_or_default(),
+    );
     tokens.insert(
         "video_codec".to_string(),
         parsed.video_codec.clone().unwrap_or_default(),
@@ -1149,7 +1191,11 @@ pub(crate) fn build_series_rename_plan_item(
         rendered = split_title_and_year_hint(&title.name).0;
     }
 
-    if !extension.is_empty() && !rendered.to_ascii_lowercase().ends_with(&format!(".{extension}")) {
+    if !extension.is_empty()
+        && !rendered
+            .to_ascii_lowercase()
+            .ends_with(&format!(".{extension}"))
+    {
         rendered = format!("{rendered}.{extension}");
     }
 

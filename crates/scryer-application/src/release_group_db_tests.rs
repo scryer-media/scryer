@@ -144,7 +144,8 @@ fn banned_group_gets_block_score() {
 #[test]
 fn unknown_group_gets_penalty() {
     let w = balanced_weights();
-    let (code, delta) = apply_release_group_scoring(&w, Some("UnknownGroup"), Some("WEB-DL"), false);
+    let (code, delta) =
+        apply_release_group_scoring(&w, Some("UnknownGroup"), Some("WEB-DL"), false);
     assert_eq!(code, "group_unknown");
     assert_eq!(delta, w.group_unknown_penalty);
 }

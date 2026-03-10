@@ -1,15 +1,15 @@
 use async_trait::async_trait;
 use scryer_application::{
-    AppError, AppResult, DownloadClientConfigRepository, DownloadSubmission, DownloadSubmissionRepository,
-    EventRepository, HousekeepingRepository, InsertMediaFileInput,
-    IndexerConfigRepository, ImportRepository, MediaFileRepository, NotificationChannelRepository,
-    NotificationSubscriptionRepository, PluginInstallationRepository, PrimaryCollectionSummary,
-    PendingRelease, PendingReleaseRepository,
-    ReleaseDecision, RuleSetRepository, SystemInfoProvider, TitleMediaFile, WantedItem, WantedItemRepository,
+    AppError, AppResult, DownloadClientConfigRepository, DownloadSubmission,
+    DownloadSubmissionRepository, EventRepository, HousekeepingRepository, ImportRepository,
+    IndexerConfigRepository, InsertMediaFileInput, MediaFileRepository,
+    NotificationChannelRepository, NotificationSubscriptionRepository, PendingRelease,
+    PendingReleaseRepository, PluginInstallationRepository, PrimaryCollectionSummary,
     QualityProfile as ApplicationQualityProfile, QualityProfileRepository,
-    ReleaseAttemptRepository, ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature,
-    TitleReleaseBlocklistEntry,
-    SettingsRepository, ShowRepository, TitleMetadataUpdate, TitleRepository, UserRepository,
+    ReleaseAttemptRepository, ReleaseDecision, ReleaseDownloadAttemptOutcome,
+    ReleaseDownloadFailureSignature, RuleSetRepository, SettingsRepository, ShowRepository,
+    SystemInfoProvider, TitleMediaFile, TitleMetadataUpdate, TitleReleaseBlocklistEntry,
+    TitleRepository, UserRepository, WantedItem, WantedItemRepository,
 };
 use scryer_domain::{
     CalendarEpisode, Collection, DownloadClientConfig, Entitlement, Episode, HistoryEvent,
@@ -493,9 +493,7 @@ impl UserRepository for SqliteServices {
     async fn list_all(&self) -> AppResult<Vec<User>> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
-            .send(crate::commands::DbCommand::ListUsers {
-                reply: reply_tx,
-            })
+            .send(crate::commands::DbCommand::ListUsers { reply: reply_tx })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
 
@@ -811,15 +809,8 @@ impl DownloadClientConfigRepository for SqliteServices {
         config_json: Option<String>,
         is_enabled: Option<bool>,
     ) -> AppResult<DownloadClientConfig> {
-        self.update_download_client_config(
-            id,
-            name,
-            client_type,
-            base_url,
-            config_json,
-            is_enabled,
-        )
-        .await
+        self.update_download_client_config(id, name, client_type, base_url, config_json, is_enabled)
+            .await
     }
 
     async fn delete(&self, id: &str) -> AppResult<()> {
@@ -857,7 +848,8 @@ impl ReleaseAttemptRepository for SqliteServices {
         &self,
         limit: usize,
     ) -> AppResult<Vec<ReleaseDownloadFailureSignature>> {
-        self.list_failed_release_download_attempt_signatures(limit).await
+        self.list_failed_release_download_attempt_signatures(limit)
+            .await
     }
 
     async fn list_failed_release_signatures_for_title(
@@ -875,16 +867,14 @@ impl ReleaseAttemptRepository for SqliteServices {
         source_hint: Option<&str>,
         source_title: Option<&str>,
     ) -> AppResult<Option<String>> {
-        self.get_latest_source_password(title_id, source_hint, source_title).await
+        self.get_latest_source_password(title_id, source_hint, source_title)
+            .await
     }
 }
 
 #[async_trait]
 impl DownloadSubmissionRepository for SqliteServices {
-    async fn record_submission(
-        &self,
-        submission: DownloadSubmission,
-    ) -> AppResult<()> {
+    async fn record_submission(&self, submission: DownloadSubmission) -> AppResult<()> {
         self.record_download_submission(
             submission.title_id,
             submission.facet,
@@ -923,7 +913,8 @@ impl ImportRepository for SqliteServices {
         source_system: &str,
         source_ref: &str,
     ) -> AppResult<Option<ImportRecord>> {
-        self.get_import_by_source_ref(source_system, source_ref).await
+        self.get_import_by_source_ref(source_system, source_ref)
+            .await
     }
 
     async fn update_import_status(
@@ -932,7 +923,8 @@ impl ImportRepository for SqliteServices {
         status: &str,
         result_json: Option<String>,
     ) -> AppResult<()> {
-        self.update_import_status(import_id, status, result_json).await
+        self.update_import_status(import_id, status, result_json)
+            .await
     }
 
     async fn recover_stale_processing_imports(&self, stale_seconds: i64) -> AppResult<u64> {
@@ -943,12 +935,11 @@ impl ImportRepository for SqliteServices {
         self.list_pending_imports().await
     }
 
-    async fn is_already_imported(
-        &self,
-        source_system: &str,
-        source_ref: &str,
-    ) -> AppResult<bool> {
-        match self.get_import_by_source_ref(source_system, source_ref).await? {
+    async fn is_already_imported(&self, source_system: &str, source_ref: &str) -> AppResult<bool> {
+        match self
+            .get_import_by_source_ref(source_system, source_ref)
+            .await?
+        {
             Some(record) => Ok(record.status == "completed"),
             None => Ok(false),
         }
@@ -987,25 +978,15 @@ impl QualityProfileRepository for SqliteServices {
 
 #[async_trait]
 impl MediaFileRepository for SqliteServices {
-    async fn insert_media_file(
-        &self,
-        input: &InsertMediaFileInput,
-    ) -> AppResult<String> {
+    async fn insert_media_file(&self, input: &InsertMediaFileInput) -> AppResult<String> {
         self.insert_media_file(input).await
     }
 
-    async fn link_file_to_episode(
-        &self,
-        file_id: &str,
-        episode_id: &str,
-    ) -> AppResult<()> {
+    async fn link_file_to_episode(&self, file_id: &str, episode_id: &str) -> AppResult<()> {
         self.link_file_to_episode(file_id, episode_id).await
     }
 
-    async fn list_media_files_for_title(
-        &self,
-        title_id: &str,
-    ) -> AppResult<Vec<TitleMediaFile>> {
+    async fn list_media_files_for_title(&self, title_id: &str) -> AppResult<Vec<TitleMediaFile>> {
         self.list_media_files_for_title(title_id).await
     }
 
@@ -1032,7 +1013,11 @@ impl WantedItemRepository for SqliteServices {
         self.upsert_wanted_item(item).await
     }
 
-    async fn list_due_wanted_items(&self, now: &str, batch_limit: i64) -> AppResult<Vec<WantedItem>> {
+    async fn list_due_wanted_items(
+        &self,
+        now: &str,
+        batch_limit: i64,
+    ) -> AppResult<Vec<WantedItem>> {
         self.list_due_wanted_items(now, batch_limit).await
     }
 
@@ -1047,9 +1032,15 @@ impl WantedItemRepository for SqliteServices {
         grabbed_release: Option<&str>,
     ) -> AppResult<()> {
         self.update_wanted_item_status(
-            id, status, next_search_at, last_search_at,
-            search_count, current_score, grabbed_release,
-        ).await
+            id,
+            status,
+            next_search_at,
+            last_search_at,
+            search_count,
+            current_score,
+            grabbed_release,
+        )
+        .await
     }
 
     async fn get_wanted_item_for_title(
@@ -1080,7 +1071,8 @@ impl WantedItemRepository for SqliteServices {
         limit: i64,
         offset: i64,
     ) -> AppResult<Vec<WantedItem>> {
-        self.list_wanted_items(status, media_type, title_id, limit, offset).await
+        self.list_wanted_items(status, media_type, title_id, limit, offset)
+            .await
     }
 
     async fn count_wanted_items(
@@ -1105,7 +1097,8 @@ impl WantedItemRepository for SqliteServices {
         wanted_item_id: &str,
         limit: i64,
     ) -> AppResult<Vec<ReleaseDecision>> {
-        self.list_release_decisions_for_wanted_item(wanted_item_id, limit).await
+        self.list_release_decisions_for_wanted_item(wanted_item_id, limit)
+            .await
     }
 }
 
@@ -1117,7 +1110,9 @@ impl RuleSetRepository for SqliteServices {
             .send(crate::commands::DbCommand::ListRuleSets { reply: reply_tx })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
     async fn list_enabled_rule_sets(&self) -> AppResult<Vec<RuleSet>> {
@@ -1126,7 +1121,9 @@ impl RuleSetRepository for SqliteServices {
             .send(crate::commands::DbCommand::ListEnabledRuleSets { reply: reply_tx })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
     async fn get_rule_set(&self, id: &str) -> AppResult<Option<RuleSet>> {
@@ -1138,7 +1135,9 @@ impl RuleSetRepository for SqliteServices {
             })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
     async fn create_rule_set(&self, rule_set: &RuleSet) -> AppResult<()> {
@@ -1150,7 +1149,9 @@ impl RuleSetRepository for SqliteServices {
             })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
     async fn update_rule_set(&self, rule_set: &RuleSet) -> AppResult<()> {
@@ -1162,7 +1163,9 @@ impl RuleSetRepository for SqliteServices {
             })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
     async fn delete_rule_set(&self, id: &str) -> AppResult<()> {
@@ -1174,7 +1177,9 @@ impl RuleSetRepository for SqliteServices {
             })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
     async fn record_rule_set_history(
@@ -1196,7 +1201,9 @@ impl RuleSetRepository for SqliteServices {
             })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 }
 
@@ -1208,10 +1215,15 @@ impl PluginInstallationRepository for SqliteServices {
             .send(crate::commands::DbCommand::ListPluginInstallations { reply: reply_tx })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
-    async fn get_plugin_installation(&self, plugin_id: &str) -> AppResult<Option<PluginInstallation>> {
+    async fn get_plugin_installation(
+        &self,
+        plugin_id: &str,
+    ) -> AppResult<Option<PluginInstallation>> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
             .send(crate::commands::DbCommand::GetPluginInstallation {
@@ -1220,7 +1232,9 @@ impl PluginInstallationRepository for SqliteServices {
             })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
     async fn create_plugin_installation(
@@ -1237,7 +1251,9 @@ impl PluginInstallationRepository for SqliteServices {
             })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
     async fn update_plugin_installation(
@@ -1254,7 +1270,9 @@ impl PluginInstallationRepository for SqliteServices {
             })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
     async fn delete_plugin_installation(&self, plugin_id: &str) -> AppResult<()> {
@@ -1266,16 +1284,22 @@ impl PluginInstallationRepository for SqliteServices {
             })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
-    async fn get_enabled_plugin_wasm_bytes(&self) -> AppResult<Vec<(PluginInstallation, Option<Vec<u8>>)>> {
+    async fn get_enabled_plugin_wasm_bytes(
+        &self,
+    ) -> AppResult<Vec<(PluginInstallation, Option<Vec<u8>>)>> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
             .send(crate::commands::DbCommand::GetEnabledPluginWasmBytes { reply: reply_tx })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
     async fn seed_builtin(
@@ -1298,7 +1322,9 @@ impl PluginInstallationRepository for SqliteServices {
             })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
     async fn store_registry_cache(&self, json: &str) -> AppResult<()> {
@@ -1310,7 +1336,9 @@ impl PluginInstallationRepository for SqliteServices {
             })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
     async fn get_registry_cache(&self) -> AppResult<Option<String>> {
@@ -1319,7 +1347,9 @@ impl PluginInstallationRepository for SqliteServices {
             .send(crate::commands::DbCommand::GetRegistryCache { reply: reply_tx })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 }
 
@@ -1333,7 +1363,9 @@ impl NotificationChannelRepository for SqliteServices {
             .send(crate::commands::DbCommand::ListNotificationChannels { reply: reply_tx })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
     async fn get_channel(&self, id: &str) -> AppResult<Option<NotificationChannelConfig>> {
@@ -1345,25 +1377,43 @@ impl NotificationChannelRepository for SqliteServices {
             })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
-    async fn create_channel(&self, config: NotificationChannelConfig) -> AppResult<NotificationChannelConfig> {
+    async fn create_channel(
+        &self,
+        config: NotificationChannelConfig,
+    ) -> AppResult<NotificationChannelConfig> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
-            .send(crate::commands::DbCommand::CreateNotificationChannel { config, reply: reply_tx })
+            .send(crate::commands::DbCommand::CreateNotificationChannel {
+                config,
+                reply: reply_tx,
+            })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
-    async fn update_channel(&self, config: NotificationChannelConfig) -> AppResult<NotificationChannelConfig> {
+    async fn update_channel(
+        &self,
+        config: NotificationChannelConfig,
+    ) -> AppResult<NotificationChannelConfig> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
-            .send(crate::commands::DbCommand::UpdateNotificationChannel { config, reply: reply_tx })
+            .send(crate::commands::DbCommand::UpdateNotificationChannel {
+                config,
+                reply: reply_tx,
+            })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
     async fn delete_channel(&self, id: &str) -> AppResult<()> {
@@ -1375,7 +1425,9 @@ impl NotificationChannelRepository for SqliteServices {
             })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 }
 
@@ -1389,49 +1441,81 @@ impl NotificationSubscriptionRepository for SqliteServices {
             .send(crate::commands::DbCommand::ListNotificationSubscriptions { reply: reply_tx })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
-    async fn list_subscriptions_for_channel(&self, channel_id: &str) -> AppResult<Vec<NotificationSubscription>> {
+    async fn list_subscriptions_for_channel(
+        &self,
+        channel_id: &str,
+    ) -> AppResult<Vec<NotificationSubscription>> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
-            .send(crate::commands::DbCommand::ListNotificationSubscriptionsForChannel {
-                channel_id: channel_id.to_string(),
+            .send(
+                crate::commands::DbCommand::ListNotificationSubscriptionsForChannel {
+                    channel_id: channel_id.to_string(),
+                    reply: reply_tx,
+                },
+            )
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn list_subscriptions_for_event(
+        &self,
+        event_type: &str,
+    ) -> AppResult<Vec<NotificationSubscription>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(
+                crate::commands::DbCommand::ListNotificationSubscriptionsForEvent {
+                    event_type: event_type.to_string(),
+                    reply: reply_tx,
+                },
+            )
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn create_subscription(
+        &self,
+        sub: NotificationSubscription,
+    ) -> AppResult<NotificationSubscription> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::CreateNotificationSubscription {
+                sub,
                 reply: reply_tx,
             })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
-    async fn list_subscriptions_for_event(&self, event_type: &str) -> AppResult<Vec<NotificationSubscription>> {
+    async fn update_subscription(
+        &self,
+        sub: NotificationSubscription,
+    ) -> AppResult<NotificationSubscription> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
-            .send(crate::commands::DbCommand::ListNotificationSubscriptionsForEvent {
-                event_type: event_type.to_string(),
+            .send(crate::commands::DbCommand::UpdateNotificationSubscription {
+                sub,
                 reply: reply_tx,
             })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
-    }
-
-    async fn create_subscription(&self, sub: NotificationSubscription) -> AppResult<NotificationSubscription> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::CreateNotificationSubscription { sub, reply: reply_tx })
+        reply_rx
             .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
-    }
-
-    async fn update_subscription(&self, sub: NotificationSubscription) -> AppResult<NotificationSubscription> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::UpdateNotificationSubscription { sub, reply: reply_tx })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
     async fn delete_subscription(&self, id: &str) -> AppResult<()> {
@@ -1443,7 +1527,9 @@ impl NotificationSubscriptionRepository for SqliteServices {
             })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 }
 
@@ -1452,13 +1538,17 @@ impl HousekeepingRepository for SqliteServices {
     async fn delete_release_decisions_older_than(&self, days: i64) -> AppResult<u32> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
-            .send(crate::commands::DbCommand::DeleteReleaseDecisionsOlderThan {
-                days,
-                reply: reply_tx,
-            })
+            .send(
+                crate::commands::DbCommand::DeleteReleaseDecisionsOlderThan {
+                    days,
+                    reply: reply_tx,
+                },
+            )
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
     async fn delete_release_attempts_older_than(&self, days: i64) -> AppResult<u32> {
@@ -1470,19 +1560,25 @@ impl HousekeepingRepository for SqliteServices {
             })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
     async fn delete_dispatched_event_outboxes_older_than(&self, days: i64) -> AppResult<u32> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
-            .send(crate::commands::DbCommand::DeleteDispatchedEventOutboxesOlderThan {
-                days,
-                reply: reply_tx,
-            })
+            .send(
+                crate::commands::DbCommand::DeleteDispatchedEventOutboxesOlderThan {
+                    days,
+                    reply: reply_tx,
+                },
+            )
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
     async fn delete_history_events_older_than(&self, days: i64) -> AppResult<u32> {
@@ -1494,18 +1590,20 @@ impl HousekeepingRepository for SqliteServices {
             })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
     async fn list_all_media_file_paths(&self) -> AppResult<Vec<(String, String)>> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
-            .send(crate::commands::DbCommand::ListAllMediaFilePaths {
-                reply: reply_tx,
-            })
+            .send(crate::commands::DbCommand::ListAllMediaFilePaths { reply: reply_tx })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
     async fn delete_media_files_by_ids(&self, ids: &[String]) -> AppResult<u32> {
@@ -1520,7 +1618,9 @@ impl HousekeepingRepository for SqliteServices {
             })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx.await.map_err(|err| AppError::Repository(err.to_string()))?
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 }
 
@@ -1542,15 +1642,30 @@ impl PendingReleaseRepository for SqliteServices {
         self.get_pending_release(id).await
     }
 
-    async fn list_pending_releases_for_wanted_item(&self, wanted_item_id: &str) -> AppResult<Vec<PendingRelease>> {
-        self.list_pending_releases_for_wanted_item(wanted_item_id).await
+    async fn list_pending_releases_for_wanted_item(
+        &self,
+        wanted_item_id: &str,
+    ) -> AppResult<Vec<PendingRelease>> {
+        self.list_pending_releases_for_wanted_item(wanted_item_id)
+            .await
     }
 
-    async fn update_pending_release_status(&self, id: &str, status: &str, grabbed_at: Option<&str>) -> AppResult<()> {
-        self.update_pending_release_status(id, status, grabbed_at).await
+    async fn update_pending_release_status(
+        &self,
+        id: &str,
+        status: &str,
+        grabbed_at: Option<&str>,
+    ) -> AppResult<()> {
+        self.update_pending_release_status(id, status, grabbed_at)
+            .await
     }
 
-    async fn supersede_pending_releases_for_wanted_item(&self, wanted_item_id: &str, except_id: &str) -> AppResult<()> {
-        self.supersede_pending_releases_for_wanted_item(wanted_item_id, except_id).await
+    async fn supersede_pending_releases_for_wanted_item(
+        &self,
+        wanted_item_id: &str,
+        except_id: &str,
+    ) -> AppResult<()> {
+        self.supersede_pending_releases_for_wanted_item(wanted_item_id, except_id)
+            .await
     }
 }

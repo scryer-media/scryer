@@ -3,16 +3,20 @@ use std::path::Path;
 use std::sync::Arc;
 
 use extism::Manifest;
-use scryer_application::{IndexerClient, IndexerPluginProvider, NotificationClient, NotificationPluginProvider};
-use scryer_domain::{IndexerConfig, NotificationChannelConfig};
+use scryer_application::{
+    DownloadClient, DownloadClientPluginProvider, IndexerClient, IndexerPluginProvider,
+    NotificationClient, NotificationPluginProvider,
+};
+use scryer_domain::{DownloadClientConfig, IndexerConfig, NotificationChannelConfig};
 use tracing::{info, warn};
 
+use crate::download_client_adapter::WasmDownloadClient;
 use crate::indexer_adapter::WasmIndexerClient;
 use crate::notification_adapter::WasmNotificationClient;
 use crate::types::PluginDescriptor;
 
 const SUPPORTED_SDK_MAJOR: &str = "0";
-const SUPPORTED_PLUGIN_TYPES: &[&str] = &["indexer", "notification"];
+const SUPPORTED_PLUGIN_TYPES: &[&str] = &["indexer", "notification", "download_client"];
 
 struct LoadedPlugin {
     wasm_bytes: Vec<u8>,
@@ -175,7 +179,9 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
         // Only return primary provider_types, not aliases (which map to the same plugin)
         self.plugins
             .iter()
-            .filter(|(key, loaded)| **key == loaded.descriptor.provider_type.trim().to_ascii_lowercase())
+            .filter(|(key, loaded)| {
+                **key == loaded.descriptor.provider_type.trim().to_ascii_lowercase()
+            })
             .map(|(key, _)| key.clone())
             .collect()
     }
@@ -190,7 +196,10 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
             .flat_map(|loaded| {
                 loaded.descriptor.scoring_policies.iter().map(|sp| {
                     // ID must be a valid Rego path segment (letters, digits, underscores).
-                    let safe_provider = loaded.descriptor.provider_type.replace(['-', ':', '.'], "_");
+                    let safe_provider = loaded
+                        .descriptor
+                        .provider_type
+                        .replace(['-', ':', '.'], "_");
                     let safe_name = sp.name.replace(['-', ':', '.'], "_");
                     let id = format!("plugin_{safe_provider}_{safe_name}");
                     scryer_rules::UserPolicy {
@@ -203,7 +212,10 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
             .collect()
     }
 
-    fn config_fields_for_provider(&self, provider_type: &str) -> Vec<scryer_domain::ConfigFieldDef> {
+    fn config_fields_for_provider(
+        &self,
+        provider_type: &str,
+    ) -> Vec<scryer_domain::ConfigFieldDef> {
         let key = provider_type.trim().to_ascii_lowercase();
         self.plugins
             .get(&key)
@@ -232,7 +244,10 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
             .and_then(|loaded| loaded.descriptor.rate_limit_seconds)
     }
 
-    fn capabilities_for_provider(&self, provider_type: &str) -> scryer_domain::IndexerProviderCapabilities {
+    fn capabilities_for_provider(
+        &self,
+        provider_type: &str,
+    ) -> scryer_domain::IndexerProviderCapabilities {
         let key = provider_type.trim().to_ascii_lowercase();
         self.plugins
             .get(&key)
@@ -287,11 +302,8 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
 
         match extism::Plugin::new(manifest, [], true) {
             Ok(plugin) => {
-                let client = WasmIndexerClient::new(
-                    plugin,
-                    loaded.descriptor.clone(),
-                    config.name.clone(),
-                );
+                let client =
+                    WasmIndexerClient::new(plugin, loaded.descriptor.clone(), config.name.clone());
                 Some(Arc::new(client))
             }
             Err(e) => {
@@ -329,7 +341,10 @@ impl DynamicPluginProvider {
 
     /// Replace the inner provider. This is called after install/uninstall/toggle.
     pub fn reload(&self, new_provider: WasmIndexerPluginProvider) {
-        let mut guard = self.inner.write().expect("DynamicPluginProvider lock poisoned");
+        let mut guard = self
+            .inner
+            .write()
+            .expect("DynamicPluginProvider lock poisoned");
         *guard = new_provider;
         // Clear the client cache — WASM bytes may have changed.
         if let Ok(mut cache) = self.client_cache.lock() {
@@ -351,7 +366,10 @@ impl IndexerPluginProvider for DynamicPluginProvider {
         }
 
         // Slow path: compile WASM and cache the result
-        let guard = self.inner.read().expect("DynamicPluginProvider lock poisoned");
+        let guard = self
+            .inner
+            .read()
+            .expect("DynamicPluginProvider lock poisoned");
         let client = guard.client_for_provider(config)?;
 
         if let Ok(mut cache) = self.client_cache.lock() {
@@ -362,37 +380,64 @@ impl IndexerPluginProvider for DynamicPluginProvider {
     }
 
     fn available_provider_types(&self) -> Vec<String> {
-        let guard = self.inner.read().expect("DynamicPluginProvider lock poisoned");
+        let guard = self
+            .inner
+            .read()
+            .expect("DynamicPluginProvider lock poisoned");
         guard.available_provider_types()
     }
 
     fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
-        let guard = self.inner.read().expect("DynamicPluginProvider lock poisoned");
+        let guard = self
+            .inner
+            .read()
+            .expect("DynamicPluginProvider lock poisoned");
         guard.scoring_policies()
     }
 
-    fn config_fields_for_provider(&self, provider_type: &str) -> Vec<scryer_domain::ConfigFieldDef> {
-        let guard = self.inner.read().expect("DynamicPluginProvider lock poisoned");
+    fn config_fields_for_provider(
+        &self,
+        provider_type: &str,
+    ) -> Vec<scryer_domain::ConfigFieldDef> {
+        let guard = self
+            .inner
+            .read()
+            .expect("DynamicPluginProvider lock poisoned");
         guard.config_fields_for_provider(provider_type)
     }
 
     fn plugin_name_for_provider(&self, provider_type: &str) -> Option<String> {
-        let guard = self.inner.read().expect("DynamicPluginProvider lock poisoned");
+        let guard = self
+            .inner
+            .read()
+            .expect("DynamicPluginProvider lock poisoned");
         guard.plugin_name_for_provider(provider_type)
     }
 
     fn default_base_url_for_provider(&self, provider_type: &str) -> Option<String> {
-        let guard = self.inner.read().expect("DynamicPluginProvider lock poisoned");
+        let guard = self
+            .inner
+            .read()
+            .expect("DynamicPluginProvider lock poisoned");
         guard.default_base_url_for_provider(provider_type)
     }
 
     fn rate_limit_seconds_for_provider(&self, provider_type: &str) -> Option<i64> {
-        let guard = self.inner.read().expect("DynamicPluginProvider lock poisoned");
+        let guard = self
+            .inner
+            .read()
+            .expect("DynamicPluginProvider lock poisoned");
         guard.rate_limit_seconds_for_provider(provider_type)
     }
 
-    fn capabilities_for_provider(&self, provider_type: &str) -> scryer_domain::IndexerProviderCapabilities {
-        let guard = self.inner.read().expect("DynamicPluginProvider lock poisoned");
+    fn capabilities_for_provider(
+        &self,
+        provider_type: &str,
+    ) -> scryer_domain::IndexerProviderCapabilities {
+        let guard = self
+            .inner
+            .read()
+            .expect("DynamicPluginProvider lock poisoned");
         guard.capabilities_for_provider(provider_type)
     }
 
@@ -423,9 +468,270 @@ impl IndexerPluginProvider for DynamicPluginProvider {
     }
 }
 
+// ── Download client plugin provider ────────────────────────────────────
+
+pub struct WasmDownloadClientPluginProvider {
+    plugins: HashMap<String, LoadedPlugin>,
+}
+
+impl WasmDownloadClientPluginProvider {
+    pub fn empty() -> Self {
+        Self {
+            plugins: HashMap::new(),
+        }
+    }
+
+    pub fn with_external_bytes(mut self, wasm_bytes: &[u8]) -> Self {
+        match load_from_bytes(wasm_bytes) {
+            Ok((descriptor, bytes)) => {
+                if !validate_descriptor_for_type(&descriptor, Some("download_client")) {
+                    return self;
+                }
+
+                let provider_type = descriptor.provider_type.trim().to_ascii_lowercase();
+                info!(
+                    plugin = descriptor.name.as_str(),
+                    version = descriptor.version.as_str(),
+                    provider_type = provider_type.as_str(),
+                    "registered external download client plugin"
+                );
+                self.plugins.insert(
+                    provider_type,
+                    LoadedPlugin {
+                        wasm_bytes: bytes,
+                        descriptor,
+                    },
+                );
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to load external download client plugin");
+            }
+        }
+        self
+    }
+
+    pub fn without_provider_type(mut self, provider_type: &str) -> Self {
+        let key = provider_type.trim().to_ascii_lowercase();
+        self.plugins.remove(&key);
+        self
+    }
+
+    fn create_download_client(
+        loaded: &LoadedPlugin,
+        config: &DownloadClientConfig,
+    ) -> Option<Arc<dyn DownloadClient>> {
+        let mut manifest = Manifest::new([extism::Wasm::data(loaded.wasm_bytes.clone())]);
+        manifest = apply_allowed_hosts(
+            manifest,
+            &loaded.descriptor,
+            config.base_url.as_deref(),
+            Some(&config.config_json),
+        );
+        manifest = manifest.with_timeout(std::time::Duration::from_secs(30));
+
+        if let Some(ref base_url) = config.base_url {
+            manifest = manifest.with_config_key("base_url", base_url);
+        }
+
+        match serde_json::from_str::<HashMap<String, String>>(&config.config_json) {
+            Ok(map) => {
+                for (k, v) in &map {
+                    manifest = manifest.with_config_key(k, v);
+                }
+            }
+            Err(e) => {
+                warn!(
+                    client = config.name.as_str(),
+                    error = %e,
+                    "failed to parse download client config_json"
+                );
+            }
+        }
+
+        match extism::Plugin::new(manifest, [], true) {
+            Ok(plugin) => {
+                let client = WasmDownloadClient::new(
+                    plugin,
+                    loaded.descriptor.clone(),
+                    config.id.clone(),
+                    config.name.clone(),
+                );
+                Some(Arc::new(client))
+            }
+            Err(e) => {
+                warn!(
+                    client = config.name.as_str(),
+                    provider_type = config.client_type.as_str(),
+                    error = %e,
+                    "failed to instantiate WASM download client plugin"
+                );
+                None
+            }
+        }
+    }
+}
+
+impl DownloadClientPluginProvider for WasmDownloadClientPluginProvider {
+    fn client_for_config(&self, config: &DownloadClientConfig) -> Option<Arc<dyn DownloadClient>> {
+        let provider = config.client_type.trim().to_ascii_lowercase();
+        let loaded = self.plugins.get(&provider)?;
+        Self::create_download_client(loaded, config)
+    }
+
+    fn available_provider_types(&self) -> Vec<String> {
+        self.plugins
+            .iter()
+            .filter(|(key, loaded)| {
+                **key == loaded.descriptor.provider_type.trim().to_ascii_lowercase()
+            })
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
+
+    fn config_fields_for_provider(
+        &self,
+        provider_type: &str,
+    ) -> Vec<scryer_domain::ConfigFieldDef> {
+        let key = provider_type.trim().to_ascii_lowercase();
+        self.plugins
+            .get(&key)
+            .map(|loaded| loaded.descriptor.config_fields.clone())
+            .unwrap_or_default()
+    }
+
+    fn plugin_name_for_provider(&self, provider_type: &str) -> Option<String> {
+        let key = provider_type.trim().to_ascii_lowercase();
+        self.plugins
+            .get(&key)
+            .map(|loaded| loaded.descriptor.name.clone())
+    }
+
+    fn default_base_url_for_provider(&self, provider_type: &str) -> Option<String> {
+        let key = provider_type.trim().to_ascii_lowercase();
+        self.plugins
+            .get(&key)
+            .and_then(|loaded| loaded.descriptor.default_base_url.clone())
+    }
+
+    fn reload_plugins(
+        &self,
+        _external_wasm_bytes: &[&[u8]],
+        _disabled_builtins: &[String],
+    ) -> Result<(), String> {
+        Err("use DynamicDownloadClientPluginProvider for reload".to_string())
+    }
+}
+
+pub struct DynamicDownloadClientPluginProvider {
+    inner: std::sync::RwLock<WasmDownloadClientPluginProvider>,
+    client_cache: std::sync::Mutex<HashMap<(String, String), Arc<dyn DownloadClient>>>,
+}
+
+impl DynamicDownloadClientPluginProvider {
+    pub fn new(provider: WasmDownloadClientPluginProvider) -> Self {
+        Self {
+            inner: std::sync::RwLock::new(provider),
+            client_cache: std::sync::Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn reload(&self, new_provider: WasmDownloadClientPluginProvider) {
+        let mut guard = self
+            .inner
+            .write()
+            .expect("DynamicDownloadClientPluginProvider lock poisoned");
+        *guard = new_provider;
+        if let Ok(mut cache) = self.client_cache.lock() {
+            cache.clear();
+        }
+        info!("download client plugin provider reloaded");
+    }
+}
+
+impl DownloadClientPluginProvider for DynamicDownloadClientPluginProvider {
+    fn client_for_config(&self, config: &DownloadClientConfig) -> Option<Arc<dyn DownloadClient>> {
+        let cache_key = (config.id.clone(), config.updated_at.to_rfc3339());
+
+        if let Ok(cache) = self.client_cache.lock() {
+            if let Some(client) = cache.get(&cache_key) {
+                return Some(Arc::clone(client));
+            }
+        }
+
+        let guard = self
+            .inner
+            .read()
+            .expect("DynamicDownloadClientPluginProvider lock poisoned");
+        let client = guard.client_for_config(config)?;
+
+        if let Ok(mut cache) = self.client_cache.lock() {
+            cache.insert(cache_key, Arc::clone(&client));
+        }
+
+        Some(client)
+    }
+
+    fn available_provider_types(&self) -> Vec<String> {
+        let guard = self
+            .inner
+            .read()
+            .expect("DynamicDownloadClientPluginProvider lock poisoned");
+        guard.available_provider_types()
+    }
+
+    fn config_fields_for_provider(
+        &self,
+        provider_type: &str,
+    ) -> Vec<scryer_domain::ConfigFieldDef> {
+        let guard = self
+            .inner
+            .read()
+            .expect("DynamicDownloadClientPluginProvider lock poisoned");
+        guard.config_fields_for_provider(provider_type)
+    }
+
+    fn plugin_name_for_provider(&self, provider_type: &str) -> Option<String> {
+        let guard = self
+            .inner
+            .read()
+            .expect("DynamicDownloadClientPluginProvider lock poisoned");
+        guard.plugin_name_for_provider(provider_type)
+    }
+
+    fn default_base_url_for_provider(&self, provider_type: &str) -> Option<String> {
+        let guard = self
+            .inner
+            .read()
+            .expect("DynamicDownloadClientPluginProvider lock poisoned");
+        guard.default_base_url_for_provider(provider_type)
+    }
+
+    fn reload_plugins(
+        &self,
+        external_wasm_bytes: &[&[u8]],
+        disabled_builtins: &[String],
+    ) -> Result<(), String> {
+        let mut provider = WasmDownloadClientPluginProvider::empty();
+
+        for bytes in external_wasm_bytes {
+            provider = provider.with_external_bytes(bytes);
+        }
+
+        for pt in disabled_builtins {
+            provider = provider.without_provider_type(pt);
+        }
+
+        self.reload(provider);
+        Ok(())
+    }
+}
+
 /// Validate a plugin descriptor, optionally filtering by a specific plugin type.
 /// If `expected_type` is None, any supported type passes.
-fn validate_descriptor_for_type(descriptor: &PluginDescriptor, expected_type: Option<&str>) -> bool {
+fn validate_descriptor_for_type(
+    descriptor: &PluginDescriptor,
+    expected_type: Option<&str>,
+) -> bool {
     let sdk_major = descriptor.sdk_version.split('.').next().unwrap_or("");
     if sdk_major != SUPPORTED_SDK_MAJOR {
         warn!(
@@ -462,8 +768,12 @@ fn validate_descriptor_for_type(descriptor: &PluginDescriptor, expected_type: Op
 pub fn load_indexer_plugins(plugins_dir: &Path) -> Result<WasmIndexerPluginProvider, String> {
     let mut plugins = HashMap::new();
 
-    let entries = std::fs::read_dir(plugins_dir)
-        .map_err(|e| format!("failed to read plugins directory {}: {e}", plugins_dir.display()))?;
+    let entries = std::fs::read_dir(plugins_dir).map_err(|e| {
+        format!(
+            "failed to read plugins directory {}: {e}",
+            plugins_dir.display()
+        )
+    })?;
 
     for entry in entries.flatten() {
         let dir = entry.path();
@@ -601,7 +911,10 @@ fn host_from_url(url: &str) -> Option<String> {
     // Strip port if present
     let host = if host.contains('[') {
         // IPv6: [::1]:8080 — take everything including brackets
-        host.split(']').next().map(|h| format!("{}]", h)).unwrap_or_default()
+        host.split(']')
+            .next()
+            .map(|h| format!("{}]", h))
+            .unwrap_or_default()
     } else {
         host.split(':').next().unwrap_or(host).to_string()
     };
@@ -730,7 +1043,10 @@ impl WasmNotificationPluginProvider {
 }
 
 impl NotificationPluginProvider for WasmNotificationPluginProvider {
-    fn client_for_channel(&self, config: &NotificationChannelConfig) -> Option<Arc<dyn NotificationClient>> {
+    fn client_for_channel(
+        &self,
+        config: &NotificationChannelConfig,
+    ) -> Option<Arc<dyn NotificationClient>> {
         let provider = config.channel_type.trim().to_ascii_lowercase();
         let loaded = self.plugins.get(&provider)?;
         Self::create_notification_client(loaded, config)
@@ -739,12 +1055,17 @@ impl NotificationPluginProvider for WasmNotificationPluginProvider {
     fn available_provider_types(&self) -> Vec<String> {
         self.plugins
             .iter()
-            .filter(|(key, loaded)| **key == loaded.descriptor.provider_type.trim().to_ascii_lowercase())
+            .filter(|(key, loaded)| {
+                **key == loaded.descriptor.provider_type.trim().to_ascii_lowercase()
+            })
             .map(|(key, _)| key.clone())
             .collect()
     }
 
-    fn config_fields_for_provider(&self, provider_type: &str) -> Vec<scryer_domain::ConfigFieldDef> {
+    fn config_fields_for_provider(
+        &self,
+        provider_type: &str,
+    ) -> Vec<scryer_domain::ConfigFieldDef> {
         let key = provider_type.trim().to_ascii_lowercase();
         self.plugins
             .get(&key)
@@ -783,7 +1104,10 @@ impl DynamicNotificationPluginProvider {
     }
 
     pub fn reload(&self, new_provider: WasmNotificationPluginProvider) {
-        let mut guard = self.inner.write().expect("DynamicNotificationPluginProvider lock poisoned");
+        let mut guard = self
+            .inner
+            .write()
+            .expect("DynamicNotificationPluginProvider lock poisoned");
         *guard = new_provider;
         if let Ok(mut cache) = self.client_cache.lock() {
             cache.clear();
@@ -793,7 +1117,10 @@ impl DynamicNotificationPluginProvider {
 }
 
 impl NotificationPluginProvider for DynamicNotificationPluginProvider {
-    fn client_for_channel(&self, config: &NotificationChannelConfig) -> Option<Arc<dyn NotificationClient>> {
+    fn client_for_channel(
+        &self,
+        config: &NotificationChannelConfig,
+    ) -> Option<Arc<dyn NotificationClient>> {
         let cache_key = (config.id.clone(), config.updated_at.to_rfc3339());
 
         if let Ok(cache) = self.client_cache.lock() {
@@ -802,7 +1129,10 @@ impl NotificationPluginProvider for DynamicNotificationPluginProvider {
             }
         }
 
-        let guard = self.inner.read().expect("DynamicNotificationPluginProvider lock poisoned");
+        let guard = self
+            .inner
+            .read()
+            .expect("DynamicNotificationPluginProvider lock poisoned");
         let client = guard.client_for_channel(config)?;
 
         if let Ok(mut cache) = self.client_cache.lock() {
@@ -813,17 +1143,29 @@ impl NotificationPluginProvider for DynamicNotificationPluginProvider {
     }
 
     fn available_provider_types(&self) -> Vec<String> {
-        let guard = self.inner.read().expect("DynamicNotificationPluginProvider lock poisoned");
+        let guard = self
+            .inner
+            .read()
+            .expect("DynamicNotificationPluginProvider lock poisoned");
         guard.available_provider_types()
     }
 
-    fn config_fields_for_provider(&self, provider_type: &str) -> Vec<scryer_domain::ConfigFieldDef> {
-        let guard = self.inner.read().expect("DynamicNotificationPluginProvider lock poisoned");
+    fn config_fields_for_provider(
+        &self,
+        provider_type: &str,
+    ) -> Vec<scryer_domain::ConfigFieldDef> {
+        let guard = self
+            .inner
+            .read()
+            .expect("DynamicNotificationPluginProvider lock poisoned");
         guard.config_fields_for_provider(provider_type)
     }
 
     fn plugin_name_for_provider(&self, provider_type: &str) -> Option<String> {
-        let guard = self.inner.read().expect("DynamicNotificationPluginProvider lock poisoned");
+        let guard = self
+            .inner
+            .read()
+            .expect("DynamicNotificationPluginProvider lock poisoned");
         guard.plugin_name_for_provider(provider_type)
     }
 

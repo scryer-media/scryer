@@ -189,13 +189,17 @@ fn apply_overrides(
     let defaults = override_defaults(persona);
 
     // allow_x265_non4k: when enabled, remove penalty
-    let allow_x265 = overrides.allow_x265_non4k.unwrap_or(defaults.allow_x265_non4k);
+    let allow_x265 = overrides
+        .allow_x265_non4k
+        .unwrap_or(defaults.allow_x265_non4k);
     if allow_x265 {
         weights.x265_non4k_penalty = weights.x265_non4k_penalty.max(0);
     }
 
     // prefer_compact_encodes: swap size curve
-    let compact = overrides.prefer_compact_encodes.unwrap_or(defaults.prefer_compact_encodes);
+    let compact = overrides
+        .prefer_compact_encodes
+        .unwrap_or(defaults.prefer_compact_encodes);
     if compact != defaults.prefer_compact_encodes {
         if compact {
             let eff = efficient_weights();
@@ -221,7 +225,9 @@ fn apply_overrides(
     }
 
     // prefer_lossless_audio: swap audio weights to audiophile-style
-    let lossless = overrides.prefer_lossless_audio.unwrap_or(defaults.prefer_lossless_audio);
+    let lossless = overrides
+        .prefer_lossless_audio
+        .unwrap_or(defaults.prefer_lossless_audio);
     if lossless != defaults.prefer_lossless_audio {
         if lossless {
             let aud = audiophile_weights();

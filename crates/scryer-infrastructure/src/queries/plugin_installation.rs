@@ -206,10 +206,7 @@ pub(crate) async fn seed_builtin_query(
     Ok(())
 }
 
-pub(crate) async fn store_registry_cache_query(
-    pool: &SqlitePool,
-    json: &str,
-) -> AppResult<()> {
+pub(crate) async fn store_registry_cache_query(pool: &SqlitePool, json: &str) -> AppResult<()> {
     // Use a special plugin_id "__registry_cache" to store the JSON in the same table
     // This avoids needing a separate table or expanding the settings system.
     let now = chrono::Utc::now().to_rfc3339();
@@ -231,9 +228,7 @@ pub(crate) async fn store_registry_cache_query(
     Ok(())
 }
 
-pub(crate) async fn get_registry_cache_query(
-    pool: &SqlitePool,
-) -> AppResult<Option<String>> {
+pub(crate) async fn get_registry_cache_query(pool: &SqlitePool) -> AppResult<Option<String>> {
     use sqlx::Row;
     let row = sqlx::query(
         "SELECT description FROM plugin_installations WHERE plugin_id = '__registry_cache'",

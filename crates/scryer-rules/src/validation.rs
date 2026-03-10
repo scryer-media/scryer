@@ -1,6 +1,6 @@
 use crate::{
-    BuiltinScoreDoc, ContextDoc, FileDoc, ProfileDoc, ReleaseDoc, RulesError, UserRuleInput,
-    builtins,
+    builtins, BuiltinScoreDoc, ContextDoc, FileDoc, ProfileDoc, ReleaseDoc, RulesError,
+    UserRuleInput,
 };
 use regorus::{Engine, Value};
 
@@ -44,9 +44,7 @@ pub fn validate_user_rule(
     let expected_pkg = format!("package scryer.rules.user.{rule_set_id}");
 
     // Check package declaration
-    let has_pkg = rego_source
-        .lines()
-        .any(|line| line.trim() == expected_pkg);
+    let has_pkg = rego_source.lines().any(|line| line.trim() == expected_pkg);
     if !has_pkg {
         return Ok(ValidationResult::invalid(format!(
             "package declaration must be: {expected_pkg}"
@@ -59,15 +57,12 @@ pub fn validate_user_rule(
 
     let policy_path = format!("user/{rule_set_id}.rego");
     if let Err(e) = engine.add_policy(policy_path, rego_source.to_string()) {
-        return Ok(ValidationResult::invalid(format!(
-            "compilation error: {e}"
-        )));
+        return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
     }
 
     // Dry-run against synthetic input
     let test_input = synthetic_test_input();
-    let input_value =
-        serde_json::to_value(&test_input).map_err(RulesError::Serialization)?;
+    let input_value = serde_json::to_value(&test_input).map_err(RulesError::Serialization)?;
     engine.set_input(input_value.into());
 
     let query = format!("data.scryer.rules.user.{rule_set_id}.score_entry");
@@ -81,9 +76,7 @@ pub fn validate_user_rule(
 
             if let Some(v) = value {
                 if let Err(e) = validate_score_entry_shape(v) {
-                    return Ok(ValidationResult::invalid(format!(
-                        "output error: {e}"
-                    )));
+                    return Ok(ValidationResult::invalid(format!("output error: {e}")));
                 }
             }
             Ok(ValidationResult::valid())
@@ -100,15 +93,18 @@ fn validate_score_entry_shape(value: &Value) -> Result<(), String> {
         return Ok(());
     }
 
-    let obj = value
-        .as_object()
-        .map_err(|_| "score_entry must produce an object (map), not a scalar or array".to_string())?;
+    let obj = value.as_object().map_err(|_| {
+        "score_entry must produce an object (map), not a scalar or array".to_string()
+    })?;
 
     for (key, val) in obj.iter() {
         if key.as_string().is_err() {
             return Err(format!("score_entry keys must be strings, got: {key:?}"));
         }
-        let key_str = key.as_string().map(|s| s.to_string()).unwrap_or_else(|_| "?".to_string());
+        let key_str = key
+            .as_string()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|_| "?".to_string());
 
         if let Ok(n) = val.as_i64() {
             if i32::try_from(n).is_err() {
@@ -171,11 +167,7 @@ fn synthetic_test_input() -> UserRuleInput {
         profile: ProfileDoc {
             id: "test".to_string(),
             name: "Test".to_string(),
-            quality_tiers: vec![
-                "2160P".to_string(),
-                "1080P".to_string(),
-                "720P".to_string(),
-            ],
+            quality_tiers: vec!["2160P".to_string(), "1080P".to_string(), "720P".to_string()],
             archival_quality: Some("2160P".to_string()),
             allow_unknown_quality: false,
             source_allowlist: vec![],

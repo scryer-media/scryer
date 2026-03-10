@@ -12,7 +12,9 @@ pub struct EncryptionKey {
 
 impl std::fmt::Debug for EncryptionKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("EncryptionKey").field("key_bytes", &"[REDACTED]").finish()
+        f.debug_struct("EncryptionKey")
+            .field("key_bytes", &"[REDACTED]")
+            .finish()
     }
 }
 
@@ -121,9 +123,7 @@ const SETTINGS_SCOPE_SYSTEM: &str = "system";
 ///
 /// This must run BEFORE `set_encryption_key` is called, so the master key
 /// itself is stored unencrypted (it's the one unprotected sensitive value).
-pub async fn ensure_encryption_key(
-    db: &crate::SqliteServices,
-) -> Result<EncryptionKey, String> {
+pub async fn ensure_encryption_key(db: &crate::SqliteServices) -> Result<EncryptionKey, String> {
     // Check env var first
     if let Ok(env_key) = std::env::var("SCRYER_ENCRYPTION_KEY") {
         let env_key = env_key.trim().to_string();

@@ -1,7 +1,7 @@
 use async_graphql::{Error, Result as GqlResult};
 use scryer_domain::{Entitlement, ExternalId, MediaFacet, NewTitle};
 
-use crate::types::{AddTitleInput};
+use crate::types::AddTitleInput;
 
 pub(crate) fn parse_facet(raw: Option<String>) -> Option<MediaFacet> {
     raw.and_then(|value| match value.to_lowercase().as_str() {

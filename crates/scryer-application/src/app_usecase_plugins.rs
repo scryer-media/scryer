@@ -118,14 +118,32 @@ impl AppUseCase {
             .collect();
 
         if let Some(ref provider) = self.services.plugin_provider {
-            provider.reload_plugins(&external_refs, &disabled_builtins)
-                .map_err(|e| AppError::Repository(format!("failed to reload plugin provider: {e}")))?;
+            provider
+                .reload_plugins(&external_refs, &disabled_builtins)
+                .map_err(|e| {
+                    AppError::Repository(format!("failed to reload plugin provider: {e}"))
+                })?;
+        }
+
+        if let Some(ref provider) = self.services.download_client_plugin_provider {
+            provider
+                .reload_plugins(&external_refs, &disabled_builtins)
+                .map_err(|e| {
+                    AppError::Repository(format!(
+                        "failed to reload download client plugin provider: {e}"
+                    ))
+                })?;
         }
 
         // Also rebuild notification plugin provider
         if let Some(ref notif_provider) = self.services.notification_provider {
-            notif_provider.reload_plugins(&external_refs, &disabled_builtins)
-                .map_err(|e| AppError::Repository(format!("failed to reload notification plugin provider: {e}")))?;
+            notif_provider
+                .reload_plugins(&external_refs, &disabled_builtins)
+                .map_err(|e| {
+                    AppError::Repository(format!(
+                        "failed to reload notification plugin provider: {e}"
+                    ))
+                })?;
         }
 
         // Rebuild rules engine to pick up new/removed scoring policies
@@ -195,7 +213,12 @@ impl AppUseCase {
     /// Tuple: (provider_type, name, config_fields, default_base_url)
     pub fn available_indexer_provider_types(
         &self,
-    ) -> Vec<(String, String, Vec<scryer_domain::ConfigFieldDef>, Option<String>)> {
+    ) -> Vec<(
+        String,
+        String,
+        Vec<scryer_domain::ConfigFieldDef>,
+        Option<String>,
+    )> {
         let Some(ref provider) = self.services.plugin_provider else {
             return vec![];
         };
@@ -215,11 +238,35 @@ impl AppUseCase {
             .collect()
     }
 
-    /// List available plugins by merging cached registry with local installations.
-    pub async fn list_available_plugins(
+    pub fn available_download_client_provider_types(
         &self,
-        actor: &User,
-    ) -> AppResult<Vec<RegistryPlugin>> {
+    ) -> Vec<(
+        String,
+        String,
+        Vec<scryer_domain::ConfigFieldDef>,
+        Option<String>,
+    )> {
+        let Some(ref provider) = self.services.download_client_plugin_provider else {
+            return vec![];
+        };
+        let mut seen = std::collections::HashSet::new();
+        provider
+            .available_provider_types()
+            .into_iter()
+            .filter(|pt| seen.insert(pt.clone()))
+            .map(|pt| {
+                let name = provider
+                    .plugin_name_for_provider(&pt)
+                    .unwrap_or_else(|| pt.clone());
+                let fields = provider.config_fields_for_provider(&pt);
+                let default_base_url = provider.default_base_url_for_provider(&pt);
+                (pt, name, fields, default_base_url)
+            })
+            .collect()
+    }
+
+    /// List available plugins by merging cached registry with local installations.
+    pub async fn list_available_plugins(&self, actor: &User) -> AppResult<Vec<RegistryPlugin>> {
         require(actor, &Entitlement::ManageConfig)?;
 
         let installations = self
@@ -262,11 +309,18 @@ impl AppUseCase {
                 wasm_url: entry.wasm_url.clone(),
                 wasm_sha256: entry.wasm_sha256.clone(),
                 min_scryer_version: entry.min_scryer_version.clone(),
-                default_base_url: self
-                    .services
-                    .plugin_provider
-                    .as_ref()
-                    .and_then(|p| p.default_base_url_for_provider(&entry.provider_type)),
+                default_base_url: match entry.plugin_type.as_str() {
+                    "download_client" => self
+                        .services
+                        .download_client_plugin_provider
+                        .as_ref()
+                        .and_then(|p| p.default_base_url_for_provider(&entry.provider_type)),
+                    _ => self
+                        .services
+                        .plugin_provider
+                        .as_ref()
+                        .and_then(|p| p.default_base_url_for_provider(&entry.provider_type)),
+                },
                 is_installed: inst.is_some(),
                 is_enabled: inst.map(|i| i.is_enabled).unwrap_or(false),
                 installed_version: inst.map(|i| i.version.clone()),
@@ -299,11 +353,18 @@ impl AppUseCase {
                     wasm_url: None,
                     wasm_sha256: inst.wasm_sha256.clone(),
                     min_scryer_version: None,
-                    default_base_url: self
-                        .services
-                        .plugin_provider
-                        .as_ref()
-                        .and_then(|p| p.default_base_url_for_provider(&inst.provider_type)),
+                    default_base_url: match inst.plugin_type.as_str() {
+                        "download_client" => self
+                            .services
+                            .download_client_plugin_provider
+                            .as_ref()
+                            .and_then(|p| p.default_base_url_for_provider(&inst.provider_type)),
+                        _ => self
+                            .services
+                            .plugin_provider
+                            .as_ref()
+                            .and_then(|p| p.default_base_url_for_provider(&inst.provider_type)),
+                    },
                     is_installed: true,
                     is_enabled: inst.is_enabled,
                     installed_version: Some(inst.version.clone()),
@@ -316,10 +377,7 @@ impl AppUseCase {
     }
 
     /// Refresh the plugin registry from the remote URL.
-    pub async fn refresh_plugin_registry(
-        &self,
-        actor: &User,
-    ) -> AppResult<Vec<RegistryPlugin>> {
+    pub async fn refresh_plugin_registry(&self, actor: &User) -> AppResult<Vec<RegistryPlugin>> {
         require(actor, &Entitlement::ManageConfig)?;
         self.refresh_plugin_registry_internal().await?;
         self.list_available_plugins(actor).await
@@ -336,9 +394,8 @@ impl AppUseCase {
                 AppError::Repository(format!("failed to read plugin registry body: {e}"))
             })?;
 
-        let _manifest: RegistryManifest = serde_json::from_str(&body).map_err(|e| {
-            AppError::Validation(format!("invalid plugin registry JSON: {e}"))
-        })?;
+        let _manifest: RegistryManifest = serde_json::from_str(&body)
+            .map_err(|e| AppError::Validation(format!("invalid plugin registry JSON: {e}")))?;
 
         self.services
             .plugin_installations
@@ -363,9 +420,7 @@ impl AppUseCase {
             .get_registry_cache()
             .await?
             .ok_or_else(|| {
-                AppError::Validation(
-                    "plugin registry not loaded; refresh first".to_string(),
-                )
+                AppError::Validation("plugin registry not loaded; refresh first".to_string())
             })?;
 
         let manifest: RegistryManifest = serde_json::from_str(&registry_json)
@@ -375,9 +430,7 @@ impl AppUseCase {
             .plugins
             .iter()
             .find(|p| p.id == plugin_id)
-            .ok_or_else(|| {
-                AppError::NotFound(format!("plugin '{plugin_id}' not in registry"))
-            })?;
+            .ok_or_else(|| AppError::NotFound(format!("plugin '{plugin_id}' not in registry")))?;
 
         // Can't install built-in plugins (they're already installed)
         if entry.builtin {
@@ -387,9 +440,7 @@ impl AppUseCase {
         }
 
         let wasm_url = entry.wasm_url.as_ref().ok_or_else(|| {
-            AppError::Validation(format!(
-                "plugin '{plugin_id}' has no wasm_url in registry"
-            ))
+            AppError::Validation(format!("plugin '{plugin_id}' has no wasm_url in registry"))
         })?;
 
         // Download WASM
@@ -486,11 +537,7 @@ impl AppUseCase {
     }
 
     /// Uninstall a non-builtin plugin.
-    pub async fn uninstall_plugin(
-        &self,
-        actor: &User,
-        plugin_id: &str,
-    ) -> AppResult<()> {
+    pub async fn uninstall_plugin(&self, actor: &User, plugin_id: &str) -> AppResult<()> {
         require(actor, &Entitlement::ManageConfig)?;
 
         let installation = self
@@ -587,9 +634,7 @@ impl AppUseCase {
             .get_registry_cache()
             .await?
             .ok_or_else(|| {
-                AppError::Validation(
-                    "plugin registry not loaded; refresh first".to_string(),
-                )
+                AppError::Validation("plugin registry not loaded; refresh first".to_string())
             })?;
 
         let manifest: RegistryManifest = serde_json::from_str(&registry_json)
@@ -599,9 +644,7 @@ impl AppUseCase {
             .plugins
             .iter()
             .find(|p| p.id == plugin_id)
-            .ok_or_else(|| {
-                AppError::NotFound(format!("plugin '{plugin_id}' not in registry"))
-            })?;
+            .ok_or_else(|| AppError::NotFound(format!("plugin '{plugin_id}' not in registry")))?;
 
         // Verify a newer version exists
         let reg_ver = semver::Version::parse(&entry.version).map_err(|e| {
@@ -621,9 +664,7 @@ impl AppUseCase {
         }
 
         let wasm_url = entry.wasm_url.as_ref().ok_or_else(|| {
-            AppError::Validation(format!(
-                "plugin '{plugin_id}' has no wasm_url in registry"
-            ))
+            AppError::Validation(format!("plugin '{plugin_id}' has no wasm_url in registry"))
         })?;
 
         // Download WASM

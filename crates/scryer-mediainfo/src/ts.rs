@@ -14,8 +14,7 @@ const PTS_HZ: f64 = 90_000.0;
 
 /// Parse an MPEG Transport Stream file and extract stream metadata.
 pub(crate) fn parse_ts(path: &Path) -> Result<RawContainer, MediaInfoError> {
-    let mut file =
-        std::fs::File::open(path).map_err(|e| MediaInfoError::Io(e.to_string()))?;
+    let mut file = std::fs::File::open(path).map_err(|e| MediaInfoError::Io(e.to_string()))?;
 
     let file_size = file
         .metadata()
@@ -79,9 +78,7 @@ fn find_pmt_pid<T: Read + Seek>(stream: &mut T) -> Result<u16, MediaInfoError> {
         if buf[0] != SYNC_BYTE {
             // Try to resync: skip one byte and look for next sync
             if !resync(stream, &mut buf)? {
-                return Err(MediaInfoError::Parse(
-                    "could not sync to TS packets".into(),
-                ));
+                return Err(MediaInfoError::Parse("could not sync to TS packets".into()));
             }
         }
 
@@ -117,8 +114,7 @@ fn find_pmt_pid<T: Read + Seek>(stream: &mut T) -> Result<u16, MediaInfoError> {
         if section.len() < 8 {
             continue;
         }
-        let section_length =
-            ((section[1] as u16 & 0x0F) << 8 | section[2] as u16) as usize;
+        let section_length = ((section[1] as u16 & 0x0F) << 8 | section[2] as u16) as usize;
         let available = section.len().saturating_sub(3);
         let data_len = section_length.min(available);
 
@@ -150,10 +146,7 @@ fn find_pmt_pid<T: Read + Seek>(stream: &mut T) -> Result<u16, MediaInfoError> {
 // ---------------------------------------------------------------------------
 
 /// Scan TS packets for the given PMT PID and extract elementary stream entries.
-fn parse_pmt<T: Read + Seek>(
-    stream: &mut T,
-    pmt_pid: u16,
-) -> Result<Vec<EsEntry>, MediaInfoError> {
+fn parse_pmt<T: Read + Seek>(stream: &mut T, pmt_pid: u16) -> Result<Vec<EsEntry>, MediaInfoError> {
     stream
         .seek(SeekFrom::Start(0))
         .map_err(|e| MediaInfoError::Io(e.to_string()))?;
@@ -212,14 +205,12 @@ fn parse_pmt<T: Read + Seek>(
             continue;
         }
 
-        let section_length =
-            ((section[1] as u16 & 0x0F) << 8 | section[2] as u16) as usize;
+        let section_length = ((section[1] as u16 & 0x0F) << 8 | section[2] as u16) as usize;
         let available = section.len().saturating_sub(3);
         let data_len = section_length.min(available);
 
         // section[10..12] = reserved/program_info_length
-        let program_info_length =
-            ((section[10] as u16 & 0x0F) << 8 | section[11] as u16) as usize;
+        let program_info_length = ((section[10] as u16 & 0x0F) << 8 | section[11] as u16) as usize;
 
         let es_start = 12 + program_info_length;
         // CRC is last 4 bytes of section_length data
@@ -235,10 +226,9 @@ fn parse_pmt<T: Read + Seek>(
 
         while pos + 5 <= es_data.len() {
             let st = es_data[pos];
-            let es_pid =
-                ((es_data[pos + 1] as u16 & 0x1F) << 8) | es_data[pos + 2] as u16;
-            let es_info_length = ((es_data[pos + 3] as u16 & 0x0F) << 8
-                | es_data[pos + 4] as u16) as usize;
+            let es_pid = ((es_data[pos + 1] as u16 & 0x1F) << 8) | es_data[pos + 2] as u16;
+            let es_info_length =
+                ((es_data[pos + 3] as u16 & 0x0F) << 8 | es_data[pos + 4] as u16) as usize;
 
             let desc_end = (pos + 5 + es_info_length).min(es_data.len());
             let descriptors = es_data[pos + 5..desc_end].to_vec();
@@ -285,10 +275,7 @@ fn build_track(es: &EsEntry) -> RawTrack {
 }
 
 /// Map a PMT stream_type byte to a (TrackKind, codec name).
-fn classify_stream_type(
-    stream_type: u8,
-    descriptors: &[u8],
-) -> (TrackKind, &'static str) {
+fn classify_stream_type(stream_type: u8, descriptors: &[u8]) -> (TrackKind, &'static str) {
     match stream_type {
         0x01 => (TrackKind::Video, "mpeg1video"),
         0x02 => (TrackKind::Video, "mpeg2video"),
@@ -385,9 +372,7 @@ fn estimate_duration<T: Read + Seek>(
     let last_pts = find_pts_near(stream, tail_start, false, &pes_pids, 50_000);
 
     match (first_pts, last_pts) {
-        (Some(first), Some(last)) if last > first => {
-            Some((last - first) as f64 / PTS_HZ)
-        }
+        (Some(first), Some(last)) if last > first => Some((last - first) as f64 / PTS_HZ),
         (Some(first), Some(last)) if last <= first => {
             // PTS wrap-around (33-bit counter)
             let wrapped = (1u64 << 33) - first + last;
@@ -401,17 +386,7 @@ fn estimate_duration<T: Read + Seek>(
 fn is_pes_stream_type(st: u8) -> bool {
     matches!(
         st,
-        0x01 | 0x02
-            | 0x03
-            | 0x04
-            | 0x06
-            | 0x0F
-            | 0x10
-            | 0x11
-            | 0x1B
-            | 0x24
-            | 0x81
-            | 0x87
+        0x01 | 0x02 | 0x03 | 0x04 | 0x06 | 0x0F | 0x10 | 0x11 | 0x1B | 0x24 | 0x81 | 0x87
     )
 }
 

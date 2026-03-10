@@ -131,10 +131,7 @@ pub(crate) async fn get_download_client_config_query(
         .transpose()
 }
 
-fn maybe_encrypt_config_json(
-    key: Option<&EncryptionKey>,
-    config_json: &str,
-) -> AppResult<String> {
+fn maybe_encrypt_config_json(key: Option<&EncryptionKey>, config_json: &str) -> AppResult<String> {
     let Some(key) = key else {
         return Ok(config_json.to_string());
     };

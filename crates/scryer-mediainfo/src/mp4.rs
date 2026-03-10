@@ -11,12 +11,9 @@ use crate::MediaInfoError;
 
 /// Parse an MP4/MOV/M4V file into a [`RawContainer`].
 pub(crate) fn parse_mp4(path: &Path) -> Result<RawContainer, MediaInfoError> {
-    let file_len = std::fs::metadata(path)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let file_len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
 
-    let mut file =
-        std::fs::File::open(path).map_err(|e| MediaInfoError::Io(e.to_string()))?;
+    let mut file = std::fs::File::open(path).map_err(|e| MediaInfoError::Io(e.to_string()))?;
 
     let ctx = mp4parse::read_mp4(&mut file)
         .map_err(|e| MediaInfoError::Parse(format!("mp4 parse: {e:?}")))?;
@@ -256,10 +253,7 @@ fn codec_type_to_fourcc(ct: CodecType) -> String {
 /// Estimate a track's bitrate from the `stsz` (sample size) box.
 ///
 /// Returns bits-per-second, or `None` if the data is unavailable.
-fn estimate_track_bitrate(
-    track: &mp4parse::Track,
-    container_duration: Option<f64>,
-) -> Option<i64> {
+fn estimate_track_bitrate(track: &mp4parse::Track, container_duration: Option<f64>) -> Option<i64> {
     let stsz = track.stsz.as_ref()?;
 
     let total_bytes: u64 = if stsz.sample_size > 0 {
@@ -271,12 +265,7 @@ fn estimate_track_bitrate(
             track
                 .stts
                 .as_ref()
-                .map(|stts| {
-                    stts.samples
-                        .iter()
-                        .map(|s| u64::from(s.sample_count))
-                        .sum()
-                })
+                .map(|stts| stts.samples.iter().map(|s| u64::from(s.sample_count)).sum())
                 .unwrap_or(0)
         };
         u64::from(stsz.sample_size) * count
@@ -321,11 +310,7 @@ fn estimate_frame_rate(track: &mp4parse::Track) -> Option<f64> {
         return None;
     }
 
-    let total_samples: u64 = stts
-        .samples
-        .iter()
-        .map(|s| u64::from(s.sample_count))
-        .sum();
+    let total_samples: u64 = stts.samples.iter().map(|s| u64::from(s.sample_count)).sum();
     if total_samples == 0 {
         return None;
     }
@@ -364,11 +349,7 @@ fn estimate_frame_rate(track: &mp4parse::Track) -> Option<f64> {
 ///
 /// Works even for Unknown sample entries (mp4parse doesn't support HEVC) by
 /// defaulting to a 4-byte NAL length prefix.
-fn scan_mp4_hdr10plus(
-    path: &Path,
-    ctx: &mp4parse::MediaContext,
-    tracks: &mut [RawTrack],
-) {
+fn scan_mp4_hdr10plus(path: &Path, ctx: &mp4parse::MediaContext, tracks: &mut [RawTrack]) {
     use std::io::{Read, Seek, SeekFrom};
 
     // Find the first video track (may be HEVC or Unknown/unidentified).
@@ -463,11 +444,14 @@ fn scan_mp4_dovi_config(path: &Path) -> Option<Vec<u8>> {
     // dvcC = [0x64, 0x76, 0x63, 0x43]
     // dvvC = [0x64, 0x76, 0x76, 0x43]
     for i in 4..n.saturating_sub(12) {
-        let is_dvcc = buf[i] == 0x64 && buf[i + 1] == 0x76 && buf[i + 2] == 0x63 && buf[i + 3] == 0x43;
-        let is_dvvc = buf[i] == 0x64 && buf[i + 1] == 0x76 && buf[i + 2] == 0x76 && buf[i + 3] == 0x43;
+        let is_dvcc =
+            buf[i] == 0x64 && buf[i + 1] == 0x76 && buf[i + 2] == 0x63 && buf[i + 3] == 0x43;
+        let is_dvvc =
+            buf[i] == 0x64 && buf[i + 1] == 0x76 && buf[i + 2] == 0x76 && buf[i + 3] == 0x43;
         if is_dvcc || is_dvvc {
             // Box size is the 4 bytes before the FourCC (big-endian u32).
-            let box_size = u32::from_be_bytes([buf[i - 4], buf[i - 3], buf[i - 2], buf[i - 1]]) as usize;
+            let box_size =
+                u32::from_be_bytes([buf[i - 4], buf[i - 3], buf[i - 2], buf[i - 1]]) as usize;
             let content_size = box_size.saturating_sub(8);
             let content_start = i + 4;
             let content_end = content_start + content_size;

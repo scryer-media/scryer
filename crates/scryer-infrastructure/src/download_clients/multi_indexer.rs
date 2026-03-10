@@ -4,7 +4,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use scryer_application::{
     AppError, AppResult, IndexerClient, IndexerConfigRepository, IndexerPluginProvider,
-    IndexerRoutingPlan, IndexerSearchResponse, IndexerSearchResult, IndexerStatsTracker, SearchMode,
+    IndexerRoutingPlan, IndexerSearchResponse, IndexerSearchResult, IndexerStatsTracker,
+    SearchMode,
 };
 use scryer_domain::IndexerConfig;
 use tokio::sync::Mutex;
@@ -59,14 +60,14 @@ impl IndexerRateLimiter {
 
 /// Exponential backoff periods (in seconds), matching Sonarr's EscalationBackOff.Periods[].
 const BACKOFF_PERIODS_SECS: &[u64] = &[
-    5 * 60,      // 5 minutes
-    10 * 60,     // 10 minutes
-    15 * 60,     // 15 minutes
-    30 * 60,     // 30 minutes
-    60 * 60,     // 1 hour
-    2 * 60 * 60, // 2 hours
-    4 * 60 * 60, // 4 hours
-    8 * 60 * 60, // 8 hours
+    5 * 60,       // 5 minutes
+    10 * 60,      // 10 minutes
+    15 * 60,      // 15 minutes
+    30 * 60,      // 30 minutes
+    60 * 60,      // 1 hour
+    2 * 60 * 60,  // 2 hours
+    4 * 60 * 60,  // 4 hours
+    8 * 60 * 60,  // 8 hours
     24 * 60 * 60, // 24 hours
 ];
 
@@ -93,10 +94,12 @@ impl IndexerBackoffTracker {
     /// Record a failure and escalate the backoff level. Returns the new disabled_until.
     async fn record_failure(&self, indexer_id: &str) -> chrono::DateTime<chrono::Utc> {
         let mut map = self.state.lock().await;
-        let state = map.entry(indexer_id.to_string()).or_insert(IndexerBackoffState {
-            escalation_level: 0,
-            disabled_until: None,
-        });
+        let state = map
+            .entry(indexer_id.to_string())
+            .or_insert(IndexerBackoffState {
+                escalation_level: 0,
+                disabled_until: None,
+            });
 
         let period_index = state.escalation_level.min(BACKOFF_PERIODS_SECS.len() - 1);
         let backoff_secs = BACKOFF_PERIODS_SECS[period_index];
@@ -275,7 +278,9 @@ impl IndexerClient for MultiIndexerSearchClient {
                 .unwrap_or_else(|| newznab_categories.clone());
 
             // Skip indexers that don't support the requested search type
-            let caps = self.plugin_provider.capabilities_for_provider(&config.provider_type);
+            let caps = self
+                .plugin_provider
+                .capabilities_for_provider(&config.provider_type);
             if imdb_id.is_some() && !caps.imdb_search {
                 info!(
                     indexer = config.name.as_str(),
@@ -291,10 +296,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 continue;
             }
 
-            let client = match Self::client_from_config(
-                config,
-                &self.plugin_provider,
-            ) {
+            let client = match Self::client_from_config(config, &self.plugin_provider) {
                 Ok(c) => c,
                 Err(err) => {
                     warn!(
@@ -316,12 +318,25 @@ impl IndexerClient for MultiIndexerSearchClient {
 
             set.spawn(async move {
                 // Enforce per-indexer rate limiting before dispatching
-                rate_limiter.acquire(&indexer_id, rate_limit_seconds, mode).await;
+                rate_limiter
+                    .acquire(&indexer_id, rate_limit_seconds, mode)
+                    .await;
 
                 let start = std::time::Instant::now();
                 let result = tokio::time::timeout(
                     std::time::Duration::from_secs(30),
-                    client.search(query, imdb_id, tvdb_id, category, per_indexer_categories, None, limit, mode, season, episode),
+                    client.search(
+                        query,
+                        imdb_id,
+                        tvdb_id,
+                        category,
+                        per_indexer_categories,
+                        None,
+                        limit,
+                        mode,
+                        season,
+                        episode,
+                    ),
                 )
                 .await;
 
@@ -347,7 +362,11 @@ impl IndexerClient for MultiIndexerSearchClient {
         while let Some(join_result) = set.join_next().await {
             match join_result {
                 Ok((id, name, Ok(mut response), elapsed, mode_label)) => {
-                    info!(indexer = name.as_str(), count = response.results.len(), "indexer returned results");
+                    info!(
+                        indexer = name.as_str(),
+                        count = response.results.len(),
+                        "indexer returned results"
+                    );
                     self.stats_tracker.record_query(&id, &name, true);
                     self.stats_tracker.record_api_limits(
                         &id,

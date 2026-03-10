@@ -16,20 +16,19 @@ use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use axum::Router;
 use scryer_application::{
-    AppServices, AppUseCase, FacetRegistry, IndexerPluginProvider, MovieFacetHandler,
-    SeriesFacetHandler, start_background_acquisition_poller, start_background_hydration_loop,
-    start_download_queue_poller,
+    start_background_acquisition_poller, start_background_hydration_loop,
+    start_download_queue_poller, AppServices, AppUseCase, DownloadClientPluginProvider,
+    FacetRegistry, IndexerPluginProvider, MovieFacetHandler, SeriesFacetHandler,
 };
-use tokio::sync::watch;
-use tokio_util::sync::CancellationToken;
 use scryer_infrastructure::{
-    FileSystemLibraryRenamer, FileSystemLibraryScanner, MetadataGatewayClient, MigrationMode,
-    MultiIndexerSearchClient, NzbgetDownloadClient,
-    PrioritizedDownloadClientRouter, SmgEnrollmentConfig, SqliteServices,
-    WeaverDownloadClient, start_weaver_subscription_bridge,
+    start_weaver_subscription_bridge, FileSystemLibraryRenamer, FileSystemLibraryScanner,
+    MetadataGatewayClient, MigrationMode, MultiIndexerSearchClient, NzbgetDownloadClient,
+    PrioritizedDownloadClientRouter, SmgEnrollmentConfig, SqliteServices, WeaverDownloadClient,
 };
 use scryer_interface::{build_schema_with_log_buffer, LogBuffer};
 use tokio::net::TcpListener;
+use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 use tower_http::compression::CompressionLayer;
 
 use admin_routes::{
@@ -37,16 +36,15 @@ use admin_routes::{
     seed_indexer_configs_from_env, AdminSettingsQuery,
 };
 use middleware::{
-    cors_handler, graphiql_handler, graphql_handler, graphql_ws_handler,
-    health_handler, AuthState, CorsConfig,
+    cors_handler, graphiql_handler, graphql_handler, graphql_ws_handler, health_handler, AuthState,
+    CorsConfig,
 };
 use settings_bootstrap::{
-    extract_pending_migration_ids, load_service_runtime_settings,
-    normalize_media_path_setting, normalize_quality_profile_settings, parse_migration_mode,
-    seed_service_setting_definitions, seed_service_settings_from_environment,
-    MOVIES_PATH_KEY, SERIES_PATH_KEY,
+    extract_pending_migration_ids, load_service_runtime_settings, normalize_media_path_setting,
+    normalize_quality_profile_settings, parse_migration_mode, seed_service_setting_definitions,
+    seed_service_settings_from_environment, MOVIES_PATH_KEY, SERIES_PATH_KEY,
 };
-use splash::{BootstrapStatus, SplashState, build_splash_router};
+use splash::{build_splash_router, BootstrapStatus, SplashState};
 use ui_assets::{ui_asset_mode, ui_fallback, UiAssetMode};
 
 include!(concat!(env!("OUT_DIR"), "/smg_build_assets.rs"));
@@ -307,8 +305,12 @@ async fn bootstrap_application(
     // Construct the facet registry early so scope IDs are available for settings bootstrap.
     let mut registry = FacetRegistry::new();
     registry.register(Arc::new(MovieFacetHandler));
-    registry.register(Arc::new(SeriesFacetHandler::new(scryer_domain::MediaFacet::Tv)));
-    registry.register(Arc::new(SeriesFacetHandler::new(scryer_domain::MediaFacet::Anime)));
+    registry.register(Arc::new(SeriesFacetHandler::new(
+        scryer_domain::MediaFacet::Tv,
+    )));
+    registry.register(Arc::new(SeriesFacetHandler::new(
+        scryer_domain::MediaFacet::Anime,
+    )));
     let facet_registry = Arc::new(registry);
 
     if let Err(error) = normalize_quality_profile_settings(&db, &facet_registry.facet_ids()).await {
@@ -340,10 +342,15 @@ async fn bootstrap_application(
     let users = Arc::new(db.clone());
     let events = Arc::new(db.clone());
     let shows = Arc::new(db.clone());
-    let indexer_configs: Arc<dyn scryer_application::IndexerConfigRepository> = Arc::new(db.clone());
+    let indexer_configs: Arc<dyn scryer_application::IndexerConfigRepository> =
+        Arc::new(db.clone());
     let release_attempts = Arc::new(db.clone());
     let download_client_configs = Arc::new(db.clone());
     let settings_for_router: Arc<dyn scryer_application::SettingsRepository> = Arc::new(db.clone());
+    let download_client_plugin_provider: Arc<dyn DownloadClientPluginProvider> =
+        Arc::new(scryer_plugins::DynamicDownloadClientPluginProvider::new(
+            scryer_plugins::WasmDownloadClientPluginProvider::empty(),
+        ));
     let fallback_download_client = Arc::new(NzbgetDownloadClient::new(
         runtime_settings.nzbget_url,
         runtime_settings.nzbget_username,
@@ -354,6 +361,7 @@ async fn bootstrap_application(
         download_client_configs.clone(),
         settings_for_router,
         fallback_download_client,
+        Some(download_client_plugin_provider.clone()),
     ));
     let indexer_stats: Arc<dyn scryer_application::IndexerStatsTracker> =
         Arc::new(scryer_infrastructure::InMemoryIndexerStatsTracker::new());
@@ -469,6 +477,7 @@ async fn bootstrap_application(
     services.housekeeping = Arc::new(db.clone());
     services.indexer_stats = indexer_stats;
     services.plugin_provider = Some(plugin_provider);
+    services.download_client_plugin_provider = Some(download_client_plugin_provider.clone());
     services.notification_channels = Some(Arc::new(db.clone()));
     services.notification_subscriptions = Some(Arc::new(db.clone()));
 
@@ -503,8 +512,7 @@ async fn bootstrap_application(
         tracing::warn!(error = %e, "failed to refresh plugin registry on startup");
     }
 
-    let dev_auto_login = std::env::var("SCRYER_DEV_AUTO_LOGIN")
-        .as_deref() == Ok("true");
+    let dev_auto_login = std::env::var("SCRYER_DEV_AUTO_LOGIN").as_deref() == Ok("true");
     let log_buf_snapshot = log_ring_buffer.clone();
     let log_buf_subscribe = log_ring_buffer.clone();
     let schema = build_schema_with_log_buffer(
@@ -520,7 +528,10 @@ async fn bootstrap_application(
     // polling for NZBGet/SABnzbd.
     match resolve_weaver_ws_url(&app_use_case).await {
         Some(ws_url) => {
-            tracing::info!(url = ws_url.as_str(), "using weaver subscription bridge for download queue");
+            tracing::info!(
+                url = ws_url.as_str(),
+                "using weaver subscription bridge for download queue"
+            );
             tokio::spawn(start_weaver_subscription_bridge(
                 app_use_case.clone(),
                 shutdown_token.child_token(),
@@ -528,11 +539,20 @@ async fn bootstrap_application(
             ));
         }
         None => {
-            tokio::spawn(start_download_queue_poller(app_use_case.clone(), shutdown_token.child_token()));
+            tokio::spawn(start_download_queue_poller(
+                app_use_case.clone(),
+                shutdown_token.child_token(),
+            ));
         }
     }
-    tokio::spawn(start_background_acquisition_poller(app_use_case.clone(), shutdown_token.child_token()));
-    tokio::spawn(start_background_hydration_loop(app_use_case.clone(), shutdown_token.child_token()));
+    tokio::spawn(start_background_acquisition_poller(
+        app_use_case.clone(),
+        shutdown_token.child_token(),
+    ));
+    tokio::spawn(start_background_hydration_loop(
+        app_use_case.clone(),
+        shutdown_token.child_token(),
+    ));
 
     if let Err(error) = seed_indexer_configs_from_env(&app_use_case).await {
         tracing::warn!(error = %error, "failed to seed indexer configs from environment");
@@ -629,9 +649,7 @@ async fn bootstrap_application(
             }
         }
         UiAssetMode::Embedded => {
-            tracing::info!(
-                "serving web UI from embedded assets bundled into this binary"
-            );
+            tracing::info!("serving web UI from embedded assets bundled into this binary");
         }
         UiAssetMode::Fallback => {
             tracing::warn!("no web UI assets found; serving fallback root notice");

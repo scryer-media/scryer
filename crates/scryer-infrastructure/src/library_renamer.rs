@@ -26,7 +26,10 @@ impl FileSystemLibraryRenamer {
 impl LibraryRenamer for FileSystemLibraryRenamer {
     async fn validate_targets(&self, plan: &RenamePlan) -> AppResult<()> {
         for item in &plan.items {
-            if !matches!(item.write_action, RenameWriteAction::Move | RenameWriteAction::Replace) {
+            if !matches!(
+                item.write_action,
+                RenameWriteAction::Move | RenameWriteAction::Replace
+            ) {
                 continue;
             }
 

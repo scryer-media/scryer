@@ -112,8 +112,7 @@ async fn enroll_with_smg(
         .map_err(|e| format!("failed to serialize CSR to PEM: {e}"))?;
 
     // POST to SMG registration endpoint
-    let mut builder = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30));
+    let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30));
     if let Some(ca_pem) = ca_cert_override {
         let cert = reqwest::Certificate::from_pem(ca_pem.as_bytes())
             .map_err(|e| format!("failed to parse SCRYER_SMG_CA_CERT: {e}"))?;
@@ -212,10 +211,7 @@ pub fn build_ca_certificate(state: &EnrollmentState) -> Result<reqwest::Certific
 // Helpers
 // ---------------------------------------------------------------------------
 
-async fn load_setting(
-    db: &crate::SqliteServices,
-    key: &str,
-) -> Result<Option<String>, String> {
+async fn load_setting(db: &crate::SqliteServices, key: &str) -> Result<Option<String>, String> {
     let record = db
         .get_setting_with_defaults(SETTINGS_SCOPE_SYSTEM, key, None)
         .await
@@ -226,15 +222,18 @@ async fn load_setting(
         .and_then(parse_string_json))
 }
 
-async fn persist_setting(
-    db: &crate::SqliteServices,
-    key: &str,
-    value: &str,
-) -> Result<(), String> {
-    db.upsert_setting_value(SETTINGS_SCOPE_SYSTEM, key, None, serde_json::to_string(value).unwrap(), "smg-enrollment", None)
-        .await
-        .map(|_| ())
-        .map_err(|e| format!("failed to persist {key}: {e}"))
+async fn persist_setting(db: &crate::SqliteServices, key: &str, value: &str) -> Result<(), String> {
+    db.upsert_setting_value(
+        SETTINGS_SCOPE_SYSTEM,
+        key,
+        None,
+        serde_json::to_string(value).unwrap(),
+        "smg-enrollment",
+        None,
+    )
+    .await
+    .map(|_| ())
+    .map_err(|e| format!("failed to persist {key}: {e}"))
 }
 
 fn parse_string_json(raw: &str) -> Option<String> {

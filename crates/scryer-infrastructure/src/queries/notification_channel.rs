@@ -11,13 +11,27 @@ fn row_to_channel(
     row: &sqlx::sqlite::SqliteRow,
     encryption_key: Option<&EncryptionKey>,
 ) -> AppResult<NotificationChannelConfig> {
-    let id: String = row.try_get("id").map_err(|e| AppError::Repository(e.to_string()))?;
-    let name: String = row.try_get("name").map_err(|e| AppError::Repository(e.to_string()))?;
-    let channel_type: String = row.try_get("channel_type").map_err(|e| AppError::Repository(e.to_string()))?;
-    let config_json_raw: String = row.try_get("config_json").map_err(|e| AppError::Repository(e.to_string()))?;
-    let is_enabled: i64 = row.try_get("is_enabled").map_err(|e| AppError::Repository(e.to_string()))?;
-    let created_at_raw: String = row.try_get("created_at").map_err(|e| AppError::Repository(e.to_string()))?;
-    let updated_at_raw: String = row.try_get("updated_at").map_err(|e| AppError::Repository(e.to_string()))?;
+    let id: String = row
+        .try_get("id")
+        .map_err(|e| AppError::Repository(e.to_string()))?;
+    let name: String = row
+        .try_get("name")
+        .map_err(|e| AppError::Repository(e.to_string()))?;
+    let channel_type: String = row
+        .try_get("channel_type")
+        .map_err(|e| AppError::Repository(e.to_string()))?;
+    let config_json_raw: String = row
+        .try_get("config_json")
+        .map_err(|e| AppError::Repository(e.to_string()))?;
+    let is_enabled: i64 = row
+        .try_get("is_enabled")
+        .map_err(|e| AppError::Repository(e.to_string()))?;
+    let created_at_raw: String = row
+        .try_get("created_at")
+        .map_err(|e| AppError::Repository(e.to_string()))?;
+    let updated_at_raw: String = row
+        .try_get("updated_at")
+        .map_err(|e| AppError::Repository(e.to_string()))?;
 
     let config_json = if crate::encryption::is_encrypted(&config_json_raw) {
         if let Some(key) = encryption_key {
@@ -130,7 +144,10 @@ pub(crate) async fn update_notification_channel_query(
     .map_err(|e| AppError::Repository(e.to_string()))?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("notification channel {}", config.id)));
+        return Err(AppError::NotFound(format!(
+            "notification channel {}",
+            config.id
+        )));
     }
 
     get_notification_channel_query(pool, &config.id, encryption_key)

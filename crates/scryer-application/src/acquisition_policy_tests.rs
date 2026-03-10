@@ -10,9 +10,15 @@ fn t() -> AcquisitionThresholds {
 fn upgrade_decision_codes() {
     assert_eq!(UpgradeDecision::AcceptInitial.code(), "accept_initial");
     assert_eq!(UpgradeDecision::AcceptUpgrade.code(), "accept_upgrade");
-    assert_eq!(UpgradeDecision::RejectInsufficientDelta.code(), "reject_insufficient_delta");
+    assert_eq!(
+        UpgradeDecision::RejectInsufficientDelta.code(),
+        "reject_insufficient_delta"
+    );
     assert_eq!(UpgradeDecision::RejectCooldown.code(), "reject_cooldown");
-    assert_eq!(UpgradeDecision::RejectNotAllowed.code(), "reject_not_allowed");
+    assert_eq!(
+        UpgradeDecision::RejectNotAllowed.code(),
+        "reject_not_allowed"
+    );
 }
 
 #[test]
