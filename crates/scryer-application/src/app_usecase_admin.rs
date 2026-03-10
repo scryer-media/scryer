@@ -1,5 +1,9 @@
 use super::*;
 
+fn to_u64<T: Into<u64>>(value: T) -> u64 {
+    value.into()
+}
+
 impl AppUseCase {
     pub async fn system_health(&self, actor: &User) -> AppResult<SystemHealth> {
         require(actor, &Entitlement::ManageConfig)?;
@@ -108,8 +112,8 @@ impl AppUseCase {
             match nix::sys::statvfs::statvfs(path.as_str()) {
                 Ok(stat) => {
                     let block_size = stat.block_size();
-                    let total = u64::from(stat.blocks()) * block_size;
-                    let free = u64::from(stat.blocks_available()) * block_size;
+                    let total = to_u64(stat.blocks()) * block_size;
+                    let free = to_u64(stat.blocks_available()) * block_size;
                     let used = total.saturating_sub(free);
                     results.push(DiskSpaceInfo {
                         path,
