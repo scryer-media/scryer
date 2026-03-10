@@ -2,7 +2,7 @@
 #
 # release.sh — pre-release validation and tagging script
 #
-# Validates: cargo clippy (host + linux ci target) · cargo audit · cargo test · tsc --noEmit
+# Validates: cargo fmt · cargo clippy (host + linux ci target) · cargo audit · cargo nextest · web lint/build
 # Then:      bumps crates/scryer version · signed tag · push
 #
 # Usage:
@@ -136,10 +136,22 @@ fi
 cargo audit 2>&1 || die "cargo audit found vulnerabilities — fix before releasing"
 ok "cargo audit passed"
 
-# ── Rust tests ─────────────────────────────────────────────────────────────────
-step "Running Rust tests (cargo test --workspace)"
+# ── cargo fmt ──────────────────────────────────────────────────────────────────
+step "Running cargo fmt --all --check"
 
-cargo test --workspace 2>&1 || die "Rust tests failed — fix before releasing"
+cargo fmt --all --check 2>&1 || die "Rust formatting drift detected — fix before releasing"
+
+ok "cargo fmt passed"
+
+# ── Rust tests ─────────────────────────────────────────────────────────────────
+step "Running Rust tests (cargo nextest run --workspace --locked)"
+
+if ! command -v cargo-nextest &>/dev/null; then
+    warn "cargo-nextest not installed — installing"
+    cargo install --locked cargo-nextest 2>&1 || die "failed to install cargo-nextest"
+fi
+
+cargo nextest run --workspace --locked 2>&1 || die "Rust tests failed — fix before releasing"
 
 ok "Rust tests passed"
 
@@ -156,6 +168,15 @@ step "Running TypeScript type check"
 npm run lint 2>&1 || die "TypeScript type check failed — fix before releasing"
 
 ok "TypeScript type check passed"
+
+# ── Web build ──────────────────────────────────────────────────────────────────
+step "Running web build"
+
+SCRYER_GRAPHQL_URL=/graphql \
+SCRYER_METADATA_GATEWAY_GRAPHQL_URL=https://smg2.scryer.media/graphql \
+    npm run build 2>&1 || die "Web build failed — fix before releasing"
+
+ok "Web build passed"
 
 # ── Bump all workspace crate versions ──────────────────────────────────────────
 step "Updating all workspace crate versions to $NEXT_VERSION"
