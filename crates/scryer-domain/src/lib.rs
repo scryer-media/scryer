@@ -592,8 +592,14 @@ pub type DomainResult<T> = Result<T, DomainError>;
 
 /// Indexer capabilities declared by a plugin. Used by the dispatcher to skip
 /// indexers that don't support a given search type.
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IndexerProviderCapabilities {
+    #[serde(default = "default_true")]
+    pub rss: bool,
     #[serde(default)]
     pub search: bool,
     #[serde(default)]

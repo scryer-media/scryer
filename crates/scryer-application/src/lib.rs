@@ -891,6 +891,7 @@ pub trait IndexerPluginProvider: Send + Sync {
         _provider_type: &str,
     ) -> scryer_domain::IndexerProviderCapabilities {
         scryer_domain::IndexerProviderCapabilities {
+            rss: true,
             search: true,
             imdb_search: true,
             tvdb_search: true,

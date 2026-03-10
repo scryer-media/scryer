@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure"
-version = "0.8.1"
+version = "0.8.2"
 edition = "2021"
 
 [dependencies]
@@ -24,6 +24,9 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 metrics = { workspace = true }
 x509-parser = "0.16"
-tokio-tungstenite = { version = "0.28", default-features = false, features = ["rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 tokio-util = { version = "0.7", features = ["rt"] }
+
+[dev-dependencies]
+scryer-rules = { path = "../scryer-rules" }

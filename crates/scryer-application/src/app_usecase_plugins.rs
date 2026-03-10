@@ -64,6 +64,34 @@ struct RegistryEntry {
 const DEFAULT_REGISTRY_URL: &str =
     "https://raw.githubusercontent.com/scryer-media/scryer-plugins/main/registry.json";
 
+const LEGACY_INDEXER_PLUGIN_TYPE: &str = "indexer";
+const USENET_INDEXER_PLUGIN_TYPE: &str = "usenet_indexer";
+const TORRENT_INDEXER_PLUGIN_TYPE: &str = "torrent_indexer";
+
+fn is_indexer_plugin_type(plugin_type: &str) -> bool {
+    matches!(
+        plugin_type,
+        LEGACY_INDEXER_PLUGIN_TYPE | USENET_INDEXER_PLUGIN_TYPE | TORRENT_INDEXER_PLUGIN_TYPE
+    )
+}
+
+fn merged_plugin_type(registry_type: &str, installed_type: Option<&str>) -> String {
+    match installed_type {
+        Some(installed)
+            if is_indexer_plugin_type(registry_type) && is_indexer_plugin_type(installed) =>
+        {
+            if registry_type == LEGACY_INDEXER_PLUGIN_TYPE
+                && installed != LEGACY_INDEXER_PLUGIN_TYPE
+            {
+                installed.to_string()
+            } else {
+                registry_type.to_string()
+            }
+        }
+        _ => registry_type.to_string(),
+    }
+}
+
 impl AppUseCase {
     /// Seed database rows for built-in plugins. Uses INSERT OR IGNORE so
     /// existing user toggles are preserved across restarts.
@@ -295,12 +323,14 @@ impl AppUseCase {
         // Start with registry entries, annotated with installation state
         for entry in &registry_entries {
             let inst = installations.iter().find(|i| i.plugin_id == entry.id);
+            let plugin_type =
+                merged_plugin_type(&entry.plugin_type, inst.map(|i| i.plugin_type.as_str()));
             result.push(RegistryPlugin {
                 id: entry.id.clone(),
                 name: entry.name.clone(),
                 description: entry.description.clone(),
                 version: entry.version.clone(),
-                plugin_type: entry.plugin_type.clone(),
+                plugin_type,
                 provider_type: entry.provider_type.clone(),
                 author: entry.author.clone(),
                 official: entry.official,
@@ -489,7 +519,7 @@ impl AppUseCase {
         // Auto-create an IndexerConfig for single-endpoint indexer plugins.
         // Read default_base_url from the loaded plugin descriptor (not the
         // registry cache) — the WASM itself is the source of truth.
-        if entry.plugin_type == "indexer" {
+        if is_indexer_plugin_type(&entry.plugin_type) {
             let default_url = self
                 .services
                 .plugin_provider
@@ -554,7 +584,7 @@ impl AppUseCase {
         }
 
         // Delete all associated IndexerConfigs for this plugin's provider type.
-        if installation.plugin_type == "indexer" {
+        if is_indexer_plugin_type(&installation.plugin_type) {
             let configs = self
                 .services
                 .indexer_configs

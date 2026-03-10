@@ -169,6 +169,22 @@ impl MultiIndexerSearchClient {
             "unsupported indexer provider: '{provider}'"
         )))
     }
+
+    fn is_rss_sync_request(
+        query: &str,
+        ids_present: bool,
+        filters_present: bool,
+        mode: SearchMode,
+        season: Option<u32>,
+        episode: Option<u32>,
+    ) -> bool {
+        matches!(mode, SearchMode::Auto)
+            && query.trim().is_empty()
+            && !ids_present
+            && !filters_present
+            && season.is_none()
+            && episode.is_none()
+    }
 }
 
 #[async_trait]
@@ -186,6 +202,20 @@ impl IndexerClient for MultiIndexerSearchClient {
         season: Option<u32>,
         episode: Option<u32>,
     ) -> AppResult<IndexerSearchResponse> {
+        let is_rss_request = Self::is_rss_sync_request(
+            &query,
+            imdb_id.is_some() || tvdb_id.is_some(),
+            category
+                .as_ref()
+                .is_some_and(|value| !value.trim().is_empty())
+                || newznab_categories
+                    .as_ref()
+                    .is_some_and(|values| !values.is_empty()),
+            mode,
+            season,
+            episode,
+        );
+
         let configs = self.indexer_configs.list(None).await.unwrap_or_else(|err| {
             warn!(error = %err, "failed to load indexer configs");
             vec![]
@@ -292,6 +322,13 @@ impl IndexerClient for MultiIndexerSearchClient {
                 info!(
                     indexer = config.name.as_str(),
                     "skipping indexer: does not support TVDB search"
+                );
+                continue;
+            }
+            if is_rss_request && !caps.rss {
+                info!(
+                    indexer = config.name.as_str(),
+                    "skipping indexer: does not support RSS sync"
                 );
                 continue;
             }
@@ -411,5 +448,196 @@ impl IndexerClient for MultiIndexerSearchClient {
             grab_current: None,
             grab_max: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use async_trait::async_trait;
+    use chrono::Utc;
+    use scryer_application::{IndexerQueryStats, IndexerSearchResponse};
+    use scryer_domain::IndexerProviderCapabilities;
+
+    use super::*;
+
+    struct MockIndexerConfigRepository {
+        configs: Vec<IndexerConfig>,
+    }
+
+    #[async_trait]
+    impl IndexerConfigRepository for MockIndexerConfigRepository {
+        async fn list(&self, _provider_type: Option<String>) -> AppResult<Vec<IndexerConfig>> {
+            Ok(self.configs.clone())
+        }
+
+        async fn get_by_id(&self, _id: &str) -> AppResult<Option<IndexerConfig>> {
+            Ok(None)
+        }
+
+        async fn create(&self, config: IndexerConfig) -> AppResult<IndexerConfig> {
+            Ok(config)
+        }
+
+        async fn touch_last_error(&self, _provider_type: &str) -> AppResult<()> {
+            Ok(())
+        }
+
+        async fn update(
+            &self,
+            _id: &str,
+            _name: Option<String>,
+            _provider_type: Option<String>,
+            _base_url: Option<String>,
+            _api_key_encrypted: Option<String>,
+            _rate_limit_seconds: Option<i64>,
+            _rate_limit_burst: Option<i64>,
+            _is_enabled: Option<bool>,
+            _enable_interactive_search: Option<bool>,
+            _enable_auto_search: Option<bool>,
+            _config_json: Option<String>,
+        ) -> AppResult<IndexerConfig> {
+            Err(AppError::Validation("not implemented in test".into()))
+        }
+
+        async fn delete(&self, _id: &str) -> AppResult<()> {
+            Ok(())
+        }
+    }
+
+    struct MockIndexerStatsTracker;
+
+    impl IndexerStatsTracker for MockIndexerStatsTracker {
+        fn record_query(&self, _indexer_id: &str, _indexer_name: &str, _success: bool) {}
+
+        fn record_api_limits(
+            &self,
+            _indexer_id: &str,
+            _api_current: Option<u32>,
+            _api_max: Option<u32>,
+            _grab_current: Option<u32>,
+            _grab_max: Option<u32>,
+        ) {
+        }
+
+        fn all_stats(&self) -> Vec<IndexerQueryStats> {
+            vec![]
+        }
+    }
+
+    struct MockIndexerClient {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl IndexerClient for MockIndexerClient {
+        async fn search(
+            &self,
+            _query: String,
+            _imdb_id: Option<String>,
+            _tvdb_id: Option<String>,
+            _category: Option<String>,
+            _newznab_categories: Option<Vec<String>>,
+            _indexer_routing: Option<IndexerRoutingPlan>,
+            _limit: usize,
+            _mode: SearchMode,
+            _season: Option<u32>,
+            _episode: Option<u32>,
+        ) -> AppResult<IndexerSearchResponse> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(IndexerSearchResponse {
+                results: vec![],
+                api_current: None,
+                api_max: None,
+                grab_current: None,
+                grab_max: None,
+            })
+        }
+    }
+
+    struct MockIndexerPluginProvider {
+        rss: bool,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl IndexerPluginProvider for MockIndexerPluginProvider {
+        fn client_for_provider(&self, _config: &IndexerConfig) -> Option<Arc<dyn IndexerClient>> {
+            Some(Arc::new(MockIndexerClient {
+                calls: self.calls.clone(),
+            }))
+        }
+
+        fn available_provider_types(&self) -> Vec<String> {
+            vec!["mock".into()]
+        }
+
+        fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
+            vec![]
+        }
+
+        fn capabilities_for_provider(&self, _provider_type: &str) -> IndexerProviderCapabilities {
+            IndexerProviderCapabilities {
+                rss: self.rss,
+                search: true,
+                imdb_search: true,
+                tvdb_search: true,
+            }
+        }
+    }
+
+    fn mock_indexer_config() -> IndexerConfig {
+        IndexerConfig {
+            id: "idx-1".into(),
+            name: "Mock Indexer".into(),
+            provider_type: "mock".into(),
+            base_url: "https://example.test".into(),
+            api_key_encrypted: None,
+            rate_limit_seconds: Some(0),
+            rate_limit_burst: None,
+            disabled_until: None,
+            is_enabled: true,
+            enable_interactive_search: true,
+            enable_auto_search: true,
+            last_health_status: None,
+            last_error_at: None,
+            config_json: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn rss_sync_search_skips_providers_without_rss_capability() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let client = MultiIndexerSearchClient::new(
+            Arc::new(MockIndexerConfigRepository {
+                configs: vec![mock_indexer_config()],
+            }),
+            Arc::new(MockIndexerStatsTracker),
+            Arc::new(MockIndexerPluginProvider {
+                rss: false,
+                calls: calls.clone(),
+            }),
+        );
+
+        let response = client
+            .search(
+                String::new(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                500,
+                SearchMode::Auto,
+                None,
+                None,
+            )
+            .await
+            .expect("rss sync search should succeed");
+
+        assert!(response.results.is_empty());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 }
