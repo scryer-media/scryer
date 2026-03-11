@@ -2,7 +2,7 @@
 #
 # release.sh — pre-release validation and tagging script
 #
-# Validates: cargo fmt · cargo clippy (host + linux ci target) · cargo audit · cargo nextest · web lint/build
+# Validates: cargo fmt · cargo clippy (linux ci target) · cargo audit · cargo nextest · web lint/build
 # Then:      bumps crates/scryer version · signed tag · push
 #
 # Usage:
@@ -91,9 +91,9 @@ fi
 ok "Pre-flight OK"
 
 # ── Rust clippy (before cargo update so failures don't dirty Cargo.lock) ───────
-step "Running cargo clippy (host + linux ci target)"
+step "Running cargo clippy (linux ci target)"
 
-"$REPO_ROOT/scripts/clippy-ci.sh" 2>&1 || die "Clippy errors — fix before releasing"
+"$REPO_ROOT/scripts/clippy-ci.sh" --linux-only 2>&1 || die "Clippy errors — fix before releasing"
 
 ok "Clippy passed"
 

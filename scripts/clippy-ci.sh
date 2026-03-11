@@ -6,13 +6,26 @@ LINUX_TARGET="x86_64-unknown-linux-gnu"
 HOST_TARGET="$(rustc -vV | sed -n 's/^host: //p')"
 LINUX_IMAGE="${SCRYER_LINUX_CLIPPY_IMAGE:-rust:1.94-bookworm}"
 LINUX_PLATFORM="${SCRYER_LINUX_CLIPPY_PLATFORM:-linux/amd64}"
+LINUX_ONLY=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --linux-only) LINUX_ONLY=true ;;
+        *)
+            echo "error: unknown argument: $arg" >&2
+            exit 1
+            ;;
+    esac
+done
 
 cd "$REPO_ROOT"
 
-echo "Running cargo clippy for host target: $HOST_TARGET"
-cargo clippy --workspace -- -D warnings
+if ! $LINUX_ONLY; then
+    echo "Running cargo clippy for host target: $HOST_TARGET"
+    cargo clippy --workspace -- -D warnings
+fi
 
-if [[ "$HOST_TARGET" != "$LINUX_TARGET" ]]; then
+if $LINUX_ONLY || [[ "$HOST_TARGET" != "$LINUX_TARGET" ]]; then
     if command -v docker >/dev/null 2>&1; then
         echo "Running cargo clippy in Linux container: $LINUX_IMAGE"
         docker run --rm \

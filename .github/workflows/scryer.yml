@@ -18,9 +18,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
           node-version: 25
           cache: npm
@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: "1.94"
@@ -52,11 +52,11 @@ jobs:
     timeout-minutes: 40
     needs: [web-lint]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
           node-version: 25
           cache: npm
@@ -73,7 +73,7 @@ jobs:
       - name: Verify static output
         run: test -f apps/scryer-web/dist/index.html
       - name: Upload web artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: scryer-web-out-${{ github.run_id }}
           path: apps/scryer-web/dist
@@ -86,14 +86,16 @@ jobs:
     timeout-minutes: 45
     needs: [rust-clippy]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: "1.94"
       - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
       - name: Run workspace tests
         run: cargo nextest run --workspace --locked
 
@@ -113,7 +115,7 @@ jobs:
             platform: linux-arm64
             runs_on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@v1
@@ -130,7 +132,7 @@ jobs:
         with:
           cache-on-failure: false
       - name: Download embedded web artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: scryer-web-out-${{ github.run_id }}
           path: scryer-web-out
@@ -150,7 +152,7 @@ jobs:
           cp target/${{ matrix.target }}/release/scryer dist/package/scryer
           tar -czf scryer-${{ matrix.platform }}.tar.gz -C dist/package .
       - name: Upload release package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: scryer-${{ matrix.platform }}-${{ github.run_id }}
           path: scryer-${{ matrix.platform }}.tar.gz
@@ -166,14 +168,14 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Download linux-amd64 artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: scryer-linux-x86_64-${{ github.run_id }}
           path: artifacts
       - name: Download linux-arm64 artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: scryer-linux-arm64-${{ github.run_id }}
           path: artifacts
@@ -182,16 +184,16 @@ jobs:
           mkdir -p docker-ctx/amd64 docker-ctx/arm64
           tar -xzf artifacts/scryer-linux-x86_64.tar.gz -C docker-ctx/amd64
           tar -xzf artifacts/scryer-linux-arm64.tar.gz -C docker-ctx/arm64
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository_owner }}/scryer
           tags: |
@@ -199,7 +201,7 @@ jobs:
             type=sha
             type=match,pattern=scryer-v(.*),group=1
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: docker-ctx
           file: docker/scryer.Dockerfile
@@ -223,7 +225,7 @@ jobs:
           RELEASE_TAG="${{ github.ref_name }}"
           echo "tag_name=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
       - name: Download release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release-artifacts
           pattern: scryer-*-${{ github.run_id }}

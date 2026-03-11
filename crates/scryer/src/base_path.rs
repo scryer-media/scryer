@@ -93,16 +93,18 @@ pub(crate) fn mount_router(router: Router, base_path: &BasePath) -> Router {
                 move || async move { Redirect::temporary(&ui_root) }
             }),
         )
-        .route(
-            &base_prefix,
-            get(move || async move { Redirect::temporary(&ui_root) }),
-        )
-        .nest(&base_prefix, router)
+        .nest_service(&base_prefix, router)
 }
 
 #[cfg(test)]
 mod tests {
     use super::BasePath;
+    use super::mount_router;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::routing::get;
+    use axum::Router;
+    use tower::ServiceExt;
 
     #[test]
     fn normalizes_root_base_path() {
@@ -128,5 +130,65 @@ mod tests {
         assert_eq!(root.join("/graphql"), "/graphql");
         assert_eq!(prefixed.join("/graphql"), "/scryer/graphql");
         assert_eq!(prefixed.ui_root(), "/scryer/");
+    }
+
+    #[tokio::test]
+    async fn prefixed_router_serves_trailing_slash_root() {
+        let app = mount_router(
+            Router::new().route("/", get(|| async { StatusCode::OK })),
+            &BasePath::from_raw(Some("/scryer/")),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/scryer/")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn prefixed_router_serves_bare_root() {
+        let app = mount_router(
+            Router::new().route("/", get(|| async { StatusCode::OK })),
+            &BasePath::from_raw(Some("/scryer/")),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/scryer")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn prefixed_router_serves_subpaths() {
+        let app = mount_router(
+            Router::new().route("/login", get(|| async { StatusCode::OK })),
+            &BasePath::from_raw(Some("/scryer/")),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/scryer/login")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

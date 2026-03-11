@@ -7,6 +7,13 @@ const LOGIN_MUTATION = `mutation Login($input: LoginInput!) {
   login(input: $input) { token expiresAt }
 }`;
 const AUTO_LOGIN_MUTATION = `mutation DevAutoLogin { devAutoLogin { token expiresAt } }`;
+const ME_QUERY = `query Me {
+  me {
+    id
+    username
+    entitlements
+  }
+}`;
 
 const SESSION_STORAGE_KEY = "scryer_auth_token";
 
@@ -76,6 +83,23 @@ export function useAuth(): AuthState {
       }
 
       // 3. No-auth bootstrap: request an auto-login JWT when authentication is disabled.
+      try {
+        // In auth-disabled mode the backend resolves `me` as the default admin
+        // user even without a JWT, so prefer that over the legacy auto-login
+        // mutation. This avoids showing the login page when auth is disabled
+        // but the browser never received a token.
+        const { data } = await backendClient.query(ME_QUERY, {}).toPromise();
+        if (data?.me) {
+          setToken(null);
+          setUser(data.me);
+          setLoading(false);
+          return;
+        }
+      } catch {
+        // Fall through to the legacy bootstrap below.
+      }
+
+      // 4. Legacy no-auth bootstrap: request an auto-login JWT when supported.
       try {
         const { data } = await backendClient.mutation(AUTO_LOGIN_MUTATION, {}).toPromise();
         if (data?.devAutoLogin?.token) {
