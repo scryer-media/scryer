@@ -198,6 +198,29 @@ async fn graphql_add_multiple_titles() {
 }
 
 #[tokio::test]
+async fn graphql_titles_are_sorted_by_display_name() {
+    let ctx = TestContext::new().await;
+    add_test_title(&ctx, "zeta movie", "movie").await;
+    add_test_title(&ctx, "Alpha Movie", "movie").await;
+    add_test_title(&ctx, "beta movie", "movie").await;
+
+    let body = gql(
+        &ctx,
+        r#"query($facet: String) { titles(facet: $facet) { name } }"#,
+        json!({ "facet": "movie" }),
+    )
+    .await;
+    assert_no_errors(&body);
+
+    let titles = body["data"]["titles"].as_array().unwrap();
+    let names: Vec<&str> = titles
+        .iter()
+        .map(|title| title["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["Alpha Movie", "beta movie", "zeta movie"]);
+}
+
+#[tokio::test]
 async fn graphql_get_title_by_id() {
     let ctx = TestContext::new().await;
     let id = add_test_title(&ctx, "Specific Movie", "movie").await;

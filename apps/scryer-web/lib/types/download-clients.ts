@@ -27,6 +27,11 @@ export type DownloadClientDraft = {
   isEnabled: boolean;
 };
 
+export type DownloadClientTypeOption = {
+  value: string;
+  label: string;
+};
+
 export type DownloadClientConfigPayloadRecord = Record<string, JsonValue>;
 
 export type NzbgetCategoryRoutingSettings = {

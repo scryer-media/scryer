@@ -84,6 +84,16 @@ export function TitleTable({
   const isMovieView = view === "movies";
   const overviewTargetView: ViewId = isMovieView ? "movies" : view === "anime" ? "anime" : "series";
   const columnCount = isMovieView ? 6 : 5;
+  const titleTableColGroup = (
+    <colgroup>
+      <col style={{ width: "5.5rem" }} />
+      <col />
+      <col style={{ width: "10rem" }} />
+      {isMovieView ? <col style={{ width: "8rem" }} /> : null}
+      <col style={{ width: "7rem" }} />
+      <col style={{ width: isMovieView ? "11rem" : "6rem" }} />
+    </colgroup>
+  );
 
   const [expandedMovieRows, setExpandedMovieRows] = React.useState(new Set<string>());
   const [interactiveSearchResultsByTitle, setInteractiveSearchResultsByTitle] = React.useState<
@@ -197,22 +207,22 @@ export function TitleTable({
               </div>
             </button>
           </TableCell>
-          <TableCell className="align-middle">
+          <TableCell className="align-middle overflow-hidden">
             <button
               type="button"
               onClick={() => onOpenOverview(overviewTargetView, item.id)}
-              className="inline-flex text-xl font-bold hover:text-foreground hover:underline"
+              className="block w-full overflow-hidden text-left text-xl font-bold hover:text-foreground hover:underline"
             >
-              {item.name}
+              <span className="block truncate">{item.name}</span>
             </button>
           </TableCell>
-          <TableCell className="align-middle">
+          <TableCell className="align-middle whitespace-nowrap">
             {isMovieView
               ? (item.qualityTier || t("label.unknown"))
               : (resolveTitleProfileName(item, qualityProfiles, resolvedProfileName) || t("label.unknown"))}
           </TableCell>
-          {isMovieView ? <TableCell className="align-middle">{bytesToReadable(item.sizeBytes)}</TableCell> : null}
-          <TableCell className="align-middle">{item.monitored ? t("label.yes") : t("label.no")}</TableCell>
+          {isMovieView ? <TableCell className="align-middle whitespace-nowrap">{bytesToReadable(item.sizeBytes)}</TableCell> : null}
+          <TableCell className="align-middle whitespace-nowrap">{item.monitored ? t("label.yes") : t("label.no")}</TableCell>
           <TableCell className="text-right align-middle">
             <div className="inline-flex items-center justify-end gap-2">
               {isMovieView ? (
@@ -321,19 +331,20 @@ export function TitleTable({
   const titleTableHeader = (
     <TableHeader>
       <TableRow>
-        <TableHead className="w-14">{t("title.table.poster")}</TableHead>
+        <TableHead className="whitespace-nowrap">{t("title.table.poster")}</TableHead>
         <TableHead>{t("title.table.name")}</TableHead>
-        <TableHead>{t("title.table.qualityTier")}</TableHead>
-        {isMovieView ? <TableHead>{t("title.table.size")}</TableHead> : null}
-        <TableHead>{t("title.table.monitored")}</TableHead>
-        <TableHead className="text-right">{t("title.table.actions")}</TableHead>
+        <TableHead className="whitespace-nowrap">{t("title.table.qualityTier")}</TableHead>
+        {isMovieView ? <TableHead className="whitespace-nowrap">{t("title.table.size")}</TableHead> : null}
+        <TableHead className="whitespace-nowrap">{t("title.table.monitored")}</TableHead>
+        <TableHead className="text-right whitespace-nowrap">{t("title.table.actions")}</TableHead>
       </TableRow>
     </TableHeader>
   );
 
   if (!useVirtualTable) {
     return (
-      <Table>
+      <Table className="table-fixed">
+        {titleTableColGroup}
         {titleTableHeader}
         <TableBody>
           {titles.map(renderTitleRow)}
@@ -357,15 +368,16 @@ export function TitleTable({
       className="relative w-full"
       style={{ maxHeight: "70vh", overflow: "auto" }}
     >
-      <table className="w-full caption-bottom text-sm">
+      <table className="w-full table-fixed caption-bottom text-sm">
+        {titleTableColGroup}
         <thead className="[&_tr]:border-b sticky top-0 z-10 bg-background">
           <TableRow>
-            <TableHead className="w-14">{t("title.table.poster")}</TableHead>
+            <TableHead className="whitespace-nowrap">{t("title.table.poster")}</TableHead>
             <TableHead>{t("title.table.name")}</TableHead>
-            <TableHead>{t("title.table.qualityTier")}</TableHead>
-            {isMovieView ? <TableHead>{t("title.table.size")}</TableHead> : null}
-            <TableHead>{t("title.table.monitored")}</TableHead>
-            <TableHead className="text-right">{t("title.table.actions")}</TableHead>
+            <TableHead className="whitespace-nowrap">{t("title.table.qualityTier")}</TableHead>
+            {isMovieView ? <TableHead className="whitespace-nowrap">{t("title.table.size")}</TableHead> : null}
+            <TableHead className="whitespace-nowrap">{t("title.table.monitored")}</TableHead>
+            <TableHead className="text-right whitespace-nowrap">{t("title.table.actions")}</TableHead>
           </TableRow>
         </thead>
         {virtualItems.length > 0 ? (

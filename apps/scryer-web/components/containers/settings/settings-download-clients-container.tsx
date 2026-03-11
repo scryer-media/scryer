@@ -1,5 +1,5 @@
 
-import { type ComponentProps, useCallback, useEffect, useState } from "react";
+import { type ComponentProps, useCallback, useEffect, useMemo, useState } from "react";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { SettingsDownloadClientsSection } from "@/components/views/settings/settings-download-clients-section";
 import {
@@ -9,7 +9,7 @@ import {
   testDownloadClientConnectionMutation,
   updateDownloadClientMutation,
 } from "@/lib/graphql/mutations";
-import { downloadClientsQuery } from "@/lib/graphql/queries";
+import { downloadClientProviderTypesQuery, downloadClientsQuery } from "@/lib/graphql/queries";
 import { DEFAULT_DOWNLOAD_CLIENT_DRAFT } from "@/lib/constants/download-clients";
 import { useClient } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -18,9 +18,17 @@ import {
   buildDownloadClientBaseUrl,
   buildDownloadClientConfigJson,
   buildDownloadClientDraftFromRecord,
+  buildDownloadClientTypeOptions,
+  ensureDownloadClientTypeOption,
+  isBuiltInDownloadClientType,
   normalizeDownloadClientType,
 } from "@/lib/utils/download-clients";
-import type { DownloadClientRecord, DownloadClientDraft } from "@/lib/types";
+import type {
+  DownloadClientRecord,
+  DownloadClientDraft,
+  DownloadClientTypeOption,
+  ProviderTypeInfo,
+} from "@/lib/types";
 
 type SettingsDownloadClientsSectionProps = ComponentProps<typeof SettingsDownloadClientsSection>;
 
@@ -30,6 +38,9 @@ export function SettingsDownloadClientsContainer() {
   const client = useClient();
   const [settingsDownloadClients, setSettingsDownloadClients] = useState<SettingsDownloadClientsSectionProps["settingsDownloadClients"]>(
     [],
+  );
+  const [downloadClientTypeOptions, setDownloadClientTypeOptions] = useState<DownloadClientTypeOption[]>(
+    () => buildDownloadClientTypeOptions([]),
   );
   const [downloadClientDraft, setDownloadClientDraft] = useState<DownloadClientDraft>(() => ({
     ...DEFAULT_DOWNLOAD_CLIENT_DRAFT,
@@ -70,6 +81,39 @@ export function SettingsDownloadClientsContainer() {
     void refreshDownloadClients();
   }, [refreshDownloadClients]);
 
+  useEffect(() => {
+    client.query(downloadClientProviderTypesQuery, {}).toPromise().then(({ data }) => {
+      if (data?.downloadClientProviderTypes) {
+        setDownloadClientTypeOptions(
+          buildDownloadClientTypeOptions(data.downloadClientProviderTypes as ProviderTypeInfo[]),
+        );
+      }
+    }).catch(() => { /* ignore - native clients remain available */ });
+  }, [client]);
+
+  useEffect(() => {
+    if (editingDownloadClientId) {
+      return;
+    }
+
+    setDownloadClientDraft((prev) => {
+      const normalizedClientType = normalizeDownloadClientType(prev.clientType);
+      if (downloadClientTypeOptions.some((option) => option.value === normalizedClientType)) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        clientType: downloadClientTypeOptions[0]?.value ?? DEFAULT_DOWNLOAD_CLIENT_DRAFT.clientType,
+      };
+    });
+  }, [downloadClientTypeOptions, editingDownloadClientId]);
+
+  const availableDownloadClientTypeOptions = useMemo(
+    () => ensureDownloadClientTypeOption(downloadClientTypeOptions, downloadClientDraft.clientType),
+    [downloadClientDraft.clientType, downloadClientTypeOptions],
+  );
+
   const submitDownloadClient = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const payload = {
@@ -95,7 +139,7 @@ export function SettingsDownloadClientsContainer() {
 
     setMutatingDownloadClientId(editingDownloadClientId || "new");
     try {
-      if (payload.clientType === "nzbget" || payload.clientType === "sabnzbd") {
+      if (isBuiltInDownloadClientType(payload.clientType)) {
         setGlobalStatus(t("status.testingDownloadClient"));
         const { data: testData, error: testError } = await client.mutation(
           testDownloadClientConnectionMutation,
@@ -202,33 +246,45 @@ export function SettingsDownloadClientsContainer() {
     }
   };
 
-  const moveDownloadClient = useCallback((clientId: string, direction: "up" | "down") => {
-    setDownloadClientOrder((prev) => {
-      const index = prev.indexOf(clientId);
-      if (index < 0) return prev;
-      const nextIndex = direction === "up" ? index - 1 : index + 1;
-      if (nextIndex < 0 || nextIndex >= prev.length) return prev;
-      const next = [...prev];
-      [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
-      return next;
-    });
-  }, []);
+  const moveDownloadClient = useCallback(async (clientId: string, direction: "up" | "down") => {
+    if (isSavingOrder) {
+      return;
+    }
 
-  const saveDownloadClientOrder = useCallback(async () => {
+    const currentOrder =
+      downloadClientOrder.length > 0
+        ? downloadClientOrder
+        : settingsDownloadClients.map((downloadClient) => downloadClient.id);
+    const index = currentOrder.indexOf(clientId);
+    if (index < 0) {
+      return;
+    }
+
+    const nextIndex = direction === "up" ? index - 1 : index + 1;
+    if (nextIndex < 0 || nextIndex >= currentOrder.length) {
+      return;
+    }
+
+    const nextOrder = [...currentOrder];
+    [nextOrder[index], nextOrder[nextIndex]] = [nextOrder[nextIndex], nextOrder[index]];
+    setDownloadClientOrder(nextOrder);
     setIsSavingOrder(true);
+
     try {
       const { error } = await client.mutation(reorderDownloadClientsMutation, {
-        input: { ids: downloadClientOrder },
+        input: { ids: nextOrder },
       }).toPromise();
-      if (error) throw error;
-      setGlobalStatus(t("status.downloadClientOrderSaved"));
+      if (error) {
+        throw error;
+      }
       await refreshDownloadClients();
     } catch (error) {
+      setDownloadClientOrder(currentOrder);
       setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
     } finally {
       setIsSavingOrder(false);
     }
-  }, [client, downloadClientOrder, refreshDownloadClients, setGlobalStatus, t]);
+  }, [client, downloadClientOrder, isSavingOrder, refreshDownloadClients, setGlobalStatus, settingsDownloadClients, t]);
 
   const editDownloadClient = useCallback((downloadClient: DownloadClientRecord) => {
     setEditingDownloadClientId(downloadClient.id);
@@ -288,6 +344,7 @@ export function SettingsDownloadClientsContainer() {
     <>
       <SettingsDownloadClientsSection
         editingDownloadClientId={editingDownloadClientId}
+        downloadClientTypeOptions={availableDownloadClientTypeOptions}
         downloadClientDraft={downloadClientDraft}
         setDownloadClientDraft={setDownloadClientDraft}
         submitDownloadClient={submitDownloadClient}
@@ -301,7 +358,6 @@ export function SettingsDownloadClientsContainer() {
         deleteDownloadClient={deleteDownloadClient}
         downloadClientOrder={downloadClientOrder}
         moveDownloadClient={moveDownloadClient}
-        saveDownloadClientOrder={saveDownloadClientOrder}
         isSavingOrder={isSavingOrder}
       />
       <ConfirmDialog

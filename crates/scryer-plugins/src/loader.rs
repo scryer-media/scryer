@@ -293,23 +293,23 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
 
         // Inject any additional key-value pairs from config_json
         if let Some(ref json_str) = config.config_json {
-            match serde_json::from_str::<HashMap<String, String>>(json_str) {
+            match parse_config_json_entries(json_str) {
                 Ok(map) => {
                     for (k, v) in &map {
                         manifest = manifest.with_config_key(k, v);
                     }
                 }
-                Err(e) => {
+                Err(error) => {
                     warn!(
                         indexer = config.name.as_str(),
-                        error = %e,
-                        "failed to parse config_json as string map; extra config keys will not be injected"
+                        error = %error,
+                        "failed to parse config_json; extra config keys will not be injected"
                     );
                 }
             }
         }
 
-        match extism::Plugin::new(manifest, [], true) {
+        match build_plugin(manifest) {
             Ok(plugin) => {
                 let client =
                     WasmIndexerClient::new(plugin, loaded.descriptor.clone(), config.name.clone());
@@ -542,22 +542,22 @@ impl WasmDownloadClientPluginProvider {
             manifest = manifest.with_config_key("base_url", base_url);
         }
 
-        match serde_json::from_str::<HashMap<String, String>>(&config.config_json) {
+        match parse_config_json_entries(&config.config_json) {
             Ok(map) => {
                 for (k, v) in &map {
                     manifest = manifest.with_config_key(k, v);
                 }
             }
-            Err(e) => {
+            Err(error) => {
                 warn!(
                     client = config.name.as_str(),
-                    error = %e,
+                    error = %error,
                     "failed to parse download client config_json"
                 );
             }
         }
 
-        match extism::Plugin::new(manifest, [], true) {
+        match build_plugin(manifest) {
             Ok(plugin) => {
                 let client = WasmDownloadClient::new(
                     plugin,
@@ -912,6 +912,49 @@ mod tests {
         assert!(!validate_indexer_descriptor(&descriptor("notification")));
         assert!(!validate_indexer_descriptor(&descriptor("download_client")));
     }
+
+    #[test]
+    fn parse_config_json_entries_stringifies_scalar_values() {
+        let entries = parse_config_json_entries(
+            r#"{"username":"alice","password":"secret","use_ssl":false,"port":8080,"meta":{"tag":"tv"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(entries.get("username"), Some(&"alice".to_string()));
+        assert_eq!(entries.get("password"), Some(&"secret".to_string()));
+        assert_eq!(entries.get("use_ssl"), Some(&"false".to_string()));
+        assert_eq!(entries.get("port"), Some(&"8080".to_string()));
+        assert_eq!(entries.get("meta"), Some(&r#"{"tag":"tv"}"#.to_string()));
+    }
+
+    #[test]
+    fn parse_config_json_entries_requires_object_root() {
+        let error = parse_config_json_entries(r#"["not","an","object"]"#).unwrap_err();
+        assert_eq!(error, "config_json must be a JSON object");
+    }
+}
+
+fn parse_config_json_entries(json_str: &str) -> Result<HashMap<String, String>, String> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(json_str).map_err(|error| error.to_string())?;
+    let object = parsed
+        .as_object()
+        .ok_or_else(|| "config_json must be a JSON object".to_string())?;
+
+    let mut entries = HashMap::with_capacity(object.len());
+    for (key, value) in object {
+        if value.is_null() {
+            continue;
+        }
+
+        let normalized = match value {
+            serde_json::Value::String(value) => value.clone(),
+            other => other.to_string(),
+        };
+        entries.insert(key.clone(), normalized);
+    }
+
+    Ok(entries)
 }
 
 /// Build the Extism allowed-hosts list for a plugin manifest.
@@ -945,9 +988,9 @@ fn apply_allowed_hosts(
 
     // Add hostnames from config_json values that parse as URLs (notification plugins)
     if let Some(json_str) = config_json {
-        if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(json_str) {
-            for v in map.values() {
-                if let Some(host) = host_from_url(v) {
+        if let Ok(map) = parse_config_json_entries(json_str) {
+            for value in map.values() {
+                if let Some(host) = host_from_url(value) {
                     hosts.push(host);
                 }
             }
@@ -982,14 +1025,21 @@ fn host_from_url(url: &str) -> Option<String> {
     }
 }
 
+fn build_plugin(manifest: Manifest) -> Result<extism::Plugin, extism::Error> {
+    extism::PluginBuilder::new(manifest)
+        .with_wasi(true)
+        .with_http_response_headers(true)
+        .build()
+}
+
 fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Vec<u8>), String> {
     let bytes = wasm_bytes.to_vec();
     // No allowed hosts needed — describe() is a pure function that returns JSON.
     let manifest = Manifest::new([extism::Wasm::data(bytes.clone())])
         .with_timeout(std::time::Duration::from_secs(10));
 
-    let mut plugin = extism::Plugin::new(manifest, [], true)
-        .map_err(|e| format!("failed to instantiate WASM: {e}"))?;
+    let mut plugin =
+        build_plugin(manifest).map_err(|e| format!("failed to instantiate WASM: {e}"))?;
 
     let output: String = plugin
         .call::<&str, String>("describe", "")
@@ -1063,22 +1113,22 @@ impl WasmNotificationPluginProvider {
         manifest = manifest.with_timeout(std::time::Duration::from_secs(30));
 
         // Inject config_json key-value pairs
-        match serde_json::from_str::<HashMap<String, String>>(&config.config_json) {
+        match parse_config_json_entries(&config.config_json) {
             Ok(map) => {
                 for (k, v) in &map {
                     manifest = manifest.with_config_key(k, v);
                 }
             }
-            Err(e) => {
+            Err(error) => {
                 warn!(
                     channel = config.name.as_str(),
-                    error = %e,
+                    error = %error,
                     "failed to parse notification channel config_json"
                 );
             }
         }
 
-        match extism::Plugin::new(manifest, [], true) {
+        match build_plugin(manifest) {
             Ok(plugin) => {
                 let client = WasmNotificationClient::new(
                     plugin,
