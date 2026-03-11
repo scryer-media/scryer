@@ -50,7 +50,7 @@ export function SetupDownloadClientView({
       </div>
       <div className="mx-auto flex w-full max-w-md flex-col gap-4">
         <div className="space-y-2">
-          <Label htmlFor="dc-name">{t("settings.name")}</Label>
+          <Label htmlFor="dc-name">{t("label.name")}</Label>
           <Input
             id="dc-name"
             value={draft.name}
@@ -59,7 +59,7 @@ export function SetupDownloadClientView({
           />
         </div>
         <div className="space-y-2">
-          <Label>{t("settings.downloadClientType")}</Label>
+          <Label>{t("label.type")}</Label>
           <Select value={draft.clientType} onValueChange={(v) => onDraftChange({ clientType: v })}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -142,7 +142,7 @@ export function SetupDownloadClientView({
             {testing ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             ) : null}
-            {t("setup.testConnection")}
+            {t("label.testConnection")}
           </Button>
           {testResult === "success" && (
             <span className="flex items-center gap-1 text-sm text-emerald-500">
@@ -169,7 +169,7 @@ export function SetupDownloadClientView({
             </button>
           )}
           <Button onClick={onNext} disabled={!canProceed || saving}>
-            {saving ? t("setup.saving") : t("setup.next")}
+            {saving ? t("label.saving") : t("setup.next")}
           </Button>
         </div>
       </div>

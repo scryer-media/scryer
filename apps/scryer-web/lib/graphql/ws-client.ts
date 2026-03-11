@@ -1,8 +1,9 @@
 import { createClient } from "graphql-ws";
 import { getAuthToken } from "@/lib/hooks/use-auth";
+import { getRuntimeGraphqlUrl } from "@/lib/runtime-config";
 
 function resolveWsUrl(): string {
-  const graphqlUrl = import.meta.env.SCRYER_GRAPHQL_URL ?? "/graphql";
+  const graphqlUrl = getRuntimeGraphqlUrl();
   try {
     const url = new URL(graphqlUrl, window.location.origin);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";

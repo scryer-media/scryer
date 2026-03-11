@@ -66,7 +66,7 @@ export function SetupIndexerView({
       </div>
       <div className="mx-auto flex w-full max-w-md flex-col gap-4">
         <div className="space-y-2">
-          <Label htmlFor="idx-name">{t("settings.name")}</Label>
+          <Label htmlFor="idx-name">{t("label.name")}</Label>
           <Input
             id="idx-name"
             value={name}
@@ -75,7 +75,7 @@ export function SetupIndexerView({
           />
         </div>
         <div className="space-y-2">
-          <Label>{t("settings.providerType")}</Label>
+          <Label>{t("settings.indexerProvider")}</Label>
           <Select value={providerType} onValueChange={onProviderTypeChange}>
             <SelectTrigger><SelectValue placeholder="Select provider" /></SelectTrigger>
             <SelectContent>
@@ -116,7 +116,7 @@ export function SetupIndexerView({
             {testing ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             ) : null}
-            {t("setup.testConnection")}
+            {t("label.testConnection")}
           </Button>
           {testResult === "success" && (
             <span className="flex items-center gap-1 text-sm text-emerald-500">
@@ -143,7 +143,7 @@ export function SetupIndexerView({
             </button>
           )}
           <Button onClick={onNext} disabled={!canProceed || saving}>
-            {saving ? t("setup.saving") : t("setup.next")}
+            {saving ? t("label.saving") : t("setup.next")}
           </Button>
         </div>
       </div>

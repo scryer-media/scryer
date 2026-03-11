@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use scryer_application::{
     AppError, AppResult, DownloadClient, DownloadClientAddRequest,
     DownloadClientMarkImportedRequest, DownloadClientStatus, DownloadGrabResult,
+    DownloadSourceKind,
 };
 use scryer_domain::{CompletedDownload, DownloadQueueItem, DownloadQueueState};
 use tracing::warn;
@@ -135,16 +136,11 @@ impl DownloadClient for WasmDownloadClient {
         request: &DownloadClientAddRequest,
     ) -> AppResult<DownloadGrabResult> {
         let source_hint = request.source_hint.clone();
-        let source_kind = source_hint
-            .as_deref()
-            .map(|value| {
-                if value.starts_with("magnet:") {
-                    "magnet_uri"
-                } else {
-                    "torrent_file"
-                }
-            })
-            .unwrap_or("torrent_file")
+        let source_kind = request
+            .source_kind
+            .or_else(|| DownloadSourceKind::infer_from_hint(source_hint.as_deref()))
+            .unwrap_or(DownloadSourceKind::TorrentFile)
+            .as_str()
             .to_string();
 
         let plugin_request = PluginDownloadClientAddRequest {

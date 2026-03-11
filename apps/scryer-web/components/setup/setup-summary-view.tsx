@@ -103,7 +103,7 @@ export function SetupSummaryView({
       <div className="flex justify-between pt-2">
         <Button variant="ghost" onClick={onBack}>{t("setup.back")}</Button>
         <Button onClick={onFinish} disabled={finishing}>
-          {finishing ? t("setup.saving") : t("setup.finish")}
+          {finishing ? t("label.saving") : t("setup.finish")}
         </Button>
       </div>
     </div>

@@ -390,6 +390,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
           input: {
             titleId: title.id,
             sourceHint,
+            sourceKind: top.sourceKind ?? null,
             sourceTitle: top.title,
           },
         }).toPromise();
@@ -448,7 +449,12 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       try {
         const { error } = await client
           .mutation(queueExistingMutation, {
-            input: { titleId: title.id, sourceHint, sourceTitle: release.title },
+            input: {
+              titleId: title.id,
+              sourceHint,
+              sourceKind: release.sourceKind ?? null,
+              sourceTitle: release.title,
+            },
           })
           .toPromise();
         if (error) throw error;

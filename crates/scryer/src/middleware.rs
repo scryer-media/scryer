@@ -11,6 +11,7 @@ use scryer_application::{AppError, AppUseCase};
 use scryer_domain::Entitlement;
 
 use crate::admin_routes::ErrorResponse;
+use crate::base_path::BasePath;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CorsConfig {
@@ -211,6 +212,8 @@ pub(crate) fn apply_cors_headers(
 pub(crate) async fn index_page() -> impl IntoResponse {
     let web_url =
         std::env::var("SCRYER_WEB_UI_URL").unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
+    let base_path = BasePath::from_env();
+    let graphql_url = base_path.join("/graphql");
     Html(format!(
         r#"
 <!doctype html>
@@ -249,7 +252,7 @@ pub(crate) async fn index_page() -> impl IntoResponse {
         <a href="{web_url}">{web_url}</a>.
       </p>
       <p>
-        Backend endpoint: <code>/graphql</code> is still served by this service.
+        Backend endpoint: <code>{graphql_url}</code> is still served by this service.
       </p>
     </main>
   </body>
@@ -259,7 +262,9 @@ pub(crate) async fn index_page() -> impl IntoResponse {
 }
 
 pub(crate) async fn graphiql_handler() -> impl IntoResponse {
-    axum::response::Html(GraphiQLSource::build().endpoint("/graphql").finish())
+    let base_path = BasePath::from_env();
+    let endpoint = base_path.join("/graphql");
+    axum::response::Html(GraphiQLSource::build().endpoint(&endpoint).finish())
 }
 
 pub(crate) async fn graphql_ws_handler(

@@ -485,7 +485,7 @@ export function SettingsQualityProfilesSection({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>{t("settings.name")}</TableHead>
+                <TableHead>{t("label.name")}</TableHead>
                 <TableHead className="max-w-72">{t("qualityProfile.qualityTiers")}</TableHead>
                 <TableHead className="w-28">{t("qualityProfile.archivalQuality")}</TableHead>
                 <TableHead className="w-24 text-center">{t("qualityProfile.allowBdDisk")}</TableHead>

@@ -122,6 +122,7 @@ pub struct PendingRelease {
     pub title_id: String,
     pub release_title: String,
     pub release_url: Option<String>,
+    pub source_kind: Option<DownloadSourceKind>,
     pub release_size_bytes: Option<i64>,
     pub release_score: i32,
     pub scoring_log_json: Option<String>,
@@ -137,6 +138,104 @@ pub struct PendingRelease {
 pub struct DownloadGrabResult {
     pub job_id: String,
     pub client_type: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DownloadSourceKind {
+    NzbUrl,
+    TorrentFile,
+    MagnetUri,
+}
+
+impl DownloadSourceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NzbUrl => "nzb_url",
+            Self::TorrentFile => "torrent_file",
+            Self::MagnetUri => "magnet_uri",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "nzb" | "nzb_url" => Some(Self::NzbUrl),
+            "torrent" | "torrent_file" => Some(Self::TorrentFile),
+            "magnet" | "magnet_uri" => Some(Self::MagnetUri),
+            _ => None,
+        }
+    }
+
+    pub fn infer_from_hint(value: Option<&str>) -> Option<Self> {
+        let raw = value?.trim();
+        if raw.is_empty() {
+            return None;
+        }
+        if raw.starts_with("magnet:") {
+            return Some(Self::MagnetUri);
+        }
+
+        let normalized = raw.to_ascii_lowercase();
+        if normalized.ends_with(".torrent") {
+            return Some(Self::TorrentFile);
+        }
+        if normalized.ends_with(".nzb") {
+            return Some(Self::NzbUrl);
+        }
+
+        reqwest::Url::parse(raw).ok().and_then(|url| {
+            let path = url.path().to_ascii_lowercase();
+            if path.ends_with(".torrent") {
+                return Some(Self::TorrentFile);
+            }
+            if path.ends_with(".nzb") {
+                return Some(Self::NzbUrl);
+            }
+
+            url.query_pairs().find_map(|(key, value)| {
+                let value = value.trim();
+                match key.as_ref() {
+                    "magnet" | "magnet_uri" if value.starts_with("magnet:") => {
+                        Some(Self::MagnetUri)
+                    }
+                    "torrent" | "torrent_url" | "file" | "url" if value.ends_with(".torrent") => {
+                        Some(Self::TorrentFile)
+                    }
+                    "nzb" | "nzb_url" | "url" if value.ends_with(".nzb") => Some(Self::NzbUrl),
+                    _ => None,
+                }
+            })
+        })
+    }
+
+    pub fn infer_from_indexer_result(
+        plugin_type: Option<&str>,
+        download_url: Option<&str>,
+        link: Option<&str>,
+        extra: &HashMap<String, serde_json::Value>,
+    ) -> Option<Self> {
+        if let Some(kind) = extra
+            .get("download_type")
+            .and_then(|value| value.as_str())
+            .and_then(Self::parse)
+        {
+            return Some(kind);
+        }
+        if extra.contains_key("magnet_uri") {
+            return Some(Self::MagnetUri);
+        }
+        if extra.contains_key("info_hash") {
+            return Some(Self::TorrentFile);
+        }
+        if let Some(kind) = Self::infer_from_hint(download_url.or(link)) {
+            return Some(kind);
+        }
+
+        match plugin_type.map(|value| value.trim().to_ascii_lowercase()) {
+            Some(plugin_type) if plugin_type == "torrent_indexer" => Some(Self::TorrentFile),
+            Some(plugin_type) if plugin_type == "usenet_indexer" => Some(Self::NzbUrl),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -176,6 +275,7 @@ pub struct IndexerSearchResult {
     pub title: String,
     pub link: Option<String>,
     pub download_url: Option<String>,
+    pub source_kind: Option<DownloadSourceKind>,
     pub size_bytes: Option<i64>,
     pub published_at: Option<String>,
     pub thumbs_up: Option<i32>,

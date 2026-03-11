@@ -332,11 +332,11 @@ export function TitleTable({
     <TableHeader>
       <TableRow>
         <TableHead className="whitespace-nowrap">{t("title.table.poster")}</TableHead>
-        <TableHead>{t("title.table.name")}</TableHead>
+        <TableHead>{t("label.name")}</TableHead>
         <TableHead className="whitespace-nowrap">{t("title.table.qualityTier")}</TableHead>
         {isMovieView ? <TableHead className="whitespace-nowrap">{t("title.table.size")}</TableHead> : null}
         <TableHead className="whitespace-nowrap">{t("title.table.monitored")}</TableHead>
-        <TableHead className="text-right whitespace-nowrap">{t("title.table.actions")}</TableHead>
+        <TableHead className="text-right whitespace-nowrap">{t("label.actions")}</TableHead>
       </TableRow>
     </TableHeader>
   );
@@ -373,11 +373,11 @@ export function TitleTable({
         <thead className="[&_tr]:border-b sticky top-0 z-10 bg-background">
           <TableRow>
             <TableHead className="whitespace-nowrap">{t("title.table.poster")}</TableHead>
-            <TableHead>{t("title.table.name")}</TableHead>
+            <TableHead>{t("label.name")}</TableHead>
             <TableHead className="whitespace-nowrap">{t("title.table.qualityTier")}</TableHead>
             {isMovieView ? <TableHead className="whitespace-nowrap">{t("title.table.size")}</TableHead> : null}
             <TableHead className="whitespace-nowrap">{t("title.table.monitored")}</TableHead>
-            <TableHead className="text-right whitespace-nowrap">{t("title.table.actions")}</TableHead>
+            <TableHead className="text-right whitespace-nowrap">{t("label.actions")}</TableHead>
           </TableRow>
         </thead>
         {virtualItems.length > 0 ? (

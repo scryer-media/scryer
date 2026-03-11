@@ -38,6 +38,7 @@ impl AppUseCase {
         title: &scryer_domain::Title,
         release_title: &str,
         release_url: Option<&str>,
+        source_kind: Option<DownloadSourceKind>,
         release_size_bytes: Option<i64>,
         release_score: i32,
         scoring_log_json: Option<String>,
@@ -54,6 +55,7 @@ impl AppUseCase {
             title_id: title.id.clone(),
             release_title: release_title.to_string(),
             release_url: release_url.map(str::to_string),
+            source_kind,
             release_size_bytes,
             release_score,
             scoring_log_json,
@@ -375,6 +377,9 @@ impl AppUseCase {
 
         // Submit to download client
         let source_hint = pr.release_url.clone();
+        let source_kind = pr
+            .source_kind
+            .or_else(|| DownloadSourceKind::infer_from_hint(source_hint.as_deref()));
         let source_title = Some(pr.release_title.clone());
 
         let _ = self
@@ -405,6 +410,7 @@ impl AppUseCase {
             .submit_to_download_queue(
                 &title,
                 source_hint.clone(),
+                source_kind,
                 source_title.clone(),
                 None,
                 Some(download_cat),

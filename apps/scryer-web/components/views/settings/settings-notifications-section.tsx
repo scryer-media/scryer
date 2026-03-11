@@ -115,7 +115,13 @@ function DynamicConfigField({
         value={value}
         onChange={(e) => onChange(field.key, e.target.value)}
         {...(field.fieldType === "number" ? signedIntegerInputProps : {})}
-        type={field.fieldType === "password" ? "password" : field.fieldType === "number" ? "number" : "text"}
+        type={
+          field.fieldType === "password" || field.fieldType === "secret"
+            ? "password"
+            : field.fieldType === "number"
+              ? "number"
+              : "text"
+        }
         required={field.required}
         placeholder={field.defaultValue ?? ""}
       />

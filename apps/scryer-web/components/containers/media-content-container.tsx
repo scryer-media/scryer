@@ -385,6 +385,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
                   : []),
               ],
               sourceHint,
+              sourceKind: release.sourceKind ?? null,
               sourceTitle: release.title,
               ...(queueFacet === "movie" ? { minAvailability: minAvailabilityForQueue } : {}),
             },
@@ -448,6 +449,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           input: {
             titleId: title.id,
             sourceHint,
+            sourceKind: top.sourceKind ?? null,
             sourceTitle: top.title,
           },
         }).toPromise();
@@ -502,6 +504,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           input: {
             titleId: title.id,
             sourceHint,
+            sourceKind: release.sourceKind ?? null,
             sourceTitle: release.title,
           },
         }).toPromise();

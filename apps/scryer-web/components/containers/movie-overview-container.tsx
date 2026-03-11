@@ -345,7 +345,8 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
         setGlobalStatus(t("nzb.blockedByProfile", { reason }));
         return;
       }
-      if (!release.downloadUrl) {
+      const sourceHint = release.downloadUrl || release.link;
+      if (!sourceHint) {
         setGlobalStatus(t("status.noReleaseSource"));
         return;
       }
@@ -353,7 +354,8 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
         const { error } = await client.mutation(queueExistingMutation, {
           input: {
             titleId: title.id,
-            sourceHint: release.downloadUrl,
+            sourceHint,
+            sourceKind: release.sourceKind ?? null,
             sourceTitle: release.title,
           },
         }).toPromise();

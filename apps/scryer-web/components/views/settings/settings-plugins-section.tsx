@@ -303,7 +303,7 @@ export function SettingsPluginsSection({
         </div>
         <Button variant="outline" size="sm" disabled={refreshing} onClick={onRefreshRegistry}>
           <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
-          {refreshing ? t("settings.pluginsRefreshing") : t("settings.pluginsRefresh")}
+          {refreshing ? t("label.refreshing") : t("settings.pluginsRefresh")}
         </Button>
       </div>
 

@@ -260,7 +260,7 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
         open={deleteConfirmItem !== null}
         title={t("queue.deleteConfirmTitle")}
         description={t("queue.deleteConfirmDescription")}
-        confirmLabel={t("queue.delete")}
+        confirmLabel={t("label.delete")}
         cancelLabel={t("label.cancel")}
         isBusy={deleteInProgress}
         onConfirm={handleDelete}
@@ -321,7 +321,7 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
         </CardHeader>
         <CardContent className="space-y-4">
 
-          {queueLoading && queueItems.length === 0 ? <p>{t("status.loading")}</p> : null}
+          {queueLoading && queueItems.length === 0 ? <p>{t("label.loading")}</p> : null}
           {queueError ? (
             <p className="rounded border border-rose-500/40 bg-rose-950/40 p-2 text-sm text-rose-200">
               {queueError}
@@ -337,7 +337,7 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
                   <TableHead className="w-44 min-w-0">{t("queue.status")}</TableHead>
                   <TableHead className="w-52 min-w-52">{t("queue.progress")}</TableHead>
                   <TableHead className="w-24 min-w-24">{t("queue.size")}</TableHead>
-                  <TableHead className="w-44 min-w-44 text-right">{t("queue.actions")}</TableHead>
+                  <TableHead className="w-44 min-w-44 text-right">{t("label.actions")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -523,8 +523,8 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
                                 variant="secondary"
                                 className={`h-10 w-10 border border-rose-500/50 bg-rose-600/15 text-rose-300 hover:bg-rose-600/25 ${rowActionVisualClass}`}
                                 disabled={isRowFullyBusy}
-                                title={t("queue.delete")}
-                                aria-label={t("queue.delete")}
+                                title={t("label.delete")}
+                                aria-label={t("label.delete")}
                                 onClick={() => {
                                   if (rowActionBusyRef.current[queueItem.id] || isActionLoading || isRowBlocked) {
                                     return;
@@ -583,7 +583,7 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
         {importHistoryExpanded && (
           <CardContent>
             {importHistoryLoading && importHistory.length === 0 ? (
-              <p className="text-sm text-muted-foreground">{t("status.loading")}</p>
+              <p className="text-sm text-muted-foreground">{t("label.loading")}</p>
             ) : importHistory.length === 0 ? (
               <p className="text-sm text-muted-foreground">{t("importHistory.empty")}</p>
             ) : (

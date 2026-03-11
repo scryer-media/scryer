@@ -499,7 +499,7 @@ async fn nzbget_submit_download() {
 
     let source_hint = format!("{}/getnzb/test.nzb", ctx.nzbget_server.uri());
     let result = new_nzbget_client(&ctx.nzbget_server.uri())
-        .submit_to_download_queue(&title, Some(source_hint), None, None, None)
+        .submit_to_download_queue(&title, Some(source_hint), None, None, None, None)
         .await;
 
     assert!(result.is_ok(), "submit should succeed: {:?}", result.err());
@@ -541,7 +541,7 @@ async fn nzbget_submit_download_no_source_hint() {
     };
 
     let result = new_nzbget_client(&ctx.nzbget_server.uri())
-        .submit_to_download_queue(&title, None, None, None, None)
+        .submit_to_download_queue(&title, None, None, None, None, None)
         .await;
     assert!(result.is_err(), "should fail without source_hint");
 }
@@ -1275,6 +1275,7 @@ async fn sabnzbd_submit_download() {
             Some(nzb_url),
             None,
             None,
+            None,
             Some("movies".to_string()),
         )
         .await;
@@ -1319,7 +1320,7 @@ async fn sabnzbd_submit_download_no_source_hint() {
 
     let server = MockServer::start().await;
     let result = new_sabnzbd_client(&server.uri())
-        .submit_to_download_queue(&title, None, None, None, None)
+        .submit_to_download_queue(&title, None, None, None, None, None)
         .await;
     assert!(result.is_err(), "should fail without source_hint");
 }

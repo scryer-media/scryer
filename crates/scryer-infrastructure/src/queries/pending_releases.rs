@@ -1,4 +1,4 @@
-use scryer_application::{AppError, AppResult, PendingRelease};
+use scryer_application::{AppError, AppResult, DownloadSourceKind, PendingRelease};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
@@ -9,9 +9,9 @@ pub(crate) async fn insert_pending_release_query(
     sqlx::query(
         "INSERT INTO pending_releases
          (id, wanted_item_id, title_id, release_title, release_url, release_size_bytes,
-          release_score, scoring_log_json, indexer_source, release_guid, added_at,
-          delay_until, status, grabbed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          source_kind, release_score, scoring_log_json, indexer_source, release_guid,
+          added_at, delay_until, status, grabbed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&release.id)
     .bind(&release.wanted_item_id)
@@ -19,6 +19,7 @@ pub(crate) async fn insert_pending_release_query(
     .bind(&release.release_title)
     .bind(&release.release_url)
     .bind(release.release_size_bytes)
+    .bind(release.source_kind.map(|value| value.as_str().to_string()))
     .bind(release.release_score)
     .bind(&release.scoring_log_json)
     .bind(&release.indexer_source)
@@ -40,8 +41,8 @@ pub(crate) async fn list_expired_pending_releases_query(
 ) -> AppResult<Vec<PendingRelease>> {
     let rows: Vec<SqliteRow> = sqlx::query(
         "SELECT id, wanted_item_id, title_id, release_title, release_url, release_size_bytes,
-                release_score, scoring_log_json, indexer_source, release_guid, added_at,
-                delay_until, status, grabbed_at
+                source_kind, release_score, scoring_log_json, indexer_source, release_guid,
+                added_at, delay_until, status, grabbed_at
          FROM pending_releases
          WHERE status = 'waiting' AND delay_until <= ?
          ORDER BY delay_until ASC",
@@ -64,8 +65,8 @@ pub(crate) async fn list_pending_releases_for_wanted_item_query(
 ) -> AppResult<Vec<PendingRelease>> {
     let rows: Vec<SqliteRow> = sqlx::query(
         "SELECT id, wanted_item_id, title_id, release_title, release_url, release_size_bytes,
-                release_score, scoring_log_json, indexer_source, release_guid, added_at,
-                delay_until, status, grabbed_at
+                source_kind, release_score, scoring_log_json, indexer_source, release_guid,
+                added_at, delay_until, status, grabbed_at
          FROM pending_releases
          WHERE wanted_item_id = ? AND status = 'waiting'
          ORDER BY release_score DESC",
@@ -122,8 +123,8 @@ pub(crate) async fn list_waiting_pending_releases_query(
 ) -> AppResult<Vec<PendingRelease>> {
     let rows: Vec<SqliteRow> = sqlx::query(
         "SELECT id, wanted_item_id, title_id, release_title, release_url, release_size_bytes,
-                release_score, scoring_log_json, indexer_source, release_guid, added_at,
-                delay_until, status, grabbed_at
+                source_kind, release_score, scoring_log_json, indexer_source, release_guid,
+                added_at, delay_until, status, grabbed_at
          FROM pending_releases
          WHERE status = 'waiting'
          ORDER BY delay_until ASC",
@@ -145,8 +146,8 @@ pub(crate) async fn get_pending_release_query(
 ) -> AppResult<Option<PendingRelease>> {
     let row = sqlx::query(
         "SELECT id, wanted_item_id, title_id, release_title, release_url, release_size_bytes,
-                release_score, scoring_log_json, indexer_source, release_guid, added_at,
-                delay_until, status, grabbed_at
+                source_kind, release_score, scoring_log_json, indexer_source, release_guid,
+                added_at, delay_until, status, grabbed_at
          FROM pending_releases
          WHERE id = ?",
     )
@@ -177,6 +178,10 @@ fn row_to_pending_release(row: &SqliteRow) -> AppResult<PendingRelease> {
             .map_err(|e| AppError::Repository(e.to_string()))?,
         release_url: row.try_get("release_url").unwrap_or(None),
         release_size_bytes: row.try_get("release_size_bytes").unwrap_or(None),
+        source_kind: row
+            .try_get::<Option<String>, _>("source_kind")
+            .unwrap_or(None)
+            .and_then(|value| DownloadSourceKind::parse(&value)),
         release_score: row
             .try_get("release_score")
             .map_err(|e| AppError::Repository(e.to_string()))?,

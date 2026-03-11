@@ -19,6 +19,7 @@ import {
   executeExternalImportMutation,
   refreshPluginRegistryMutation,
   installPluginMutation,
+  uninstallPluginMutation,
 } from "@/lib/graphql/mutations";
 import { QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY } from "@/lib/constants/settings";
 import { DEFAULT_DOWNLOAD_CLIENT_DRAFT } from "@/lib/constants/download-clients";
@@ -284,6 +285,28 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
     [client, loadPlugins, refreshProviderOptions, t],
   );
 
+  const uninstallPlugin = useCallback(
+    async (plugin: RegistryPluginRecord) => {
+      setMutatingPluginId(plugin.id);
+      setPluginsError(null);
+      try {
+        const { error } = await client
+          .mutation(uninstallPluginMutation, {
+            input: { pluginId: plugin.id },
+          })
+          .toPromise();
+        if (error) throw error;
+
+        await Promise.all([loadPlugins(false), refreshProviderOptions()]);
+      } catch (error) {
+        setPluginsError(error instanceof Error ? error.message : t("status.failedToDelete"));
+      } finally {
+        setMutatingPluginId(null);
+      }
+    },
+    [client, loadPlugins, refreshProviderOptions, t],
+  );
+
   // ── Step labels per path ────────────────────────────────────────────
   const stepLabels =
     wizardPath === "import"
@@ -485,7 +508,6 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
       const { data, error } = await client
         .mutation(testIndexerConnectionMutation, {
           input: {
-            name: idxName.trim(),
             providerType: idxProviderType,
             baseUrl: effectiveBaseUrl,
             apiKey: idxApiKey.trim() || undefined,
@@ -503,7 +525,7 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
     } finally {
       setIdxTesting(false);
     }
-  }, [client, idxName, idxProviderType, idxBaseUrl, idxApiKey, idxProviderOptions]);
+  }, [client, idxProviderType, idxBaseUrl, idxApiKey, idxProviderOptions]);
 
   // ── Indexer save ────────────────────────────────────────────────────
   const saveIndexer = useCallback(async () => {
@@ -544,7 +566,6 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
       const { data, error } = await client
         .mutation(testIndexerConnectionMutation, {
           input: {
-            name: idxName.trim(),
             providerType: idxProviderType,
             baseUrl: effectiveBaseUrl,
             apiKey: idxApiKey.trim() || undefined,
@@ -564,7 +585,7 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
       setIdxTestResult("failed");
       setIdxTesting(false);
     }
-  }, [client, idxName, idxProviderType, idxBaseUrl, idxApiKey, idxProviderOptions, saveIndexer]);
+  }, [client, idxProviderType, idxBaseUrl, idxApiKey, idxProviderOptions, saveIndexer]);
 
   // ── Import: Connect & Scan ──────────────────────────────────────────
   const handleImportConnect = useCallback(async () => {
@@ -796,6 +817,7 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
           error={pluginsError}
           onRefreshRegistry={refreshPluginsRegistry}
           onInstallPlugin={installPlugin}
+          onUninstallPlugin={uninstallPlugin}
           onNext={() => goToStep(4)}
           onBack={() => goToStep(2)}
         />

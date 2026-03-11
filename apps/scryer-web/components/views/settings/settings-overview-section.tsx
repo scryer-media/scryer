@@ -1,4 +1,5 @@
 import { Loader2, Rocket, Shield } from "lucide-react";
+import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -57,13 +58,13 @@ export function SettingsOverviewSection({
       </div>
 
       <div className="border-t border-border pt-6">
-        <a
-          href="/setup?reentry=1"
+        <Link
+          to={{ pathname: "/setup", search: "?reentry=1" }}
           className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
         >
           <Rocket className="h-4 w-4" />
           {t("settings.runSetupWizard")}
-        </a>
+        </Link>
       </div>
 
       {setTlsCertPath && setTlsKeyPath && onTlsSave ? (

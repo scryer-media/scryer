@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { IndexerRecord, IndexerDraft, ProviderTypeInfo, ConfigFieldDef } from "@/lib/types";
+import { showStandardIndexerConnectionFields } from "@/lib/utils/indexers";
 
 type SettingsIndexersSectionProps = {
   editingIndexerId: string | null;
@@ -185,7 +186,13 @@ function DynamicConfigField({
         value={value}
         onChange={(e) => onChange(field.key, e.target.value)}
         {...(field.fieldType === "number" ? signedIntegerInputProps : {})}
-        type={field.fieldType === "password" ? "password" : field.fieldType === "number" ? "number" : "text"}
+        type={
+          field.fieldType === "password" || field.fieldType === "secret"
+            ? "password"
+            : field.fieldType === "number"
+              ? "number"
+              : "text"
+        }
         required={field.required}
         placeholder={field.defaultValue ?? ""}
       />
@@ -240,9 +247,7 @@ export function SettingsIndexersSection({
 
   const selectedProviderFields = selectedProvider?.configFields ?? [];
 
-  // When a provider has a default_base_url, it has a fixed public endpoint
-  // — no need to show base URL or API key fields.
-  const hasFixedEndpoint = !!selectedProvider?.defaultBaseUrl;
+  const shouldShowStandardFields = showStandardIndexerConnectionFields(selectedProvider);
 
   const handleConfigValueChange = React.useCallback(
     (key: string, value: string) => {
@@ -275,14 +280,14 @@ export function SettingsIndexersSection({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>{t("settings.indexerName")}</TableHead>
+                <TableHead>{t("label.name")}</TableHead>
                 <TableHead>{t("settings.indexerProvider")}</TableHead>
-                <TableHead>{t("settings.indexerBaseUrl")}</TableHead>
+                <TableHead>{t("settings.baseUrl")}</TableHead>
                 <TableHead className="text-center">{t("label.enabled")}</TableHead>
                 <TableHead className="text-center">{t("settings.indexerInteractiveSearch")}</TableHead>
                 <TableHead className="text-center">{t("settings.indexerAutoSearch")}</TableHead>
                 <TableHead>{t("settings.indexerStatus")}</TableHead>
-                <TableHead className="text-right">{t("settings.actions")}</TableHead>
+                <TableHead className="text-right">{t("label.actions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -335,7 +340,7 @@ export function SettingsIndexersSection({
                         onClick={() => editIndexer(indexer)}
                       >
                         <Edit className="mr-1 h-3.5 w-3.5" />
-                        {t("settings.indexerEdit")}
+                        {t("label.edit")}
                       </Button>
                       <Button
                         size="sm"
@@ -344,7 +349,7 @@ export function SettingsIndexersSection({
                         disabled={mutatingIndexerId === indexer.id}
                       >
                         <Trash2 className="mr-1 h-3.5 w-3.5" />
-                        {mutatingIndexerId === indexer.id ? t("label.deleting") : t("settings.indexerDelete")}
+                        {mutatingIndexerId === indexer.id ? t("label.deleting") : t("label.delete")}
                       </Button>
                     </div>
                   </TableCell>
@@ -372,7 +377,7 @@ export function SettingsIndexersSection({
           <form className="space-y-3" onSubmit={submitIndexer}>
             <div className="grid gap-3 md:grid-cols-3">
               <label>
-                <Label className="mb-2 block">{t("settings.indexerName")}</Label>
+                <Label className="mb-2 block">{t("label.name")}</Label>
                 <Input
                   value={indexerDraft.name}
                   onChange={(event) =>
@@ -406,10 +411,10 @@ export function SettingsIndexersSection({
                   </SelectContent>
                 </Select>
               </label>
-              {!hasFixedEndpoint ? (
+              {shouldShowStandardFields ? (
                 <>
                   <label>
-                    <Label className="mb-2 block">{t("form.baseUrlPlaceholder")}</Label>
+                    <Label className="mb-2 block">{t("settings.baseUrl")}</Label>
                     <Input
                       value={indexerDraft.baseUrl}
                       onChange={(event) =>
@@ -423,7 +428,7 @@ export function SettingsIndexersSection({
                     />
                   </label>
                   <label>
-                    <Label className="mb-2 block">{t("settings.indexerApi")}</Label>
+                    <Label className="mb-2 block">{t("settings.apiKey")}</Label>
                     <Input
                       value={indexerDraft.apiKey}
                       onChange={(event) =>
@@ -516,7 +521,7 @@ export function SettingsIndexersSection({
                 onClick={() => void testIndexerConnection()}
                 disabled={isTestingConnection}
               >
-                {isTestingConnection ? t("status.testingIndexerConnection") : t("settings.indexerTest")}
+                {isTestingConnection ? t("status.testingIndexerConnection") : t("label.testConnection")}
               </Button>
               <Button type="button" variant="secondary" onClick={resetIndexerDraft}>
                 {t("label.cancel")}

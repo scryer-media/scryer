@@ -1,4 +1,5 @@
 mod admin_routes;
+mod base_path;
 mod dev_seed;
 mod init;
 mod log_buffer;
@@ -35,6 +36,7 @@ use admin_routes::{
     admin_migrations_handler, admin_settings_list, bootstrap_admin_password,
     seed_indexer_configs_from_env, AdminSettingsQuery,
 };
+use base_path::{mount_router, BasePath};
 use middleware::{
     cors_handler, graphiql_handler, graphql_handler, graphql_ws_handler, health_handler, AuthState,
     CorsConfig,
@@ -94,6 +96,7 @@ async fn main() {
     let jwt_access_ttl_seconds = parse_env_u64("SCRYER_JWT_ACCESS_TTL_SECONDS", 86_400);
     let migration_mode = parse_migration_mode(std::env::var("SCRYER_DB_MIGRATION_MODE").ok());
     let bind = std::env::var("SCRYER_BIND").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+    let base_path = BasePath::from_env();
 
     let log_ring_buffer = log_buffer::LogRingBuffer::with_default_capacity();
 
@@ -148,7 +151,7 @@ async fn main() {
     let (status_tx, status_rx) = watch::channel(BootstrapStatus::Migrating);
     let splash_state = SplashState { status_rx };
     let cors = CorsConfig::from_env();
-    let splash_app = build_splash_router(splash_state, cors.clone());
+    let splash_app = build_splash_router(splash_state, cors.clone(), base_path.clone());
 
     let cors_allow_all = cors.allow_all || cors.allowed_origins.iter().any(|origin| origin == "*");
     if cors_allow_all {
@@ -159,6 +162,7 @@ async fn main() {
 
     let addr: SocketAddr = bind.parse().expect("invalid bind address");
     let shutdown_token = CancellationToken::new();
+    let startup_base_path = base_path.clone();
 
     // Spawn the full application bootstrap in the background.
     let bootstrap_shutdown = shutdown_token.clone();
@@ -171,6 +175,7 @@ async fn main() {
             jwt_access_ttl_seconds,
             bootstrap_bind,
             cors,
+            base_path.clone(),
             bootstrap_shutdown,
             log_ring_buffer,
             metrics_handle,
@@ -207,7 +212,10 @@ async fn main() {
                 shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
             });
             tracing::info!("scryer service listening on {addr} with TLS");
-            tracing::info!("open the web UI at https://{addr}/");
+            tracing::info!(
+                "open the web UI at https://{addr}{}",
+                startup_base_path.ui_root()
+            );
             if let Err(error) = axum_server::bind_rustls(addr, rustls_config)
                 .handle(handle)
                 .serve(splash_app.into_make_service())
@@ -228,7 +236,10 @@ async fn main() {
                 "scryer service listening on {}",
                 listener.local_addr().expect("bound addr")
             );
-            tracing::info!("open the web UI at http://{addr}/");
+            tracing::info!(
+                "open the web UI at http://{addr}{}",
+                startup_base_path.ui_root()
+            );
             if let Err(error) = axum::serve(listener, splash_app)
                 .with_graceful_shutdown(shutdown_signal(shutdown_token.clone()))
                 .await
@@ -250,6 +261,7 @@ async fn bootstrap_application(
     jwt_access_ttl_seconds: u64,
     bind: String,
     cors: CorsConfig,
+    base_path: BasePath,
     shutdown_token: CancellationToken,
     log_ring_buffer: log_buffer::LogRingBuffer,
     metrics_handle: Option<metrics_exporter_prometheus::PrometheusHandle>,
@@ -647,6 +659,7 @@ async fn bootstrap_application(
         .layer(axum::middleware::from_fn(move |request, next| {
             cors_handler(request, next, cors_for_layer.clone())
         }));
+    let app = mount_router(app, &base_path);
 
     match ui_asset_mode() {
         UiAssetMode::Filesystem(dist_dir) => {

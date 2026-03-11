@@ -355,10 +355,10 @@ export function AddTitleForm({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>{t("title.table.name")}</TableHead>
+                <TableHead>{t("label.name")}</TableHead>
                 <TableHead>{t("title.table.facet")}</TableHead>
                 <TableHead>{t("title.table.monitored")}</TableHead>
-                <TableHead className="text-right">{t("title.table.actions")}</TableHead>
+                <TableHead className="text-right">{t("label.actions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

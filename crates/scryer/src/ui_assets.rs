@@ -7,6 +7,7 @@ use axum::http::{header, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use tokio::fs;
 
+use crate::base_path::BasePath;
 use crate::middleware::index_page;
 
 mod embedded_ui_assets {
@@ -14,6 +15,8 @@ mod embedded_ui_assets {
 }
 
 pub(crate) static UI_ASSET_MODE: OnceLock<UiAssetMode> = OnceLock::new();
+const BASE_PATH_PLACEHOLDER: &str = "__SCRYER_BASE_PATH__";
+const GRAPHQL_URL_PLACEHOLDER: &str = "__SCRYER_GRAPHQL_URL__";
 
 #[derive(Clone, Debug)]
 pub(crate) enum UiAssetMode {
@@ -124,6 +127,7 @@ pub(crate) fn embedded_ui_asset(path: &str) -> Option<&'static [u8]> {
 pub(crate) async fn serve_embedded_index(head_only: bool) -> Response {
     match embedded_ui_asset("index.html") {
         Some(index_html) => {
+            let index_html = render_index_html(index_html);
             let content_len = index_html.len().to_string();
             let response = Response::builder()
                 .status(StatusCode::OK)
@@ -274,6 +278,7 @@ pub(crate) async fn serve_index_html(dist_dir: &Path, head_only: bool) -> Respon
     let index = dist_dir.join("index.html");
     match fs::read(&index).await {
         Ok(index_html) => {
+            let index_html = render_index_html(&index_html);
             let content_len = index_html.len().to_string();
             let response = Response::builder()
                 .status(StatusCode::OK)
@@ -302,4 +307,13 @@ pub(crate) async fn serve_index_html(dist_dir: &Path, head_only: bool) -> Respon
             index_page().await.into_response()
         }
     }
+}
+
+fn render_index_html(index_html: &[u8]) -> Vec<u8> {
+    let base_path = BasePath::from_env();
+    let graphql_url = base_path.join("/graphql");
+    String::from_utf8_lossy(index_html)
+        .replace(BASE_PATH_PLACEHOLDER, base_path.basename())
+        .replace(GRAPHQL_URL_PLACEHOLDER, &graphql_url)
+        .into_bytes()
 }

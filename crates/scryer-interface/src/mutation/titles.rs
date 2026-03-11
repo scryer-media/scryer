@@ -3,7 +3,7 @@ use async_graphql::{Context, Object, Result as GqlResult};
 use crate::context::{actor_from_ctx, app_from_ctx, to_gql_error};
 use crate::mappers::from_title;
 use crate::types::*;
-use crate::utils::{map_add_input, parse_facet};
+use crate::utils::{map_add_input, parse_download_source_kind, parse_facet};
 
 #[derive(Default)]
 pub(crate) struct TitleMutations;
@@ -36,9 +36,16 @@ impl TitleMutations {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let source_hint = input.source_hint.clone();
+        let source_kind = parse_download_source_kind(input.source_kind.clone());
         let source_title = input.source_title.clone();
         let (title, job_id) = app
-            .add_title_and_queue_download(&actor, map_add_input(input), source_hint, source_title)
+            .add_title_and_queue_download(
+                &actor,
+                map_add_input(input),
+                source_hint,
+                source_kind,
+                source_title,
+            )
             .await
             .map_err(to_gql_error)?;
 

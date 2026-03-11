@@ -77,7 +77,7 @@ export const IndexerRoutingPanel = React.memo(function IndexerRoutingPanel({
               <TableHeader>
                 <TableRow>
                   <TableHead>{t("settings.indexerRoutingPriority")}</TableHead>
-                  <TableHead>{t("settings.indexerName")}</TableHead>
+                  <TableHead>{t("label.name")}</TableHead>
                   <TableHead>{t("settings.indexerRoutingCategories")}</TableHead>
                   <TableHead className="text-center">{t("settings.indexerRoutingGloballyEnabled")}</TableHead>
                   <TableHead className="text-center">{t("settings.indexerRoutingEnabled")}</TableHead>

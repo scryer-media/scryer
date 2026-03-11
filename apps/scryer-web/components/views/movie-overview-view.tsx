@@ -32,6 +32,8 @@ import type {
 } from "@/components/containers/movie-overview-container";
 import { MediaInfoBadges } from "@/components/common/media-info-badges";
 
+const imdbLogoUrl = `${import.meta.env.BASE_URL}media-sites/imdb.svg`;
+
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 function formatDate(iso: string) {
@@ -433,7 +435,7 @@ export function MovieOverviewView({
                     className="inline-flex h-12 items-center gap-2 rounded-md border border-border bg-card/45 px-3 py-2 text-base hover:bg-muted"
                     aria-label="Open on IMDb"
                   >
-                    <img src="/media-sites/imdb.svg" alt="IMDb" className="h-8 w-8" />
+                    <img src={imdbLogoUrl} alt="IMDb" className="h-8 w-8" />
                     <span className="text-muted-foreground">IMDb</span>
                   </a>
                 ) : null}

@@ -198,6 +198,7 @@ export const searchQuery = `query SearchIndexers($query: String!, $imdbId: Strin
     title
     link
     downloadUrl
+    sourceKind
     sizeBytes
     publishedAt
     thumbsUp
@@ -241,6 +242,7 @@ export const searchSeriesEpisodeQuery = `query SearchIndexersEpisode($title: Str
     title
     link
     downloadUrl
+    sourceKind
     sizeBytes
     publishedAt
     thumbsUp
@@ -284,6 +286,7 @@ export const searchSeasonQuery = `query SearchIndexersSeason($title: String!, $s
     title
     link
     downloadUrl
+    sourceKind
     sizeBytes
     publishedAt
     thumbsUp

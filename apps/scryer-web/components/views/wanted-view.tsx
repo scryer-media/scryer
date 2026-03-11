@@ -343,7 +343,7 @@ function WantedItemsCard({ state }: { state: WantedViewState }) {
                 <TableHead>{t("wanted.colNextSearch")}</TableHead>
                 <TableHead>{t("wanted.colScore")}</TableHead>
                 <TableHead>{t("wanted.colSearches")}</TableHead>
-                <TableHead>{t("wanted.colActions")}</TableHead>
+                <TableHead>{t("label.actions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -551,7 +551,7 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
                 <TableHead>{t("pending.colIndexer")}</TableHead>
                 <TableHead>{t("pending.colAddedAt")}</TableHead>
                 <TableHead>{t("pending.colDelayUntil")}</TableHead>
-                <TableHead>{t("pending.colActions")}</TableHead>
+                <TableHead>{t("label.actions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
