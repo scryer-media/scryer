@@ -133,7 +133,25 @@ if ! command -v cargo-audit &>/dev/null; then
     cargo install --locked cargo-audit 2>&1 || die "failed to install cargo-audit"
 fi
 
-cargo audit 2>&1 || die "cargo audit found vulnerabilities — fix before releasing"
+CARGO_AUDIT_IGNORES=(
+    # sqlx macros still pull the MySQL backend into Cargo.lock even though Scryer only uses SQLite.
+    "RUSTSEC-2023-0071"
+    # extism 1.13.0 still pins wasmtime 37.x upstream; no fixed extism release is available yet.
+    "RUSTSEC-2026-0006"
+    "RUSTSEC-2026-0020"
+    "RUSTSEC-2026-0021"
+)
+
+if [[ ${#CARGO_AUDIT_IGNORES[@]} -gt 0 ]]; then
+    warn "Ignoring advisories pending upstream fixes: ${CARGO_AUDIT_IGNORES[*]}"
+fi
+
+CARGO_AUDIT_ARGS=()
+for advisory in "${CARGO_AUDIT_IGNORES[@]}"; do
+    CARGO_AUDIT_ARGS+=(--ignore "$advisory")
+done
+
+cargo audit "${CARGO_AUDIT_ARGS[@]}" 2>&1 || die "cargo audit found vulnerabilities — fix before releasing"
 ok "cargo audit passed"
 
 # ── cargo fmt ──────────────────────────────────────────────────────────────────
