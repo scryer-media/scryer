@@ -2,22 +2,72 @@ import type {
   DownloadClientConfigPayloadRecord,
   DownloadClientDraft,
   DownloadClientRecord,
+  DownloadClientTypeOption,
+  ProviderTypeInfo,
 } from "@/lib/types";
 import {
+  BUILT_IN_DOWNLOAD_CLIENT_TYPE_LABELS,
+  BUILT_IN_DOWNLOAD_CLIENT_TYPES,
+  DEFAULT_DOWNLOAD_CLIENT_TYPE,
   DEFAULT_DOWNLOAD_CLIENT_DRAFT,
-  SUPPORTED_DOWNLOAD_CLIENT_TYPES,
 } from "@/lib/constants/download-clients";
 
-type SupportedDownloadClientType = (typeof SUPPORTED_DOWNLOAD_CLIENT_TYPES)[number];
+type BuiltInDownloadClientType = (typeof BUILT_IN_DOWNLOAD_CLIENT_TYPES)[number];
 
-export function isSupportedDownloadClientType(value: string): value is SupportedDownloadClientType {
+export function isBuiltInDownloadClientType(value: string): value is BuiltInDownloadClientType {
   const normalized = value.trim().toLowerCase();
-  return SUPPORTED_DOWNLOAD_CLIENT_TYPES.includes(normalized as SupportedDownloadClientType);
+  return BUILT_IN_DOWNLOAD_CLIENT_TYPES.includes(normalized as BuiltInDownloadClientType);
 }
 
-export function normalizeDownloadClientType(value: string): SupportedDownloadClientType {
+export function normalizeDownloadClientType(
+  value: string,
+  fallback = DEFAULT_DOWNLOAD_CLIENT_TYPE,
+): string {
   const normalized = value.trim().toLowerCase();
-  return isSupportedDownloadClientType(normalized) ? normalized : "nzbget";
+  return normalized || fallback;
+}
+
+export function buildDownloadClientTypeOptions(
+  providerTypes: ProviderTypeInfo[],
+): DownloadClientTypeOption[] {
+  const options: DownloadClientTypeOption[] = BUILT_IN_DOWNLOAD_CLIENT_TYPES.map((value) => ({
+    value,
+    label: BUILT_IN_DOWNLOAD_CLIENT_TYPE_LABELS[value],
+  }));
+  const seenValues = new Set(options.map((option) => option.value));
+
+  for (const providerType of providerTypes) {
+    const value = normalizeDownloadClientType(providerType.providerType, "");
+    if (!value || seenValues.has(value)) {
+      continue;
+    }
+
+    options.push({
+      value,
+      label: providerType.name?.trim() || value,
+    });
+    seenValues.add(value);
+  }
+
+  return options;
+}
+
+export function ensureDownloadClientTypeOption(
+  options: DownloadClientTypeOption[],
+  clientType: string,
+): DownloadClientTypeOption[] {
+  const normalized = normalizeDownloadClientType(clientType, "");
+  if (!normalized || options.some((option) => option.value === normalized)) {
+    return options;
+  }
+
+  return [
+    ...options,
+    {
+      value: normalized,
+      label: clientType.trim() || normalized,
+    },
+  ];
 }
 
 export function readConfigValueAsString(rawValue: unknown): string {
@@ -115,7 +165,7 @@ export function splitBaseUrlForDraft(
       host: "",
       port: "",
       urlBase: "",
-      useSsl: true,
+      useSsl: false,
     };
   }
 
@@ -139,7 +189,7 @@ export function splitBaseUrlForDraft(
       host: "",
       port: "",
       urlBase: "",
-      useSsl: true,
+      useSsl: false,
     };
   }
 }

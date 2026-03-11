@@ -6,7 +6,7 @@ import { RenderBooleanIcon } from "@/components/common/boolean-icon";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
+import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -21,13 +21,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
-import type { DownloadClientRecord, DownloadClientDraft } from "@/lib/types";
+import type { DownloadClientRecord, DownloadClientDraft, DownloadClientTypeOption } from "@/lib/types";
 
-type DownloadClientTypeOption = {
+type DownloadClientTypeLogoOption = {
   value: string;
-  label: string;
-  iconSrc: string;
-  icon: (props: React.ComponentPropsWithoutRef<"svg">) => React.JSX.Element;
+  iconSrc?: string;
+  icon?: (props: React.ComponentPropsWithoutRef<"svg">) => React.JSX.Element;
 };
 
 const NzbgetIcon = (props: React.ComponentPropsWithoutRef<"svg">) => (
@@ -106,6 +105,7 @@ const SabnzbdIcon = (props: React.ComponentPropsWithoutRef<"svg">) => (
 
 export type SettingsDownloadClientsSectionProps = {
   editingDownloadClientId: string | null;
+  downloadClientTypeOptions: DownloadClientTypeOption[];
   downloadClientDraft: DownloadClientDraft;
   setDownloadClientDraft: React.Dispatch<React.SetStateAction<DownloadClientDraft>>;
   submitDownloadClient: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
@@ -118,27 +118,23 @@ export type SettingsDownloadClientsSectionProps = {
   toggleDownloadClientEnabled: (downloadClient: DownloadClientRecord) => Promise<void>;
   deleteDownloadClient: (downloadClient: DownloadClientRecord) => Promise<void>;
   downloadClientOrder: string[];
-  moveDownloadClient: (clientId: string, direction: "up" | "down") => void;
-  saveDownloadClientOrder: () => Promise<void> | void;
+  moveDownloadClient: (clientId: string, direction: "up" | "down") => Promise<void> | void;
   isSavingOrder: boolean;
 };
 
-const DOWNLOAD_CLIENT_TYPE_OPTIONS: DownloadClientTypeOption[] = [
+const DOWNLOAD_CLIENT_TYPE_LOGO_OPTIONS: DownloadClientTypeLogoOption[] = [
   {
     value: "nzbget",
-    label: "nzbget",
     iconSrc: "/download-clients/nzbget.svg",
     icon: NzbgetIcon,
   },
   {
     value: "sabnzbd",
-    label: "sabnzbd",
     iconSrc: "/download-clients/sabnzbd.svg",
     icon: SabnzbdIcon,
   },
   {
     value: "qbittorrent",
-    label: "qbittorrent",
     iconSrc: "/download-clients/qbittorrent.svg",
     icon: QBitTorrentIcon,
   },
@@ -146,10 +142,7 @@ const DOWNLOAD_CLIENT_TYPE_OPTIONS: DownloadClientTypeOption[] = [
 
 function getDownloadClientTypeOption(typeValue: string) {
   const normalizedType = typeValue.trim().toLowerCase();
-  return (
-    DOWNLOAD_CLIENT_TYPE_OPTIONS.find((option) => option.value === normalizedType) ??
-    DOWNLOAD_CLIENT_TYPE_OPTIONS[0]
-  );
+  return DOWNLOAD_CLIENT_TYPE_LOGO_OPTIONS.find((option) => option.value === normalizedType);
 }
 
 function DownloadClientTypeLogo({
@@ -160,10 +153,10 @@ function DownloadClientTypeLogo({
   className?: string;
 }) {
   const option = getDownloadClientTypeOption(typeValue);
-  const FallbackIcon = option.icon;
+  const FallbackIcon = option?.icon ?? Server;
   const [failedToLoadImage, setFailedToLoadImage] = React.useState(false);
 
-  if (failedToLoadImage) {
+  if (failedToLoadImage || !option?.iconSrc) {
     return <FallbackIcon className={`${className} object-contain`} aria-hidden="true" role="img" />;
   }
 
@@ -180,20 +173,20 @@ function DownloadClientTypeLogo({
 
 export function SettingsDownloadClientsSection({
   editingDownloadClientId,
+  downloadClientTypeOptions,
   downloadClientDraft,
   setDownloadClientDraft,
   submitDownloadClient,
   testDownloadClientConnection,
-    isTestingDownloadClientConnection,
-    mutatingDownloadClientId,
-    resetDownloadClientDraft,
-    settingsDownloadClients,
+  isTestingDownloadClientConnection,
+  mutatingDownloadClientId,
+  resetDownloadClientDraft,
+  settingsDownloadClients,
   editDownloadClient,
   toggleDownloadClientEnabled,
   deleteDownloadClient,
   downloadClientOrder,
   moveDownloadClient,
-  saveDownloadClientOrder,
   isSavingOrder,
 }: SettingsDownloadClientsSectionProps) {
   const t = useTranslate();
@@ -334,17 +327,6 @@ export function SettingsDownloadClientsSection({
             </TableBody>
           </Table>
         </div>
-        {orderedClients.length > 1 ? (
-          <div className="mt-2 flex justify-end px-1">
-            <Button
-              size="sm"
-              onClick={() => void saveDownloadClientOrder()}
-              disabled={isSavingOrder || orderedClients.length === 0}
-            >
-              {isSavingOrder ? t("label.saving") : t("label.saveOrder")}
-            </Button>
-          </div>
-        ) : null}
       </div>
 
       <Card>
@@ -385,10 +367,10 @@ export function SettingsDownloadClientsSection({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {DOWNLOAD_CLIENT_TYPE_OPTIONS.map((option) => (
+                    {downloadClientTypeOptions.map((option) => (
                       <SelectItem key={option.value} value={option.value}>
                         <DownloadClientTypeLogo typeValue={option.value} />
-                        <span className="capitalize">{option.label}</span>
+                        <span>{option.label}</span>
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -413,17 +395,16 @@ export function SettingsDownloadClientsSection({
                 <label>
                   <Label className="mb-2 block">{t("settings.downloadClientPort")}</Label>
                   <Input
+                    {...integerInputProps}
                     value={downloadClientDraft.port}
                     onChange={(event) =>
                       setDownloadClientDraft((prev: DownloadClientDraft) => ({
                         ...prev,
-                        port: event.target.value,
+                        port: sanitizeDigits(event.target.value),
                       }))
                     }
                     className="w-24 max-w-24"
                     placeholder={t("settings.downloadClientPortPlaceholder")}
-                    inputMode="numeric"
-                    pattern="[0-9]*"
                   />
                 </label>
                 <label>

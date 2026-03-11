@@ -499,6 +499,23 @@ export const indexerProviderTypesQuery = `query IndexerProviderTypes {
   }
 }`;
 
+export const downloadClientProviderTypesQuery = `query DownloadClientProviderTypes {
+  downloadClientProviderTypes {
+    providerType
+    name
+    defaultBaseUrl
+    configFields {
+      key
+      label
+      fieldType
+      required
+      defaultValue
+      options { value label }
+      helpText
+    }
+  }
+}`;
+
 export const downloadClientsQuery = `query DownloadClients {
   downloadClientConfigs {
     id

@@ -117,6 +117,17 @@ fn map_completed_download(
     }
 }
 
+fn plugin_call_error(operation: &str, error: extism::Error) -> AppError {
+    let root_cause = error.root_cause().to_string();
+    let detail = if root_cause.trim().is_empty() || root_cause == error.to_string() {
+        error.to_string()
+    } else {
+        root_cause
+    };
+
+    AppError::Repository(format!("plugin {operation} failed: {detail}"))
+}
+
 #[async_trait]
 impl DownloadClient for WasmDownloadClient {
     async fn submit_download(
@@ -190,7 +201,7 @@ impl DownloadClient for WasmDownloadClient {
                 .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
             guard
                 .call::<&str, String>("add_download", &input)
-                .map_err(|e| AppError::Repository(format!("plugin add_download() failed: {e}")))
+                .map_err(|e| plugin_call_error("add_download()", e))
         })
         .await
         .map_err(|e| AppError::Repository(format!("plugin task panicked: {e}")))??;
@@ -215,7 +226,7 @@ impl DownloadClient for WasmDownloadClient {
                 .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
             guard
                 .call::<(), String>("list_downloads", ())
-                .map_err(|e| AppError::Repository(format!("plugin list_downloads() failed: {e}")))
+                .map_err(|e| plugin_call_error("list_downloads()", e))
         })
         .await
         .map_err(|e| AppError::Repository(format!("plugin task panicked: {e}")))??;
@@ -253,7 +264,7 @@ impl DownloadClient for WasmDownloadClient {
                 .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
             guard
                 .call::<(), String>("list_downloads", ())
-                .map_err(|e| AppError::Repository(format!("plugin list_downloads() failed: {e}")))
+                .map_err(|e| plugin_call_error("list_downloads()", e))
         })
         .await
         .map_err(|e| AppError::Repository(format!("plugin task panicked: {e}")))??;
@@ -291,9 +302,7 @@ impl DownloadClient for WasmDownloadClient {
                 .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
             guard
                 .call::<(), String>("list_completed_downloads", ())
-                .map_err(|e| {
-                    AppError::Repository(format!("plugin list_completed_downloads() failed: {e}"))
-                })
+                .map_err(|e| plugin_call_error("list_completed_downloads()", e))
         })
         .await
         .map_err(|e| AppError::Repository(format!("plugin task panicked: {e}")))??;
@@ -328,7 +337,7 @@ impl DownloadClient for WasmDownloadClient {
                 .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
             guard
                 .call::<&str, String>("control", &input)
-                .map_err(|e| AppError::Repository(format!("plugin control() failed: {e}")))
+                .map_err(|e| plugin_call_error("control()", e))
                 .map(|_| ())
         })
         .await
@@ -352,7 +361,7 @@ impl DownloadClient for WasmDownloadClient {
                 .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
             guard
                 .call::<&str, String>("control", &input)
-                .map_err(|e| AppError::Repository(format!("plugin control() failed: {e}")))
+                .map_err(|e| plugin_call_error("control()", e))
                 .map(|_| ())
         })
         .await
@@ -376,7 +385,7 @@ impl DownloadClient for WasmDownloadClient {
                 .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
             guard
                 .call::<&str, String>("control", &input)
-                .map_err(|e| AppError::Repository(format!("plugin control() failed: {e}")))
+                .map_err(|e| plugin_call_error("control()", e))
                 .map(|_| ())
         })
         .await
@@ -403,7 +412,7 @@ impl DownloadClient for WasmDownloadClient {
                 .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
             guard
                 .call::<&str, String>("mark_imported", &input)
-                .map_err(|e| AppError::Repository(format!("plugin mark_imported() failed: {e}")))
+                .map_err(|e| plugin_call_error("mark_imported()", e))
                 .map(|_| ())
         })
         .await
@@ -419,9 +428,7 @@ impl DownloadClient for WasmDownloadClient {
                 .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
             guard
                 .call::<(), String>("get_client_status", ())
-                .map_err(|e| {
-                    AppError::Repository(format!("plugin get_client_status() failed: {e}"))
-                })
+                .map_err(|e| plugin_call_error("get_client_status()", e))
         })
         .await
         .map_err(|e| AppError::Repository(format!("plugin task panicked: {e}")))??;
@@ -449,7 +456,7 @@ impl DownloadClient for WasmDownloadClient {
                 .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
             guard
                 .call::<(), String>("test_connection", ())
-                .map_err(|e| AppError::Repository(format!("plugin test_connection() failed: {e}")))
+                .map_err(|e| plugin_call_error("test_connection()", e))
         })
         .await
         .map_err(|e| AppError::Repository(format!("plugin task panicked: {e}")))?
