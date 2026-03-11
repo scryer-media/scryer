@@ -98,6 +98,7 @@ async fn seed_pending_release(
         title_id: title_id.to_string(),
         release_title: format!("Test.Release.Score{score}.1080p.WEB-DL"),
         release_url: Some("https://example.com/nzb/123".to_string()),
+        source_kind: Some(scryer_application::DownloadSourceKind::NzbUrl),
         release_size_bytes: Some(1_500_000_000),
         release_score: score,
         scoring_log_json: None,

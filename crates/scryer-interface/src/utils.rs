@@ -1,4 +1,5 @@
 use async_graphql::{Error, Result as GqlResult};
+use scryer_application::DownloadSourceKind;
 use scryer_domain::{Entitlement, ExternalId, MediaFacet, NewTitle};
 
 use crate::types::AddTitleInput;
@@ -38,6 +39,10 @@ pub(crate) fn map_add_input(input: AddTitleInput) -> NewTitle {
         language: input.language,
         content_status: input.content_status,
     }
+}
+
+pub(crate) fn parse_download_source_kind(raw: Option<String>) -> Option<DownloadSourceKind> {
+    raw.and_then(|value| DownloadSourceKind::parse(&value))
 }
 
 pub(crate) fn parse_entitlements(raw_entitlements: &[String]) -> GqlResult<Vec<Entitlement>> {

@@ -3,21 +3,9 @@ import { DEFAULT_LANGUAGE, interpolate } from "./types";
 import en from "./locales/en";
 export { DEFAULT_LANGUAGE } from "./types";
 
-// Interface copy is intentionally maintained in en.ts only.
-// Other locale files are UI selector targets for future data-language
-// behavior and currently alias to English for interface text.
+// Interface copy is maintained in English only for now.
 
-export type LocaleCode =
-  | "eng"
-  | "spa"
-  | "zho"
-  | "hin"
-  | "ara"
-  | "fra"
-  | "rus"
-  | "por"
-  | "jpn"
-  | "deu";
+export type LocaleCode = "eng";
 
 export type LanguageOption = {
   code: LocaleCode;
@@ -28,41 +16,14 @@ type LocaleMap = Record<LocaleCode, LocaleDictionary>;
 
 const LOCALE_ALIASES: Record<string, LocaleCode> = {
   en: "eng",
-  es: "spa",
-  zh: "zho",
-  hi: "hin",
-  ar: "ara",
-  fr: "fra",
-  ru: "rus",
-  pt: "por",
-  de: "deu",
-  ja: "jpn",
 };
 
 const locales: LocaleMap = {
   eng: en,
-  spa: en,
-  zho: en,
-  hin: en,
-  ara: en,
-  fra: en,
-  rus: en,
-  por: en,
-  jpn: en,
-  deu: en,
 };
 
 export const AVAILABLE_LANGUAGES: LanguageOption[] = [
   { code: "eng", label: "English" },
-  { code: "zho", label: "Chinese" },
-  { code: "spa", label: "Spanish" },
-  { code: "hin", label: "Hindi" },
-  { code: "ara", label: "Arabic" },
-  { code: "fra", label: "French" },
-  { code: "rus", label: "Russian" },
-  { code: "por", label: "Portuguese" },
-  { code: "jpn", label: "Japanese" },
-  { code: "deu", label: "German" },
 ];
 
 export function getLanguageLabel(code: string): string {

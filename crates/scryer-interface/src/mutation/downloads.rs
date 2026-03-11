@@ -2,6 +2,7 @@ use async_graphql::{Context, Error, Object, Result as GqlResult};
 
 use crate::context::{actor_from_ctx, app_from_ctx, to_gql_error};
 use crate::types::*;
+use crate::utils::parse_download_source_kind;
 
 #[derive(Default)]
 pub(crate) struct DownloadMutations;
@@ -19,6 +20,7 @@ impl DownloadMutations {
             &actor,
             &input.title_id,
             input.source_hint,
+            parse_download_source_kind(input.source_kind),
             input.source_title,
         )
         .await

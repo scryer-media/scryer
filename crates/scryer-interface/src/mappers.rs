@@ -71,6 +71,7 @@ pub(crate) fn from_search_result(result: IndexerSearchResult) -> IndexerSearchRe
         title: result.title,
         link: result.link,
         download_url: result.download_url,
+        source_kind: result.source_kind.map(|value| value.as_str().to_string()),
         size_bytes: result.size_bytes,
         published_at: result.published_at,
         thumbs_up: result.thumbs_up,

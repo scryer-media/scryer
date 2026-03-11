@@ -4,6 +4,7 @@ import {
   subscriptionExchange,
 } from "@urql/core";
 import { getAuthToken } from "@/lib/hooks/use-auth";
+import { getRuntimeGraphqlUrl } from "@/lib/runtime-config";
 import { wsClient } from "@/lib/graphql/ws-client";
 
 // ---------------------------------------------------------------------------
@@ -43,7 +44,7 @@ export const scryerFetch: typeof fetch = async (input, init) => {
 // ---------------------------------------------------------------------------
 
 export const backendClient = new Client({
-  url: import.meta.env.SCRYER_GRAPHQL_URL ?? "/graphql",
+  url: getRuntimeGraphqlUrl(),
   preferGetMethod: false,
   requestPolicy: "network-only",
   fetch: scryerFetch,

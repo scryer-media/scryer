@@ -48,6 +48,7 @@ Runtime bootstrap environment values (optional, used when DB settings are empty)
 
 - `SCRYER_DB_PATH` (default `sqlite://file::memory:?mode=memory&cache=shared`)
 - `SCRYER_BIND` (default `127.0.0.1:8080`)
+- `SCRYER_BASE_PATH` (optional, defaults to `/`; set to `/scryer` to host behind a reverse-proxy path prefix)
 
 Application configuration now lives in `settings_definitions` and `settings_values`.
 
@@ -90,7 +91,7 @@ Legacy bootstrap settings (still supported as fallback):
 - `SCRYER_NZBGEEK_MAX_BACKOFF_SECONDS` (optional, default `900`)
 - `SCRYER_MOVIES_PATH`
 - `SCRYER_SERIES_PATH`
-
+- `SCRYER_BASE_PATH` (optional; serves the UI, GraphQL, GraphiQL, health, and WebSocket endpoints under that prefix)
 - `SCRYER_WEB_UI_URL` (optional, default `http://127.0.0.1:3000`)
 - `SCRYER_WEB_DIST_DIR` (optional, default `./crates/scryer/ui`)
 

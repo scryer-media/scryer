@@ -110,9 +110,9 @@ pub use release_parser::{parse_release_metadata, ParsedEpisodeMetadata, ParsedRe
 pub use scoring_weights::{build_weights, ScoringOverrides, ScoringPersona, ScoringWeights};
 pub(crate) use types::JwtClaims;
 pub use types::{
-    BackupInfo, DiskSpaceInfo, DownloadGrabResult, HealthCheckResult, HealthCheckStatus,
-    HousekeepingReport, IndexerQueryStats, IndexerSearchResponse, IndexerSearchResult,
-    JwtAuthConfig, PendingRelease, PrimaryCollectionSummary, ReleaseDecision,
+    BackupInfo, DiskSpaceInfo, DownloadGrabResult, DownloadSourceKind, HealthCheckResult,
+    HealthCheckStatus, HousekeepingReport, IndexerQueryStats, IndexerSearchResponse,
+    IndexerSearchResult, JwtAuthConfig, PendingRelease, PrimaryCollectionSummary, ReleaseDecision,
     ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature, SystemHealth, TitleMediaFile,
     TitleMetadataUpdate, TitleReleaseBlocklistEntry, WantedItem,
 };
@@ -903,6 +903,7 @@ pub trait IndexerPluginProvider: Send + Sync {
 pub struct DownloadClientAddRequest {
     pub title: Title,
     pub source_hint: Option<String>,
+    pub source_kind: Option<DownloadSourceKind>,
     pub source_title: Option<String>,
     pub source_password: Option<String>,
     pub category: Option<String>,
@@ -920,6 +921,7 @@ impl DownloadClientAddRequest {
     pub fn from_legacy(
         title: &Title,
         source_hint: Option<String>,
+        source_kind: Option<DownloadSourceKind>,
         source_title: Option<String>,
         source_password: Option<String>,
         category: Option<String>,
@@ -927,6 +929,7 @@ impl DownloadClientAddRequest {
         Self {
             title: title.clone(),
             source_hint,
+            source_kind,
             source_title,
             source_password,
             category,
@@ -977,6 +980,9 @@ pub trait DownloadClientPluginProvider: Send + Sync {
     }
     fn default_base_url_for_provider(&self, _provider_type: &str) -> Option<String> {
         None
+    }
+    fn accepted_inputs_for_provider(&self, _provider_type: &str) -> Vec<String> {
+        vec![]
     }
     fn reload_plugins(
         &self,
@@ -1071,6 +1077,7 @@ pub trait DownloadClient: Send + Sync {
         &self,
         title: &Title,
         source_hint: Option<String>,
+        source_kind: Option<DownloadSourceKind>,
         source_title: Option<String>,
         source_password: Option<String>,
         category: Option<String>,
@@ -1078,6 +1085,7 @@ pub trait DownloadClient: Send + Sync {
         let request = DownloadClientAddRequest::from_legacy(
             title,
             source_hint,
+            source_kind,
             source_title,
             source_password,
             category,
@@ -1722,6 +1730,7 @@ mod tests {
                     title: format!("match for {query}"),
                     link: None,
                     download_url: None,
+                    source_kind: Some(DownloadSourceKind::NzbUrl),
                     size_bytes: None,
                     published_at: Some("1970-01-01T00:00:00Z".into()),
                     thumbs_up: None,
@@ -2118,6 +2127,7 @@ mod tests {
 
                     ..Default::default()
                 },
+                None,
                 None,
                 None,
             )

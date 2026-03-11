@@ -824,6 +824,7 @@ impl AppUseCase {
                     title,
                     &best.title,
                     best.download_url.as_deref().or(best.link.as_deref()),
+                    best.source_kind,
                     best.size_bytes,
                     candidate_score,
                     scoring_json,
@@ -880,6 +881,7 @@ impl AppUseCase {
             .submit_to_download_queue(
                 title,
                 source_hint.clone(),
+                best.source_kind,
                 source_title.clone(),
                 source_password.clone(),
                 Some(download_cat),

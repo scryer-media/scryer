@@ -135,7 +135,7 @@ export function CutoffUnmetView({ state }: { state: CutoffUnmetViewState }) {
                 <TableHead>{t("cutoff.colFacet")}</TableHead>
                 <TableHead>{t("cutoff.colCurrentQuality")}</TableHead>
                 <TableHead>{t("cutoff.colTargetQuality")}</TableHead>
-                <TableHead>{t("cutoff.colActions")}</TableHead>
+                <TableHead>{t("label.actions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

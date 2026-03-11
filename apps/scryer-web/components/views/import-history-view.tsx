@@ -133,7 +133,7 @@ export function ImportHistoryView({
             {error}
           </p>
         ) : loading && records.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t("status.loading")}</p>
+          <p className="text-sm text-muted-foreground">{t("label.loading")}</p>
         ) : filtered.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t("importHistory.empty")}</p>
         ) : (

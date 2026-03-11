@@ -316,8 +316,8 @@ export const DownloadClientRoutingPanel = React.memo(function DownloadClientRout
               <TableHeader>
                 <TableRow>
                   <TableHead>{t("settings.downloadClientPriority")}</TableHead>
-                  <TableHead>{t("settings.downloadClientName")}</TableHead>
-                  <TableHead>{t("settings.downloadClientType")}</TableHead>
+                  <TableHead>{t("label.name")}</TableHead>
+                  <TableHead>{t("label.type")}</TableHead>
                   <TableHead>{t("settings.downloadClientCategory")}</TableHead>
                   <TableHead>{t("settings.downloadClientTags")}</TableHead>
                   <TableHead>{t("settings.downloadClientRecentPriority")}</TableHead>

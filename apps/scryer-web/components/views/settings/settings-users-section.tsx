@@ -140,7 +140,7 @@ export function SettingsUsersSection({
               <TableHead className="min-w-40">{t("settings.username")}</TableHead>
               <TableHead className="min-w-[360px]">{t("settings.entitlements")}</TableHead>
               <TableHead className="min-w-72">{t("settings.newPassword")}</TableHead>
-              <TableHead className="w-44 text-right">{t("settings.actions")}</TableHead>
+              <TableHead className="w-44 text-right">{t("label.actions")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>

@@ -633,6 +633,7 @@ async fn process_single_wanted_item(
                             .submit_to_download_queue(
                                 &title,
                                 pack_url.clone(),
+                                best_pack.source_kind,
                                 pack_title.clone(),
                                 pack_password.clone(),
                                 Some(download_cat),
@@ -1109,6 +1110,7 @@ async fn process_single_wanted_item(
         .submit_to_download_queue(
             &title,
             source_hint.clone(),
+            best.source_kind,
             source_title.clone(),
             source_password.clone(),
             Some(download_cat.clone()),

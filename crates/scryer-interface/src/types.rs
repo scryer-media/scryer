@@ -277,6 +277,7 @@ pub struct IndexerSearchResultPayload {
     pub title: String,
     pub link: Option<String>,
     pub download_url: Option<String>,
+    pub source_kind: Option<String>,
     pub size_bytes: Option<i64>,
     pub published_at: Option<String>,
     pub thumbs_up: Option<i32>,
@@ -558,6 +559,7 @@ pub struct AddTitleInput {
     pub tags: Vec<String>,
     pub external_ids: Option<Vec<ExternalIdInput>>,
     pub source_hint: Option<String>,
+    pub source_kind: Option<String>,
     pub source_title: Option<String>,
     pub min_availability: Option<String>,
     // Metadata fields the frontend can supply from the search result so the
@@ -586,6 +588,7 @@ pub struct PolicyInputPayload {
 pub struct QueueDownloadInput {
     pub title_id: String,
     pub source_hint: Option<String>,
+    pub source_kind: Option<String>,
     pub source_title: Option<String>,
 }
 

@@ -8,6 +8,10 @@ import { useGlobalStatus } from "@/lib/context/global-status-context";
 import type { IndexerRecord, ProviderTypeInfo } from "@/lib/types";
 import { indexersQuery, indexerProviderTypesQuery } from "@/lib/graphql/queries";
 import {
+  resolveIndexerBaseUrl,
+  showStandardIndexerConnectionFields,
+} from "@/lib/utils/indexers";
+import {
   createIndexerMutation,
   deleteIndexerMutation,
   testIndexerConnectionMutation,
@@ -93,12 +97,17 @@ export function SettingsIndexersContainer() {
     const selectedProvider = providerTypes.find(
       (pt) => pt.providerType === indexerDraft.providerType.trim().toLowerCase(),
     );
-    const effectiveBaseUrl = selectedProvider?.defaultBaseUrl || indexerDraft.baseUrl.trim();
+    const effectiveBaseUrl = resolveIndexerBaseUrl(
+      selectedProvider,
+      indexerDraft.baseUrl,
+      indexerDraft.configValues,
+    );
+    const useStandardConnectionFields = showStandardIndexerConnectionFields(selectedProvider);
     const payload = {
       name: indexerDraft.name.trim(),
       providerType: indexerDraft.providerType.trim(),
       baseUrl: effectiveBaseUrl,
-      apiKey: indexerDraft.apiKey.trim(),
+      apiKey: useStandardConnectionFields ? indexerDraft.apiKey.trim() : "",
       isEnabled: indexerDraft.isEnabled,
       enableInteractiveSearch: indexerDraft.enableInteractiveSearch,
       enableAutoSearch: indexerDraft.enableAutoSearch,
@@ -220,16 +229,20 @@ export function SettingsIndexersContainer() {
     const selectedProvider = providerTypes.find(
       (pt) => pt.providerType === indexerDraft.providerType.trim().toLowerCase(),
     );
-    const effectiveBaseUrl = selectedProvider?.defaultBaseUrl || indexerDraft.baseUrl.trim();
+    const effectiveBaseUrl = resolveIndexerBaseUrl(
+      selectedProvider,
+      indexerDraft.baseUrl,
+      indexerDraft.configValues,
+    );
+    const useStandardConnectionFields = showStandardIndexerConnectionFields(selectedProvider);
     const payload = {
-      name: indexerDraft.name.trim(),
       providerType: indexerDraft.providerType.trim(),
       baseUrl: effectiveBaseUrl,
-      apiKey: indexerDraft.apiKey.trim() || undefined,
+      apiKey: useStandardConnectionFields ? indexerDraft.apiKey.trim() || undefined : undefined,
       configJson: serializeConfigJson(indexerDraft.configValues),
     };
 
-    if (!payload.name || !payload.providerType || !payload.baseUrl) {
+    if (!payload.providerType || !payload.baseUrl) {
       setGlobalStatus(t("form.indexerValidation"));
       return;
     }

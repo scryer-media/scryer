@@ -11,14 +11,14 @@
     <meta name="description" content="Scryer media automation web UI" />
 
     <!-- PWA -->
-    <link rel="manifest" href="/manifest.json" />
+    <link rel="manifest" href="./manifest.json" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Scryer" />
-    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
 
     <!-- Favicon -->
-    <link rel="icon" href="/logo.svg" type="image/svg+xml" />
+    <link rel="icon" href="./logo.svg" type="image/svg+xml" />
 
     <!-- Open Graph -->
     <meta property="og:title" content="Scryer" />
@@ -34,6 +34,12 @@
   </head>
   <body class="min-h-screen bg-background text-foreground antialiased">
     <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <script>
+      window.__SCRYER_RUNTIME_CONFIG__ = {
+        basePath: "__SCRYER_BASE_PATH__",
+        graphqlUrl: "__SCRYER_GRAPHQL_URL__",
+      };
+    </script>
+    <script type="module" src="./src/main.tsx"></script>
   </body>
 </html>

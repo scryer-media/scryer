@@ -316,12 +316,12 @@ export function SettingsRulesSection({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>{t("settings.ruleName")}</TableHead>
+                <TableHead>{t("label.name")}</TableHead>
                 <TableHead>{t("settings.ruleDescription")}</TableHead>
                 <TableHead>{t("settings.ruleAppliedFacets")}</TableHead>
                 <TableHead className="text-center">{t("settings.rulePriority")}</TableHead>
                 <TableHead className="text-center">{t("label.enabled")}</TableHead>
-                <TableHead className="text-right">{t("settings.actions")}</TableHead>
+                <TableHead className="text-right">{t("label.actions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -363,7 +363,7 @@ export function SettingsRulesSection({
                         onClick={() => editRuleSet(record)}
                       >
                         <Edit className="mr-1 h-3.5 w-3.5" />
-                        {t("settings.ruleEdit")}
+                        {t("label.edit")}
                       </Button>
                       <Button
                         size="sm"
@@ -372,7 +372,7 @@ export function SettingsRulesSection({
                         disabled={mutatingRuleSetId === record.id}
                       >
                         <Trash2 className="mr-1 h-3.5 w-3.5" />
-                        {mutatingRuleSetId === record.id ? t("label.deleting") : t("settings.ruleDelete")}
+                        {mutatingRuleSetId === record.id ? t("label.deleting") : t("label.delete")}
                       </Button>
                     </div>
                   </TableCell>
@@ -400,7 +400,7 @@ export function SettingsRulesSection({
           <form className="space-y-3" onSubmit={submitRuleSet}>
             <div className="grid gap-3 md:grid-cols-3">
               <label>
-                <Label className="mb-2 block">{t("settings.ruleName")}</Label>
+                <Label className="mb-2 block">{t("label.name")}</Label>
                 <Input
                   value={ruleSetDraft.name}
                   onChange={(e) =>

@@ -42,7 +42,7 @@ export function SettingsAcquisitionSection({
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <Loader2 className="h-4 w-4 animate-spin" />
-        {t("status.loading")}
+        {t("label.loading")}
       </div>
     );
   }
@@ -129,7 +129,7 @@ export function SettingsAcquisitionSection({
         {saving ? (
           <>
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            {t("settings.saving")}
+            {t("label.saving")}
           </>
         ) : (
           t("settings.save")

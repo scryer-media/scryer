@@ -143,7 +143,7 @@ export function SetupPersonaView({
             </button>
           )}
           <Button onClick={onNext} disabled={saving}>
-            {saving ? t("setup.saving") : t("setup.next")}
+            {saving ? t("label.saving") : t("setup.next")}
           </Button>
         </div>
       </div>

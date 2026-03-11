@@ -1,5 +1,53 @@
 use super::*;
 
+fn extract_url_origin(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let (scheme, remainder) = trimmed.split_once("://")?;
+    if scheme.is_empty() {
+        return None;
+    }
+
+    let authority = remainder.split(['/', '?', '#']).next()?.trim();
+    if authority.is_empty() {
+        return None;
+    }
+
+    Some(format!("{scheme}://{authority}"))
+}
+
+fn derive_indexer_base_url_from_config_json(config_json: Option<&str>) -> Option<String> {
+    let raw = config_json?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let object = parsed.as_object()?;
+
+    for key in ["feed_url", "feedUrl", "rss_url", "rssUrl"] {
+        if let Some(value) = object.get(key).and_then(|value| value.as_str()) {
+            if let Some(origin) = extract_url_origin(value) {
+                return Some(origin);
+            }
+        }
+    }
+
+    None
+}
+
+pub(crate) fn resolve_indexer_base_url(
+    base_url: &str,
+    config_json: Option<&str>,
+) -> AppResult<String> {
+    let normalized = base_url.trim();
+    if !normalized.is_empty() {
+        return Ok(normalized.to_string());
+    }
+
+    derive_indexer_base_url_from_config_json(config_json)
+        .ok_or_else(|| AppError::Validation("base URL is required".into()))
+}
+
 impl AppUseCase {
     fn normalize_download_client_type(&self, client_type: impl AsRef<str>) -> AppResult<String> {
         let normalized = client_type.as_ref().trim().to_lowercase();
@@ -83,10 +131,13 @@ impl AppUseCase {
             return Err(AppError::Validation("provider type is required".into()));
         }
 
-        let base_url = input.base_url.trim().to_string();
-        if base_url.is_empty() {
-            return Err(AppError::Validation("base URL is required".into()));
-        }
+        let normalized_config_json = input
+            .config_json
+            .clone()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let base_url =
+            resolve_indexer_base_url(&input.base_url, normalized_config_json.as_deref())?;
 
         let api_key_encrypted = input
             .api_key_encrypted
@@ -115,7 +166,7 @@ impl AppUseCase {
             enable_auto_search: input.enable_auto_search,
             last_health_status: None,
             last_error_at: None,
-            config_json: input.config_json.clone(),
+            config_json: normalized_config_json,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -166,10 +217,18 @@ impl AppUseCase {
             return Err(AppError::Validation("provider type cannot be empty".into()));
         }
 
-        let normalized_base_url = base_url.map(|value| value.trim().to_string());
-        if normalized_base_url.as_ref().is_some_and(String::is_empty) {
-            return Err(AppError::Validation("base URL cannot be empty".into()));
-        }
+        let normalized_config_json = config_json.map(|value| value.trim().to_string());
+
+        let normalized_base_url = match base_url {
+            Some(value) => {
+                let normalized = value.trim().to_string();
+                if normalized.is_empty() {
+                    return Err(AppError::Validation("base URL cannot be empty".into()));
+                }
+                Some(normalized)
+            }
+            None => derive_indexer_base_url_from_config_json(normalized_config_json.as_deref()),
+        };
 
         let normalized_api_key = api_key_encrypted
             .map(|value| value.trim().to_string())
@@ -197,7 +256,7 @@ impl AppUseCase {
                 is_enabled,
                 enable_interactive_search,
                 enable_auto_search,
-                config_json,
+                normalized_config_json,
             )
             .await?;
         self.services

@@ -489,7 +489,12 @@ export const WantedContainer = memo(function WantedContainer({ onOpenOverview }:
 
       const { error: queueError } = await client
         .mutation(queueExistingMutation, {
-          input: { titleId: title.id, sourceHint, sourceTitle: top.title },
+          input: {
+            titleId: title.id,
+            sourceHint,
+            sourceKind: top.sourceKind ?? null,
+            sourceTitle: top.title,
+          },
         })
         .toPromise();
 

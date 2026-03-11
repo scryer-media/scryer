@@ -717,6 +717,7 @@ impl AppUseCase {
         actor: &User,
         request: NewTitle,
         source_hint: Option<String>,
+        source_kind: Option<DownloadSourceKind>,
         source_title: Option<String>,
     ) -> AppResult<(Title, String)> {
         let title = self.add_title(actor, request).await?;
@@ -743,6 +744,7 @@ impl AppUseCase {
             .submit_to_download_queue(
                 &title,
                 source_hint,
+                source_kind,
                 source_title,
                 source_password.clone(),
                 Some(category),
@@ -833,6 +835,7 @@ impl AppUseCase {
         actor: &User,
         title_id: &str,
         source_hint: Option<String>,
+        source_kind: Option<DownloadSourceKind>,
         source_title: Option<String>,
     ) -> AppResult<String> {
         require(actor, &Entitlement::TriggerActions)?;
@@ -867,6 +870,7 @@ impl AppUseCase {
             .submit_to_download_queue(
                 &title,
                 source_hint,
+                source_kind,
                 source_title,
                 source_password.clone(),
                 Some(category),

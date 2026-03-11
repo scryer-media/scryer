@@ -252,6 +252,7 @@ export function SeriesOverviewView({
         input: {
           titleId: title.id,
           sourceHint,
+          sourceKind: release.sourceKind ?? null,
           sourceTitle: release.title,
         },
       }).toPromise()

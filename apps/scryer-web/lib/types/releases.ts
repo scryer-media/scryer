@@ -3,6 +3,7 @@ export type Release = {
   title: string;
   link: string | null;
   downloadUrl: string | null;
+  sourceKind?: string | null;
   sizeBytes: number | null;
   publishedAt: string | null;
   thumbsUp?: number | null;

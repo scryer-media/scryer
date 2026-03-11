@@ -1,0 +1,132 @@
+use axum::response::Redirect;
+use axum::routing::get;
+use axum::Router;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BasePath {
+    prefix: String,
+}
+
+impl BasePath {
+    pub(crate) fn from_env() -> Self {
+        Self::from_raw(std::env::var("SCRYER_BASE_PATH").ok().as_deref())
+    }
+
+    pub(crate) fn from_raw(raw: Option<&str>) -> Self {
+        let Some(raw) = raw else {
+            return Self {
+                prefix: String::new(),
+            };
+        };
+
+        let normalized = raw.trim().replace('\\', "/");
+        let segments = normalized
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>();
+
+        if segments.is_empty() {
+            return Self {
+                prefix: String::new(),
+            };
+        }
+
+        Self {
+            prefix: format!("/{}", segments.join("/")),
+        }
+    }
+
+    pub(crate) fn is_root(&self) -> bool {
+        self.prefix.is_empty()
+    }
+
+    pub(crate) fn basename(&self) -> &str {
+        if self.is_root() {
+            "/"
+        } else {
+            &self.prefix
+        }
+    }
+
+    pub(crate) fn ui_root(&self) -> String {
+        if self.is_root() {
+            "/".to_string()
+        } else {
+            format!("{}/", self.prefix)
+        }
+    }
+
+    pub(crate) fn join(&self, suffix: &str) -> String {
+        let normalized_suffix = if suffix.is_empty() {
+            String::new()
+        } else if suffix.starts_with('/') {
+            suffix.to_string()
+        } else {
+            format!("/{suffix}")
+        };
+
+        if self.is_root() {
+            if normalized_suffix.is_empty() {
+                "/".to_string()
+            } else {
+                normalized_suffix
+            }
+        } else {
+            format!("{}{}", self.prefix, normalized_suffix)
+        }
+    }
+}
+
+pub(crate) fn mount_router(router: Router, base_path: &BasePath) -> Router {
+    if base_path.is_root() {
+        return router;
+    }
+
+    let ui_root = base_path.ui_root();
+    let base_prefix = base_path.basename().to_string();
+
+    Router::new()
+        .route(
+            "/",
+            get({
+                let ui_root = ui_root.clone();
+                move || async move { Redirect::temporary(&ui_root) }
+            }),
+        )
+        .route(
+            &base_prefix,
+            get(move || async move { Redirect::temporary(&ui_root) }),
+        )
+        .nest(&base_prefix, router)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BasePath;
+
+    #[test]
+    fn normalizes_root_base_path() {
+        assert_eq!(BasePath::from_raw(None).basename(), "/");
+        assert_eq!(BasePath::from_raw(Some("")).basename(), "/");
+        assert_eq!(BasePath::from_raw(Some("/")).basename(), "/");
+    }
+
+    #[test]
+    fn normalizes_prefixed_base_path() {
+        assert_eq!(BasePath::from_raw(Some("scryer")).basename(), "/scryer");
+        assert_eq!(
+            BasePath::from_raw(Some("/nested/scryer/")).basename(),
+            "/nested/scryer"
+        );
+    }
+
+    #[test]
+    fn joins_routes_without_double_slashes() {
+        let root = BasePath::from_raw(None);
+        let prefixed = BasePath::from_raw(Some("/scryer/"));
+
+        assert_eq!(root.join("/graphql"), "/graphql");
+        assert_eq!(prefixed.join("/graphql"), "/scryer/graphql");
+        assert_eq!(prefixed.ui_root(), "/scryer/");
+    }
+}

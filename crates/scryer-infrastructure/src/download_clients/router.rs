@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use scryer_application::{
     AppError, AppResult, DownloadClient, DownloadClientAddRequest, DownloadClientConfigRepository,
-    DownloadClientPluginProvider, DownloadGrabResult, SettingsRepository,
+    DownloadClientPluginProvider, DownloadGrabResult, DownloadSourceKind, SettingsRepository,
 };
 use scryer_domain::{DownloadClientConfig, DownloadQueueItem, MediaFacet};
 use tracing::warn;
@@ -48,6 +48,49 @@ impl PrioritizedDownloadClientRouter {
             .collect::<Vec<_>>();
         clients.sort_by_key(|config| config.client_priority);
         Ok(clients)
+    }
+
+    fn request_source_kind(request: &DownloadClientAddRequest) -> Option<DownloadSourceKind> {
+        request
+            .source_kind
+            .or_else(|| DownloadSourceKind::infer_from_hint(request.source_hint.as_deref()))
+            .or_else(|| {
+                request
+                    .info_hash_hint
+                    .as_ref()
+                    .map(|_| DownloadSourceKind::TorrentFile)
+            })
+    }
+
+    fn source_kind_label(kind: DownloadSourceKind) -> &'static str {
+        match kind {
+            DownloadSourceKind::NzbUrl => "NZB",
+            DownloadSourceKind::TorrentFile => "torrent file",
+            DownloadSourceKind::MagnetUri => "magnet",
+        }
+    }
+
+    fn config_accepts_source_kind(
+        config: &DownloadClientConfig,
+        source_kind: DownloadSourceKind,
+        plugin_provider: Option<&Arc<dyn DownloadClientPluginProvider>>,
+    ) -> bool {
+        let client_type = config.client_type.trim().to_ascii_lowercase();
+        match client_type.as_str() {
+            "nzbget" | "sabnzbd" | "weaver" => source_kind == DownloadSourceKind::NzbUrl,
+            _ => {
+                let accepted_inputs = plugin_provider
+                    .map(|provider| provider.accepted_inputs_for_provider(&config.client_type))
+                    .unwrap_or_default();
+                if accepted_inputs.is_empty() {
+                    return true;
+                }
+                accepted_inputs.iter().any(|input| {
+                    DownloadSourceKind::parse(input)
+                        .is_some_and(|accepted_kind| accepted_kind == source_kind)
+                })
+            }
+        }
     }
 
     /// Return enabled clients ordered by per-facet routing priority.
@@ -180,7 +223,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         &self,
         request: &DownloadClientAddRequest,
     ) -> AppResult<DownloadGrabResult> {
-        let clients = match self.list_clients_for_facet(&request.title.facet).await {
+        let mut clients = match self.list_clients_for_facet(&request.title.facet).await {
             Ok(configs) => configs,
             Err(error) => {
                 warn!(
@@ -195,6 +238,33 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
 
         if clients.is_empty() {
             return self.fallback_client.submit_download(request).await;
+        }
+
+        if let Some(source_kind) = Self::request_source_kind(request) {
+            clients.retain(|config| {
+                let compatible = Self::config_accepts_source_kind(
+                    config,
+                    source_kind,
+                    self.plugin_provider.as_ref(),
+                );
+                if !compatible {
+                    warn!(
+                        client_id = config.id.as_str(),
+                        client_name = config.name.as_str(),
+                        client_type = config.client_type.as_str(),
+                        source_kind = source_kind.as_str(),
+                        "download client skipped because it cannot handle this release type"
+                    );
+                }
+                compatible
+            });
+
+            if clients.is_empty() {
+                return Err(AppError::Validation(format!(
+                    "no enabled download client can handle {} releases",
+                    Self::source_kind_label(source_kind)
+                )));
+            }
         }
 
         let mut last_error: Option<AppError> = None;
@@ -364,5 +434,241 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             }
         }
         self.fallback_client.delete_queue_item(id, is_history).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use std::sync::{Arc, Mutex};
+
+    struct MockDownloadClientConfigRepository {
+        configs: Vec<DownloadClientConfig>,
+    }
+
+    #[async_trait]
+    impl DownloadClientConfigRepository for MockDownloadClientConfigRepository {
+        async fn list(
+            &self,
+            _provider_type: Option<String>,
+        ) -> AppResult<Vec<DownloadClientConfig>> {
+            Ok(self.configs.clone())
+        }
+
+        async fn get_by_id(&self, _id: &str) -> AppResult<Option<DownloadClientConfig>> {
+            Ok(None)
+        }
+
+        async fn create(&self, _config: DownloadClientConfig) -> AppResult<DownloadClientConfig> {
+            unreachable!("not used in router tests")
+        }
+
+        async fn update(
+            &self,
+            _id: &str,
+            _name: Option<String>,
+            _client_type: Option<String>,
+            _base_url: Option<String>,
+            _config_json: Option<String>,
+            _is_enabled: Option<bool>,
+        ) -> AppResult<DownloadClientConfig> {
+            unreachable!("not used in router tests")
+        }
+
+        async fn delete(&self, _id: &str) -> AppResult<()> {
+            unreachable!("not used in router tests")
+        }
+
+        async fn reorder(&self, _ordered_ids: Vec<String>) -> AppResult<()> {
+            unreachable!("not used in router tests")
+        }
+    }
+
+    struct MockSettingsRepository;
+
+    #[async_trait]
+    impl SettingsRepository for MockSettingsRepository {
+        async fn get_setting_json(
+            &self,
+            _scope: &str,
+            _key_name: &str,
+            _scope_id: Option<String>,
+        ) -> AppResult<Option<String>> {
+            Ok(None)
+        }
+    }
+
+    #[derive(Default)]
+    struct MockDownloadClient {
+        submissions: Mutex<Vec<DownloadClientAddRequest>>,
+    }
+
+    #[async_trait]
+    impl DownloadClient for MockDownloadClient {
+        async fn submit_download(
+            &self,
+            request: &DownloadClientAddRequest,
+        ) -> AppResult<DownloadGrabResult> {
+            self.submissions.lock().unwrap().push(request.clone());
+            Ok(DownloadGrabResult {
+                job_id: "job-1".to_string(),
+                client_type: "mock".to_string(),
+            })
+        }
+    }
+
+    struct MockDownloadClientPluginProvider {
+        accepted_inputs: Vec<String>,
+        client: Arc<dyn DownloadClient>,
+    }
+
+    impl DownloadClientPluginProvider for MockDownloadClientPluginProvider {
+        fn client_for_config(
+            &self,
+            _config: &DownloadClientConfig,
+        ) -> Option<Arc<dyn DownloadClient>> {
+            Some(Arc::clone(&self.client))
+        }
+
+        fn available_provider_types(&self) -> Vec<String> {
+            vec!["qbittorrent".to_string()]
+        }
+
+        fn accepted_inputs_for_provider(&self, _provider_type: &str) -> Vec<String> {
+            self.accepted_inputs.clone()
+        }
+    }
+
+    fn test_title() -> scryer_domain::Title {
+        scryer_domain::Title {
+            id: "title-1".to_string(),
+            name: "Test Title".to_string(),
+            facet: MediaFacet::Movie,
+            monitored: true,
+            tags: vec![],
+            external_ids: vec![],
+            created_by: None,
+            created_at: Utc::now(),
+            year: None,
+            overview: None,
+            poster_url: None,
+            sort_title: None,
+            slug: None,
+            imdb_id: None,
+            runtime_minutes: None,
+            genres: vec![],
+            content_status: None,
+            language: None,
+            first_aired: None,
+            network: None,
+            studio: None,
+            country: None,
+            aliases: vec![],
+            metadata_language: None,
+            metadata_fetched_at: None,
+            min_availability: None,
+            digital_release_date: None,
+        }
+    }
+
+    fn test_config(id: &str, name: &str, client_type: &str, priority: i64) -> DownloadClientConfig {
+        DownloadClientConfig {
+            id: id.to_string(),
+            name: name.to_string(),
+            client_type: client_type.to_string(),
+            base_url: Some("http://localhost".to_string()),
+            config_json: "{}".to_string(),
+            is_enabled: true,
+            status: "healthy".to_string(),
+            last_error: None,
+            last_seen_at: None,
+            client_priority: priority,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_download_skips_incompatible_clients_by_source_kind() {
+        let torrent_client = Arc::new(MockDownloadClient::default());
+        let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
+            Arc::new(MockDownloadClientPluginProvider {
+                accepted_inputs: vec!["torrent_file".to_string(), "magnet_uri".to_string()],
+                client: torrent_client.clone(),
+            });
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: vec![
+                    test_config("nzb", "NZBGet", "nzbget", 0),
+                    test_config("torrent", "qBittorrent", "qbittorrent", 1),
+                ],
+            }),
+            Arc::new(MockSettingsRepository),
+            Arc::new(MockDownloadClient::default()),
+            Some(plugin_provider),
+        );
+
+        let result = router
+            .submit_download(&DownloadClientAddRequest {
+                title: test_title(),
+                source_hint: Some("https://tracker.example/file.torrent".to_string()),
+                source_kind: Some(DownloadSourceKind::TorrentFile),
+                source_title: Some("Test Release".to_string()),
+                source_password: None,
+                category: None,
+                download_directory: None,
+                release_title: None,
+                indexer_name: None,
+                info_hash_hint: None,
+                seed_goal_ratio: None,
+                seed_goal_seconds: None,
+                is_recent: None,
+                season_pack: None,
+            })
+            .await
+            .expect("torrent request should route to torrent client");
+
+        assert_eq!(result.client_type, "qbittorrent");
+        assert_eq!(torrent_client.submissions.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn submit_download_errors_when_no_enabled_client_can_handle_source_kind() {
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: vec![test_config("nzb", "NZBGet", "nzbget", 0)],
+            }),
+            Arc::new(MockSettingsRepository),
+            Arc::new(MockDownloadClient::default()),
+            None,
+        );
+
+        let error = router
+            .submit_download(&DownloadClientAddRequest {
+                title: test_title(),
+                source_hint: Some("magnet:?xt=urn:btih:abcdef".to_string()),
+                source_kind: Some(DownloadSourceKind::MagnetUri),
+                source_title: Some("Test Release".to_string()),
+                source_password: None,
+                category: None,
+                download_directory: None,
+                release_title: None,
+                indexer_name: None,
+                info_hash_hint: None,
+                seed_goal_ratio: None,
+                seed_goal_seconds: None,
+                is_recent: None,
+                season_pack: None,
+            })
+            .await
+            .expect_err("magnet request should fail when only nzb clients are enabled");
+
+        match error {
+            AppError::Validation(message) => {
+                assert!(message.contains("magnet"));
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
     }
 }

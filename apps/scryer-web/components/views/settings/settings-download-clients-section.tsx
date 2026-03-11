@@ -226,13 +226,13 @@ export function SettingsDownloadClientsSection({
             <TableHeader>
                 <TableRow>
                   <TableHead>{t("settings.downloadClientPriority")}</TableHead>
-                  <TableHead>{t("settings.downloadClientName")}</TableHead>
+                  <TableHead>{t("label.name")}</TableHead>
                   <TableHead className="text-center align-middle">
-                    {t("settings.downloadClientType")}
+                    {t("label.type")}
                   </TableHead>
-                  <TableHead>{t("settings.downloadClientUrlLabel")}</TableHead>
+                  <TableHead>{t("settings.baseUrl")}</TableHead>
                   <TableHead className="text-center">{t("label.enabled")}</TableHead>
-                  <TableHead className="text-right">{t("settings.actions")}</TableHead>
+                  <TableHead className="text-right">{t("label.actions")}</TableHead>
                 </TableRow>
             </TableHeader>
             <TableBody>
@@ -288,7 +288,7 @@ export function SettingsDownloadClientsSection({
                         onClick={() => editDownloadClient(client)}
                       >
                         <Edit className="mr-1 h-3.5 w-3.5" />
-                        {t("settings.downloadClientEdit")}
+                        {t("label.edit")}
                       </Button>
                       <Button
                         size="sm"
@@ -310,7 +310,7 @@ export function SettingsDownloadClientsSection({
                         disabled={mutatingDownloadClientId === client.id}
                       >
                         <Trash2 className="mr-1 h-3.5 w-3.5" />
-                        {mutatingDownloadClientId === client.id ? t("label.deleting") : t("settings.downloadClientDelete")}
+                        {mutatingDownloadClientId === client.id ? t("label.deleting") : t("label.delete")}
                       </Button>
                     </div>
                   </TableCell>
@@ -339,7 +339,7 @@ export function SettingsDownloadClientsSection({
           <form className="space-y-3" onSubmit={submitDownloadClient}>
             <div className="grid gap-3 md:grid-cols-3">
               <label>
-                <Label className="mb-2 block">{t("settings.downloadClientName")}</Label>
+                <Label className="mb-2 block">{t("label.name")}</Label>
                 <Input
                   value={downloadClientDraft.name}
                   onChange={(event) =>
@@ -353,7 +353,7 @@ export function SettingsDownloadClientsSection({
                 />
               </label>
               <label>
-                <Label className="mb-2 block">{t("settings.downloadClientType")}</Label>
+                <Label className="mb-2 block">{t("label.type")}</Label>
                 <Select
                   value={downloadClientDraft.clientType}
                   onValueChange={(value) =>
@@ -378,7 +378,7 @@ export function SettingsDownloadClientsSection({
               </label>
               <div className="md:col-span-3 grid grid-cols-1 gap-2 md:grid-cols-[220px_92px_128px_auto] md:items-end md:gap-2">
                 <label>
-                  <Label className="mb-2 block">{t("settings.downloadClientHost")}</Label>
+                  <Label className="mb-2 block">{t("settings.host")}</Label>
                   <Input
                     className="w-56 max-w-56"
                     value={downloadClientDraft.host}
@@ -393,7 +393,7 @@ export function SettingsDownloadClientsSection({
                   />
                 </label>
                 <label>
-                  <Label className="mb-2 block">{t("settings.downloadClientPort")}</Label>
+                  <Label className="mb-2 block">{t("settings.port")}</Label>
                   <Input
                     {...integerInputProps}
                     value={downloadClientDraft.port}
@@ -446,7 +446,7 @@ export function SettingsDownloadClientsSection({
               </label>
               {hasApiKeyField ? (
                 <label>
-                  <Label className="mb-2 block">{t("settings.downloadClientApiKey")}</Label>
+                  <Label className="mb-2 block">{t("settings.apiKey")}</Label>
                   <Input
                     value={downloadClientDraft.apiKey}
                     onChange={(event) =>
@@ -464,7 +464,7 @@ export function SettingsDownloadClientsSection({
                 <>
                   <label>
                     <Label className="mb-2 block">
-                      {t("settings.downloadClientUsername")}
+                      {t("settings.username")}
                       {optionalCredentialLabel}
                     </Label>
                     <Input
@@ -480,7 +480,7 @@ export function SettingsDownloadClientsSection({
                   </label>
                   <label>
                     <Label className="mb-2 block">
-                      {t("settings.downloadClientPassword")}
+                      {t("settings.password")}
                       {optionalCredentialLabel}
                     </Label>
                     <Input
@@ -530,7 +530,7 @@ export function SettingsDownloadClientsSection({
                 onClick={() => void testDownloadClientConnection()}
                 disabled={isTestingDownloadClientConnection || mutatingDownloadClientId !== null}
               >
-                {isTestingDownloadClientConnection ? t("status.testingDownloadClient") : t("settings.downloadClientTest")}
+                {isTestingDownloadClientConnection ? t("status.testingDownloadClient") : t("label.testConnection")}
               </Button>
               <Button type="submit" disabled={mutatingDownloadClientId === "new"}>
                 {mutatingDownloadClientId === "new"

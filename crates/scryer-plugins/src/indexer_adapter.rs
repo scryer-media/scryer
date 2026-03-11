@@ -2,8 +2,8 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use scryer_application::{
-    AppError, AppResult, IndexerClient, IndexerRoutingPlan, IndexerSearchResponse,
-    IndexerSearchResult, SearchMode,
+    AppError, AppResult, DownloadSourceKind, IndexerClient, IndexerRoutingPlan,
+    IndexerSearchResponse, IndexerSearchResult, SearchMode,
 };
 use tracing::warn;
 
@@ -108,12 +108,19 @@ impl IndexerClient for WasmIndexerClient {
                     .or_else(|| r.extra.get("password_protected"))
                     .and_then(|v| v.as_str())
                     .map(String::from);
+                let source_kind = DownloadSourceKind::infer_from_indexer_result(
+                    Some(&self.descriptor.plugin_type),
+                    r.download_url.as_deref(),
+                    r.link.as_deref(),
+                    &r.extra,
+                );
 
                 IndexerSearchResult {
                     source: source.clone(),
                     title: r.title,
                     link: r.link,
                     download_url: r.download_url,
+                    source_kind,
                     size_bytes: r.size_bytes,
                     published_at: r.published_at,
                     thumbs_up,

@@ -54,11 +54,11 @@ export const RulesRoutingPanel = React.memo(function RulesRoutingPanel({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>{t("settings.ruleName")}</TableHead>
+                <TableHead>{t("label.name")}</TableHead>
                 <TableHead>{t("settings.ruleDescription")}</TableHead>
                 <TableHead className="text-center">{t("settings.rulePriority")}</TableHead>
                 <TableHead className="text-center">{t("settings.ruleAppliedFacets")}</TableHead>
-                <TableHead className="text-right">{t("settings.actions")}</TableHead>
+                <TableHead className="text-right">{t("label.actions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

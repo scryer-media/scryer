@@ -1,7 +1,14 @@
-import { Check, Download, Loader2, PlugZap, RefreshCw } from "lucide-react";
+import { Download, Loader2, PlugZap, RefreshCw, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import type { RegistryPluginRecord } from "@/components/views/settings/settings-plugins-section";
 
 interface SetupPluginsViewProps {
@@ -16,6 +23,7 @@ interface SetupPluginsViewProps {
   error: string | null;
   onRefreshRegistry: () => void;
   onInstallPlugin: (plugin: RegistryPluginRecord) => void;
+  onUninstallPlugin: (plugin: RegistryPluginRecord) => void;
   onNext: () => void;
   onBack: () => void;
 }
@@ -27,16 +35,16 @@ function categoryLabel(
     values?: Record<string, string | number | boolean | null | undefined>,
   ) => string,
 ) {
-  switch (pluginType) {
-    case "indexer":
-      return t("settings.pluginCategoryIndexer");
-    case "download_client":
-      return t("settings.pluginCategoryDownloadClient");
-    case "notification":
-      return t("settings.pluginCategoryNotification");
-    default:
-      return pluginType;
+  if (pluginType === "indexer" || pluginType.endsWith("_indexer")) {
+    return t("settings.pluginCategoryIndexer");
   }
+  if (pluginType === "download_client") {
+    return t("settings.pluginCategoryDownloadClient");
+  }
+  if (pluginType === "notification") {
+    return t("settings.pluginCategoryNotification");
+  }
+  return pluginType;
 }
 
 export function SetupPluginsView({
@@ -48,14 +56,13 @@ export function SetupPluginsView({
   error,
   onRefreshRegistry,
   onInstallPlugin,
+  onUninstallPlugin,
   onNext,
   onBack,
 }: SetupPluginsViewProps) {
-  const acquisitionPlugins = plugins
-    .filter((plugin) => plugin.pluginType === "download_client" || plugin.pluginType === "indexer")
+  const sortedPlugins = [...plugins]
+    .filter((plugin) => plugin.official)
     .sort((left, right) => left.name.localeCompare(right.name));
-  const installedPlugins = acquisitionPlugins.filter((plugin) => plugin.isInstalled);
-  const availablePlugins = acquisitionPlugins.filter((plugin) => !plugin.isInstalled);
 
   return (
     <div className="flex flex-col gap-6">
@@ -64,24 +71,12 @@ export function SetupPluginsView({
         <p className="mt-1 text-sm text-muted-foreground">{t("setup.pluginsDescription")}</p>
       </div>
 
-      <Card className="mx-auto w-full max-w-3xl border-dashed bg-muted/30">
-        <CardContent className="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
-          <div>
-            <p className="font-medium">{t("setup.pluginsBuiltInTitle")}</p>
-            <p className="text-sm text-muted-foreground">{t("setup.pluginsBuiltInDescription")}</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <span className="rounded-full border border-border bg-background px-3 py-1 text-sm">
-              NZBGet
-            </span>
-            <span className="rounded-full border border-border bg-background px-3 py-1 text-sm">
-              SABnzbd
-            </span>
-          </div>
-        </CardContent>
-      </Card>
+      <div className="mx-auto w-full max-w-5xl rounded-xl border border-dashed border-border bg-muted/30 px-4 py-3 text-sm">
+        <span className="font-medium">{t("setup.pluginsBuiltInTitle")}:</span>{" "}
+        <span className="text-muted-foreground">{t("setup.pluginsBuiltInDescription")}</span>
+      </div>
 
-      <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-4">
+      <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-4">
         <div>
           <p className="text-sm font-medium">{t("setup.pluginsAvailableHeading")}</p>
           <p className="text-sm text-muted-foreground">{t("setup.pluginsAvailableHint")}</p>
@@ -97,99 +92,87 @@ export function SetupPluginsView({
       </div>
 
       {error && (
-        <p className="mx-auto w-full max-w-3xl text-sm text-destructive">{error}</p>
+        <p className="mx-auto w-full max-w-5xl text-sm text-destructive">{error}</p>
       )}
 
       {loading ? (
-        <div className="mx-auto flex w-full max-w-3xl items-center justify-center gap-2 rounded-xl border border-dashed border-border py-10 text-sm text-muted-foreground">
+        <div className="mx-auto flex w-full max-w-5xl items-center justify-center gap-2 rounded-xl border border-dashed border-border py-10 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
-          {t("status.loading")}
+          {t("label.loading")}
         </div>
       ) : (
-        <div className="mx-auto grid w-full max-w-3xl gap-4">
-          {installedPlugins.length > 0 && (
-            <div className="space-y-3">
-              <p className="text-sm font-medium">{t("setup.pluginsInstalledHeading")}</p>
-              <div className="grid gap-3">
-                {installedPlugins.map((plugin) => (
-                  <Card key={plugin.id}>
-                    <CardContent className="flex flex-col gap-4 p-5 md:flex-row md:items-start md:justify-between">
-                      <div className="space-y-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="font-medium">{plugin.name}</p>
-                          <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-600">
-                            {t("settings.pluginInstalled")}
-                          </span>
-                          <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                            {categoryLabel(plugin.pluginType, t)}
-                          </span>
-                        </div>
-                        <p className="text-sm text-muted-foreground">{plugin.description}</p>
-                      </div>
-                      <div className="flex items-center gap-2 text-sm text-emerald-600">
-                        <Check className="h-4 w-4" />
-                        {t("settings.pluginVersion", {
-                          version: plugin.installedVersion ?? plugin.version,
-                        })}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
+        <div className="mx-auto w-full max-w-5xl">
+          {sortedPlugins.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border py-10 text-center text-sm text-muted-foreground">
+              {t("setup.pluginsNoneFound")}
             </div>
-          )}
-
-          <div className="space-y-3">
-            <p className="text-sm font-medium">{t("setup.pluginsAvailable")}</p>
-            {availablePlugins.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-border py-10 text-center text-sm text-muted-foreground">
-                {acquisitionPlugins.length === 0
-                  ? t("setup.pluginsNoneFound")
-                  : t("setup.pluginsNoneAvailable")}
-              </div>
-            ) : (
-              <div className="grid gap-3">
-                {availablePlugins.map((plugin) => {
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("label.name")}</TableHead>
+                  <TableHead className="w-[140px]">{t("label.type")}</TableHead>
+                  <TableHead className="w-[140px] text-right">{t("label.actions")}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sortedPlugins.map((plugin) => {
                   const isBusy = mutatingPluginId === plugin.id;
                   return (
-                    <Card key={plugin.id}>
-                      <CardContent className="flex flex-col gap-4 p-5 md:flex-row md:items-start md:justify-between">
-                        <div className="space-y-2">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="font-medium">{plugin.name}</p>
-                            <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                              {categoryLabel(plugin.pluginType, t)}
+                    <TableRow key={plugin.id}>
+                      <TableCell className="min-w-[260px]">
+                        <div className="space-y-1">
+                          <span className="font-medium">{plugin.name}</span>
+                          <p className="text-xs text-muted-foreground">{plugin.description}</p>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {categoryLabel(plugin.pluginType, t)}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {plugin.isInstalled ? (
+                          <div className="flex items-center justify-end gap-2">
+                            <span className="text-sm text-muted-foreground">
+                              {t("settings.pluginInstalled")}
                             </span>
-                            {plugin.official && (
-                              <span className="rounded-full bg-blue-500/15 px-2 py-0.5 text-xs text-blue-600">
-                                {t("settings.pluginOfficial")}
-                              </span>
+                            {!plugin.builtin && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                disabled={isBusy}
+                                onClick={() => onUninstallPlugin(plugin)}
+                                title={t("settings.pluginUninstall")}
+                              >
+                                {isBusy ? (
+                                  <Loader2 className="h-4 w-4 animate-spin text-destructive" />
+                                ) : (
+                                  <Trash2 className="h-4 w-4 text-destructive" />
+                                )}
+                              </Button>
                             )}
                           </div>
-                          <p className="text-sm text-muted-foreground">{plugin.description}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {t("settings.pluginVersion", { version: plugin.version })}
-                          </p>
-                        </div>
-                        <Button
-                          variant="outline"
-                          disabled={isBusy}
-                          onClick={() => onInstallPlugin(plugin)}
-                        >
-                          {isBusy ? (
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          ) : (
-                            <Download className="mr-2 h-4 w-4" />
-                          )}
-                          {isBusy ? t("settings.pluginInstalling") : t("settings.pluginInstall")}
-                        </Button>
-                      </CardContent>
-                    </Card>
+                        ) : (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={isBusy}
+                            onClick={() => onInstallPlugin(plugin)}
+                          >
+                            {isBusy ? (
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : (
+                              <Download className="mr-2 h-4 w-4" />
+                            )}
+                            {isBusy ? t("settings.pluginInstalling") : t("settings.pluginInstall")}
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
                   );
                 })}
-              </div>
-            )}
-          </div>
+              </TableBody>
+            </Table>
+          )}
         </div>
       )}
 

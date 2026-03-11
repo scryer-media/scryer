@@ -715,6 +715,14 @@ impl DownloadClientPluginProvider for DynamicDownloadClientPluginProvider {
         guard.default_base_url_for_provider(provider_type)
     }
 
+    fn accepted_inputs_for_provider(&self, provider_type: &str) -> Vec<String> {
+        let guard = self
+            .inner
+            .read()
+            .expect("DynamicDownloadClientPluginProvider lock poisoned");
+        guard.accepted_inputs_for_provider(provider_type)
+    }
+
     fn reload_plugins(
         &self,
         external_wasm_bytes: &[&[u8]],

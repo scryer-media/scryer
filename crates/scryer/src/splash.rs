@@ -1,5 +1,3 @@
-use std::sync::OnceLock;
-
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
@@ -9,6 +7,7 @@ use tokio::sync::watch;
 use tower::ServiceExt;
 use tower_http::compression::CompressionLayer;
 
+use crate::base_path::{mount_router, BasePath};
 use crate::middleware::{cors_handler, CorsConfig};
 
 #[derive(Clone)]
@@ -53,10 +52,14 @@ pub(crate) async fn splash_fallback_handler(
     }
 }
 
-pub(crate) fn build_splash_router(state: SplashState, cors: CorsConfig) -> Router {
+pub(crate) fn build_splash_router(
+    state: SplashState,
+    cors: CorsConfig,
+    base_path: BasePath,
+) -> Router {
     let cors_for_layer = cors.clone();
 
-    Router::new()
+    let router = Router::new()
         .route(
             "/health",
             get(splash_health_handler).with_state(state.clone()),
@@ -66,14 +69,15 @@ pub(crate) fn build_splash_router(state: SplashState, cors: CorsConfig) -> Route
         .layer(CompressionLayer::new().zstd(true).br(true).gzip(true))
         .layer(axum::middleware::from_fn(move |request, next| {
             cors_handler(request, next, cors_for_layer.clone())
-        }))
+        }));
+
+    mount_router(router, &base_path)
 }
 
-fn splash_html() -> &'static str {
-    static HTML: OnceLock<String> = OnceLock::new();
-    HTML.get_or_init(|| {
-        format!(
-            r#"<!doctype html>
+fn splash_html() -> String {
+    let health_url = BasePath::from_env().join("/health");
+    format!(
+        r#"<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
@@ -91,7 +95,7 @@ fn splash_html() -> &'static str {
 (function() {{
   var delay = 200;
   function poll() {{
-    fetch("/health")
+    fetch("{health_url}")
       .then(function(r) {{ return r.json(); }})
       .then(function(d) {{
         if (d.status === "ok") location.reload();
@@ -115,8 +119,7 @@ fn splash_html() -> &'static str {
 </script>
 </body>
 </html>"#
-        )
-    })
+    )
 }
 
 fn error_html(message: &str) -> String {
