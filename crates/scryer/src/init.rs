@@ -120,11 +120,10 @@ fn generate_compose(movies_path: &str, series_path: &str) -> String {
       - {movies_path}:/media/movies
       - {series_path}:/media/series
     environment:
-      # ── Default credentials ───────────────────────────────────────
-      # On first run, an admin user is created automatically:
-      #   username: admin
-      #   password: admin
-      # Change the password in the web UI after first login.
+      # ── Authentication ────────────────────────────────────────────
+      # Beta default: authentication is disabled and all requests act
+      # as the built-in admin user. Set this to "true" to require login.
+      SCRYER_AUTH_ENABLED: "false"
 
       # ── Encryption key (from .env) ──────────────────────────────
       SCRYER_ENCRYPTION_KEY: ${{SCRYER_ENCRYPTION_KEY}}

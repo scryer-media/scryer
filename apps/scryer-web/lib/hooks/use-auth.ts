@@ -6,7 +6,7 @@ import { decodeJwtPayload, isTokenExpired } from "@/lib/utils/jwt";
 const LOGIN_MUTATION = `mutation Login($input: LoginInput!) {
   login(input: $input) { token expiresAt }
 }`;
-const DEV_AUTO_LOGIN_MUTATION = `mutation DevAutoLogin { devAutoLogin { token expiresAt } }`;
+const AUTO_LOGIN_MUTATION = `mutation DevAutoLogin { devAutoLogin { token expiresAt } }`;
 
 const SESSION_STORAGE_KEY = "scryer_auth_token";
 
@@ -23,7 +23,6 @@ export type AuthState = {
   token: string | null;
   user: AuthUser | null;
   loading: boolean;
-  devMode: boolean;
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
 };
@@ -43,7 +42,6 @@ export function useAuth(): AuthState {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
-  const [devMode, setDevMode] = useState(false);
   const initialized = useRef(false);
 
   useEffect(() => {
@@ -77,9 +75,9 @@ export function useAuth(): AuthState {
         sessionStorage.removeItem(SESSION_STORAGE_KEY);
       }
 
-      // 3. Dev mode probe: request an auto-login JWT (only works when SCRYER_DEV_AUTO_LOGIN=true)
+      // 3. No-auth bootstrap: request an auto-login JWT when authentication is disabled.
       try {
-        const { data } = await backendClient.mutation(DEV_AUTO_LOGIN_MUTATION, {}).toPromise();
+        const { data } = await backendClient.mutation(AUTO_LOGIN_MUTATION, {}).toPromise();
         if (data?.devAutoLogin?.token) {
           const devToken = data.devAutoLogin.token;
           const authUser = userFromToken(devToken);
@@ -88,13 +86,12 @@ export function useAuth(): AuthState {
             currentToken = devToken;
             setToken(devToken);
             setUser(authUser);
-            setDevMode(true);
             setLoading(false);
             return;
           }
         }
       } catch {
-        // Expected in production mode (dev auto-login not enabled)
+        // Expected when authentication is enabled.
       }
 
       setLoading(false);
@@ -126,5 +123,5 @@ export function useAuth(): AuthState {
     setUser(null);
   }, []);
 
-  return { token, user, loading, devMode, login, logout };
+  return { token, user, loading, login, logout };
 }

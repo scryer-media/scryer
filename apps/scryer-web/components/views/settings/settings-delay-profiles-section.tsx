@@ -3,7 +3,7 @@ import { Edit, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
+import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Table,
@@ -54,6 +54,11 @@ export function SettingsDelayProfilesSection({
 
   function updateField<K extends keyof DelayProfileDraft>(field: K, value: DelayProfileDraft[K]) {
     setDraft((prev) => ({ ...prev, [field]: value }));
+  }
+
+  function parseIntegerInput(raw: string) {
+    const nextValue = sanitizeDigits(raw);
+    return nextValue === "" ? 0 : Number(nextValue);
   }
 
   function toggleFacet(facet: string) {
@@ -174,12 +179,9 @@ export function SettingsDelayProfilesSection({
               <Label htmlFor="dp-hours">{t("settings.delayProfileHoursLabel")}</Label>
               <Input
                 id="dp-hours"
-                type="number"
-                min={0}
+                {...integerInputProps}
                 value={draft.delay_hours}
-                onChange={(e) =>
-                  updateField("delay_hours", Math.max(0, parseInt(e.target.value) || 0))
-                }
+                onChange={(e) => updateField("delay_hours", parseIntegerInput(e.target.value))}
               />
               <p className="text-muted-foreground text-xs">
                 {t("settings.delayProfileHoursHelp")}
@@ -191,13 +193,13 @@ export function SettingsDelayProfilesSection({
               <Label htmlFor="dp-bypass">{t("settings.delayProfileBypassLabel")}</Label>
               <Input
                 id="dp-bypass"
-                type="number"
+                {...integerInputProps}
                 value={draft.bypass_score_threshold ?? ""}
                 onChange={(e) => {
-                  const val = e.target.value.trim();
+                  const val = sanitizeDigits(e.target.value);
                   updateField(
                     "bypass_score_threshold",
-                    val === "" ? null : parseInt(val) || 0,
+                    val === "" ? null : Number(val),
                   );
                 }}
                 placeholder={t("settings.delayProfileBypassPlaceholder")}
@@ -253,12 +255,9 @@ export function SettingsDelayProfilesSection({
               <Label htmlFor="dp-priority">{t("settings.delayProfilePriorityLabel")}</Label>
               <Input
                 id="dp-priority"
-                type="number"
-                min={0}
+                {...integerInputProps}
                 value={draft.priority}
-                onChange={(e) =>
-                  updateField("priority", Math.max(0, parseInt(e.target.value) || 0))
-                }
+                onChange={(e) => updateField("priority", parseIntegerInput(e.target.value))}
               />
               <p className="text-muted-foreground text-xs">
                 {t("settings.delayProfilePriorityHelp")}

@@ -389,6 +389,24 @@ pub(crate) fn from_collection(collection: Collection) -> CollectionPayload {
         file_size_bytes,
         first_episode_number: collection.first_episode_number,
         last_episode_number: collection.last_episode_number,
+        interstitial_movie: collection.interstitial_movie.map(|movie| {
+            InterstitialMovieMetadataPayload {
+                tvdb_id: movie.tvdb_id,
+                name: movie.name,
+                slug: movie.slug,
+                year: movie.year,
+                content_status: movie.content_status,
+                overview: movie.overview,
+                poster_url: movie.poster_url,
+                language: movie.language,
+                runtime_minutes: movie.runtime_minutes,
+                sort_title: movie.sort_title,
+                imdb_id: movie.imdb_id,
+                genres: movie.genres,
+                studio: movie.studio,
+                digital_release_date: movie.digital_release_date,
+            }
+        }),
         monitored: collection.monitored,
         created_at: collection.created_at.to_rfc3339(),
     }

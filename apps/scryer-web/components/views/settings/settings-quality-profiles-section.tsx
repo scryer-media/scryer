@@ -4,7 +4,7 @@ import { ArrowLeft, ArrowRight, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
+import { Input, signedIntegerInputProps } from "@/components/ui/input";
 import { InfoHelp } from "@/components/common/info-help";
 import { RenderBooleanIcon } from "@/components/common/boolean-icon";
 import { Label } from "@/components/ui/label";
@@ -995,7 +995,7 @@ export function SettingsQualityProfilesSection({
                       />
                     </Label>
                     <Input
-                      type="number"
+                      {...signedIntegerInputProps}
                       placeholder={t("qualityProfile.minScorePlaceholder")}
                       value={qualityProfileDraft.min_score_to_grab ?? ""}
                       onChange={(event) => {

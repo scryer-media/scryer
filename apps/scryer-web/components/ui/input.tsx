@@ -2,6 +2,28 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
+export const integerInputProps = {
+  type: "text",
+  inputMode: "numeric",
+  pattern: "[0-9]*",
+} satisfies Pick<
+  React.ComponentProps<"input">,
+  "type" | "inputMode" | "pattern"
+>
+
+export const signedIntegerInputProps = {
+  type: "number",
+  inputMode: "numeric",
+  step: 1,
+} satisfies Pick<
+  React.ComponentProps<"input">,
+  "type" | "inputMode" | "step"
+>
+
+export function sanitizeDigits(raw: string): string {
+  return raw.replace(/\D+/g, "")
+}
+
 function Input({ className, type, ...props }: React.ComponentProps<"input">) {
   return (
     <input

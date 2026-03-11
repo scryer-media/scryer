@@ -74,6 +74,24 @@ pub struct Title {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InterstitialMovieMetadata {
+    pub tvdb_id: String,
+    pub name: String,
+    pub slug: String,
+    pub year: Option<i32>,
+    pub content_status: String,
+    pub overview: String,
+    pub poster_url: String,
+    pub language: String,
+    pub runtime_minutes: i32,
+    pub sort_title: String,
+    pub imdb_id: String,
+    pub genres: Vec<String>,
+    pub studio: String,
+    pub digital_release_date: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Collection {
     pub id: String,
     pub title_id: String,
@@ -84,6 +102,7 @@ pub struct Collection {
     pub narrative_order: Option<String>,
     pub first_episode_number: Option<String>,
     pub last_episode_number: Option<String>,
+    pub interstitial_movie: Option<InterstitialMovieMetadata>,
     pub monitored: bool,
     pub created_at: DateTime<Utc>,
 }

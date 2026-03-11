@@ -96,6 +96,8 @@ pub struct AnimeMapping {
     pub anilist_id: Option<i64>,
     pub anidb_id: Option<i64>,
     pub kitsu_id: Option<i64>,
+    pub thetvdb_id: Option<i64>,
+    pub alt_tvdb_id: Option<i64>,
     pub thetvdb_season: Option<i32>,
     pub score: Option<f64>,
     pub anime_media_type: String,

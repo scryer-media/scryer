@@ -196,16 +196,21 @@ pub(crate) struct AdminSettingsQuery {
 pub(crate) async fn admin_settings_list(
     database: SqliteServices,
     app_use_case: AppUseCase,
+    auth_enabled: bool,
     headers: HeaderMap,
     query: AdminSettingsQuery,
 ) -> Response {
-    let _actor =
-        match resolve_actor_with_entitlement(&app_use_case, &headers, Entitlement::ManageConfig)
-            .await
-        {
-            Ok(actor) => actor,
-            Err(error) => return map_app_error(error),
-        };
+    let _actor = match resolve_actor_with_entitlement(
+        &app_use_case,
+        auth_enabled,
+        &headers,
+        Entitlement::ManageConfig,
+    )
+    .await
+    {
+        Ok(actor) => actor,
+        Err(error) => return map_app_error(error),
+    };
 
     let scope = query
         .scope

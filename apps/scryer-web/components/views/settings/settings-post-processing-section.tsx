@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2 } from "lucide-react";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -88,9 +88,13 @@ export function SettingsPostProcessingSection({
         <div className="space-y-1">
           <Label>{t("settings.pp.timeoutSecs")}</Label>
           <Input
-            type="number"
+            {...integerInputProps}
             value={settings.timeoutSecs}
-            onChange={(e) => update({ timeoutSecs: Number(e.target.value) })}
+            onChange={(e) =>
+              update({
+                timeoutSecs: Number(sanitizeDigits(e.target.value)) || 0,
+              })
+            }
           />
         </div>
       </div>

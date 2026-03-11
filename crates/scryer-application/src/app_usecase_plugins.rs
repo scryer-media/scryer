@@ -2,6 +2,8 @@ use super::*;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::sync::OnceLock;
+use tracing::warn;
 
 /// Registry plugin entry merged with local installation state.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -67,6 +69,15 @@ const DEFAULT_REGISTRY_URL: &str =
 const LEGACY_INDEXER_PLUGIN_TYPE: &str = "indexer";
 const USENET_INDEXER_PLUGIN_TYPE: &str = "usenet_indexer";
 const TORRENT_INDEXER_PLUGIN_TYPE: &str = "torrent_indexer";
+const CURRENT_SCRYER_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn current_scryer_version() -> &'static semver::Version {
+    static VERSION: OnceLock<semver::Version> = OnceLock::new();
+    VERSION.get_or_init(|| {
+        semver::Version::parse(CURRENT_SCRYER_VERSION)
+            .expect("CARGO_PKG_VERSION must be a valid semver version")
+    })
+}
 
 fn is_indexer_plugin_type(plugin_type: &str) -> bool {
     matches!(
@@ -90,6 +101,60 @@ fn merged_plugin_type(registry_type: &str, installed_type: Option<&str>) -> Stri
         }
         _ => registry_type.to_string(),
     }
+}
+
+fn parse_min_scryer_version(entry: &RegistryEntry) -> Option<semver::Version> {
+    let min_version = entry.min_scryer_version.as_deref()?.trim();
+    if min_version.is_empty() {
+        return None;
+    }
+
+    match semver::Version::parse(min_version) {
+        Ok(version) => Some(version),
+        Err(err) => {
+            warn!(
+                plugin_id = entry.id.as_str(),
+                required_version = min_version,
+                error = %err,
+                "skipping plugin with invalid min_scryer_version"
+            );
+            None
+        }
+    }
+}
+
+fn registry_entry_is_host_compatible(entry: &RegistryEntry) -> bool {
+    match entry.min_scryer_version.as_deref().map(str::trim) {
+        None | Some("") => true,
+        Some(_) => parse_min_scryer_version(entry)
+            .is_some_and(|required| current_scryer_version() >= &required),
+    }
+}
+
+fn ensure_registry_entry_is_host_compatible(entry: &RegistryEntry) -> AppResult<()> {
+    let Some(required_raw) = entry.min_scryer_version.as_deref().map(str::trim) else {
+        return Ok(());
+    };
+    if required_raw.is_empty() {
+        return Ok(());
+    }
+
+    let required = semver::Version::parse(required_raw).map_err(|err| {
+        AppError::Validation(format!(
+            "plugin '{}' requires an invalid min_scryer_version '{}': {err}",
+            entry.id, required_raw
+        ))
+    })?;
+
+    let current = current_scryer_version();
+    if current < &required {
+        return Err(AppError::Validation(format!(
+            "plugin '{}' requires Scryer {} but current Scryer is {}",
+            entry.id, required, current
+        )));
+    }
+
+    Ok(())
 }
 
 impl AppUseCase {
@@ -323,6 +388,10 @@ impl AppUseCase {
         // Start with registry entries, annotated with installation state
         for entry in &registry_entries {
             let inst = installations.iter().find(|i| i.plugin_id == entry.id);
+            let is_compatible = registry_entry_is_host_compatible(entry);
+            if inst.is_none() && !is_compatible {
+                continue;
+            }
             let plugin_type =
                 merged_plugin_type(&entry.plugin_type, inst.map(|i| i.plugin_type.as_str()));
             result.push(RegistryPlugin {
@@ -356,6 +425,9 @@ impl AppUseCase {
                 installed_version: inst.map(|i| i.version.clone()),
                 update_available: inst
                     .map(|i| {
+                        if !is_compatible {
+                            return false;
+                        }
                         semver::Version::parse(&entry.version)
                             .ok()
                             .zip(semver::Version::parse(&i.version).ok())
@@ -461,6 +533,8 @@ impl AppUseCase {
             .iter()
             .find(|p| p.id == plugin_id)
             .ok_or_else(|| AppError::NotFound(format!("plugin '{plugin_id}' not in registry")))?;
+
+        ensure_registry_entry_is_host_compatible(entry)?;
 
         // Can't install built-in plugins (they're already installed)
         if entry.builtin {
@@ -675,6 +749,8 @@ impl AppUseCase {
             .iter()
             .find(|p| p.id == plugin_id)
             .ok_or_else(|| AppError::NotFound(format!("plugin '{plugin_id}' not in registry")))?;
+
+        ensure_registry_entry_is_host_compatible(entry)?;
 
         // Verify a newer version exists
         let reg_ver = semver::Version::parse(&entry.version).map_err(|e| {

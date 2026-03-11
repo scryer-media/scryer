@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2 } from "lucide-react";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -33,6 +33,10 @@ export function SettingsAcquisitionSection({
   const t = useTranslate();
   const update = (patch: Partial<AcquisitionSettings>) =>
     setSettings({ ...settings, ...patch });
+  const parseIntegerInput = (raw: string) => {
+    const nextValue = sanitizeDigits(raw);
+    return nextValue === "" ? 0 : Number(nextValue);
+  };
 
   if (loading) {
     return (
@@ -64,57 +68,59 @@ export function SettingsAcquisitionSection({
         <div className="space-y-1">
           <Label>{t("settings.acq.cooldownHours")}</Label>
           <Input
-            type="number"
+            {...integerInputProps}
             value={settings.upgradeCooldownHours}
-            onChange={(e) => update({ upgradeCooldownHours: Number(e.target.value) })}
+            onChange={(e) => update({ upgradeCooldownHours: parseIntegerInput(e.target.value) })}
           />
         </div>
         <div className="space-y-1">
           <Label>{t("settings.acq.sameTierDelta")}</Label>
           <Input
-            type="number"
+            {...integerInputProps}
             value={settings.sameTierMinDelta}
-            onChange={(e) => update({ sameTierMinDelta: Number(e.target.value) })}
+            onChange={(e) => update({ sameTierMinDelta: parseIntegerInput(e.target.value) })}
           />
         </div>
         <div className="space-y-1">
           <Label>{t("settings.acq.crossTierDelta")}</Label>
           <Input
-            type="number"
+            {...integerInputProps}
             value={settings.crossTierMinDelta}
-            onChange={(e) => update({ crossTierMinDelta: Number(e.target.value) })}
+            onChange={(e) => update({ crossTierMinDelta: parseIntegerInput(e.target.value) })}
           />
         </div>
         <div className="space-y-1">
           <Label>{t("settings.acq.forcedBypassDelta")}</Label>
           <Input
-            type="number"
+            {...integerInputProps}
             value={settings.forcedUpgradeDeltaBypass}
-            onChange={(e) => update({ forcedUpgradeDeltaBypass: Number(e.target.value) })}
+            onChange={(e) =>
+              update({ forcedUpgradeDeltaBypass: parseIntegerInput(e.target.value) })
+            }
           />
         </div>
         <div className="space-y-1">
           <Label>{t("settings.acq.pollInterval")}</Label>
           <Input
-            type="number"
+            {...integerInputProps}
             value={settings.pollIntervalSeconds}
-            onChange={(e) => update({ pollIntervalSeconds: Number(e.target.value) })}
+            onChange={(e) => update({ pollIntervalSeconds: parseIntegerInput(e.target.value) })}
           />
         </div>
         <div className="space-y-1">
           <Label>{t("settings.acq.syncInterval")}</Label>
           <Input
-            type="number"
+            {...integerInputProps}
             value={settings.syncIntervalSeconds}
-            onChange={(e) => update({ syncIntervalSeconds: Number(e.target.value) })}
+            onChange={(e) => update({ syncIntervalSeconds: parseIntegerInput(e.target.value) })}
           />
         </div>
         <div className="space-y-1">
           <Label>{t("settings.acq.batchSize")}</Label>
           <Input
-            type="number"
+            {...integerInputProps}
             value={settings.batchSize}
-            onChange={(e) => update({ batchSize: Number(e.target.value) })}
+            onChange={(e) => update({ batchSize: parseIntegerInput(e.target.value) })}
           />
         </div>
       </div>

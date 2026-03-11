@@ -39,6 +39,22 @@ export const titleDetailQuery = `query TitleDetail($id: String!) {
     fileSizeBytes
     firstEpisodeNumber
     lastEpisodeNumber
+    interstitialMovie {
+      tvdbId
+      name
+      slug
+      year
+      contentStatus
+      overview
+      posterUrl
+      language
+      runtimeMinutes
+      sortTitle
+      imdbId
+      genres
+      studio
+      digitalReleaseDate
+    }
     monitored
     createdAt
   }
@@ -102,6 +118,22 @@ export const titleOverviewInitQuery = `query TitleOverviewInit($id: String!, $bl
     fileSizeBytes
     firstEpisodeNumber
     lastEpisodeNumber
+    interstitialMovie {
+      tvdbId
+      name
+      slug
+      year
+      contentStatus
+      overview
+      posterUrl
+      language
+      runtimeMinutes
+      sortTitle
+      imdbId
+      genres
+      studio
+      digitalReleaseDate
+    }
     monitored
     createdAt
   }
@@ -317,6 +349,22 @@ export const titleCollectionsQuery = `query TitleCollections($titleId: String!) 
     fileSizeBytes
     firstEpisodeNumber
     lastEpisodeNumber
+    interstitialMovie {
+      tvdbId
+      name
+      slug
+      year
+      contentStatus
+      overview
+      posterUrl
+      language
+      runtimeMinutes
+      sortTitle
+      imdbId
+      genres
+      studio
+      digitalReleaseDate
+    }
   }
 }`;
 

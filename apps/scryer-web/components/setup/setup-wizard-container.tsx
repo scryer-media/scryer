@@ -4,7 +4,9 @@ import { useClient } from "urql";
 
 import {
   adminSettingsQuery,
+  downloadClientProviderTypesQuery,
   indexerProviderTypesQuery,
+  pluginsQuery,
 } from "@/lib/graphql/queries";
 import {
   saveAdminSettingsMutation,
@@ -15,20 +17,26 @@ import {
   completeSetupMutation,
   previewExternalImportMutation,
   executeExternalImportMutation,
+  refreshPluginRegistryMutation,
+  installPluginMutation,
 } from "@/lib/graphql/mutations";
 import { QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY } from "@/lib/constants/settings";
 import { DEFAULT_DOWNLOAD_CLIENT_DRAFT } from "@/lib/constants/download-clients";
 import {
   buildDownloadClientBaseUrl,
   buildDownloadClientConfigJson,
+  buildDownloadClientTypeOptions,
+  ensureDownloadClientTypeOption,
+  normalizeDownloadClientType,
 } from "@/lib/utils/download-clients";
 import {
   parseQualityProfileCatalogEntries,
   normalizeQualityProfilesForSave,
 } from "@/lib/utils/quality-profiles";
-import type { DownloadClientDraft } from "@/lib/types/download-clients";
+import type { DownloadClientDraft, DownloadClientTypeOption } from "@/lib/types/download-clients";
 import type { FacetQualityPrefs, ViewCategoryId } from "@/lib/types/quality-profiles";
 import type { ExternalImportPreview, ExternalImportResult } from "@/lib/types/external-import";
+import type { ProviderTypeInfo } from "@/lib/types";
 
 import { SetupProgressBar } from "./setup-progress-bar";
 import { SetupWelcomeView } from "./setup-welcome-view";
@@ -39,6 +47,8 @@ import { SetupIndexerView } from "./setup-indexer-view";
 import { SetupSummaryView } from "./setup-summary-view";
 import { SetupImportConnectView } from "./setup-import-connect-view";
 import { SetupImportReviewView } from "./setup-import-review-view";
+import { SetupPluginsView } from "./setup-plugins-view";
+import type { RegistryPluginRecord } from "@/components/views/settings/settings-plugins-section";
 
 const FALLBACK_PROVIDER_OPTIONS = [
   { value: "nzbgeek", label: "NZBGeek Indexer" },
@@ -86,15 +96,18 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
   const [mediaPathsSaving, setMediaPathsSaving] = useState(false);
   const [mediaPathsError, setMediaPathsError] = useState<string | null>(null);
 
-  // ── Step 3 (fresh): Download Client ─────────────────────────────────
+  // ── Step 4 (fresh): Download Client ─────────────────────────────────
   const [dcDraft, setDcDraft] = useState<DownloadClientDraft>({ ...DEFAULT_DOWNLOAD_CLIENT_DRAFT });
+  const [dcTypeOptions, setDcTypeOptions] = useState<DownloadClientTypeOption[]>(
+    () => buildDownloadClientTypeOptions([]),
+  );
   const [dcTesting, setDcTesting] = useState(false);
   const [dcTestResult, setDcTestResult] = useState<"success" | "failed" | null>(null);
   const [dcSaving, setDcSaving] = useState(false);
   const [dcSaved, setDcSaved] = useState(false);
   const [dcError, setDcError] = useState<string | null>(null);
 
-  // ── Step 4 (fresh): Indexer ─────────────────────────────────────────
+  // ── Step 5 (fresh): Indexer ─────────────────────────────────────────
   const [idxName, setIdxName] = useState("");
   const [idxProviderType, setIdxProviderType] = useState("");
   const [idxBaseUrl, setIdxBaseUrl] = useState("");
@@ -107,6 +120,13 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
   const [idxSaving, setIdxSaving] = useState(false);
   const [idxSaved, setIdxSaved] = useState(false);
   const [idxError, setIdxError] = useState<string | null>(null);
+
+  // ── Step 3 (fresh): Plugins ────────────────────────────────────────
+  const [plugins, setPlugins] = useState<RegistryPluginRecord[]>([]);
+  const [pluginsLoading, setPluginsLoading] = useState(true);
+  const [pluginsRefreshing, setPluginsRefreshing] = useState(false);
+  const [mutatingPluginId, setMutatingPluginId] = useState<string | null>(null);
+  const [pluginsError, setPluginsError] = useState<string | null>(null);
 
   // ── Import: Connect ─────────────────────────────────────────────────
   const [sonarrUrl, setSonarrUrl] = useState("");
@@ -130,40 +150,145 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
   // ── Summary / Finish ────────────────────────────────────────────────
   const [finishing, setFinishing] = useState(false);
 
-  // ── Load indexer provider types on mount (for fresh path) ───────────
-  useEffect(() => {
-    (async () => {
-      try {
-        const { data } = await client.query(indexerProviderTypesQuery, {}).toPromise();
-        if (data?.indexerProviderTypes?.length) {
-          const options = data.indexerProviderTypes.map(
-            (p: { providerType: string; name: string; defaultBaseUrl?: string }) => ({
-              value: p.providerType,
-              label: p.name,
-              defaultBaseUrl: p.defaultBaseUrl || undefined,
+  const refreshProviderOptions = useCallback(async () => {
+    try {
+      const [{ data: dcData }, { data: idxData }] = await Promise.all([
+        client.query(downloadClientProviderTypesQuery, {}).toPromise(),
+        client.query(indexerProviderTypesQuery, {}).toPromise(),
+      ]);
+
+      setDcTypeOptions(
+        buildDownloadClientTypeOptions(
+          (dcData?.downloadClientProviderTypes as ProviderTypeInfo[] | undefined) ?? [],
+        ),
+      );
+
+      if (idxData?.indexerProviderTypes?.length) {
+        setIdxProviderOptions(
+          idxData.indexerProviderTypes.map(
+            (provider: { providerType: string; name: string; defaultBaseUrl?: string }) => ({
+              value: provider.providerType,
+              label: provider.name,
+              defaultBaseUrl: provider.defaultBaseUrl || undefined,
             }),
-          );
-          setIdxProviderOptions(options);
-          if (options.length > 0 && !idxProviderType) {
-            setIdxProviderType(options[0].value);
-          }
-        } else {
-          setIdxProviderOptions(FALLBACK_PROVIDER_OPTIONS);
-          if (!idxProviderType) setIdxProviderType(FALLBACK_PROVIDER_OPTIONS[0].value);
-        }
-      } catch {
+          ),
+        );
+      } else {
         setIdxProviderOptions(FALLBACK_PROVIDER_OPTIONS);
-        if (!idxProviderType) setIdxProviderType(FALLBACK_PROVIDER_OPTIONS[0].value);
+      }
+    } catch {
+      setDcTypeOptions(buildDownloadClientTypeOptions([]));
+      setIdxProviderOptions(FALLBACK_PROVIDER_OPTIONS);
+    }
+  }, [client]);
+
+  const loadPlugins = useCallback(
+    async (refreshIfEmpty = false) => {
+      const { data, error } = await client.query(pluginsQuery, {}).toPromise();
+      if (error) throw error;
+
+      const nextPlugins = (data?.plugins ?? []) as RegistryPluginRecord[];
+      if (nextPlugins.length > 0 || !refreshIfEmpty) {
+        setPlugins(nextPlugins);
+        return nextPlugins;
+      }
+
+      const { data: refreshData, error: refreshError } = await client
+        .mutation(refreshPluginRegistryMutation, {})
+        .toPromise();
+      if (refreshError) throw refreshError;
+
+      const refreshedPlugins = (refreshData?.refreshPluginRegistry ?? []) as RegistryPluginRecord[];
+      setPlugins(refreshedPlugins);
+      return refreshedPlugins;
+    },
+    [client],
+  );
+
+  useEffect(() => {
+    void (async () => {
+      setPluginsLoading(true);
+      setPluginsError(null);
+      try {
+        await Promise.all([refreshProviderOptions(), loadPlugins(true)]);
+      } catch (error) {
+        setPluginsError(error instanceof Error ? error.message : t("status.failedToLoad"));
+      } finally {
+        setPluginsLoading(false);
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadPlugins, refreshProviderOptions, t]);
+
+  useEffect(() => {
+    setDcDraft((prev) => {
+      const normalizedClientType = normalizeDownloadClientType(prev.clientType);
+      if (dcTypeOptions.some((option) => option.value === normalizedClientType)) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        clientType: dcTypeOptions[0]?.value ?? DEFAULT_DOWNLOAD_CLIENT_DRAFT.clientType,
+      };
+    });
+  }, [dcTypeOptions]);
+
+  useEffect(() => {
+    if (idxProviderOptions.some((option) => option.value === idxProviderType)) {
+      return;
+    }
+    if (idxProviderOptions[0]?.value) {
+      setIdxProviderType(idxProviderOptions[0].value);
+    }
+  }, [idxProviderOptions, idxProviderType]);
+
+  const availableDcTypeOptions = ensureDownloadClientTypeOption(dcTypeOptions, dcDraft.clientType);
+
+  const refreshPluginsRegistry = useCallback(async () => {
+    setPluginsRefreshing(true);
+    setPluginsError(null);
+    try {
+      const { data, error } = await client
+        .mutation(refreshPluginRegistryMutation, {})
+        .toPromise();
+      if (error) throw error;
+
+      setPlugins((data?.refreshPluginRegistry ?? []) as RegistryPluginRecord[]);
+      await refreshProviderOptions();
+    } catch (error) {
+      setPluginsError(error instanceof Error ? error.message : t("status.failedToLoad"));
+    } finally {
+      setPluginsRefreshing(false);
+    }
+  }, [client, refreshProviderOptions, t]);
+
+  const installPlugin = useCallback(
+    async (plugin: RegistryPluginRecord) => {
+      setMutatingPluginId(plugin.id);
+      setPluginsError(null);
+      try {
+        const { error } = await client
+          .mutation(installPluginMutation, {
+            input: { pluginId: plugin.id },
+          })
+          .toPromise();
+        if (error) throw error;
+
+        await Promise.all([loadPlugins(false), refreshProviderOptions()]);
+      } catch (error) {
+        setPluginsError(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      } finally {
+        setMutatingPluginId(null);
+      }
+    },
+    [client, loadPlugins, refreshProviderOptions, t],
+  );
 
   // ── Step labels per path ────────────────────────────────────────────
   const stepLabels =
     wizardPath === "import"
       ? [t("setup.stepConnect"), t("setup.stepReview"), t("setup.stepPersona"), t("setup.stepSummary")]
-      : [t("setup.stepPersona"), t("setup.stepMediaPaths"), t("setup.stepDownloadClient"), t("setup.stepIndexer"), t("setup.stepSummary")];
+      : [t("setup.stepPersona"), t("setup.stepMediaPaths"), t("setup.stepPlugins"), t("setup.stepDownloadClient"), t("setup.stepIndexer"), t("setup.stepSummary")];
 
   // ── Quality preferences save (per-facet) ────────────────────────────
   const saveFacetQualityPrefs = useCallback(
@@ -662,16 +787,32 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
       )}
 
       {currentStep === 3 && wizardPath === "fresh" && (
+        <SetupPluginsView
+          t={t}
+          plugins={plugins}
+          loading={pluginsLoading}
+          refreshing={pluginsRefreshing}
+          mutatingPluginId={mutatingPluginId}
+          error={pluginsError}
+          onRefreshRegistry={refreshPluginsRegistry}
+          onInstallPlugin={installPlugin}
+          onNext={() => goToStep(4)}
+          onBack={() => goToStep(2)}
+        />
+      )}
+
+      {currentStep === 4 && wizardPath === "fresh" && (
         <SetupDownloadClientView
           t={t}
           draft={dcDraft}
+          downloadClientTypeOptions={availableDcTypeOptions}
           onDraftChange={(updates) =>
             setDcDraft((prev) => ({ ...prev, ...updates }))
           }
           onTestConnection={dcSaved ? testDownloadClient : handleDcTestAndSave}
-          onNext={() => goToStep(4)}
-          onBack={() => goToStep(2)}
-          onSkip={() => goToStep(4)}
+          onNext={() => goToStep(5)}
+          onBack={() => goToStep(3)}
+          onSkip={() => goToStep(5)}
           testing={dcTesting}
           testResult={dcTestResult}
           saving={dcSaving}
@@ -680,7 +821,7 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
         />
       )}
 
-      {currentStep === 4 && wizardPath === "fresh" && (
+      {currentStep === 5 && wizardPath === "fresh" && (
         <SetupIndexerView
           t={t}
           name={idxName}
@@ -693,9 +834,9 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
           onBaseUrlChange={setIdxBaseUrl}
           onApiKeyChange={setIdxApiKey}
           onTestConnection={idxSaved ? testIndexer : handleIdxTestAndSave}
-          onNext={() => goToStep(5)}
-          onBack={() => goToStep(3)}
-          onSkip={() => goToStep(5)}
+          onNext={() => goToStep(6)}
+          onBack={() => goToStep(4)}
+          onSkip={() => goToStep(6)}
           testing={idxTesting}
           testResult={idxTestResult}
           saving={idxSaving}
@@ -704,7 +845,7 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
         />
       )}
 
-      {currentStep === 5 && wizardPath === "fresh" && (
+      {currentStep === 6 && wizardPath === "fresh" && (
         <SetupSummaryView
           t={t}
           facetPrefs={facetPrefs}
@@ -714,7 +855,7 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
           downloadClientName={dcDraft.name || dcDraft.clientType}
           indexerName={idxName || idxProviderType}
           onFinish={finishSetup}
-          onBack={() => goToStep(4)}
+          onBack={() => goToStep(5)}
           finishing={finishing}
         />
       )}

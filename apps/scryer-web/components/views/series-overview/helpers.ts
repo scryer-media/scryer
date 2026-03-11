@@ -1,6 +1,6 @@
-import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import type {
   CollectionEpisode,
+  InterstitialMovieMetadata,
   TitleCollection,
   TitleReleaseBlocklistEntry,
 } from "@/components/containers/series-overview-container";
@@ -49,14 +49,13 @@ export function getImdbUrl(imdbId: string | null | undefined) {
   return `https://www.imdb.com/find?q=${encodeURIComponent(trimmed)}&s=tt`;
 }
 
-export function getTvdbMovieUrl(metadata: MetadataTvdbSearchItem) {
+export function getTvdbMovieUrl(metadata: InterstitialMovieMetadata) {
   const tvdbId = String(metadata.tvdbId).trim();
   if (!tvdbId) return null;
   const slug = metadata.slug?.trim();
   const base = "https://www.thetvdb.com";
   if (slug) {
-    const segment = metadata.type?.toLowerCase() === "movie" ? "movies" : "series";
-    return `${base}/${segment}/${tvdbId}-${encodeURIComponent(slug)}`;
+    return `${base}/movies/${tvdbId}-${encodeURIComponent(slug)}`;
   }
   return `${base}/?id=${encodeURIComponent(tvdbId)}`;
 }

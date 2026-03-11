@@ -1,5 +1,5 @@
 use super::*;
-use scryer_domain::NotificationEventType;
+use scryer_domain::{InterstitialMovieMetadata, NotificationEventType};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
@@ -22,6 +22,25 @@ fn extract_highest_priority_nzbget_category(raw_json: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn interstitial_movie_from_metadata(movie: &MovieMetadata) -> InterstitialMovieMetadata {
+    InterstitialMovieMetadata {
+        tvdb_id: movie.tvdb_id.to_string(),
+        name: movie.name.clone(),
+        slug: movie.slug.clone(),
+        year: movie.year,
+        content_status: movie.content_status.clone(),
+        overview: movie.overview.clone(),
+        poster_url: movie.poster_url.clone(),
+        language: movie.language.clone(),
+        runtime_minutes: movie.runtime_minutes,
+        sort_title: movie.sort_title.clone(),
+        imdb_id: movie.imdb_id.clone(),
+        genres: movie.genres.clone(),
+        studio: movie.studio.clone(),
+        digital_release_date: movie.tmdb_release_date.clone(),
+    }
 }
 
 impl AppUseCase {
@@ -360,6 +379,7 @@ impl AppUseCase {
                 narrative_order: Some(season.number.to_string()),
                 first_episode_number: None,
                 last_episode_number: None,
+                interstitial_movie: None,
                 monitored: season_monitored,
                 created_at: Utc::now(),
             };
@@ -384,6 +404,23 @@ impl AppUseCase {
             }
         }
 
+        // Build last-aired date per regular season from the episode data so
+        // we can determine where each interstitial movie falls narratively.
+        let mut season_last_aired: std::collections::BTreeMap<i32, String> =
+            std::collections::BTreeMap::new();
+        for ep in episodes.iter() {
+            if ep.season_number > 0 && !ep.aired.is_empty() {
+                season_last_aired
+                    .entry(ep.season_number)
+                    .and_modify(|d| {
+                        if ep.aired > *d {
+                            *d = ep.aired.clone();
+                        }
+                    })
+                    .or_insert_with(|| ep.aired.clone());
+            }
+        }
+
         // Create interstitial movie collections for anime titles.
         // Movies (global_media_type == "movie") are positioned narratively between
         // seasons using their episode aired dates (e.g. Demon Slayer: Mugen Train
@@ -400,22 +437,27 @@ impl AppUseCase {
                 .collect();
 
             if !movie_mappings.is_empty() {
-                // Build last-aired date per regular season from the episode data so
-                // we can determine where each movie falls narratively.
-                let mut season_last_aired: std::collections::BTreeMap<i32, String> =
-                    std::collections::BTreeMap::new();
-                for ep in episodes.iter() {
-                    if ep.season_number > 0 && !ep.aired.is_empty() {
-                        season_last_aired
-                            .entry(ep.season_number)
-                            .and_modify(|d| {
-                                if ep.aired > *d {
-                                    *d = ep.aired.clone();
-                                }
-                            })
-                            .or_insert_with(|| ep.aired.clone());
+                let metadata_language = title.metadata_language.as_deref().unwrap_or("eng");
+                let movie_tvdb_ids: Vec<i64> = movie_mappings
+                    .iter()
+                    .filter_map(|mapping| mapping.thetvdb_id.or(mapping.alt_tvdb_id))
+                    .collect();
+                let interstitial_movie_metadata = match self
+                    .services
+                    .metadata_gateway
+                    .get_movies_bulk(&movie_tvdb_ids, metadata_language)
+                    .await
+                {
+                    Ok(metadata) => metadata,
+                    Err(err) => {
+                        warn!(
+                            title_id = %title.id,
+                            error = %err,
+                            "failed to fetch interstitial movie metadata"
+                        );
+                        HashMap::new()
                     }
-                }
+                };
 
                 // For each movie, find its earliest episode aired date, then
                 // find the last regular season that ended on or before that date.
@@ -474,6 +516,11 @@ impl AppUseCase {
                             narrative_order: Some(narrative_order.clone()),
                             first_episode_number: None,
                             last_episode_number: None,
+                            interstitial_movie: movie
+                                .thetvdb_id
+                                .or(movie.alt_tvdb_id)
+                                .and_then(|tvdb_id| interstitial_movie_metadata.get(&tvdb_id))
+                                .map(interstitial_movie_from_metadata),
                             monitored: true,
                             created_at: Utc::now(),
                         };
@@ -1304,6 +1351,7 @@ impl AppUseCase {
             narrative_order: None,
             first_episode_number: normalize_show_text_opt(first_episode_number),
             last_episode_number: normalize_show_text_opt(last_episode_number),
+            interstitial_movie: None,
             monitored: true,
             created_at: Utc::now(),
         };

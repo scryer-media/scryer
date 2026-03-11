@@ -312,23 +312,6 @@ export function useGlobalSearch({
     void refreshCatalogQualityProfileState();
   }, [refreshCatalogQualityProfileState]);
 
-  const isMetadataSearchResultInCatalog = useCallback(
-    (facet: Facet, result: MetadataTvdbSearchItem) => {
-      const tvdbId = String(result.tvdbId).trim();
-      if (!tvdbId) {
-        return false;
-      }
-      return isTitleInCatalogByFacet[facet].has(tvdbId);
-    },
-    [isTitleInCatalogByFacet],
-  );
-
-  const filterMetadataSearchResults = useCallback(
-    (facet: Facet, results: MetadataTvdbSearchItem[]) =>
-      results.filter((result) => !isMetadataSearchResultInCatalog(facet, result)),
-    [isMetadataSearchResultInCatalog],
-  );
-
   const isMetadataSearchResultInAnyCatalog = useCallback(
     (result: MetadataTvdbSearchItem) => {
       const tvdbId = String(result.tvdbId).trim();
@@ -336,6 +319,17 @@ export function useGlobalSearch({
       return Object.values(isTitleInCatalogByFacet).some((bucket) => bucket.has(tvdbId));
     },
     [isTitleInCatalogByFacet],
+  );
+
+  const isMetadataSearchResultInCatalog = useCallback(
+    (_facet: Facet, result: MetadataTvdbSearchItem) => isMetadataSearchResultInAnyCatalog(result),
+    [isMetadataSearchResultInAnyCatalog],
+  );
+
+  const filterMetadataSearchResults = useCallback(
+    (facet: Facet, results: MetadataTvdbSearchItem[]) =>
+      results.filter((result) => !isMetadataSearchResultInCatalog(facet, result)),
+    [isMetadataSearchResultInCatalog],
   );
 
   const mapFacetToTvdbType = useCallback((facet: Facet) => {

@@ -69,8 +69,26 @@ export type TitleCollection = {
   fileSizeBytes: number | null;
   firstEpisodeNumber: string | null;
   lastEpisodeNumber: string | null;
+  interstitialMovie: InterstitialMovieMetadata | null;
   monitored: boolean;
   createdAt: string;
+};
+
+export type InterstitialMovieMetadata = {
+  tvdbId: string;
+  name: string;
+  slug: string;
+  year: number | null;
+  contentStatus: string;
+  overview: string;
+  posterUrl: string;
+  language: string;
+  runtimeMinutes: number;
+  sortTitle: string;
+  imdbId: string;
+  genres: string[];
+  studio: string;
+  digitalReleaseDate: string | null;
 };
 
 export type TitleEvent = {

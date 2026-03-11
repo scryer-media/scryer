@@ -29,7 +29,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SearchResultBuckets } from "@/components/common/release-search-results";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { Release } from "@/lib/types";
-import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import type {
   CollectionEpisode,
   EpisodeMediaFile,
@@ -38,8 +37,6 @@ import type {
 } from "@/components/containers/series-overview-container";
 import type { EpisodePanelTab } from "./episode-panel-reducer";
 import {
-  dedupeInsensitive,
-  normalizeMovieCollectionLabel,
   isSpecialsCollection,
   seasonHeading,
   formatDate,
@@ -53,7 +50,6 @@ import { EpisodeBlocklistPanel } from "./episode-blocklist-panel";
 export function SeasonSection({
   collection,
   episodes,
-  titleName,
   expanded,
   facet,
   onToggle,
@@ -72,10 +68,6 @@ export function SeasonSection({
   onAutoSearchEpisode,
   onSetCollectionMonitored,
   onSetEpisodeMonitored,
-  onLoadInterstitialMovieMetadata,
-  interstitialMovieMetadata,
-  interstitialMovieMetadataLoaded,
-  interstitialMovieMetadataLoading,
   seasonSearchResults,
   seasonSearchLoading,
   onRunSeasonSearch,
@@ -84,7 +76,6 @@ export function SeasonSection({
   collection: TitleCollection;
   facet: string;
   episodes: CollectionEpisode[];
-  titleName: string;
   expanded: boolean;
   onToggle: () => void;
   expandedEpisodeRows: Set<string>;
@@ -102,10 +93,6 @@ export function SeasonSection({
   onAutoSearchEpisode?: (episode: CollectionEpisode) => void;
   onSetCollectionMonitored?: (collectionId: string, monitored: boolean) => Promise<void>;
   onSetEpisodeMonitored?: (episodeId: string, monitored: boolean) => Promise<void>;
-  onLoadInterstitialMovieMetadata: (collectionId: string, candidates: string[]) => void;
-  interstitialMovieMetadata: MetadataTvdbSearchItem | null;
-  interstitialMovieMetadataLoaded: boolean;
-  interstitialMovieMetadataLoading: boolean;
   seasonSearchResults?: Release[];
   seasonSearchLoading?: boolean;
   onRunSeasonSearch?: () => void;
@@ -123,18 +110,6 @@ export function SeasonSection({
     if (monitoredCount === episodes.length) return true;
     return "indeterminate";
   }, [episodes, collection.monitored]);
-
-  React.useEffect(() => {
-    if (!expanded || collection.collectionType !== "interstitial") return;
-    const candidates = dedupeInsensitive([
-      ...episodes
-        .map((episode) => episode.title?.trim() ?? episode.episodeLabel?.trim() ?? "")
-        .filter((candidate): candidate is string => candidate.length > 0),
-      normalizeMovieCollectionLabel(collection.label) ?? "",
-      titleName,
-    ]);
-    onLoadInterstitialMovieMetadata(collection.id, candidates);
-  }, [collection.collectionType, collection.id, collection.label, episodes, expanded, titleName, onLoadInterstitialMovieMetadata]);
 
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-background/40">
@@ -228,19 +203,10 @@ export function SeasonSection({
       {expanded ? (
         collection.collectionType === "interstitial" ? (
           <div className="border-t border-border px-4 py-3 text-sm text-muted-foreground">
-            {interstitialMovieMetadataLoading ? (
-              <div className="flex items-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin text-emerald-500" />
-                <span>Loading movie metadata…</span>
-              </div>
-            ) : interstitialMovieMetadataLoaded ? (
-              interstitialMovieMetadata ? (
-                <InterstitialMoviePanel movie={interstitialMovieMetadata} />
-              ) : (
-                <p>No metadata found for this movie in the catalog.</p>
-              )
+            {collection.interstitialMovie ? (
+              <InterstitialMoviePanel movie={collection.interstitialMovie} />
             ) : (
-              <p>Unable to identify a movie title to look up metadata.</p>
+              <p>No local metadata has been hydrated for this movie yet.</p>
             )}
           </div>
         ) : (
