@@ -98,8 +98,8 @@ pub(crate) fn mount_router(router: Router, base_path: &BasePath) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use super::BasePath;
     use super::mount_router;
+    use super::BasePath;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::routing::get;
