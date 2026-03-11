@@ -23,8 +23,7 @@ if [ ! -f "$COMPOSE_FILE" ]; then
   exit 1
 fi
 
-export SCRYER_DOCKER_DEV_AUTO_LOGIN="true"
-export SCRYER_DEV_AUTO_LOGIN="true"
+export SCRYER_AUTH_ENABLED="false"
 
 mkdir -p "$REPO_DIR/tmp/scryer-data"
 mkdir -p "$REPO_DIR/tmp/scryer-media/movies"

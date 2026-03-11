@@ -1,0 +1,14 @@
+ALTER TABLE collections ADD COLUMN interstitial_tvdb_id TEXT;
+ALTER TABLE collections ADD COLUMN interstitial_name TEXT;
+ALTER TABLE collections ADD COLUMN interstitial_slug TEXT;
+ALTER TABLE collections ADD COLUMN interstitial_year INTEGER;
+ALTER TABLE collections ADD COLUMN interstitial_content_status TEXT;
+ALTER TABLE collections ADD COLUMN interstitial_overview TEXT;
+ALTER TABLE collections ADD COLUMN interstitial_poster_url TEXT;
+ALTER TABLE collections ADD COLUMN interstitial_language TEXT;
+ALTER TABLE collections ADD COLUMN interstitial_runtime_minutes INTEGER;
+ALTER TABLE collections ADD COLUMN interstitial_sort_title TEXT;
+ALTER TABLE collections ADD COLUMN interstitial_imdb_id TEXT;
+ALTER TABLE collections ADD COLUMN interstitial_genres_json TEXT;
+ALTER TABLE collections ADD COLUMN interstitial_studio TEXT;
+ALTER TABLE collections ADD COLUMN interstitial_digital_release_date TEXT;

@@ -43,28 +43,24 @@ pub type ApiSchema = Schema<QueryRoot, MutationRoot, SubscriptionRoot>;
 pub struct ApiContext {
     pub app: AppUseCase,
     pub settings_db: SqliteServices,
-    pub dev_auto_login: bool,
+    pub auth_enabled: bool,
 }
 
-pub fn build_schema(
-    app: AppUseCase,
-    settings_db: SqliteServices,
-    dev_auto_login: bool,
-) -> ApiSchema {
-    build_schema_with_log_buffer(app, settings_db, dev_auto_login, None)
+pub fn build_schema(app: AppUseCase, settings_db: SqliteServices, auth_enabled: bool) -> ApiSchema {
+    build_schema_with_log_buffer(app, settings_db, auth_enabled, None)
 }
 
 pub fn build_schema_with_log_buffer(
     app: AppUseCase,
     settings_db: SqliteServices,
-    dev_auto_login: bool,
+    auth_enabled: bool,
     log_buffer: Option<LogBuffer>,
 ) -> ApiSchema {
     let mut builder =
         Schema::build(QueryRoot, MutationRoot::default(), SubscriptionRoot).data(ApiContext {
             app,
             settings_db,
-            dev_auto_login,
+            auth_enabled,
         });
     if let Some(buf) = log_buffer {
         builder = builder.data(buf);

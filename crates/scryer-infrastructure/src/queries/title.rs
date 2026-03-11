@@ -1,5 +1,7 @@
 use scryer_application::{AppError, AppResult, PrimaryCollectionSummary, TitleMetadataUpdate};
-use scryer_domain::{CalendarEpisode, Collection, Episode, ExternalId, MediaFacet, Title};
+use scryer_domain::{
+    CalendarEpisode, Collection, Episode, ExternalId, InterstitialMovieMetadata, MediaFacet, Title,
+};
 use serde_json;
 use sqlx::{Row, SqlitePool};
 
@@ -197,7 +199,12 @@ pub(crate) async fn list_collections_for_title_query(
 ) -> AppResult<Vec<Collection>> {
     let rows = sqlx::query(
         "SELECT id, title_id, collection_type, collection_index, label, ordered_path,
-                narrative_order, first_episode_number, last_episode_number, monitored, created_at
+                narrative_order, first_episode_number, last_episode_number,
+                interstitial_tvdb_id, interstitial_name, interstitial_slug, interstitial_year,
+                interstitial_content_status, interstitial_overview, interstitial_poster_url,
+                interstitial_language, interstitial_runtime_minutes, interstitial_sort_title,
+                interstitial_imdb_id, interstitial_genres_json, interstitial_studio,
+                interstitial_digital_release_date, monitored, created_at
          FROM collections WHERE title_id = ? ORDER BY collection_index ASC, id ASC",
     )
     .bind(title_id)
@@ -252,7 +259,12 @@ pub(crate) async fn get_collection_by_id_query(
 ) -> AppResult<Option<Collection>> {
     let row = sqlx::query(
         "SELECT id, title_id, collection_type, collection_index, label, ordered_path,
-                narrative_order, first_episode_number, last_episode_number, monitored, created_at
+                narrative_order, first_episode_number, last_episode_number,
+                interstitial_tvdb_id, interstitial_name, interstitial_slug, interstitial_year,
+                interstitial_content_status, interstitial_overview, interstitial_poster_url,
+                interstitial_language, interstitial_runtime_minutes, interstitial_sort_title,
+                interstitial_imdb_id, interstitial_genres_json, interstitial_studio,
+                interstitial_digital_release_date, monitored, created_at
          FROM collections WHERE id = ?",
     )
     .bind(collection_id)
@@ -273,8 +285,13 @@ pub(crate) async fn create_collection_query(
     sqlx::query(
         "INSERT INTO collections
          (id, title_id, collection_type, collection_index, label, ordered_path, narrative_order,
-          first_episode_number, last_episode_number, monitored, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          first_episode_number, last_episode_number, interstitial_tvdb_id, interstitial_name,
+          interstitial_slug, interstitial_year, interstitial_content_status,
+          interstitial_overview, interstitial_poster_url, interstitial_language,
+          interstitial_runtime_minutes, interstitial_sort_title, interstitial_imdb_id,
+          interstitial_genres_json, interstitial_studio, interstitial_digital_release_date,
+          monitored, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&collection.id)
     .bind(&collection.title_id)
@@ -285,6 +302,90 @@ pub(crate) async fn create_collection_query(
     .bind(&collection.narrative_order)
     .bind(&collection.first_episode_number)
     .bind(&collection.last_episode_number)
+    .bind(
+        collection
+            .interstitial_movie
+            .as_ref()
+            .map(|movie| movie.tvdb_id.clone()),
+    )
+    .bind(
+        collection
+            .interstitial_movie
+            .as_ref()
+            .map(|movie| movie.name.clone()),
+    )
+    .bind(
+        collection
+            .interstitial_movie
+            .as_ref()
+            .map(|movie| movie.slug.clone()),
+    )
+    .bind(
+        collection
+            .interstitial_movie
+            .as_ref()
+            .and_then(|movie| movie.year),
+    )
+    .bind(
+        collection
+            .interstitial_movie
+            .as_ref()
+            .map(|movie| movie.content_status.clone()),
+    )
+    .bind(
+        collection
+            .interstitial_movie
+            .as_ref()
+            .map(|movie| movie.overview.clone()),
+    )
+    .bind(
+        collection
+            .interstitial_movie
+            .as_ref()
+            .map(|movie| movie.poster_url.clone()),
+    )
+    .bind(
+        collection
+            .interstitial_movie
+            .as_ref()
+            .map(|movie| movie.language.clone()),
+    )
+    .bind(
+        collection
+            .interstitial_movie
+            .as_ref()
+            .map(|movie| movie.runtime_minutes),
+    )
+    .bind(
+        collection
+            .interstitial_movie
+            .as_ref()
+            .map(|movie| movie.sort_title.clone()),
+    )
+    .bind(
+        collection
+            .interstitial_movie
+            .as_ref()
+            .map(|movie| movie.imdb_id.clone()),
+    )
+    .bind(
+        collection
+            .interstitial_movie
+            .as_ref()
+            .map(|movie| serde_json::to_string(&movie.genres).unwrap_or_else(|_| "[]".to_string())),
+    )
+    .bind(
+        collection
+            .interstitial_movie
+            .as_ref()
+            .map(|movie| movie.studio.clone()),
+    )
+    .bind(
+        collection
+            .interstitial_movie
+            .as_ref()
+            .and_then(|movie| movie.digital_release_date.clone()),
+    )
     .bind(if collection.monitored { 1_i64 } else { 0_i64 })
     .bind(collection.created_at.to_rfc3339())
     .execute(pool)
@@ -734,6 +835,7 @@ fn row_to_collection(row: &sqlx::sqlite::SqliteRow) -> AppResult<Collection> {
     let narrative_order: Option<String> = row.try_get("narrative_order").unwrap_or(None);
     let first_episode_number = optional_text_from_column(row, "first_episode_number")?;
     let last_episode_number = optional_text_from_column(row, "last_episode_number")?;
+    let interstitial_movie = row_to_interstitial_movie(row)?;
     let monitored: i64 = row
         .try_get("monitored")
         .map_err(|err| AppError::Repository(err.to_string()))?;
@@ -751,9 +853,54 @@ fn row_to_collection(row: &sqlx::sqlite::SqliteRow) -> AppResult<Collection> {
         narrative_order,
         first_episode_number,
         last_episode_number,
+        interstitial_movie,
         monitored: monitored != 0,
         created_at: parse_utc_datetime(&created_at_raw)?,
     })
+}
+
+fn row_to_interstitial_movie(
+    row: &sqlx::sqlite::SqliteRow,
+) -> AppResult<Option<InterstitialMovieMetadata>> {
+    let Some(tvdb_id) = row
+        .try_get::<Option<String>, _>("interstitial_tvdb_id")
+        .unwrap_or(None)
+    else {
+        return Ok(None);
+    };
+
+    let genres_json = row
+        .try_get::<Option<String>, _>("interstitial_genres_json")
+        .unwrap_or(None);
+    let genres = genres_json
+        .as_deref()
+        .map(serde_json::from_str::<Vec<String>>)
+        .transpose()
+        .map_err(|err| AppError::Repository(err.to_string()))?
+        .unwrap_or_default();
+
+    Ok(Some(InterstitialMovieMetadata {
+        tvdb_id,
+        name: row.try_get("interstitial_name").unwrap_or_default(),
+        slug: row.try_get("interstitial_slug").unwrap_or_default(),
+        year: row.try_get("interstitial_year").unwrap_or(None),
+        content_status: row
+            .try_get("interstitial_content_status")
+            .unwrap_or_default(),
+        overview: row.try_get("interstitial_overview").unwrap_or_default(),
+        poster_url: row.try_get("interstitial_poster_url").unwrap_or_default(),
+        language: row.try_get("interstitial_language").unwrap_or_default(),
+        runtime_minutes: row
+            .try_get("interstitial_runtime_minutes")
+            .unwrap_or_default(),
+        sort_title: row.try_get("interstitial_sort_title").unwrap_or_default(),
+        imdb_id: row.try_get("interstitial_imdb_id").unwrap_or_default(),
+        genres,
+        studio: row.try_get("interstitial_studio").unwrap_or_default(),
+        digital_release_date: row
+            .try_get("interstitial_digital_release_date")
+            .unwrap_or(None),
+    }))
 }
 
 fn optional_text_from_column(

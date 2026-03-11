@@ -155,8 +155,8 @@ impl TestContext {
             facet_registry,
         );
 
-        // Build the GraphQL schema with dev_auto_login enabled
-        let schema = build_schema(app.clone(), db.clone(), true);
+        // Build the GraphQL schema with authentication disabled.
+        let schema = build_schema(app.clone(), db.clone(), false);
 
         // Start axum server on a random port
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -211,7 +211,7 @@ pub fn load_fixture(path: &str) -> String {
         .unwrap_or_else(|e| panic!("failed to load fixture {}: {e}", fixture_path.display()))
 }
 
-/// Build a minimal axum router with a GraphQL endpoint and dev_auto_login.
+/// Build a minimal axum router with a GraphQL endpoint and authentication disabled.
 fn build_test_router(app: AppUseCase, schema: ApiSchema) -> Router {
     Router::new().route(
         "/graphql",
@@ -219,7 +219,7 @@ fn build_test_router(app: AppUseCase, schema: ApiSchema) -> Router {
     )
 }
 
-/// Minimal GraphQL handler that replicates dev_auto_login behavior.
+/// Minimal GraphQL handler that replicates auth-disabled default-user injection.
 async fn test_graphql_handler(
     State((app, schema)): State<(AppUseCase, ApiSchema)>,
     req: GraphQLRequest,

@@ -1,7 +1,9 @@
 use super::*;
 use chrono::Utc;
 use scryer_application::UserRepository;
-use scryer_domain::{Collection, Entitlement, Episode, MediaFacet, Title};
+use scryer_domain::{
+    Collection, Entitlement, Episode, InterstitialMovieMetadata, MediaFacet, Title,
+};
 use sqlx::sqlite::SqlitePoolOptions;
 
 #[tokio::test]
@@ -339,6 +341,22 @@ async fn sqlite_show_queries_roundtrip() {
         narrative_order: Some("1".into()),
         first_episode_number: Some("1".into()),
         last_episode_number: Some("12".into()),
+        interstitial_movie: Some(InterstitialMovieMetadata {
+            tvdb_id: "12345".into(),
+            name: "Test Movie".into(),
+            slug: "test-movie".into(),
+            year: Some(2024),
+            content_status: "released".into(),
+            overview: "Interstitial overview".into(),
+            poster_url: "https://example.com/poster.jpg".into(),
+            language: "eng".into(),
+            runtime_minutes: 97,
+            sort_title: "Test Movie".into(),
+            imdb_id: "tt1234567".into(),
+            genres: vec!["Action".into(), "Anime".into()],
+            studio: "Studio Test".into(),
+            digital_release_date: Some("2024-01-01".into()),
+        }),
         monitored: true,
         created_at: Utc::now(),
     };
@@ -392,6 +410,13 @@ async fn sqlite_show_queries_roundtrip() {
 
     assert_eq!(collections.len(), 1);
     assert_eq!(collections[0].id, collection.id);
+    assert_eq!(
+        collections[0]
+            .interstitial_movie
+            .as_ref()
+            .map(|movie| movie.name.as_str()),
+        Some("Test Movie")
+    );
     let loaded_collection =
         <SqliteServices as scryer_application::ShowRepository>::get_collection_by_id(
             &services,
@@ -401,6 +426,13 @@ async fn sqlite_show_queries_roundtrip() {
         .expect("get collection by id")
         .expect("collection should exist");
     assert_eq!(loaded_collection.id, collection.id);
+    assert_eq!(
+        loaded_collection
+            .interstitial_movie
+            .as_ref()
+            .map(|movie| movie.imdb_id.as_str()),
+        Some("tt1234567")
+    );
     assert_eq!(episodes.len(), 1);
     assert_eq!(episodes[0].id, episode.id);
     let loaded_episode = <SqliteServices as scryer_application::ShowRepository>::get_episode_by_id(

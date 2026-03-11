@@ -1,8 +1,8 @@
 import { ExternalLink } from "lucide-react";
-import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
+import type { InterstitialMovieMetadata } from "@/components/containers/series-overview-container";
 import { getImdbUrl, getTvdbMovieUrl, formatRuntimeFromMinutes } from "./helpers";
 
-export function InterstitialMoviePanel({ movie }: { movie: MetadataTvdbSearchItem }) {
+export function InterstitialMoviePanel({ movie }: { movie: InterstitialMovieMetadata }) {
   const imdbUrl = getImdbUrl(movie.imdbId);
   const tvdbUrl = getTvdbMovieUrl(movie);
   const runtime = formatRuntimeFromMinutes(movie.runtimeMinutes);
@@ -31,8 +31,8 @@ export function InterstitialMoviePanel({ movie }: { movie: MetadataTvdbSearchIte
           {runtime ? (
             <span>{runtime}</span>
           ) : null}
-          {movie.status ? (
-            <span className="capitalize">{movie.status}</span>
+          {movie.contentStatus ? (
+            <span className="capitalize">{movie.contentStatus}</span>
           ) : null}
         </div>
         {movie.overview ? (

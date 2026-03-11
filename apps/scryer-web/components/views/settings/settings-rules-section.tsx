@@ -2,7 +2,7 @@ import * as React from "react";
 import { BookOpen, ChevronDown, Edit, FileCode2, Power, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LazyRegoEditor } from "@/components/common/lazy-rego-editor";
 import { RenderBooleanIcon } from "@/components/common/boolean-icon";
@@ -423,10 +423,13 @@ export function SettingsRulesSection({
               <label>
                 <Label className="mb-2 block">{t("settings.rulePriority")}</Label>
                 <Input
-                  type="number"
+                  {...integerInputProps}
                   value={ruleSetDraft.priority}
                   onChange={(e) =>
-                    setRuleSetDraft((prev) => ({ ...prev, priority: Number(e.target.value) || 0 }))
+                    setRuleSetDraft((prev) => ({
+                      ...prev,
+                      priority: Number(sanitizeDigits(e.target.value)) || 0,
+                    }))
                   }
                   placeholder="0"
                 />

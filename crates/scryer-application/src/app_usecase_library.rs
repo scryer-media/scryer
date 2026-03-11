@@ -606,6 +606,7 @@ impl AppUseCase {
             narrative_order: None,
             first_episode_number: None,
             last_episode_number: None,
+            interstitial_movie: None,
             monitored: true,
             created_at: Utc::now(),
         };

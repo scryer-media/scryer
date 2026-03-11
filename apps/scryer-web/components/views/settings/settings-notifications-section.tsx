@@ -3,7 +3,7 @@ import * as React from "react";
 import { Bell, Edit, Power, PowerOff, Send, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { Input, signedIntegerInputProps } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RenderBooleanIcon } from "@/components/common/boolean-icon";
@@ -114,6 +114,7 @@ function DynamicConfigField({
       <Input
         value={value}
         onChange={(e) => onChange(field.key, e.target.value)}
+        {...(field.fieldType === "number" ? signedIntegerInputProps : {})}
         type={field.fieldType === "password" ? "password" : field.fieldType === "number" ? "number" : "text"}
         required={field.required}
         placeholder={field.defaultValue ?? ""}

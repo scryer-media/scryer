@@ -316,6 +316,18 @@ fn registry_entry_with_type(
     entry
 }
 
+fn registry_entry_with_min_scryer_version(
+    id: &str,
+    version: &str,
+    builtin: bool,
+    wasm_url: Option<&str>,
+    min_scryer_version: &str,
+) -> serde_json::Value {
+    let mut entry = registry_entry(id, version, builtin, wasm_url);
+    entry["min_scryer_version"] = serde_json::json!(min_scryer_version);
+    entry
+}
+
 fn make_indexer_config(provider_type: &str) -> IndexerConfig {
     let now = Utc::now();
     IndexerConfig {
@@ -443,6 +455,66 @@ async fn list_registry_entries_not_installed() {
         assert!(p.installed_version.is_none());
         assert!(!p.update_available);
     }
+}
+
+#[tokio::test]
+async fn list_hides_incompatible_registry_entries_when_not_installed() {
+    let h = bootstrap_plugins(Some(MockPluginProvider::new()));
+    let json = make_registry_json(&[
+        registry_entry("alpha", "1.0.0", false, Some("https://example.com/a.wasm")),
+        registry_entry_with_min_scryer_version(
+            "torrent-rss",
+            "1.0.0",
+            false,
+            Some("https://example.com/torrent-rss.wasm"),
+            "99.0.0",
+        ),
+    ]);
+    h.plugin_repo.store_registry_cache(&json).await.unwrap();
+
+    let result = h.app.list_available_plugins(&admin()).await.unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].id, "alpha");
+}
+
+#[tokio::test]
+async fn list_keeps_installed_incompatible_registry_entries_visible() {
+    let h = bootstrap_plugins(Some(MockPluginProvider::new()));
+    let json = make_registry_json(&[registry_entry_with_min_scryer_version(
+        "torrent-rss",
+        "2.0.0",
+        false,
+        Some("https://example.com/torrent-rss.wasm"),
+        "99.0.0",
+    )]);
+    h.plugin_repo.store_registry_cache(&json).await.unwrap();
+    h.plugin_repo
+        .installations
+        .lock()
+        .await
+        .push(make_installation("torrent-rss", "1.0.0", false, true));
+
+    let result = h.app.list_available_plugins(&admin()).await.unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].id, "torrent-rss");
+    assert!(result[0].is_installed);
+    assert!(!result[0].update_available);
+}
+
+#[tokio::test]
+async fn list_hides_registry_entries_with_invalid_min_version() {
+    let h = bootstrap_plugins(Some(MockPluginProvider::new()));
+    let json = make_registry_json(&[registry_entry_with_min_scryer_version(
+        "torrent-rss",
+        "1.0.0",
+        false,
+        Some("https://example.com/torrent-rss.wasm"),
+        "not-a-semver",
+    )]);
+    h.plugin_repo.store_registry_cache(&json).await.unwrap();
+
+    let result = h.app.list_available_plugins(&admin()).await.unwrap();
+    assert!(result.is_empty());
 }
 
 #[tokio::test]
@@ -814,6 +886,34 @@ async fn install_no_wasm_url() {
 }
 
 #[tokio::test]
+async fn install_rejects_incompatible_host_version() {
+    let h = bootstrap_plugins(Some(MockPluginProvider::new()));
+    let json = make_registry_json(&[registry_entry_with_min_scryer_version(
+        "torrent-rss",
+        "1.0.0",
+        false,
+        Some("https://example.com/torrent-rss.wasm"),
+        "99.0.0",
+    )]);
+    h.plugin_repo.store_registry_cache(&json).await.unwrap();
+
+    let err = h
+        .app
+        .install_plugin(&admin(), "torrent-rss")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AppError::Validation(_)));
+    match err {
+        AppError::Validation(msg) => {
+            assert!(msg.contains("torrent-rss"));
+            assert!(msg.contains("99.0.0"));
+            assert!(msg.contains(env!("CARGO_PKG_VERSION")));
+        }
+        _ => panic!("expected Validation"),
+    }
+}
+
+#[tokio::test]
 async fn install_auth_rejects_viewer() {
     let h = bootstrap_plugins(Some(MockPluginProvider::new()));
     let err = h.app.install_plugin(&viewer(), "alpha").await.unwrap_err();
@@ -917,6 +1017,39 @@ async fn upgrade_no_wasm_url() {
     assert!(matches!(err, AppError::Validation(_)));
     match err {
         AppError::Validation(msg) => assert!(msg.contains("no wasm_url")),
+        _ => panic!("expected Validation"),
+    }
+}
+
+#[tokio::test]
+async fn upgrade_rejects_incompatible_host_version() {
+    let h = bootstrap_plugins(Some(MockPluginProvider::new()));
+    h.plugin_repo
+        .installations
+        .lock()
+        .await
+        .push(make_installation("torrent-rss", "0.1.0", false, true));
+    let json = make_registry_json(&[registry_entry_with_min_scryer_version(
+        "torrent-rss",
+        "0.2.0",
+        false,
+        Some("https://example.com/torrent-rss.wasm"),
+        "99.0.0",
+    )]);
+    h.plugin_repo.store_registry_cache(&json).await.unwrap();
+
+    let err = h
+        .app
+        .upgrade_plugin(&admin(), "torrent-rss")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AppError::Validation(_)));
+    match err {
+        AppError::Validation(msg) => {
+            assert!(msg.contains("torrent-rss"));
+            assert!(msg.contains("99.0.0"));
+            assert!(msg.contains(env!("CARGO_PKG_VERSION")));
+        }
         _ => panic!("expected Validation"),
     }
 }

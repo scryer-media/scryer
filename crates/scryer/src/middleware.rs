@@ -269,10 +269,10 @@ pub(crate) async fn graphql_ws_handler(
 ) -> Response {
     let schema = state.schema.clone();
     let app = state.app.clone();
-    let dev_auto_login = state.dev_auto_login;
+    let auth_enabled = state.auth_enabled;
 
     let mut initial_data = Data::default();
-    if dev_auto_login {
+    if !auth_enabled {
         if let Ok(user) = app.find_or_create_default_user().await {
             initial_data.insert(user);
         }
@@ -285,7 +285,7 @@ pub(crate) async fn graphql_ws_handler(
                 .with_data(initial_data)
                 .on_connection_init(move |value: serde_json::Value| async move {
                     let mut data = Data::default();
-                    if dev_auto_login {
+                    if !auth_enabled {
                         return Ok(data);
                     }
                     let token = value
@@ -320,7 +320,7 @@ pub(crate) async fn graphql_ws_handler(
 pub(crate) struct AuthState {
     pub(crate) app: AppUseCase,
     pub(crate) schema: scryer_interface::ApiSchema,
-    pub(crate) dev_auto_login: bool,
+    pub(crate) auth_enabled: bool,
 }
 
 /// GraphQL handler that returns a streaming response body.
@@ -366,9 +366,7 @@ pub(crate) async fn graphql_handler(
 }
 
 async fn resolve_actor(state: &AuthState, headers: &HeaderMap) -> Option<scryer_domain::User> {
-    if state.dev_auto_login {
-        state.app.find_or_create_default_user().await.ok()
-    } else {
+    if state.auth_enabled {
         let token = headers
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
@@ -377,6 +375,8 @@ async fn resolve_actor(state: &AuthState, headers: &HeaderMap) -> Option<scryer_
             Some(t) => state.app.authenticate_token(t).await.ok(),
             None => None,
         }
+    } else {
+        state.app.find_or_create_default_user().await.ok()
     }
 }
 
@@ -396,9 +396,15 @@ pub(crate) fn parse_bearer_token(raw: &str) -> Option<&str> {
 
 pub(crate) async fn resolve_actor_with_entitlement(
     app_use_case: &AppUseCase,
+    auth_enabled: bool,
     headers: &HeaderMap,
     required_entitlement: Entitlement,
 ) -> Result<String, AppError> {
+    if !auth_enabled {
+        let actor = app_use_case.find_or_create_default_user().await?;
+        return Ok(actor.id);
+    }
+
     let Some(auth_header) = headers.get(header::AUTHORIZATION) else {
         return Err(AppError::Unauthorized("authorization required".into()));
     };

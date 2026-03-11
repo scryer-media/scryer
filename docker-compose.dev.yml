@@ -1,24 +1,4 @@
 services:
-  # postgres:
-  #   image: postgres:18-alpine
-  #   container_name: scryer-postgres
-  #   environment:
-  #     POSTGRES_DB: scryer_metadata
-  #     POSTGRES_USER: scryer
-  #     POSTGRES_PASSWORD: scryer
-  #   ports:
-  #     - "25432:5432"
-  #   healthcheck:
-  #     test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
-  #     interval: 5s
-  #     timeout: 3s
-  #     retries: 12
-  #   command:
-  #     - postgres
-  #     - -c
-  #     - "wal_compression=on"
-  #   volumes:
-  #     - scryer-postgres-data:/var/lib/postgresql/data
 
   nzbget:
     build:
@@ -81,12 +61,12 @@ services:
       SCRYER_DB_PATH: "sqlite://file::memory:?mode=memory&cache=shared"
       SCRYER_WEB_UI_URL: http://nodejs:3000
       SCRYER_CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://0.0.0.0:3000,http://host.docker.internal:3000,http://nodejs:3000
+      SCRYER_AUTH_ENABLED: "false"
       SCRYER_METADATA_GATEWAY_GRAPHQL_URL: https://smg2.scryer.media/graphql
       SCRYER_NZBGET_URL: http://nzbget:6789/
       SCRYER_MOVIES_PATH: /media/movies
       SCRYER_SERIES_PATH: /media/series
       RUST_LOG: "info,scryer_infrastructure::metadata_gateway=debug"
-      # SCRYER_DEV_AUTO_LOGIN: "true"
     command: >
       sh -c '
         set -eu

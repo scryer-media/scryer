@@ -51,6 +51,12 @@ include!(concat!(env!("OUT_DIR"), "/smg_build_assets.rs"));
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuthModeConfig {
+    auth_enabled: bool,
+    used_legacy_dev_auto_login: bool,
+}
+
 #[tokio::main]
 async fn main() {
     // Handle CLI subcommands before any startup work
@@ -512,13 +518,13 @@ async fn bootstrap_application(
         tracing::warn!(error = %e, "failed to refresh plugin registry on startup");
     }
 
-    let dev_auto_login = std::env::var("SCRYER_DEV_AUTO_LOGIN").as_deref() == Ok("true");
+    let auth_mode = resolve_auth_mode_from_env();
     let log_buf_snapshot = log_ring_buffer.clone();
     let log_buf_subscribe = log_ring_buffer.clone();
     let schema = build_schema_with_log_buffer(
         app_use_case.clone(),
         db.clone(),
-        dev_auto_login,
+        auth_mode.auth_enabled,
         Some(LogBuffer::new(
             move |limit| log_buf_snapshot.snapshot(limit),
             move || log_buf_subscribe.subscribe(),
@@ -561,25 +567,29 @@ async fn bootstrap_application(
     if let Err(error) = dev_seed::apply_dev_seed(&app_use_case, &db).await {
         tracing::warn!(error = %error, "failed to apply dev seed file");
     }
-    if dev_auto_login {
+    if auth_mode.used_legacy_dev_auto_login {
+        tracing::warn!(
+            "SCRYER_DEV_AUTO_LOGIN is deprecated; use SCRYER_AUTH_ENABLED=false instead"
+        );
+    }
+    if auth_mode.auth_enabled {
+        tracing::info!("running with authentication enabled");
+        bootstrap_admin_password(&app_use_case).await;
+    } else {
         let addr: SocketAddr = bind.parse().expect("invalid bind address");
         if !addr.ip().is_loopback() && !addr.ip().is_unspecified() {
-            return Err(format!(
-                "SCRYER_DEV_AUTO_LOGIN=true is only allowed on loopback or unspecified \
-                 (0.0.0.0 / ::) addresses, but SCRYER_BIND={bind}. Refusing to start \
-                 with auth bypass on a routable address."
-            )
-            .into());
+            tracing::warn!(
+                bind = %bind,
+                "authentication is disabled on a non-loopback bind address; all requests will act as admin"
+            );
         }
-        tracing::warn!("SCRYER_DEV_AUTO_LOGIN=true: all GraphQL requests bypass authentication");
-    } else {
-        bootstrap_admin_password(&app_use_case).await;
+        tracing::warn!("running with authentication disabled; all requests act as admin");
     }
 
     let auth_state = AuthState {
         app: app_use_case.clone(),
         schema: schema.clone(),
-        dev_auto_login,
+        auth_enabled: auth_mode.auth_enabled,
     };
 
     let cors_for_layer = cors.clone();
@@ -611,6 +621,7 @@ async fn bootstrap_application(
                     admin_settings_list(
                         admin_settings_db.clone(),
                         admin_settings_app.clone(),
+                        auth_mode.auth_enabled,
                         headers,
                         query,
                     )
@@ -712,6 +723,43 @@ pub(crate) fn normalize_env_option(name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn parse_env_bool_value(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "y" | "on" => Some(true),
+        "0" | "false" | "no" | "n" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn resolve_auth_mode(
+    auth_enabled_raw: Option<&str>,
+    legacy_dev_auto_login_raw: Option<&str>,
+) -> AuthModeConfig {
+    if let Some(auth_enabled) = auth_enabled_raw.and_then(parse_env_bool_value) {
+        return AuthModeConfig {
+            auth_enabled,
+            used_legacy_dev_auto_login: false,
+        };
+    }
+
+    let used_legacy_dev_auto_login = matches!(
+        legacy_dev_auto_login_raw.and_then(parse_env_bool_value),
+        Some(true)
+    );
+
+    AuthModeConfig {
+        auth_enabled: false,
+        used_legacy_dev_auto_login,
+    }
+}
+
+fn resolve_auth_mode_from_env() -> AuthModeConfig {
+    resolve_auth_mode(
+        normalize_env_option("SCRYER_AUTH_ENABLED").as_deref(),
+        normalize_env_option("SCRYER_DEV_AUTO_LOGIN").as_deref(),
+    )
+}
+
 fn parse_env_u64(name: &str, default: u64) -> u64 {
     std::env::var(name)
         .ok()
@@ -754,6 +802,66 @@ async fn check_version_upgrade(db: &SqliteServices) {
         .await
     {
         tracing::warn!(error = %error, "failed to persist last_run_version");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_auth_mode, AuthModeConfig};
+
+    #[test]
+    fn auth_defaults_to_disabled() {
+        assert_eq!(
+            resolve_auth_mode(None, None),
+            AuthModeConfig {
+                auth_enabled: false,
+                used_legacy_dev_auto_login: false,
+            }
+        );
+    }
+
+    #[test]
+    fn explicit_auth_enabled_wins() {
+        assert_eq!(
+            resolve_auth_mode(Some("true"), Some("true")),
+            AuthModeConfig {
+                auth_enabled: true,
+                used_legacy_dev_auto_login: false,
+            }
+        );
+    }
+
+    #[test]
+    fn explicit_auth_disabled_wins_over_legacy_alias() {
+        assert_eq!(
+            resolve_auth_mode(Some("false"), Some("true")),
+            AuthModeConfig {
+                auth_enabled: false,
+                used_legacy_dev_auto_login: false,
+            }
+        );
+    }
+
+    #[test]
+    fn legacy_dev_auto_login_disables_auth_when_new_flag_absent() {
+        assert_eq!(
+            resolve_auth_mode(None, Some("true")),
+            AuthModeConfig {
+                auth_enabled: false,
+                used_legacy_dev_auto_login: true,
+            }
+        );
+    }
+
+    #[test]
+    fn invalid_auth_flag_falls_back_to_default_disabled() {
+        assert_eq!(
+            resolve_auth_mode(Some("garbage"), None),
+            AuthModeConfig {
+                auth_enabled: false,
+                used_legacy_dev_auto_login: false,
+            }
+        );
     }
 }
 

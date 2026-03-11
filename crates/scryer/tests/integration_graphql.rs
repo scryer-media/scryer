@@ -329,14 +329,14 @@ async fn graphql_me_query() {
     let ctx = TestContext::new().await;
     let body = gql(&ctx, "{ me { id username } }", json!({})).await;
     assert_no_errors(&body);
-    // dev_auto_login creates an "admin" user
+    // auth-disabled mode creates an "admin" user
     assert_eq!(body["data"]["me"]["username"], "admin");
 }
 
 #[tokio::test]
 async fn graphql_users_query() {
     let ctx = TestContext::new().await;
-    // Trigger dev_auto_login user creation first
+    // Trigger default admin user creation first
     gql(&ctx, "{ me { id } }", json!({})).await;
 
     let body = gql(&ctx, "{ users { id username } }", json!({})).await;

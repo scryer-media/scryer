@@ -339,11 +339,11 @@ impl SettingsMutations {
     }
 
     /// Issue a JWT for the default admin user without credentials.
-    /// Only available when SCRYER_DEV_AUTO_LOGIN=true.
+    /// Retained for compatibility when authentication is disabled.
     async fn dev_auto_login(&self, ctx: &Context<'_>) -> GqlResult<LoginPayload> {
         let api_ctx = ctx.data_unchecked::<crate::context::ApiContext>();
-        if !api_ctx.dev_auto_login {
-            return Err(Error::new("dev auto-login is not enabled"));
+        if api_ctx.auth_enabled {
+            return Err(Error::new("authentication is enabled"));
         }
         let app = &api_ctx.app;
         let user = app

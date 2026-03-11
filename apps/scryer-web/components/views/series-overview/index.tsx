@@ -9,7 +9,6 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { searchSeriesEpisodeQuery } from "@/lib/graphql/queries";
 import { queueExistingMutation } from "@/lib/graphql/mutations";
-import { searchMetadataQuery } from "@/lib/graphql/queries";
 import type {
   CollectionEpisode,
   EpisodeMediaFile,
@@ -28,8 +27,6 @@ import {
   sortDbCollections,
   findLatestSeasonKey,
   episodeSortValue,
-  dedupeInsensitive,
-  normalizeMovieCollectionLabel,
   formatDate,
 } from "./helpers";
 import { TitleSettingsPanel } from "./title-settings-panel";
@@ -287,59 +284,6 @@ export function SeriesOverviewView({
     [onAutoSearchEpisode, setGlobalStatus, t],
   );
 
-  const handleLoadInterstitialMovieMetadata = React.useCallback((collectionId: string, candidates: string[]) => {
-    if (
-      episodePanel.interstitialMovieMetadataLoadedByCollection[collectionId] ||
-      episodePanel.interstitialMovieMetadataLoadingByCollection[collectionId]
-    ) {
-      return;
-    }
-
-    const searchCandidates = dedupeInsensitive(
-      candidates
-        .map((candidate) => candidate.replace(/\s+/g, " "))
-        .filter((candidate) => candidate.trim().length > 0)
-        .map((candidate) => normalizeMovieCollectionLabel(candidate))
-        .filter((candidate): candidate is string => candidate != null),
-    );
-    if (title?.name) {
-      searchCandidates.push(title.name.trim());
-    }
-    const searchQuery = searchCandidates[0];
-    if (!searchQuery) {
-      dispatchEpisodePanel({ type: "SET_INTERSTITIAL_LOADED", collectionId });
-      dispatchEpisodePanel({ type: "SET_INTERSTITIAL_METADATA", collectionId, metadata: null });
-      return;
-    }
-
-    dispatchEpisodePanel({ type: "SET_INTERSTITIAL_LOADING", collectionId, loading: true });
-    const metadataLanguage = title?.metadataLanguage?.trim() || "eng";
-    const query = searchQuery;
-
-    client
-      .query(searchMetadataQuery, {
-        query,
-        type: "movie",
-        limit: 6,
-        language: metadataLanguage,
-      })
-      .toPromise()
-      .then((result) => {
-        if (result.error) {
-          throw result.error;
-        }
-        const found = result.data?.searchMetadata?.[0] ?? null;
-        dispatchEpisodePanel({ type: "SET_INTERSTITIAL_METADATA", collectionId, metadata: found });
-      })
-      .catch(() => {
-        dispatchEpisodePanel({ type: "SET_INTERSTITIAL_METADATA", collectionId, metadata: null });
-      })
-      .finally(() => {
-        dispatchEpisodePanel({ type: "SET_INTERSTITIAL_LOADING", collectionId, loading: false });
-        dispatchEpisodePanel({ type: "SET_INTERSTITIAL_LOADED", collectionId });
-      });
-  }, [title, episodePanel.interstitialMovieMetadataLoadedByCollection, episodePanel.interstitialMovieMetadataLoadingByCollection, client]);
-
   if (loading) {
     return (
       <div className="space-y-4">
@@ -513,14 +457,9 @@ export function SeriesOverviewView({
                   key={key}
                   collection={collection}
                   episodes={sortedEpisodes}
-                  titleName={title.name}
                   facet={title.facet}
                   expanded={expandedKeys.has(key)}
                   onToggle={() => toggleKey(key)}
-                  onLoadInterstitialMovieMetadata={handleLoadInterstitialMovieMetadata}
-                  interstitialMovieMetadata={episodePanel.interstitialMovieMetadataByCollection[collection.id] ?? null}
-                  interstitialMovieMetadataLoaded={episodePanel.interstitialMovieMetadataLoadedByCollection[collection.id] ?? false}
-                  interstitialMovieMetadataLoading={episodePanel.interstitialMovieMetadataLoadingByCollection[collection.id] ?? false}
                   expandedEpisodeRows={episodePanel.expandedEpisodeRows}
                   episodeActiveTab={episodePanel.episodeActiveTab}
                   mediaFilesByEpisode={mediaFilesByEpisode}
