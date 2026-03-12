@@ -7,12 +7,12 @@ use serde_json::json;
 
 use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_error};
 use crate::mappers::{
-    from_activity_event, from_backup_info, from_calendar_episode, from_collection,
-    from_disk_space, from_download_client_config, from_download_queue_item, from_episode,
-    from_event, from_health_check_result, from_indexer_config,
-    from_media_rename_plan, from_pending_release, from_provider_type, from_release_decision,
-    from_system_health, from_title, from_title_media_file, from_title_release_blocklist_entry,
-    from_user, from_wanted_item, map_admin_setting,
+    from_activity_event, from_backup_info, from_calendar_episode, from_collection, from_disk_space,
+    from_download_client_config, from_download_queue_item, from_episode, from_event,
+    from_health_check_result, from_indexer_config, from_media_rename_plan, from_pending_release,
+    from_provider_type, from_release_decision, from_system_health, from_title,
+    from_title_media_file, from_title_release_blocklist_entry, from_user, from_wanted_item,
+    map_admin_setting,
 };
 use crate::types::*;
 use crate::utils::parse_facet;

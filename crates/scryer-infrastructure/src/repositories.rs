@@ -8,8 +8,8 @@ use scryer_application::{
     QualityProfile as ApplicationQualityProfile, QualityProfileRepository,
     ReleaseAttemptRepository, ReleaseDecision, ReleaseDownloadAttemptOutcome,
     ReleaseDownloadFailureSignature, RuleSetRepository, SettingsRepository, ShowRepository,
-    SystemInfoProvider, TitleMediaFile, TitleMediaSizeSummary, TitleMetadataUpdate, TitleReleaseBlocklistEntry,
-    TitleRepository, UserRepository, WantedItem, WantedItemRepository,
+    SystemInfoProvider, TitleMediaFile, TitleMediaSizeSummary, TitleMetadataUpdate,
+    TitleReleaseBlocklistEntry, TitleRepository, UserRepository, WantedItem, WantedItemRepository,
 };
 use scryer_domain::{
     CalendarEpisode, Collection, DownloadClientConfig, Entitlement, Episode, HistoryEvent,
