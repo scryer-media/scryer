@@ -225,7 +225,7 @@ pub fn default_quality_profile_for_search() -> QualityProfile {
             atmos_preferred: true,
             dolby_vision_allowed: true,
             detected_hdr_allowed: true,
-            prefer_remux: true,
+            prefer_remux: false,
             allow_bd_disk: false,
             allow_upgrades: true,
             prefer_dual_audio: false,
@@ -256,7 +256,7 @@ pub fn default_quality_profile_1080p_for_search() -> QualityProfile {
             atmos_preferred: true,
             dolby_vision_allowed: true,
             detected_hdr_allowed: true,
-            prefer_remux: true,
+            prefer_remux: false,
             allow_bd_disk: false,
             allow_upgrades: true,
             prefer_dual_audio: false,
@@ -327,7 +327,7 @@ impl Default for QualityProfile {
                 atmos_preferred: false,
                 dolby_vision_allowed: true,
                 detected_hdr_allowed: true,
-                prefer_remux: true,
+                prefer_remux: false,
                 allow_bd_disk: false,
                 allow_upgrades: true,
                 prefer_dual_audio: false,
@@ -357,7 +357,7 @@ impl Default for QualityProfileCriteria {
             atmos_preferred: false,
             dolby_vision_allowed: true,
             detected_hdr_allowed: true,
-            prefer_remux: true,
+            prefer_remux: false,
             allow_bd_disk: true,
             allow_upgrades: true,
             prefer_dual_audio: false,
@@ -679,10 +679,13 @@ pub fn evaluate_against_profile(
 
     // ── Remux preference ─────────────────────────────────────────────────────
     if c.prefer_remux {
-        if release.is_remux {
-            d.log("prefer_remux_match", weights.remux_bonus);
+        let (code, delta) = if release.is_remux {
+            ("prefer_remux_match", weights.remux_bonus)
         } else {
-            d.log("prefer_remux_missing", weights.remux_missing_penalty);
+            ("prefer_remux_missing", weights.remux_missing_penalty)
+        };
+        if delta != 0 {
+            d.log(code, delta);
         }
     }
 
@@ -907,6 +910,46 @@ fn expected_size_gib_for_quality(quality: Option<&str>, media_category: MediaSiz
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SizeRatioThresholds {
+    implausible: f64,
+    excessive: f64,
+    massive: f64,
+    very_large: f64,
+    large: f64,
+    expected: f64,
+    slightly_small: f64,
+    small: f64,
+    very_small: f64,
+}
+
+fn size_ratio_thresholds(media_category: MediaSizeCategory) -> SizeRatioThresholds {
+    match media_category {
+        MediaSizeCategory::Movie | MediaSizeCategory::Series => SizeRatioThresholds {
+            implausible: 8.0,
+            excessive: 4.0,
+            massive: 2.4,
+            very_large: 1.8,
+            large: 1.35,
+            expected: 1.0,
+            slightly_small: 0.75,
+            small: 0.55,
+            very_small: 0.35,
+        },
+        MediaSizeCategory::Anime => SizeRatioThresholds {
+            implausible: 6.0,
+            excessive: 2.5,
+            massive: 2.1,
+            very_large: 1.6,
+            large: 1.2,
+            expected: 0.85,
+            slightly_small: 0.65,
+            small: 0.5,
+            very_small: 0.3,
+        },
+    }
+}
+
 /// Apply category-aware size scoring.
 ///
 /// Movies, series, and anime have different expected payload sizes at the same
@@ -940,7 +983,7 @@ pub fn apply_size_scoring_for_category(
     if matches!(source.as_deref(), Some("BLURAY")) {
         expected_gib *= 1.35;
     }
-    if release.is_remux {
+    if release.is_remux && media_category != MediaSizeCategory::Anime {
         expected_gib *= 1.45;
     }
     if release.is_bd_disk {
@@ -962,20 +1005,21 @@ pub fn apply_size_scoring_for_category(
     }
 
     let ratio = size_gib / expected_gib.max(0.5);
+    let thresholds = size_ratio_thresholds(media_category);
 
     let (code, delta) = match ratio {
-        r if r >= 8.0 => ("size_implausible_for_quality", BLOCK_SCORE),
-        r if r >= 4.0 => ("size_excessive_for_quality", 0),
-        r if r >= 2.4 => ("size_massive_for_quality", weights.size_massive),
-        r if r >= 1.8 => ("size_very_large_for_quality", weights.size_very_large),
-        r if r >= 1.35 => ("size_large_for_quality", weights.size_large),
-        r if r >= 1.0 => ("size_expected_for_quality", weights.size_expected),
-        r if r >= 0.75 => (
+        r if r >= thresholds.implausible => ("size_implausible_for_quality", BLOCK_SCORE),
+        r if r >= thresholds.excessive => ("size_excessive_for_quality", weights.size_excessive),
+        r if r >= thresholds.massive => ("size_massive_for_quality", weights.size_massive),
+        r if r >= thresholds.very_large => ("size_very_large_for_quality", weights.size_very_large),
+        r if r >= thresholds.large => ("size_large_for_quality", weights.size_large),
+        r if r >= thresholds.expected => ("size_expected_for_quality", weights.size_expected),
+        r if r >= thresholds.slightly_small => (
             "size_slightly_small_for_quality",
             weights.size_slightly_small,
         ),
-        r if r >= 0.55 => ("size_small_for_quality", weights.size_small),
-        r if r >= 0.35 => ("size_very_small_for_quality", weights.size_very_small),
+        r if r >= thresholds.small => ("size_small_for_quality", weights.size_small),
+        r if r >= thresholds.very_small => ("size_very_small_for_quality", weights.size_very_small),
         _ => ("size_tiny_for_quality", weights.size_tiny),
     };
 
@@ -1093,7 +1137,7 @@ mod tests {
     }
 
     #[test]
-    fn profile_prefers_remux_candidates() {
+    fn audiophile_profile_prefers_remux_candidates() {
         let profile = QualityProfile::parse(
             r#"{
                 "id":"remux-first",
@@ -1106,7 +1150,10 @@ mod tests {
         )
         .expect("profile must parse");
 
-        let w = balanced_weights();
+        let w = crate::scoring_weights::build_weights(
+            &crate::scoring_weights::ScoringPersona::Audiophile,
+            &crate::scoring_weights::ScoringOverrides::default(),
+        );
         let with_remux = parse_release_metadata("Movie.2021.1080p.WEB-DL.H.265.Remux.DDP2.0");
         let without_remux = parse_release_metadata("Movie.2021.1080p.WEB-DL.H.265.DDP2.0");
 

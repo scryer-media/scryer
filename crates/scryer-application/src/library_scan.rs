@@ -88,6 +88,7 @@ pub struct SeriesMetadata {
     pub seasons: Vec<SeasonMetadata>,
     pub episodes: Vec<EpisodeMetadata>,
     pub anime_mappings: Vec<AnimeMapping>,
+    pub anime_movies: Vec<AnimeMovie>,
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +98,7 @@ pub struct AnimeMapping {
     pub anidb_id: Option<i64>,
     pub kitsu_id: Option<i64>,
     pub thetvdb_id: Option<i64>,
+    pub themoviedb_id: Option<i64>,
     pub alt_tvdb_id: Option<i64>,
     pub thetvdb_season: Option<i32>,
     pub score: Option<f64>,
@@ -111,6 +113,33 @@ pub struct AnimeEpisodeMapping {
     pub tvdb_season: i32,
     pub episode_start: i32,
     pub episode_end: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct AnimeMovie {
+    pub movie_tvdb_id: Option<i64>,
+    pub movie_tmdb_id: Option<i64>,
+    pub movie_imdb_id: Option<String>,
+    pub movie_mal_id: Option<i64>,
+    pub name: String,
+    pub slug: String,
+    pub year: Option<i32>,
+    pub content_status: String,
+    pub overview: String,
+    pub poster_url: String,
+    pub language: String,
+    pub runtime_minutes: i32,
+    pub sort_title: String,
+    pub imdb_id: String,
+    pub genres: Vec<String>,
+    pub studio: String,
+    pub digital_release_date: Option<String>,
+    pub association_confidence: String,
+    pub continuity_status: String,
+    pub movie_form: String,
+    pub placement: String,
+    pub confidence: String,
+    pub signal_summary: String,
 }
 
 #[derive(Debug, Clone)]

@@ -105,6 +105,7 @@ pub struct ScoringWeights {
     pub streaming_anime: i32,
 
     // ── Size curve ─────────────────────────────────────────
+    pub size_excessive: i32,
     pub size_massive: i32,
     pub size_very_large: i32,
     pub size_large: i32,
@@ -203,6 +204,7 @@ fn apply_overrides(
     if compact != defaults.prefer_compact_encodes {
         if compact {
             let eff = efficient_weights();
+            weights.size_excessive = eff.size_excessive;
             weights.size_massive = eff.size_massive;
             weights.size_very_large = eff.size_very_large;
             weights.size_large = eff.size_large;
@@ -213,6 +215,7 @@ fn apply_overrides(
             weights.size_tiny = eff.size_tiny;
         } else {
             let bal = balanced_weights();
+            weights.size_excessive = bal.size_excessive;
             weights.size_massive = bal.size_massive;
             weights.size_very_large = bal.size_very_large;
             weights.size_large = bal.size_large;
@@ -255,9 +258,7 @@ fn apply_overrides(
 
 // ─── Persona presets ────────────────────────────────────────────────────────
 
-/// Balanced — sensible defaults matching the pre-persona hardcoded values.
-/// Produces identical scores to the legacy hardcoded constants for all
-/// currently-implemented scoring factors.
+/// Balanced — mainstream quality preference without a strong remux bias.
 pub(crate) fn balanced_weights() -> ScoringWeights {
     ScoringWeights {
         // Source
@@ -299,8 +300,8 @@ pub(crate) fn balanced_weights() -> ScoringWeights {
         sdr_at_4k_penalty: -150,
 
         // Features
-        remux_bonus: 200,
-        remux_missing_penalty: -50,
+        remux_bonus: 0,
+        remux_missing_penalty: 0,
         atmos_bonus: 100,
         atmos_missing_penalty: -20,
         dual_audio_bonus: 150,
@@ -322,7 +323,8 @@ pub(crate) fn balanced_weights() -> ScoringWeights {
         streaming_tier3: 10,
         streaming_anime: 20,
 
-        // Size curve — matches legacy values exactly
+        // Size curve
+        size_excessive: -300,
         size_massive: 550,
         size_very_large: 380,
         size_large: 240,
@@ -409,6 +411,7 @@ fn audiophile_weights() -> ScoringWeights {
         streaming_tier3: 5,
         streaming_anime: 15,
 
+        size_excessive: -150,
         size_massive: 700,
         size_very_large: 500,
         size_large: 350,
@@ -471,8 +474,8 @@ fn efficient_weights() -> ScoringWeights {
         hdr10plus: 20,
         sdr_at_4k_penalty: -80,
 
-        remux_bonus: 50,
-        remux_missing_penalty: -10,
+        remux_bonus: 0,
+        remux_missing_penalty: 0,
         atmos_bonus: 40,
         atmos_missing_penalty: -5,
         dual_audio_bonus: 80,
@@ -493,6 +496,7 @@ fn efficient_weights() -> ScoringWeights {
         streaming_anime: 25,
 
         // Inverted curve — sweet spot at or slightly below expected
+        size_excessive: -250,
         size_massive: -200,
         size_very_large: -100,
         size_large: 0,
@@ -555,8 +559,8 @@ fn compatible_weights() -> ScoringWeights {
         hdr10plus: 10,
         sdr_at_4k_penalty: 0, // SDR at 4K is fine for compatible
 
-        remux_bonus: 100,
-        remux_missing_penalty: -20,
+        remux_bonus: 0,
+        remux_missing_penalty: 0,
         atmos_bonus: 50,
         atmos_missing_penalty: -10,
         dual_audio_bonus: 100,
@@ -577,6 +581,7 @@ fn compatible_weights() -> ScoringWeights {
         streaming_anime: 20,
 
         // Standard curve
+        size_excessive: -250,
         size_massive: 550,
         size_very_large: 380,
         size_large: 240,

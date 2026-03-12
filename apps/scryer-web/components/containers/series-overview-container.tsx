@@ -76,6 +76,7 @@ export type TitleCollection = {
   firstEpisodeNumber: string | null;
   lastEpisodeNumber: string | null;
   interstitialMovie: InterstitialMovieMetadata | null;
+  specialsMovies: InterstitialMovieMetadata[];
   monitored: boolean;
   createdAt: string;
 };
@@ -95,6 +96,11 @@ export type InterstitialMovieMetadata = {
   genres: string[];
   studio: string;
   digitalReleaseDate: string | null;
+  associationConfidence: string | null;
+  continuityStatus: string | null;
+  movieForm: string | null;
+  confidence: string | null;
+  signalSummary: string | null;
 };
 
 export type TitleEvent = {

@@ -7,9 +7,9 @@ use async_trait::async_trait;
 use reqwest::Client;
 use ring::digest;
 use scryer_application::{
-    AnimeEpisodeMapping, AnimeMapping, AppError, AppResult, EpisodeMetadata, MetadataGateway,
-    MetadataSearchItem, MovieMetadata, MultiMetadataSearchResult, RichMetadataSearchItem,
-    SeasonMetadata, SeriesMetadata,
+    AnimeEpisodeMapping, AnimeMapping, AnimeMovie, AppError, AppResult, EpisodeMetadata,
+    MetadataGateway, MetadataSearchItem, MovieMetadata, MultiMetadataSearchResult,
+    RichMetadataSearchItem, SeasonMetadata, SeriesMetadata,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -173,6 +173,7 @@ const GET_SERIES_QUERY: &str = r#"
           anidb_id
           kitsu_id
           thetvdb_id
+          themoviedb_id
           alt_tvdb_id
           thetvdb_season
           score
@@ -184,6 +185,31 @@ const GET_SERIES_QUERY: &str = r#"
             episode_start
             episode_end
           }
+        }
+        anime_movies {
+          movie_tvdb_id
+          movie_tmdb_id
+          movie_imdb_id
+          movie_mal_id
+          name
+          slug
+          year
+          content_status
+          overview
+          poster_url
+          language
+          runtime_minutes
+          sort_title
+          imdb_id
+          genres
+          studio
+          digital_release_date
+          association_confidence
+          continuity_status
+          movie_form
+          placement
+          confidence
+          signal_summary
         }
       }
     }
@@ -635,9 +661,13 @@ const SERIES_FIELD_SELECTION: &str = "\
     seasons { tvdb_id number label episode_type } \
     episodes { tvdb_id episode_number season_number name aired runtime_minutes \
                is_filler is_recap overview absolute_number } \
-    anime_mappings { mal_id anilist_id anidb_id kitsu_id thetvdb_id alt_tvdb_id thetvdb_season score \
+    anime_mappings { mal_id anilist_id anidb_id kitsu_id thetvdb_id themoviedb_id alt_tvdb_id thetvdb_season score \
                      anime_media_type global_media_type status \
-                     episode_mappings { tvdb_season episode_start episode_end } }";
+                     episode_mappings { tvdb_season episode_start episode_end } } \
+    anime_movies { movie_tvdb_id movie_tmdb_id movie_imdb_id movie_mal_id name slug year \
+                   content_status overview poster_url language runtime_minutes sort_title imdb_id \
+                   genres studio digital_release_date association_confidence continuity_status \
+                   movie_form placement confidence signal_summary }";
 
 fn build_bulk_movie_query(tvdb_ids: &[i64], language: &str) -> String {
     let mut q = String::from("query {\n");
@@ -801,6 +831,8 @@ struct SeriesItem {
     episodes: Vec<SeriesEpisodeItem>,
     #[serde(default)]
     anime_mappings: Vec<AnimeMappingItem>,
+    #[serde(default)]
+    anime_movies: Vec<AnimeMovieItem>,
 }
 
 #[derive(Deserialize)]
@@ -832,6 +864,7 @@ struct AnimeMappingItem {
     anidb_id: Option<i64>,
     kitsu_id: Option<i64>,
     thetvdb_id: Option<i64>,
+    themoviedb_id: Option<i64>,
     alt_tvdb_id: Option<i64>,
     thetvdb_season: Option<i32>,
     score: Option<f64>,
@@ -847,6 +880,33 @@ struct AnimeEpisodeMappingItem {
     tvdb_season: i32,
     episode_start: i32,
     episode_end: i32,
+}
+
+#[derive(Deserialize)]
+struct AnimeMovieItem {
+    movie_tvdb_id: Option<i64>,
+    movie_tmdb_id: Option<i64>,
+    movie_imdb_id: Option<String>,
+    movie_mal_id: Option<i64>,
+    name: String,
+    slug: String,
+    year: Option<i32>,
+    content_status: String,
+    overview: String,
+    poster_url: String,
+    language: String,
+    runtime_minutes: i32,
+    sort_title: String,
+    imdb_id: String,
+    genres: Vec<String>,
+    studio: String,
+    digital_release_date: Option<String>,
+    association_confidence: String,
+    continuity_status: String,
+    movie_form: String,
+    placement: String,
+    confidence: String,
+    signal_summary: String,
 }
 
 #[async_trait]
@@ -1053,6 +1113,7 @@ impl MetadataGateway for MetadataGatewayClient {
                     anidb_id: m.anidb_id,
                     kitsu_id: m.kitsu_id,
                     thetvdb_id: m.thetvdb_id,
+                    themoviedb_id: m.themoviedb_id,
                     alt_tvdb_id: m.alt_tvdb_id,
                     thetvdb_season: m.thetvdb_season,
                     score: m.score,
@@ -1068,6 +1129,35 @@ impl MetadataGateway for MetadataGatewayClient {
                             episode_end: e.episode_end,
                         })
                         .collect(),
+                })
+                .collect(),
+            anime_movies: s
+                .anime_movies
+                .into_iter()
+                .map(|movie| AnimeMovie {
+                    movie_tvdb_id: movie.movie_tvdb_id,
+                    movie_tmdb_id: movie.movie_tmdb_id,
+                    movie_imdb_id: movie.movie_imdb_id,
+                    movie_mal_id: movie.movie_mal_id,
+                    name: movie.name,
+                    slug: movie.slug,
+                    year: movie.year,
+                    content_status: movie.content_status,
+                    overview: movie.overview,
+                    poster_url: movie.poster_url,
+                    language: movie.language,
+                    runtime_minutes: movie.runtime_minutes,
+                    sort_title: movie.sort_title,
+                    imdb_id: movie.imdb_id,
+                    genres: movie.genres,
+                    studio: movie.studio,
+                    digital_release_date: movie.digital_release_date,
+                    association_confidence: movie.association_confidence,
+                    continuity_status: movie.continuity_status,
+                    movie_form: movie.movie_form,
+                    placement: movie.placement,
+                    confidence: movie.confidence,
+                    signal_summary: movie.signal_summary,
                 })
                 .collect(),
         })
@@ -1213,6 +1303,7 @@ impl MetadataGateway for MetadataGatewayClient {
                                     anidb_id: m.anidb_id,
                                     kitsu_id: m.kitsu_id,
                                     thetvdb_id: m.thetvdb_id,
+                                    themoviedb_id: m.themoviedb_id,
                                     alt_tvdb_id: m.alt_tvdb_id,
                                     thetvdb_season: m.thetvdb_season,
                                     score: m.score,
@@ -1228,6 +1319,35 @@ impl MetadataGateway for MetadataGatewayClient {
                                             episode_end: e.episode_end,
                                         })
                                         .collect(),
+                                })
+                                .collect(),
+                            anime_movies: s
+                                .anime_movies
+                                .into_iter()
+                                .map(|movie| AnimeMovie {
+                                    movie_tvdb_id: movie.movie_tvdb_id,
+                                    movie_tmdb_id: movie.movie_tmdb_id,
+                                    movie_imdb_id: movie.movie_imdb_id,
+                                    movie_mal_id: movie.movie_mal_id,
+                                    name: movie.name,
+                                    slug: movie.slug,
+                                    year: movie.year,
+                                    content_status: movie.content_status,
+                                    overview: movie.overview,
+                                    poster_url: movie.poster_url,
+                                    language: movie.language,
+                                    runtime_minutes: movie.runtime_minutes,
+                                    sort_title: movie.sort_title,
+                                    imdb_id: movie.imdb_id,
+                                    genres: movie.genres,
+                                    studio: movie.studio,
+                                    digital_release_date: movie.digital_release_date,
+                                    association_confidence: movie.association_confidence,
+                                    continuity_status: movie.continuity_status,
+                                    movie_form: movie.movie_form,
+                                    placement: movie.placement,
+                                    confidence: movie.confidence,
+                                    signal_summary: movie.signal_summary,
                                 })
                                 .collect(),
                         },

@@ -173,7 +173,7 @@ mod tests {
                 atmos_preferred: true,
                 dolby_vision_allowed: true,
                 detected_hdr_allowed: true,
-                prefer_remux: true,
+                prefer_remux: false,
                 allow_bd_disk: false,
                 allow_upgrades: true,
                 prefer_dual_audio: false,

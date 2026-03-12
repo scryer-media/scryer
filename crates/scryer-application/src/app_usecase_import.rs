@@ -822,6 +822,7 @@ async fn import_movie_download(
                 first_episode_number: None,
                 last_episode_number: None,
                 interstitial_movie: None,
+                specials_movies: vec![],
                 monitored: true,
                 created_at: Utc::now(),
             };

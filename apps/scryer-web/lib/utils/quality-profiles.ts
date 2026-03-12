@@ -275,7 +275,7 @@ export function buildQualityProfileTemplate(profileId: string, profileName: stri
     atmos_preferred: true,
     dolby_vision_allowed: true,
     detected_hdr_allowed: true,
-    prefer_remux: true,
+    prefer_remux: false,
     prefer_dual_audio: false,
     allow_bd_disk: true,
     allow_upgrades: true,
@@ -343,7 +343,8 @@ export function toQualityProfileDraft(
       typeof entry.criteria.detected_hdr_allowed === "boolean"
         ? entry.criteria.detected_hdr_allowed
         : true,
-    prefer_remux: typeof entry.criteria.prefer_remux === "boolean" ? entry.criteria.prefer_remux : true,
+    prefer_remux:
+      typeof entry.criteria.prefer_remux === "boolean" ? entry.criteria.prefer_remux : false,
     prefer_dual_audio: typeof entry.criteria.prefer_dual_audio === "boolean" ? entry.criteria.prefer_dual_audio : false,
     allow_bd_disk: typeof entry.criteria.allow_bd_disk === "boolean" ? entry.criteria.allow_bd_disk : true,
     allow_upgrades:

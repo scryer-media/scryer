@@ -117,9 +117,10 @@ export function OverviewControlPanel({
           )}
         >
           <ActionButton
-            label="Monitor"
+            label={monitored ? "Stop Monitoring" : "Monitor"}
             icon={monitored ? BellOff : Bell}
             active={monitored}
+            destructive={monitored}
             loading={monitoredUpdating}
             disabled={!onToggleMonitoring}
             onClick={onToggleMonitoring}

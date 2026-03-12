@@ -29,6 +29,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SearchResultBuckets } from "@/components/common/release-search-results";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { Release } from "@/lib/types";
+import { cn } from "@/lib/utils";
+import {
+  boxedActionButtonBaseClass,
+  boxedActionButtonToneClass,
+  type BoxedActionButtonTone,
+} from "@/lib/utils/action-button-styles";
 import type {
   CollectionEpisode,
   EpisodeMediaFile,
@@ -46,6 +52,35 @@ import {
 import { EpisodeDetailsPanel } from "./episode-details-panel";
 import { InterstitialMoviePanel } from "./interstitial-movie-panel";
 import { EpisodeBlocklistPanel } from "./episode-blocklist-panel";
+
+function EpisodeTableActionButton({
+  label,
+  tone,
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof Button> & {
+  label: string;
+  tone: Extract<BoxedActionButtonTone, "auto" | "search">;
+}) {
+  return (
+    <Button
+      type="button"
+      size="icon-sm"
+      variant="secondary"
+      title={label}
+      aria-label={label}
+      className={cn(
+        boxedActionButtonBaseClass,
+        boxedActionButtonToneClass[tone],
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </Button>
+  );
+}
 
 export function SeasonSection({
   collection,
@@ -163,6 +198,9 @@ export function SeasonSection({
             ) : isSpecialsCollection(collection) ? (
               <span className="inline-flex items-center gap-1">
                 <Star className="h-3 w-3" />
+                {collection.specialsMovies.length > 0
+                  ? `${collection.specialsMovies.length} movie${collection.specialsMovies.length === 1 ? "" : "s"} · `
+                  : ""}
                 {episodes.length} special{episodes.length === 1 ? "" : "s"}
               </span>
             ) : (
@@ -175,22 +213,22 @@ export function SeasonSection({
           {onRunSeasonSearch && !isSpecialsCollection(collection) && collection.collectionType !== "interstitial" ? (
             <HoverCard openDelay={600} closeDelay={75}>
               <HoverCardTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
+                <EpisodeTableActionButton
+                  tone="search"
                   aria-label={t("series.searchSeason")}
                   disabled={seasonSearchLoading === true}
                   onClick={(e) => {
                     e.stopPropagation();
                     onRunSeasonSearch();
                   }}
+                  label={t("series.searchSeason")}
                 >
                   {seasonSearchLoading === true ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
                     <Search className="h-4 w-4" />
                   )}
-                </Button>
+                </EpisodeTableActionButton>
               </HoverCardTrigger>
               <HoverCardContent side="left" className="w-auto p-2 text-xs">
                 {t("help.seasonSearchTooltip")}
@@ -211,6 +249,20 @@ export function SeasonSection({
           </div>
         ) : (
           <>
+            {isSpecialsCollection(collection) && collection.specialsMovies.length > 0 ? (
+              <div className="border-t border-border px-4 py-3">
+                <div className="space-y-4">
+                  {collection.specialsMovies.map((movie) => (
+                    <div
+                      key={`${collection.id}-${movie.tvdbId || movie.name}`}
+                      className="rounded-xl border border-border/70 bg-card/40 p-3"
+                    >
+                      <InterstitialMoviePanel movie={movie} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {seasonSearchResults && seasonSearchResults.length > 0 && onQueueFromSeasonSearch ? (
               <div className="border-t border-border px-4 py-3">
                 <p className="mb-2 text-xs font-medium text-muted-foreground">Season pack results</p>
@@ -222,7 +274,9 @@ export function SeasonSection({
             ) : null}
             {episodes.length === 0 ? (
               <div className="border-t border-border px-4 py-3 text-sm text-muted-foreground">
-                No episode records for this season.
+                {collection.specialsMovies.length > 0
+                  ? "No episode records for this season."
+                  : "No episode records for this season."}
               </div>
             ) : (
           <Table>
@@ -233,7 +287,7 @@ export function SeasonSection({
                 <TableHead>Title</TableHead>
                 <TableHead className="w-40">Air Date</TableHead>
                 <TableHead className="w-28 text-center">{t("episode.quality")}</TableHead>
-                <TableHead className="w-20 text-right">Actions</TableHead>
+                <TableHead className="w-28 text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -347,19 +401,18 @@ export function SeasonSection({
                           {onAutoSearchEpisode ? (
                             <HoverCard openDelay={3000} closeDelay={75}>
                               <HoverCardTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  aria-label={t("label.search")}
+                                <EpisodeTableActionButton
+                                  tone="auto"
                                   onClick={() => onAutoSearchEpisode?.(episode)}
                                   disabled={autoSearching}
+                                  label={t("label.search")}
                                 >
                                   {autoSearching ? (
                                     <Loader2 className="h-4 w-4 animate-spin" />
                                   ) : (
                                     <Zap className="h-4 w-4" />
                                   )}
-                                </Button>
+                                </EpisodeTableActionButton>
                               </HoverCardTrigger>
                               <HoverCardContent>
                                 <p className="max-w-[18rem] whitespace-normal break-words text-sm">
@@ -370,14 +423,13 @@ export function SeasonSection({
                           ) : null}
                           <HoverCard openDelay={3000} closeDelay={75}>
                             <HoverCardTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                aria-label={t("label.search")}
+                              <EpisodeTableActionButton
+                                tone="search"
                                 onClick={() => onToggleEpisodeSearch(episode)}
+                                label={t("label.search")}
                               >
                                 <Search className="h-4 w-4" />
-                              </Button>
+                              </EpisodeTableActionButton>
                             </HoverCardTrigger>
                             <HoverCardContent>
                               <p className="max-w-[18rem] whitespace-normal break-words text-sm">

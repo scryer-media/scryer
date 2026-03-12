@@ -70,6 +70,11 @@ pub struct InterstitialMovieMetadataPayload {
     pub genres: Vec<String>,
     pub studio: String,
     pub digital_release_date: Option<String>,
+    pub association_confidence: Option<String>,
+    pub continuity_status: Option<String>,
+    pub movie_form: Option<String>,
+    pub confidence: Option<String>,
+    pub signal_summary: Option<String>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -85,6 +90,7 @@ pub struct CollectionPayload {
     pub first_episode_number: Option<String>,
     pub last_episode_number: Option<String>,
     pub interstitial_movie: Option<InterstitialMovieMetadataPayload>,
+    pub specials_movies: Vec<InterstitialMovieMetadataPayload>,
     pub monitored: bool,
     pub created_at: String,
 }

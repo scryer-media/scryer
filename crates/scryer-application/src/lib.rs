@@ -93,9 +93,9 @@ pub use library_rename::{
     RenameMissingMetadataPolicy, RenamePlan, RenamePlanItem, RenameWriteAction,
 };
 pub use library_scan::{
-    AnimeEpisodeMapping, AnimeMapping, EpisodeMetadata, LibraryFile, LibraryScanSummary,
-    LibraryScanner, MetadataGateway, MetadataSearchItem, MovieMetadata, MultiMetadataSearchResult,
-    RichMetadataSearchItem, SeasonMetadata, SeriesMetadata,
+    AnimeEpisodeMapping, AnimeMapping, AnimeMovie, EpisodeMetadata, LibraryFile,
+    LibraryScanSummary, LibraryScanner, MetadataGateway, MetadataSearchItem, MovieMetadata,
+    MultiMetadataSearchResult, RichMetadataSearchItem, SeasonMetadata, SeriesMetadata,
 };
 pub use null_repositories::{
     NullDownloadSubmissionRepository, NullFileImporter, NullHousekeepingRepository,
@@ -3044,6 +3044,7 @@ mod tests {
             anidb_id: None,
             kitsu_id: None,
             thetvdb_id: Some(348545),
+            themoviedb_id: Some(438759),
             alt_tvdb_id: Some(131_963),
             thetvdb_season: Some(0),
             score: None,
@@ -3056,9 +3057,40 @@ mod tests {
                 episode_end: 1,
             }],
         }];
+        let anime_movies = vec![AnimeMovie {
+            movie_tvdb_id: Some(131_963),
+            movie_tmdb_id: Some(438759),
+            movie_imdb_id: Some("tt11032374".into()),
+            movie_mal_id: Some(40456),
+            name: "Mugen Train".into(),
+            slug: "mugen-train".into(),
+            year: Some(2020),
+            content_status: "released".into(),
+            overview: "Demon Slayer: Mugen Train".into(),
+            poster_url: "poster".into(),
+            language: "eng".into(),
+            runtime_minutes: 117,
+            sort_title: "Mugen Train".into(),
+            imdb_id: "tt11032374".into(),
+            genres: vec!["Action".into()],
+            studio: "ufotable".into(),
+            digital_release_date: Some("2020-10-16".into()),
+            association_confidence: "high".into(),
+            continuity_status: "canon".into(),
+            movie_form: "movie".into(),
+            placement: "ordered".into(),
+            confidence: "high".into(),
+            signal_summary: "TVDB marked special as critical to story".into(),
+        }];
 
-        app.create_series_seasons_and_episodes(&title, &seasons, &episodes, &anime_mappings)
-            .await;
+        app.create_series_seasons_and_episodes(
+            &title,
+            &seasons,
+            &episodes,
+            &anime_mappings,
+            &anime_movies,
+        )
+        .await;
 
         let collections = app
             .list_collections(&user, &title.id)
@@ -3157,6 +3189,7 @@ mod tests {
             anidb_id: None,
             kitsu_id: None,
             thetvdb_id: Some(361218),
+            themoviedb_id: None,
             alt_tvdb_id: None,
             thetvdb_season: Some(0),
             score: None,
@@ -3170,7 +3203,7 @@ mod tests {
             }],
         }];
 
-        app.create_series_seasons_and_episodes(&title, &seasons, &episodes, &anime_mappings)
+        app.create_series_seasons_and_episodes(&title, &seasons, &episodes, &anime_mappings, &[])
             .await;
 
         let collections = app
@@ -3182,6 +3215,161 @@ mod tests {
                 .iter()
                 .all(|collection| collection.collection_type != "interstitial"),
             "unexpected interstitial collection created"
+        );
+    }
+
+    #[tokio::test]
+    async fn anime_specials_movies_attach_to_specials_collection_and_keep_ordered_movies_separate()
+    {
+        let (app, user) = bootstrap();
+        let title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: "Attack on Titan".into(),
+                    facet: MediaFacet::Anime,
+                    monitored: true,
+                    tags: vec!["scryer:monitor-specials:false".into()],
+                    external_ids: vec![ExternalId {
+                        source: "tvdb".into(),
+                        value: "267440".into(),
+                    }],
+                    min_availability: None,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create title");
+
+        let seasons = vec![
+            SeasonMetadata {
+                tvdb_id: 50,
+                number: 0,
+                label: "Specials".into(),
+                episode_type: "special".into(),
+            },
+            SeasonMetadata {
+                tvdb_id: 51,
+                number: 1,
+                label: "Season 1".into(),
+                episode_type: "official".into(),
+            },
+            SeasonMetadata {
+                tvdb_id: 52,
+                number: 2,
+                label: "Season 2".into(),
+                episode_type: "official".into(),
+            },
+        ];
+        let episodes = vec![
+            EpisodeMetadata {
+                tvdb_id: 5001,
+                episode_number: 1,
+                name: "To You, in 2000 Years".into(),
+                aired: "2013-04-07".into(),
+                runtime_minutes: 24,
+                is_filler: false,
+                is_recap: false,
+                overview: "Episode 1".into(),
+                absolute_number: "1".into(),
+                season_number: 1,
+            },
+            EpisodeMetadata {
+                tvdb_id: 6001,
+                episode_number: 1,
+                name: "Beast Titan".into(),
+                aired: "2017-04-01".into(),
+                runtime_minutes: 24,
+                is_filler: false,
+                is_recap: false,
+                overview: "Episode 1".into(),
+                absolute_number: "26".into(),
+                season_number: 2,
+            },
+        ];
+
+        let anime_movies = vec![
+            AnimeMovie {
+                movie_tvdb_id: Some(379088),
+                movie_tmdb_id: Some(379088),
+                movie_imdb_id: Some("tt3865768".into()),
+                movie_mal_id: Some(23775),
+                name: "Attack on Titan: Crimson Bow and Arrow".into(),
+                slug: "crimson-bow-and-arrow".into(),
+                year: Some(2014),
+                content_status: "released".into(),
+                overview: "Recap of episodes 1-13.".into(),
+                poster_url: "poster-aot".into(),
+                language: "eng".into(),
+                runtime_minutes: 120,
+                sort_title: "Crimson Bow and Arrow".into(),
+                imdb_id: "tt3865768".into(),
+                genres: vec!["Action".into()],
+                studio: "WIT Studio".into(),
+                digital_release_date: Some("2014-11-22".into()),
+                association_confidence: "high".into(),
+                continuity_status: "unknown".into(),
+                movie_form: "recap".into(),
+                placement: "specials".into(),
+                confidence: "high".into(),
+                signal_summary: "TVDB special category marks this as a recap".into(),
+            },
+            AnimeMovie {
+                movie_tvdb_id: Some(131963),
+                movie_tmdb_id: Some(438759),
+                movie_imdb_id: Some("tt11032374".into()),
+                movie_mal_id: Some(40456),
+                name: "Mugen Train".into(),
+                slug: "mugen-train".into(),
+                year: Some(2020),
+                content_status: "released".into(),
+                overview: "Canon bridge movie".into(),
+                poster_url: "poster-ds".into(),
+                language: "eng".into(),
+                runtime_minutes: 117,
+                sort_title: "Mugen Train".into(),
+                imdb_id: "tt11032374".into(),
+                genres: vec!["Action".into()],
+                studio: "ufotable".into(),
+                digital_release_date: Some("2020-10-16".into()),
+                association_confidence: "high".into(),
+                continuity_status: "canon".into(),
+                movie_form: "movie".into(),
+                placement: "ordered".into(),
+                confidence: "high".into(),
+                signal_summary: "TVDB marked special as critical to story".into(),
+            },
+        ];
+
+        app.create_series_seasons_and_episodes(&title, &seasons, &episodes, &[], &anime_movies)
+            .await;
+
+        let collections = app
+            .list_collections(&user, &title.id)
+            .await
+            .expect("list collections");
+        let specials = collections
+            .iter()
+            .find(|collection| collection.collection_type == "specials")
+            .expect("specials collection should exist");
+        assert!(!specials.monitored);
+        assert_eq!(specials.specials_movies.len(), 1);
+        assert_eq!(
+            specials.specials_movies[0].movie_form.as_deref(),
+            Some("recap")
+        );
+
+        let interstitial = collections
+            .iter()
+            .find(|collection| collection.collection_type == "interstitial")
+            .expect("ordered movie collection should exist");
+        assert!(interstitial.monitored);
+        assert_eq!(
+            interstitial
+                .interstitial_movie
+                .as_ref()
+                .and_then(|movie| movie.continuity_status.as_deref()),
+            Some("canon")
         );
     }
 

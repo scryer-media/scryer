@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Balanced preset matches legacy hardcoded values ───────────────────────
+// ── Balanced preset defaults ───────────────────────────────────────────────
 
 #[test]
 fn balanced_source_matches_legacy() {
@@ -42,10 +42,10 @@ fn balanced_dv_hdr_matches_legacy() {
 }
 
 #[test]
-fn balanced_features_match_legacy() {
+fn balanced_features_match_current_defaults() {
     let w = build_weights(&ScoringPersona::Balanced, &ScoringOverrides::default());
-    assert_eq!(w.remux_bonus, 200);
-    assert_eq!(w.remux_missing_penalty, -50);
+    assert_eq!(w.remux_bonus, 0);
+    assert_eq!(w.remux_missing_penalty, 0);
     assert_eq!(w.atmos_bonus, 100);
     assert_eq!(w.atmos_missing_penalty, -20);
     assert_eq!(w.dual_audio_bonus, 150);
@@ -57,6 +57,7 @@ fn balanced_features_match_legacy() {
 #[test]
 fn balanced_size_curve_matches_legacy() {
     let w = build_weights(&ScoringPersona::Balanced, &ScoringOverrides::default());
+    assert_eq!(w.size_excessive, -300);
     assert_eq!(w.size_massive, 550);
     assert_eq!(w.size_very_large, 380);
     assert_eq!(w.size_large, 240);
@@ -127,6 +128,7 @@ fn override_compact_off_on_efficient_uses_normal_curve() {
         },
     );
     // Should use normal curve now
+    assert_eq!(w.size_excessive, -300);
     assert_eq!(w.size_massive, 550);
     assert_eq!(w.size_slightly_small, 0);
 }

@@ -5,7 +5,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LINUX_TARGET="x86_64-unknown-linux-gnu"
 HOST_TARGET="$(rustc -vV | sed -n 's/^host: //p')"
 LINUX_IMAGE="${SCRYER_LINUX_CLIPPY_IMAGE:-rust:1.94-bookworm}"
-LINUX_PLATFORM="${SCRYER_LINUX_CLIPPY_PLATFORM:-linux/amd64}"
+LINUX_PLATFORM="${SCRYER_LINUX_CLIPPY_PLATFORM:-linux/arm64}"
 LINUX_ONLY=false
 
 for arg in "$@"; do
