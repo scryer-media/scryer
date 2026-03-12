@@ -740,14 +740,8 @@ pub(crate) fn synthesize_local_title_image_url(
 ) -> String {
     let version = version_hash.chars().take(16).collect::<String>();
     format!(
-        "{}{}?v={}",
-        base_path,
-        format!(
-            "/images/titles/{title_id}/{}/{}",
-            kind.as_str(),
-            variant_key
-        ),
-        version
+        "{base_path}/images/titles/{title_id}/{}/{variant_key}?v={version}",
+        kind.as_str()
     )
 }
 

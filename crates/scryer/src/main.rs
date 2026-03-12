@@ -776,17 +776,14 @@ async fn title_image_handler(
 }
 
 fn if_none_match_matches(raw_header: &str, quoted_etag: &str, bare_etag: &str) -> bool {
-    raw_header
-        .split(',')
-        .map(str::trim)
-        .any(|candidate| {
-            candidate == "*"
-                || candidate == quoted_etag
-                || candidate == bare_etag
-                || candidate
-                    .strip_prefix("W/")
-                    .is_some_and(|weak| weak == quoted_etag || weak == bare_etag)
-        })
+    raw_header.split(',').map(str::trim).any(|candidate| {
+        candidate == "*"
+            || candidate == quoted_etag
+            || candidate == bare_etag
+            || candidate
+                .strip_prefix("W/")
+                .is_some_and(|weak| weak == quoted_etag || weak == bare_etag)
+    })
 }
 
 /// ValidateOnly mode: check for pending migrations and exit.

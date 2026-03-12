@@ -28,6 +28,18 @@ pub struct NzbgetDownloadClient {
     http_client: Client,
 }
 
+#[derive(Clone, Copy)]
+struct NzbgetAppendRequest<'a> {
+    job_id: &'a str,
+    title_name: &'a str,
+    nzb_filename: &'a str,
+    source_for_payload: &'a str,
+    category: &'a str,
+    queue_priority: i32,
+    parameters: &'a [Value],
+    use_auto_category: bool,
+}
+
 impl NzbgetDownloadClient {
     pub fn new(
         rpc_url: String,
@@ -288,25 +300,9 @@ impl NzbgetDownloadClient {
 
     async fn send_append_request(
         &self,
-        job_id: &str,
-        title_name: &str,
-        nzb_filename: &str,
-        source_for_payload: &str,
-        category: &str,
-        queue_priority: i32,
-        parameters: &[Value],
-        use_auto_category: bool,
+        append_request: &NzbgetAppendRequest<'_>,
     ) -> AppResult<i64> {
-        let request_payload = build_nzbget_append_payload(
-            job_id,
-            nzb_filename,
-            source_for_payload,
-            category,
-            queue_priority,
-            &self.dupe_mode,
-            parameters,
-            use_auto_category,
-        );
+        let request_payload = build_nzbget_append_payload(append_request, &self.dupe_mode);
 
         let mut request_payload_for_log = request_payload.clone();
         if let Some(params) = request_payload_for_log
@@ -321,7 +317,7 @@ impl NzbgetDownloadClient {
         let endpoint = self.endpoint();
         tracing::info!(
             endpoint = endpoint.as_str(),
-            auto_category = use_auto_category,
+            auto_category = append_request.use_auto_category,
             payload = %request_payload_for_log,
             "nzbget append request payload"
         );
@@ -363,8 +359,8 @@ impl NzbgetDownloadClient {
                 endpoint = endpoint.as_str(),
                 status = status.to_string().as_str(),
                 preview = preview.as_str(),
-                title = title_name,
-                auto_category = use_auto_category,
+                title = append_request.title_name,
+                auto_category = append_request.use_auto_category,
                 "nzbget request failed"
             );
             return Err(AppError::Repository(format!(
@@ -403,10 +399,10 @@ impl NzbgetDownloadClient {
         debug!(
             endpoint = endpoint.as_str(),
             nzb_id = result,
-            job_id,
-            title = title_name,
-            category,
-            auto_category = use_auto_category,
+            job_id = append_request.job_id,
+            title = append_request.title_name,
+            category = append_request.category,
+            auto_category = append_request.use_auto_category,
             "nzbget append succeeded"
         );
 
@@ -834,39 +830,32 @@ impl DownloadClient for NzbgetDownloadClient {
 
         let use_auto_category = self.append_requires_auto_category().await;
         let queue_priority = nzbget_queue_priority(request.queue_priority.as_deref());
-        match self
-            .send_append_request(
-                &job_id,
-                title.name.as_str(),
-                &nzb_filename,
-                &source_for_payload,
-                &category,
-                queue_priority,
-                &parameters,
-                use_auto_category,
-            )
-            .await
-        {
+        let append_request = NzbgetAppendRequest {
+            job_id: &job_id,
+            title_name: title.name.as_str(),
+            nzb_filename: &nzb_filename,
+            source_for_payload: &source_for_payload,
+            category: &category,
+            queue_priority,
+            parameters: &parameters,
+            use_auto_category,
+        };
+
+        match self.send_append_request(&append_request).await {
             Ok(queue_id) => queue_id,
             Err(err) if is_nzbget_invalid_procedure_error(&err) => {
-                let retry_use_auto_category = !use_auto_category;
+                let retry_use_auto_category = !append_request.use_auto_category;
                 warn!(
                     error = %err,
                     retry_auto_category = retry_use_auto_category,
                     title = title.name.as_str(),
                     "nzbget append rejected payload shape; retrying alternate append signature"
                 );
-                self.send_append_request(
-                    &job_id,
-                    title.name.as_str(),
-                    &nzb_filename,
-                    &source_for_payload,
-                    &category,
-                    queue_priority,
-                    &parameters,
-                    retry_use_auto_category,
-                )
-                .await?
+                let retry_request = NzbgetAppendRequest {
+                    use_auto_category: retry_use_auto_category,
+                    ..append_request
+                };
+                self.send_append_request(&retry_request).await?
             }
             Err(err) => return Err(err),
         };
@@ -1465,37 +1454,28 @@ fn supports_nzbget_append_auto_category(version: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn build_nzbget_append_payload(
-    job_id: &str,
-    nzb_filename: &str,
-    source_for_payload: &str,
-    category: &str,
-    queue_priority: i32,
-    dupe_mode: &str,
-    parameters: &[Value],
-    use_auto_category: bool,
-) -> Value {
+fn build_nzbget_append_payload(append_request: &NzbgetAppendRequest<'_>, dupe_mode: &str) -> Value {
     let mut params = vec![
-        json!(nzb_filename),
-        json!(source_for_payload),
-        json!(category),
-        json!(queue_priority),
+        json!(append_request.nzb_filename),
+        json!(append_request.source_for_payload),
+        json!(append_request.category),
+        json!(append_request.queue_priority),
         json!(false),
         json!(false),
         json!(""),
         json!(0),
         json!(dupe_mode),
     ];
-    if use_auto_category {
+    if append_request.use_auto_category {
         params.push(json!(false));
     }
-    params.push(json!(parameters));
+    params.push(json!(append_request.parameters));
 
     json!({
         "version": "2.0",
         "method": "append",
         "params": params,
-        "id": job_id,
+        "id": append_request.job_id,
     })
 }
 
@@ -1553,6 +1533,38 @@ fn sanitize_nzb_name(name: &str) -> String {
     sanitize_filename_with_nzb_ext(without_ext)
 }
 
+fn derive_nzb_filename(
+    source_title: Option<&str>,
+    source_hint: &str,
+    fallback_title: &str,
+) -> String {
+    if let Some(title) = source_title {
+        return sanitize_nzb_name(title);
+    }
+
+    if let Ok(url) = reqwest::Url::parse(source_hint) {
+        if let Some(query_title) = url.query_pairs().find_map(|(key, value)| {
+            (key.eq_ignore_ascii_case("title")
+                || key.eq_ignore_ascii_case("dn")
+                || key.eq_ignore_ascii_case("name"))
+            .then(|| value.into_owned())
+        }) {
+            return sanitize_nzb_name(&query_title);
+        }
+
+        if let Some(path_segment) = url.path_segments().and_then(|segments| {
+            let mut segments = segments;
+            segments.rfind(|segment| !segment.is_empty())
+        }) {
+            if path_segment.to_ascii_lowercase().ends_with(".nzb") {
+                return sanitize_nzb_name(path_segment);
+            }
+        }
+    }
+
+    sanitize_filename_with_nzb_ext(fallback_title)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1600,16 +1612,17 @@ mod tests {
     #[test]
     fn build_append_payload_uses_legacy_signature_for_older_servers() {
         let parameters = vec![json!({"*scryer_title_id": "title-1"})];
-        let payload = build_nzbget_append_payload(
-            "job-1",
-            "Example.nzb",
-            "base64-data",
-            "movies",
-            0,
-            "SCORE",
-            &parameters,
-            false,
-        );
+        let append_request = NzbgetAppendRequest {
+            job_id: "job-1",
+            title_name: "Example",
+            nzb_filename: "Example.nzb",
+            source_for_payload: "base64-data",
+            category: "movies",
+            queue_priority: 0,
+            parameters: &parameters,
+            use_auto_category: false,
+        };
+        let payload = build_nzbget_append_payload(&append_request, "SCORE");
 
         let params = payload
             .get("params")
@@ -1623,16 +1636,17 @@ mod tests {
     #[test]
     fn build_append_payload_includes_auto_category_for_newer_servers() {
         let parameters = vec![json!({"*scryer_title_id": "title-1"})];
-        let payload = build_nzbget_append_payload(
-            "job-1",
-            "Example.nzb",
-            "base64-data",
-            "movies",
-            0,
-            "SCORE",
-            &parameters,
-            true,
-        );
+        let append_request = NzbgetAppendRequest {
+            job_id: "job-1",
+            title_name: "Example",
+            nzb_filename: "Example.nzb",
+            source_for_payload: "base64-data",
+            category: "movies",
+            queue_priority: 0,
+            parameters: &parameters,
+            use_auto_category: true,
+        };
+        let payload = build_nzbget_append_payload(&append_request, "SCORE");
 
         let params = payload
             .get("params")
@@ -1654,36 +1668,4 @@ mod tests {
         assert_eq!(nzbget_queue_priority(Some("very low")), -100);
         assert_eq!(nzbget_queue_priority(None), 0);
     }
-}
-
-fn derive_nzb_filename(
-    source_title: Option<&str>,
-    source_hint: &str,
-    fallback_title: &str,
-) -> String {
-    if let Some(title) = source_title {
-        return sanitize_nzb_name(title);
-    }
-
-    if let Ok(url) = reqwest::Url::parse(source_hint) {
-        if let Some(query_title) = url.query_pairs().find_map(|(key, value)| {
-            (key.eq_ignore_ascii_case("title")
-                || key.eq_ignore_ascii_case("dn")
-                || key.eq_ignore_ascii_case("name"))
-            .then(|| value.into_owned())
-        }) {
-            return sanitize_nzb_name(&query_title);
-        }
-
-        if let Some(path_segment) = url.path_segments().and_then(|segments| {
-            let mut segments = segments;
-            segments.rfind(|segment| !segment.is_empty())
-        }) {
-            if path_segment.to_ascii_lowercase().ends_with(".nzb") {
-                return sanitize_nzb_name(path_segment);
-            }
-        }
-    }
-
-    sanitize_filename_with_nzb_ext(fallback_title)
 }

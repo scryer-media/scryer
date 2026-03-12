@@ -309,7 +309,7 @@ fn summary_candidate_sort_key(candidate: &SummaryCandidate) -> (String, bool, bo
         candidate
             .ordered_path
             .as_deref()
-            .map_or(true, |path| path.trim().is_empty()),
+            .is_none_or(|path| path.trim().is_empty()),
         candidate
             .collection_index
             .parse::<u32>()
@@ -1322,7 +1322,7 @@ mod tests {
 
     #[test]
     fn movie_collection_wins_over_index_zero_fallback() {
-        let mut candidates = vec![
+        let mut candidates = [
             SummaryCandidate {
                 title_id: "title-1".to_string(),
                 collection_type: "season".to_string(),
@@ -1346,7 +1346,7 @@ mod tests {
 
     #[test]
     fn movie_collection_with_path_wins_over_pathless_movie_collection() {
-        let mut candidates = vec![
+        let mut candidates = [
             SummaryCandidate {
                 title_id: "title-1".to_string(),
                 collection_type: "movie".to_string(),
