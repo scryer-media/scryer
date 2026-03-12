@@ -36,7 +36,7 @@ use admin_routes::{
     admin_migrations_handler, admin_settings_list, bootstrap_admin_password,
     seed_indexer_configs_from_env, AdminSettingsQuery,
 };
-use base_path::{mount_router, BasePath};
+use base_path::BasePath;
 use middleware::{
     cors_handler, graphiql_handler, graphql_handler, graphql_ws_handler, health_handler, AuthState,
     CorsConfig,
@@ -175,7 +175,6 @@ async fn main() {
             jwt_access_ttl_seconds,
             bootstrap_bind,
             cors,
-            base_path.clone(),
             bootstrap_shutdown,
             log_ring_buffer,
             metrics_handle,
@@ -261,7 +260,6 @@ async fn bootstrap_application(
     jwt_access_ttl_seconds: u64,
     bind: String,
     cors: CorsConfig,
-    base_path: BasePath,
     shutdown_token: CancellationToken,
     log_ring_buffer: log_buffer::LogRingBuffer,
     metrics_handle: Option<metrics_exporter_prometheus::PrometheusHandle>,
@@ -659,7 +657,6 @@ async fn bootstrap_application(
         .layer(axum::middleware::from_fn(move |request, next| {
             cors_handler(request, next, cors_for_layer.clone())
         }));
-    let app = mount_router(app, &base_path);
 
     match ui_asset_mode() {
         UiAssetMode::Filesystem(dist_dir) => {

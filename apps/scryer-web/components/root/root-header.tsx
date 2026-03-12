@@ -41,6 +41,15 @@ function renderMetadataResultKey(section: string, tvdbId: string, name: string, 
   return `${section}-${tvdbId}-${name}-${year ?? ""}`;
 }
 
+function SearchSectionLoading({ label }: { label: string }) {
+  return (
+    <div className="flex min-h-24 items-center gap-3 rounded-lg border border-dashed border-border/80 bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+      <Loader2 className="h-4 w-4 animate-spin text-emerald-500" />
+      <span>{label}</span>
+    </div>
+  );
+}
+
 export const RootHeader = React.memo(function RootHeader({
   routeCommandPalette,
   onOpenOverview,
@@ -70,6 +79,8 @@ export const RootHeader = React.memo(function RootHeader({
   const hasAnyMatches =
     searchState.catalogSearchResults.length > 0 ||
     FACET_REGISTRY.some((f) => (searchState.metadataSearchResults[f.metadataKey] ?? []).length > 0);
+  const showSectionResults =
+    searchState.catalogSearchLoading || searchState.metadataSearchLoading || hasAnyMatches;
 
   const catalogSearchSections = React.useMemo(
     () => Object.fromEntries(
@@ -578,7 +589,7 @@ export const RootHeader = React.memo(function RootHeader({
                   ref={searchPanelRef}
                   className="absolute left-0 top-full z-30 mt-2 w-full max-h-[65vh] overflow-y-auto rounded-xl border border-border bg-card p-4 shadow-lg"
                 >
-                {hasAnyMatches ? (
+                {showSectionResults ? (
                   <div className="space-y-4">
                     <section className="space-y-2">
                       <h3 className="text-sm font-semibold text-foreground">{t("search.catalog")}</h3>
@@ -590,7 +601,9 @@ export const RootHeader = React.memo(function RootHeader({
                               <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                                 {sectionLabelForFacet(t, f.id)}
                               </h4>
-                              {items.length === 0 ? (
+                              {searchState.catalogSearchLoading ? (
+                                <SearchSectionLoading label={t("label.loading")} />
+                              ) : items.length === 0 ? (
                                 <p className="text-sm text-muted-foreground">
                                   {t("search.noCatalogMatches")}
                                 </p>
@@ -610,7 +623,9 @@ export const RootHeader = React.memo(function RootHeader({
                               <h3 className="text-sm font-semibold text-foreground">
                                 {sectionLabelForFacet(t, f.id)}
                               </h3>
-                              {items.length === 0 ? (
+                              {searchState.metadataSearchLoading ? (
+                                <SearchSectionLoading label={t("label.loading")} />
+                              ) : items.length === 0 ? (
                                 <p className="text-sm text-muted-foreground">
                                   {t("search.noMetadataMatches")}
                                 </p>

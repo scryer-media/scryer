@@ -62,7 +62,7 @@ services:
       SCRYER_WEB_UI_URL: http://nodejs:3000
       SCRYER_CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://0.0.0.0:3000,http://host.docker.internal:3000,http://nodejs:3000
       SCRYER_AUTH_ENABLED: "false"
-      SCRYER_METADATA_GATEWAY_GRAPHQL_URL: https://smg2.scryer.media/graphql
+      SCRYER_METADATA_GATEWAY_GRAPHQL_URL: https://smg.scryer.media/graphql
       SCRYER_NZBGET_URL: http://nzbget:6789/
       SCRYER_MOVIES_PATH: /media/movies
       SCRYER_SERIES_PATH: /media/series
