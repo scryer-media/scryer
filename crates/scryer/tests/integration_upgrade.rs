@@ -1,12 +1,16 @@
+#![recursion_limit = "256"]
+
 mod common;
 
 use std::sync::Arc;
 
 use common::TestContext;
 use scryer_application::recycle_bin::RecycleBinConfig;
-use scryer_application::upgrade::execute_upgrade;
-use scryer_application::{ActivityKind, ActivitySeverity, InsertMediaFileInput, TitleRepository};
-use scryer_domain::{MediaFacet, Title};
+use scryer_application::upgrade::{execute_upgrade, UpgradeResult};
+use scryer_application::{
+    ActivityKind, ActivitySeverity, InsertMediaFileInput, QualityProfile, TitleRepository,
+};
+use scryer_domain::{CompletedDownload, MediaFacet, Title, User};
 use scryer_infrastructure::FsFileImporter;
 
 // ---------------------------------------------------------------------------
@@ -20,7 +24,7 @@ fn app_with_real_fs(ctx: &TestContext) -> scryer_application::AppUseCase {
     app
 }
 
-async fn seed_title(ctx: &TestContext, id: &str) {
+async fn seed_title(ctx: &TestContext, id: &str) -> Title {
     let title = Title {
         id: id.to_string(),
         name: "Test Movie".to_string(),
@@ -50,7 +54,8 @@ async fn seed_title(ctx: &TestContext, id: &str) {
         min_availability: None,
         digital_release_date: None,
     };
-    ctx.db.create(title).await.expect("seed title");
+    ctx.db.create(title.clone()).await.expect("seed title");
+    title
 }
 
 fn make_recycle_config(base: &std::path::Path) -> RecycleBinConfig {
@@ -88,6 +93,24 @@ fn last_upgrade_event(
     events.iter().find(|e| e.kind == ActivityKind::FileUpgraded)
 }
 
+fn test_actor() -> User {
+    User::new_admin("admin")
+}
+
+fn test_completed_download() -> CompletedDownload {
+    CompletedDownload {
+        client_type: "nzbget".to_string(),
+        client_id: "client-1".to_string(),
+        download_client_item_id: "download-1".to_string(),
+        name: "Test Movie".to_string(),
+        dest_dir: "/downloads".to_string(),
+        category: Some("movie".to_string()),
+        size_bytes: Some(1024),
+        completed_at: Some(chrono::Utc::now()),
+        parameters: vec![],
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Happy path
 // ---------------------------------------------------------------------------
@@ -96,7 +119,10 @@ fn last_upgrade_event(
 async fn upgrade_replaces_old_file_with_new() {
     let ctx = TestContext::new().await;
     let app = app_with_real_fs(&ctx);
-    seed_title(&ctx, "title-1").await;
+    let title = seed_title(&ctx, "title-1").await;
+    let actor = test_actor();
+    let completed = test_completed_download();
+    let quality_profile = QualityProfile::default();
 
     // Set up directories
     let media_dir = tempfile::tempdir().expect("media dir");
@@ -121,18 +147,26 @@ async fn upgrade_replaces_old_file_with_new() {
 
     let outcome = execute_upgrade(
         &app,
-        "Test Movie",
-        "title-1",
+        &actor,
+        &title,
         &existing,
         &new_source,
         &new_dest,
         &parsed,
+        &quality_profile,
+        &completed,
         650,
         400,
+        &[],
+        false,
         &recycle_config,
     )
     .await
     .expect("execute_upgrade");
+
+    let UpgradeResult::Upgraded(outcome) = outcome else {
+        panic!("expected upgrade to succeed");
+    };
 
     assert_eq!(outcome.old_score, 400);
     assert_eq!(outcome.new_score, 650);
@@ -173,7 +207,10 @@ async fn upgrade_replaces_old_file_with_new() {
 async fn upgrade_restores_old_file_on_import_failure() {
     let ctx = TestContext::new().await;
     let app = app_with_real_fs(&ctx);
-    seed_title(&ctx, "title-2").await;
+    let title = seed_title(&ctx, "title-2").await;
+    let actor = test_actor();
+    let completed = test_completed_download();
+    let quality_profile = QualityProfile::default();
 
     let media_dir = tempfile::tempdir().expect("media dir");
     let recycle_dir = tempfile::tempdir().expect("recycle dir");
@@ -192,14 +229,18 @@ async fn upgrade_restores_old_file_on_import_failure() {
 
     let result = execute_upgrade(
         &app,
-        "Test Movie",
-        "title-2",
+        &actor,
+        &title,
         &existing,
         &bad_source,
         &new_dest,
         &parsed,
+        &quality_profile,
+        &completed,
         700,
         400,
+        &[],
+        false,
         &recycle_config,
     )
     .await;
@@ -229,7 +270,10 @@ async fn upgrade_restores_old_file_on_import_failure() {
 async fn upgrade_with_disabled_recycle_bin() {
     let ctx = TestContext::new().await;
     let app = app_with_real_fs(&ctx);
-    seed_title(&ctx, "title-3").await;
+    let title = seed_title(&ctx, "title-3").await;
+    let actor = test_actor();
+    let completed = test_completed_download();
+    let quality_profile = QualityProfile::default();
 
     let media_dir = tempfile::tempdir().expect("media dir");
     let source_dir = tempfile::tempdir().expect("source dir");
@@ -253,18 +297,26 @@ async fn upgrade_with_disabled_recycle_bin() {
 
     let outcome = execute_upgrade(
         &app,
-        "Test Movie",
-        "title-3",
+        &actor,
+        &title,
         &existing,
         &new_source,
         &new_dest,
         &parsed,
+        &quality_profile,
+        &completed,
         600,
         300,
+        &[],
+        false,
         &disabled_config,
     )
     .await
     .expect("execute_upgrade");
+
+    let UpgradeResult::Upgraded(outcome) = outcome else {
+        panic!("expected upgrade to succeed");
+    };
 
     assert_eq!(outcome.new_score, 600);
 

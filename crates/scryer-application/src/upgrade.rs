@@ -15,12 +15,13 @@ use scryer_domain::{CompletedDownload, Title, User};
 
 /// Result of a successful upgrade operation.
 #[derive(Debug)]
-pub(crate) struct UpgradeOutcome {
+pub struct UpgradeOutcome {
     pub old_score: i32,
     pub new_score: i32,
+    pub new_file_id: String,
 }
 
-pub(crate) enum UpgradeResult {
+pub enum UpgradeResult {
     Upgraded(UpgradeOutcome),
     Rejected(crate::post_download_gate::ImportedFileRejection),
 }
@@ -29,7 +30,7 @@ pub(crate) enum UpgradeResult {
 ///
 /// If the new file import fails, the old file is restored from the recycle bin
 /// so that we never lose both copies.
-pub(crate) async fn execute_upgrade(
+pub async fn execute_upgrade(
     app: &AppUseCase,
     actor: &User,
     title: &Title,
@@ -197,6 +198,7 @@ pub(crate) async fn execute_upgrade(
             Ok(UpgradeResult::Upgraded(UpgradeOutcome {
                 old_score,
                 new_score,
+                new_file_id,
             }))
         }
     }
