@@ -112,7 +112,7 @@ pub(crate) async fn execute_upgrade(
             )
             .await;
             restore_old_file(&recycle_result, &old_path).await;
-            return Ok(UpgradeResult::Rejected(rejection));
+            Ok(UpgradeResult::Rejected(rejection))
         }
         crate::post_download_gate::ImportedFileGateDecision::Accepted(accepted) => {
             // 4. Delete old media_files record
@@ -194,10 +194,10 @@ pub(crate) async fn execute_upgrade(
                 )
                 .await?;
 
-            return Ok(UpgradeResult::Upgraded(UpgradeOutcome {
+            Ok(UpgradeResult::Upgraded(UpgradeOutcome {
                 old_score,
                 new_score,
-            }));
+            }))
         }
     }
 }
