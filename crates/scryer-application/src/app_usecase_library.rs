@@ -4,7 +4,7 @@ use std::time::UNIX_EPOCH;
 
 use super::*;
 use crate::nfo::parse_nfo;
-use tracing::info;
+use tracing::{info, warn};
 
 const METADATA_TYPE_MOVIE: &str = "movie";
 const RENAME_TEMPLATE_KEY: &str = "rename.template";
@@ -544,6 +544,284 @@ impl AppUseCase {
             skipped = summary.skipped,
             unmatched = summary.unmatched,
             "library scan completed"
+        );
+
+        Ok(summary)
+    }
+
+    pub async fn scan_title_library(
+        &self,
+        actor: &User,
+        title_id: &str,
+    ) -> AppResult<LibraryScanSummary> {
+        require(actor, &Entitlement::ManageTitle)?;
+
+        let title = self
+            .services
+            .titles
+            .get_by_id(title_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("title {}", title_id)))?;
+
+        let handler = self.facet_registry.get(&title.facet).ok_or_else(|| {
+            AppError::Validation("library scan is not supported for this facet".into())
+        })?;
+        if !handler.has_episodes() {
+            return Err(AppError::Validation(
+                "title library scan is only supported for episodic titles".into(),
+            ));
+        }
+
+        let (media_root, _) = crate::app_usecase_import::resolve_import_paths(self, &title).await?;
+        let title_dir = PathBuf::from(&media_root).join(&title.name);
+        let title_dir_str = title_dir.to_string_lossy().to_string();
+
+        let files = self
+            .services
+            .library_scanner
+            .scan_directory(&title_dir_str)
+            .await?;
+
+        let existing_files = self
+            .services
+            .media_files
+            .list_media_files_for_title(&title.id)
+            .await
+            .unwrap_or_default();
+
+        let mut file_ids_by_path: HashMap<String, String> = HashMap::new();
+        let mut existing_records_by_path: HashMap<String, TitleMediaFile> = HashMap::new();
+        let mut episode_links: HashSet<(String, String)> = HashSet::new();
+
+        for file in &existing_files {
+            file_ids_by_path
+                .entry(file.file_path.clone())
+                .or_insert_with(|| file.id.clone());
+            existing_records_by_path
+                .entry(file.file_path.clone())
+                .or_insert_with(|| file.clone());
+            if let Some(episode_id) = file.episode_id.as_ref() {
+                episode_links.insert((file.id.clone(), episode_id.clone()));
+            }
+        }
+
+        let scanned_paths: HashSet<String> = files.iter().map(|file| file.path.clone()).collect();
+        let stale_paths: Vec<String> = existing_records_by_path
+            .iter()
+            .filter(|(path, record)| {
+                path.starts_with(title_dir_str.as_str())
+                    && !scanned_paths.contains(*path)
+                    && !Path::new(&record.file_path).exists()
+            })
+            .map(|(path, _)| path.clone())
+            .collect();
+
+        for stale_path in stale_paths {
+            if let Some(record) = existing_records_by_path.remove(&stale_path) {
+                file_ids_by_path.remove(&stale_path);
+                if let Err(error) = self
+                    .services
+                    .media_files
+                    .delete_media_file(&record.id)
+                    .await
+                {
+                    warn!(
+                        error = %error,
+                        title_id = %title.id,
+                        file_path = %record.file_path,
+                        "failed to delete stale media file during title scan"
+                    );
+                }
+            }
+        }
+
+        let mut summary = LibraryScanSummary::default();
+
+        for file in files {
+            summary.scanned += 1;
+
+            let source_path = Path::new(&file.path);
+            let parsed = parse_release_metadata(
+                source_path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or(file.display_name.as_str()),
+            );
+
+            let ep_meta = match parsed.episode.as_ref() {
+                Some(ep) if !ep.episode_numbers.is_empty() => ep,
+                Some(ep)
+                    if ep.absolute_episode.is_some()
+                        && title.facet == scryer_domain::MediaFacet::Anime =>
+                {
+                    ep
+                }
+                _ => {
+                    summary.unmatched += 1;
+                    continue;
+                }
+            };
+
+            let season_str = ep_meta.season.unwrap_or(1).to_string();
+            let target_episodes = crate::app_usecase_import::resolve_target_episodes(
+                self,
+                &title,
+                ep_meta,
+                &season_str,
+            )
+            .await;
+
+            if target_episodes.is_empty() {
+                summary.unmatched += 1;
+                continue;
+            }
+
+            summary.matched += 1;
+
+            let file_id = if let Some(existing_id) = file_ids_by_path.get(&file.path).cloned() {
+                summary.skipped += 1;
+                existing_id
+            } else {
+                let size_bytes = std::fs::metadata(source_path)
+                    .map(|meta| meta.len() as i64)
+                    .unwrap_or(0);
+                let media_file_input = crate::InsertMediaFileInput {
+                    title_id: title.id.clone(),
+                    file_path: file.path.clone(),
+                    size_bytes,
+                    quality_label: parsed.quality.clone(),
+                    scene_name: Some(parsed.raw_title.clone()),
+                    release_group: parsed.release_group.clone(),
+                    source_type: parsed.source.clone(),
+                    resolution: parsed.quality.clone(),
+                    video_codec_parsed: parsed.video_codec.clone(),
+                    audio_codec_parsed: parsed.audio.clone(),
+                    ..Default::default()
+                };
+
+                match self
+                    .services
+                    .media_files
+                    .insert_media_file(&media_file_input)
+                    .await
+                {
+                    Ok(file_id) => {
+                        file_ids_by_path.insert(file.path.clone(), file_id.clone());
+                        summary.imported += 1;
+                        file_id
+                    }
+                    Err(error) => {
+                        warn!(
+                            error = %error,
+                            title_id = %title.id,
+                            file_path = %file.path,
+                            "failed to insert media file during title scan"
+                        );
+                        summary.skipped += 1;
+                        continue;
+                    }
+                }
+            };
+
+            for episode in &target_episodes {
+                if episode_links.insert((file_id.clone(), episode.id.clone())) {
+                    if let Err(error) = self
+                        .services
+                        .media_files
+                        .link_file_to_episode(&file_id, &episode.id)
+                        .await
+                    {
+                        warn!(
+                            error = %error,
+                            title_id = %title.id,
+                            episode_id = %episode.id,
+                            file_id = %file_id,
+                            "failed to link scanned file to episode"
+                        );
+                    }
+                }
+                crate::app_usecase_import::mark_wanted_completed(
+                    self,
+                    &title.id,
+                    Some(&episode.id),
+                    None,
+                )
+                .await;
+            }
+
+            match scryer_mediainfo::analyze_file(source_path) {
+                Ok(analysis) if scryer_mediainfo::is_valid_video(&analysis) => {
+                    if let Err(error) = self
+                        .services
+                        .media_files
+                        .update_media_file_analysis(
+                            &file_id,
+                            crate::post_download_gate::build_media_file_analysis(&analysis),
+                        )
+                        .await
+                    {
+                        warn!(
+                            error = %error,
+                            title_id = %title.id,
+                            file_id = %file_id,
+                            "failed to persist scanned media analysis"
+                        );
+                    }
+                }
+                Ok(_) => {
+                    if let Err(error) = self
+                        .services
+                        .media_files
+                        .mark_scan_failed(&file_id, "file is not a valid video")
+                        .await
+                    {
+                        warn!(
+                            error = %error,
+                            title_id = %title.id,
+                            file_id = %file_id,
+                            "failed to mark invalid scanned media file"
+                        );
+                    }
+                }
+                Err(error) => {
+                    if let Err(mark_error) = self
+                        .services
+                        .media_files
+                        .mark_scan_failed(&file_id, &error.to_string())
+                        .await
+                    {
+                        warn!(
+                            error = %mark_error,
+                            title_id = %title.id,
+                            file_id = %file_id,
+                            "failed to mark scanned media analysis failure"
+                        );
+                    }
+                }
+            }
+        }
+
+        self.services
+            .record_event(
+                Some(actor.id.clone()),
+                Some(title.id.clone()),
+                EventType::ActionCompleted,
+                format!(
+                    "title scan completed: {} imported, {} skipped, {} unmatched",
+                    summary.imported, summary.skipped, summary.unmatched
+                ),
+            )
+            .await?;
+
+        info!(
+            title_id = %title.id,
+            path = %title_dir.display(),
+            scanned = summary.scanned,
+            matched = summary.matched,
+            imported = summary.imported,
+            skipped = summary.skipped,
+            unmatched = summary.unmatched,
+            "title library scan completed"
         );
 
         Ok(summary)

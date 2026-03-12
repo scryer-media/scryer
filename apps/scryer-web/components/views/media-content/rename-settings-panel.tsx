@@ -169,8 +169,6 @@ export function RenameSettingsPanel({
   handleRenameCollisionPolicyChange,
   categoryRenameMissingMetadataPolicies,
   handleRenameMissingMetadataPolicyChange,
-  categoryPreferredSubGroup,
-  handlePreferredSubGroupChange,
   updateCategoryMediaProfileSettings,
 }: {
   activeQualityScopeId: ViewCategoryId;
@@ -182,8 +180,6 @@ export function RenameSettingsPanel({
   handleRenameCollisionPolicyChange: (value: string) => void;
   categoryRenameMissingMetadataPolicies: Record<ViewCategoryId, string>;
   handleRenameMissingMetadataPolicyChange: (value: string) => void;
-  categoryPreferredSubGroup: Record<ViewCategoryId, string>;
-  handlePreferredSubGroupChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
   updateCategoryMediaProfileSettings: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
 }) {
   const t = useTranslate();
@@ -329,20 +325,6 @@ export function RenameSettingsPanel({
           <p className="text-xs text-muted-foreground">
             {t("settings.renamePolicyHelp")}
           </p>
-
-          {activeQualityScopeId === "anime" && (
-            <label className="block space-y-2">
-              <Label className="text-sm text-card-foreground">
-                {t("settings.preferredSubGroupLabel")}
-              </Label>
-              <Input
-                value={categoryPreferredSubGroup[activeQualityScopeId]}
-                onChange={handlePreferredSubGroupChange}
-                placeholder={t("settings.preferredSubGroupPlaceholder")}
-                disabled={mediaSettingsLoading}
-              />
-            </label>
-          )}
 
           <div className="flex justify-end">
             <Button type="submit" disabled={mediaSettingsSaving || renameValidationError !== null}>

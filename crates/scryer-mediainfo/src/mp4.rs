@@ -175,6 +175,7 @@ pub(crate) fn parse_mp4(path: &Path) -> Result<RawContainer, MediaInfoError> {
     Ok(RawContainer {
         format_name,
         duration_seconds,
+        num_chapters: None,
         tracks,
     })
 }

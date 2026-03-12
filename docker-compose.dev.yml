@@ -66,6 +66,9 @@ services:
       SCRYER_NZBGET_URL: http://nzbget:6789/
       SCRYER_MOVIES_PATH: /media/movies
       SCRYER_SERIES_PATH: /media/series
+      SCRYER_TITLE_IMAGE_AVIF_SPEED: "10"
+      SCRYER_TITLE_IMAGE_AVIF_QUALITY: "60"
+      SCRYER_SMG_REGISTRATION_SECRET: ${SCRYER_SMG_REGISTRATION_SECRET}
       RUST_LOG: "info,scryer_infrastructure::metadata_gateway=debug"
     command: >
       sh -c '

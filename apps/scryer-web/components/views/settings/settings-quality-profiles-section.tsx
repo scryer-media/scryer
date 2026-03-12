@@ -1,6 +1,6 @@
 
 import * as React from "react";
-import { ArrowLeft, ArrowRight, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, Edit, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -19,6 +19,12 @@ import {
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
 import { PERSONA_OVERRIDE_DEFAULTS } from "@/lib/constants/quality-profiles";
+import { cn } from "@/lib/utils";
+import {
+  boxedActionButtonBaseClass,
+  boxedActionButtonToneClass,
+  type BoxedActionButtonTone,
+} from "@/lib/utils/action-button-styles";
 
 type ViewCategoryId = "movie" | "series" | "anime";
 
@@ -156,6 +162,35 @@ type SettingsQualityProfilesSectionProps = {
   archivalQualityOptions: Array<{ value: string; label: string }>;
   deleteQualityProfile: (profileId: string) => Promise<void>;
 };
+
+function QualityProfileActionButton({
+  label,
+  tone,
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof Button> & {
+  label: string;
+  tone: Extract<BoxedActionButtonTone, "edit" | "delete">;
+}) {
+  return (
+    <Button
+      type="button"
+      size="icon-sm"
+      variant="secondary"
+      title={label}
+      aria-label={label}
+      className={cn(
+        boxedActionButtonBaseClass,
+        boxedActionButtonToneClass[tone],
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </Button>
+  );
+}
 
 function ProfileListEditor({
   title,
@@ -569,18 +604,15 @@ export function SettingsQualityProfilesSection({
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="secondary"
+                        <QualityProfileActionButton
+                          tone="edit"
                           onClick={() => loadQualityProfileById(profile.id)}
+                          label={t("label.edit")}
                         >
-                          {t("label.load")}
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="destructive"
+                          <Edit className="h-4 w-4" />
+                        </QualityProfileActionButton>
+                        <QualityProfileActionButton
+                          tone="delete"
                           disabled={
                             qualityProfilesSaving ||
                             profile.id === globalQualityProfileId ||
@@ -589,10 +621,10 @@ export function SettingsQualityProfilesSection({
                             )
                           }
                           onClick={() => void deleteQualityProfile(profile.id)}
-                          aria-label={t("label.delete")}
+                          label={t("label.delete")}
                         >
                           <Trash2 className="h-4 w-4" />
-                        </Button>
+                        </QualityProfileActionButton>
                       </div>
                     </TableCell>
                   </TableRow>

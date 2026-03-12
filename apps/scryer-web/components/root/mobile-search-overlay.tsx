@@ -22,6 +22,7 @@ import {
   defaultMonitorTypeForFacet,
 } from "@/lib/facets/helpers";
 import { useSearchContext } from "@/lib/context/search-context";
+import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 
 type MobileSearchOverlayProps = {
   onClose: () => void;
@@ -89,15 +90,27 @@ export function MobileSearchOverlay({
     [searchState.catalogSearchResults],
   );
 
-  const { resolveDefaultQualityProfileIdForFacet, addMetadataSearchResultToCatalog, isMetadataSearchResultInCatalog, catalogQualityProfileOptions } = searchState;
+  const {
+    resolveDefaultQualityProfileIdForFacet,
+    animeCatalogDefaults,
+    addMetadataSearchResultToCatalog,
+    isMetadataSearchResultInCatalog,
+    catalogQualityProfileOptions,
+  } = searchState;
   const defaultAddOptionsForFacet = React.useCallback(
     (facet: Facet): MetadataCatalogAddOptions => ({
       qualityProfileId: resolveDefaultQualityProfileIdForFacet(facet),
       seasonFolder: facet !== "movie",
       monitorType: defaultMonitorTypeForFacet(facet),
       ...(facet === "movie" ? { minAvailability: "announced" } : {}),
+      ...(facet === "anime"
+        ? {
+            monitorSpecials: animeCatalogDefaults.monitorSpecials,
+            interSeasonMovies: animeCatalogDefaults.interSeasonMovies,
+          }
+        : {}),
     }),
-    [resolveDefaultQualityProfileIdForFacet],
+    [animeCatalogDefaults, resolveDefaultQualityProfileIdForFacet],
   );
 
   const toggleMetadataAddOptionsCard = React.useCallback(
@@ -120,7 +133,9 @@ export function MobileSearchOverlay({
           current.qualityProfileId === next.qualityProfileId &&
           current.seasonFolder === next.seasonFolder &&
           current.monitorType === next.monitorType &&
-          current.minAvailability === next.minAvailability
+          current.minAvailability === next.minAvailability &&
+          current.monitorSpecials === next.monitorSpecials &&
+          current.interSeasonMovies === next.interSeasonMovies
         )
           return previous;
         return { ...previous, [cardKey]: next };
@@ -164,6 +179,7 @@ export function MobileSearchOverlay({
       const tvdbId = title.externalIds
         .find((externalId) => externalId.source.toLowerCase() === "tvdb")
         ?.value.trim();
+      const posterUrl = selectPosterVariantUrl(title.posterUrl, "w70");
 
       return (
         <button
@@ -178,9 +194,9 @@ export function MobileSearchOverlay({
         >
           <div className="flex min-h-[44px] items-center gap-3">
             <div className="h-16 w-11 flex-none overflow-hidden rounded-md border border-border bg-muted">
-              {title.posterUrl ? (
+              {posterUrl ? (
                 <img
-                  src={title.posterUrl}
+                  src={posterUrl}
                   alt={t("media.posterAlt", { name: title.name })}
                   className="h-full w-full object-cover"
                   loading="lazy"
@@ -227,14 +243,15 @@ export function MobileSearchOverlay({
               { value: "allEpisodes", label: t("search.monitorType.allEpisodes") },
               { value: "none", label: t("search.monitorType.none") },
             ];
+      const posterUrl = selectPosterVariantUrl(result.posterUrl, "w70");
 
       return (
         <div key={cardKey} className="rounded-lg border border-border bg-card/60 p-3">
           <div className="flex min-h-[44px] items-center gap-3">
             <div className="h-16 w-11 flex-none overflow-hidden rounded-md border border-border bg-muted">
-              {result.posterUrl ? (
+              {posterUrl ? (
                 <img
-                  src={result.posterUrl}
+                  src={posterUrl}
                   alt={t("media.posterAlt", { name: result.name })}
                   className="h-full w-full object-cover"
                   loading="lazy"
@@ -323,6 +340,40 @@ export function MobileSearchOverlay({
                   </Select>
                 </label>
               ) : null}
+              {facet === "anime" ? (
+                <>
+                  <label className="space-y-1">
+                    <span className="block text-xs font-medium text-card-foreground">
+                      {t("settings.monitorSpecialsLabel")}
+                    </span>
+                    <div className="flex min-h-10 w-full items-center">
+                      <Checkbox
+                        className="h-8 w-8"
+                        checked={draft.monitorSpecials !== false}
+                        onCheckedChange={(checked) =>
+                          updateMetadataAddDraft(cardKey, facet, { monitorSpecials: checked === true })
+                        }
+                        disabled={isAdding}
+                      />
+                    </div>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="block text-xs font-medium text-card-foreground">
+                      {t("settings.interSeasonMoviesLabel")}
+                    </span>
+                    <div className="flex min-h-10 w-full items-center">
+                      <Checkbox
+                        className="h-8 w-8"
+                        checked={draft.interSeasonMovies !== false}
+                        onCheckedChange={(checked) =>
+                          updateMetadataAddDraft(cardKey, facet, { interSeasonMovies: checked === true })
+                        }
+                        disabled={isAdding}
+                      />
+                    </div>
+                  </label>
+                </>
+              ) : null}
 
               {facet === "movie" ? (
                 <>
@@ -338,27 +389,6 @@ export function MobileSearchOverlay({
                         disabled={isAdding}
                       />
                     </div>
-                  </label>
-                  <label className="space-y-1">
-                    <span className="block text-xs font-medium text-card-foreground">
-                      {t("settings.minAvailabilityLabel")}
-                    </span>
-                    <Select
-                      value={draft.minAvailability ?? "announced"}
-                      onValueChange={(v) =>
-                        updateMetadataAddDraft(cardKey, facet, { minAvailability: v })
-                      }
-                      disabled={isAdding}
-                    >
-                      <SelectTrigger className="h-10 w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="announced">{t("settings.minAvailability.announced")}</SelectItem>
-                        <SelectItem value="in_cinemas">{t("settings.minAvailability.in_cinemas")}</SelectItem>
-                        <SelectItem value="released">{t("settings.minAvailability.released")}</SelectItem>
-                      </SelectContent>
-                    </Select>
                   </label>
                 </>
               ) : (

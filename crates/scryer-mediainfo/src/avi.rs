@@ -49,6 +49,7 @@ pub(crate) fn parse_avi(path: &Path) -> Result<RawContainer, MediaInfoError> {
     Ok(RawContainer {
         format_name: "avi".into(),
         duration_seconds,
+        num_chapters: None,
         tracks,
     })
 }

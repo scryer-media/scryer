@@ -34,21 +34,25 @@ export type DownloadClientTypeOption = {
 
 export type DownloadClientConfigPayloadRecord = Record<string, JsonValue>;
 
-export type NzbgetCategoryRoutingSettings = {
+export type DownloadClientRoutingSettings = {
+  enabled: boolean;
   category: string;
-  recentPriority: string;
-  olderPriority: string;
+  recentQueuePriority: string;
+  olderQueuePriority: string;
   removeCompleted: boolean;
   removeFailed: boolean;
-  tags: string[];
 };
 
-export type NzbgetClientRoutingSettingsByClient = Record<
+export type DownloadClientRoutingSettingsByClient = Record<
   string,
-  NzbgetCategoryRoutingSettings
+  DownloadClientRoutingSettings
 >;
 
-export type NzbgetClientRoutingSettingsByScope = Record<
+export type DownloadClientRoutingSettingsByScope = Record<
   ViewCategoryId,
-  NzbgetClientRoutingSettingsByClient
+  DownloadClientRoutingSettingsByClient
 >;
+
+export type NzbgetCategoryRoutingSettings = DownloadClientRoutingSettings;
+export type NzbgetClientRoutingSettingsByClient = DownloadClientRoutingSettingsByClient;
+export type NzbgetClientRoutingSettingsByScope = DownloadClientRoutingSettingsByScope;

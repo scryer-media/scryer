@@ -49,5 +49,19 @@ export function resolveIndexerBaseUrl(
 export function showStandardIndexerConnectionFields(
   provider: ProviderTypeInfo | null | undefined,
 ): boolean {
-  return !provider?.defaultBaseUrl && !providerDerivesBaseUrlFromConfig(provider);
+  return showIndexerBaseUrlField(provider) && showIndexerApiKeyField(provider);
+}
+
+export function showIndexerBaseUrlField(
+  provider: ProviderTypeInfo | null | undefined,
+): boolean {
+  return (
+    !provider?.defaultBaseUrl && !providerDerivesBaseUrlFromConfig(provider)
+  );
+}
+
+export function showIndexerApiKeyField(
+  provider: ProviderTypeInfo | null | undefined,
+): boolean {
+  return !providerDerivesBaseUrlFromConfig(provider);
 }

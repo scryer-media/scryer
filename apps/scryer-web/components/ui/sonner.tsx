@@ -8,10 +8,11 @@ import {
 } from "lucide-react"
 import { useTheme } from "next-themes"
 import { Toaster as Sonner, type ToasterProps } from "sonner"
+import { isDarkTheme } from "@/lib/theme"
 
 const Toaster = ({ ...props }: ToasterProps) => {
   const { resolvedTheme } = useTheme()
-  const isDark = resolvedTheme === "dark"
+  const isDark = isDarkTheme(resolvedTheme)
 
   return (
     <Sonner

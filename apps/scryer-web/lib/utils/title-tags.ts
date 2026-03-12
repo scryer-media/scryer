@@ -7,7 +7,6 @@ export const ANIME_MEDIA_TYPE_PREFIX = "scryer:anime-media-type:";
 export const ANIME_STATUS_PREFIX = "scryer:anime-status:";
 export const MONITOR_SPECIALS_PREFIX = "scryer:monitor-specials:";
 export const INTER_SEASON_MOVIES_PREFIX = "scryer:inter-season-movies:";
-export const PREFERRED_SUB_GROUP_PREFIX = "scryer:preferred-sub-group:";
 export const FILLER_POLICY_PREFIX = "scryer:filler-policy:";
 export const RECAP_POLICY_PREFIX = "scryer:recap-policy:";
 

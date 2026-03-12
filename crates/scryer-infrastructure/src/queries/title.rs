@@ -4,8 +4,10 @@ use scryer_domain::{
 };
 use serde_json;
 use sqlx::{Row, SqlitePool};
+use std::collections::HashSet;
 
 use super::common::parse_utc_datetime;
+use crate::title_images::apply_local_poster_urls;
 
 const TITLE_COLUMNS: &str =
     "id, name, facet, monitored, tags, external_ids, created_by, created_at, \
@@ -61,6 +63,7 @@ pub(crate) async fn list_titles_query(
     for row in rows {
         out.push(row_to_title(&row)?);
     }
+    apply_local_poster_urls(pool, &mut out).await?;
     Ok(out)
 }
 
@@ -94,7 +97,11 @@ pub(crate) async fn get_title_by_id_query(pool: &SqlitePool, id: &str) -> AppRes
         .map_err(|err| AppError::Repository(err.to_string()))?;
 
     match row {
-        Some(row) => Ok(Some(row_to_title(&row)?)),
+        Some(row) => {
+            let mut titles = vec![row_to_title(&row)?];
+            apply_local_poster_urls(pool, &mut titles).await?;
+            Ok(titles.into_iter().next())
+        }
         None => Ok(None),
     }
 }
@@ -229,8 +236,8 @@ pub(crate) async fn list_primary_collection_summaries_query(
 
     let placeholders: String = title_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     let sql = format!(
-        "SELECT title_id, label, ordered_path FROM collections \
-         WHERE title_id IN ({placeholders}) AND collection_index = '0'"
+        "SELECT title_id, collection_type, collection_index, label, ordered_path FROM collections \
+         WHERE title_id IN ({placeholders}) AND (collection_index = '0' OR collection_type = 'movie')"
     );
 
     let mut query = sqlx::query(&sql);
@@ -243,14 +250,72 @@ pub(crate) async fn list_primary_collection_summaries_query(
         .await
         .map_err(|err| AppError::Repository(err.to_string()))?;
 
-    Ok(rows
-        .iter()
-        .map(|row| PrimaryCollectionSummary {
+    let mut candidates = rows
+        .into_iter()
+        .map(|row| SummaryCandidate {
             title_id: row.get("title_id"),
+            collection_type: row.get("collection_type"),
+            collection_index: row.get("collection_index"),
             label: row.get("label"),
             ordered_path: row.get("ordered_path"),
         })
-        .collect())
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(summary_candidate_sort_key);
+
+    let mut seen = HashSet::new();
+    let mut summaries = Vec::new();
+    for candidate in candidates {
+        if seen.contains(candidate.title_id.as_str()) {
+            continue;
+        }
+        if !summary_candidate_should_include(&candidate) {
+            continue;
+        }
+        seen.insert(candidate.title_id.clone());
+        summaries.push(PrimaryCollectionSummary {
+            title_id: candidate.title_id,
+            label: candidate.label,
+            ordered_path: candidate.ordered_path,
+        });
+    }
+
+    Ok(summaries)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SummaryCandidate {
+    title_id: String,
+    collection_type: String,
+    collection_index: String,
+    label: Option<String>,
+    ordered_path: Option<String>,
+}
+
+fn summary_candidate_should_include(candidate: &SummaryCandidate) -> bool {
+    let normalized_type = candidate.collection_type.trim().to_ascii_lowercase();
+    if normalized_type == "movie" {
+        return true;
+    }
+    candidate.collection_index.trim() == "0"
+}
+
+fn summary_candidate_sort_key(candidate: &SummaryCandidate) -> (String, bool, bool, u32, String) {
+    (
+        candidate.title_id.clone(),
+        !candidate
+            .collection_type
+            .trim()
+            .eq_ignore_ascii_case("movie"),
+        candidate
+            .ordered_path
+            .as_deref()
+            .map_or(true, |path| path.trim().is_empty()),
+        candidate
+            .collection_index
+            .parse::<u32>()
+            .unwrap_or(u32::MAX),
+        candidate.collection_index.clone(),
+    )
 }
 
 pub(crate) async fn get_collection_by_id_query(
@@ -1249,4 +1314,57 @@ pub(crate) async fn delete_title_query(pool: &SqlitePool, id: &str) -> AppResult
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{summary_candidate_sort_key, SummaryCandidate};
+
+    #[test]
+    fn movie_collection_wins_over_index_zero_fallback() {
+        let mut candidates = vec![
+            SummaryCandidate {
+                title_id: "title-1".to_string(),
+                collection_type: "season".to_string(),
+                collection_index: "0".to_string(),
+                label: Some("Specials".to_string()),
+                ordered_path: None,
+            },
+            SummaryCandidate {
+                title_id: "title-1".to_string(),
+                collection_type: "movie".to_string(),
+                collection_index: "1".to_string(),
+                label: Some("1080P".to_string()),
+                ordered_path: Some("/media/movies/Movie/Movie.1080P.mkv".to_string()),
+            },
+        ];
+        candidates.sort_by_key(summary_candidate_sort_key);
+
+        assert_eq!(candidates[0].collection_type, "movie");
+        assert_eq!(candidates[0].label.as_deref(), Some("1080P"));
+    }
+
+    #[test]
+    fn movie_collection_with_path_wins_over_pathless_movie_collection() {
+        let mut candidates = vec![
+            SummaryCandidate {
+                title_id: "title-1".to_string(),
+                collection_type: "movie".to_string(),
+                collection_index: "2".to_string(),
+                label: Some("2160P".to_string()),
+                ordered_path: None,
+            },
+            SummaryCandidate {
+                title_id: "title-1".to_string(),
+                collection_type: "movie".to_string(),
+                collection_index: "1".to_string(),
+                label: Some("1080P".to_string()),
+                ordered_path: Some("/media/movies/Movie/Movie.1080P.mkv".to_string()),
+            },
+        ];
+        candidates.sort_by_key(summary_candidate_sort_key);
+
+        assert_eq!(candidates[0].collection_index, "1");
+        assert_eq!(candidates[0].label.as_deref(), Some("1080P"));
+    }
 }

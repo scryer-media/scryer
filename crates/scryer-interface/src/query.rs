@@ -7,9 +7,9 @@ use serde_json::json;
 
 use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_error};
 use crate::mappers::{
-    file_size_bytes_for_path, from_activity_event, from_backup_info, from_calendar_episode,
-    from_collection, from_disk_space, from_download_client_config, from_download_queue_item,
-    from_episode, from_event, from_health_check_result, from_indexer_config,
+    from_activity_event, from_backup_info, from_calendar_episode, from_collection,
+    from_disk_space, from_download_client_config, from_download_queue_item, from_episode,
+    from_event, from_health_check_result, from_indexer_config,
     from_media_rename_plan, from_pending_release, from_provider_type, from_release_decision,
     from_system_health, from_title, from_title_media_file, from_title_release_blocklist_entry,
     from_user, from_wanted_item, map_admin_setting,
@@ -42,8 +42,16 @@ impl QueryRoot {
             .list_primary_collection_summaries(&actor, &title_ids)
             .await
             .map_err(to_gql_error)?;
+        let media_size_summaries = app
+            .list_title_media_size_summaries(&actor, &title_ids)
+            .await
+            .map_err(to_gql_error)?;
         let summary_map: std::collections::HashMap<&str, _> =
             summaries.iter().map(|s| (s.title_id.as_str(), s)).collect();
+        let media_size_map: std::collections::HashMap<&str, i64> = media_size_summaries
+            .iter()
+            .map(|summary| (summary.title_id.as_str(), summary.total_size_bytes))
+            .collect();
 
         Ok(titles
             .into_iter()
@@ -52,8 +60,8 @@ impl QueryRoot {
                 let mut payload = from_title(t);
                 if let Some(s) = summary_map.get(id.as_str()) {
                     payload.quality_tier = s.label.clone();
-                    payload.size_bytes = file_size_bytes_for_path(s.ordered_path.as_deref());
                 }
+                payload.size_bytes = media_size_map.get(id.as_str()).copied();
                 payload
             })
             .collect())
@@ -402,6 +410,7 @@ impl QueryRoot {
         scope: Option<String>,
         scope_id: Option<String>,
         category: Option<String>,
+        key_names: Option<Vec<String>>,
     ) -> GqlResult<AdminSettingsPayload> {
         let actor = actor_from_ctx(ctx)?;
         if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {
@@ -410,6 +419,13 @@ impl QueryRoot {
         let db = settings_db_from_ctx(ctx)?;
         let scope = scope.unwrap_or_else(|| "system".to_string());
         let category_filter = category.map(|value| value.trim().to_string());
+        let key_filter = key_names.map(|values| {
+            values
+                .into_iter()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .collect::<std::collections::HashSet<_>>()
+        });
 
         let records = db
             .list_settings_with_defaults(&scope, scope_id.clone())
@@ -422,6 +438,9 @@ impl QueryRoot {
                 category_filter
                     .as_deref()
                     .is_none_or(|target| record.category == target)
+                    && key_filter
+                        .as_ref()
+                        .is_none_or(|targets| targets.contains(record.key_name.as_str()))
             })
             .map(map_admin_setting)
             .collect();

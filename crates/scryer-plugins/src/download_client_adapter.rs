@@ -181,6 +181,7 @@ impl DownloadClient for WasmDownloadClient {
             },
             routing: PluginDownloadRouting {
                 isolation_value: request.category.clone(),
+                queue_priority: request.queue_priority.clone(),
                 download_directory: request.download_directory.clone(),
             },
         };

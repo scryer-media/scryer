@@ -48,6 +48,20 @@ type TvdbSearchItem = MetadataTvdbSearchItem;
 type ScopeRoutingRecord = Record<string, NzbgetCategoryRoutingSettings>;
 type IndexerRoutingRecord = Record<string, IndexerCategoryRoutingSettings>;
 
+function formatQualityProfileFallback(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.toLowerCase() === "4k") {
+    return "4K";
+  }
+  if (/^\d{3,4}p$/i.test(trimmed)) {
+    return trimmed.toUpperCase();
+  }
+  return trimmed;
+}
+
 export function MediaContentView({
   state,
 }: {
@@ -98,10 +112,6 @@ export function MediaContentView({
     setCategoryInterSeasonMovies: React.Dispatch<
       React.SetStateAction<Record<ViewCategoryId, string>>
     >;
-    categoryPreferredSubGroup: Record<ViewCategoryId, string>;
-    setCategoryPreferredSubGroup: React.Dispatch<
-      React.SetStateAction<Record<ViewCategoryId, string>>
-    >;
     nfoWriteOnImport: Record<ViewCategoryId, string>;
     setNfoWriteOnImport: React.Dispatch<
       React.SetStateAction<Record<ViewCategoryId, string>>
@@ -127,8 +137,6 @@ export function MediaContentView({
     setMonitorSpecialsForQueue: (value: boolean) => void;
     interSeasonMoviesForQueue: boolean;
     setInterSeasonMoviesForQueue: (value: boolean) => void;
-    preferredSubGroupForQueue: string;
-    setPreferredSubGroupForQueue: (value: string) => void;
     minAvailabilityForQueue: string;
     setMinAvailabilityForQueue: (value: string) => void;
     selectedTvdb: TvdbSearchItem | null;
@@ -147,16 +155,21 @@ export function MediaContentView({
     titleStatus: string;
     monitoredTitles: TitleRecord[];
     queueExisting: (title: TitleRecord) => Promise<void> | void;
+    toggleTitleMonitored: (title: TitleRecord, monitored: boolean) => Promise<void> | void;
     runInteractiveSearchForTitle: (title: TitleRecord) => Promise<Release[]> | Release[];
     queueExistingFromRelease: (title: TitleRecord, release: Release) => Promise<void> | void;
+    isTogglingTitleMonitoredById: Record<string, boolean>;
     downloadClients: DownloadClientRecord[];
     activeScopeRouting: ScopeRoutingRecord;
     activeScopeRoutingOrder: string[];
     downloadClientRoutingLoading: boolean;
     downloadClientRoutingSaving: boolean;
-    updateDownloadClientRoutingForScope: (clientId: string, nextValue: Partial<NzbgetCategoryRoutingSettings>) => void;
+    updateDownloadClientRoutingForScope: (
+      clientId: string,
+      nextValue: Partial<NzbgetCategoryRoutingSettings>,
+      options?: { save?: boolean },
+    ) => Promise<void> | void;
     moveDownloadClientInScope: (clientId: string, direction: "up" | "down") => void;
-    saveDownloadClientRouting: () => Promise<void> | void;
     indexers: IndexerRecord[];
     activeScopeIndexerRouting: IndexerRoutingRecord;
     activeScopeIndexerRoutingOrder: string[];
@@ -211,8 +224,6 @@ export function MediaContentView({
     setCategoryMonitorSpecials,
     categoryInterSeasonMovies,
     setCategoryInterSeasonMovies,
-    categoryPreferredSubGroup,
-    setCategoryPreferredSubGroup,
     nfoWriteOnImport,
     setNfoWriteOnImport,
     plexmatchWriteOnImport,
@@ -234,8 +245,6 @@ export function MediaContentView({
     setMonitorSpecialsForQueue,
     interSeasonMoviesForQueue,
     setInterSeasonMoviesForQueue,
-    preferredSubGroupForQueue,
-    setPreferredSubGroupForQueue,
     minAvailabilityForQueue,
     setMinAvailabilityForQueue,
     selectedTvdb,
@@ -254,8 +263,10 @@ export function MediaContentView({
     titleStatus,
     monitoredTitles,
     queueExisting,
+    toggleTitleMonitored,
     runInteractiveSearchForTitle,
     queueExistingFromRelease,
+    isTogglingTitleMonitoredById,
     downloadClients,
     activeScopeRouting,
     activeScopeRoutingOrder,
@@ -263,7 +274,6 @@ export function MediaContentView({
     downloadClientRoutingSaving,
     updateDownloadClientRoutingForScope,
     moveDownloadClientInScope,
-    saveDownloadClientRouting,
     indexers,
     activeScopeIndexerRouting,
     activeScopeIndexerRoutingOrder,
@@ -405,16 +415,6 @@ export function MediaContentView({
     [activeQualityScopeId, setCategoryInterSeasonMovies],
   );
 
-  const handlePreferredSubGroupChange = React.useCallback(
-    (event: React.ChangeEvent<HTMLInputElement>) => {
-      setCategoryPreferredSubGroup((previous) => ({
-        ...previous,
-        [activeQualityScopeId]: event.target.value,
-      }));
-    },
-    [activeQualityScopeId, setCategoryPreferredSubGroup],
-  );
-
   const handleNfoWriteChange = React.useCallback(
     (checked: boolean) => {
       setNfoWriteOnImport((previous) => ({
@@ -517,8 +517,6 @@ export function MediaContentView({
           handleRenameCollisionPolicyChange={handleRenameCollisionPolicyChange}
           categoryRenameMissingMetadataPolicies={categoryRenameMissingMetadataPolicies}
           handleRenameMissingMetadataPolicyChange={handleRenameMissingMetadataPolicyChange}
-          categoryPreferredSubGroup={categoryPreferredSubGroup}
-          handlePreferredSubGroupChange={handlePreferredSubGroupChange}
           updateCategoryMediaProfileSettings={updateCategoryMediaProfileSettings}
         />
       ) : contentSettingsSection === "routing" ? (
@@ -545,7 +543,6 @@ export function MediaContentView({
             downloadClientRoutingSaving={downloadClientRoutingSaving}
             updateDownloadClientRoutingForScope={updateDownloadClientRoutingForScope}
             moveDownloadClientInScope={moveDownloadClientInScope}
-            saveDownloadClientRouting={saveDownloadClientRouting}
           />
         </div>
       ) : contentSettingsSection === "settings" || contentSettingsSection === "general" ? (
@@ -628,6 +625,7 @@ export function MediaContentView({
                     ? globalQualityProfileId
                     : overrideId;
                   return qualityProfiles.find((p) => p.id === effectiveId)?.name
+                    ?? formatQualityProfileFallback(effectiveId)
                     ?? qualityProfiles[0]?.name
                     ?? null;
                 })();
@@ -658,9 +656,11 @@ export function MediaContentView({
                     onOpenOverview={onOpenOverview}
                     onDelete={handleDeleteCatalogTitle}
                     onAutoQueue={queueExisting}
+                    onToggleMonitored={toggleTitleMonitored}
                     onInteractiveSearch={runInteractiveSearchForTitle}
                     onQueueFromInteractive={queueExistingFromRelease}
                     isDeletingById={isDeletingCatalogTitleById}
+                    isTogglingMonitoredById={isTogglingTitleMonitoredById}
                   />
                 );
               })()}
@@ -680,8 +680,6 @@ export function MediaContentView({
             setMonitorSpecialsForQueue={setMonitorSpecialsForQueue}
             interSeasonMoviesForQueue={interSeasonMoviesForQueue}
             setInterSeasonMoviesForQueue={setInterSeasonMoviesForQueue}
-            preferredSubGroupForQueue={preferredSubGroupForQueue}
-            setPreferredSubGroupForQueue={setPreferredSubGroupForQueue}
             minAvailabilityForQueue={minAvailabilityForQueue}
             setMinAvailabilityForQueue={setMinAvailabilityForQueue}
             onAddSubmit={onAddSubmit}

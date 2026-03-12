@@ -236,7 +236,10 @@ impl DownloadClient for SabnzbdDownloadClient {
             .text("output", "json")
             .text("mode", "addfile")
             .text("nzbname", nzb_name.to_string())
-            .text("priority", "-1")
+            .text(
+                "priority",
+                sabnzbd_queue_priority(request.queue_priority.as_deref()).to_string(),
+            )
             .part("nzbfile", nzb_part);
 
         if let Some(cat) = request.category.as_deref() {
@@ -590,6 +593,21 @@ impl DownloadClient for SabnzbdDownloadClient {
             .await?;
         }
         Ok(())
+    }
+}
+
+fn sabnzbd_queue_priority(raw_priority: Option<&str>) -> i32 {
+    match raw_priority
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("force") => 2,
+        Some("very high") | Some("high") => 1,
+        Some("normal") => 0,
+        Some("low") | Some("very low") => -1,
+        _ => -1,
     }
 }
 

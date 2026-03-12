@@ -244,9 +244,10 @@ impl AppUseCase {
         Ok(())
     }
 
-    /// Ensure every loaded indexer plugin with a `default_base_url` has at least
-    /// one IndexerConfig. This covers the case where a plugin was installed before
-    /// the auto-create logic existed, or when the registry was stale at install time.
+    /// Ensure every auto-provisionable indexer plugin with a `default_base_url`
+    /// has at least one IndexerConfig. This covers the case where a plugin was
+    /// installed before the auto-create logic existed, or when the registry was
+    /// stale at install time.
     pub async fn reconcile_indexer_configs(&self) -> AppResult<()> {
         let Some(ref provider) = self.services.plugin_provider else {
             return Ok(());
@@ -257,6 +258,9 @@ impl AppUseCase {
             let Some(default_url) = provider.default_base_url_for_provider(&pt) else {
                 continue;
             };
+            if should_skip_auto_created_indexer_config(&pt) {
+                continue;
+            }
             let existing = self
                 .services
                 .indexer_configs
@@ -807,6 +811,11 @@ impl AppUseCase {
         self.rebuild_plugin_provider().await?;
         Ok(result)
     }
+}
+
+// NZBGeek has a fixed endpoint, but it still needs a user-supplied API key.
+fn should_skip_auto_created_indexer_config(provider_type: &str) -> bool {
+    provider_type.eq_ignore_ascii_case("nzbgeek")
 }
 
 #[cfg(test)]

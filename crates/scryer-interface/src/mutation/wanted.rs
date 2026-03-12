@@ -9,6 +9,23 @@ pub(crate) struct WantedMutations;
 
 #[Object]
 impl WantedMutations {
+    async fn trigger_title_wanted_search(
+        &self,
+        ctx: &Context<'_>,
+        input: TitleIdInput,
+    ) -> GqlResult<i32> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let queued = app
+            .trigger_title_wanted_search(&input.title_id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(queued as i32)
+    }
+
     async fn trigger_wanted_search(
         &self,
         ctx: &Context<'_>,

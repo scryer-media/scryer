@@ -12,19 +12,22 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 
-use axum::extract::Query;
-use axum::http::HeaderMap;
+use axum::extract::{Path as AxumPath, Query, State};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use scryer_application::{
     start_background_acquisition_poller, start_background_hydration_loop,
-    start_download_queue_poller, AppServices, AppUseCase, DownloadClientPluginProvider,
-    FacetRegistry, IndexerPluginProvider, MovieFacetHandler, SeriesFacetHandler,
+    start_background_poster_loop, start_download_queue_poller, AppServices, AppUseCase,
+    DownloadClientPluginProvider, FacetRegistry, IndexerPluginProvider, MovieFacetHandler,
+    SeriesFacetHandler, TitleImageKind, TitleImageRepository,
 };
 use scryer_infrastructure::{
     start_weaver_subscription_bridge, FileSystemLibraryRenamer, FileSystemLibraryScanner,
     MetadataGatewayClient, MigrationMode, MultiIndexerSearchClient, NzbgetDownloadClient,
-    PrioritizedDownloadClientRouter, SmgEnrollmentConfig, SqliteServices, WeaverDownloadClient,
+    PrioritizedDownloadClientRouter, SmgEnrollmentConfig, SqliteServices,
+    SqliteTitleImageProcessor, WeaverDownloadClient,
 };
 use scryer_interface::{build_schema_with_log_buffer, LogBuffer};
 use tokio::net::TcpListener;
@@ -42,7 +45,9 @@ use middleware::{
     CorsConfig,
 };
 use settings_bootstrap::{
-    extract_pending_migration_ids, load_service_runtime_settings, normalize_media_path_setting,
+    extract_pending_migration_ids, load_service_runtime_settings,
+    migrate_legacy_download_client_default_category_settings,
+    migrate_legacy_download_client_routing_settings, normalize_media_path_setting,
     normalize_quality_profile_settings, parse_migration_mode, seed_service_setting_definitions,
     seed_service_settings_from_environment, MOVIES_PATH_KEY, SERIES_PATH_KEY,
 };
@@ -301,6 +306,19 @@ async fn bootstrap_application(
             "failed to persist optional settings from environment"
         );
     }
+    if let Err(error) = migrate_legacy_download_client_routing_settings(&db).await {
+        tracing::warn!(
+            error = %error,
+            "failed to migrate legacy download client routing settings during bootstrap"
+        );
+    }
+
+    if let Err(error) = migrate_legacy_download_client_default_category_settings(&db).await {
+        tracing::warn!(
+            error = %error,
+            "failed to migrate legacy download client default category settings during bootstrap"
+        );
+    }
     tracing::info!(elapsed_ms = %t.elapsed().as_millis(), "environment settings synced");
 
     let t = std::time::Instant::now();
@@ -431,6 +449,8 @@ async fn bootstrap_application(
     );
 
     let indexer_client = Arc::new(indexer_client);
+    let title_image_processor = Arc::new(SqliteTitleImageProcessor::new());
+    let title_images_for_route: Arc<dyn TitleImageRepository> = Arc::new(db.clone());
     let metadata_gateway_url = std::env::var("SCRYER_METADATA_GATEWAY_GRAPHQL_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:8090/graphql".to_string());
     // TODO: Remove SCRYER_METADATA_GATEWAY_INSECURE once the gateway has proper TLS certificates.
@@ -490,6 +510,8 @@ async fn bootstrap_application(
     services.rule_sets = Arc::new(db.clone());
     services.plugin_installations = Arc::new(db.clone());
     services.system_info = Arc::new(db.clone());
+    services.title_images = Arc::new(db.clone());
+    services.title_image_processor = title_image_processor;
     services.housekeeping = Arc::new(db.clone());
     services.indexer_stats = indexer_stats;
     services.plugin_provider = Some(plugin_provider);
@@ -569,6 +591,11 @@ async fn bootstrap_application(
         app_use_case.clone(),
         shutdown_token.child_token(),
     ));
+    tokio::spawn(start_background_poster_loop(
+        app_use_case.clone(),
+        shutdown_token.child_token(),
+    ));
+    app_use_case.services.poster_wake.notify_one();
 
     if let Err(error) = seed_indexer_configs_from_env(&app_use_case).await {
         tracing::warn!(error = %error, "failed to seed indexer configs from environment");
@@ -620,6 +647,10 @@ async fn bootstrap_application(
         .route("/health", get(health_handler))
         .route("/graphiql", get(graphiql_handler))
         .route("/graphql", post(graphql_handler).with_state(auth_state))
+        .route(
+            "/images/titles/{title_id}/{kind}/{variant}",
+            get(title_image_handler).with_state(title_images_for_route),
+        )
         .route(
             "/admin/migrations",
             get(move || admin_migrations_handler(admin_migrations_db.clone())),
@@ -678,6 +709,84 @@ async fn bootstrap_application(
     }
 
     Ok(app)
+}
+
+async fn title_image_handler(
+    State(repository): State<Arc<dyn TitleImageRepository>>,
+    headers: HeaderMap,
+    AxumPath((title_id, kind, variant)): AxumPath<(String, String, String)>,
+) -> Response {
+    let Some(kind) = TitleImageKind::parse(&kind) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let blob = match repository
+        .get_title_image_blob(&title_id, kind, &variant)
+        .await
+    {
+        Ok(Some(blob)) => blob,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                title_id = %title_id,
+                kind = kind.as_str(),
+                variant = %variant,
+                "failed to serve title image"
+            );
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let quoted_etag = format!("\"{}\"", blob.etag);
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| if_none_match_matches(value, &quoted_etag, &blob.etag))
+    {
+        let mut response = StatusCode::NOT_MODIFIED.into_response();
+        let headers = response.headers_mut();
+        if let Ok(value) = HeaderValue::from_str(&quoted_etag) {
+            headers.insert(header::ETAG, value);
+        }
+        headers.insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=31536000, immutable"),
+        );
+        return response;
+    }
+
+    let body_len = blob.bytes.len();
+    let mut response = blob.bytes.into_response();
+    let headers = response.headers_mut();
+    if let Ok(value) = HeaderValue::from_str(&blob.content_type) {
+        headers.insert(header::CONTENT_TYPE, value);
+    }
+    if let Ok(value) = HeaderValue::from_str(&body_len.to_string()) {
+        headers.insert(header::CONTENT_LENGTH, value);
+    }
+    if let Ok(value) = HeaderValue::from_str(&format!("\"{}\"", blob.etag)) {
+        headers.insert(header::ETAG, value);
+    }
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=31536000, immutable"),
+    );
+    response
+}
+
+fn if_none_match_matches(raw_header: &str, quoted_etag: &str, bare_etag: &str) -> bool {
+    raw_header
+        .split(',')
+        .map(str::trim)
+        .any(|candidate| {
+            candidate == "*"
+                || candidate == quoted_etag
+                || candidate == bare_etag
+                || candidate
+                    .strip_prefix("W/")
+                    .is_some_and(|weak| weak == quoted_etag || weak == bare_etag)
+        })
 }
 
 /// ValidateOnly mode: check for pending migrations and exit.
@@ -817,7 +926,52 @@ async fn check_version_upgrade(db: &SqliteServices) {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_auth_mode, AuthModeConfig};
+    use super::{resolve_auth_mode, title_image_handler, AuthModeConfig};
+    use std::sync::Arc;
+
+    use crate::base_path::{mount_router, BasePath};
+    use axum::body::Body;
+    use axum::http::{header, Request, StatusCode};
+    use axum::routing::get;
+    use axum::Router;
+    use scryer_application::{
+        AppResult, TitleImageBlob, TitleImageKind, TitleImageReplacement, TitleImageRepository,
+        TitleImageSyncTask,
+    };
+    use tower::ServiceExt;
+
+    #[derive(Default)]
+    struct MockTitleImageRepository {
+        blob: Option<TitleImageBlob>,
+    }
+
+    #[async_graphql::async_trait::async_trait]
+    impl TitleImageRepository for MockTitleImageRepository {
+        async fn list_titles_requiring_image_refresh(
+            &self,
+            _kind: TitleImageKind,
+            _limit: usize,
+        ) -> AppResult<Vec<TitleImageSyncTask>> {
+            Ok(Vec::new())
+        }
+
+        async fn replace_title_image(
+            &self,
+            _title_id: &str,
+            _replacement: TitleImageReplacement,
+        ) -> AppResult<()> {
+            Ok(())
+        }
+
+        async fn get_title_image_blob(
+            &self,
+            _title_id: &str,
+            _kind: TitleImageKind,
+            _variant_key: &str,
+        ) -> AppResult<Option<TitleImageBlob>> {
+            Ok(self.blob.clone())
+        }
+    }
 
     #[test]
     fn auth_defaults_to_disabled() {
@@ -872,6 +1026,126 @@ mod tests {
                 used_legacy_dev_auto_login: false,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn title_image_route_serves_cached_bytes_with_headers() {
+        let repo: Arc<dyn TitleImageRepository> = Arc::new(MockTitleImageRepository {
+            blob: Some(TitleImageBlob {
+                content_type: "image/avif".to_string(),
+                etag: "abc123".to_string(),
+                bytes: vec![1, 2, 3, 4],
+            }),
+        });
+        let app = Router::new().route(
+            "/images/titles/{title_id}/{kind}/{variant}",
+            get(title_image_handler).with_state(repo),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/images/titles/title-1/poster/w500")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "image/avif"
+        );
+        assert_eq!(response.headers().get(header::ETAG).unwrap(), "\"abc123\"");
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "public, max-age=31536000, immutable"
+        );
+    }
+
+    #[tokio::test]
+    async fn title_image_route_returns_not_found_for_missing_images() {
+        let repo: Arc<dyn TitleImageRepository> = Arc::new(MockTitleImageRepository::default());
+        let app = Router::new().route(
+            "/images/titles/{title_id}/{kind}/{variant}",
+            get(title_image_handler).with_state(repo),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/images/titles/title-1/poster/w500")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn title_image_route_returns_not_modified_for_matching_etag() {
+        let repo: Arc<dyn TitleImageRepository> = Arc::new(MockTitleImageRepository {
+            blob: Some(TitleImageBlob {
+                content_type: "image/avif".to_string(),
+                etag: "abc123".to_string(),
+                bytes: vec![1, 2, 3, 4],
+            }),
+        });
+        let app = Router::new().route(
+            "/images/titles/{title_id}/{kind}/{variant}",
+            get(title_image_handler).with_state(repo),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/images/titles/title-1/poster/w500")
+                    .header(header::IF_NONE_MATCH, "\"abc123\"")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(response.headers().get(header::ETAG).unwrap(), "\"abc123\"");
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "public, max-age=31536000, immutable"
+        );
+    }
+
+    #[tokio::test]
+    async fn title_image_route_serves_under_prefixed_base_path() {
+        let repo: Arc<dyn TitleImageRepository> = Arc::new(MockTitleImageRepository {
+            blob: Some(TitleImageBlob {
+                content_type: "image/avif".to_string(),
+                etag: "abc123".to_string(),
+                bytes: vec![1, 2, 3, 4],
+            }),
+        });
+        let app = mount_router(
+            Router::new().route(
+                "/images/titles/{title_id}/{kind}/{variant}",
+                get(title_image_handler).with_state(repo),
+            ),
+            &BasePath::from_raw(Some("/scryer/")),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/scryer/images/titles/title-1/poster/w500")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }
 

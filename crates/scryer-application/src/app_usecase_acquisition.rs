@@ -231,9 +231,15 @@ impl AppUseCase {
 pub(crate) struct DownloadClientSnapshot {
     /// Lowercase title names of items currently queued or downloading.
     active_titles: std::collections::HashSet<String>,
-    /// Failed history items keyed by lowercase title name, value is the
-    /// attention_reason (e.g. "HEALTH", "PAR", "UNPACK").
-    failed_titles: std::collections::HashMap<String, String>,
+    /// Failed history items keyed by lowercase title name.
+    failed_titles: std::collections::HashMap<String, FailedDownloadSnapshot>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FailedDownloadSnapshot {
+    reason: String,
+    download_client_item_id: String,
+    client_id: String,
 }
 
 impl DownloadClientSnapshot {
@@ -271,8 +277,14 @@ impl DownloadClientSnapshot {
                             || reason_upper == "PAR"
                             || reason_upper == "UNPACK"
                         {
-                            failed_titles
-                                .insert(item.title_name.to_ascii_lowercase(), reason_upper);
+                            failed_titles.insert(
+                                item.title_name.to_ascii_lowercase(),
+                                FailedDownloadSnapshot {
+                                    reason: reason_upper,
+                                    download_client_item_id: item.download_client_item_id.clone(),
+                                    client_id: item.client_id.clone(),
+                                },
+                            );
                         }
                     }
                 }
@@ -299,10 +311,8 @@ impl DownloadClientSnapshot {
 
     /// If a release with this title failed in history with a blocklist-worthy
     /// reason, returns the failure reason (e.g. "HEALTH").
-    pub(crate) fn failed_reason(&self, release_title: &str) -> Option<&str> {
-        self.failed_titles
-            .get(&release_title.to_ascii_lowercase())
-            .map(String::as_str)
+    pub(crate) fn failed_item(&self, release_title: &str) -> Option<&FailedDownloadSnapshot> {
+        self.failed_titles.get(&release_title.to_ascii_lowercase())
     }
 }
 
@@ -342,11 +352,11 @@ async fn check_grabbed_for_failures(app: &AppUseCase, dl_snapshot: &DownloadClie
             continue;
         };
 
-        if let Some(failure_reason) = dl_snapshot.failed_reason(&release_title) {
+        if let Some(failed_item) = dl_snapshot.failed_item(&release_title) {
             warn!(
                 title_id = item.title_id.as_str(),
                 release = release_title.as_str(),
-                reason = failure_reason,
+                reason = failed_item.reason.as_str(),
                 "grabbed release failed in download client, re-queuing for search"
             );
 
@@ -362,7 +372,7 @@ async fn check_grabbed_for_failures(app: &AppUseCase, dl_snapshot: &DownloadClie
                     hint,
                     rel_title,
                     ReleaseDownloadAttemptOutcome::Failed,
-                    Some(format!("download client failure: {failure_reason}")),
+                    Some(format!("download client failure: {}", failed_item.reason)),
                     None,
                 )
                 .await;
@@ -396,6 +406,28 @@ async fn check_grabbed_for_failures(app: &AppUseCase, dl_snapshot: &DownloadClie
                     vec![ActivityChannel::WebUi, ActivityChannel::Toast],
                 )
                 .await;
+
+            if let Ok(Some(title)) = app.services.titles.get_by_id(&item.title_id).await {
+                if app
+                    .should_remove_failed_download(&title.facet, &failed_item.client_id)
+                    .await
+                {
+                    if let Err(error) = app
+                        .services
+                        .download_client
+                        .delete_queue_item(&failed_item.download_client_item_id, true)
+                        .await
+                    {
+                        warn!(
+                            title_id = item.title_id.as_str(),
+                            client_id = failed_item.client_id.as_str(),
+                            download_client_item_id = failed_item.download_client_item_id.as_str(),
+                            error = %error,
+                            "failed to delete failed download from client history"
+                        );
+                    }
+                }
+            }
         }
     }
 }
@@ -619,6 +651,14 @@ async fn process_single_wanted_item(
 
                     if !url_str.is_empty() && grabbed_urls.insert(url_str.clone()) {
                         let download_cat = app.derive_download_category(&title.facet).await;
+                        let is_recent = app.is_recent_for_queue_priority(
+                            best_pack
+                                .published_at
+                                .as_deref()
+                                .or(episode.as_ref().and_then(|item| item.air_date.as_deref()))
+                                .or(title.first_aired.as_deref())
+                                .or(title.digital_release_date.as_deref()),
+                        );
                         let pack_title = Some(best_pack.title.clone());
                         let pack_hint = normalize_release_attempt_hint(pack_url.as_deref());
                         let pack_title_norm =
@@ -630,14 +670,27 @@ async fn process_single_wanted_item(
                         let grab_result = app
                             .services
                             .download_client
-                            .submit_to_download_queue(
-                                &title,
-                                pack_url.clone(),
-                                best_pack.source_kind,
-                                pack_title.clone(),
-                                pack_password.clone(),
-                                Some(download_cat),
-                            )
+                            .submit_download(&DownloadClientAddRequest {
+                                title: title.clone(),
+                                source_hint: pack_url.clone(),
+                                source_kind: best_pack.source_kind,
+                                source_title: pack_title.clone(),
+                                source_password: pack_password.clone(),
+                                category: Some(download_cat),
+                                queue_priority: None,
+                                download_directory: None,
+                                release_title: Some(best_pack.title.clone()),
+                                indexer_name: Some(best_pack.source.clone()),
+                                info_hash_hint: best_pack
+                                    .extra
+                                    .get("info_hash")
+                                    .and_then(|value| value.as_str())
+                                    .map(str::to_string),
+                                seed_goal_ratio: None,
+                                seed_goal_seconds: None,
+                                is_recent,
+                                season_pack: Some(true),
+                            })
                             .await;
 
                         match grab_result {
@@ -732,7 +785,8 @@ async fn process_single_wanted_item(
         }
     }
     // ── End season pack priority ──────────────────────────────────────────────
-    // Uses the configurable per-facet nzbget.category setting with hardcoded fallback.
+    // Uses the per-facet default download category; the selected client's
+    // explicit routing category overrides this inside the router.
     let download_cat = app.derive_download_category(&title.facet).await;
 
     if queries.is_empty() {
@@ -862,11 +916,11 @@ async fn process_single_wanted_item(
             continue;
         }
 
-        if let Some(failure_reason) = dl_snapshot.failed_reason(&candidate.title) {
+        if let Some(failed_item) = dl_snapshot.failed_item(&candidate.title) {
             warn!(
                 title = title.name.as_str(),
                 release = candidate.title.as_str(),
-                reason = failure_reason,
+                reason = failed_item.reason.as_str(),
                 "release failed in download client history, adding to blocklist"
             );
 
@@ -888,7 +942,7 @@ async fn process_single_wanted_item(
                     hint,
                     rel_title,
                     ReleaseDownloadAttemptOutcome::Failed,
-                    Some(format!("download client failure: {failure_reason}")),
+                    Some(format!("download client failure: {}", failed_item.reason)),
                     password,
                 )
                 .await;
@@ -1096,6 +1150,15 @@ async fn process_single_wanted_item(
         )
         .await;
 
+    let is_recent = app.is_recent_for_queue_priority(
+        best.published_at
+            .as_deref()
+            .or(episode.as_ref().and_then(|item| item.air_date.as_deref()))
+            .or(item.baseline_date.as_deref())
+            .or(title.first_aired.as_deref())
+            .or(title.digital_release_date.as_deref()),
+    );
+
     info!(
         title = title.name.as_str(),
         release = best.title.as_str(),
@@ -1107,14 +1170,27 @@ async fn process_single_wanted_item(
     let grab_result = app
         .services
         .download_client
-        .submit_to_download_queue(
-            &title,
-            source_hint.clone(),
-            best.source_kind,
-            source_title.clone(),
-            source_password.clone(),
-            Some(download_cat.clone()),
-        )
+        .submit_download(&DownloadClientAddRequest {
+            title: title.clone(),
+            source_hint: source_hint.clone(),
+            source_kind: best.source_kind,
+            source_title: source_title.clone(),
+            source_password: source_password.clone(),
+            category: Some(download_cat.clone()),
+            queue_priority: None,
+            download_directory: None,
+            release_title: Some(best.title.clone()),
+            indexer_name: Some(best.source.clone()),
+            info_hash_hint: best
+                .extra
+                .get("info_hash")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            seed_goal_ratio: None,
+            seed_goal_seconds: None,
+            is_recent,
+            season_pack: Some(false),
+        })
         .await;
 
     match grab_result {
@@ -1420,6 +1496,10 @@ impl AppUseCase {
         limit: i64,
         offset: i64,
     ) -> AppResult<(Vec<WantedItem>, i64)> {
+        if let Err(err) = self.sync_wanted_state().await {
+            warn!(error = %err, "wanted items list: sync_wanted_state failed before listing");
+        }
+
         let items = self
             .services
             .wanted_items
@@ -1454,6 +1534,35 @@ impl AppUseCase {
                 .await;
         }
         Ok(vec![])
+    }
+
+    pub async fn trigger_title_wanted_search(&self, title_id: &str) -> AppResult<usize> {
+        let title = self
+            .services
+            .titles
+            .get_by_id(title_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("title not found".to_string()))?;
+
+        let now = Utc::now();
+        let queued = if let Some(handler) = self.facet_registry.get(&title.facet) {
+            if handler.has_episodes() {
+                self.queue_monitored_series_items_for_search(&title, &now)
+                    .await?
+            } else if title.monitored {
+                self.queue_monitored_movie_for_search(&title, &now).await?
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        if queued > 0 {
+            self.services.acquisition_wake.notify_one();
+        }
+
+        Ok(queued)
     }
 
     pub async fn trigger_wanted_item_search(&self, wanted_item_id: &str) -> AppResult<()> {
@@ -1561,6 +1670,172 @@ impl AppUseCase {
                 None,
             )
             .await
+    }
+}
+
+impl AppUseCase {
+    async fn queue_monitored_movie_for_search(
+        &self,
+        title: &Title,
+        now: &DateTime<Utc>,
+    ) -> AppResult<usize> {
+        let has_file = self
+            .services
+            .media_files
+            .list_media_files_for_title(&title.id)
+            .await
+            .map(|files| !files.is_empty())
+            .unwrap_or(false);
+
+        if has_file {
+            return Ok(0);
+        }
+
+        let next_search_at = now.to_rfc3339();
+        if let Some(item) = self
+            .services
+            .wanted_items
+            .get_wanted_item_for_title(&title.id, None)
+            .await?
+        {
+            if item.status == "grabbed" {
+                return Ok(0);
+            }
+
+            self.services
+                .wanted_items
+                .update_wanted_item_status(
+                    &item.id,
+                    "wanted",
+                    Some(&next_search_at),
+                    item.last_search_at.as_deref(),
+                    item.search_count,
+                    item.current_score,
+                    item.grabbed_release.as_deref(),
+                )
+                .await?;
+            return Ok(1);
+        }
+
+        let baseline_date = title.first_aired.clone();
+        let schedule = compute_search_schedule("movie", baseline_date.as_deref(), "primary", now);
+        let item = WantedItem {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            title_name: None,
+            episode_id: None,
+            season_number: None,
+            media_type: "movie".to_string(),
+            search_phase: schedule.search_phase,
+            next_search_at: Some(next_search_at),
+            last_search_at: None,
+            search_count: 0,
+            baseline_date,
+            status: "wanted".to_string(),
+            grabbed_release: None,
+            current_score: None,
+            created_at: now.to_rfc3339(),
+            updated_at: now.to_rfc3339(),
+        };
+
+        self.services.wanted_items.upsert_wanted_item(&item).await?;
+        Ok(1)
+    }
+
+    async fn queue_monitored_series_items_for_search(
+        &self,
+        title: &Title,
+        now: &DateTime<Utc>,
+    ) -> AppResult<usize> {
+        let collections = self
+            .services
+            .shows
+            .list_collections_for_title(&title.id)
+            .await?;
+
+        let existing_files = self
+            .services
+            .media_files
+            .list_media_files_for_title(&title.id)
+            .await
+            .unwrap_or_default();
+        let episodes_with_files: std::collections::HashSet<String> = existing_files
+            .iter()
+            .filter_map(|file| file.episode_id.clone())
+            .collect();
+        let next_search_at = now.to_rfc3339();
+        let mut queued = 0usize;
+
+        for collection in &collections {
+            if !collection.monitored {
+                continue;
+            }
+
+            let episodes = self
+                .services
+                .shows
+                .list_episodes_for_collection(&collection.id)
+                .await?;
+
+            for episode in &episodes {
+                if !episode.monitored || episodes_with_files.contains(&episode.id) {
+                    continue;
+                }
+
+                if let Some(item) = self
+                    .services
+                    .wanted_items
+                    .get_wanted_item_for_title(&title.id, Some(&episode.id))
+                    .await?
+                {
+                    if item.status == "grabbed" {
+                        continue;
+                    }
+
+                    self.services
+                        .wanted_items
+                        .update_wanted_item_status(
+                            &item.id,
+                            "wanted",
+                            Some(&next_search_at),
+                            item.last_search_at.as_deref(),
+                            item.search_count,
+                            item.current_score,
+                            item.grabbed_release.as_deref(),
+                        )
+                        .await?;
+                    queued += 1;
+                    continue;
+                }
+
+                let baseline_date = episode.air_date.clone();
+                let schedule =
+                    compute_search_schedule("episode", baseline_date.as_deref(), "primary", now);
+                let item = WantedItem {
+                    id: Id::new().0,
+                    title_id: title.id.clone(),
+                    title_name: None,
+                    episode_id: Some(episode.id.clone()),
+                    season_number: episode.season_number.clone(),
+                    media_type: "episode".to_string(),
+                    search_phase: schedule.search_phase,
+                    next_search_at: Some(next_search_at.clone()),
+                    last_search_at: None,
+                    search_count: 0,
+                    baseline_date,
+                    status: "wanted".to_string(),
+                    grabbed_release: None,
+                    current_score: None,
+                    created_at: now.to_rfc3339(),
+                    updated_at: now.to_rfc3339(),
+                };
+
+                self.services.wanted_items.upsert_wanted_item(&item).await?;
+                queued += 1;
+            }
+        }
+
+        Ok(queued)
     }
 }
 

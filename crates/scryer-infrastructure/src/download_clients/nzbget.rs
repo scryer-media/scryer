@@ -272,6 +272,147 @@ impl NzbgetDownloadClient {
         Ok(general_purpose::STANDARD.encode(bytes))
     }
 
+    async fn append_requires_auto_category(&self) -> bool {
+        match self.rpc_call("version", vec![]).await {
+            Ok(Value::String(version)) => supports_nzbget_append_auto_category(&version),
+            Ok(other) => {
+                warn!(result = %other, "nzbget version call returned non-string result");
+                false
+            }
+            Err(err) => {
+                warn!(error = %err, "failed to determine nzbget version before append");
+                false
+            }
+        }
+    }
+
+    async fn send_append_request(
+        &self,
+        job_id: &str,
+        title_name: &str,
+        nzb_filename: &str,
+        source_for_payload: &str,
+        category: &str,
+        queue_priority: i32,
+        parameters: &[Value],
+        use_auto_category: bool,
+    ) -> AppResult<i64> {
+        let request_payload = build_nzbget_append_payload(
+            job_id,
+            nzb_filename,
+            source_for_payload,
+            category,
+            queue_priority,
+            &self.dupe_mode,
+            parameters,
+            use_auto_category,
+        );
+
+        let mut request_payload_for_log = request_payload.clone();
+        if let Some(params) = request_payload_for_log
+            .get_mut("params")
+            .and_then(Value::as_array_mut)
+        {
+            if params.len() > 1 {
+                params[1] = Value::String("<omitted base64 nzb content>".to_string());
+            }
+        }
+
+        let endpoint = self.endpoint();
+        tracing::info!(
+            endpoint = endpoint.as_str(),
+            auto_category = use_auto_category,
+            payload = %request_payload_for_log,
+            "nzbget append request payload"
+        );
+        let json_bytes = serde_json::to_vec(&request_payload).map_err(|err| {
+            AppError::Repository(format!("nzbget append payload serialization failed: {err}"))
+        })?;
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(&json_bytes).map_err(|err| {
+            AppError::Repository(format!("nzbget append gzip compression failed: {err}"))
+        })?;
+        let compressed = encoder.finish().map_err(|err| {
+            AppError::Repository(format!("nzbget append gzip finalization failed: {err}"))
+        })?;
+
+        let mut request = self
+            .http_client
+            .post(&endpoint)
+            .header("Content-Type", "application/json")
+            .header("Content-Encoding", "gzip")
+            .body(compressed);
+
+        if let Some(username) = self.username.clone() {
+            request = request.basic_auth(username, self.password.as_deref());
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|err| AppError::Repository(format!("nzbget request failed: {err}")))?;
+        let status = response.status();
+        let body_text = response
+            .text()
+            .await
+            .map_err(|err| AppError::Repository(format!("nzbget response read failed: {err}")))?;
+
+        if !status.is_success() {
+            let preview = body_text.chars().take(800).collect::<String>();
+            warn!(
+                endpoint = endpoint.as_str(),
+                status = status.to_string().as_str(),
+                preview = preview.as_str(),
+                title = title_name,
+                auto_category = use_auto_category,
+                "nzbget request failed"
+            );
+            return Err(AppError::Repository(format!(
+                "nzbget rejected request with status {status}"
+            )));
+        }
+
+        let response_json: Value = serde_json::from_str(&body_text).map_err(|err| {
+            AppError::Repository(format!("nzbget returned non-json response: {err}"))
+        })?;
+
+        if let Some(error) = response_json.get("error") {
+            let code = error
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            return Err(AppError::Repository(format!(
+                "nzbget API error {code}: {message}"
+            )));
+        }
+
+        let result = response_json
+            .get("result")
+            .and_then(Value::as_i64)
+            .unwrap_or(-1);
+        if result <= 0 {
+            return Err(AppError::Repository(format!(
+                "nzbget returned non-positive queue id {result}"
+            )));
+        }
+
+        debug!(
+            endpoint = endpoint.as_str(),
+            nzb_id = result,
+            job_id,
+            title = title_name,
+            category,
+            auto_category = use_auto_category,
+            "nzbget append succeeded"
+        );
+
+        Ok(result)
+    }
+
     async fn edit_queue(&self, command: &str, ids: Vec<i64>) -> AppResult<()> {
         let result = self
             .rpc_call("editqueue", vec![json!(command), json!(""), json!(ids)])
@@ -691,122 +832,44 @@ impl DownloadClient for NzbgetDownloadClient {
             parameters.push(json!({"*Unpack:Password": password}));
         }
 
-        let request_payload = json!({
-            "version": "2.0",
-            "method": "append",
-            "params": [
-                nzb_filename,
-                source_for_payload,
-                category,
-                0,
-                false,
-                false,
-                "",
-                0,
-                self.dupe_mode,
-                parameters
-            ],
-            "id": job_id,
-        });
-
-        let mut request_payload_for_log = request_payload.clone();
-        if let Some(params) = request_payload_for_log
-            .get_mut("params")
-            .and_then(Value::as_array_mut)
+        let use_auto_category = self.append_requires_auto_category().await;
+        let queue_priority = nzbget_queue_priority(request.queue_priority.as_deref());
+        match self
+            .send_append_request(
+                &job_id,
+                title.name.as_str(),
+                &nzb_filename,
+                &source_for_payload,
+                &category,
+                queue_priority,
+                &parameters,
+                use_auto_category,
+            )
+            .await
         {
-            if params.len() > 1 {
-                params[1] = Value::String("<omitted base64 nzb content>".to_string());
+            Ok(queue_id) => queue_id,
+            Err(err) if is_nzbget_invalid_procedure_error(&err) => {
+                let retry_use_auto_category = !use_auto_category;
+                warn!(
+                    error = %err,
+                    retry_auto_category = retry_use_auto_category,
+                    title = title.name.as_str(),
+                    "nzbget append rejected payload shape; retrying alternate append signature"
+                );
+                self.send_append_request(
+                    &job_id,
+                    title.name.as_str(),
+                    &nzb_filename,
+                    &source_for_payload,
+                    &category,
+                    queue_priority,
+                    &parameters,
+                    retry_use_auto_category,
+                )
+                .await?
             }
-        }
-
-        let endpoint = self.endpoint();
-        tracing::info!(
-            endpoint = endpoint.as_str(),
-            payload = %request_payload_for_log,
-            "nzbget append request payload"
-        );
-        let json_bytes = serde_json::to_vec(&request_payload).map_err(|err| {
-            AppError::Repository(format!("nzbget append payload serialization failed: {err}"))
-        })?;
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
-        encoder.write_all(&json_bytes).map_err(|err| {
-            AppError::Repository(format!("nzbget append gzip compression failed: {err}"))
-        })?;
-        let compressed = encoder.finish().map_err(|err| {
-            AppError::Repository(format!("nzbget append gzip finalization failed: {err}"))
-        })?;
-
-        let mut request = self
-            .http_client
-            .post(&endpoint)
-            .header("Content-Type", "application/json")
-            .header("Content-Encoding", "gzip")
-            .body(compressed);
-
-        if let Some(username) = self.username.clone() {
-            request = request.basic_auth(username, self.password.as_deref());
-        }
-
-        let response = request
-            .send()
-            .await
-            .map_err(|err| AppError::Repository(format!("nzbget request failed: {err}")))?;
-        let status = response.status();
-        let body_text = response
-            .text()
-            .await
-            .map_err(|err| AppError::Repository(format!("nzbget response read failed: {err}")))?;
-
-        if !status.is_success() {
-            let preview = body_text.chars().take(800).collect::<String>();
-            warn!(
-                endpoint = endpoint.as_str(),
-                status = status.to_string().as_str(),
-                preview = preview.as_str(),
-                title = title.name.as_str(),
-                "nzbget request failed"
-            );
-            return Err(AppError::Repository(format!(
-                "nzbget rejected request with status {status}"
-            )));
-        }
-
-        let response_json: Value = serde_json::from_str(&body_text).map_err(|err| {
-            AppError::Repository(format!("nzbget returned non-json response: {err}"))
-        })?;
-
-        if let Some(error) = response_json.get("error") {
-            let code = error
-                .get("code")
-                .and_then(Value::as_i64)
-                .unwrap_or_default();
-            let message = error
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            return Err(AppError::Repository(format!(
-                "nzbget API error {code}: {message}"
-            )));
-        }
-
-        let result = response_json
-            .get("result")
-            .and_then(Value::as_i64)
-            .unwrap_or(-1);
-        if result <= 0 {
-            return Err(AppError::Repository(format!(
-                "nzbget returned non-positive queue id {result}"
-            )));
-        }
-
-        debug!(
-            endpoint = endpoint.as_str(),
-            nzb_id = result,
-            job_id = job_id.as_str(),
-            title = title.name.as_str(),
-            category = category.as_str(),
-            "nzbget append succeeded"
-        );
+            Err(err) => return Err(err),
+        };
 
         Ok(DownloadGrabResult {
             job_id,
@@ -1353,14 +1416,108 @@ fn is_nzbget_success_value(value: &str) -> bool {
 /// Parses the major version number from an NZBGet version string.
 /// Handles formats like "24.3", "nzbget-24.3", "24.3-testing".
 fn parse_nzbget_major_version(version: &str) -> Option<u32> {
+    parse_nzbget_version(version).map(|version| version.major)
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct NzbgetVersion {
+    major: u32,
+    minor: u32,
+}
+
+fn parse_nzbget_version(version: &str) -> Option<NzbgetVersion> {
     let cleaned = version
         .trim()
         .trim_start_matches("nzbget-")
-        .trim_start_matches("nzbget");
-    let first_segment = cleaned.split('.').next()?;
-    // Handle "24-testing" → "24"
-    let digits = first_segment.split('-').next()?;
-    digits.parse::<u32>().ok()
+        .trim_start_matches("nzbget")
+        .trim();
+
+    let mut segments = cleaned.split('.');
+    let major = parse_numeric_prefix(segments.next()?)?;
+    let minor = segments.next().and_then(parse_numeric_prefix).unwrap_or(0);
+
+    Some(NzbgetVersion { major, minor })
+}
+
+fn parse_numeric_prefix(segment: &str) -> Option<u32> {
+    let digits: String = segment
+        .trim()
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect();
+
+    if digits.is_empty() {
+        None
+    } else {
+        digits.parse::<u32>().ok()
+    }
+}
+
+fn supports_nzbget_append_auto_category(version: &str) -> bool {
+    parse_nzbget_version(version)
+        .map(|parsed| {
+            parsed
+                >= NzbgetVersion {
+                    major: 25,
+                    minor: 3,
+                }
+        })
+        .unwrap_or(false)
+}
+
+fn build_nzbget_append_payload(
+    job_id: &str,
+    nzb_filename: &str,
+    source_for_payload: &str,
+    category: &str,
+    queue_priority: i32,
+    dupe_mode: &str,
+    parameters: &[Value],
+    use_auto_category: bool,
+) -> Value {
+    let mut params = vec![
+        json!(nzb_filename),
+        json!(source_for_payload),
+        json!(category),
+        json!(queue_priority),
+        json!(false),
+        json!(false),
+        json!(""),
+        json!(0),
+        json!(dupe_mode),
+    ];
+    if use_auto_category {
+        params.push(json!(false));
+    }
+    params.push(json!(parameters));
+
+    json!({
+        "version": "2.0",
+        "method": "append",
+        "params": params,
+        "id": job_id,
+    })
+}
+
+fn nzbget_queue_priority(raw_priority: Option<&str>) -> i32 {
+    match raw_priority
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("force") => 900,
+        Some("very high") => 100,
+        Some("high") => 50,
+        Some("normal") => 0,
+        Some("low") => -50,
+        Some("very low") => -100,
+        _ => 0,
+    }
+}
+
+fn is_nzbget_invalid_procedure_error(err: &AppError) -> bool {
+    matches!(err, AppError::Repository(message) if message.contains("Invalid procedure"))
 }
 
 fn sanitize_filename_with_nzb_ext(name: &str) -> String {
@@ -1394,6 +1551,109 @@ fn sanitize_nzb_name(name: &str) -> String {
     };
 
     sanitize_filename_with_nzb_ext(without_ext)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_nzbget_version_handles_common_formats() {
+        assert_eq!(
+            parse_nzbget_version("25.3"),
+            Some(NzbgetVersion {
+                major: 25,
+                minor: 3
+            })
+        );
+        assert_eq!(
+            parse_nzbget_version("nzbget-24.3"),
+            Some(NzbgetVersion {
+                major: 24,
+                minor: 3
+            })
+        );
+        assert_eq!(
+            parse_nzbget_version("nzbget 25.3-testing-r2"),
+            Some(NzbgetVersion {
+                major: 25,
+                minor: 3
+            })
+        );
+        assert_eq!(
+            parse_nzbget_version("26"),
+            Some(NzbgetVersion {
+                major: 26,
+                minor: 0
+            })
+        );
+        assert_eq!(parse_nzbget_version("unknown"), None);
+    }
+
+    #[test]
+    fn append_auto_category_support_starts_at_v25_3() {
+        assert!(!supports_nzbget_append_auto_category("25.2"));
+        assert!(supports_nzbget_append_auto_category("25.3"));
+        assert!(supports_nzbget_append_auto_category("26.0"));
+    }
+
+    #[test]
+    fn build_append_payload_uses_legacy_signature_for_older_servers() {
+        let parameters = vec![json!({"*scryer_title_id": "title-1"})];
+        let payload = build_nzbget_append_payload(
+            "job-1",
+            "Example.nzb",
+            "base64-data",
+            "movies",
+            0,
+            "SCORE",
+            &parameters,
+            false,
+        );
+
+        let params = payload
+            .get("params")
+            .and_then(Value::as_array)
+            .expect("append payload should include params");
+        assert_eq!(params.len(), 10);
+        assert_eq!(params[8], json!("SCORE"));
+        assert_eq!(params[9], json!(parameters));
+    }
+
+    #[test]
+    fn build_append_payload_includes_auto_category_for_newer_servers() {
+        let parameters = vec![json!({"*scryer_title_id": "title-1"})];
+        let payload = build_nzbget_append_payload(
+            "job-1",
+            "Example.nzb",
+            "base64-data",
+            "movies",
+            0,
+            "SCORE",
+            &parameters,
+            true,
+        );
+
+        let params = payload
+            .get("params")
+            .and_then(Value::as_array)
+            .expect("append payload should include params");
+        assert_eq!(params.len(), 11);
+        assert_eq!(params[8], json!("SCORE"));
+        assert_eq!(params[9], json!(false));
+        assert_eq!(params[10], json!(parameters));
+    }
+
+    #[test]
+    fn nzbget_queue_priority_maps_supported_values() {
+        assert_eq!(nzbget_queue_priority(Some("force")), 900);
+        assert_eq!(nzbget_queue_priority(Some("very high")), 100);
+        assert_eq!(nzbget_queue_priority(Some("high")), 50);
+        assert_eq!(nzbget_queue_priority(Some("normal")), 0);
+        assert_eq!(nzbget_queue_priority(Some("low")), -50);
+        assert_eq!(nzbget_queue_priority(Some("very low")), -100);
+        assert_eq!(nzbget_queue_priority(None), 0);
+    }
 }
 
 fn derive_nzb_filename(

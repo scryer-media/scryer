@@ -1,7 +1,7 @@
 import type { ViewCategoryId } from "@/lib/types/quality-profiles";
 import type {
-  NzbgetCategoryRoutingSettings,
-  NzbgetClientRoutingSettingsByClient,
+  DownloadClientRoutingSettings,
+  DownloadClientRoutingSettingsByClient,
 } from "@/lib/types";
 
 export type SearchableQualityProfileBody = {
@@ -27,25 +27,22 @@ export function getDefaultRoutingOrder(): NzbgetRoutingOrder {
 
 
 export function areNzbgetRoutingSettingsEqual(
-  left: NzbgetCategoryRoutingSettings,
-  right: NzbgetCategoryRoutingSettings,
+  left: DownloadClientRoutingSettings,
+  right: DownloadClientRoutingSettings,
 ) {
-  const tagsAreEqual =
-    left.tags.length === right.tags.length && left.tags.every((tag, index) => tag === right.tags[index]);
-
   return (
+    left.enabled === right.enabled &&
     left.category === right.category &&
-    left.recentPriority === right.recentPriority &&
-    left.olderPriority === right.olderPriority &&
-    tagsAreEqual &&
+    left.recentQueuePriority === right.recentQueuePriority &&
+    left.olderQueuePriority === right.olderQueuePriority &&
     left.removeCompleted === right.removeCompleted &&
     left.removeFailed === right.removeFailed
   );
 }
 
 export function areNzbgetRoutingMapsEqual(
-  left: NzbgetClientRoutingSettingsByClient,
-  right: NzbgetClientRoutingSettingsByClient,
+  left: DownloadClientRoutingSettingsByClient,
+  right: DownloadClientRoutingSettingsByClient,
 ) {
   const leftClientIds = Object.keys(left);
   const rightClientIds = Object.keys(right);
@@ -75,7 +72,7 @@ export function areRoutingOrdersEqual(left: string[], right: string[]) {
 
 export function buildRoutingOrder(
   clientIds: string[],
-  scopeRouting: NzbgetClientRoutingSettingsByClient,
+  scopeRouting: DownloadClientRoutingSettingsByClient,
 ): string[] {
   const clientIdSet = new Set(Object.keys(scopeRouting));
 

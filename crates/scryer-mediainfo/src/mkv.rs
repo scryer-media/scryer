@@ -30,6 +30,7 @@ pub(crate) fn parse_mkv(path: &Path) -> Result<RawContainer, MediaInfoError> {
     // get nanoseconds, then divide by 1e9 to get seconds.
     let timestamp_scale_ns = mkv.info().timestamp_scale().get() as f64;
     let duration_seconds = mkv.info().duration().map(|d| d * timestamp_scale_ns / 1e9);
+    let num_chapters = Some(count_mkv_chapters(&mkv));
 
     // -- tracks ----------------------------------------------------------
     let mut tracks: Vec<RawTrack> = Vec::new();
@@ -118,8 +119,20 @@ pub(crate) fn parse_mkv(path: &Path) -> Result<RawContainer, MediaInfoError> {
     Ok(RawContainer {
         format_name,
         duration_seconds,
+        num_chapters,
         tracks,
     })
+}
+
+fn count_mkv_chapters<R: std::io::Read + std::io::Seek>(mkv: &MatroskaFile<R>) -> i32 {
+    mkv.chapters()
+        .map(|editions| {
+            editions
+                .iter()
+                .map(|edition| edition.chapter_atoms().len() as i32)
+                .sum()
+        })
+        .unwrap_or(0)
 }
 
 /// Walk frames and accumulate byte sizes per track to estimate bitrate.

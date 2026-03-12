@@ -23,6 +23,7 @@ fn mkv_h264_aac() {
     assert_eq!(a.audio_codec.as_deref(), Some("aac"));
     assert_eq!(a.audio_channels, Some(2));
     assert!(!a.has_multiaudio);
+    assert_eq!(a.num_chapters, Some(0));
     assert_eq!(a.container_format.as_deref(), Some("matroska"));
     assert!(a.duration_seconds.unwrap() >= 1);
     assert!(is_valid_video(&a));
@@ -95,6 +96,7 @@ fn mp4_h264_aac() {
     assert_eq!(a.video_height, Some(72));
     assert_eq!(a.audio_codec.as_deref(), Some("aac"));
     assert_eq!(a.audio_channels, Some(2));
+    assert_eq!(a.num_chapters, None);
     assert_eq!(a.container_format.as_deref(), Some("mp4"));
     assert!(a.duration_seconds.unwrap() >= 1);
     assert!(is_valid_video(&a));

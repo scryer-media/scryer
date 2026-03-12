@@ -7,11 +7,18 @@ import {
   searchQuery,
   titleMediaFilesQuery,
   titleOverviewInitQuery,
+  wantedItemsQuery,
 } from "@/lib/graphql/queries";
 import {
   applyMediaRenameMutation,
+  deleteTitleMutation,
   queueExistingMutation,
-  scanLibraryMutation,
+  scanTitleLibraryMutation,
+  setTitleMonitoredMutation,
+  triggerTitleWantedSearchMutation,
+  pauseWantedItemMutation,
+  resumeWantedItemMutation,
+  resetWantedItemMutation,
   updateTitleMutation,
 } from "@/lib/graphql/mutations";
 import type { AdminSetting } from "@/lib/types/admin-settings";
@@ -25,8 +32,10 @@ import {
 import { useClient, useSubscription } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
-import type { Release } from "@/lib/types";
+import type { Release, WantedItem } from "@/lib/types";
 import { MovieOverviewView } from "@/components/views/movie-overview-view";
+import { ConfirmDialog } from "@/components/common/confirm-dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 
 export type TitleDetail = {
   id: string;
@@ -108,6 +117,7 @@ export type TitleMediaFile = {
   subtitleStreams: { codec: string | null; language: string | null; name: string | null; forced: boolean; default: boolean }[];
   hasMultiaudio: boolean;
   durationSeconds: number | null;
+  numChapters: number | null;
   containerFormat: string | null;
   sceneName: string | null;
   releaseGroup: string | null;
@@ -183,6 +193,7 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
   const [loading, setLoading] = React.useState(true);
 
   const [searchResults, setSearchResults] = React.useState<Release[]>([]);
+  const [interactiveSearchAttempted, setInteractiveSearchAttempted] = React.useState(false);
   const [searching, setSearching] = React.useState(false);
   const [renamePlan, setRenamePlan] = React.useState<MediaRenamePlan | null>(null);
   const [renamePreviewing, setRenamePreviewing] = React.useState(false);
@@ -192,11 +203,24 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
   const [qualityProfiles, setQualityProfiles] = React.useState<{ id: string; name: string }[]>([]);
   const [defaultRootFolder, setDefaultRootFolder] = React.useState(DEFAULT_MOVIE_LIBRARY_PATH);
   const [mediaFiles, setMediaFiles] = React.useState<TitleMediaFile[]>([]);
+  const [wantedItem, setWantedItem] = React.useState<WantedItem | null>(null);
+  const [monitoredUpdating, setMonitoredUpdating] = React.useState(false);
+  const [searchMonitoredLoading, setSearchMonitoredLoading] = React.useState(false);
+  const [refreshAndScanLoading, setRefreshAndScanLoading] = React.useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
+  const [deleteFilesOnDisk, setDeleteFilesOnDisk] = React.useState(false);
+  const [deleteLoading, setDeleteLoading] = React.useState(false);
+  const [wantedActionLoading, setWantedActionLoading] = React.useState<
+    "pause" | "resume" | "reset" | null
+  >(null);
 
   const refreshTitleDetail = React.useCallback(async () => {
-    const [titleResult, mediaResult] = await Promise.all([
+    const [titleResult, mediaResult, wantedResult] = await Promise.all([
       client.query(titleOverviewInitQuery, { id: titleId, blocklistLimit: 200 }).toPromise(),
       client.query(titleMediaFilesQuery, { titleId }).toPromise(),
+      client
+        .query(wantedItemsQuery, { titleId, limit: 1, offset: 0 }, { requestPolicy: "network-only" })
+        .toPromise(),
     ]);
     if (titleResult.error) throw titleResult.error;
     setTitle(titleResult.data.title ?? null);
@@ -204,6 +228,7 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
     setEvents(titleResult.data.titleEvents ?? []);
     setBlocklistEntries(titleResult.data.titleReleaseBlocklist ?? []);
     setMediaFiles(mediaResult.data?.titleMediaFiles ?? []);
+    setWantedItem(wantedResult.data?.wantedItems?.items?.[0] ?? null);
     setRenamePlan(null);
   }, [titleId, client]);
 
@@ -217,6 +242,7 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
       setEvents([]);
       setBlocklistEntries([]);
       setSearchResults([]);
+      setInteractiveSearchAttempted(false);
       setMediaFiles([]);
       setRenamePlan(null);
       setRenamePreviewing(false);
@@ -224,6 +250,7 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
       setTitleLookupAttempted(false);
       setTitleLookupFailed(false);
       setLoading(false);
+      setWantedItem(null);
       return () => {
         cancelled = true;
       };
@@ -231,6 +258,8 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
 
     setTitleLookupAttempted(false);
     setTitleLookupFailed(false);
+    setSearchResults([]);
+    setInteractiveSearchAttempted(false);
     setLoading(true);
     refreshTitleDetail()
       .catch((err: unknown) => {
@@ -313,8 +342,106 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
     [titleId, client, refreshTitleDetail],
   );
 
+  const handleSetTitleMonitored = React.useCallback(
+    async (monitored: boolean) => {
+      if (!title) return;
+      setMonitoredUpdating(true);
+      try {
+        const { error } = await client.mutation(setTitleMonitoredMutation, {
+          input: { titleId: title.id, monitored },
+        }).toPromise();
+        if (error) throw error;
+        setGlobalStatus(
+          monitored
+            ? t("status.titleMonitoringEnabled")
+            : t("status.titleMonitoringDisabled"),
+        );
+        await refreshTitleDetail();
+      } catch (err) {
+        setGlobalStatus(err instanceof Error ? err.message : t("status.apiError"));
+      } finally {
+        setMonitoredUpdating(false);
+      }
+    },
+    [title, client, refreshTitleDetail, setGlobalStatus, t],
+  );
+
+  const runWantedAction = React.useCallback(
+    async (
+      action: "pause" | "resume" | "reset",
+      mutation: string,
+      successMessage?: string,
+    ) => {
+      if (!wantedItem) return;
+      setWantedActionLoading(action);
+      try {
+        const { error } = await client.mutation(mutation, {
+          input: { wantedItemId: wantedItem.id },
+        }).toPromise();
+        if (error) throw error;
+        if (successMessage) {
+          setGlobalStatus(successMessage);
+        }
+        await refreshTitleDetail();
+      } catch (err) {
+        setGlobalStatus(err instanceof Error ? err.message : t("status.apiError"));
+      } finally {
+        setWantedActionLoading(null);
+      }
+    },
+    [wantedItem, client, refreshTitleDetail, setGlobalStatus, t],
+  );
+
+  const handleSearchMonitored = React.useCallback(
+    async () => {
+      if (!title) return;
+      setSearchMonitoredLoading(true);
+      try {
+        const { data, error } = await client.mutation(triggerTitleWantedSearchMutation, {
+          input: { titleId: title.id },
+        }).toPromise();
+        if (error) throw error;
+
+        const queued = data?.triggerTitleWantedSearch ?? 0;
+        setGlobalStatus(
+          queued > 0
+            ? t("status.searchMonitoredQueued", { count: queued })
+            : t("status.searchMonitoredEmpty"),
+        );
+        await refreshTitleDetail();
+      } catch (err) {
+        setGlobalStatus(err instanceof Error ? err.message : t("status.apiError"));
+      } finally {
+        setSearchMonitoredLoading(false);
+      }
+    },
+    [title, client, refreshTitleDetail, setGlobalStatus, t],
+  );
+
+  const handlePauseWanted = React.useCallback(
+    async () => {
+      await runWantedAction("pause", pauseWantedItemMutation);
+    },
+    [runWantedAction],
+  );
+
+  const handleResumeWanted = React.useCallback(
+    async () => {
+      await runWantedAction("resume", resumeWantedItemMutation);
+    },
+    [runWantedAction],
+  );
+
+  const handleResetWanted = React.useCallback(
+    async () => {
+      await runWantedAction("reset", resetWantedItemMutation);
+    },
+    [runWantedAction],
+  );
+
   const runIndexerSearch = React.useCallback(async () => {
     if (!title) return;
+    setInteractiveSearchAttempted(true);
     setSearching(true);
     setGlobalStatus(t("status.searchingNzb", { query: title.name, category: "" }));
     try {
@@ -370,22 +497,28 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
     [title, client, t, setGlobalStatus, refreshTitleDetail],
   );
 
-  const scanLibrary = React.useCallback(async () => {
+  const handleRefreshAndScan = React.useCallback(async () => {
+    if (!title) return;
+    setRefreshAndScanLoading(true);
     try {
-      const { data, error } = await client.mutation(scanLibraryMutation, { facet: "movie" }).toPromise();
+      const { data, error } = await client.mutation(scanTitleLibraryMutation, {
+        input: { titleId: title.id },
+      }).toPromise();
       if (error) throw error;
       setGlobalStatus(
-        t("settings.libraryScanSuccess", {
-          imported: data.scanLibrary.imported,
-          skipped: data.scanLibrary.skipped,
-          unmatched: data.scanLibrary.unmatched,
+        t("status.titleScanSuccess", {
+          imported: data.scanTitleLibrary.imported,
+          skipped: data.scanTitleLibrary.skipped,
+          unmatched: data.scanTitleLibrary.unmatched,
         }),
       );
       await refreshTitleDetail();
     } catch (err) {
       setGlobalStatus(err instanceof Error ? err.message : t("settings.libraryScanFailed"));
+    } finally {
+      setRefreshAndScanLoading(false);
     }
-  }, [refreshTitleDetail, client, setGlobalStatus, t]);
+  }, [title, refreshTitleDetail, client, setGlobalStatus, t]);
 
   const previewRename = React.useCallback(async () => {
     if (!title) return;
@@ -446,17 +579,74 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
     }
   }, [title, renamePlan, refreshTitleDetail, client, setGlobalStatus, t]);
 
+  const handleRequestDeleteTitle = React.useCallback(() => {
+    setDeleteFilesOnDisk(false);
+    setDeleteDialogOpen(true);
+  }, []);
+
+  const handleCancelDeleteTitle = React.useCallback(() => {
+    if (deleteLoading) return;
+    setDeleteDialogOpen(false);
+    setDeleteFilesOnDisk(false);
+  }, [deleteLoading]);
+
+  const handleConfirmDeleteTitle = React.useCallback(async () => {
+    if (!title) return;
+    setDeleteLoading(true);
+    try {
+      const payload: { titleId: string; deleteFilesOnDisk?: boolean } = {
+        titleId: title.id,
+      };
+      if (deleteFilesOnDisk) {
+        payload.deleteFilesOnDisk = true;
+      }
+
+      const { error } = await client.mutation(deleteTitleMutation, {
+        input: payload,
+      }).toPromise();
+      if (error) throw error;
+
+      setGlobalStatus(t("status.titleDeleted", { name: title.name }));
+      setDeleteDialogOpen(false);
+      setDeleteFilesOnDisk(false);
+
+      if (onBackToList) {
+        onBackToList();
+        return;
+      }
+      onTitleNotFound?.();
+    } catch (err) {
+      setGlobalStatus(err instanceof Error ? err.message : t("status.failedToDelete"));
+    } finally {
+      setDeleteLoading(false);
+    }
+  }, [
+    client,
+    deleteFilesOnDisk,
+    onBackToList,
+    onTitleNotFound,
+    setGlobalStatus,
+    t,
+    title,
+  ]);
+
   // Subscribe to activity events via WebSocket — refresh title detail (including
   // collection quality labels) when an import or upgrade completes for this movie.
   const IMPORT_KINDS = React.useMemo(
     () => new Set(["movie_downloaded", "series_episode_imported", "file_upgraded"]),
     [],
   );
+  const HYDRATION_COMPLETED_KIND = "metadata_hydration_completed";
 
   // Use a ref for title so the effect only fires on new subscription data,
   // not when refreshTitleDetail() updates the title state (which would loop).
   const titleRef = React.useRef(title);
   titleRef.current = title;
+  const processedActivityEventIdsRef = React.useRef<Set<string>>(new Set());
+
+  React.useEffect(() => {
+    processedActivityEventIdsRef.current.clear();
+  }, [titleId]);
 
   const [activitySub] = useSubscription({
     query: activitySubscriptionQuery,
@@ -471,35 +661,87 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
       const activity = normalizeActivityEvent(
         raw as Partial<ReturnType<typeof normalizeActivityEvent>>,
       );
-      if (activity.titleId === currentTitle.id && IMPORT_KINDS.has(activity.kind)) {
+      const processedEventIds = processedActivityEventIdsRef.current;
+      if (processedEventIds.has(activity.id)) {
+        continue;
+      }
+      processedEventIds.add(activity.id);
+      if (processedEventIds.size > 200) {
+        const oldestProcessedEventId = processedEventIds.values().next().value;
+        if (oldestProcessedEventId) {
+          processedEventIds.delete(oldestProcessedEventId);
+        }
+      }
+      if (activity.titleId !== currentTitle.id) {
+        continue;
+      }
+      if (activity.kind === HYDRATION_COMPLETED_KIND || IMPORT_KINDS.has(activity.kind)) {
         void refreshTitleDetail();
         return;
       }
     }
-  }, [IMPORT_KINDS, refreshTitleDetail, activitySub.data]);
+  }, [HYDRATION_COMPLETED_KIND, IMPORT_KINDS, refreshTitleDetail, activitySub.data]);
 
   return (
-    <MovieOverviewView
-      loading={loading}
-      title={title}
-      collections={collections}
-      events={events}
-      searchResults={searchResults}
-      searching={searching}
-      renamePlan={renamePlan}
-      renamePreviewing={renamePreviewing}
-      renameApplying={renameApplying}
-      onSearch={runIndexerSearch}
-      onQueue={queueRelease}
-      onScanLibrary={scanLibrary}
-      onPreviewRename={previewRename}
-      onApplyRename={applyRename}
-      onBackToList={onBackToList}
-      qualityProfiles={qualityProfiles}
-      defaultRootFolder={defaultRootFolder}
-      onUpdateTitleTags={handleUpdateTitleTags}
-      blocklistEntries={blocklistEntries}
-      mediaFiles={mediaFiles}
-    />
+    <>
+      <MovieOverviewView
+        loading={loading}
+        title={title}
+        collections={collections}
+        events={events}
+        searchResults={searchResults}
+        searching={searching}
+        renamePlan={renamePlan}
+        renamePreviewing={renamePreviewing}
+        renameApplying={renameApplying}
+        interactiveSearchAttempted={interactiveSearchAttempted}
+        searchMonitoredLoading={searchMonitoredLoading}
+        refreshAndScanLoading={refreshAndScanLoading}
+        deleteLoading={deleteLoading}
+        onSearch={runIndexerSearch}
+        onQueue={queueRelease}
+        onSearchMonitored={handleSearchMonitored}
+        onRefreshAndScan={handleRefreshAndScan}
+        onPreviewRename={previewRename}
+        onApplyRename={applyRename}
+        onBackToList={onBackToList}
+        qualityProfiles={qualityProfiles}
+        defaultRootFolder={defaultRootFolder}
+        onUpdateTitleTags={handleUpdateTitleTags}
+        onSetTitleMonitored={handleSetTitleMonitored}
+        monitoredUpdating={monitoredUpdating}
+        wantedItem={wantedItem}
+        wantedActionLoading={wantedActionLoading}
+        onPauseWanted={handlePauseWanted}
+        onResumeWanted={handleResumeWanted}
+        onResetWanted={handleResetWanted}
+        onRequestDeleteTitle={handleRequestDeleteTitle}
+        blocklistEntries={blocklistEntries}
+        mediaFiles={mediaFiles}
+      />
+      <ConfirmDialog
+        open={deleteDialogOpen && title !== null}
+        title={t("label.delete")}
+        description={
+          title
+            ? t("status.deleteCatalogConfirm", { name: title.name })
+            : t("label.delete")
+        }
+        confirmLabel={t("label.delete")}
+        cancelLabel={t("label.cancel")}
+        isBusy={deleteLoading}
+        onConfirm={handleConfirmDeleteTitle}
+        onCancel={handleCancelDeleteTitle}
+      >
+        <label className="flex items-center gap-2">
+          <Checkbox
+            checked={deleteFilesOnDisk}
+            onCheckedChange={(checked) => setDeleteFilesOnDisk(checked === true)}
+            disabled={deleteLoading}
+          />
+          <span className="text-sm text-muted-foreground">{t("title.deleteFilesOnDisk")}</span>
+        </label>
+      </ConfirmDialog>
+    </>
   );
 });

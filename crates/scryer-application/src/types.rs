@@ -32,6 +32,99 @@ pub struct TitleMetadataUpdate {
     pub extra_tags: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TitleImageKind {
+    Poster,
+    Banner,
+    Fanart,
+}
+
+impl TitleImageKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Poster => "poster",
+            Self::Banner => "banner",
+            Self::Fanart => "fanart",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "poster" => Some(Self::Poster),
+            "banner" => Some(Self::Banner),
+            "fanart" => Some(Self::Fanart),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TitleImageStorageMode {
+    Original,
+    AvifMaster,
+}
+
+impl TitleImageStorageMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Original => "original",
+            Self::AvifMaster => "avif_master",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "original" => Some(Self::Original),
+            "avif_master" => Some(Self::AvifMaster),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TitleImageVariantRecord {
+    pub variant_key: String,
+    pub format: String,
+    pub width: i32,
+    pub height: i32,
+    pub bytes: Vec<u8>,
+    pub sha256: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct TitleImageReplacement {
+    pub kind: TitleImageKind,
+    pub source_url: String,
+    pub source_etag: Option<String>,
+    pub source_last_modified: Option<String>,
+    pub source_format: String,
+    pub source_width: i32,
+    pub source_height: i32,
+    pub storage_mode: TitleImageStorageMode,
+    pub master_format: String,
+    pub master_sha256: String,
+    pub master_width: i32,
+    pub master_height: i32,
+    pub master_bytes: Vec<u8>,
+    pub variants: Vec<TitleImageVariantRecord>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TitleImageSyncTask {
+    pub title_id: String,
+    pub source_url: String,
+    pub cached_source_url: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TitleImageBlob {
+    pub content_type: String,
+    pub etag: String,
+    pub bytes: Vec<u8>,
+}
+
 #[derive(Clone, Debug)]
 pub struct TitleMediaFile {
     pub id: String,
@@ -61,6 +154,7 @@ pub struct TitleMediaFile {
     pub subtitle_streams: Vec<crate::SubtitleStreamDetail>,
     pub has_multiaudio: bool,
     pub duration_seconds: Option<i32>,
+    pub num_chapters: Option<i32>,
     pub container_format: Option<String>,
     // Rich schema fields (populated during import from parsed release metadata)
     pub scene_name: Option<String>,
@@ -323,13 +417,21 @@ pub(crate) struct JwtClaims {
     pub entitlements: Vec<String>,
 }
 
-/// Lightweight summary of a title's primary (index=0) collection, used to
-/// avoid N+1 queries when listing titles with their quality tier and file size.
+/// Lightweight summary of the collection that should represent a title in list
+/// views, used to avoid N+1 queries when listing titles with their current
+/// collection label.
 #[derive(Clone, Debug)]
 pub struct PrimaryCollectionSummary {
     pub title_id: String,
     pub label: Option<String>,
     pub ordered_path: Option<String>,
+}
+
+/// Aggregated media-file byte totals per title, used by title list views.
+#[derive(Clone, Debug)]
+pub struct TitleMediaSizeSummary {
+    pub title_id: String,
+    pub total_size_bytes: i64,
 }
 
 #[derive(Clone, Debug)]

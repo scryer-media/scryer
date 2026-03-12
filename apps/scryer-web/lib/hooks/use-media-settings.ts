@@ -10,7 +10,6 @@ import {
   ANIME_RECAP_POLICY_KEY,
   ANIME_INTER_SEASON_MOVIES_KEY,
   ANIME_MONITOR_SPECIALS_KEY,
-  ANIME_PREFERRED_SUB_GROUP_KEY,
   DEFAULT_MOVIE_LIBRARY_PATH,
   DEFAULT_SERIES_LIBRARY_PATH,
   MOVIE_FOLDER_KEY,
@@ -31,7 +30,7 @@ import {
   RENAME_TEMPLATE_GLOBAL_KEYS,
   RENAME_TEMPLATE_KEY,
 } from "@/lib/constants/settings";
-import type { ViewId } from "@/components/root/types";
+import type { ContentSettingsSection, ViewId } from "@/components/root/types";
 import type { SearchableQualityProfileBody } from "@/lib/utils/media-content";
 import type { ParsedQualityProfileEntry } from "@/lib/types/quality-profiles";
 import {
@@ -46,6 +45,7 @@ import type { ViewCategoryId } from "@/lib/types/quality-profiles";
 type UseMediaSettingsArgs = {
   activeQualityScopeId: ViewCategoryId;
   view: ViewId;
+  contentSettingsSection: ContentSettingsSection;
 };
 
 export type UseMediaSettingsResult = {
@@ -92,10 +92,6 @@ export type UseMediaSettingsResult = {
   setCategoryInterSeasonMovies: React.Dispatch<
     React.SetStateAction<Record<ViewCategoryId, string>>
   >;
-  categoryPreferredSubGroup: Record<ViewCategoryId, string>;
-  setCategoryPreferredSubGroup: React.Dispatch<
-    React.SetStateAction<Record<ViewCategoryId, string>>
-  >;
   nfoWriteOnImport: Record<ViewCategoryId, string>;
   setNfoWriteOnImport: React.Dispatch<
     React.SetStateAction<Record<ViewCategoryId, string>>
@@ -104,7 +100,9 @@ export type UseMediaSettingsResult = {
   setPlexmatchWriteOnImport: React.Dispatch<
     React.SetStateAction<Record<ViewCategoryId, string>>
   >;
-  updateCategoryMediaProfileSettings: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
+  updateCategoryMediaProfileSettings: (
+    event: React.FormEvent<HTMLFormElement>,
+  ) => Promise<void> | void;
   refreshMediaSettings: () => Promise<void>;
   refreshCategoryValidation: () => void;
 };
@@ -112,8 +110,15 @@ export type UseMediaSettingsResult = {
 const DEFAULT_RENAME_COLLISION_POLICY = "skip";
 const DEFAULT_RENAME_MISSING_METADATA_POLICY = "fallback_title";
 const DEFAULT_FILLER_POLICY = "download_all";
-const ALLOWED_RENAME_COLLISION_POLICIES = new Set(["skip", "error", "replace_if_better"]);
-const ALLOWED_RENAME_MISSING_METADATA_POLICIES = new Set(["skip", "fallback_title"]);
+const ALLOWED_RENAME_COLLISION_POLICIES = new Set([
+  "skip",
+  "error",
+  "replace_if_better",
+]);
+const ALLOWED_RENAME_MISSING_METADATA_POLICIES = new Set([
+  "skip",
+  "fallback_title",
+]);
 const ALLOWED_FILLER_POLICIES = new Set(["download_all", "skip_filler"]);
 const DEFAULT_RECAP_POLICY = "download_all";
 const ALLOWED_RECAP_POLICIES = new Set(["download_all", "skip_recap"]);
@@ -131,29 +136,92 @@ const PLEXMATCH_WRITE_KEYS: Partial<Record<ViewCategoryId, string>> = {
   anime: PLEXMATCH_WRITE_ON_IMPORT_ANIME_KEY,
 };
 
+function buildMediaSettingsInitVariables(
+  activeQualityScopeId: ViewCategoryId,
+  view: ViewId,
+  contentSettingsSection: ContentSettingsSection,
+) {
+  const isOverviewSection = contentSettingsSection === "overview";
+  const mediaKeyNames: string[] = [];
+  const systemKeyNames = [QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY];
+  const categoryKeyNames = [QUALITY_PROFILE_ID_KEY];
+
+  if (!isOverviewSection) {
+    if (view === "movies") {
+      mediaKeyNames.push(MOVIE_FOLDER_KEY);
+    } else if (view === "series") {
+      mediaKeyNames.push(SERIES_FOLDER_KEY);
+    }
+
+    systemKeyNames.push(
+      RENAME_TEMPLATE_GLOBAL_KEYS[activeQualityScopeId],
+      RENAME_COLLISION_POLICY_GLOBAL_KEY,
+      RENAME_MISSING_METADATA_POLICY_GLOBAL_KEY,
+      NFO_WRITE_KEYS[activeQualityScopeId],
+    );
+
+    const plexmatchKey = PLEXMATCH_WRITE_KEYS[activeQualityScopeId];
+    if (plexmatchKey) {
+      systemKeyNames.push(plexmatchKey);
+    }
+
+    categoryKeyNames.push(
+      RENAME_TEMPLATE_KEY,
+      RENAME_COLLISION_POLICY_KEY,
+      RENAME_MISSING_METADATA_POLICY_KEY,
+    );
+
+    if (activeQualityScopeId === "anime") {
+      categoryKeyNames.push(
+        ANIME_FILLER_POLICY_KEY,
+        ANIME_RECAP_POLICY_KEY,
+        ANIME_MONITOR_SPECIALS_KEY,
+        ANIME_INTER_SEASON_MOVIES_KEY,
+      );
+    }
+  }
+
+  return {
+    scopeId: activeQualityScopeId,
+    mediaKeyNames,
+    systemKeyNames,
+    categoryKeyNames,
+  };
+}
+
 export function useMediaSettings({
   activeQualityScopeId,
   view,
+  contentSettingsSection,
 }: UseMediaSettingsArgs): UseMediaSettingsResult {
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
   const client = useClient();
-  const [moviesPath, setMoviesPath] = React.useState(DEFAULT_MOVIE_LIBRARY_PATH);
-  const [seriesPath, setSeriesPath] = React.useState(DEFAULT_SERIES_LIBRARY_PATH);
+  const [moviesPath, setMoviesPath] = React.useState(
+    DEFAULT_MOVIE_LIBRARY_PATH,
+  );
+  const [seriesPath, setSeriesPath] = React.useState(
+    DEFAULT_SERIES_LIBRARY_PATH,
+  );
   const [mediaSettingsLoading, setMediaSettingsLoading] = React.useState(false);
   const [mediaSettingsSaving, setMediaSettingsSaving] = React.useState(false);
-  const [qualityProfiles, setQualityProfiles] = React.useState<SearchableQualityProfileBody[]>([]);
-  const [qualityProfileEntries, setQualityProfileEntries] = React.useState<ParsedQualityProfileEntry[]>([]);
+  const [qualityProfiles, setQualityProfiles] = React.useState<
+    SearchableQualityProfileBody[]
+  >([]);
+  const [qualityProfileEntries, setQualityProfileEntries] = React.useState<
+    ParsedQualityProfileEntry[]
+  >([]);
   const [qualityProfilesText, setQualityProfilesText] = React.useState("");
-  const [qualityProfileParseError, setQualityProfileParseError] = React.useState("");
-  const [globalQualityProfileId, setGlobalQualityProfileId] = React.useState("");
-  const [categoryQualityProfileOverrides, setCategoryQualityProfileOverrides] = React.useState<
-    Record<ViewCategoryId, string>
-  >({
-    movie: QUALITY_PROFILE_INHERIT_VALUE,
-    series: QUALITY_PROFILE_INHERIT_VALUE,
-    anime: QUALITY_PROFILE_INHERIT_VALUE,
-  });
+  const [qualityProfileParseError, setQualityProfileParseError] =
+    React.useState("");
+  const [globalQualityProfileId, setGlobalQualityProfileId] =
+    React.useState("");
+  const [categoryQualityProfileOverrides, setCategoryQualityProfileOverrides] =
+    React.useState<Record<ViewCategoryId, string>>({
+      movie: QUALITY_PROFILE_INHERIT_VALUE,
+      series: QUALITY_PROFILE_INHERIT_VALUE,
+      anime: QUALITY_PROFILE_INHERIT_VALUE,
+    });
   const [categoryRenameTemplates, setCategoryRenameTemplates] = React.useState<
     Record<ViewCategoryId, string>
   >({
@@ -161,19 +229,20 @@ export function useMediaSettings({
     series: DEFAULT_RENAME_TEMPLATE,
     anime: DEFAULT_RENAME_TEMPLATE,
   });
-  const [categoryRenameCollisionPolicies, setCategoryRenameCollisionPolicies] = React.useState<
-    Record<ViewCategoryId, string>
-  >({
-    movie: DEFAULT_RENAME_COLLISION_POLICY,
-    series: DEFAULT_RENAME_COLLISION_POLICY,
-    anime: DEFAULT_RENAME_COLLISION_POLICY,
-  });
-  const [categoryRenameMissingMetadataPolicies, setCategoryRenameMissingMetadataPolicies] =
+  const [categoryRenameCollisionPolicies, setCategoryRenameCollisionPolicies] =
     React.useState<Record<ViewCategoryId, string>>({
-      movie: DEFAULT_RENAME_MISSING_METADATA_POLICY,
-      series: DEFAULT_RENAME_MISSING_METADATA_POLICY,
-      anime: DEFAULT_RENAME_MISSING_METADATA_POLICY,
+      movie: DEFAULT_RENAME_COLLISION_POLICY,
+      series: DEFAULT_RENAME_COLLISION_POLICY,
+      anime: DEFAULT_RENAME_COLLISION_POLICY,
     });
+  const [
+    categoryRenameMissingMetadataPolicies,
+    setCategoryRenameMissingMetadataPolicies,
+  ] = React.useState<Record<ViewCategoryId, string>>({
+    movie: DEFAULT_RENAME_MISSING_METADATA_POLICY,
+    series: DEFAULT_RENAME_MISSING_METADATA_POLICY,
+    anime: DEFAULT_RENAME_MISSING_METADATA_POLICY,
+  });
   const [categoryFillerPolicies, setCategoryFillerPolicies] = React.useState<
     Record<ViewCategoryId, string>
   >({
@@ -195,20 +264,12 @@ export function useMediaSettings({
     series: "true",
     anime: "false",
   });
-  const [categoryInterSeasonMovies, setCategoryInterSeasonMovies] = React.useState<
-    Record<ViewCategoryId, string>
-  >({
-    movie: "true",
-    series: "true",
-    anime: "true",
-  });
-  const [categoryPreferredSubGroup, setCategoryPreferredSubGroup] = React.useState<
-    Record<ViewCategoryId, string>
-  >({
-    movie: "",
-    series: "",
-    anime: "",
-  });
+  const [categoryInterSeasonMovies, setCategoryInterSeasonMovies] =
+    React.useState<Record<ViewCategoryId, string>>({
+      movie: "true",
+      series: "true",
+      anime: "true",
+    });
   const [nfoWriteOnImport, setNfoWriteOnImport] = React.useState<
     Record<ViewCategoryId, string>
   >({
@@ -233,7 +294,9 @@ export function useMediaSettings({
           : "";
 
       setQualityProfileParseError((currentParseError) =>
-        currentParseError === nextParseError ? currentParseError : nextParseError,
+        currentParseError === nextParseError
+          ? currentParseError
+          : nextParseError,
       );
 
       setQualityProfileEntries(resolved.entries);
@@ -244,12 +307,15 @@ export function useMediaSettings({
     [t],
   );
 
-  const normalizeRenameCollisionPolicy = React.useCallback((rawValue: string | null | undefined) => {
-    const normalized = (rawValue || "").trim().toLowerCase();
-    return ALLOWED_RENAME_COLLISION_POLICIES.has(normalized)
-      ? normalized
-      : DEFAULT_RENAME_COLLISION_POLICY;
-  }, []);
+  const normalizeRenameCollisionPolicy = React.useCallback(
+    (rawValue: string | null | undefined) => {
+      const normalized = (rawValue || "").trim().toLowerCase();
+      return ALLOWED_RENAME_COLLISION_POLICIES.has(normalized)
+        ? normalized
+        : DEFAULT_RENAME_COLLISION_POLICY;
+    },
+    [],
+  );
 
   const normalizeRenameMissingMetadataPolicy = React.useCallback(
     (rawValue: string | null | undefined) => {
@@ -261,15 +327,25 @@ export function useMediaSettings({
     [],
   );
 
-  const normalizeFillerPolicy = React.useCallback((rawValue: string | null | undefined) => {
-    const normalized = (rawValue || "").trim().toLowerCase();
-    return ALLOWED_FILLER_POLICIES.has(normalized) ? normalized : DEFAULT_FILLER_POLICY;
-  }, []);
+  const normalizeFillerPolicy = React.useCallback(
+    (rawValue: string | null | undefined) => {
+      const normalized = (rawValue || "").trim().toLowerCase();
+      return ALLOWED_FILLER_POLICIES.has(normalized)
+        ? normalized
+        : DEFAULT_FILLER_POLICY;
+    },
+    [],
+  );
 
-  const normalizeRecapPolicy = React.useCallback((rawValue: string | null | undefined) => {
-    const normalized = (rawValue || "").trim().toLowerCase();
-    return ALLOWED_RECAP_POLICIES.has(normalized) ? normalized : DEFAULT_RECAP_POLICY;
-  }, []);
+  const normalizeRecapPolicy = React.useCallback(
+    (rawValue: string | null | undefined) => {
+      const normalized = (rawValue || "").trim().toLowerCase();
+      return ALLOWED_RECAP_POLICIES.has(normalized)
+        ? normalized
+        : DEFAULT_RECAP_POLICY;
+    },
+    [],
+  );
 
   const applyMediaSettingsFromPayload = React.useCallback(
     (
@@ -306,15 +382,18 @@ export function useMediaSettings({
         });
       }
 
-      const nextProfileText = payload.qualityProfiles ?? getSettingDisplayValue(profileCatalogRecord);
+      const nextProfileText =
+        payload.qualityProfiles ?? getSettingDisplayValue(profileCatalogRecord);
       const nextProfiles = normalizeQualityProfiles(nextProfileText);
 
       const globalProfileRecord = payload.items.find(
         (item) => item.keyName === QUALITY_PROFILE_ID_KEY,
       );
-      const rawGlobalProfileId = getSettingDisplayValue(globalProfileRecord).trim();
+      const rawGlobalProfileId =
+        getSettingDisplayValue(globalProfileRecord).trim();
       const resolvedGlobalId =
-        rawGlobalProfileId && nextProfiles.some((p) => p.id === rawGlobalProfileId)
+        rawGlobalProfileId &&
+        nextProfiles.some((p) => p.id === rawGlobalProfileId)
           ? rawGlobalProfileId
           : (nextProfiles[0]?.id ?? "");
       setGlobalQualityProfileId((current) =>
@@ -323,9 +402,10 @@ export function useMediaSettings({
 
       setQualityProfiles((currentProfiles) =>
         currentProfiles.length === nextProfiles.length &&
-        currentProfiles.every((profile, index) =>
-          profile.id === nextProfiles[index]?.id &&
-          profile.name === nextProfiles[index]?.name,
+        currentProfiles.every(
+          (profile, index) =>
+            profile.id === nextProfiles[index]?.id &&
+            profile.name === nextProfiles[index]?.name,
         )
           ? currentProfiles
           : nextProfiles,
@@ -349,7 +429,8 @@ export function useMediaSettings({
           const categoryProfileValue = coerceProfileSetting(
             getSettingDisplayValue(categoryProfileRecord),
           );
-          const nextValue = categoryProfileValue || QUALITY_PROFILE_INHERIT_VALUE;
+          const nextValue =
+            categoryProfileValue || QUALITY_PROFILE_INHERIT_VALUE;
           if (next[scopeId] !== nextValue) {
             next[scopeId] = nextValue;
             hasUpdate = true;
@@ -371,10 +452,15 @@ export function useMediaSettings({
           const categoryTemplateRecord = categoryBody.items.find(
             (item) => item.keyName === RENAME_TEMPLATE_KEY,
           );
-          const scopedTemplate = getSettingDisplayValue(categoryTemplateRecord).trim();
-          const globalTemplateRecord = systemItemsByKey[RENAME_TEMPLATE_GLOBAL_KEYS[scopeId]];
-          const globalTemplate = getSettingDisplayValue(globalTemplateRecord).trim();
-          const nextTemplate = scopedTemplate || globalTemplate || DEFAULT_RENAME_TEMPLATE;
+          const scopedTemplate = getSettingDisplayValue(
+            categoryTemplateRecord,
+          ).trim();
+          const globalTemplateRecord =
+            systemItemsByKey[RENAME_TEMPLATE_GLOBAL_KEYS[scopeId]];
+          const globalTemplate =
+            getSettingDisplayValue(globalTemplateRecord).trim();
+          const nextTemplate =
+            scopedTemplate || globalTemplate || DEFAULT_RENAME_TEMPLATE;
 
           if (next[scopeId] !== nextTemplate) {
             next[scopeId] = nextTemplate;
@@ -389,7 +475,9 @@ export function useMediaSettings({
         let hasUpdate = false;
         const next = { ...previous };
         const globalPolicy = normalizeRenameCollisionPolicy(
-          getSettingDisplayValue(systemItemsByKey[RENAME_COLLISION_POLICY_GLOBAL_KEY]),
+          getSettingDisplayValue(
+            systemItemsByKey[RENAME_COLLISION_POLICY_GLOBAL_KEY],
+          ),
         );
 
         for (const categoryBody of categoryPayloads) {
@@ -404,7 +492,8 @@ export function useMediaSettings({
           const scopedPolicy = normalizeRenameCollisionPolicy(
             getSettingDisplayValue(categoryPolicyRecord),
           );
-          const isScopedValueSet = getSettingDisplayValue(categoryPolicyRecord).trim().length > 0;
+          const isScopedValueSet =
+            getSettingDisplayValue(categoryPolicyRecord).trim().length > 0;
           const nextPolicy = isScopedValueSet ? scopedPolicy : globalPolicy;
           if (next[scopeId] !== nextPolicy) {
             next[scopeId] = nextPolicy;
@@ -419,7 +508,9 @@ export function useMediaSettings({
         let hasUpdate = false;
         const next = { ...previous };
         const globalPolicy = normalizeRenameMissingMetadataPolicy(
-          getSettingDisplayValue(systemItemsByKey[RENAME_MISSING_METADATA_POLICY_GLOBAL_KEY]),
+          getSettingDisplayValue(
+            systemItemsByKey[RENAME_MISSING_METADATA_POLICY_GLOBAL_KEY],
+          ),
         );
 
         for (const categoryBody of categoryPayloads) {
@@ -434,7 +525,8 @@ export function useMediaSettings({
           const scopedPolicy = normalizeRenameMissingMetadataPolicy(
             getSettingDisplayValue(categoryPolicyRecord),
           );
-          const isScopedValueSet = getSettingDisplayValue(categoryPolicyRecord).trim().length > 0;
+          const isScopedValueSet =
+            getSettingDisplayValue(categoryPolicyRecord).trim().length > 0;
           const nextPolicy = isScopedValueSet ? scopedPolicy : globalPolicy;
           if (next[scopeId] !== nextPolicy) {
             next[scopeId] = nextPolicy;
@@ -454,7 +546,9 @@ export function useMediaSettings({
         const fillerRecord = animeBody.items.find(
           (item) => item.keyName === ANIME_FILLER_POLICY_KEY,
         );
-        const nextPolicy = normalizeFillerPolicy(getSettingDisplayValue(fillerRecord));
+        const nextPolicy = normalizeFillerPolicy(
+          getSettingDisplayValue(fillerRecord),
+        );
         if (previous.anime === nextPolicy) return previous;
         return { ...previous, anime: nextPolicy };
       });
@@ -468,7 +562,9 @@ export function useMediaSettings({
         const recapRecord = animeBody.items.find(
           (item) => item.keyName === ANIME_RECAP_POLICY_KEY,
         );
-        const nextPolicy = normalizeRecapPolicy(getSettingDisplayValue(recapRecord));
+        const nextPolicy = normalizeRecapPolicy(
+          getSettingDisplayValue(recapRecord),
+        );
         if (previous.anime === nextPolicy) return previous;
         return { ...previous, anime: nextPolicy };
       });
@@ -482,7 +578,9 @@ export function useMediaSettings({
         const monitorRecord = animeBody.items.find(
           (item) => item.keyName === ANIME_MONITOR_SPECIALS_KEY,
         );
-        const rawValue = getSettingDisplayValue(monitorRecord).trim().toLowerCase();
+        const rawValue = getSettingDisplayValue(monitorRecord)
+          .trim()
+          .toLowerCase();
         const nextValue = rawValue === "true" ? "true" : "false";
         if (previous.anime === nextValue) return previous;
         return { ...previous, anime: nextValue };
@@ -503,26 +601,14 @@ export function useMediaSettings({
         return { ...previous, anime: next };
       });
 
-      setCategoryPreferredSubGroup((previous) => {
-        const animeBody = categoryPayloads.find(
-          (body) => body.scopeId === "anime",
-        );
-        if (!animeBody) return previous;
-
-        const record = animeBody.items.find(
-          (item) => item.keyName === ANIME_PREFERRED_SUB_GROUP_KEY,
-        );
-        const next = getSettingDisplayValue(record).trim();
-        if (previous.anime === next) return previous;
-        return { ...previous, anime: next };
-      });
-
       // NFO write-on-import (system-scoped, keyed per facet)
       setNfoWriteOnImport((previous) => {
         let hasUpdate = false;
         const next = { ...previous };
         for (const [scopeId, key] of Object.entries(NFO_WRITE_KEYS)) {
-          const raw = getSettingDisplayValue(systemItemsByKey[key]).trim().toLowerCase();
+          const raw = getSettingDisplayValue(systemItemsByKey[key])
+            .trim()
+            .toLowerCase();
           const val = raw === "true" ? "true" : "false";
           if (next[scopeId as ViewCategoryId] !== val) {
             next[scopeId as ViewCategoryId] = val;
@@ -537,7 +623,9 @@ export function useMediaSettings({
         let hasUpdate = false;
         const next = { ...previous };
         for (const [scopeId, key] of Object.entries(PLEXMATCH_WRITE_KEYS)) {
-          const raw = getSettingDisplayValue(systemItemsByKey[key]).trim().toLowerCase();
+          const raw = getSettingDisplayValue(systemItemsByKey[key])
+            .trim()
+            .toLowerCase();
           const val = raw === "true" ? "true" : "false";
           if (next[scopeId as ViewCategoryId] !== val) {
             next[scopeId as ViewCategoryId] = val;
@@ -559,26 +647,47 @@ export function useMediaSettings({
   const refreshMediaSettings = React.useCallback(async () => {
     setMediaSettingsLoading(true);
     try {
-      const { data, error } = await client.query(mediaSettingsInitQuery, {}).toPromise();
+      const variables = buildMediaSettingsInitVariables(
+        activeQualityScopeId,
+        view,
+        contentSettingsSection,
+      );
+      const { data, error } = await client
+        .query(mediaSettingsInitQuery, variables)
+        .toPromise();
       if (error) throw error;
 
       applyMediaSettingsFromPayload(
         data.systemSettings,
         data.mediaSettings,
-        [data.movieSettings, data.seriesSettings, data.animeSettings],
+        data.categorySettings ? [data.categorySettings] : [],
       );
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(
+        error instanceof Error ? error.message : t("status.failedToLoad"),
+      );
     } finally {
       setMediaSettingsLoading(false);
     }
-  }, [applyMediaSettingsFromPayload, client, setGlobalStatus, t]);
+  }, [
+    activeQualityScopeId,
+    applyMediaSettingsFromPayload,
+    client,
+    contentSettingsSection,
+    setGlobalStatus,
+    t,
+    view,
+  ]);
 
   const updateCategoryMediaProfileSettings = React.useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
       const path =
-        view === "movies" ? moviesPath.trim() : view === "series" ? seriesPath.trim() : "";
+        view === "movies"
+          ? moviesPath.trim()
+          : view === "series"
+            ? seriesPath.trim()
+            : "";
       if ((view === "movies" || view === "series") && !path) {
         const requiredMessage =
           view === "movies"
@@ -588,8 +697,11 @@ export function useMediaSettings({
         return;
       }
 
-      const selectedProfile = coerceProfileSetting(categoryQualityProfileOverrides[activeQualityScopeId]);
-      const renameTemplate = categoryRenameTemplates[activeQualityScopeId].trim();
+      const selectedProfile = coerceProfileSetting(
+        categoryQualityProfileOverrides[activeQualityScopeId],
+      );
+      const renameTemplate =
+        categoryRenameTemplates[activeQualityScopeId].trim();
       const renameCollisionPolicy = normalizeRenameCollisionPolicy(
         categoryRenameCollisionPolicies[activeQualityScopeId],
       );
@@ -606,7 +718,9 @@ export function useMediaSettings({
         !isValidProfileSelection(qualityProfiles, selectedProfile)
       ) {
         const invalidId = selectedProfile || t("label.default");
-        setQualityProfileParseError(t("settings.qualityProfileUnknown", { id: invalidId }));
+        setQualityProfileParseError(
+          t("settings.qualityProfileUnknown", { id: invalidId }),
+        );
         setGlobalStatus(t("settings.qualityProfileUnknown", { id: invalidId }));
         return;
       }
@@ -622,56 +736,76 @@ export function useMediaSettings({
 
       try {
         const globalSaveItems: Array<{ keyName: string; value: string }> = [];
-        let globalSaveResponse: { saveAdminSettings: AdminSettingsResponse } | null = null;
+        let globalSaveResponse: {
+          saveAdminSettings: AdminSettingsResponse;
+        } | null = null;
 
         if (view === "movies" || view === "series") {
-          const pathKey = view === "movies" ? MOVIE_FOLDER_KEY : SERIES_FOLDER_KEY;
+          const pathKey =
+            view === "movies" ? MOVIE_FOLDER_KEY : SERIES_FOLDER_KEY;
           globalSaveItems.push({ keyName: pathKey, value: path });
-          const { data: globalData, error: globalError } = await client.mutation(
-            saveAdminSettingsMutation,
-            {
+          const { data: globalData, error: globalError } = await client
+            .mutation(saveAdminSettingsMutation, {
               input: {
                 scope: "media",
                 items: globalSaveItems,
               },
-            },
-          ).toPromise();
+            })
+            .toPromise();
           if (globalError) throw globalError;
           globalSaveResponse = globalData;
         }
 
-        const { data: categoryData, error: categoryError } = await client.mutation(
-          saveAdminSettingsMutation,
-          {
+        const { data: categoryData, error: categoryError } = await client
+          .mutation(saveAdminSettingsMutation, {
             input: {
               scope: "system",
               scopeId: activeQualityScopeId,
               items: [
                 { keyName: QUALITY_PROFILE_ID_KEY, value: selectedProfile },
                 { keyName: RENAME_TEMPLATE_KEY, value: renameTemplate },
-                { keyName: RENAME_COLLISION_POLICY_KEY, value: renameCollisionPolicy },
+                {
+                  keyName: RENAME_COLLISION_POLICY_KEY,
+                  value: renameCollisionPolicy,
+                },
                 {
                   keyName: RENAME_MISSING_METADATA_POLICY_KEY,
                   value: renameMissingMetadataPolicy,
                 },
                 ...(activeQualityScopeId === "anime"
                   ? [
-                      { keyName: ANIME_FILLER_POLICY_KEY, value: normalizeFillerPolicy(categoryFillerPolicies.anime) },
-                      { keyName: ANIME_RECAP_POLICY_KEY, value: normalizeRecapPolicy(categoryRecapPolicies.anime) },
-                      { keyName: ANIME_MONITOR_SPECIALS_KEY, value: categoryMonitorSpecials.anime },
-                      { keyName: ANIME_INTER_SEASON_MOVIES_KEY, value: categoryInterSeasonMovies.anime },
-                      { keyName: ANIME_PREFERRED_SUB_GROUP_KEY, value: categoryPreferredSubGroup.anime },
+                      {
+                        keyName: ANIME_FILLER_POLICY_KEY,
+                        value: normalizeFillerPolicy(
+                          categoryFillerPolicies.anime,
+                        ),
+                      },
+                      {
+                        keyName: ANIME_RECAP_POLICY_KEY,
+                        value: normalizeRecapPolicy(
+                          categoryRecapPolicies.anime,
+                        ),
+                      },
+                      {
+                        keyName: ANIME_MONITOR_SPECIALS_KEY,
+                        value: categoryMonitorSpecials.anime,
+                      },
+                      {
+                        keyName: ANIME_INTER_SEASON_MOVIES_KEY,
+                        value: categoryInterSeasonMovies.anime,
+                      },
                     ]
                   : []),
               ],
             },
-          },
-        ).toPromise();
+          })
+          .toPromise();
         if (categoryError) throw categoryError;
         const categoryResponse = categoryData;
 
         if ((view === "movies" || view === "series") && globalSaveResponse) {
-          const pathKey = view === "movies" ? MOVIE_FOLDER_KEY : SERIES_FOLDER_KEY;
+          const pathKey =
+            view === "movies" ? MOVIE_FOLDER_KEY : SERIES_FOLDER_KEY;
           const pathRecord = globalSaveResponse.saveAdminSettings.items.find(
             (item) => item.keyName === pathKey,
           );
@@ -687,31 +821,43 @@ export function useMediaSettings({
           setSeriesPath(path || DEFAULT_SERIES_LIBRARY_PATH);
         }
 
-        const categoryProfileRecord = categoryResponse.saveAdminSettings.items.find(
-          (item: AdminSetting) => item.keyName === QUALITY_PROFILE_ID_KEY,
+        const categoryProfileRecord =
+          categoryResponse.saveAdminSettings.items.find(
+            (item: AdminSetting) => item.keyName === QUALITY_PROFILE_ID_KEY,
+          );
+        const persistedTemplateRecord =
+          categoryResponse.saveAdminSettings.items.find(
+            (item: AdminSetting) => item.keyName === RENAME_TEMPLATE_KEY,
+          );
+        const persistedCollisionPolicyRecord =
+          categoryResponse.saveAdminSettings.items.find(
+            (item: AdminSetting) =>
+              item.keyName === RENAME_COLLISION_POLICY_KEY,
+          );
+        const persistedMissingMetadataPolicyRecord =
+          categoryResponse.saveAdminSettings.items.find(
+            (item: AdminSetting) =>
+              item.keyName === RENAME_MISSING_METADATA_POLICY_KEY,
+          );
+        const persistedProfile = coerceProfileSetting(
+          getSettingDisplayValue(categoryProfileRecord),
         );
-        const persistedTemplateRecord = categoryResponse.saveAdminSettings.items.find(
-          (item: AdminSetting) => item.keyName === RENAME_TEMPLATE_KEY,
-        );
-        const persistedCollisionPolicyRecord = categoryResponse.saveAdminSettings.items.find(
-          (item: AdminSetting) => item.keyName === RENAME_COLLISION_POLICY_KEY,
-        );
-        const persistedMissingMetadataPolicyRecord = categoryResponse.saveAdminSettings.items.find(
-          (item: AdminSetting) => item.keyName === RENAME_MISSING_METADATA_POLICY_KEY,
-        );
-        const persistedProfile = coerceProfileSetting(getSettingDisplayValue(categoryProfileRecord));
         setCategoryQualityProfileOverrides((previous) => ({
           ...previous,
-          [activeQualityScopeId]: persistedProfile || QUALITY_PROFILE_INHERIT_VALUE,
+          [activeQualityScopeId]:
+            persistedProfile || QUALITY_PROFILE_INHERIT_VALUE,
         }));
         setCategoryRenameTemplates((previous) => ({
           ...previous,
-          [activeQualityScopeId]: getSettingDisplayValue(persistedTemplateRecord).trim() || renameTemplate,
+          [activeQualityScopeId]:
+            getSettingDisplayValue(persistedTemplateRecord).trim() ||
+            renameTemplate,
         }));
         setCategoryRenameCollisionPolicies((previous) => ({
           ...previous,
           [activeQualityScopeId]: normalizeRenameCollisionPolicy(
-            getSettingDisplayValue(persistedCollisionPolicyRecord) || renameCollisionPolicy,
+            getSettingDisplayValue(persistedCollisionPolicyRecord) ||
+              renameCollisionPolicy,
           ),
         }));
         setCategoryRenameMissingMetadataPolicies((previous) => ({
@@ -723,50 +869,58 @@ export function useMediaSettings({
         }));
 
         if (activeQualityScopeId === "anime") {
-          const persistedFillerPolicyRecord = categoryResponse.saveAdminSettings.items.find(
-            (item: AdminSetting) => item.keyName === ANIME_FILLER_POLICY_KEY,
-          );
+          const persistedFillerPolicyRecord =
+            categoryResponse.saveAdminSettings.items.find(
+              (item: AdminSetting) => item.keyName === ANIME_FILLER_POLICY_KEY,
+            );
           setCategoryFillerPolicies((previous) => ({
             ...previous,
             anime: normalizeFillerPolicy(
-              getSettingDisplayValue(persistedFillerPolicyRecord) || categoryFillerPolicies.anime,
+              getSettingDisplayValue(persistedFillerPolicyRecord) ||
+                categoryFillerPolicies.anime,
             ),
           }));
 
-          const persistedRecapPolicyRecord = categoryResponse.saveAdminSettings.items.find(
-            (item: AdminSetting) => item.keyName === ANIME_RECAP_POLICY_KEY,
-          );
+          const persistedRecapPolicyRecord =
+            categoryResponse.saveAdminSettings.items.find(
+              (item: AdminSetting) => item.keyName === ANIME_RECAP_POLICY_KEY,
+            );
           setCategoryRecapPolicies((previous) => ({
             ...previous,
             anime: normalizeRecapPolicy(
-              getSettingDisplayValue(persistedRecapPolicyRecord) || categoryRecapPolicies.anime,
+              getSettingDisplayValue(persistedRecapPolicyRecord) ||
+                categoryRecapPolicies.anime,
             ),
           }));
 
-          const persistedMonitorSpecialsRecord = categoryResponse.saveAdminSettings.items.find(
-            (item: AdminSetting) => item.keyName === ANIME_MONITOR_SPECIALS_KEY,
-          );
-          const rawMonitor = getSettingDisplayValue(persistedMonitorSpecialsRecord).trim().toLowerCase();
+          const persistedMonitorSpecialsRecord =
+            categoryResponse.saveAdminSettings.items.find(
+              (item: AdminSetting) =>
+                item.keyName === ANIME_MONITOR_SPECIALS_KEY,
+            );
+          const rawMonitor = getSettingDisplayValue(
+            persistedMonitorSpecialsRecord,
+          )
+            .trim()
+            .toLowerCase();
           setCategoryMonitorSpecials((previous) => ({
             ...previous,
             anime: rawMonitor === "true" ? "true" : "false",
           }));
 
-          const persistedInterSeasonMoviesRecord = categoryResponse.saveAdminSettings.items.find(
-            (item: AdminSetting) => item.keyName === ANIME_INTER_SEASON_MOVIES_KEY,
-          );
-          const rawInterSeason = getSettingDisplayValue(persistedInterSeasonMoviesRecord).trim().toLowerCase();
+          const persistedInterSeasonMoviesRecord =
+            categoryResponse.saveAdminSettings.items.find(
+              (item: AdminSetting) =>
+                item.keyName === ANIME_INTER_SEASON_MOVIES_KEY,
+            );
+          const rawInterSeason = getSettingDisplayValue(
+            persistedInterSeasonMoviesRecord,
+          )
+            .trim()
+            .toLowerCase();
           setCategoryInterSeasonMovies((previous) => ({
             ...previous,
             anime: rawInterSeason === "false" ? "false" : "true",
-          }));
-
-          const persistedSubGroupRecord = categoryResponse.saveAdminSettings.items.find(
-            (item: AdminSetting) => item.keyName === ANIME_PREFERRED_SUB_GROUP_KEY,
-          );
-          setCategoryPreferredSubGroup((previous) => ({
-            ...previous,
-            anime: getSettingDisplayValue(persistedSubGroupRecord).trim(),
           }));
         }
 
@@ -775,17 +929,24 @@ export function useMediaSettings({
           const sidecarItems: Array<{ keyName: string; value: string }> = [];
           const nfoKey = NFO_WRITE_KEYS[activeQualityScopeId];
           if (nfoKey) {
-            sidecarItems.push({ keyName: nfoKey, value: nfoWriteOnImport[activeQualityScopeId] });
+            sidecarItems.push({
+              keyName: nfoKey,
+              value: nfoWriteOnImport[activeQualityScopeId],
+            });
           }
           const plexKey = PLEXMATCH_WRITE_KEYS[activeQualityScopeId];
           if (plexKey) {
-            sidecarItems.push({ keyName: plexKey, value: plexmatchWriteOnImport[activeQualityScopeId] });
+            sidecarItems.push({
+              keyName: plexKey,
+              value: plexmatchWriteOnImport[activeQualityScopeId],
+            });
           }
           if (sidecarItems.length > 0) {
-            const { error: sidecarError } = await client.mutation(
-              saveAdminSettingsMutation,
-              { input: { scope: "system", items: sidecarItems } },
-            ).toPromise();
+            const { error: sidecarError } = await client
+              .mutation(saveAdminSettingsMutation, {
+                input: { scope: "system", items: sidecarItems },
+              })
+              .toPromise();
             if (sidecarError) throw sidecarError;
           }
         }
@@ -798,7 +959,9 @@ export function useMediaSettings({
               : t("settings.mediaSettingsSaved");
         setGlobalStatus(successMessage);
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.failedToUpdate"),
+        );
       } finally {
         setMediaSettingsSaving(false);
       }
@@ -809,7 +972,6 @@ export function useMediaSettings({
       categoryRecapPolicies,
       categoryInterSeasonMovies,
       categoryMonitorSpecials,
-      categoryPreferredSubGroup,
       categoryQualityProfileOverrides,
       categoryRenameCollisionPolicies,
       categoryRenameMissingMetadataPolicies,
@@ -836,7 +998,9 @@ export function useMediaSettings({
     }
 
     const hasInvalidProfile = QUALITY_PROFILE_SCOPE_IDS.some((scopeId) => {
-      const normalizedCategoryProfile = coerceProfileSetting(categoryQualityProfileOverrides[scopeId]);
+      const normalizedCategoryProfile = coerceProfileSetting(
+        categoryQualityProfileOverrides[scopeId],
+      );
       return (
         normalizedCategoryProfile !== QUALITY_PROFILE_INHERIT_VALUE &&
         !isValidProfileSelection(qualityProfiles, normalizedCategoryProfile)
@@ -848,19 +1012,25 @@ export function useMediaSettings({
       return;
     }
 
-    const invalidValue = Object.entries(categoryQualityProfileOverrides).find(([scopeId, profileId]) => {
-      const normalizedProfileId = coerceProfileSetting(profileId);
-      const isScopeAllowed = QUALITY_PROFILE_SCOPE_IDS.includes(scopeId as (typeof QUALITY_PROFILE_SCOPE_IDS)[number]);
-      const isInvalid =
-        normalizedProfileId !== QUALITY_PROFILE_INHERIT_VALUE &&
-        !isValidProfileSelection(qualityProfiles, normalizedProfileId);
-      return isScopeAllowed && isInvalid;
-    })?.[1];
+    const invalidValue = Object.entries(categoryQualityProfileOverrides).find(
+      ([scopeId, profileId]) => {
+        const normalizedProfileId = coerceProfileSetting(profileId);
+        const isScopeAllowed = QUALITY_PROFILE_SCOPE_IDS.includes(
+          scopeId as (typeof QUALITY_PROFILE_SCOPE_IDS)[number],
+        );
+        const isInvalid =
+          normalizedProfileId !== QUALITY_PROFILE_INHERIT_VALUE &&
+          !isValidProfileSelection(qualityProfiles, normalizedProfileId);
+        return isScopeAllowed && isInvalid;
+      },
+    )?.[1];
 
     const invalidProfileId = invalidValue
       ? coerceProfileSetting(invalidValue)
       : t("label.default");
-    setQualityProfileParseError(t("settings.qualityProfileUnknown", { id: invalidProfileId }));
+    setQualityProfileParseError(
+      t("settings.qualityProfileUnknown", { id: invalidProfileId }),
+    );
   }, [categoryQualityProfileOverrides, qualityProfiles, t]);
 
   React.useEffect(() => {
@@ -895,8 +1065,6 @@ export function useMediaSettings({
     setCategoryMonitorSpecials,
     categoryInterSeasonMovies,
     setCategoryInterSeasonMovies,
-    categoryPreferredSubGroup,
-    setCategoryPreferredSubGroup,
     nfoWriteOnImport,
     setNfoWriteOnImport,
     plexmatchWriteOnImport,

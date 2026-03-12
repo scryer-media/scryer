@@ -11,6 +11,7 @@ use crate::types::{MigrationMode, MigrationStatus, SettingsDefinitionRecord, Set
 #[derive(Clone)]
 pub struct SqliteServices {
     pub(crate) sender: mpsc::Sender<DbCommand>,
+    pub(crate) pool: sqlx::SqlitePool,
     db_path: String,
 }
 
@@ -60,10 +61,11 @@ impl SqliteServices {
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
 
-        let sender = spawn_db_command_worker(pool);
+        let sender = spawn_db_command_worker(pool.clone());
 
         Ok(Self {
             sender,
+            pool,
             db_path: path.as_ref().to_string(),
         })
     }
@@ -308,6 +310,39 @@ impl SqliteServices {
             .send(DbCommand::FindDownloadSubmission {
                 download_client_type: download_client_type.to_string(),
                 download_client_item_id: download_client_item_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn list_download_submissions_for_title(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Vec<scryer_application::DownloadSubmission>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::ListDownloadSubmissionsForTitle {
+                title_id: title_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn delete_download_submissions_for_title(&self, title_id: &str) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::DeleteDownloadSubmissionsForTitle {
+                title_id: title_id.to_string(),
                 reply: reply_tx,
             })
             .await
@@ -700,6 +735,24 @@ impl SqliteServices {
         self.sender
             .send(DbCommand::ListMediaFilesForTitle {
                 title_id: title_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn list_title_media_size_summaries(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<scryer_application::TitleMediaSizeSummary>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::ListTitleMediaSizeSummaries {
+                title_ids: title_ids.to_vec(),
                 reply: reply_tx,
             })
             .await
@@ -1261,6 +1314,21 @@ impl SqliteServices {
             .send(DbCommand::SupersedePendingReleasesForWantedItem {
                 wanted_item_id: wanted_item_id.to_string(),
                 except_id: except_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn delete_pending_releases_for_title(&self, title_id: &str) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::DeletePendingReleasesForTitle {
+                title_id: title_id.to_string(),
                 reply: reply_tx,
             })
             .await

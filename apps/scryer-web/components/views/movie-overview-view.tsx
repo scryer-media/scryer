@@ -1,6 +1,6 @@
 
 import * as React from "react";
-import { ArrowLeft, FolderOpen, Loader2, Search, Settings2 } from "lucide-react";
+import { FolderOpen, Loader2, Pause, Play, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -21,7 +21,7 @@ import {
 } from "@/lib/utils/title-tags";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { Translate } from "@/components/root/types";
-import type { Release } from "@/lib/types";
+import type { Release, WantedItem } from "@/lib/types";
 import type {
   MediaRenamePlan,
   TitleReleaseBlocklistEntry,
@@ -31,6 +31,8 @@ import type {
   TitleMediaFile,
 } from "@/components/containers/movie-overview-container";
 import { MediaInfoBadges } from "@/components/common/media-info-badges";
+import { OverviewControlPanel } from "@/components/views/overview-control-panel";
+import { OverviewBackLink } from "@/components/views/overview-back-link";
 
 const imdbLogoUrl = `${import.meta.env.BASE_URL}media-sites/imdb.svg`;
 
@@ -44,7 +46,8 @@ function formatDate(iso: string) {
   }
 }
 
-function formatDateTime(iso: string) {
+function formatDateTime(iso: string | null | undefined) {
+  if (!iso) return "—";
   try {
     return new Date(iso).toLocaleString();
   } catch {
@@ -128,6 +131,39 @@ function formatTitleTag(t: Translate, tag: string) {
 }
 
 const MONITOR_TYPE_TAG_PREFIX = "scryer:monitor-type:";
+
+function wantedStatusClass(status: string) {
+  switch (status) {
+    case "wanted":
+      return "bg-blue-500/20 text-blue-300";
+    case "grabbed":
+      return "bg-amber-500/20 text-amber-300";
+    case "completed":
+      return "bg-emerald-500/20 text-emerald-300";
+    case "paused":
+      return "bg-muted text-muted-foreground";
+    default:
+      return "bg-muted text-muted-foreground";
+  }
+}
+
+function wantedPhaseClass(phase: string) {
+  switch (phase) {
+    case "primary":
+      return "bg-emerald-500/15 text-emerald-300";
+    case "pre_release":
+    case "pre_air":
+      return "bg-fuchsia-500/15 text-fuchsia-300";
+    case "secondary":
+      return "bg-yellow-500/15 text-yellow-300";
+    default:
+      return "bg-muted text-muted-foreground";
+  }
+}
+
+function formatWantedPhase(phase: string) {
+  return phase.replaceAll("_", " ");
+}
 
 // ─── title settings ──────────────────────────────────────────────────────────
 
@@ -261,15 +297,28 @@ type Props = {
   renamePlan: MediaRenamePlan | null;
   renamePreviewing: boolean;
   renameApplying: boolean;
+  interactiveSearchAttempted: boolean;
+  searchMonitoredLoading: boolean;
+  refreshAndScanLoading: boolean;
+  deleteLoading: boolean;
   onSearch: () => void;
   onQueue: (r: Release) => void;
-  onScanLibrary: () => void;
+  onSearchMonitored: () => void;
+  onRefreshAndScan: () => void;
   onPreviewRename: () => void;
   onApplyRename: () => void;
   onBackToList?: () => void;
   qualityProfiles: { id: string; name: string }[];
   defaultRootFolder: string;
   onUpdateTitleTags: (newTags: string[]) => Promise<void>;
+  onSetTitleMonitored: (monitored: boolean) => Promise<void>;
+  monitoredUpdating: boolean;
+  wantedItem: WantedItem | null;
+  wantedActionLoading: "pause" | "resume" | "reset" | null;
+  onPauseWanted: () => Promise<void>;
+  onResumeWanted: () => Promise<void>;
+  onResetWanted: () => Promise<void>;
+  onRequestDeleteTitle?: () => void;
   blocklistEntries: TitleReleaseBlocklistEntry[];
   mediaFiles: TitleMediaFile[];
 };
@@ -284,15 +333,28 @@ export function MovieOverviewView({
   renamePlan,
   renamePreviewing,
   renameApplying,
+  interactiveSearchAttempted,
+  searchMonitoredLoading,
+  refreshAndScanLoading,
+  deleteLoading,
   onSearch,
   onQueue,
-  onScanLibrary,
+  onSearchMonitored,
+  onRefreshAndScan,
   onPreviewRename,
   onApplyRename,
   onBackToList,
   qualityProfiles,
   defaultRootFolder,
   onUpdateTitleTags,
+  onSetTitleMonitored,
+  monitoredUpdating,
+  wantedItem,
+  wantedActionLoading,
+  onPauseWanted,
+  onResumeWanted,
+  onResetWanted,
+  onRequestDeleteTitle,
   blocklistEntries,
   mediaFiles,
 }: Props) {
@@ -310,13 +372,10 @@ export function MovieOverviewView({
   if (!title) {
     return (
       <div className="space-y-4">
-        <button
-          type="button"
-          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        <OverviewBackLink
+          label={`Back to ${t("nav.movies")}`}
           onClick={() => onBackToList?.()}
-        >
-          <ArrowLeft className="h-4 w-4" /> Back to Movies
-        </button>
+        />
         <Card>
           <CardContent className="pt-6">
             <p className="text-muted-foreground">Title not found.</p>
@@ -334,17 +393,50 @@ export function MovieOverviewView({
   const runtime = formatRuntime(title.runtimeMinutes);
   const year = title.year;
   const studio = title.studio;
+  const hasMediaFiles = mediaFiles.length > 0;
+  const wantedStatusLabel = wantedItem?.status
+    ? wantedItem.status.charAt(0).toUpperCase() + wantedItem.status.slice(1)
+    : null;
+  const interactiveSearchPanel = (
+    <div className="p-4">
+      {searching ? (
+        <div className="flex flex-col items-center gap-4 py-8">
+          <Loader2 className="h-8 w-8 animate-spin text-emerald-500" />
+          <p className="text-sm text-muted-foreground">Searching indexers for releases&hellip;</p>
+          <div className="w-full space-y-2">
+            {[1, 2, 3].map((n) => (
+              <div
+                key={n}
+                className="h-12 animate-pulse rounded-lg bg-muted"
+                style={{ animationDelay: `${n * 150}ms` }}
+              />
+            ))}
+          </div>
+        </div>
+      ) : searchResults.length > 0 ? (
+        <SearchResultBuckets
+          results={searchResults}
+          onQueue={onQueue}
+        />
+      ) : interactiveSearchAttempted ? (
+        <p className="text-sm text-muted-foreground">
+          No releases found for <span className="text-foreground">{title.name}</span>.
+        </p>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          Use interactive search to query your configured indexers for releases of{" "}
+          <span className="text-foreground">{title.name}</span>.
+        </p>
+      )}
+    </div>
+  );
 
   return (
     <div className="space-y-4">
-      {/* back nav */}
-      <button
-        type="button"
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+      <OverviewBackLink
+        label={`Back to ${t("nav.movies")}`}
         onClick={() => onBackToList?.()}
-      >
-        <ArrowLeft className="h-4 w-4" /> Back to Movies
-      </button>
+      />
 
       {/* title header with poster */}
       <Card>
@@ -406,6 +498,70 @@ export function MovieOverviewView({
                 })}
               </div>
 
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {wantedItem ? (
+                  <>
+                    <span
+                      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${wantedStatusClass(wantedItem.status)}`}
+                    >
+                      {wantedStatusLabel}
+                    </span>
+                    <span
+                      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium capitalize ${wantedPhaseClass(wantedItem.searchPhase)}`}
+                    >
+                      {formatWantedPhase(wantedItem.searchPhase)}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {t("wanted.colNextSearch")}: {formatDateTime(wantedItem.nextSearchAt)}
+                    </span>
+                    {wantedItem.status === "paused" ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => void onResumeWanted()}
+                        disabled={wantedActionLoading !== null}
+                      >
+                        {wantedActionLoading === "resume" ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Play className="h-4 w-4" />
+                        )}
+                        {t("wanted.resume")}
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => void onPauseWanted()}
+                        disabled={wantedActionLoading !== null}
+                      >
+                        {wantedActionLoading === "pause" ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Pause className="h-4 w-4" />
+                        )}
+                        {t("wanted.pause")}
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => void onResetWanted()}
+                      disabled={wantedActionLoading !== null}
+                    >
+                      {wantedActionLoading === "reset" ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <RotateCcw className="h-4 w-4" />
+                      )}
+                      {t("wanted.reset")}
+                    </Button>
+                  </>
+                ) : title.monitored && !hasMediaFiles ? (
+                  <span className="text-xs text-muted-foreground">{t("title.noWantedItem")}</span>
+                ) : null}
+              </div>
+
               {/* genres */}
               {genres.length > 0 ? (
                 <div className="mt-2 flex flex-wrap gap-1.5">
@@ -455,6 +611,30 @@ export function MovieOverviewView({
         </CardContent>
       </Card>
 
+      <OverviewControlPanel
+        monitored={title.monitored}
+        searchMonitoredLabel="Search"
+        monitoredUpdating={monitoredUpdating}
+        searchMonitoredLoading={searchMonitoredLoading}
+        interactiveSearchLoading={searching}
+        refreshAndScanLoading={refreshAndScanLoading}
+        deleteLoading={deleteLoading}
+        onToggleMonitoring={() => void onSetTitleMonitored(!title.monitored)}
+        onSearchMonitored={() => void onSearchMonitored()}
+        onInteractiveSearch={() => void onSearch()}
+        onRefreshAndScan={() => void onRefreshAndScan()}
+        onRequestDelete={onRequestDeleteTitle}
+        settingsPanel={(
+          <TitleSettingsPanel
+            title={title}
+            qualityProfiles={qualityProfiles}
+            defaultRootFolder={defaultRootFolder}
+            onUpdateTitleTags={onUpdateTitleTags}
+          />
+        )}
+        interactiveSearchPanel={interactiveSearchPanel}
+      />
+
       {/* files on disk */}
       <Card>
         <CardHeader>
@@ -477,7 +657,7 @@ export function MovieOverviewView({
           {collections.length === 0 ? (
             <div className="space-y-3">
               <p className="text-sm text-muted-foreground">No files tracked. Run a library scan to detect files on disk.</p>
-              <Button size="sm" onClick={onScanLibrary}>
+              <Button size="sm" onClick={onRefreshAndScan} disabled={refreshAndScanLoading}>
                 {t("settings.libraryScanButton")}
               </Button>
             </div>
@@ -572,48 +752,6 @@ export function MovieOverviewView({
         </CardContent>
       </Card>
 
-      {/* indexer search */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Search className="h-4 w-4" />
-              Search Indexers
-            </CardTitle>
-            <Button size="sm" onClick={onSearch} disabled={searching}>
-              {searching ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Searching&hellip;
-                </>
-              ) : "Search Now"}
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {searchResults.length === 0 && !searching ? (
-            <p className="text-sm text-muted-foreground">
-              Click &ldquo;Search Now&rdquo; to query your configured indexers for releases of <span className="text-foreground">{title.name}</span>.
-            </p>
-          ) : searching ? (
-            <div className="flex flex-col items-center gap-4 py-8">
-              <Loader2 className="h-8 w-8 animate-spin text-emerald-500" />
-              <p className="text-sm text-muted-foreground">Searching indexers for releases&hellip;</p>
-              <div className="w-full space-y-2">
-                {[1, 2, 3].map((n) => (
-                  <div key={n} className="h-12 animate-pulse rounded-lg bg-muted" style={{ animationDelay: `${n * 150}ms` }} />
-                ))}
-              </div>
-            </div>
-          ) : (
-            <SearchResultBuckets
-              results={searchResults}
-              onQueue={onQueue}
-            />
-          )}
-        </CardContent>
-      </Card>
-
       <details className="rounded-xl border border-border bg-card text-card-foreground overflow-hidden">
         <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-card-foreground">
           <span className="inline-flex items-center gap-2">
@@ -655,24 +793,6 @@ export function MovieOverviewView({
               ))}
             </div>
           )}
-        </div>
-      </details>
-
-      {/* title settings */}
-      <details className="rounded-xl border border-border bg-card text-card-foreground overflow-hidden">
-        <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-card-foreground">
-          <span className="inline-flex items-center gap-2">
-            <Settings2 className="h-4 w-4" />
-            {t("title.settings")}
-          </span>
-        </summary>
-        <div className="border-t border-border">
-          <TitleSettingsPanel
-            title={title}
-            qualityProfiles={qualityProfiles}
-            defaultRootFolder={defaultRootFolder}
-            onUpdateTitleTags={onUpdateTitleTags}
-          />
         </div>
       </details>
 

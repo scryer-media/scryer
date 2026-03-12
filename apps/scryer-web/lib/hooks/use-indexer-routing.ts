@@ -2,7 +2,10 @@ import * as React from "react";
 
 import { saveAdminSettingsMutation } from "@/lib/graphql/mutations";
 import { indexerRoutingInitQuery } from "@/lib/graphql/queries";
-import { INDEXER_ROUTING_SETTINGS_KEY, getDefaultIndexerRouting } from "@/lib/constants/indexers";
+import {
+  INDEXER_ROUTING_SETTINGS_KEY,
+  getDefaultIndexerRouting,
+} from "@/lib/constants/indexers";
 import { useClient } from "urql";
 import { getSettingStringFromItems } from "@/lib/utils/settings";
 import {
@@ -10,8 +13,12 @@ import {
   buildIndexerRoutingOrder,
   parseIndexerCategoryRoutingFromJson,
 } from "@/lib/utils/indexer-routing";
-import { areRoutingOrdersEqual, getDefaultRoutingOrder } from "@/lib/utils/media-content";
+import {
+  areRoutingOrdersEqual,
+  getDefaultRoutingOrder,
+} from "@/lib/utils/media-content";
 import type {
+  AdminSettingsResponse,
   IndexerRecord,
   IndexerRoutingSettingsByIndexer,
   IndexerRoutingSettingsByScope,
@@ -35,8 +42,15 @@ export type IndexerRoutingHookResult = {
   activeScopeRoutingOrder: string[];
   indexerRoutingLoading: boolean;
   indexerRoutingSaving: boolean;
+  hydrateIndexerRouting: (
+    indexers: IndexerRecord[],
+    categorySettings: AdminSettingsResponse,
+  ) => void;
   refreshIndexerRouting: () => Promise<void>;
-  setIndexerEnabledForScope: (indexerId: string, enabled: boolean) => Promise<void>;
+  setIndexerEnabledForScope: (
+    indexerId: string,
+    enabled: boolean,
+  ) => Promise<void>;
   updateIndexerRoutingForScope: (
     indexerId: string,
     nextValue: Partial<IndexerCategoryRoutingSettings>,
@@ -58,13 +72,67 @@ export function useIndexerRouting({
       anime: {},
     });
   const [indexerRoutingOrderByScope, setIndexerRoutingOrderByScope] =
-    React.useState<Record<ViewCategoryId, string[]>>({ ...DEFAULT_SCOPE_ROUTING_ORDER });
-  const [indexerRoutingSaving, setIndexerRoutingSaving] =
-    React.useState<Record<ViewCategoryId, boolean>>({ movie: false, series: false, anime: false });
-  const [indexerRoutingLoading, setIndexerRoutingLoading] = React.useState(false);
+    React.useState<Record<ViewCategoryId, string[]>>({
+      ...DEFAULT_SCOPE_ROUTING_ORDER,
+    });
+  const [indexerRoutingSaving, setIndexerRoutingSaving] = React.useState<
+    Record<ViewCategoryId, boolean>
+  >({ movie: false, series: false, anime: false });
+  const [indexerRoutingLoading, setIndexerRoutingLoading] =
+    React.useState(false);
 
   const activeScopeRouting = indexerRoutingByScope[activeQualityScopeId] ?? {};
-  const activeScopeRoutingOrder = indexerRoutingOrderByScope[activeQualityScopeId] ?? [];
+  const activeScopeRoutingOrder =
+    indexerRoutingOrderByScope[activeQualityScopeId] ?? [];
+
+  const hydrateIndexerRouting = React.useCallback(
+    (indexerList: IndexerRecord[], categorySettings: AdminSettingsResponse) => {
+      const rawRoutingValue = getSettingStringFromItems(
+        categorySettings.items,
+        INDEXER_ROUTING_SETTINGS_KEY,
+      );
+      const parsedRouting =
+        parseIndexerCategoryRoutingFromJson(rawRoutingValue);
+
+      setIndexers(indexerList);
+
+      const scopeDefaults = getDefaultIndexerRouting(activeQualityScopeId);
+      const scopeRouting: IndexerRoutingSettingsByIndexer = {};
+      for (const indexer of indexerList) {
+        const routing = parsedRouting[indexer.id];
+        scopeRouting[indexer.id] = routing
+          ? { ...scopeDefaults, ...routing }
+          : { ...scopeDefaults };
+      }
+
+      setIndexerRoutingByScope((previous) => {
+        const currentScopeRouting = previous[activeQualityScopeId] ?? {};
+        if (areIndexerRoutingMapsEqual(currentScopeRouting, scopeRouting)) {
+          return previous;
+        }
+        return {
+          ...previous,
+          [activeQualityScopeId]: scopeRouting,
+        };
+      });
+
+      const nextOrder = buildIndexerRoutingOrder(
+        indexerList.map((indexer) => indexer.id),
+        scopeRouting,
+      );
+      setIndexerRoutingOrderByScope((previous) => {
+        const currentOrder = previous[activeQualityScopeId] ?? [];
+        if (areRoutingOrdersEqual(currentOrder, nextOrder)) {
+          return previous;
+        }
+        return {
+          ...previous,
+          [activeQualityScopeId]: nextOrder,
+        };
+      });
+    },
+    [activeQualityScopeId],
+  );
 
   const buildIndexerRoutingPayload = React.useCallback(
     (
@@ -100,17 +168,24 @@ export function useIndexerRouting({
   );
 
   const saveIndexerRoutingForScope = React.useCallback(
-    async (scopeId: ViewCategoryId, scopeRouting: IndexerRoutingSettingsByIndexer, scopeOrder: string[]) => {
+    async (
+      scopeId: ViewCategoryId,
+      scopeRouting: IndexerRoutingSettingsByIndexer,
+      scopeOrder: string[],
+    ) => {
       setIndexerRoutingSaving((previous) => ({
         ...previous,
         [scopeId]: true,
       }));
 
       try {
-        const payload = buildIndexerRoutingPayload(scopeId, scopeRouting, scopeOrder);
-        const { data: saveData, error: saveError } = await client.mutation(
-          saveAdminSettingsMutation,
-          {
+        const payload = buildIndexerRoutingPayload(
+          scopeId,
+          scopeRouting,
+          scopeOrder,
+        );
+        const { data: saveData, error: saveError } = await client
+          .mutation(saveAdminSettingsMutation, {
             input: {
               scope: "system",
               scopeId,
@@ -121,19 +196,23 @@ export function useIndexerRouting({
                 },
               ],
             },
-          },
-        ).toPromise();
+          })
+          .toPromise();
         if (saveError) throw saveError;
 
         const rawSavedRoutingValue = getSettingStringFromItems(
           saveData.saveAdminSettings.items,
           INDEXER_ROUTING_SETTINGS_KEY,
         );
-        const savedRouting = parseIndexerCategoryRoutingFromJson(rawSavedRoutingValue);
+        const savedRouting =
+          parseIndexerCategoryRoutingFromJson(rawSavedRoutingValue);
         const normalizedSavedRouting: IndexerRoutingSettingsByIndexer = {};
         const scopeDefaults = getDefaultIndexerRouting(scopeId);
         for (const indexer of indexers) {
-          const routing = savedRouting[indexer.id] ?? scopeRouting[indexer.id] ?? scopeDefaults;
+          const routing =
+            savedRouting[indexer.id] ??
+            scopeRouting[indexer.id] ??
+            scopeDefaults;
           normalizedSavedRouting[indexer.id] = { ...scopeDefaults, ...routing };
         }
 
@@ -144,7 +223,12 @@ export function useIndexerRouting({
 
         setIndexerRoutingByScope((previous) => {
           const currentScopeRouting = previous[scopeId] ?? {};
-          if (areIndexerRoutingMapsEqual(currentScopeRouting, normalizedSavedRouting)) {
+          if (
+            areIndexerRoutingMapsEqual(
+              currentScopeRouting,
+              normalizedSavedRouting,
+            )
+          ) {
             return previous;
           }
           return {
@@ -165,7 +249,9 @@ export function useIndexerRouting({
         });
         setGlobalStatus(t("settings.qualitySettingsSaved"));
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.failedToUpdate"),
+        );
       } finally {
         setIndexerRoutingSaving((previous) => ({
           ...previous,
@@ -179,61 +265,25 @@ export function useIndexerRouting({
   const refreshIndexerRouting = React.useCallback(async () => {
     setIndexerRoutingLoading(true);
     try {
-      const { data, error } = await client.query(indexerRoutingInitQuery, { scopeId: activeQualityScopeId }).toPromise();
+      const { data, error } = await client
+        .query(indexerRoutingInitQuery, { scopeId: activeQualityScopeId })
+        .toPromise();
       if (error) throw error;
-
-      const indexerList = data.indexers || [];
-      const rawRoutingValue = getSettingStringFromItems(
-        data.categorySettings.items,
-        INDEXER_ROUTING_SETTINGS_KEY,
-      );
-      const parsedRouting = parseIndexerCategoryRoutingFromJson(rawRoutingValue);
-
-      setIndexers(indexerList);
-
-      const scopeDefaults = getDefaultIndexerRouting(activeQualityScopeId);
-      const scopeRouting: IndexerRoutingSettingsByIndexer = {};
-      for (const indexer of indexerList) {
-        const routing = parsedRouting[indexer.id];
-        scopeRouting[indexer.id] = routing
-          ? { ...scopeDefaults, ...routing }
-          : { ...scopeDefaults };
-      }
-
-      setIndexerRoutingByScope((previous) => {
-        const currentScopeRouting = previous[activeQualityScopeId] ?? {};
-        if (areIndexerRoutingMapsEqual(currentScopeRouting, scopeRouting)) {
-          return previous;
-        }
-        return {
-          ...previous,
-          [activeQualityScopeId]: scopeRouting,
-        };
-      });
-
-      const nextOrder = buildIndexerRoutingOrder(
-        indexerList.map((indexer: IndexerRecord) => indexer.id),
-        scopeRouting,
-      );
-      setIndexerRoutingOrderByScope((previous) => {
-        const currentOrder = previous[activeQualityScopeId] ?? [];
-        if (areRoutingOrdersEqual(currentOrder, nextOrder)) {
-          return previous;
-        }
-        return {
-          ...previous,
-          [activeQualityScopeId]: nextOrder,
-        };
-      });
+      hydrateIndexerRouting(data.indexers || [], data.categorySettings);
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(
+        error instanceof Error ? error.message : t("status.failedToLoad"),
+      );
     } finally {
       setIndexerRoutingLoading(false);
     }
-  }, [activeQualityScopeId, client, setGlobalStatus, t]);
+  }, [activeQualityScopeId, client, hydrateIndexerRouting, setGlobalStatus, t]);
 
   const updateIndexerRoutingForScope = React.useCallback(
-    async (indexerId: string, nextValue: Partial<IndexerCategoryRoutingSettings>) => {
+    async (
+      indexerId: string,
+      nextValue: Partial<IndexerCategoryRoutingSettings>,
+    ) => {
       const scopeId = activeQualityScopeId;
       const scopeDefaults = getDefaultIndexerRouting(scopeId);
       const currentScopeRouting = indexerRoutingByScope[scopeId] ?? {};
@@ -275,7 +325,12 @@ export function useIndexerRouting({
 
       await saveIndexerRoutingForScope(scopeId, nextScopeRouting, nextOrder);
     },
-    [activeQualityScopeId, indexerRoutingByScope, indexerRoutingOrderByScope, saveIndexerRoutingForScope],
+    [
+      activeQualityScopeId,
+      indexerRoutingByScope,
+      indexerRoutingOrderByScope,
+      saveIndexerRoutingForScope,
+    ],
   );
 
   const setIndexerEnabledForScope = React.useCallback(
@@ -289,29 +344,43 @@ export function useIndexerRouting({
     (indexerId: string, direction: Direction) => {
       const scopeId = activeQualityScopeId;
       const scopeRouting = indexerRoutingByScope[scopeId] ?? {};
+      const currentOrder = indexerRoutingOrderByScope[scopeId] ?? [];
+      const index = currentOrder.indexOf(indexerId);
+      if (index < 0) {
+        return;
+      }
+
+      const nextIndex = direction === "up" ? index - 1 : index + 1;
+      if (nextIndex < 0 || nextIndex >= currentOrder.length) {
+        return;
+      }
+
+      const nextOrder = [...currentOrder];
+      [nextOrder[index], nextOrder[nextIndex]] = [
+        nextOrder[nextIndex],
+        nextOrder[index],
+      ];
 
       setIndexerRoutingOrderByScope((previous) => {
-        const currentOrder = previous[scopeId] ?? [];
-        const index = currentOrder.indexOf(indexerId);
-        if (index < 0) {
+        const previousOrder = previous[scopeId] ?? [];
+        if (areRoutingOrdersEqual(previousOrder, nextOrder)) {
           return previous;
         }
-        const nextIndex = direction === "up" ? index - 1 : index + 1;
-        if (nextIndex < 0 || nextIndex >= currentOrder.length) {
-          return previous;
-        }
-        const nextOrder = [...currentOrder];
-        [nextOrder[index], nextOrder[nextIndex]] = [nextOrder[nextIndex], nextOrder[index]];
-
-        void saveIndexerRoutingForScope(scopeId, scopeRouting, nextOrder);
 
         return {
           ...previous,
           [scopeId]: nextOrder,
         };
       });
+
+      void saveIndexerRoutingForScope(scopeId, scopeRouting, nextOrder);
     },
-    [activeQualityScopeId, indexerRoutingByScope, saveIndexerRoutingForScope],
+    [
+      activeQualityScopeId,
+      indexerRoutingByScope,
+      indexerRoutingOrderByScope,
+      saveIndexerRoutingForScope,
+    ],
   );
 
   return {
@@ -320,6 +389,7 @@ export function useIndexerRouting({
     activeScopeRoutingOrder,
     indexerRoutingLoading,
     indexerRoutingSaving: indexerRoutingSaving[activeQualityScopeId],
+    hydrateIndexerRouting,
     refreshIndexerRouting,
     setIndexerEnabledForScope,
     updateIndexerRoutingForScope,

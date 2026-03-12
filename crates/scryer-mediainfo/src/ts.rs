@@ -36,6 +36,7 @@ pub(crate) fn parse_ts(path: &Path) -> Result<RawContainer, MediaInfoError> {
     Ok(RawContainer {
         format_name: "mpegts".into(),
         duration_seconds,
+        num_chapters: None,
         tracks,
     })
 }

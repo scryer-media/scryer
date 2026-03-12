@@ -162,6 +162,19 @@ pub(crate) async fn get_pending_release_query(
     }
 }
 
+pub(crate) async fn delete_pending_releases_for_title_query(
+    pool: &SqlitePool,
+    title_id: &str,
+) -> AppResult<()> {
+    sqlx::query("DELETE FROM pending_releases WHERE title_id = ?")
+        .bind(title_id)
+        .execute(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(())
+}
+
 fn row_to_pending_release(row: &SqliteRow) -> AppResult<PendingRelease> {
     Ok(PendingRelease {
         id: row

@@ -3,9 +3,12 @@ import { useNavigate } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/hooks/use-auth";
 import { Input } from "@/components/ui/input";
+import { useBackendRestarting } from "@/lib/hooks/use-backend-restarting";
+import { BackendRestartOverlay } from "@/components/common/backend-restart-overlay";
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const { serviceRestarting } = useBackendRestarting();
   const { login, user, loading: authLoading } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -14,10 +17,10 @@ export default function LoginPage() {
 
   // Redirect to home if already authenticated
   useEffect(() => {
-    if (!authLoading && user) {
+    if (!serviceRestarting && !authLoading && user) {
       navigate("/", { replace: true });
     }
-  }, [authLoading, user, navigate]);
+  }, [authLoading, user, navigate, serviceRestarting]);
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -35,6 +38,10 @@ export default function LoginPage() {
     },
     [login, username, password, navigate],
   );
+
+  if (serviceRestarting) {
+    return <BackendRestartOverlay />;
+  }
 
   if (authLoading) {
     return (

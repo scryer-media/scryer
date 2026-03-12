@@ -36,6 +36,7 @@ export type MediaInfoFile = {
   subtitleStreams: SubtitleStreamDetail[];
   hasMultiaudio: boolean;
   durationSeconds: number | null;
+  numChapters: number | null;
   containerFormat: string | null;
   sceneName?: string | null;
   releaseGroup?: string | null;

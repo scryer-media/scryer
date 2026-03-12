@@ -1,8 +1,9 @@
 import * as React from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslate } from "@/lib/context/translate-context";
+import { RenderBooleanIcon } from "@/components/common/boolean-icon";
 import { Button } from "@/components/ui/button";
-import { Loader2, Search, Trash2, Zap } from "lucide-react";
+import { Bell, BellOff, Loader2, Search, Trash2, Zap } from "lucide-react";
 import {
   HoverCard,
   HoverCardContent,
@@ -10,7 +11,6 @@ import {
 } from "@/components/ui/hover-card";
 import { SearchResultBuckets } from "@/components/common/release-search-results";
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
@@ -20,8 +20,29 @@ import {
 import type { ViewId } from "@/components/root/types";
 import type { Release, TitleRecord } from "@/lib/types";
 import type { ParsedQualityProfile } from "@/lib/types/quality-profiles";
+import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
+import { cn } from "@/lib/utils";
+import {
+  boxedActionButtonBaseClass,
+  boxedActionButtonToneClass,
+  type BoxedActionButtonTone,
+} from "@/lib/utils/action-button-styles";
 
 const QP_TAG_PREFIX = "scryer:quality-profile:";
+
+function formatProfileLabel(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.toLowerCase() === "4k") {
+    return "4K";
+  }
+  if (/^\d{3,4}p$/i.test(trimmed)) {
+    return trimmed.toUpperCase();
+  }
+  return trimmed;
+}
 
 function bytesToReadable(raw: number | null | undefined) {
   if (!raw || raw <= 0) {
@@ -48,9 +69,11 @@ type TitleTableProps = {
   onOpenOverview: (targetView: ViewId, titleId: string) => void;
   onDelete: (title: TitleRecord) => void;
   onAutoQueue: (title: TitleRecord) => void;
+  onToggleMonitored?: (title: TitleRecord, monitored: boolean) => Promise<void> | void;
   onInteractiveSearch: (title: TitleRecord) => Promise<Release[]> | Release[];
   onQueueFromInteractive: (title: TitleRecord, release: Release) => void;
   isDeletingById: Record<string, boolean>;
+  isTogglingMonitoredById?: Record<string, boolean>;
 };
 
 function resolveTitleProfileName(
@@ -63,8 +86,47 @@ function resolveTitleProfileName(
     const id = tag.slice(QP_TAG_PREFIX.length);
     const match = profiles.find((p) => p.id === id);
     if (match) return match.name;
+    return formatProfileLabel(id);
   }
-  return fallback;
+  return formatProfileLabel(fallback) ?? fallback;
+}
+
+function resolveDisplayedQualityLabel(
+  item: TitleRecord,
+  profiles: ParsedQualityProfile[],
+  fallback: string | null,
+  unknownLabel: string,
+) {
+  return resolveTitleProfileName(item, profiles, fallback) || unknownLabel;
+}
+
+function TitleTableActionButton({
+  label,
+  tone,
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof Button> & {
+  label: string;
+  tone: BoxedActionButtonTone;
+}) {
+  return (
+    <Button
+      type="button"
+      size="icon-sm"
+      variant="secondary"
+      title={label}
+      aria-label={label}
+      className={cn(
+        boxedActionButtonBaseClass,
+        boxedActionButtonToneClass[tone],
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </Button>
+  );
 }
 
 export function TitleTable({
@@ -76,9 +138,11 @@ export function TitleTable({
   onOpenOverview,
   onDelete,
   onAutoQueue,
+  onToggleMonitored,
   onInteractiveSearch,
   onQueueFromInteractive,
   isDeletingById,
+  isTogglingMonitoredById,
 }: TitleTableProps) {
   const t = useTranslate();
   const isMovieView = view === "movies";
@@ -91,11 +155,11 @@ export function TitleTable({
       <col style={{ width: "10rem" }} />
       {isMovieView ? <col style={{ width: "8rem" }} /> : null}
       <col style={{ width: "7rem" }} />
-      <col style={{ width: isMovieView ? "11rem" : "6rem" }} />
+      <col style={{ width: "12.5rem" }} />
     </colgroup>
   );
 
-  const [expandedMovieRows, setExpandedMovieRows] = React.useState(new Set<string>());
+  const [expandedInteractiveRows, setExpandedInteractiveRows] = React.useState(new Set<string>());
   const [interactiveSearchResultsByTitle, setInteractiveSearchResultsByTitle] = React.useState<
     Record<string, Release[]>
   >({});
@@ -105,14 +169,12 @@ export function TitleTable({
   const [autoQueueLoadingByTitle, setAutoQueueLoadingByTitle] = React.useState<Record<string, boolean>>({});
 
   const titleTableScrollRef = React.useRef<HTMLDivElement>(null);
-  const useVirtualTable = titles.length > 50;
   const titleVirtualizer = useVirtualizer({
     count: titles.length,
     getScrollElement: () => titleTableScrollRef.current,
     estimateSize: () => 64,
     overscan: 5,
-    measureElement: useVirtualTable ? (element) => element.getBoundingClientRect().height : undefined,
-    enabled: useVirtualTable,
+    measureElement: (element) => element.getBoundingClientRect().height,
   });
 
   const handleQueueExisting = React.useCallback(
@@ -157,8 +219,8 @@ export function TitleTable({
   const handleToggleInteractiveSearch = React.useCallback(
     (title: TitleRecord) => {
       const titleId = title.id;
-      const isOpen = expandedMovieRows.has(titleId);
-      setExpandedMovieRows((prev) => {
+      const isOpen = expandedInteractiveRows.has(titleId);
+      setExpandedInteractiveRows((prev) => {
         const next = new Set(prev);
         if (next.has(titleId)) {
           next.delete(titleId);
@@ -171,30 +233,33 @@ export function TitleTable({
         handleRunInteractiveSearch(title);
       }
     },
-    [expandedMovieRows, handleRunInteractiveSearch, interactiveSearchResultsByTitle],
+    [expandedInteractiveRows, handleRunInteractiveSearch, interactiveSearchResultsByTitle],
   );
 
   const renderTitleRow = (item: TitleRecord) => {
-    const isPanelOpen = isMovieView && expandedMovieRows.has(item.id);
+    const isPanelOpen = expandedInteractiveRows.has(item.id);
     const interactiveSearchResults = interactiveSearchResultsByTitle[item.id] ?? [];
     const interactiveSearchLoading = interactiveSearchLoadingByTitle[item.id] === true;
     const autoQueueLoading = autoQueueLoadingByTitle[item.id] === true;
     const deleteLoading = isDeletingById[item.id] === true;
+    const monitorToggleLoading = isTogglingMonitoredById?.[item.id] === true;
+    const posterThumbUrl = selectPosterVariantUrl(item.posterUrl, "w70");
 
     return (
       <React.Fragment key={item.id}>
-        <TableRow className="h-24 cv-auto-row">
+        <TableRow data-ui="title-table-row" className="h-24 cv-auto-row">
           <TableCell className="align-middle">
             <button
               type="button"
               onClick={() => onOpenOverview(overviewTargetView, item.id)}
+              data-ui="poster-link"
               className="inline-block text-left"
               aria-label={t("media.posterAlt", { name: item.name })}
             >
-              <div className="h-20 w-14 overflow-hidden rounded border border-border bg-muted">
-                {item.posterUrl ? (
+              <div data-ui="poster-thumb" className="h-20 w-14 overflow-hidden rounded border border-border bg-muted">
+                {posterThumbUrl ? (
                   <img
-                    src={item.posterUrl}
+                    src={posterThumbUrl}
                     alt={t("media.posterAlt", { name: item.name })}
                     className="h-full w-full object-cover"
                     loading="lazy"
@@ -211,68 +276,85 @@ export function TitleTable({
             <button
               type="button"
               onClick={() => onOpenOverview(overviewTargetView, item.id)}
+              data-ui="title-name"
               className="block w-full overflow-hidden text-left text-xl font-bold hover:text-foreground hover:underline"
             >
               <span className="block truncate">{item.name}</span>
             </button>
           </TableCell>
           <TableCell className="align-middle whitespace-nowrap">
-            {isMovieView
-              ? (item.qualityTier || t("label.unknown"))
-              : (resolveTitleProfileName(item, qualityProfiles, resolvedProfileName) || t("label.unknown"))}
+            {resolveDisplayedQualityLabel(
+              item,
+              qualityProfiles,
+              resolvedProfileName,
+              t("label.unknown"),
+            )}
           </TableCell>
           {isMovieView ? <TableCell className="align-middle whitespace-nowrap">{bytesToReadable(item.sizeBytes)}</TableCell> : null}
-          <TableCell className="align-middle whitespace-nowrap">{item.monitored ? t("label.yes") : t("label.no")}</TableCell>
+          <TableCell className="text-center align-middle">
+            <RenderBooleanIcon
+              value={item.monitored}
+              label={`${t("title.table.monitored")}: ${item.name}`}
+            />
+          </TableCell>
           <TableCell className="text-right align-middle">
-            <div className="inline-flex items-center justify-end gap-2">
-              {isMovieView ? (
-                <>
-                  <HoverCard openDelay={3000} closeDelay={75}>
-                    <HoverCardTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        aria-label={t("label.search")}
-                        onClick={() => handleQueueExisting(item)}
-                        disabled={autoQueueLoading}
-                      >
-                        {autoQueueLoading ? (
-                          <Loader2 className="h-4 w-4 animate-spin text-emerald-500" />
-                        ) : (
-                          <Zap className="h-4 w-4" />
-                        )}
-                      </Button>
-                    </HoverCardTrigger>
-                    <HoverCardContent>
-                      <p className="max-w-[18rem] whitespace-normal break-words text-sm">
-                        {t("help.autoSearchTooltip")}
-                      </p>
-                    </HoverCardContent>
-                  </HoverCard>
-                  <HoverCard openDelay={3000} closeDelay={75}>
-                    <HoverCardTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        aria-label={t("label.interactiveSearch")}
-                        onClick={() => handleToggleInteractiveSearch(item)}
-                      >
-                        <Search className="h-4 w-4" />
-                      </Button>
-                    </HoverCardTrigger>
-                    <HoverCardContent>
-                      <p className="max-w-[18rem] whitespace-normal break-words text-sm">
-                        {t("help.interactiveSearchTooltip")}
-                      </p>
-                    </HoverCardContent>
-                  </HoverCard>
-                </>
+            <div data-ui="row-actions" className="inline-flex items-center justify-end gap-2">
+              <HoverCard openDelay={3000} closeDelay={75}>
+                <HoverCardTrigger asChild>
+                  <TitleTableActionButton
+                    tone="auto"
+                    label={t("label.search")}
+                    onClick={() => handleQueueExisting(item)}
+                    disabled={autoQueueLoading}
+                  >
+                    {autoQueueLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin text-emerald-500" />
+                    ) : (
+                      <Zap className="h-4 w-4" />
+                    )}
+                  </TitleTableActionButton>
+                </HoverCardTrigger>
+                <HoverCardContent>
+                  <p className="max-w-[18rem] whitespace-normal break-words text-sm">
+                    {t("help.autoSearchTooltip")}
+                  </p>
+                </HoverCardContent>
+              </HoverCard>
+              <HoverCard openDelay={3000} closeDelay={75}>
+                <HoverCardTrigger asChild>
+                  <TitleTableActionButton
+                    tone="search"
+                    label={t("label.interactiveSearch")}
+                    onClick={() => handleToggleInteractiveSearch(item)}
+                  >
+                    <Search className="h-4 w-4" />
+                  </TitleTableActionButton>
+                </HoverCardTrigger>
+                <HoverCardContent>
+                  <p className="max-w-[18rem] whitespace-normal break-words text-sm">
+                    {t("help.interactiveSearchTooltip")}
+                  </p>
+                </HoverCardContent>
+              </HoverCard>
+              {onToggleMonitored ? (
+                <TitleTableActionButton
+                  tone={item.monitored ? "disabled" : "enabled"}
+                  label={t(item.monitored ? "title.unmonitorAction" : "title.monitorAction")}
+                  onClick={() => onToggleMonitored(item, !item.monitored)}
+                  disabled={monitorToggleLoading}
+                >
+                  {monitorToggleLoading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : item.monitored ? (
+                    <BellOff className="h-4 w-4" />
+                  ) : (
+                    <Bell className="h-4 w-4" />
+                  )}
+                </TitleTableActionButton>
               ) : null}
-              <Button
-                variant="destructive"
-                size="sm"
-                type="button"
-                aria-label={t("label.delete")}
+              <TitleTableActionButton
+                tone="delete"
+                label={t("label.delete")}
                 onClick={() => onDelete(item)}
                 disabled={deleteLoading}
               >
@@ -281,12 +363,12 @@ export function TitleTable({
                 ) : (
                   <Trash2 className="h-4 w-4" />
                 )}
-              </Button>
+              </TitleTableActionButton>
             </div>
           </TableCell>
         </TableRow>
         {isPanelOpen ? (
-          <TableRow>
+          <TableRow data-ui="title-table-panel-row">
             <TableCell colSpan={columnCount} className="border-t border-border bg-popover/40 p-0">
               <div className="px-4 py-3">
                 <div className="mb-2 flex items-center justify-between gap-3">
@@ -330,35 +412,16 @@ export function TitleTable({
 
   const titleTableHeader = (
     <TableHeader>
-      <TableRow>
+      <TableRow className="sticky top-0 z-10 bg-background">
         <TableHead className="whitespace-nowrap">{t("title.table.poster")}</TableHead>
         <TableHead>{t("label.name")}</TableHead>
         <TableHead className="whitespace-nowrap">{t("title.table.qualityTier")}</TableHead>
         {isMovieView ? <TableHead className="whitespace-nowrap">{t("title.table.size")}</TableHead> : null}
-        <TableHead className="whitespace-nowrap">{t("title.table.monitored")}</TableHead>
+        <TableHead className="text-center whitespace-nowrap">{t("title.table.monitored")}</TableHead>
         <TableHead className="text-right whitespace-nowrap">{t("label.actions")}</TableHead>
       </TableRow>
     </TableHeader>
   );
-
-  if (!useVirtualTable) {
-    return (
-      <Table className="table-fixed">
-        {titleTableColGroup}
-        {titleTableHeader}
-        <TableBody>
-          {titles.map(renderTitleRow)}
-          {titles.length === 0 && !titleLoading ? (
-            <TableRow>
-              <TableCell colSpan={columnCount} className="text-muted-foreground">
-                {t("title.noManaged")}
-              </TableCell>
-            </TableRow>
-          ) : null}
-        </TableBody>
-      </Table>
-    );
-  }
 
   const virtualItems = titleVirtualizer.getVirtualItems();
 
@@ -368,18 +431,9 @@ export function TitleTable({
       className="relative w-full"
       style={{ maxHeight: "70vh", overflow: "auto" }}
     >
-      <table className="w-full table-fixed caption-bottom text-sm">
+      <table data-ui="title-table" data-view={view} className="w-full table-fixed caption-bottom text-sm">
         {titleTableColGroup}
-        <thead className="[&_tr]:border-b sticky top-0 z-10 bg-background">
-          <TableRow>
-            <TableHead className="whitespace-nowrap">{t("title.table.poster")}</TableHead>
-            <TableHead>{t("label.name")}</TableHead>
-            <TableHead className="whitespace-nowrap">{t("title.table.qualityTier")}</TableHead>
-            {isMovieView ? <TableHead className="whitespace-nowrap">{t("title.table.size")}</TableHead> : null}
-            <TableHead className="whitespace-nowrap">{t("title.table.monitored")}</TableHead>
-            <TableHead className="text-right whitespace-nowrap">{t("label.actions")}</TableHead>
-          </TableRow>
-        </thead>
+        {titleTableHeader}
         {virtualItems.length > 0 ? (
           <>
             {virtualItems[0].start > 0 ? (

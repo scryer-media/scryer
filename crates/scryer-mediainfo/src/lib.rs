@@ -88,6 +88,7 @@ pub struct MediaAnalysis {
     pub subtitle_streams: Vec<SubtitleStreamDetail>,
     pub has_multiaudio: bool,
     pub duration_seconds: Option<i32>,
+    pub num_chapters: Option<i32>,
     pub container_format: Option<String>,
     /// Structured JSON representation of the analysis
     pub raw_json: String,
@@ -241,6 +242,7 @@ fn build_analysis(raw: RawContainer) -> MediaAnalysis {
 
     // --- Container ---
     let duration_seconds = raw.duration_seconds.map(|d| d as i32);
+    let num_chapters = raw.num_chapters;
     let container_format = Some(raw.format_name.clone());
 
     // --- Structured JSON (replaces ffprobe raw JSON) ---
@@ -267,6 +269,7 @@ fn build_analysis(raw: RawContainer) -> MediaAnalysis {
         subtitle_streams,
         has_multiaudio,
         duration_seconds,
+        num_chapters,
         container_format,
         raw_json,
     }
@@ -301,6 +304,7 @@ fn build_raw_json(raw: &RawContainer) -> String {
     struct JsonAnalysis<'a> {
         format: &'a str,
         duration_seconds: Option<f64>,
+        num_chapters: Option<i32>,
         tracks: Vec<JsonTrack<'a>>,
     }
 
@@ -320,6 +324,7 @@ fn build_raw_json(raw: &RawContainer) -> String {
     let analysis = JsonAnalysis {
         format: &raw.format_name,
         duration_seconds: raw.duration_seconds,
+        num_chapters: raw.num_chapters,
         tracks: raw
             .tracks
             .iter()

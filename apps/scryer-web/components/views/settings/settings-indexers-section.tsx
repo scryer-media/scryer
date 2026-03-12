@@ -1,11 +1,16 @@
-
 import * as React from "react";
 import { Edit, MonitorCog, Power, PowerOff, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, signedIntegerInputProps } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { RenderBooleanIcon } from "@/components/common/boolean-icon";
 import {
   Table,
@@ -16,14 +21,30 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
-import type { IndexerRecord, IndexerDraft, ProviderTypeInfo, ConfigFieldDef } from "@/lib/types";
-import { showStandardIndexerConnectionFields } from "@/lib/utils/indexers";
+import type {
+  IndexerRecord,
+  IndexerDraft,
+  ProviderTypeInfo,
+  ConfigFieldDef,
+} from "@/lib/types";
+import { cn } from "@/lib/utils";
+import {
+  boxedActionButtonBaseClass,
+  boxedActionButtonToneClass,
+  type BoxedActionButtonTone,
+} from "@/lib/utils/action-button-styles";
+import {
+  showIndexerApiKeyField,
+  showIndexerBaseUrlField,
+} from "@/lib/utils/indexers";
 
 type SettingsIndexersSectionProps = {
   editingIndexerId: string | null;
   indexerDraft: IndexerDraft;
   setIndexerDraft: React.Dispatch<React.SetStateAction<IndexerDraft>>;
-  submitIndexer: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
+  submitIndexer: (
+    event: React.FormEvent<HTMLFormElement>,
+  ) => Promise<void> | void;
   mutatingIndexerId: string | null;
   resetIndexerDraft: () => void;
   settingsIndexerFilter: string;
@@ -67,6 +88,35 @@ function IndexerProviderTypeCell({ providerType }: { providerType: string }) {
   );
 }
 
+function IndexerActionButton({
+  label,
+  tone,
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof Button> & {
+  label: string;
+  tone: Extract<BoxedActionButtonTone, "edit" | "enabled" | "disabled" | "delete">;
+}) {
+  return (
+    <Button
+      type="button"
+      size="icon-sm"
+      variant="secondary"
+      title={label}
+      aria-label={label}
+      className={cn(
+        boxedActionButtonBaseClass,
+        boxedActionButtonToneClass[tone],
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </Button>
+  );
+}
+
 function formatRelativeTime(isoDate: string): string {
   const date = new Date(isoDate);
   const now = new Date();
@@ -103,8 +153,13 @@ function IndexerStatusCell({ indexer }: { indexer: IndexerRecord }) {
     const until = new Date(indexer.disabledUntil);
     if (until > new Date()) {
       return (
-        <span className="text-yellow-600 dark:text-yellow-400" title={indexer.disabledUntil}>
-          {t("settings.indexerDisabledUntil", { time: formatRelativeTime(indexer.disabledUntil) })}
+        <span
+          className="text-yellow-600 dark:text-yellow-400"
+          title={indexer.disabledUntil}
+        >
+          {t("settings.indexerDisabledUntil", {
+            time: formatRelativeTime(indexer.disabledUntil),
+          })}
         </span>
       );
     }
@@ -112,8 +167,13 @@ function IndexerStatusCell({ indexer }: { indexer: IndexerRecord }) {
 
   if (indexer.lastErrorAt) {
     return (
-      <span className="text-red-600 dark:text-red-400" title={indexer.lastErrorAt}>
-        {t("settings.indexerLastError", { time: formatRelativeTime(indexer.lastErrorAt) })}
+      <span
+        className="text-red-600 dark:text-red-400"
+        title={indexer.lastErrorAt}
+      >
+        {t("settings.indexerLastError", {
+          time: formatRelativeTime(indexer.lastErrorAt),
+        })}
       </span>
     );
   }
@@ -121,12 +181,18 @@ function IndexerStatusCell({ indexer }: { indexer: IndexerRecord }) {
   if (indexer.lastQueryAt) {
     return (
       <span className="text-muted-foreground" title={indexer.lastQueryAt}>
-        {t("settings.indexerLastSearched", { time: formatRelativeTime(indexer.lastQueryAt) })}
+        {t("settings.indexerLastSearched", {
+          time: formatRelativeTime(indexer.lastQueryAt),
+        })}
       </span>
     );
   }
 
-  return <span className="text-muted-foreground">{t("settings.indexerNoActivity")}</span>;
+  return (
+    <span className="text-muted-foreground">
+      {t("settings.indexerNoActivity")}
+    </span>
+  );
 }
 
 function DynamicConfigField({
@@ -144,12 +210,16 @@ function DynamicConfigField({
         <input
           type="checkbox"
           checked={value === "true"}
-          onChange={(e) => onChange(field.key, e.target.checked ? "true" : "false")}
+          onChange={(e) =>
+            onChange(field.key, e.target.checked ? "true" : "false")
+          }
           className="accent-primary"
         />
         <span className="text-sm">{field.label}</span>
         {field.helpText ? (
-          <span className="text-xs text-muted-foreground">{field.helpText}</span>
+          <span className="text-xs text-muted-foreground">
+            {field.helpText}
+          </span>
         ) : null}
       </label>
     );
@@ -168,7 +238,9 @@ function DynamicConfigField({
           </SelectTrigger>
           <SelectContent>
             {field.options.map((opt) => (
-              <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -225,9 +297,13 @@ export function SettingsIndexersSection({
 
   // Build provider type options from loaded plugins, falling back to hardcoded list
   const providerTypeOptions = React.useMemo(() => {
-    const baseOptions = providerTypes.length > 0
-      ? providerTypes.map((pt) => ({ value: pt.providerType, label: pt.name }))
-      : FALLBACK_PROVIDER_OPTIONS;
+    const baseOptions =
+      providerTypes.length > 0
+        ? providerTypes.map((pt) => ({
+            value: pt.providerType,
+            label: pt.name,
+          }))
+        : FALLBACK_PROVIDER_OPTIONS;
 
     if (!normalizedProviderType) {
       return baseOptions;
@@ -235,19 +311,24 @@ export function SettingsIndexersSection({
     if (baseOptions.some((option) => option.value === normalizedProviderType)) {
       return baseOptions;
     }
-    return [{ value: normalizedProviderType, label: indexerDraft.providerType }, ...baseOptions];
+    return [
+      { value: normalizedProviderType, label: indexerDraft.providerType },
+      ...baseOptions,
+    ];
   }, [indexerDraft.providerType, normalizedProviderType, providerTypes]);
 
   // Get config fields for the selected provider type
   const selectedProvider = React.useMemo(() => {
-    return providerTypes.find(
-      (pt) => pt.providerType === normalizedProviderType,
-    ) ?? null;
+    return (
+      providerTypes.find((pt) => pt.providerType === normalizedProviderType) ??
+      null
+    );
   }, [normalizedProviderType, providerTypes]);
 
   const selectedProviderFields = selectedProvider?.configFields ?? [];
 
-  const shouldShowStandardFields = showStandardIndexerConnectionFields(selectedProvider);
+  const shouldShowBaseUrlField = showIndexerBaseUrlField(selectedProvider);
+  const shouldShowApiKeyField = showIndexerApiKeyField(selectedProvider);
 
   const handleConfigValueChange = React.useCallback(
     (key: string, value: string) => {
@@ -268,7 +349,9 @@ export function SettingsIndexersSection({
 
       <div className="rounded border border-border">
         <div className="flex items-center justify-between border-b border-border px-3 py-2">
-          <CardTitle className="text-base">{t("settings.existingIndexers")}</CardTitle>
+          <CardTitle className="text-base">
+            {t("settings.existingIndexers")}
+          </CardTitle>
           <Input
             value={settingsIndexerFilter}
             onChange={(event) => setSettingsIndexerFilter(event.target.value)}
@@ -283,11 +366,19 @@ export function SettingsIndexersSection({
                 <TableHead>{t("label.name")}</TableHead>
                 <TableHead>{t("settings.indexerProvider")}</TableHead>
                 <TableHead>{t("settings.baseUrl")}</TableHead>
-                <TableHead className="text-center">{t("label.enabled")}</TableHead>
-                <TableHead className="text-center">{t("settings.indexerInteractiveSearch")}</TableHead>
-                <TableHead className="text-center">{t("settings.indexerAutoSearch")}</TableHead>
+                <TableHead className="text-center">
+                  {t("label.enabled")}
+                </TableHead>
+                <TableHead className="text-center">
+                  {t("settings.indexerInteractiveSearch")}
+                </TableHead>
+                <TableHead className="text-center">
+                  {t("settings.indexerAutoSearch")}
+                </TableHead>
                 <TableHead>{t("settings.indexerStatus")}</TableHead>
-                <TableHead className="text-right">{t("label.actions")}</TableHead>
+                <TableHead className="text-right">
+                  {t("label.actions")}
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -295,9 +386,13 @@ export function SettingsIndexersSection({
                 <TableRow key={indexer.id}>
                   <TableCell>{indexer.name}</TableCell>
                   <TableCell>
-                    <IndexerProviderTypeCell providerType={indexer.providerType} />
+                    <IndexerProviderTypeCell
+                      providerType={indexer.providerType}
+                    />
                   </TableCell>
-                  <TableCell className="max-w-[260px] truncate">{indexer.baseUrl}</TableCell>
+                  <TableCell className="max-w-[260px] truncate">
+                    {indexer.baseUrl}
+                  </TableCell>
                   <TableCell className="text-center">
                     <RenderBooleanIcon
                       value={indexer.isEnabled}
@@ -321,36 +416,41 @@ export function SettingsIndexersSection({
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
-                      <Button
-                        size="icon"
-                        variant="ghost"
+                      <IndexerActionButton
+                        tone={indexer.isEnabled ? "disabled" : "enabled"}
                         onClick={() => void toggleIndexerEnabled(indexer)}
                         disabled={mutatingIndexerId === indexer.id}
-                        title={indexer.isEnabled ? t("label.disable") : t("label.enable")}
+                        label={
+                          indexer.isEnabled
+                            ? t("label.disable")
+                            : t("label.enable")
+                        }
                       >
                         {indexer.isEnabled ? (
-                          <Power className="h-4 w-4 text-green-400" />
+                          <PowerOff className="h-4 w-4" />
                         ) : (
-                          <PowerOff className="h-4 w-4 text-red-400" />
+                          <Power className="h-4 w-4" />
                         )}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="secondary"
+                      </IndexerActionButton>
+                      <IndexerActionButton
+                        tone="edit"
                         onClick={() => editIndexer(indexer)}
+                        label={t("label.edit")}
                       >
-                        <Edit className="mr-1 h-3.5 w-3.5" />
-                        {t("label.edit")}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="destructive"
+                        <Edit className="h-4 w-4" />
+                      </IndexerActionButton>
+                      <IndexerActionButton
+                        tone="delete"
                         onClick={() => void deleteIndexer(indexer)}
                         disabled={mutatingIndexerId === indexer.id}
+                        label={
+                          mutatingIndexerId === indexer.id
+                            ? t("label.deleting")
+                            : t("label.delete")
+                        }
                       >
-                        <Trash2 className="mr-1 h-3.5 w-3.5" />
-                        {mutatingIndexerId === indexer.id ? t("label.deleting") : t("label.delete")}
-                      </Button>
+                        <Trash2 className="h-4 w-4" />
+                      </IndexerActionButton>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -370,7 +470,9 @@ export function SettingsIndexersSection({
       <Card>
         <CardHeader>
           <CardTitle className="text-base">
-            {editingIndexerId ? t("settings.indexerUpdate") : t("settings.indexerCreate")}
+            {editingIndexerId
+              ? t("settings.indexerUpdate")
+              : t("settings.indexerCreate")}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -391,7 +493,9 @@ export function SettingsIndexersSection({
                 />
               </label>
               <label>
-                <Label className="mb-2 block">{t("form.providerTypePlaceholder")}</Label>
+                <Label className="mb-2 block">
+                  {t("form.providerTypePlaceholder")}
+                </Label>
                 <Select
                   value={normalizedProviderType || undefined}
                   onValueChange={(v) =>
@@ -402,52 +506,58 @@ export function SettingsIndexersSection({
                   }
                 >
                   <SelectTrigger className="w-full">
-                    <SelectValue placeholder={t("form.providerTypePlaceholder")} />
+                    <SelectValue
+                      placeholder={t("form.providerTypePlaceholder")}
+                    />
                   </SelectTrigger>
                   <SelectContent>
                     {providerTypeOptions.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </label>
-              {shouldShowStandardFields ? (
-                <>
-                  <label>
-                    <Label className="mb-2 block">{t("settings.baseUrl")}</Label>
-                    <Input
-                      value={indexerDraft.baseUrl}
-                      onChange={(event) =>
-                        setIndexerDraft((prev: IndexerDraft) => ({
-                          ...prev,
-                          baseUrl: event.target.value,
-                        }))
-                      }
-                      required
-                      placeholder={t("form.baseUrlPlaceholderValue")}
-                    />
-                  </label>
-                  <label>
-                    <Label className="mb-2 block">{t("settings.apiKey")}</Label>
-                    <Input
-                      value={indexerDraft.apiKey}
-                      onChange={(event) =>
-                        setIndexerDraft((prev: IndexerDraft) => ({
-                          ...prev,
-                          apiKey: event.target.value,
-                        }))
-                      }
-                      placeholder={t("form.apiKeyInputPlaceholder")}
-                      type="password"
-                    />
-                  </label>
-                </>
+              {shouldShowBaseUrlField ? (
+                <label>
+                  <Label className="mb-2 block">{t("settings.baseUrl")}</Label>
+                  <Input
+                    value={indexerDraft.baseUrl}
+                    onChange={(event) =>
+                      setIndexerDraft((prev: IndexerDraft) => ({
+                        ...prev,
+                        baseUrl: event.target.value,
+                      }))
+                    }
+                    required
+                    placeholder={t("form.baseUrlPlaceholderValue")}
+                  />
+                </label>
+              ) : null}
+              {shouldShowApiKeyField ? (
+                <label>
+                  <Label className="mb-2 block">{t("settings.apiKey")}</Label>
+                  <Input
+                    value={indexerDraft.apiKey}
+                    onChange={(event) =>
+                      setIndexerDraft((prev: IndexerDraft) => ({
+                        ...prev,
+                        apiKey: event.target.value,
+                      }))
+                    }
+                    placeholder={t("form.apiKeyInputPlaceholder")}
+                    type="password"
+                  />
+                </label>
               ) : null}
             </div>
 
             {selectedProviderFields.length > 0 ? (
               <div className="space-y-3">
-                <Label className="text-sm font-medium">{t("settings.indexerConfig")}</Label>
+                <Label className="text-sm font-medium">
+                  {t("settings.indexerConfig")}
+                </Label>
                 <div className="grid gap-3 md:grid-cols-3">
                   {selectedProviderFields
                     .filter((f) => f.fieldType !== "bool")
@@ -455,7 +565,11 @@ export function SettingsIndexersSection({
                       <DynamicConfigField
                         key={field.key}
                         field={field}
-                        value={indexerDraft.configValues[field.key] ?? field.defaultValue ?? ""}
+                        value={
+                          indexerDraft.configValues[field.key] ??
+                          field.defaultValue ??
+                          ""
+                        }
                         onChange={handleConfigValueChange}
                       />
                     ))}
@@ -468,7 +582,11 @@ export function SettingsIndexersSection({
                         <DynamicConfigField
                           key={field.key}
                           field={field}
-                          value={indexerDraft.configValues[field.key] ?? field.defaultValue ?? "false"}
+                          value={
+                            indexerDraft.configValues[field.key] ??
+                            field.defaultValue ??
+                            "false"
+                          }
                           onChange={handleConfigValueChange}
                         />
                       ))}
@@ -490,7 +608,9 @@ export function SettingsIndexersSection({
                   }
                   className="accent-primary"
                 />
-                <span className="text-sm">{t("settings.indexerInteractiveSearch")}</span>
+                <span className="text-sm">
+                  {t("settings.indexerInteractiveSearch")}
+                </span>
               </label>
               <label className="flex items-center gap-2">
                 <input
@@ -504,7 +624,9 @@ export function SettingsIndexersSection({
                   }
                   className="accent-primary"
                 />
-                <span className="text-sm">{t("settings.indexerAutoSearch")}</span>
+                <span className="text-sm">
+                  {t("settings.indexerAutoSearch")}
+                </span>
               </label>
             </div>
             <div className="flex gap-2">
@@ -521,9 +643,15 @@ export function SettingsIndexersSection({
                 onClick={() => void testIndexerConnection()}
                 disabled={isTestingConnection}
               >
-                {isTestingConnection ? t("status.testingIndexerConnection") : t("label.testConnection")}
+                {isTestingConnection
+                  ? t("status.testingIndexerConnection")
+                  : t("label.testConnection")}
               </Button>
-              <Button type="button" variant="secondary" onClick={resetIndexerDraft}>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={resetIndexerDraft}
+              >
                 {t("label.cancel")}
               </Button>
             </div>

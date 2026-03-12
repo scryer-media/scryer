@@ -10,10 +10,11 @@ use crate::mappers::{
 use crate::types::*;
 
 const SETTINGS_SCOPE_SYSTEM: &str = "system";
-const NZBGET_CLIENT_ROUTING_SETTINGS_KEY: &str = "nzbget.client_routing";
-const NZBGET_CLIENT_RANKING_SCOPE_IDS: [&str; 3] = ["movie", "series", "anime"];
+const DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY: &str = "download_client.routing";
+const LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY: &str = "nzbget.client_routing";
+const DOWNLOAD_CLIENT_ROUTING_SCOPE_IDS: [&str; 3] = ["movie", "series", "anime"];
 
-fn parse_nzbget_priority(raw_priority: &Value) -> Option<i64> {
+fn parse_download_client_routing_priority(raw_priority: &Value) -> Option<i64> {
     match raw_priority {
         Value::Number(number) => number.as_i64(),
         Value::String(value) => value.parse::<i64>().ok(),
@@ -21,11 +22,11 @@ fn parse_nzbget_priority(raw_priority: &Value) -> Option<i64> {
     }
 }
 
-fn next_nzbget_routing_priority(routing_by_client: &Map<String, Value>) -> i64 {
+fn next_download_client_routing_priority(routing_by_client: &Map<String, Value>) -> i64 {
     let max_explicit_priority = routing_by_client
         .values()
         .filter_map(|value| value.get("priority"))
-        .filter_map(parse_nzbget_priority)
+        .filter_map(parse_download_client_routing_priority)
         .max();
 
     match max_explicit_priority {
@@ -34,52 +35,90 @@ fn next_nzbget_routing_priority(routing_by_client: &Map<String, Value>) -> i64 {
     }
 }
 
-pub(crate) async fn ensure_nzbget_routing_entry_for_client(
+fn default_download_client_routing_entry(priority: i64) -> Value {
+    json!({
+        "enabled": true,
+        "category": "",
+        "recentQueuePriority": "",
+        "olderQueuePriority": "",
+        "removeCompleted": false,
+        "removeFailed": false,
+        "priority": priority,
+    })
+}
+
+fn parse_download_client_routing_object(raw_payload: &str) -> Map<String, Value> {
+    serde_json::from_str::<Value>(raw_payload)
+        .ok()
+        .and_then(|value| value.as_object().map(std::borrow::ToOwned::to_owned))
+        .unwrap_or_default()
+}
+
+async fn load_download_client_routing_payload(
+    db: &scryer_infrastructure::SqliteServices,
+    scope_id: &str,
+) -> GqlResult<Map<String, Value>> {
+    let current = db
+        .get_setting_with_defaults(
+            SETTINGS_SCOPE_SYSTEM,
+            DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY,
+            Some(scope_id.to_string()),
+        )
+        .await
+        .map_err(to_gql_error)?;
+
+    if let Some(record) = current.as_ref() {
+        if record.value_json.is_some() {
+            return Ok(parse_download_client_routing_object(
+                &record.effective_value_json,
+            ));
+        }
+    }
+
+    let legacy = db
+        .get_setting_with_defaults(
+            SETTINGS_SCOPE_SYSTEM,
+            LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY,
+            Some(scope_id.to_string()),
+        )
+        .await
+        .map_err(to_gql_error)?;
+
+    if let Some(record) = legacy.as_ref() {
+        if record.value_json.is_some() {
+            return Ok(parse_download_client_routing_object(
+                &record.effective_value_json,
+            ));
+        }
+    }
+
+    Ok(current
+        .as_ref()
+        .map(|record| parse_download_client_routing_object(&record.effective_value_json))
+        .unwrap_or_default())
+}
+
+pub(crate) async fn ensure_download_client_routing_entry_for_client(
     db: &scryer_infrastructure::SqliteServices,
     client_id: &str,
     actor_id: &str,
 ) -> GqlResult<()> {
-    for scope_id in NZBGET_CLIENT_RANKING_SCOPE_IDS {
-        let existing = db
-            .get_setting_with_defaults(
-                SETTINGS_SCOPE_SYSTEM,
-                NZBGET_CLIENT_ROUTING_SETTINGS_KEY,
-                Some(scope_id.to_string()),
-            )
-            .await
-            .map_err(to_gql_error)?;
-
-        let Some(existing) = existing else {
-            continue;
-        };
-
-        let raw_payload = existing.effective_value_json;
-        let mut payload = serde_json::from_str::<Value>(&raw_payload)
-            .ok()
-            .and_then(|value| value.as_object().map(std::borrow::ToOwned::to_owned))
-            .unwrap_or_default();
+    for scope_id in DOWNLOAD_CLIENT_ROUTING_SCOPE_IDS {
+        let mut payload = load_download_client_routing_payload(db, scope_id).await?;
 
         if payload.contains_key(client_id) {
             continue;
         }
 
-        let next_priority = next_nzbget_routing_priority(&payload);
+        let next_priority = next_download_client_routing_priority(&payload);
         payload.insert(
             client_id.to_string(),
-            json!({
-                "category": "",
-                "recentPriority": "",
-                "olderPriority": "",
-                "removeCompleted": false,
-                "removeFailed": false,
-                "tags": [],
-                "priority": next_priority,
-            }),
+            default_download_client_routing_entry(next_priority),
         );
 
         db.upsert_setting_value(
             SETTINGS_SCOPE_SYSTEM,
-            NZBGET_CLIENT_ROUTING_SETTINGS_KEY,
+            DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY,
             Some(scope_id.to_string()),
             Value::Object(payload).to_string(),
             "admin_graphql",
@@ -90,6 +129,19 @@ pub(crate) async fn ensure_nzbget_routing_entry_for_client(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_download_client_routing_entry;
+
+    #[test]
+    fn default_download_client_routing_entry_seeds_enabled_true() {
+        let entry = default_download_client_routing_entry(4);
+
+        assert_eq!(entry["enabled"], true);
+        assert_eq!(entry["priority"], 4);
+    }
 }
 
 #[derive(Default)]
@@ -189,7 +241,7 @@ impl ConfigMutations {
             .map_err(to_gql_error)?;
 
         if config.client_type == "nzbget" || config.client_type == "sabnzbd" {
-            ensure_nzbget_routing_entry_for_client(&db, &config.id, &actor.id).await?;
+            ensure_download_client_routing_entry_for_client(&db, &config.id, &actor.id).await?;
         }
 
         Ok(from_download_client_config(config))
@@ -217,7 +269,7 @@ impl ConfigMutations {
             .map_err(to_gql_error)?;
 
         if config.client_type == "nzbget" || config.client_type == "sabnzbd" {
-            ensure_nzbget_routing_entry_for_client(&db, &config.id, &actor.id).await?;
+            ensure_download_client_routing_entry_for_client(&db, &config.id, &actor.id).await?;
         }
 
         Ok(from_download_client_config(config))

@@ -7,21 +7,153 @@ use std::time::Duration;
 use tokio::fs;
 use tracing::{info, warn};
 
-/// Extract the `category` from the highest-priority client in a `nzbget.client_routing`
-/// JSON blob (`{ "client_id": { "category": "Movies", ... }, ... }`).
-/// With `serde_json` `preserve_order`, the first key is the highest-priority client.
-fn extract_highest_priority_nzbget_category(raw_json: &str) -> Option<String> {
-    let parsed: serde_json::Value = serde_json::from_str(raw_json).ok()?;
-    let obj = parsed.as_object()?;
-    for (_client_id, config) in obj {
-        if let Some(cat) = config.get("category").and_then(|v| v.as_str()) {
-            let trimmed = cat.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
-        }
+const DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY: &str = "download_client.routing";
+const LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY: &str = "nzbget.client_routing";
+const DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY: &str = "download_client.default_category";
+const LEGACY_NZBGET_CATEGORY_SETTING_KEY: &str = "nzbget.category";
+const RECENT_QUEUE_PRIORITY_WINDOW_DAYS: i64 = 14;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct DownloadClientRoutingEntry {
+    enabled: bool,
+    category: Option<String>,
+    recent_queue_priority: Option<String>,
+    older_queue_priority: Option<String>,
+    remove_completed: bool,
+    remove_failed: bool,
+}
+
+fn routing_entry_enabled(config: &serde_json::Value) -> bool {
+    match config.get("enabled") {
+        Some(serde_json::Value::Bool(enabled)) => *enabled,
+        Some(serde_json::Value::String(enabled)) => !matches!(
+            enabled.trim().to_ascii_lowercase().as_str(),
+            "false" | "0" | "no"
+        ),
+        Some(serde_json::Value::Number(number)) => number.as_i64() != Some(0),
+        _ => true,
     }
-    None
+}
+
+fn read_routing_string(raw_value: Option<&serde_json::Value>) -> Option<String> {
+    raw_value
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn read_routing_bool(raw_value: Option<&serde_json::Value>, default: bool) -> bool {
+    match raw_value {
+        Some(serde_json::Value::Bool(value)) => *value,
+        Some(serde_json::Value::String(value)) => !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "false" | "0" | "no"
+        ),
+        Some(serde_json::Value::Number(value)) => value.as_i64() != Some(0),
+        _ => default,
+    }
+}
+
+fn parse_download_client_routing_entry(config: &serde_json::Value) -> DownloadClientRoutingEntry {
+    DownloadClientRoutingEntry {
+        enabled: routing_entry_enabled(config),
+        category: read_routing_string(config.get("category")),
+        recent_queue_priority: read_routing_string(
+            config
+                .get("recentQueuePriority")
+                .or_else(|| config.get("recentPriority"))
+                .or_else(|| config.get("recent_priority")),
+        ),
+        older_queue_priority: read_routing_string(
+            config
+                .get("olderQueuePriority")
+                .or_else(|| config.get("olderPriority"))
+                .or_else(|| config.get("older_priority")),
+        ),
+        remove_completed: read_routing_bool(
+            config
+                .get("removeCompleted")
+                .or_else(|| config.get("remove_completed"))
+                .or_else(|| config.get("removeComplete")),
+            false,
+        ),
+        remove_failed: read_routing_bool(
+            config
+                .get("removeFailed")
+                .or_else(|| config.get("remove_failed"))
+                .or_else(|| config.get("removeFailure")),
+            false,
+        ),
+    }
+}
+
+fn parse_download_client_routing_map(
+    raw_json: &str,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    serde_json::from_str::<serde_json::Value>(raw_json)
+        .ok()?
+        .as_object()
+        .cloned()
+}
+
+fn scope_id_for_facet(facet: &MediaFacet) -> Option<&'static str> {
+    match facet {
+        MediaFacet::Movie => Some("movie"),
+        MediaFacet::Tv => Some("series"),
+        MediaFacet::Anime => Some("anime"),
+        MediaFacet::Other => None,
+    }
+}
+
+fn release_is_recent_for_queue_priority(baseline_date: Option<&str>) -> bool {
+    let Some(baseline_date) = baseline_date else {
+        return false;
+    };
+    let baseline_date = baseline_date.trim();
+    let parsed_date = chrono::NaiveDate::parse_from_str(baseline_date, "%Y-%m-%d")
+        .ok()
+        .or_else(|| {
+            chrono::DateTime::parse_from_rfc3339(baseline_date)
+                .ok()
+                .map(|value| value.date_naive())
+        })
+        .or_else(|| {
+            chrono::DateTime::parse_from_rfc2822(baseline_date)
+                .ok()
+                .map(|value| value.date_naive())
+        });
+    let Some(parsed_date) = parsed_date else {
+        return false;
+    };
+    let now = chrono::Utc::now().date_naive();
+    let age_days = now.signed_duration_since(parsed_date).num_days();
+    (0..=RECENT_QUEUE_PRIORITY_WINDOW_DAYS).contains(&age_days)
+}
+
+#[cfg(test)]
+mod routing_tests {
+    use super::parse_download_client_routing_entry;
+    use serde_json::json;
+
+    #[test]
+    fn routing_entry_parses_legacy_and_new_queue_priority_fields() {
+        let entry = parse_download_client_routing_entry(&json!({
+            "enabled": true,
+            "category": "tv",
+            "recentPriority": "high",
+            "olderQueuePriority": "low",
+            "removeCompleted": true,
+            "remove_failed": true
+        }));
+
+        assert!(entry.enabled);
+        assert_eq!(entry.category.as_deref(), Some("tv"));
+        assert_eq!(entry.recent_queue_priority.as_deref(), Some("high"));
+        assert_eq!(entry.older_queue_priority.as_deref(), Some("low"));
+        assert!(entry.remove_completed);
+        assert!(entry.remove_failed);
+    }
 }
 
 fn interstitial_movie_from_metadata(movie: &MovieMetadata) -> InterstitialMovieMetadata {
@@ -43,7 +175,195 @@ fn interstitial_movie_from_metadata(movie: &MovieMetadata) -> InterstitialMovieM
     }
 }
 
+fn resolve_interstitial_movie_tvdb_id(mapping: &AnimeMapping) -> Option<i64> {
+    if mapping.episode_mappings.is_empty() {
+        return None;
+    }
+
+    mapping.alt_tvdb_id.or_else(|| {
+        if mapping.global_media_type == "movie" {
+            mapping.thetvdb_id
+        } else {
+            None
+        }
+    })
+}
+
+#[cfg(test)]
+mod interstitial_mapping_tests {
+    use super::resolve_interstitial_movie_tvdb_id;
+    use crate::{AnimeEpisodeMapping, AnimeMapping};
+
+    fn mapping() -> AnimeMapping {
+        AnimeMapping {
+            mal_id: Some(1),
+            anilist_id: None,
+            anidb_id: None,
+            kitsu_id: None,
+            thetvdb_id: Some(100),
+            alt_tvdb_id: None,
+            thetvdb_season: Some(0),
+            score: None,
+            anime_media_type: "TV".into(),
+            global_media_type: "series".into(),
+            status: String::new(),
+            episode_mappings: vec![AnimeEpisodeMapping {
+                tvdb_season: 0,
+                episode_start: 1,
+                episode_end: 1,
+            }],
+        }
+    }
+
+    #[test]
+    fn prefers_alt_tvdb_id_for_hybrid_show_movie_mappings() {
+        let mut input = mapping();
+        input.alt_tvdb_id = Some(200);
+
+        assert_eq!(resolve_interstitial_movie_tvdb_id(&input), Some(200));
+    }
+
+    #[test]
+    fn falls_back_to_primary_tvdb_id_for_true_movie_rows() {
+        let mut input = mapping();
+        input.global_media_type = "movie".into();
+
+        assert_eq!(resolve_interstitial_movie_tvdb_id(&input), Some(100));
+    }
+
+    #[test]
+    fn ignores_rows_without_episode_mappings() {
+        let mut input = mapping();
+        input.episode_mappings.clear();
+        input.alt_tvdb_id = Some(200);
+
+        assert_eq!(resolve_interstitial_movie_tvdb_id(&input), None);
+    }
+}
+
 impl AppUseCase {
+    async fn emit_hydration_activity(
+        &self,
+        title: &Title,
+        kind: ActivityKind,
+        severity: ActivitySeverity,
+        message: String,
+    ) {
+        if let Err(err) = self
+            .services
+            .record_activity_event(
+                None,
+                Some(title.id.clone()),
+                kind,
+                message,
+                severity,
+                vec![ActivityChannel::WebUi],
+            )
+            .await
+        {
+            warn!(
+                title_id = %title.id,
+                error = %err,
+                "failed to record hydration activity event"
+            );
+        }
+    }
+
+    async fn emit_hydration_started(&self, title: &Title) {
+        self.emit_hydration_activity(
+            title,
+            ActivityKind::MetadataHydrationStarted,
+            ActivitySeverity::Info,
+            format!("hydrating metadata for {}", title.name),
+        )
+        .await;
+    }
+
+    async fn emit_hydration_completed(&self, title: &Title) {
+        self.emit_hydration_activity(
+            title,
+            ActivityKind::MetadataHydrationCompleted,
+            ActivitySeverity::Success,
+            format!("metadata hydrated for {}", title.name),
+        )
+        .await;
+    }
+
+    async fn emit_hydration_failed(&self, title: &Title, reason: &str) {
+        self.emit_hydration_activity(
+            title,
+            ActivityKind::MetadataHydrationFailed,
+            ActivitySeverity::Warning,
+            format!("metadata hydration failed for {}: {}", title.name, reason),
+        )
+        .await;
+    }
+
+    async fn read_download_client_routing_value(
+        &self,
+        scope_id: &str,
+    ) -> AppResult<Option<String>> {
+        if let Some(value) = self
+            .read_setting_string_value(DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY, Some(scope_id))
+            .await?
+        {
+            return Ok(Some(value));
+        }
+
+        self.read_setting_string_value(LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY, Some(scope_id))
+            .await
+    }
+
+    async fn read_download_client_routing_entry(
+        &self,
+        facet: &MediaFacet,
+        client_id: &str,
+    ) -> AppResult<Option<DownloadClientRoutingEntry>> {
+        let Some(scope_id) = scope_id_for_facet(facet) else {
+            return Ok(None);
+        };
+
+        let Some(raw_json) = self.read_download_client_routing_value(scope_id).await? else {
+            return Ok(None);
+        };
+
+        let Some(routing_map) = parse_download_client_routing_map(&raw_json) else {
+            return Ok(None);
+        };
+
+        Ok(routing_map
+            .get(client_id)
+            .map(parse_download_client_routing_entry))
+    }
+
+    pub(crate) async fn should_remove_completed_download(
+        &self,
+        facet: &MediaFacet,
+        client_id: &str,
+    ) -> bool {
+        self.read_download_client_routing_entry(facet, client_id)
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|entry| entry.remove_completed)
+    }
+
+    pub(crate) async fn should_remove_failed_download(
+        &self,
+        facet: &MediaFacet,
+        client_id: &str,
+    ) -> bool {
+        self.read_download_client_routing_entry(facet, client_id)
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|entry| entry.remove_failed)
+    }
+
+    pub(crate) fn is_recent_for_queue_priority(&self, baseline_date: Option<&str>) -> Option<bool> {
+        baseline_date.map(|_| release_is_recent_for_queue_priority(baseline_date))
+    }
+
     pub async fn list_titles(
         &self,
         actor: &User,
@@ -153,7 +473,15 @@ impl AppUseCase {
 
         // Wake the background hydration loop to fetch rich metadata from SMG.
         // The title is already persisted — hydration happens asynchronously.
+        self.emit_hydration_started(&title).await;
         self.services.hydration_wake.notify_one();
+        if title
+            .poster_url
+            .as_ref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            self.services.poster_wake.notify_one();
+        }
 
         Ok(title)
     }
@@ -169,6 +497,8 @@ impl AppUseCase {
                     external_ids = ?title.external_ids,
                     "no tvdb external id found, skipping metadata hydration"
                 );
+                self.emit_hydration_failed(&title, "no tvdb external id found")
+                    .await;
                 return title;
             }
         };
@@ -179,11 +509,22 @@ impl AppUseCase {
             return title;
         };
 
+        self.emit_hydration_started(&title).await;
+
         match handler
             .hydrate_metadata(self.services.metadata_gateway.as_ref(), tvdb_id, language)
             .await
         {
-            Ok(result) => self.apply_hydration_result(title, result).await,
+            Ok(result) => {
+                let hydrated = self.apply_hydration_result(title, result).await;
+                if hydrated.metadata_fetched_at.is_some() {
+                    self.emit_hydration_completed(&hydrated).await;
+                } else {
+                    self.emit_hydration_failed(&hydrated, "metadata could not be persisted")
+                        .await;
+                }
+                hydrated
+            }
             Err(err) => {
                 warn!(
                     title_id = %title.id,
@@ -191,6 +532,7 @@ impl AppUseCase {
                     error = %err,
                     "failed to fetch metadata from gateway"
                 );
+                self.emit_hydration_failed(&title, &err.to_string()).await;
                 title
             }
         }
@@ -289,10 +631,18 @@ impl AppUseCase {
             .await;
         }
 
+        if title
+            .poster_url
+            .as_ref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            self.services.poster_wake.notify_one();
+        }
+
         title
     }
 
-    async fn create_series_seasons_and_episodes(
+    pub(crate) async fn create_series_seasons_and_episodes(
         &self,
         title: &Title,
         seasons: &[SeasonMetadata],
@@ -422,7 +772,7 @@ impl AppUseCase {
         }
 
         // Create interstitial movie collections for anime titles.
-        // Movies (global_media_type == "movie") are positioned narratively between
+        // Movie-linked anime mappings are positioned narratively between
         // seasons using their episode aired dates (e.g. Demon Slayer: Mugen Train
         // between S1 and S2). Build a lookup from (season_number, episode_number) →
         // collection_id so that episodes get routed to the correct collection.
@@ -430,17 +780,21 @@ impl AppUseCase {
             std::collections::HashMap::new();
 
         if title.facet == MediaFacet::Anime && inter_season_movies && !anime_mappings.is_empty() {
-            let movie_mappings: Vec<&AnimeMapping> = anime_mappings
+            let movie_mappings: Vec<(&AnimeMapping, i64)> = anime_mappings
                 .iter()
-                .filter(|m| m.global_media_type == "movie")
-                .filter(|m| !m.episode_mappings.is_empty())
+                .filter_map(|mapping| {
+                    resolve_interstitial_movie_tvdb_id(mapping)
+                        .map(|movie_tvdb_id| (mapping, movie_tvdb_id))
+                })
                 .collect();
 
             if !movie_mappings.is_empty() {
                 let metadata_language = title.metadata_language.as_deref().unwrap_or("eng");
+                let mut seen_movie_tvdb_ids = HashSet::new();
                 let movie_tvdb_ids: Vec<i64> = movie_mappings
                     .iter()
-                    .filter_map(|mapping| mapping.thetvdb_id.or(mapping.alt_tvdb_id))
+                    .map(|(_, movie_tvdb_id)| *movie_tvdb_id)
+                    .filter(|movie_tvdb_id| seen_movie_tvdb_ids.insert(*movie_tvdb_id))
                     .collect();
                 let interstitial_movie_metadata = match self
                     .services
@@ -461,10 +815,12 @@ impl AppUseCase {
 
                 // For each movie, find its earliest episode aired date, then
                 // find the last regular season that ended on or before that date.
-                let mut movies_by_position: std::collections::BTreeMap<i32, Vec<&AnimeMapping>> =
-                    std::collections::BTreeMap::new();
-                for m in &movie_mappings {
-                    let movie_aired: Option<String> = m
+                let mut movies_by_position: std::collections::BTreeMap<
+                    i32,
+                    Vec<(&AnimeMapping, i64)>,
+                > = std::collections::BTreeMap::new();
+                for (mapping, movie_tvdb_id) in &movie_mappings {
+                    let movie_aired: Option<String> = mapping
                         .episode_mappings
                         .iter()
                         .flat_map(|em| {
@@ -491,18 +847,22 @@ impl AppUseCase {
 
                     info!(
                         title_id = %title.id,
-                        movie_type = %m.global_media_type,
-                        thetvdb_season = ?m.thetvdb_season,
+                        movie_type = %mapping.global_media_type,
+                        thetvdb_season = ?mapping.thetvdb_season,
+                        interstitial_movie_tvdb_id = movie_tvdb_id,
                         movie_aired = ?movie_aired,
                         after_season = after_season,
                         "positioning interstitial movie"
                     );
 
-                    movies_by_position.entry(after_season).or_default().push(m);
+                    movies_by_position
+                        .entry(after_season)
+                        .or_default()
+                        .push((mapping, *movie_tvdb_id));
                 }
 
                 for (after_season, movies) in &movies_by_position {
-                    for (seq, movie) in movies.iter().enumerate() {
+                    for (seq, (movie, movie_tvdb_id)) in movies.iter().enumerate() {
                         let narrative_order = format!("{}.{}", after_season, seq + 1);
                         let label = format!("Movie {}", seq + 1);
 
@@ -516,10 +876,8 @@ impl AppUseCase {
                             narrative_order: Some(narrative_order.clone()),
                             first_episode_number: None,
                             last_episode_number: None,
-                            interstitial_movie: movie
-                                .thetvdb_id
-                                .or(movie.alt_tvdb_id)
-                                .and_then(|tvdb_id| interstitial_movie_metadata.get(&tvdb_id))
+                            interstitial_movie: interstitial_movie_metadata
+                                .get(movie_tvdb_id)
                                 .map(interstitial_movie_from_metadata),
                             monitored: true,
                             created_at: Utc::now(),
@@ -738,17 +1096,32 @@ impl AppUseCase {
             .await;
 
         let category = self.derive_download_category(&title.facet).await;
+        let is_recent = self.is_recent_for_queue_priority(
+            title
+                .first_aired
+                .as_deref()
+                .or(title.digital_release_date.as_deref()),
+        );
         let job_result = self
             .services
             .download_client
-            .submit_to_download_queue(
-                &title,
+            .submit_download(&DownloadClientAddRequest {
+                title: title.clone(),
                 source_hint,
                 source_kind,
                 source_title,
-                source_password.clone(),
-                Some(category),
-            )
+                source_password: source_password.clone(),
+                category: Some(category),
+                queue_priority: None,
+                download_directory: None,
+                release_title: None,
+                indexer_name: None,
+                info_hash_hint: None,
+                seed_goal_ratio: None,
+                seed_goal_seconds: None,
+                is_recent,
+                season_pack: None,
+            })
             .await;
 
         let grab = match job_result {
@@ -864,17 +1237,32 @@ impl AppUseCase {
             .await;
 
         let category = self.derive_download_category(&title.facet).await;
+        let is_recent = self.is_recent_for_queue_priority(
+            title
+                .first_aired
+                .as_deref()
+                .or(title.digital_release_date.as_deref()),
+        );
         let job_result = self
             .services
             .download_client
-            .submit_to_download_queue(
-                &title,
+            .submit_download(&DownloadClientAddRequest {
+                title: title.clone(),
                 source_hint,
                 source_kind,
                 source_title,
-                source_password.clone(),
-                Some(category),
-            )
+                source_password: source_password.clone(),
+                category: Some(category),
+                queue_priority: None,
+                download_directory: None,
+                release_title: None,
+                indexer_name: None,
+                info_hash_hint: None,
+                seed_goal_ratio: None,
+                seed_goal_seconds: None,
+                is_recent,
+                season_pack: None,
+            })
             .await;
 
         let grab = match job_result {
@@ -956,31 +1344,29 @@ impl AppUseCase {
         Ok(grab.job_id)
     }
 
-    /// Resolve the NZBGet download category for a facet.
-    /// Reads the per-facet `nzbget.client_routing` setting first (which stores
-    /// per-client per-scope routing with a `category` field), falling back to the
-    /// hardcoded `FacetHandler::download_category()` value.
+    /// Resolve the per-facet fallback category used when the selected client
+    /// does not declare an explicit routing category.
     pub(crate) async fn derive_download_category(&self, facet: &MediaFacet) -> String {
-        let scope_id = match facet {
-            MediaFacet::Movie => "movie",
-            MediaFacet::Tv => "series",
-            MediaFacet::Anime => "anime",
-            _ => "other",
+        let Some(scope_id) = scope_id_for_facet(facet) else {
+            return self
+                .facet_registry
+                .get(facet)
+                .map(|h| h.download_category().to_string())
+                .unwrap_or_else(|| "other".to_string());
         };
 
-        // Try the per-client routing config first (set via the download client routing UI)
-        if let Ok(Some(raw_json)) = self
-            .read_setting_string_value("nzbget.client_routing", Some(scope_id))
+        if let Ok(Some(configured)) = self
+            .read_setting_string_value(DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY, Some(scope_id))
             .await
         {
-            if let Some(cat) = extract_highest_priority_nzbget_category(&raw_json) {
-                return cat;
+            let trimmed = configured.trim().to_string();
+            if !trimmed.is_empty() {
+                return trimmed;
             }
         }
 
-        // Fall back to the legacy nzbget.category setting
         if let Ok(Some(configured)) = self
-            .read_setting_string_value("nzbget.category", Some(scope_id))
+            .read_setting_string_value(LEGACY_NZBGET_CATEGORY_SETTING_KEY, Some(scope_id))
             .await
         {
             let trimmed = configured.trim().to_string();
@@ -1004,6 +1390,29 @@ impl AppUseCase {
         require(actor, &Entitlement::MonitorTitle)?;
 
         let title = self.services.titles.update_monitored(id, monitored).await?;
+
+        if title.monitored {
+            let now = Utc::now();
+            if let Some(handler) = self.facet_registry.get(&title.facet) {
+                if handler.has_episodes() {
+                    self.sync_wanted_series_inner(&title, &now, true).await;
+                } else {
+                    self.sync_wanted_movie_inner(&title, &now, true).await;
+                }
+            }
+        } else if let Err(err) = self
+            .services
+            .wanted_items
+            .delete_wanted_items_for_title(&title.id)
+            .await
+        {
+            warn!(
+                title_id = title.id.as_str(),
+                error = %err,
+                "failed to delete wanted items after disabling monitoring"
+            );
+        }
+
         self.services
             .record_event(
                 Some(actor.id.clone()),
@@ -1164,11 +1573,41 @@ impl AppUseCase {
             }
         }
 
+        let queued_submission_keys = match self
+            .services
+            .download_submissions
+            .list_for_title(id)
+            .await
+        {
+            Ok(submissions) => submissions
+                .into_iter()
+                .map(|submission| {
+                    (
+                        submission.download_client_type,
+                        submission.download_client_item_id,
+                    )
+                })
+                .collect::<HashSet<_>>(),
+            Err(err) => {
+                warn!(
+                    title_id = %id,
+                    error = %err,
+                    "failed to list download submissions while deleting title; falling back to embedded queue metadata only"
+                );
+                HashSet::new()
+            }
+        };
+
         // Cancel any inflight downloads for this title
         match self.services.download_client.list_queue().await {
             Ok(queue_items) => {
                 for item in queue_items {
-                    if item.title_id.as_deref() == Some(id) {
+                    let matches_title = item.title_id.as_deref() == Some(id)
+                        || queued_submission_keys.contains(&(
+                            item.client_type.clone(),
+                            item.download_client_item_id.clone(),
+                        ));
+                    if matches_title {
                         if let Err(err) = self
                             .services
                             .download_client
@@ -1194,6 +1633,19 @@ impl AppUseCase {
             }
         }
 
+        if let Err(err) = self
+            .services
+            .pending_releases
+            .delete_pending_releases_for_title(id)
+            .await
+        {
+            warn!(
+                title_id = %id,
+                error = %err,
+                "failed to delete pending releases while deleting title"
+            );
+        }
+
         // Clean up wanted items for this title
         if let Err(err) = self
             .services
@@ -1205,6 +1657,19 @@ impl AppUseCase {
                 title_id = %id,
                 error = %err,
                 "failed to delete wanted items while deleting title"
+            );
+        }
+
+        if let Err(err) = self
+            .services
+            .download_submissions
+            .delete_for_title(id)
+            .await
+        {
+            warn!(
+                title_id = %id,
+                error = %err,
+                "failed to delete download submissions while deleting title"
             );
         }
 
@@ -1295,6 +1760,18 @@ impl AppUseCase {
         self.services
             .shows
             .list_primary_collection_summaries(title_ids)
+            .await
+    }
+
+    pub async fn list_title_media_size_summaries(
+        &self,
+        actor: &User,
+        title_ids: &[String],
+    ) -> AppResult<Vec<TitleMediaSizeSummary>> {
+        require(actor, &Entitlement::ViewCatalog)?;
+        self.services
+            .media_files
+            .list_title_media_size_summaries(title_ids)
             .await
     }
 
@@ -1908,6 +2385,9 @@ pub async fn start_background_hydration_loop(
                                 let result =
                                     super::movie_to_hydration_result(movie.clone(), language);
                                 let hydrated = app.apply_hydration_result(title, result).await;
+                                if hydrated.metadata_fetched_at.is_some() {
+                                    app.emit_hydration_completed(&hydrated).await;
+                                }
                                 sync_wanted_after_hydration(&app, &hydrated).await;
                             } else {
                                 had_failures = true;
@@ -1938,6 +2418,9 @@ pub async fn start_background_hydration_loop(
                                 let result =
                                     super::series_to_hydration_result(series.clone(), language);
                                 let hydrated = app.apply_hydration_result(title, result).await;
+                                if hydrated.metadata_fetched_at.is_some() {
+                                    app.emit_hydration_completed(&hydrated).await;
+                                }
                                 sync_wanted_after_hydration(&app, &hydrated).await;
                             } else {
                                 had_failures = true;
