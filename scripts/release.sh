@@ -2,7 +2,7 @@
 #
 # release.sh — pre-release validation and tagging script
 #
-# Validates: web audit/lint/build · cargo fmt · cargo audit · cargo nextest · cargo clippy (linux ci target)
+# Validates: web audit/lint/build and Rust fmt/audit/nextest/clippy in parallel
 # Then:      bumps crates/scryer version · signed tag · push
 #
 # Usage:
@@ -90,6 +90,87 @@ fi
 
 ok "Pre-flight OK"
 
+run_web_validation() {
+    step "Running npm audit fix"
+
+    cd "$WEB_DIR"
+    npm audit fix 2>&1
+    ok "npm audit fix complete"
+
+    step "Running TypeScript type check"
+
+    npm run lint 2>&1 || die "TypeScript type check failed — fix before releasing"
+
+    ok "TypeScript type check passed"
+
+    step "Running web build"
+
+    SCRYER_GRAPHQL_URL=/graphql \
+    SCRYER_METADATA_GATEWAY_GRAPHQL_URL=https://smg2.scryer.media/graphql \
+        npm run build 2>&1 || die "Web build failed — fix before releasing"
+
+    ok "Web build passed"
+}
+
+run_rust_validation() {
+    step "Running cargo fmt --all --check"
+
+    cd "$REPO_ROOT"
+    cargo fmt --all --check 2>&1 || die "Rust formatting drift detected — fix before releasing"
+
+    ok "cargo fmt passed"
+
+    step "Updating Cargo.lock (cargo update)"
+
+    cargo update 2>&1
+    ok "Cargo.lock updated"
+
+    step "Running cargo audit"
+
+    if ! command -v cargo-audit &>/dev/null; then
+        warn "cargo-audit not installed — installing"
+        cargo install --locked cargo-audit 2>&1 || die "failed to install cargo-audit"
+    fi
+
+    CARGO_AUDIT_IGNORES=(
+        # sqlx macros still pull the MySQL backend into Cargo.lock even though Scryer only uses SQLite.
+        "RUSTSEC-2023-0071"
+        # extism 1.13.0 still pins wasmtime 37.x upstream; no fixed extism release is available yet.
+        "RUSTSEC-2026-0006"
+        "RUSTSEC-2026-0020"
+        "RUSTSEC-2026-0021"
+    )
+
+    if [[ ${#CARGO_AUDIT_IGNORES[@]} -gt 0 ]]; then
+        warn "Ignoring advisories pending upstream fixes: ${CARGO_AUDIT_IGNORES[*]}"
+    fi
+
+    CARGO_AUDIT_ARGS=()
+    for advisory in "${CARGO_AUDIT_IGNORES[@]}"; do
+        CARGO_AUDIT_ARGS+=(--ignore "$advisory")
+    done
+
+    cargo audit "${CARGO_AUDIT_ARGS[@]}" 2>&1 || die "cargo audit found vulnerabilities — fix before releasing"
+    ok "cargo audit passed"
+
+    step "Running Rust tests (cargo nextest run --workspace --locked)"
+
+    if ! command -v cargo-nextest &>/dev/null; then
+        warn "cargo-nextest not installed — installing"
+        cargo install --locked cargo-nextest 2>&1 || die "failed to install cargo-nextest"
+    fi
+
+    cargo nextest run --workspace --locked 2>&1 || die "Rust tests failed — fix before releasing"
+
+    ok "Rust tests passed"
+
+    step "Running cargo clippy (linux ci target)"
+
+    "$REPO_ROOT/scripts/clippy-ci.sh" --linux-only 2>&1 || die "Clippy errors — fix before releasing"
+
+    ok "Clippy passed"
+}
+
 # ── Release group database validation (AI-assisted) ──────────────────────────
 step "Validating release group database"
 
@@ -111,91 +192,37 @@ step "Validating release group database"
 # fi
 warn "Claude release group validation temporarily disabled — skipping"
 
-# ── npm audit fix ─────────────────────────────────────────────────────────────
-step "Running npm audit fix"
+step "Running web and Rust validation in parallel"
 
-cd "$WEB_DIR"
-npm audit fix 2>&1
-ok "npm audit fix complete"
+(
+    exec > >(sed 's/^/[web] /') 2>&1
+    run_web_validation
+) &
+WEB_VALIDATION_PID=$!
 
-# ── TypeScript type check ──────────────────────────────────────────────────────
-step "Running TypeScript type check"
+(
+    exec > >(sed 's/^/[rust] /') 2>&1
+    run_rust_validation
+) &
+RUST_VALIDATION_PID=$!
 
-npm run lint 2>&1 || die "TypeScript type check failed — fix before releasing"
+VALIDATION_FAILED=false
 
-ok "TypeScript type check passed"
-
-# ── Web build ──────────────────────────────────────────────────────────────────
-step "Running web build"
-
-SCRYER_GRAPHQL_URL=/graphql \
-SCRYER_METADATA_GATEWAY_GRAPHQL_URL=https://smg2.scryer.media/graphql \
-    npm run build 2>&1 || die "Web build failed — fix before releasing"
-
-ok "Web build passed"
-
-cd "$REPO_ROOT"
-
-# ── cargo fmt ──────────────────────────────────────────────────────────────────
-step "Running cargo fmt --all --check"
-
-cargo fmt --all --check 2>&1 || die "Rust formatting drift detected — fix before releasing"
-
-ok "cargo fmt passed"
-
-# ── cargo update (bump Cargo.lock to latest compatible deps) ───────────────────
-step "Updating Cargo.lock (cargo update)"
-
-cargo update 2>&1
-ok "Cargo.lock updated"
-
-# ── cargo audit (RustSec vulnerability check) ──────────────────────────────────
-step "Running cargo audit"
-
-if ! command -v cargo-audit &>/dev/null; then
-    warn "cargo-audit not installed — installing"
-    cargo install --locked cargo-audit 2>&1 || die "failed to install cargo-audit"
+if ! wait "$WEB_VALIDATION_PID"; then
+    VALIDATION_FAILED=true
+    warn "Web validation failed"
 fi
 
-CARGO_AUDIT_IGNORES=(
-    # sqlx macros still pull the MySQL backend into Cargo.lock even though Scryer only uses SQLite.
-    "RUSTSEC-2023-0071"
-    # extism 1.13.0 still pins wasmtime 37.x upstream; no fixed extism release is available yet.
-    "RUSTSEC-2026-0006"
-    "RUSTSEC-2026-0020"
-    "RUSTSEC-2026-0021"
-)
-
-if [[ ${#CARGO_AUDIT_IGNORES[@]} -gt 0 ]]; then
-    warn "Ignoring advisories pending upstream fixes: ${CARGO_AUDIT_IGNORES[*]}"
+if ! wait "$RUST_VALIDATION_PID"; then
+    VALIDATION_FAILED=true
+    warn "Rust validation failed"
 fi
 
-CARGO_AUDIT_ARGS=()
-for advisory in "${CARGO_AUDIT_IGNORES[@]}"; do
-    CARGO_AUDIT_ARGS+=(--ignore "$advisory")
-done
-
-cargo audit "${CARGO_AUDIT_ARGS[@]}" 2>&1 || die "cargo audit found vulnerabilities — fix before releasing"
-ok "cargo audit passed"
-
-# ── Rust tests ─────────────────────────────────────────────────────────────────
-step "Running Rust tests (cargo nextest run --workspace --locked)"
-
-if ! command -v cargo-nextest &>/dev/null; then
-    warn "cargo-nextest not installed — installing"
-    cargo install --locked cargo-nextest 2>&1 || die "failed to install cargo-nextest"
+if [[ "$VALIDATION_FAILED" == true ]]; then
+    die "Validation failed — fix before releasing"
 fi
 
-cargo nextest run --workspace --locked 2>&1 || die "Rust tests failed — fix before releasing"
-
-ok "Rust tests passed"
-
-# ── Rust clippy ────────────────────────────────────────────────────────────────
-step "Running cargo clippy (linux ci target)"
-
-"$REPO_ROOT/scripts/clippy-ci.sh" --linux-only 2>&1 || die "Clippy errors — fix before releasing"
-
-ok "Clippy passed"
+ok "Parallel validation passed"
 
 # ── Bump all workspace crate versions ──────────────────────────────────────────
 step "Updating all workspace crate versions to $NEXT_VERSION"
@@ -238,6 +265,7 @@ if $DRY_RUN; then
     echo -e "  Version $NEXT_VERSION validated OK."
     # Restore any changes so the working tree is clean
     git checkout -- "${WORKSPACE_TOMLS[@]}"
+    git checkout -- "$REPO_ROOT/Cargo.lock" 2>/dev/null || true
     git checkout -- "$WEB_DIR/package-lock.json" 2>/dev/null || true
     exit 0
 fi
