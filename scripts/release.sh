@@ -2,7 +2,7 @@
 #
 # release.sh — pre-release validation and tagging script
 #
-# Validates: cargo fmt · cargo audit · cargo nextest · cargo clippy (linux ci target) · web lint/build
+# Validates: web audit/lint/build · cargo fmt · cargo audit · cargo nextest · cargo clippy (linux ci target)
 # Then:      bumps crates/scryer version · signed tag · push
 #
 # Usage:
@@ -111,6 +111,31 @@ step "Validating release group database"
 # fi
 warn "Claude release group validation temporarily disabled — skipping"
 
+# ── npm audit fix ─────────────────────────────────────────────────────────────
+step "Running npm audit fix"
+
+cd "$WEB_DIR"
+npm audit fix 2>&1
+ok "npm audit fix complete"
+
+# ── TypeScript type check ──────────────────────────────────────────────────────
+step "Running TypeScript type check"
+
+npm run lint 2>&1 || die "TypeScript type check failed — fix before releasing"
+
+ok "TypeScript type check passed"
+
+# ── Web build ──────────────────────────────────────────────────────────────────
+step "Running web build"
+
+SCRYER_GRAPHQL_URL=/graphql \
+SCRYER_METADATA_GATEWAY_GRAPHQL_URL=https://smg2.scryer.media/graphql \
+    npm run build 2>&1 || die "Web build failed — fix before releasing"
+
+ok "Web build passed"
+
+cd "$REPO_ROOT"
+
 # ── cargo fmt ──────────────────────────────────────────────────────────────────
 step "Running cargo fmt --all --check"
 
@@ -121,7 +146,6 @@ ok "cargo fmt passed"
 # ── cargo update (bump Cargo.lock to latest compatible deps) ───────────────────
 step "Updating Cargo.lock (cargo update)"
 
-cd "$REPO_ROOT"
 cargo update 2>&1
 ok "Cargo.lock updated"
 
@@ -172,29 +196,6 @@ step "Running cargo clippy (linux ci target)"
 "$REPO_ROOT/scripts/clippy-ci.sh" --linux-only 2>&1 || die "Clippy errors — fix before releasing"
 
 ok "Clippy passed"
-
-# ── npm audit fix ─────────────────────────────────────────────────────────────
-step "Running npm audit fix"
-
-cd "$WEB_DIR"
-npm audit fix 2>&1
-ok "npm audit fix complete"
-
-# ── TypeScript type check ──────────────────────────────────────────────────────
-step "Running TypeScript type check"
-
-npm run lint 2>&1 || die "TypeScript type check failed — fix before releasing"
-
-ok "TypeScript type check passed"
-
-# ── Web build ──────────────────────────────────────────────────────────────────
-step "Running web build"
-
-SCRYER_GRAPHQL_URL=/graphql \
-SCRYER_METADATA_GATEWAY_GRAPHQL_URL=https://smg2.scryer.media/graphql \
-    npm run build 2>&1 || die "Web build failed — fix before releasing"
-
-ok "Web build passed"
 
 # ── Bump all workspace crate versions ──────────────────────────────────────────
 step "Updating all workspace crate versions to $NEXT_VERSION"
