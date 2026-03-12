@@ -89,6 +89,16 @@ pub struct InterstitialMovieMetadata {
     pub genres: Vec<String>,
     pub studio: String,
     pub digital_release_date: Option<String>,
+    #[serde(default)]
+    pub association_confidence: Option<String>,
+    #[serde(default)]
+    pub continuity_status: Option<String>,
+    #[serde(default)]
+    pub movie_form: Option<String>,
+    #[serde(default)]
+    pub confidence: Option<String>,
+    #[serde(default)]
+    pub signal_summary: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -103,6 +113,8 @@ pub struct Collection {
     pub first_episode_number: Option<String>,
     pub last_episode_number: Option<String>,
     pub interstitial_movie: Option<InterstitialMovieMetadata>,
+    #[serde(default)]
+    pub specials_movies: Vec<InterstitialMovieMetadata>,
     pub monitored: bool,
     pub created_at: DateTime<Utc>,
 }

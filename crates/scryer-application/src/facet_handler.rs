@@ -5,9 +5,9 @@ use chrono::Utc;
 use scryer_domain::{Collection, MediaFacet, Title};
 
 use crate::{
-    ActivityKind, AnimeMapping, AppResult, EpisodeMetadata, MetadataGateway, MovieMetadata,
-    RenameCollisionPolicy, RenameMissingMetadataPolicy, RenamePlanItem, SeasonMetadata,
-    SeriesMetadata, TitleMetadataUpdate,
+    ActivityKind, AnimeMapping, AnimeMovie, AppResult, EpisodeMetadata, MetadataGateway,
+    MovieMetadata, RenameCollisionPolicy, RenameMissingMetadataPolicy, RenamePlanItem,
+    SeasonMetadata, SeriesMetadata, TitleMetadataUpdate,
 };
 
 /// Result of hydrating a title's metadata from a metadata gateway.
@@ -17,6 +17,7 @@ pub struct HydrationResult {
     pub seasons: Vec<SeasonMetadata>,
     pub episodes: Vec<EpisodeMetadata>,
     pub anime_mappings: Vec<AnimeMapping>,
+    pub anime_movies: Vec<AnimeMovie>,
 }
 
 fn non_empty(s: String) -> Option<String> {
@@ -61,6 +62,7 @@ pub fn movie_to_hydration_result(movie: MovieMetadata, language: &str) -> Hydrat
         seasons: vec![],
         episodes: vec![],
         anime_mappings: vec![],
+        anime_movies: vec![],
     }
 }
 
@@ -95,6 +97,7 @@ pub fn series_to_hydration_result(series: SeriesMetadata, language: &str) -> Hyd
         seasons: series.seasons,
         episodes: series.episodes,
         anime_mappings: series.anime_mappings,
+        anime_movies: series.anime_movies,
     }
 }
 

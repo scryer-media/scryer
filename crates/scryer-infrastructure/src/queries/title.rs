@@ -211,7 +211,9 @@ pub(crate) async fn list_collections_for_title_query(
                 interstitial_content_status, interstitial_overview, interstitial_poster_url,
                 interstitial_language, interstitial_runtime_minutes, interstitial_sort_title,
                 interstitial_imdb_id, interstitial_genres_json, interstitial_studio,
-                interstitial_digital_release_date, monitored, created_at
+                interstitial_digital_release_date, interstitial_association_confidence,
+                interstitial_continuity_status, interstitial_movie_form, interstitial_confidence,
+                interstitial_signal_summary, special_movies_json, monitored, created_at
          FROM collections WHERE title_id = ? ORDER BY collection_index ASC, id ASC",
     )
     .bind(title_id)
@@ -329,7 +331,9 @@ pub(crate) async fn get_collection_by_id_query(
                 interstitial_content_status, interstitial_overview, interstitial_poster_url,
                 interstitial_language, interstitial_runtime_minutes, interstitial_sort_title,
                 interstitial_imdb_id, interstitial_genres_json, interstitial_studio,
-                interstitial_digital_release_date, monitored, created_at
+                interstitial_digital_release_date, interstitial_association_confidence,
+                interstitial_continuity_status, interstitial_movie_form, interstitial_confidence,
+                interstitial_signal_summary, special_movies_json, monitored, created_at
          FROM collections WHERE id = ?",
     )
     .bind(collection_id)
@@ -355,8 +359,10 @@ pub(crate) async fn create_collection_query(
           interstitial_overview, interstitial_poster_url, interstitial_language,
           interstitial_runtime_minutes, interstitial_sort_title, interstitial_imdb_id,
           interstitial_genres_json, interstitial_studio, interstitial_digital_release_date,
-          monitored, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          interstitial_association_confidence, interstitial_continuity_status,
+          interstitial_movie_form, interstitial_confidence, interstitial_signal_summary,
+          special_movies_json, monitored, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&collection.id)
     .bind(&collection.title_id)
@@ -451,6 +457,37 @@ pub(crate) async fn create_collection_query(
             .as_ref()
             .and_then(|movie| movie.digital_release_date.clone()),
     )
+    .bind(
+        collection
+            .interstitial_movie
+            .as_ref()
+            .and_then(|movie| movie.association_confidence.clone()),
+    )
+    .bind(
+        collection
+            .interstitial_movie
+            .as_ref()
+            .and_then(|movie| movie.continuity_status.clone()),
+    )
+    .bind(
+        collection
+            .interstitial_movie
+            .as_ref()
+            .and_then(|movie| movie.movie_form.clone()),
+    )
+    .bind(
+        collection
+            .interstitial_movie
+            .as_ref()
+            .and_then(|movie| movie.confidence.clone()),
+    )
+    .bind(
+        collection
+            .interstitial_movie
+            .as_ref()
+            .and_then(|movie| movie.signal_summary.clone()),
+    )
+    .bind(serde_json::to_string(&collection.specials_movies).unwrap_or_else(|_| "[]".to_string()))
     .bind(if collection.monitored { 1_i64 } else { 0_i64 })
     .bind(collection.created_at.to_rfc3339())
     .execute(pool)
@@ -901,6 +938,7 @@ fn row_to_collection(row: &sqlx::sqlite::SqliteRow) -> AppResult<Collection> {
     let first_episode_number = optional_text_from_column(row, "first_episode_number")?;
     let last_episode_number = optional_text_from_column(row, "last_episode_number")?;
     let interstitial_movie = row_to_interstitial_movie(row)?;
+    let specials_movies = row_to_specials_movies(row)?;
     let monitored: i64 = row
         .try_get("monitored")
         .map_err(|err| AppError::Repository(err.to_string()))?;
@@ -919,6 +957,7 @@ fn row_to_collection(row: &sqlx::sqlite::SqliteRow) -> AppResult<Collection> {
         first_episode_number,
         last_episode_number,
         interstitial_movie,
+        specials_movies,
         monitored: monitored != 0,
         created_at: parse_utc_datetime(&created_at_raw)?,
     })
@@ -965,7 +1004,26 @@ fn row_to_interstitial_movie(
         digital_release_date: row
             .try_get("interstitial_digital_release_date")
             .unwrap_or(None),
+        association_confidence: row
+            .try_get("interstitial_association_confidence")
+            .unwrap_or(None),
+        continuity_status: row
+            .try_get("interstitial_continuity_status")
+            .unwrap_or(None),
+        movie_form: row.try_get("interstitial_movie_form").unwrap_or(None),
+        confidence: row.try_get("interstitial_confidence").unwrap_or(None),
+        signal_summary: row.try_get("interstitial_signal_summary").unwrap_or(None),
     }))
+}
+
+fn row_to_specials_movies(
+    row: &sqlx::sqlite::SqliteRow,
+) -> AppResult<Vec<InterstitialMovieMetadata>> {
+    let raw = row
+        .try_get::<Option<String>, _>("special_movies_json")
+        .unwrap_or(None)
+        .unwrap_or_else(|| "[]".to_string());
+    serde_json::from_str(&raw).map_err(|err| AppError::Repository(err.to_string()))
 }
 
 fn optional_text_from_column(

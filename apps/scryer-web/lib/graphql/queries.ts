@@ -54,6 +54,32 @@ export const titleDetailQuery = `query TitleDetail($id: String!) {
       genres
       studio
       digitalReleaseDate
+      associationConfidence
+      continuityStatus
+      movieForm
+      confidence
+      signalSummary
+    }
+    specialsMovies {
+      tvdbId
+      name
+      slug
+      year
+      contentStatus
+      overview
+      posterUrl
+      language
+      runtimeMinutes
+      sortTitle
+      imdbId
+      genres
+      studio
+      digitalReleaseDate
+      associationConfidence
+      continuityStatus
+      movieForm
+      confidence
+      signalSummary
     }
     monitored
     createdAt
@@ -133,6 +159,32 @@ export const titleOverviewInitQuery = `query TitleOverviewInit($id: String!, $bl
       genres
       studio
       digitalReleaseDate
+      associationConfidence
+      continuityStatus
+      movieForm
+      confidence
+      signalSummary
+    }
+    specialsMovies {
+      tvdbId
+      name
+      slug
+      year
+      contentStatus
+      overview
+      posterUrl
+      language
+      runtimeMinutes
+      sortTitle
+      imdbId
+      genres
+      studio
+      digitalReleaseDate
+      associationConfidence
+      continuityStatus
+      movieForm
+      confidence
+      signalSummary
     }
     monitored
     createdAt
@@ -371,6 +423,32 @@ export const titleCollectionsQuery = `query TitleCollections($titleId: String!) 
       genres
       studio
       digitalReleaseDate
+      associationConfidence
+      continuityStatus
+      movieForm
+      confidence
+      signalSummary
+    }
+    specialsMovies {
+      tvdbId
+      name
+      slug
+      year
+      contentStatus
+      overview
+      posterUrl
+      language
+      runtimeMinutes
+      sortTitle
+      imdbId
+      genres
+      studio
+      digitalReleaseDate
+      associationConfidence
+      continuityStatus
+      movieForm
+      confidence
+      signalSummary
     }
   }
 }`;
@@ -439,7 +517,6 @@ export const titleMediaFilesQuery = `query TitleMediaFiles($titleId: String!) {
     numChapters
     containerFormat
     sceneName
-    releaseGroup
     sourceType
     resolution
     videoCodecParsed

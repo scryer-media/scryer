@@ -27,6 +27,9 @@
 - **Per-facet/per-category settings belong in the per-category section**, not in a general settings section. When a feature varies by media type (movie/series/anime), put its UI alongside the existing per-category controls (e.g. "Default category profiles"), not inside the profile editor's general scoring section.
 - **Don't mix preset selection with fine-tuning knobs** in the same visible section. If a user picks a persona preset, showing override toggles right next to it is confusing — collapse advanced overrides behind a sub-`<details>`.
 
+## Search Scoring
+- **Validate persona promises against real release examples before shipping scoring tweaks.** If the UI says remux is an Audiophile concern, Balanced/Efficient/Compatible should not still reward remux-heavy anime releases through hidden defaults or oversized file bonuses.
+
 ## urql / Frontend Caching
 - `cacheExchange` was removed from both `backendClient` and `smgClient` — the network layer handles caching naturally.
 - Don't add per-query `requestPolicy` overrides; the exchange-level removal is the correct fix.

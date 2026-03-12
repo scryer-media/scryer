@@ -8,6 +8,7 @@ export function InterstitialMoviePanel({ movie }: { movie: InterstitialMovieMeta
   const tvdbUrl = getTvdbMovieUrl(movie);
   const runtime = formatRuntimeFromMinutes(movie.runtimeMinutes);
   const posterUrl = selectPosterVariantUrl(movie.posterUrl, "w250");
+  const badges = buildMovieBadges(movie);
 
   return (
     <div className="flex items-start gap-4">
@@ -26,6 +27,18 @@ export function InterstitialMoviePanel({ movie }: { movie: InterstitialMovieMeta
       </div>
       <div className="min-w-0 flex-1">
         <p className="text-sm font-semibold text-card-foreground">{movie.name}</p>
+        {badges.length > 0 ? (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {badges.map((badge) => (
+              <span
+                key={`${badge.label}-${badge.tone}`}
+                className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${badgeClassName(badge.tone)}`}
+              >
+                {badge.label}
+              </span>
+            ))}
+          </div>
+        ) : null}
         <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
           {movie.year ? (
             <span>{movie.year}</span>
@@ -42,6 +55,9 @@ export function InterstitialMoviePanel({ movie }: { movie: InterstitialMovieMeta
         ) : (
           <p className="mt-3 text-sm italic text-muted-foreground/60">No description available.</p>
         )}
+        {movie.signalSummary ? (
+          <p className="mt-2 text-xs text-muted-foreground/80">{movie.signalSummary}</p>
+        ) : null}
         <div className="mt-3 flex flex-wrap gap-2 text-sm">
           {imdbUrl ? (
             <a
@@ -71,4 +87,47 @@ export function InterstitialMoviePanel({ movie }: { movie: InterstitialMovieMeta
       </div>
     </div>
   );
+}
+
+function buildMovieBadges(movie: InterstitialMovieMetadata): Array<{ label: string; tone: "emerald" | "amber" | "slate" | "sky" }> {
+  const badges: Array<{ label: string; tone: "emerald" | "amber" | "slate" | "sky" }> = [];
+
+  if (movie.movieForm === "recap") {
+    badges.push({ label: "Recap", tone: "slate" });
+  } else if (movie.movieForm === "special") {
+    badges.push({ label: "Special", tone: "slate" });
+  } else if (movie.continuityStatus === "canon") {
+    badges.push({ label: "Canon", tone: "emerald" });
+  } else if (movie.continuityStatus === "mixed") {
+    badges.push({ label: "Mixed", tone: "amber" });
+  } else {
+    badges.push({ label: "Guess", tone: "sky" });
+  }
+
+  if (movie.confidence) {
+    badges.push({
+      label: movie.confidence === "high" ? "High Confidence" : "Medium Confidence",
+      tone: movie.confidence === "high" ? "emerald" : "amber",
+    });
+  } else if (movie.associationConfidence) {
+    badges.push({
+      label: movie.associationConfidence === "high" ? "High Match" : "Medium Match",
+      tone: movie.associationConfidence === "high" ? "emerald" : "amber",
+    });
+  }
+
+  return badges;
+}
+
+function badgeClassName(tone: "emerald" | "amber" | "slate" | "sky") {
+  switch (tone) {
+    case "emerald":
+      return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
+    case "amber":
+      return "border-amber-500/30 bg-amber-500/10 text-amber-100";
+    case "sky":
+      return "border-sky-500/30 bg-sky-500/10 text-sky-100";
+    default:
+      return "border-border bg-muted/30 text-muted-foreground";
+  }
 }

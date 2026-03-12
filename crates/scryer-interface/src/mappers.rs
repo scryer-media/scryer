@@ -379,6 +379,28 @@ fn from_media_rename_apply_item(item: RenameApplyItemResult) -> MediaRenameApply
 
 pub(crate) fn from_collection(collection: Collection) -> CollectionPayload {
     let file_size_bytes = file_size_bytes_for_path(collection.ordered_path.as_deref());
+    let map_movie =
+        |movie: scryer_domain::InterstitialMovieMetadata| InterstitialMovieMetadataPayload {
+            tvdb_id: movie.tvdb_id,
+            name: movie.name,
+            slug: movie.slug,
+            year: movie.year,
+            content_status: movie.content_status,
+            overview: movie.overview,
+            poster_url: movie.poster_url,
+            language: movie.language,
+            runtime_minutes: movie.runtime_minutes,
+            sort_title: movie.sort_title,
+            imdb_id: movie.imdb_id,
+            genres: movie.genres,
+            studio: movie.studio,
+            digital_release_date: movie.digital_release_date,
+            association_confidence: movie.association_confidence,
+            continuity_status: movie.continuity_status,
+            movie_form: movie.movie_form,
+            confidence: movie.confidence,
+            signal_summary: movie.signal_summary,
+        };
     CollectionPayload {
         id: collection.id,
         title_id: collection.title_id,
@@ -390,24 +412,12 @@ pub(crate) fn from_collection(collection: Collection) -> CollectionPayload {
         file_size_bytes,
         first_episode_number: collection.first_episode_number,
         last_episode_number: collection.last_episode_number,
-        interstitial_movie: collection.interstitial_movie.map(|movie| {
-            InterstitialMovieMetadataPayload {
-                tvdb_id: movie.tvdb_id,
-                name: movie.name,
-                slug: movie.slug,
-                year: movie.year,
-                content_status: movie.content_status,
-                overview: movie.overview,
-                poster_url: movie.poster_url,
-                language: movie.language,
-                runtime_minutes: movie.runtime_minutes,
-                sort_title: movie.sort_title,
-                imdb_id: movie.imdb_id,
-                genres: movie.genres,
-                studio: movie.studio,
-                digital_release_date: movie.digital_release_date,
-            }
-        }),
+        interstitial_movie: collection.interstitial_movie.map(map_movie),
+        specials_movies: collection
+            .specials_movies
+            .into_iter()
+            .map(map_movie)
+            .collect(),
         monitored: collection.monitored,
         created_at: collection.created_at.to_rfc3339(),
     }

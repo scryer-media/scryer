@@ -108,7 +108,7 @@ const en: LocaleDictionary = {
   "persona.trait.balanced.audio": "Audio: balanced codec weighting",
   "persona.trait.balanced.x265": "x265: penalized below 4K",
   "persona.trait.balanced.size": "File size: prefers larger files",
-  "persona.trait.balanced.remux": "Remux: moderate bonus",
+  "persona.trait.balanced.remux": "Remux: not prioritized by default",
   "persona.trait.balanced.hdr": "HDR: Dolby Vision and HDR10 rewarded",
   "persona.trait.audiophile.source": "Source: BluRay strongly preferred",
   "persona.trait.audiophile.audio":
@@ -122,14 +122,14 @@ const en: LocaleDictionary = {
     "Audio: lossy codecs acceptable (DDP preferred)",
   "persona.trait.efficient.x265": "x265: rewarded at all resolutions",
   "persona.trait.efficient.size": "File size: compact encodes preferred",
-  "persona.trait.efficient.remux": "Remux: low bonus",
+  "persona.trait.efficient.remux": "Remux: not prioritized",
   "persona.trait.efficient.hdr": "HDR: standard",
   "persona.trait.compatible.source": "Source: WEB-DL preferred",
   "persona.trait.compatible.audio":
     "Audio: DDP and AAC prioritized for broad device support",
   "persona.trait.compatible.x265": "x265: H.264 preferred over H.265",
   "persona.trait.compatible.size": "File size: standard preferences",
-  "persona.trait.compatible.remux": "Remux: moderate bonus",
+  "persona.trait.compatible.remux": "Remux: not prioritized",
   "persona.trait.compatible.hdr":
     "HDR: Dolby Vision penalized (compatibility risk)",
   "settings.moviesLibrarySettings": "Movie media settings",
@@ -906,7 +906,7 @@ const en: LocaleDictionary = {
     "Prefer releases that include Atmos when available while still allowing non-Atmos options.",
   "qualityProfile.preferRemux": "Remux preferred",
   "qualityProfile.preferRemuxInfo":
-    "Remux are full-quality copies of physical media (like Blu-ray disk).",
+    "Remux are full-quality copies of physical media. This is mainly useful with the Audiophile persona.",
   "qualityProfile.preferDualAudio": "Dual audio preferred",
   "qualityProfile.preferDualAudioInfo":
     "Strongly prefer releases with dual audio tracks (e.g. Japanese + English). Non-dual-audio releases receive a score penalty.",
@@ -1309,9 +1309,9 @@ const en: LocaleDictionary = {
   "setup.qualityTarget": "Quality",
   "setup.scoringFocus": "Persona",
   "setup.personaBalancedDesc":
-    "Sensible defaults for most setups. Good quality without extremes.",
+    "Sensible defaults for most setups. Good quality without chasing remux releases.",
   "setup.personaAudiophileDesc":
-    "Maximum fidelity. Prioritizes BluRay, lossless audio, HDR, large files.",
+    "Maximum fidelity. Prioritizes BluRay, remux, lossless audio, HDR, and large files.",
   "setup.personaEfficientDesc":
     "Best quality per GB. Prefers x265, WEB-DL, compact encodes.",
   "setup.personaCompatibleDesc":

@@ -664,7 +664,33 @@ async fn sqlite_show_queries_roundtrip() {
             genres: vec!["Action".into(), "Anime".into()],
             studio: "Studio Test".into(),
             digital_release_date: Some("2024-01-01".into()),
+            association_confidence: Some("high".into()),
+            continuity_status: Some("canon".into()),
+            movie_form: Some("movie".into()),
+            confidence: Some("high".into()),
+            signal_summary: Some("TVDB marked special as critical to story".into()),
         }),
+        specials_movies: vec![InterstitialMovieMetadata {
+            tvdb_id: "67890".into(),
+            name: "Recap Movie".into(),
+            slug: "recap-movie".into(),
+            year: Some(2014),
+            content_status: "released".into(),
+            overview: "Recap of the first half.".into(),
+            poster_url: "https://example.com/recap.jpg".into(),
+            language: "eng".into(),
+            runtime_minutes: 90,
+            sort_title: "Recap Movie".into(),
+            imdb_id: "tt7654321".into(),
+            genres: vec!["Action".into()],
+            studio: "Studio Test".into(),
+            digital_release_date: Some("2014-11-01".into()),
+            association_confidence: Some("high".into()),
+            continuity_status: Some("unknown".into()),
+            movie_form: Some("recap".into()),
+            confidence: Some("high".into()),
+            signal_summary: Some("TVDB special category marks this as a recap".into()),
+        }],
         monitored: true,
         created_at: Utc::now(),
     };
@@ -740,6 +766,11 @@ async fn sqlite_show_queries_roundtrip() {
             .as_ref()
             .map(|movie| movie.imdb_id.as_str()),
         Some("tt1234567")
+    );
+    assert_eq!(loaded_collection.specials_movies.len(), 1);
+    assert_eq!(
+        loaded_collection.specials_movies[0].movie_form.as_deref(),
+        Some("recap")
     );
     assert_eq!(episodes.len(), 1);
     assert_eq!(episodes[0].id, episode.id);

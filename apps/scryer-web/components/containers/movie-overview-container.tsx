@@ -120,7 +120,6 @@ export type TitleMediaFile = {
   numChapters: number | null;
   containerFormat: string | null;
   sceneName: string | null;
-  releaseGroup: string | null;
   sourceType: string | null;
   resolution: string | null;
   videoCodecParsed: string | null;

@@ -284,31 +284,48 @@ fn hdr_blocks_when_not_allowed() {
 // ── evaluate_against_profile: remux / atmos / dual audio ──────────────────
 
 #[test]
-fn remux_preference_bonus() {
+fn balanced_profile_does_not_score_remux_preference() {
     let profile = QualityProfile::parse(
         r#"{"id":"t","name":"T","criteria":{"prefer_remux":true,"allow_unknown_quality":true,"allow_upgrades":true}}"#,
     ).unwrap();
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.1080p.BluRay.REMUX.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "prefer_remux_match" && e.delta == 200));
+    assert!(!d.scoring_log.iter().any(|e| e.code == "prefer_remux_match"));
 }
 
 #[test]
-fn remux_missing_penalty() {
+fn audiophile_profile_scores_remux_preference() {
     let profile = QualityProfile::parse(
         r#"{"id":"t","name":"T","criteria":{"prefer_remux":true,"allow_unknown_quality":true,"allow_upgrades":true}}"#,
     ).unwrap();
-    let w = balanced_weights();
+    let w = crate::scoring_weights::build_weights(
+        &crate::scoring_weights::ScoringPersona::Audiophile,
+        &crate::scoring_weights::ScoringOverrides::default(),
+    );
+    let release = parse_release_metadata("Movie.2024.1080p.BluRay.REMUX.H.265");
+    let d = evaluate_against_profile(&profile, &release, false, &w);
+    assert!(d
+        .scoring_log
+        .iter()
+        .any(|e| e.code == "prefer_remux_match" && e.delta == 400));
+}
+
+#[test]
+fn audiophile_profile_penalizes_missing_remux() {
+    let profile = QualityProfile::parse(
+        r#"{"id":"t","name":"T","criteria":{"prefer_remux":true,"allow_unknown_quality":true,"allow_upgrades":true}}"#,
+    ).unwrap();
+    let w = crate::scoring_weights::build_weights(
+        &crate::scoring_weights::ScoringPersona::Audiophile,
+        &crate::scoring_weights::ScoringOverrides::default(),
+    );
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
     assert!(d
         .scoring_log
         .iter()
-        .any(|e| e.code == "prefer_remux_missing" && e.delta == -50));
+        .any(|e| e.code == "prefer_remux_missing" && e.delta == -80));
 }
 
 #[test]
@@ -463,6 +480,7 @@ fn default_4k_profile_has_three_tiers() {
     let profile = default_quality_profile_for_search();
     assert_eq!(profile.criteria.quality_tiers.len(), 3);
     assert_eq!(profile.criteria.quality_tiers[0], "2160P");
+    assert!(!profile.criteria.prefer_remux);
 }
 
 #[test]
@@ -470,6 +488,7 @@ fn default_1080p_profile_has_two_tiers() {
     let profile = default_quality_profile_1080p_for_search();
     assert_eq!(profile.criteria.quality_tiers.len(), 2);
     assert_eq!(profile.criteria.quality_tiers[0], "1080P");
+    assert!(!profile.criteria.prefer_remux);
 }
 
 // ── apply_size_scoring_for_category ───────────────────────────────────────
@@ -588,9 +607,8 @@ fn size_implausible_blocks_wildly_oversized() {
 }
 
 #[test]
-fn size_excessive_stops_rewarding_oversized() {
-    // 3 GB for a 720p anime Blu-ray episode (expected ~1.0 GiB) → ratio ~3× → not blocked
-    // but 5 GB → ratio ~5× → excessive band, scores 0 (no bonus, no penalty)
+fn size_excessive_penalizes_oversized_anime() {
+    // 5 GB for a 720p anime Blu-ray episode is far outside the anime envelope.
     let release = parse_release_metadata("Anime.2024.720p.BluRay.H.265");
     let w = balanced_weights();
     let size_5gb = 5 * 1024 * 1024 * 1024_i64;
@@ -598,7 +616,36 @@ fn size_excessive_stops_rewarding_oversized() {
     let mut d = QualityProfileDecision::new();
     apply_size_scoring_for_category(&mut d, &release, Some(size_5gb), Some("anime"), None, &w);
     assert!(d.allowed);
-    assert_eq!(d.release_score, 0);
+    assert!(d
+        .scoring_log
+        .iter()
+        .any(|e| e.code == "size_excessive_for_quality" && e.delta == w.size_excessive));
+}
+
+#[test]
+fn large_balanced_anime_remux_gets_size_penalty_without_remux_bonus() {
+    let profile = QualityProfile::parse(
+        r#"{"id":"anime","name":"Anime","criteria":{"quality_tiers":["1080P","720P"],"prefer_remux":true,"allow_unknown_quality":true,"allow_upgrades":true}}"#,
+    ).unwrap();
+    let w = balanced_weights();
+    let release = parse_release_metadata("Anime.S03E10.1080p.FLAC.2.0.AVC.REMUX-FraMeSToR");
+    let size_7gb = 7 * 1024 * 1024 * 1024_i64;
+
+    let mut d = evaluate_against_profile(&profile, &release, false, &w);
+    apply_size_scoring_for_category(
+        &mut d,
+        &release,
+        Some(size_7gb),
+        Some("anime"),
+        Some(24),
+        &w,
+    );
+
+    assert!(!d.scoring_log.iter().any(|e| e.code == "prefer_remux_match"));
+    assert!(d
+        .scoring_log
+        .iter()
+        .any(|e| e.code == "size_excessive_for_quality" && e.delta == w.size_excessive));
 }
 
 #[test]

@@ -156,9 +156,12 @@ mod routing_tests {
     }
 }
 
-fn interstitial_movie_from_metadata(movie: &MovieMetadata) -> InterstitialMovieMetadata {
+fn interstitial_movie_from_anime_movie(movie: &AnimeMovie) -> InterstitialMovieMetadata {
     InterstitialMovieMetadata {
-        tvdb_id: movie.tvdb_id.to_string(),
+        tvdb_id: movie
+            .movie_tvdb_id
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
         name: movie.name.clone(),
         slug: movie.slug.clone(),
         year: movie.year,
@@ -171,73 +174,117 @@ fn interstitial_movie_from_metadata(movie: &MovieMetadata) -> InterstitialMovieM
         imdb_id: movie.imdb_id.clone(),
         genres: movie.genres.clone(),
         studio: movie.studio.clone(),
-        digital_release_date: movie.tmdb_release_date.clone(),
+        digital_release_date: movie.digital_release_date.clone(),
+        association_confidence: Some(movie.association_confidence.clone()),
+        continuity_status: Some(movie.continuity_status.clone()),
+        movie_form: Some(movie.movie_form.clone()),
+        confidence: Some(movie.confidence.clone()),
+        signal_summary: Some(movie.signal_summary.clone()),
     }
 }
 
-fn resolve_interstitial_movie_tvdb_id(mapping: &AnimeMapping) -> Option<i64> {
-    if mapping.episode_mappings.is_empty() {
-        return None;
+fn anime_movie_identity_keys(movie: &AnimeMovie) -> Vec<String> {
+    let mut keys = Vec::new();
+    if let Some(tvdb_id) = movie.movie_tvdb_id {
+        keys.push(format!("tvdb:{tvdb_id}"));
     }
+    if let Some(tmdb_id) = movie.movie_tmdb_id {
+        keys.push(format!("tmdb:{tmdb_id}"));
+    }
+    if let Some(imdb_id) = movie
+        .movie_imdb_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        keys.push(format!("imdb:{}", imdb_id.trim().to_ascii_lowercase()));
+    }
+    keys
+}
 
-    mapping.alt_tvdb_id.or_else(|| {
-        if mapping.global_media_type == "movie" {
-            mapping.thetvdb_id
-        } else {
-            None
+fn anime_mapping_identity_keys(mapping: &AnimeMapping) -> Vec<String> {
+    let mut keys = Vec::new();
+    if let Some(tvdb_id) = mapping.alt_tvdb_id {
+        keys.push(format!("tvdb:{tvdb_id}"));
+    }
+    if let Some(tmdb_id) = mapping.themoviedb_id {
+        keys.push(format!("tmdb:{tmdb_id}"));
+    }
+    if mapping.global_media_type == "movie" {
+        if let Some(tvdb_id) = mapping.thetvdb_id {
+            keys.push(format!("tvdb:{tvdb_id}"));
         }
-    })
+    }
+    keys
+}
+
+fn anime_movie_after_season(
+    movie: &AnimeMovie,
+    season_last_aired: &std::collections::BTreeMap<i32, String>,
+) -> i32 {
+    let Some(release_date) = movie
+        .digital_release_date
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return 0;
+    };
+
+    season_last_aired
+        .iter()
+        .filter(|(_, last)| last.as_str() <= release_date)
+        .max_by_key(|(season, _)| *season)
+        .map(|(season, _)| *season)
+        .unwrap_or(0)
+}
+
+fn anime_movie_release_sort_key(movie: &AnimeMovie) -> (&str, &str) {
+    (
+        movie
+            .digital_release_date
+            .as_deref()
+            .unwrap_or("9999-12-31"),
+        movie.sort_title.as_str(),
+    )
 }
 
 #[cfg(test)]
-mod interstitial_mapping_tests {
-    use super::resolve_interstitial_movie_tvdb_id;
-    use crate::{AnimeEpisodeMapping, AnimeMapping};
-
-    fn mapping() -> AnimeMapping {
-        AnimeMapping {
-            mal_id: Some(1),
-            anilist_id: None,
-            anidb_id: None,
-            kitsu_id: None,
-            thetvdb_id: Some(100),
-            alt_tvdb_id: None,
-            thetvdb_season: Some(0),
-            score: None,
-            anime_media_type: "TV".into(),
-            global_media_type: "series".into(),
-            status: String::new(),
-            episode_mappings: vec![AnimeEpisodeMapping {
-                tvdb_season: 0,
-                episode_start: 1,
-                episode_end: 1,
-            }],
-        }
-    }
+mod anime_movie_mapping_tests {
+    use super::interstitial_movie_from_anime_movie;
+    use crate::AnimeMovie;
 
     #[test]
-    fn prefers_alt_tvdb_id_for_hybrid_show_movie_mappings() {
-        let mut input = mapping();
-        input.alt_tvdb_id = Some(200);
+    fn interstitial_movies_preserve_classification_metadata() {
+        let movie = AnimeMovie {
+            movie_tvdb_id: Some(200),
+            movie_tmdb_id: Some(300),
+            movie_imdb_id: Some("tt123".into()),
+            movie_mal_id: Some(400),
+            name: "Sample Movie".into(),
+            slug: "sample-movie".into(),
+            year: Some(2024),
+            content_status: "released".into(),
+            overview: "Overview".into(),
+            poster_url: "poster".into(),
+            language: "eng".into(),
+            runtime_minutes: 95,
+            sort_title: "Sample Movie".into(),
+            imdb_id: "tt123".into(),
+            genres: vec!["Action".into()],
+            studio: "Studio".into(),
+            digital_release_date: Some("2024-02-01".into()),
+            association_confidence: "high".into(),
+            continuity_status: "canon".into(),
+            movie_form: "movie".into(),
+            placement: "ordered".into(),
+            confidence: "high".into(),
+            signal_summary: "TVDB marked special as critical to story".into(),
+        };
 
-        assert_eq!(resolve_interstitial_movie_tvdb_id(&input), Some(200));
-    }
-
-    #[test]
-    fn falls_back_to_primary_tvdb_id_for_true_movie_rows() {
-        let mut input = mapping();
-        input.global_media_type = "movie".into();
-
-        assert_eq!(resolve_interstitial_movie_tvdb_id(&input), Some(100));
-    }
-
-    #[test]
-    fn ignores_rows_without_episode_mappings() {
-        let mut input = mapping();
-        input.episode_mappings.clear();
-        input.alt_tvdb_id = Some(200);
-
-        assert_eq!(resolve_interstitial_movie_tvdb_id(&input), None);
+        let mapped = interstitial_movie_from_anime_movie(&movie);
+        assert_eq!(mapped.tvdb_id, "200");
+        assert_eq!(mapped.continuity_status.as_deref(), Some("canon"));
+        assert_eq!(mapped.association_confidence.as_deref(), Some("high"));
+        assert_eq!(mapped.confidence.as_deref(), Some("high"));
     }
 }
 
@@ -627,6 +674,7 @@ impl AppUseCase {
                 &result.seasons,
                 &result.episodes,
                 &result.anime_mappings,
+                &result.anime_movies,
             )
             .await;
         }
@@ -648,6 +696,7 @@ impl AppUseCase {
         seasons: &[SeasonMetadata],
         episodes: &[EpisodeMetadata],
         anime_mappings: &[AnimeMapping],
+        anime_movies: &[AnimeMovie],
     ) {
         let monitor_type = if title.monitored {
             extract_monitor_type(&title.tags)
@@ -708,6 +757,30 @@ impl AppUseCase {
         let seasons_with_episodes: std::collections::HashSet<i32> =
             episodes.iter().map(|ep| ep.season_number).collect();
 
+        let derived_anime_movies: Vec<&AnimeMovie> =
+            if title.facet == MediaFacet::Anime && inter_season_movies {
+                anime_movies
+                    .iter()
+                    .filter(|movie| {
+                        !movie.name.trim().is_empty()
+                            && matches!(movie.association_confidence.as_str(), "medium" | "high")
+                    })
+                    .collect()
+            } else {
+                vec![]
+            };
+        let specials_movies: Vec<InterstitialMovieMetadata> = derived_anime_movies
+            .iter()
+            .copied()
+            .filter(|movie| movie.placement == "specials")
+            .map(interstitial_movie_from_anime_movie)
+            .collect();
+        let ordered_movies: Vec<&AnimeMovie> = derived_anime_movies
+            .iter()
+            .copied()
+            .filter(|movie| movie.placement != "specials")
+            .collect();
+
         let mut season_number_to_collection: std::collections::HashMap<i32, String> =
             std::collections::HashMap::new();
 
@@ -730,6 +803,11 @@ impl AppUseCase {
                 first_episode_number: None,
                 last_episode_number: None,
                 interstitial_movie: None,
+                specials_movies: if season.number == 0 && title.facet == MediaFacet::Anime {
+                    specials_movies.clone()
+                } else {
+                    vec![]
+                },
                 monitored: season_monitored,
                 created_at: Utc::now(),
             };
@@ -771,141 +849,102 @@ impl AppUseCase {
             }
         }
 
-        // Create interstitial movie collections for anime titles.
-        // Movie-linked anime mappings are positioned narratively between
-        // seasons using their episode aired dates (e.g. Demon Slayer: Mugen Train
-        // between S1 and S2). Build a lookup from (season_number, episode_number) →
-        // collection_id so that episodes get routed to the correct collection.
+        // Create interstitial movie collections for anime titles using the
+        // derived anime_movies payload from SMG. Episode mappings are only used
+        // to route any linked season-0 episode records into the movie collection
+        // when a matching mapping still exists.
         let mut interstitial_episode_lookup: std::collections::HashMap<(i32, i32), String> =
             std::collections::HashMap::new();
 
-        if title.facet == MediaFacet::Anime && inter_season_movies && !anime_mappings.is_empty() {
-            let movie_mappings: Vec<(&AnimeMapping, i64)> = anime_mappings
-                .iter()
-                .filter_map(|mapping| {
-                    resolve_interstitial_movie_tvdb_id(mapping)
-                        .map(|movie_tvdb_id| (mapping, movie_tvdb_id))
-                })
-                .collect();
-
-            if !movie_mappings.is_empty() {
-                let metadata_language = title.metadata_language.as_deref().unwrap_or("eng");
-                let mut seen_movie_tvdb_ids = HashSet::new();
-                let movie_tvdb_ids: Vec<i64> = movie_mappings
-                    .iter()
-                    .map(|(_, movie_tvdb_id)| *movie_tvdb_id)
-                    .filter(|movie_tvdb_id| seen_movie_tvdb_ids.insert(*movie_tvdb_id))
-                    .collect();
-                let interstitial_movie_metadata = match self
-                    .services
-                    .metadata_gateway
-                    .get_movies_bulk(&movie_tvdb_ids, metadata_language)
-                    .await
-                {
-                    Ok(metadata) => metadata,
-                    Err(err) => {
-                        warn!(
-                            title_id = %title.id,
-                            error = %err,
-                            "failed to fetch interstitial movie metadata"
-                        );
-                        HashMap::new()
+        if title.facet == MediaFacet::Anime && inter_season_movies && !ordered_movies.is_empty() {
+            let mut mapping_episode_links: HashMap<String, Vec<(i32, i32)>> = HashMap::new();
+            for mapping in anime_mappings {
+                let identity_keys = anime_mapping_identity_keys(mapping);
+                if identity_keys.is_empty() || mapping.episode_mappings.is_empty() {
+                    continue;
+                }
+                let mut linked_episodes = Vec::new();
+                for em in &mapping.episode_mappings {
+                    for ep_num in em.episode_start..=em.episode_end {
+                        linked_episodes.push((em.tvdb_season, ep_num));
                     }
-                };
+                }
+                for key in identity_keys {
+                    mapping_episode_links
+                        .entry(key)
+                        .or_default()
+                        .extend(linked_episodes.iter().copied());
+                }
+            }
 
-                // For each movie, find its earliest episode aired date, then
-                // find the last regular season that ended on or before that date.
-                let mut movies_by_position: std::collections::BTreeMap<
-                    i32,
-                    Vec<(&AnimeMapping, i64)>,
-                > = std::collections::BTreeMap::new();
-                for (mapping, movie_tvdb_id) in &movie_mappings {
-                    let movie_aired: Option<String> = mapping
-                        .episode_mappings
-                        .iter()
-                        .flat_map(|em| {
-                            episodes.iter().filter(move |ep| {
-                                ep.season_number == em.tvdb_season
-                                    && ep.episode_number >= em.episode_start
-                                    && ep.episode_number <= em.episode_end
-                            })
-                        })
-                        .filter(|ep| !ep.aired.is_empty())
-                        .map(|ep| ep.aired.clone())
-                        .min();
+            let mut movies_by_position: std::collections::BTreeMap<i32, Vec<&AnimeMovie>> =
+                std::collections::BTreeMap::new();
+            for movie in &ordered_movies {
+                let after_season = anime_movie_after_season(movie, &season_last_aired);
+                movies_by_position
+                    .entry(after_season)
+                    .or_default()
+                    .push(*movie);
+            }
 
-                    let after_season = if let Some(aired) = &movie_aired {
-                        season_last_aired
-                            .iter()
-                            .filter(|(_, last)| last.as_str() <= aired.as_str())
-                            .max_by_key(|(&num, _)| num)
-                            .map(|(&num, _)| num)
-                            .unwrap_or(0)
+            for (after_season, movies) in &mut movies_by_position {
+                movies.sort_by(|left, right| {
+                    anime_movie_release_sort_key(left)
+                        .cmp(&anime_movie_release_sort_key(right))
+                        .then_with(|| left.name.cmp(&right.name))
+                });
+
+                for (seq, movie) in movies.iter().enumerate() {
+                    let narrative_order = format!("{}.{}", after_season, seq + 1);
+                    let label = if movie.continuity_status == "canon" {
+                        movie.name.clone()
                     } else {
-                        0
+                        format!("Movie {}", seq + 1)
                     };
 
-                    info!(
-                        title_id = %title.id,
-                        movie_type = %mapping.global_media_type,
-                        thetvdb_season = ?mapping.thetvdb_season,
-                        interstitial_movie_tvdb_id = movie_tvdb_id,
-                        movie_aired = ?movie_aired,
-                        after_season = after_season,
-                        "positioning interstitial movie"
-                    );
+                    let collection = Collection {
+                        id: Id::new().0,
+                        title_id: title.id.clone(),
+                        collection_type: "interstitial".to_string(),
+                        collection_index: narrative_order.clone(),
+                        label: Some(label.clone()),
+                        ordered_path: None,
+                        narrative_order: Some(narrative_order.clone()),
+                        first_episode_number: None,
+                        last_episode_number: None,
+                        interstitial_movie: Some(interstitial_movie_from_anime_movie(movie)),
+                        specials_movies: vec![],
+                        monitored: true,
+                        created_at: Utc::now(),
+                    };
 
-                    movies_by_position
-                        .entry(after_season)
-                        .or_default()
-                        .push((mapping, *movie_tvdb_id));
-                }
-
-                for (after_season, movies) in &movies_by_position {
-                    for (seq, (movie, movie_tvdb_id)) in movies.iter().enumerate() {
-                        let narrative_order = format!("{}.{}", after_season, seq + 1);
-                        let label = format!("Movie {}", seq + 1);
-
-                        let collection = Collection {
-                            id: Id::new().0,
-                            title_id: title.id.clone(),
-                            collection_type: "interstitial".to_string(),
-                            collection_index: narrative_order.clone(),
-                            label: Some(label.clone()),
-                            ordered_path: None,
-                            narrative_order: Some(narrative_order.clone()),
-                            first_episode_number: None,
-                            last_episode_number: None,
-                            interstitial_movie: interstitial_movie_metadata
-                                .get(movie_tvdb_id)
-                                .map(interstitial_movie_from_metadata),
-                            monitored: true,
-                            created_at: Utc::now(),
-                        };
-
-                        match self.services.shows.create_collection(collection).await {
-                            Ok(created) => {
-                                info!(
-                                    title_id = %title.id,
-                                    label = %label,
-                                    narrative_order = %narrative_order,
-                                    "created interstitial movie collection"
-                                );
-                                for em in &movie.episode_mappings {
-                                    for ep_num in em.episode_start..=em.episode_end {
-                                        interstitial_episode_lookup
-                                            .insert((em.tvdb_season, ep_num), created.id.clone());
+                    match self.services.shows.create_collection(collection).await {
+                        Ok(created) => {
+                            info!(
+                                title_id = %title.id,
+                                label = %label,
+                                narrative_order = %narrative_order,
+                                placement = %movie.placement,
+                                "created interstitial movie collection"
+                            );
+                            for key in anime_movie_identity_keys(movie) {
+                                if let Some(linked_episodes) = mapping_episode_links.get(&key) {
+                                    for (season_num, episode_num) in linked_episodes {
+                                        interstitial_episode_lookup.insert(
+                                            (*season_num, *episode_num),
+                                            created.id.clone(),
+                                        );
                                     }
                                 }
                             }
-                            Err(err) => {
-                                warn!(
-                                    title_id = %title.id,
-                                    label = %label,
-                                    error = %err,
-                                    "failed to create interstitial movie collection"
-                                );
-                            }
+                        }
+                        Err(err) => {
+                            warn!(
+                                title_id = %title.id,
+                                label = %label,
+                                error = %err,
+                                "failed to create interstitial movie collection"
+                            );
                         }
                     }
                 }
@@ -1833,6 +1872,7 @@ impl AppUseCase {
             first_episode_number: normalize_show_text_opt(first_episode_number),
             last_episode_number: normalize_show_text_opt(last_episode_number),
             interstitial_movie: None,
+            specials_movies: vec![],
             monitored: true,
             created_at: Utc::now(),
         };
