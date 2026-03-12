@@ -747,7 +747,7 @@ async fn import_movie_download(
                 .imports
                 .update_import_status(import_id, "failed", result_json)
                 .await?;
-            return Ok(result);
+            Ok(result)
         }
         crate::post_download_gate::ImportedFileGateDecision::Accepted(accepted) => {
             // Write NFO sidecar (non-fatal, opt-in)
@@ -907,7 +907,7 @@ async fn import_movie_download(
                 )
                 .await?;
 
-            return Ok(result);
+            Ok(result)
         }
     }
 }

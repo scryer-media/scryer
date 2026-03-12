@@ -12,7 +12,7 @@ use scryer_domain::{ImportSkipReason, MediaFacet, Title};
 use tracing::warn;
 
 pub(crate) enum ImportedFileGateDecision {
-    Accepted(ImportedFileAcceptance),
+    Accepted(Box<ImportedFileAcceptance>),
     Rejected(ImportedFileRejection),
 }
 
@@ -138,10 +138,10 @@ pub(crate) async fn evaluate_imported_file_gate(
         Ok(analysis) => analysis,
         Err(error) => {
             warn!(error = %error, path = %path.display(), "media analysis failed");
-            return ImportedFileGateDecision::Accepted(ImportedFileAcceptance {
+            return ImportedFileGateDecision::Accepted(Box::new(ImportedFileAcceptance {
                 analysis: None,
                 scan_error: Some(error.to_string()),
-            });
+            }));
         }
     };
 
@@ -250,10 +250,10 @@ pub(crate) async fn evaluate_imported_file_gate(
         }
     }
 
-    ImportedFileGateDecision::Accepted(ImportedFileAcceptance {
+    ImportedFileGateDecision::Accepted(Box::new(ImportedFileAcceptance {
         analysis: Some(build_media_file_analysis(&analysis)),
         scan_error: None,
-    })
+    }))
 }
 
 pub(crate) async fn persist_media_analysis_result(
