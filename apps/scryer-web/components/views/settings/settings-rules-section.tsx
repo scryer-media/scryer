@@ -1,8 +1,19 @@
 import * as React from "react";
-import { BookOpen, ChevronDown, Edit, FileCode2, Power, Trash2 } from "lucide-react";
+import {
+  BookOpen,
+  ChevronDown,
+  Edit,
+  FileCode2,
+  Power,
+  Trash2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
+import {
+  Input,
+  integerInputProps,
+  sanitizeDigits,
+} from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LazyRegoEditor } from "@/components/common/lazy-rego-editor";
 import { RenderBooleanIcon } from "@/components/common/boolean-icon";
@@ -15,13 +26,19 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
-import type { RuleSetRecord, RuleSetDraft, RuleValidationResult } from "@/lib/types/rule-sets";
+import type {
+  RuleSetRecord,
+  RuleSetDraft,
+  RuleValidationResult,
+} from "@/lib/types/rule-sets";
 
 type SettingsRulesSectionProps = {
   editingRuleSetId: string | null;
   ruleSetDraft: RuleSetDraft;
   setRuleSetDraft: React.Dispatch<React.SetStateAction<RuleSetDraft>>;
-  submitRuleSet: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
+  submitRuleSet: (
+    event: React.FormEvent<HTMLFormElement>,
+  ) => Promise<void> | void;
   mutatingRuleSetId: string | null;
   resetRuleSetDraft: () => void;
   ruleSetRecords: RuleSetRecord[];
@@ -42,51 +59,208 @@ const FACET_OPTIONS = [
 type RefField = { field: string; type: string; descKey: string };
 
 const RELEASE_FIELDS: RefField[] = [
-  { field: "raw_title", type: "string", descKey: "settings.refReleaseRawTitle" },
+  {
+    field: "raw_title",
+    type: "string",
+    descKey: "settings.refReleaseRawTitle",
+  },
   { field: "quality", type: "string?", descKey: "settings.refReleaseQuality" },
   { field: "source", type: "string?", descKey: "settings.refReleaseSource" },
-  { field: "video_codec", type: "string?", descKey: "settings.refReleaseVideoCodec" },
+  {
+    field: "video_codec",
+    type: "string?",
+    descKey: "settings.refReleaseVideoCodec",
+  },
   { field: "audio", type: "string?", descKey: "settings.refReleaseAudio" },
-  { field: "audio_codecs", type: "string[]", descKey: "settings.refReleaseAudioCodecs" },
-  { field: "audio_channels", type: "string?", descKey: "settings.refReleaseAudioChannels" },
-  { field: "languages_audio", type: "string[]", descKey: "settings.refReleaseLangsAudio" },
-  { field: "languages_subtitles", type: "string[]", descKey: "settings.refReleaseLangsSub" },
-  { field: "is_dual_audio", type: "bool", descKey: "settings.refReleaseIsDualAudio" },
+  {
+    field: "audio_codecs",
+    type: "string[]",
+    descKey: "settings.refReleaseAudioCodecs",
+  },
+  {
+    field: "audio_channels",
+    type: "string?",
+    descKey: "settings.refReleaseAudioChannels",
+  },
+  {
+    field: "languages_audio",
+    type: "string[]",
+    descKey: "settings.refReleaseLangsAudio",
+  },
+  {
+    field: "languages_subtitles",
+    type: "string[]",
+    descKey: "settings.refReleaseLangsSub",
+  },
+  {
+    field: "is_dual_audio",
+    type: "bool",
+    descKey: "settings.refReleaseIsDualAudio",
+  },
   { field: "is_atmos", type: "bool", descKey: "settings.refReleaseIsAtmos" },
-  { field: "is_dolby_vision", type: "bool", descKey: "settings.refReleaseIsDV" },
-  { field: "detected_hdr", type: "bool", descKey: "settings.refReleaseDetectedHdr" },
+  {
+    field: "is_dolby_vision",
+    type: "bool",
+    descKey: "settings.refReleaseIsDV",
+  },
+  {
+    field: "detected_hdr",
+    type: "bool",
+    descKey: "settings.refReleaseDetectedHdr",
+  },
   { field: "is_remux", type: "bool", descKey: "settings.refReleaseIsRemux" },
   { field: "is_bd_disk", type: "bool", descKey: "settings.refReleaseIsBdDisk" },
-  { field: "is_proper_upload", type: "bool", descKey: "settings.refReleaseIsProper" },
-  { field: "release_group", type: "string?", descKey: "settings.refReleaseGroup" },
+  {
+    field: "is_proper_upload",
+    type: "bool",
+    descKey: "settings.refReleaseIsProper",
+  },
+  { field: "is_repack", type: "bool", descKey: "settings.refReleaseIsRepack" },
+  {
+    field: "is_ai_enhanced",
+    type: "bool",
+    descKey: "settings.refReleaseIsAiEnhanced",
+  },
+  {
+    field: "is_hardcoded_subs",
+    type: "bool",
+    descKey: "settings.refReleaseIsHardcodedSubs",
+  },
+  {
+    field: "is_hdr10plus",
+    type: "bool",
+    descKey: "settings.refReleaseIsHdr10Plus",
+  },
+  { field: "is_hlg", type: "bool", descKey: "settings.refReleaseIsHlg" },
+  {
+    field: "streaming_service",
+    type: "string?",
+    descKey: "settings.refReleaseStreamingService",
+  },
+  { field: "edition", type: "string?", descKey: "settings.refReleaseEdition" },
+  {
+    field: "anime_version",
+    type: "number?",
+    descKey: "settings.refReleaseAnimeVersion",
+  },
+  {
+    field: "release_group",
+    type: "string?",
+    descKey: "settings.refReleaseGroup",
+  },
   { field: "year", type: "number?", descKey: "settings.refReleaseYear" },
-  { field: "parse_confidence", type: "float", descKey: "settings.refReleaseParseConf" },
-  { field: "size_bytes", type: "number?", descKey: "settings.refReleaseSizeBytes" },
+  {
+    field: "parse_confidence",
+    type: "float",
+    descKey: "settings.refReleaseParseConf",
+  },
+  {
+    field: "size_bytes",
+    type: "number?",
+    descKey: "settings.refReleaseSizeBytes",
+  },
   { field: "age_days", type: "number?", descKey: "settings.refReleaseAgeDays" },
-  { field: "thumbs_up", type: "number?", descKey: "settings.refReleaseThumbsUp" },
-  { field: "thumbs_down", type: "number?", descKey: "settings.refReleaseThumbsDown" },
+  {
+    field: "thumbs_up",
+    type: "number?",
+    descKey: "settings.refReleaseThumbsUp",
+  },
+  {
+    field: "thumbs_down",
+    type: "number?",
+    descKey: "settings.refReleaseThumbsDown",
+  },
+  { field: "extra", type: "object", descKey: "settings.refReleaseExtra" },
 ];
 
 const PROFILE_FIELDS: RefField[] = [
   { field: "id", type: "string", descKey: "settings.refProfileId" },
   { field: "name", type: "string", descKey: "settings.refProfileName" },
-  { field: "quality_tiers", type: "string[]", descKey: "settings.refProfileQualityTiers" },
-  { field: "archival_quality", type: "string?", descKey: "settings.refProfileArchivalQuality" },
-  { field: "allow_unknown_quality", type: "bool", descKey: "settings.refProfileAllowUnknown" },
-  { field: "source_allowlist", type: "string[]", descKey: "settings.refProfileSourceAllow" },
-  { field: "source_blocklist", type: "string[]", descKey: "settings.refProfileSourceBlock" },
-  { field: "video_codec_allowlist", type: "string[]", descKey: "settings.refProfileVCodecAllow" },
-  { field: "video_codec_blocklist", type: "string[]", descKey: "settings.refProfileVCodecBlock" },
-  { field: "audio_codec_allowlist", type: "string[]", descKey: "settings.refProfileACodecAllow" },
-  { field: "audio_codec_blocklist", type: "string[]", descKey: "settings.refProfileACodecBlock" },
-  { field: "atmos_preferred", type: "bool", descKey: "settings.refProfileAtmosPreferred" },
-  { field: "dolby_vision_allowed", type: "bool", descKey: "settings.refProfileDVAllowed" },
-  { field: "detected_hdr_allowed", type: "bool", descKey: "settings.refProfileHdrAllowed" },
-  { field: "prefer_remux", type: "bool", descKey: "settings.refProfilePreferRemux" },
-  { field: "allow_bd_disk", type: "bool", descKey: "settings.refProfileAllowBdDisk" },
-  { field: "allow_upgrades", type: "bool", descKey: "settings.refProfileAllowUpgrades" },
-  { field: "prefer_dual_audio", type: "bool", descKey: "settings.refProfilePreferDualAudio" },
-  { field: "required_audio_languages", type: "string[]", descKey: "settings.refProfileRequiredLangs" },
+  {
+    field: "quality_tiers",
+    type: "string[]",
+    descKey: "settings.refProfileQualityTiers",
+  },
+  {
+    field: "archival_quality",
+    type: "string?",
+    descKey: "settings.refProfileArchivalQuality",
+  },
+  {
+    field: "allow_unknown_quality",
+    type: "bool",
+    descKey: "settings.refProfileAllowUnknown",
+  },
+  {
+    field: "source_allowlist",
+    type: "string[]",
+    descKey: "settings.refProfileSourceAllow",
+  },
+  {
+    field: "source_blocklist",
+    type: "string[]",
+    descKey: "settings.refProfileSourceBlock",
+  },
+  {
+    field: "video_codec_allowlist",
+    type: "string[]",
+    descKey: "settings.refProfileVCodecAllow",
+  },
+  {
+    field: "video_codec_blocklist",
+    type: "string[]",
+    descKey: "settings.refProfileVCodecBlock",
+  },
+  {
+    field: "audio_codec_allowlist",
+    type: "string[]",
+    descKey: "settings.refProfileACodecAllow",
+  },
+  {
+    field: "audio_codec_blocklist",
+    type: "string[]",
+    descKey: "settings.refProfileACodecBlock",
+  },
+  {
+    field: "atmos_preferred",
+    type: "bool",
+    descKey: "settings.refProfileAtmosPreferred",
+  },
+  {
+    field: "dolby_vision_allowed",
+    type: "bool",
+    descKey: "settings.refProfileDVAllowed",
+  },
+  {
+    field: "detected_hdr_allowed",
+    type: "bool",
+    descKey: "settings.refProfileHdrAllowed",
+  },
+  {
+    field: "prefer_remux",
+    type: "bool",
+    descKey: "settings.refProfilePreferRemux",
+  },
+  {
+    field: "allow_bd_disk",
+    type: "bool",
+    descKey: "settings.refProfileAllowBdDisk",
+  },
+  {
+    field: "allow_upgrades",
+    type: "bool",
+    descKey: "settings.refProfileAllowUpgrades",
+  },
+  {
+    field: "prefer_dual_audio",
+    type: "bool",
+    descKey: "settings.refProfilePreferDualAudio",
+  },
+  {
+    field: "required_audio_languages",
+    type: "string[]",
+    descKey: "settings.refProfileRequiredLangs",
+  },
 ];
 
 const CONTEXT_FIELDS: RefField[] = [
@@ -94,10 +268,26 @@ const CONTEXT_FIELDS: RefField[] = [
   { field: "media_type", type: "string", descKey: "settings.refCtxMediaType" },
   { field: "category", type: "string", descKey: "settings.refCtxCategory" },
   { field: "tags", type: "string[]", descKey: "settings.refCtxTags" },
-  { field: "has_existing_file", type: "bool", descKey: "settings.refCtxHasExisting" },
-  { field: "existing_score", type: "number?", descKey: "settings.refCtxExistingScore" },
-  { field: "search_mode", type: "string", descKey: "settings.refCtxSearchMode" },
-  { field: "runtime_minutes", type: "number?", descKey: "settings.refCtxRuntimeMin" },
+  {
+    field: "has_existing_file",
+    type: "bool",
+    descKey: "settings.refCtxHasExisting",
+  },
+  {
+    field: "existing_score",
+    type: "number?",
+    descKey: "settings.refCtxExistingScore",
+  },
+  {
+    field: "search_mode",
+    type: "string",
+    descKey: "settings.refCtxSearchMode",
+  },
+  {
+    field: "runtime_minutes",
+    type: "number?",
+    descKey: "settings.refCtxRuntimeMin",
+  },
   { field: "is_anime", type: "bool", descKey: "settings.refCtxIsAnime" },
   { field: "is_filler", type: "bool", descKey: "settings.refCtxIsFiller" },
 ];
@@ -108,13 +298,200 @@ const BUILTIN_SCORE_FIELDS: RefField[] = [
   { field: "codes", type: "string[]", descKey: "settings.refBuiltinCodes" },
 ];
 
+const FILE_FIELDS: RefField[] = [
+  {
+    field: "video_codec",
+    type: "string?",
+    descKey: "settings.refFileVideoCodec",
+  },
+  {
+    field: "video_width",
+    type: "number?",
+    descKey: "settings.refFileVideoWidth",
+  },
+  {
+    field: "video_height",
+    type: "number?",
+    descKey: "settings.refFileVideoHeight",
+  },
+  {
+    field: "video_bitrate_kbps",
+    type: "number?",
+    descKey: "settings.refFileVideoBitrateKbps",
+  },
+  {
+    field: "video_bit_depth",
+    type: "number?",
+    descKey: "settings.refFileVideoBitDepth",
+  },
+  {
+    field: "video_hdr_format",
+    type: "string?",
+    descKey: "settings.refFileVideoHdrFormat",
+  },
+  {
+    field: "dovi_profile",
+    type: "number?",
+    descKey: "settings.refFileDoviProfile",
+  },
+  {
+    field: "dovi_bl_compat_id",
+    type: "number?",
+    descKey: "settings.refFileDoviBlCompatId",
+  },
+  {
+    field: "video_frame_rate",
+    type: "string?",
+    descKey: "settings.refFileVideoFrameRate",
+  },
+  {
+    field: "video_profile",
+    type: "string?",
+    descKey: "settings.refFileVideoProfile",
+  },
+  {
+    field: "audio_codec",
+    type: "string?",
+    descKey: "settings.refFileAudioCodec",
+  },
+  {
+    field: "audio_channels",
+    type: "number?",
+    descKey: "settings.refFileAudioChannels",
+  },
+  {
+    field: "audio_bitrate_kbps",
+    type: "number?",
+    descKey: "settings.refFileAudioBitrateKbps",
+  },
+  {
+    field: "audio_languages",
+    type: "string[]",
+    descKey: "settings.refFileAudioLanguages",
+  },
+  {
+    field: "audio_streams",
+    type: "object[]",
+    descKey: "settings.refFileAudioStreams",
+  },
+  {
+    field: "subtitle_languages",
+    type: "string[]",
+    descKey: "settings.refFileSubtitleLanguages",
+  },
+  {
+    field: "subtitle_codecs",
+    type: "string[]",
+    descKey: "settings.refFileSubtitleCodecs",
+  },
+  {
+    field: "subtitle_streams",
+    type: "object[]",
+    descKey: "settings.refFileSubtitleStreams",
+  },
+  {
+    field: "has_multiaudio",
+    type: "bool",
+    descKey: "settings.refFileHasMultiAudio",
+  },
+  {
+    field: "duration_seconds",
+    type: "number?",
+    descKey: "settings.refFileDurationSeconds",
+  },
+  {
+    field: "num_chapters",
+    type: "number?",
+    descKey: "settings.refFileNumChapters",
+  },
+  {
+    field: "container_format",
+    type: "string?",
+    descKey: "settings.refFileContainerFormat",
+  },
+];
+
+const AUDIO_STREAM_FIELDS: RefField[] = [
+  { field: "codec", type: "string?", descKey: "settings.refAudioStreamCodec" },
+  {
+    field: "channels",
+    type: "number?",
+    descKey: "settings.refAudioStreamChannels",
+  },
+  {
+    field: "language",
+    type: "string?",
+    descKey: "settings.refAudioStreamLanguage",
+  },
+  {
+    field: "bitrate_kbps",
+    type: "number?",
+    descKey: "settings.refAudioStreamBitrateKbps",
+  },
+];
+
+const SUBTITLE_STREAM_FIELDS: RefField[] = [
+  {
+    field: "codec",
+    type: "string?",
+    descKey: "settings.refSubtitleStreamCodec",
+  },
+  {
+    field: "language",
+    type: "string?",
+    descKey: "settings.refSubtitleStreamLanguage",
+  },
+  { field: "name", type: "string?", descKey: "settings.refSubtitleStreamName" },
+  {
+    field: "forced",
+    type: "bool",
+    descKey: "settings.refSubtitleStreamForced",
+  },
+  {
+    field: "default",
+    type: "bool",
+    descKey: "settings.refSubtitleStreamDefault",
+  },
+];
+
 type RefSectionDef = { titleKey: string; path: string; fields: RefField[] };
 
 const REF_SECTIONS: RefSectionDef[] = [
-  { titleKey: "settings.refSectionRelease", path: "input.release", fields: RELEASE_FIELDS },
-  { titleKey: "settings.refSectionProfile", path: "input.profile", fields: PROFILE_FIELDS },
-  { titleKey: "settings.refSectionContext", path: "input.context", fields: CONTEXT_FIELDS },
-  { titleKey: "settings.refSectionBuiltinScore", path: "input.builtin_score", fields: BUILTIN_SCORE_FIELDS },
+  {
+    titleKey: "settings.refSectionRelease",
+    path: "input.release",
+    fields: RELEASE_FIELDS,
+  },
+  {
+    titleKey: "settings.refSectionProfile",
+    path: "input.profile",
+    fields: PROFILE_FIELDS,
+  },
+  {
+    titleKey: "settings.refSectionContext",
+    path: "input.context",
+    fields: CONTEXT_FIELDS,
+  },
+  {
+    titleKey: "settings.refSectionBuiltinScore",
+    path: "input.builtin_score",
+    fields: BUILTIN_SCORE_FIELDS,
+  },
+  {
+    titleKey: "settings.refSectionFile",
+    path: "input.file",
+    fields: FILE_FIELDS,
+  },
+  {
+    titleKey: "settings.refSectionAudioStreams",
+    path: "input.file.audio_streams[]",
+    fields: AUDIO_STREAM_FIELDS,
+  },
+  {
+    titleKey: "settings.refSectionSubtitleStreams",
+    path: "input.file.subtitle_streams[]",
+    fields: SUBTITLE_STREAM_FIELDS,
+  },
 ];
 
 function RefFieldTable({ section }: { section: RefSectionDef }) {
@@ -122,15 +499,23 @@ function RefFieldTable({ section }: { section: RefSectionDef }) {
   return (
     <div>
       <h4 className="mb-1 font-semibold">
-        <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{section.path}</code>
-        {" "}<span className="text-muted-foreground font-normal">{t(section.titleKey)}</span>
+        <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
+          {section.path}
+        </code>{" "}
+        <span className="text-muted-foreground font-normal">
+          {t(section.titleKey)}
+        </span>
       </h4>
       <div className="overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-[220px]">{t("settings.refColField")}</TableHead>
-              <TableHead className="w-[100px]">{t("settings.refColType")}</TableHead>
+              <TableHead className="w-[220px]">
+                {t("settings.refColField")}
+              </TableHead>
+              <TableHead className="w-[100px]">
+                {t("settings.refColType")}
+              </TableHead>
               <TableHead>{t("settings.refColDescription")}</TableHead>
             </TableRow>
           </TableHeader>
@@ -138,12 +523,18 @@ function RefFieldTable({ section }: { section: RefSectionDef }) {
             {section.fields.map((f) => (
               <TableRow key={f.field}>
                 <TableCell>
-                  <code className="text-xs">{section.path}.{f.field}</code>
+                  <code className="text-xs">
+                    {section.path}.{f.field}
+                  </code>
                 </TableCell>
                 <TableCell>
-                  <code className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground">{f.type}</code>
+                  <code className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground">
+                    {f.type}
+                  </code>
                 </TableCell>
-                <TableCell className="text-muted-foreground">{t(f.descKey)}</TableCell>
+                <TableCell className="text-muted-foreground">
+                  {t(f.descKey)}
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -166,17 +557,25 @@ function RulesContextReference() {
         <CardTitle className="flex items-center gap-2 text-base">
           <BookOpen className="h-4 w-4" />
           {t("settings.refTitle")}
-          <ChevronDown className={`ml-auto h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`} />
+          <ChevronDown
+            className={`ml-auto h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`}
+          />
         </CardTitle>
-        <p className="text-xs text-muted-foreground">{t("settings.refSubtitle")}</p>
+        <p className="text-xs text-muted-foreground">
+          {t("settings.refSubtitle")}
+        </p>
       </CardHeader>
       {open ? (
         <CardContent className="space-y-6 text-sm">
           <p className="text-muted-foreground">{t("settings.refIntro")}</p>
 
           <div>
-            <h4 className="mb-2 font-semibold">{t("settings.refSectionSandbox")}</h4>
-            <p className="mb-2 text-muted-foreground">{t("settings.refSandboxIntro")}</p>
+            <h4 className="mb-2 font-semibold">
+              {t("settings.refSectionSandbox")}
+            </h4>
+            <p className="mb-2 text-muted-foreground">
+              {t("settings.refSandboxIntro")}
+            </p>
             <ul className="list-disc space-y-1.5 pl-5 text-muted-foreground">
               <li>{t("settings.refSandboxNoIO")}</li>
               <li>{t("settings.refSandboxPkgIsolation")}</li>
@@ -193,42 +592,96 @@ function RulesContextReference() {
           ))}
 
           <div>
-            <h4 className="mb-1 font-semibold">{t("settings.refSectionBuiltins")}</h4>
-            <p className="mb-2 text-muted-foreground">{t("settings.refBuiltinsIntro")}</p>
+            <h4 className="mb-1 font-semibold">
+              {t("settings.refSectionBuiltins")}
+            </h4>
+            <p className="mb-2 text-muted-foreground">
+              {t("settings.refBuiltinsIntro")}
+            </p>
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[280px]">{t("settings.refColFunction")}</TableHead>
-                    <TableHead className="w-[100px]">{t("settings.refColReturns")}</TableHead>
+                    <TableHead className="w-[280px]">
+                      {t("settings.refColFunction")}
+                    </TableHead>
+                    <TableHead className="w-[100px]">
+                      {t("settings.refColReturns")}
+                    </TableHead>
                     <TableHead>{t("settings.refColDescription")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   <TableRow>
-                    <TableCell><code className="text-xs">scryer.block_score()</code></TableCell>
-                    <TableCell><code className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground">number</code></TableCell>
-                    <TableCell className="text-muted-foreground">{t("settings.refFnBlockScore")}</TableCell>
+                    <TableCell>
+                      <code className="text-xs">scryer.block_score()</code>
+                    </TableCell>
+                    <TableCell>
+                      <code className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground">
+                        number
+                      </code>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {t("settings.refFnBlockScore")}
+                    </TableCell>
                   </TableRow>
                   <TableRow>
-                    <TableCell><code className="text-xs">scryer.size_gib(bytes)</code></TableCell>
-                    <TableCell><code className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground">float</code></TableCell>
-                    <TableCell className="text-muted-foreground">{t("settings.refFnSizeGib")}</TableCell>
+                    <TableCell>
+                      <code className="text-xs">scryer.size_gib(bytes)</code>
+                    </TableCell>
+                    <TableCell>
+                      <code className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground">
+                        float
+                      </code>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {t("settings.refFnSizeGib")}
+                    </TableCell>
                   </TableRow>
                   <TableRow>
-                    <TableCell><code className="text-xs">scryer.lang_matches(code, pattern)</code></TableCell>
-                    <TableCell><code className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground">bool</code></TableCell>
-                    <TableCell className="text-muted-foreground">{t("settings.refFnLangMatches")}</TableCell>
+                    <TableCell>
+                      <code className="text-xs">
+                        scryer.lang_matches(code, pattern)
+                      </code>
+                    </TableCell>
+                    <TableCell>
+                      <code className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground">
+                        bool
+                      </code>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {t("settings.refFnLangMatches")}
+                    </TableCell>
                   </TableRow>
                   <TableRow>
-                    <TableCell><code className="text-xs">scryer.normalize_source(raw)</code></TableCell>
-                    <TableCell><code className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground">string</code></TableCell>
-                    <TableCell className="text-muted-foreground">{t("settings.refFnNormalizeSource")}</TableCell>
+                    <TableCell>
+                      <code className="text-xs">
+                        scryer.normalize_source(raw)
+                      </code>
+                    </TableCell>
+                    <TableCell>
+                      <code className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground">
+                        string
+                      </code>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {t("settings.refFnNormalizeSource")}
+                    </TableCell>
                   </TableRow>
                   <TableRow>
-                    <TableCell><code className="text-xs">scryer.normalize_codec(raw)</code></TableCell>
-                    <TableCell><code className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground">string</code></TableCell>
-                    <TableCell className="text-muted-foreground">{t("settings.refFnNormalizeCodec")}</TableCell>
+                    <TableCell>
+                      <code className="text-xs">
+                        scryer.normalize_codec(raw)
+                      </code>
+                    </TableCell>
+                    <TableCell>
+                      <code className="rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground">
+                        string
+                      </code>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {t("settings.refFnNormalizeCodec")}
+                    </TableCell>
                   </TableRow>
                 </TableBody>
               </Table>
@@ -236,10 +689,14 @@ function RulesContextReference() {
           </div>
 
           <div>
-            <h4 className="mb-1 font-semibold">{t("settings.refSectionOutput")}</h4>
-            <p className="mb-2 text-muted-foreground">{t("settings.refOutputIntro")}</p>
+            <h4 className="mb-1 font-semibold">
+              {t("settings.refSectionOutput")}
+            </h4>
+            <p className="mb-2 text-muted-foreground">
+              {t("settings.refOutputIntro")}
+            </p>
             <pre className="rounded border border-border bg-muted/50 p-3 text-xs leading-relaxed">
-{`package scryer.rules.user.<rule_id>
+              {`package scryer.rules.user.<rule_id>
 import rego.v1
 
 # Return a map of score codes to point deltas.
@@ -254,12 +711,14 @@ score_entry["too_old"] := scryer.block_score() if {
     input.release.age_days > 365
 }
 
-score_entry["large_file_penalty"] := -200 if {
-    scryer.size_gib(input.release.size_bytes) > 80
+score_entry["too_few_chapters"] := scryer.block_score() if {
+    input.file != null
+    input.file.num_chapters < 2
 }
 
 score_entry["japanese_audio_bonus"] := 300 if {
-    some lang in input.release.languages_audio
+    input.file != null
+    some lang in input.file.audio_languages
     scryer.lang_matches(lang, "ja")
 }`}
             </pre>
@@ -272,12 +731,19 @@ score_entry["japanese_audio_bonus"] := 300 if {
 
 function FacetBadges({ facets }: { facets: string[] }) {
   if (facets.length === 0) {
-    return <span className="rounded bg-blue-900/40 px-1.5 py-0.5 text-xs text-blue-300">Global</span>;
+    return (
+      <span className="rounded bg-blue-900/40 px-1.5 py-0.5 text-xs text-blue-300">
+        Global
+      </span>
+    );
   }
   return (
     <div className="flex gap-1">
       {facets.map((f) => (
-        <span key={f} className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground capitalize">
+        <span
+          key={f}
+          className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground capitalize"
+        >
           {f}
         </span>
       ))}
@@ -310,7 +776,9 @@ export function SettingsRulesSection({
 
       <div className="rounded border border-border">
         <div className="flex items-center justify-between border-b border-border px-3 py-2">
-          <CardTitle className="text-base">{t("settings.existingRules")}</CardTitle>
+          <CardTitle className="text-base">
+            {t("settings.existingRules")}
+          </CardTitle>
         </div>
         <div className="overflow-x-auto">
           <Table>
@@ -319,9 +787,15 @@ export function SettingsRulesSection({
                 <TableHead>{t("label.name")}</TableHead>
                 <TableHead>{t("settings.ruleDescription")}</TableHead>
                 <TableHead>{t("settings.ruleAppliedFacets")}</TableHead>
-                <TableHead className="text-center">{t("settings.rulePriority")}</TableHead>
-                <TableHead className="text-center">{t("label.enabled")}</TableHead>
-                <TableHead className="text-right">{t("label.actions")}</TableHead>
+                <TableHead className="text-center">
+                  {t("settings.rulePriority")}
+                </TableHead>
+                <TableHead className="text-center">
+                  {t("label.enabled")}
+                </TableHead>
+                <TableHead className="text-right">
+                  {t("label.actions")}
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -334,7 +808,9 @@ export function SettingsRulesSection({
                   <TableCell>
                     <FacetBadges facets={record.appliedFacets} />
                   </TableCell>
-                  <TableCell className="text-center">{record.priority}</TableCell>
+                  <TableCell className="text-center">
+                    {record.priority}
+                  </TableCell>
                   <TableCell className="text-center">
                     <RenderBooleanIcon
                       value={record.enabled}
@@ -355,7 +831,9 @@ export function SettingsRulesSection({
                         }
                       >
                         <Power className="mr-1 h-3.5 w-3.5" />
-                        {record.enabled ? t("label.disable") : t("label.enable")}
+                        {record.enabled
+                          ? t("label.disable")
+                          : t("label.enable")}
                       </Button>
                       <Button
                         size="sm"
@@ -372,7 +850,9 @@ export function SettingsRulesSection({
                         disabled={mutatingRuleSetId === record.id}
                       >
                         <Trash2 className="mr-1 h-3.5 w-3.5" />
-                        {mutatingRuleSetId === record.id ? t("label.deleting") : t("label.delete")}
+                        {mutatingRuleSetId === record.id
+                          ? t("label.deleting")
+                          : t("label.delete")}
                       </Button>
                     </div>
                   </TableCell>
@@ -393,7 +873,9 @@ export function SettingsRulesSection({
       <Card>
         <CardHeader>
           <CardTitle className="text-base">
-            {editingRuleSetId ? t("settings.ruleUpdate") : t("settings.ruleCreate")}
+            {editingRuleSetId
+              ? t("settings.ruleUpdate")
+              : t("settings.ruleCreate")}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -404,24 +886,34 @@ export function SettingsRulesSection({
                 <Input
                   value={ruleSetDraft.name}
                   onChange={(e) =>
-                    setRuleSetDraft((prev) => ({ ...prev, name: e.target.value }))
+                    setRuleSetDraft((prev) => ({
+                      ...prev,
+                      name: e.target.value,
+                    }))
                   }
                   required
                   placeholder="my_rule"
                 />
               </label>
               <label>
-                <Label className="mb-2 block">{t("settings.ruleDescription")}</Label>
+                <Label className="mb-2 block">
+                  {t("settings.ruleDescription")}
+                </Label>
                 <Input
                   value={ruleSetDraft.description}
                   onChange={(e) =>
-                    setRuleSetDraft((prev) => ({ ...prev, description: e.target.value }))
+                    setRuleSetDraft((prev) => ({
+                      ...prev,
+                      description: e.target.value,
+                    }))
                   }
                   placeholder="Block releases over 100 GiB"
                 />
               </label>
               <label>
-                <Label className="mb-2 block">{t("settings.rulePriority")}</Label>
+                <Label className="mb-2 block">
+                  {t("settings.rulePriority")}
+                </Label>
                 <Input
                   {...integerInputProps}
                   value={ruleSetDraft.priority}
@@ -437,7 +929,9 @@ export function SettingsRulesSection({
             </div>
 
             <div>
-              <Label className="mb-2 block">{t("settings.ruleRegoSource")}</Label>
+              <Label className="mb-2 block">
+                {t("settings.ruleRegoSource")}
+              </Label>
               <LazyRegoEditor
                 value={ruleSetDraft.regoSource}
                 onChange={(value) =>
@@ -448,8 +942,12 @@ export function SettingsRulesSection({
             </div>
 
             <div>
-              <Label className="mb-2 block">{t("settings.ruleAppliedFacets")}</Label>
-              <p className="mb-2 text-xs text-muted-foreground">{t("settings.ruleAppliedFacetsHelp")}</p>
+              <Label className="mb-2 block">
+                {t("settings.ruleAppliedFacets")}
+              </Label>
+              <p className="mb-2 text-xs text-muted-foreground">
+                {t("settings.ruleAppliedFacetsHelp")}
+              </p>
               <div className="flex items-center gap-4">
                 {FACET_OPTIONS.map((opt) => (
                   <label key={opt.value} className="flex items-center gap-2">
@@ -477,7 +975,10 @@ export function SettingsRulesSection({
                 type="checkbox"
                 checked={ruleSetDraft.enabled}
                 onChange={(e) =>
-                  setRuleSetDraft((prev) => ({ ...prev, enabled: e.target.checked }))
+                  setRuleSetDraft((prev) => ({
+                    ...prev,
+                    enabled: e.target.checked,
+                  }))
                 }
                 className="accent-primary"
               />
@@ -518,9 +1019,15 @@ export function SettingsRulesSection({
                 onClick={() => void validateDraft()}
                 disabled={validating || !ruleSetDraft.regoSource.trim()}
               >
-                {validating ? t("settings.ruleValidating") : t("settings.ruleValidate")}
+                {validating
+                  ? t("settings.ruleValidating")
+                  : t("settings.ruleValidate")}
               </Button>
-              <Button type="button" variant="secondary" onClick={resetRuleSetDraft}>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={resetRuleSetDraft}
+              >
                 {t("label.cancel")}
               </Button>
             </div>

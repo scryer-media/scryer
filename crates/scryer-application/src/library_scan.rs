@@ -178,6 +178,10 @@ pub trait MetadataGateway: Send + Sync {
 #[async_trait]
 pub trait LibraryScanner: Send + Sync {
     async fn scan_library(&self, root: &str) -> AppResult<Vec<LibraryFile>>;
+
+    async fn scan_directory(&self, root: &str) -> AppResult<Vec<LibraryFile>> {
+        self.scan_library(root).await
+    }
 }
 
 #[derive(Default)]

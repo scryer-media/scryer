@@ -13,10 +13,10 @@ import { buildRouteCommands } from "@/components/root/route-commands";
 import { useGlobalStatusToast } from "@/lib/hooks/use-global-status-toast";
 import { useLanguage } from "@/lib/hooks/use-language";
 import { ScryerGraphqlProvider } from "@/lib/graphql/urql-provider";
-import { setOnBackendRestarting } from "@/lib/graphql/urql-client";
 import { useOnlineStatus } from "@/lib/hooks/use-online-status";
 import { useInstallPrompt } from "@/lib/hooks/use-install-prompt";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
+import { useBackendRestarting } from "@/lib/hooks/use-backend-restarting";
 import type { ViewId, SettingsSection, ContentSettingsSection } from "@/components/root/types";
 import type { Facet } from "@/lib/types";
 import {
@@ -35,6 +35,7 @@ import {
   parseViewFromPath,
 } from "@/lib/utils/routing";
 import { FACET_REGISTRY, isMediaView, facetForView } from "@/lib/facets/registry";
+import { BackendRestartOverlay } from "@/components/common/backend-restart-overlay";
 
 const MediaContentContainer = lazy(() =>
   import("@/components/containers/media-content-container").then((m) => ({ default: m.MediaContentContainer })),
@@ -161,19 +162,20 @@ function MainContent({
 }
 
 export default function HomePage() {
+  const { serviceRestarting, setServiceRestarting } = useBackendRestarting();
   const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const [setupChecked, setSetupChecked] = useState(false);
 
   useEffect(() => {
-    if (!authLoading && !user) {
+    if (!serviceRestarting && !authLoading && !user) {
       navigate("/login", { replace: true });
     }
-  }, [authLoading, user, navigate]);
+  }, [authLoading, user, navigate, serviceRestarting]);
 
   // Check if setup wizard needs to run (first-run detection).
   useEffect(() => {
-    if (authLoading || !user || setupChecked) return;
+    if (serviceRestarting || authLoading || !user || setupChecked) return;
     (async () => {
       try {
         const { data } = await import("@/lib/graphql/urql-client").then(
@@ -191,7 +193,11 @@ export default function HomePage() {
       }
       setSetupChecked(true);
     })();
-  }, [authLoading, user, setupChecked, navigate]);
+  }, [authLoading, user, setupChecked, navigate, serviceRestarting]);
+
+  if (serviceRestarting) {
+    return <BackendRestartOverlay />;
+  }
 
   if (authLoading || (!setupChecked && user)) {
     return (
@@ -205,10 +211,21 @@ export default function HomePage() {
     return null;
   }
 
-  return <AuthenticatedHomePage />;
+  return (
+    <AuthenticatedHomePage
+      serviceRestarting={serviceRestarting}
+      setServiceRestarting={setServiceRestarting}
+    />
+  );
 }
 
-function AuthenticatedHomePage() {
+function AuthenticatedHomePage({
+  serviceRestarting,
+  setServiceRestarting,
+}: {
+  serviceRestarting: boolean;
+  setServiceRestarting: (value: boolean) => void;
+}) {
   const { user } = useAuth();
   const isMobile = useIsMobile();
   const isOnline = useOnlineStatus();
@@ -249,17 +266,9 @@ function AuthenticatedHomePage() {
   } = useLanguage(searchParams);
 
   const [, setGlobalStatusRaw] = useState("");
-  const [serviceRestarting, setServiceRestarting] = useState(false);
   const setGlobalStatus = useGlobalStatusToast(setGlobalStatusRaw, {
-    onServiceRestarting: useCallback(() => setServiceRestarting(true), []),
+    onServiceRestarting: useCallback(() => setServiceRestarting(true), [setServiceRestarting]),
   });
-
-  // Register the fetch-level restart detector so ANY GraphQL request that
-  // returns HTML (backend upgrade splash) triggers the overlay immediately.
-  useEffect(() => {
-    setOnBackendRestarting(() => setServiceRestarting(true));
-    return () => setOnBackendRestarting(null);
-  }, []);
 
   const setLanguagePreferenceFromShell = useCallback(
     (code: string) => {
@@ -383,42 +392,13 @@ function AuthenticatedHomePage() {
     [navigateTo, view],
   );
 
-  // Poll /health when backend is restarting; reload when it's back
-  useEffect(() => {
-    if (!serviceRestarting) return;
-    const id = setInterval(async () => {
-      try {
-        const res = await fetch("/health");
-        const data = await res.json();
-        if (data.status === "ok") {
-          setServiceRestarting(false);
-          window.location.reload();
-        }
-      } catch {
-        // still down, keep polling
-      }
-    }, 1000);
-    return () => clearInterval(id);
-  }, [serviceRestarting]);
-
   return (
     <ScryerGraphqlProvider language={uiLanguage}>
     <TranslateContext.Provider value={t}>
     <GlobalStatusContext.Provider value={setGlobalStatus}>
     <div className="min-h-screen bg-background text-foreground">
       {serviceRestarting && (
-        <div className="fixed inset-0 z-[9999] grid place-items-center bg-[#070b18]">
-          <div className="text-center">
-            <h1
-              className="mb-8 text-3xl font-bold tracking-tight text-[#dbe5ff]"
-              style={{ fontFamily: "'Space Grotesk', Inter, ui-sans-serif, system-ui, sans-serif" }}
-            >
-              scryer
-            </h1>
-            <Loader2 className="mx-auto mb-6 size-7 animate-spin text-[#5b64ff]" />
-            <p className="text-sm text-[#8b96b9]">Service is restarting&hellip;</p>
-          </div>
-        </div>
+        <BackendRestartOverlay />
       )}
       <Suspense fallback={<ViewLoadingFallback />}>
         <GlobalSearchProvider

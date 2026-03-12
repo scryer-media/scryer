@@ -21,6 +21,7 @@ pub mod app_usecase_post_processing;
 pub(crate) mod app_usecase_rss;
 mod app_usecase_rules;
 mod app_usecase_security;
+mod app_usecase_title_images;
 mod delay_profile;
 pub(crate) mod facet_handler;
 mod facet_movie;
@@ -31,6 +32,7 @@ mod library_rename;
 mod library_scan;
 pub(crate) mod nfo;
 mod null_repositories;
+mod post_download_gate;
 mod quality_profile;
 pub mod recycle_bin;
 mod release_group_db;
@@ -38,6 +40,7 @@ mod release_parser;
 mod scoring_weights;
 mod types;
 pub mod upgrade;
+mod user_rule_input;
 
 use crate::activity::ActivityStream;
 use async_trait::async_trait;
@@ -73,6 +76,7 @@ pub use app_usecase_integration::start_download_queue_poller;
 pub use app_usecase_plugins::RegistryPlugin;
 pub use app_usecase_post_processing::{run_post_processing, PostProcessingContext};
 pub use app_usecase_rss::RssSyncReport;
+pub use app_usecase_title_images::start_background_poster_loop;
 pub use delay_profile::{
     parse_delay_profile_catalog, resolve_delay_profile, should_bypass_delay, DelayProfile,
     DELAY_PROFILE_CATALOG_KEY,
@@ -98,7 +102,8 @@ pub use null_repositories::{
     NullImportRepository, NullIndexerStatsTracker, NullMediaFileRepository,
     NullNotificationChannelRepository, NullNotificationSubscriptionRepository,
     NullPendingReleaseRepository, NullPluginInstallationRepository, NullRuleSetRepository,
-    NullSettingsRepository, NullSystemInfoProvider, NullWantedItemRepository,
+    NullSettingsRepository, NullSystemInfoProvider, NullTitleImageProcessor,
+    NullTitleImageRepository, NullWantedItemRepository,
 };
 pub use quality_profile::{
     apply_age_scoring, apply_size_scoring_for_category, default_quality_profile_1080p_for_search,
@@ -113,8 +118,10 @@ pub use types::{
     BackupInfo, DiskSpaceInfo, DownloadGrabResult, DownloadSourceKind, HealthCheckResult,
     HealthCheckStatus, HousekeepingReport, IndexerQueryStats, IndexerSearchResponse,
     IndexerSearchResult, JwtAuthConfig, PendingRelease, PrimaryCollectionSummary, ReleaseDecision,
-    ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature, SystemHealth, TitleMediaFile,
-    TitleMetadataUpdate, TitleReleaseBlocklistEntry, WantedItem,
+    ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature, SystemHealth, TitleImageBlob,
+    TitleImageKind, TitleImageReplacement, TitleImageStorageMode, TitleImageSyncTask,
+    TitleImageVariantRecord, TitleMediaFile, TitleMediaSizeSummary, TitleMetadataUpdate,
+    TitleReleaseBlocklistEntry, WantedItem,
 };
 
 const SETTINGS_SCOPE_SYSTEM: &str = "system";
@@ -162,6 +169,8 @@ pub struct AppServices {
     pub rule_sets: Arc<dyn RuleSetRepository>,
     pub plugin_installations: Arc<dyn PluginInstallationRepository>,
     pub system_info: Arc<dyn SystemInfoProvider>,
+    pub title_images: Arc<dyn TitleImageRepository>,
+    pub title_image_processor: Arc<dyn TitleImageProcessor>,
     pub indexer_stats: Arc<dyn IndexerStatsTracker>,
     pub user_rules: Arc<std::sync::RwLock<scryer_rules::UserRulesEngine>>,
     pub plugin_provider: Option<Arc<dyn IndexerPluginProvider>>,
@@ -176,6 +185,7 @@ pub struct AppServices {
     pub download_queue_broadcast: broadcast::Sender<Vec<DownloadQueueItem>>,
     pub acquisition_wake: Arc<tokio::sync::Notify>,
     pub hydration_wake: Arc<tokio::sync::Notify>,
+    pub poster_wake: Arc<tokio::sync::Notify>,
     pub housekeeping: Arc<dyn HousekeepingRepository>,
     pub health_check_results: Arc<tokio::sync::RwLock<Vec<HealthCheckResult>>>,
     pub pending_releases: Arc<dyn PendingReleaseRepository>,
@@ -223,6 +233,8 @@ impl AppServices {
             rule_sets: Arc::new(NullRuleSetRepository),
             plugin_installations: Arc::new(NullPluginInstallationRepository),
             system_info: Arc::new(NullSystemInfoProvider),
+            title_images: Arc::new(NullTitleImageRepository),
+            title_image_processor: Arc::new(NullTitleImageProcessor),
             indexer_stats: Arc::new(NullIndexerStatsTracker),
             user_rules: Arc::new(std::sync::RwLock::new(
                 scryer_rules::UserRulesEngine::empty(),
@@ -239,6 +251,7 @@ impl AppServices {
             download_queue_broadcast: queue_tx,
             acquisition_wake: Arc::new(tokio::sync::Notify::new()),
             hydration_wake: Arc::new(tokio::sync::Notify::new()),
+            poster_wake: Arc::new(tokio::sync::Notify::new()),
             housekeeping: Arc::new(NullHousekeepingRepository),
             pending_releases: Arc::new(NullPendingReleaseRepository),
             health_check_results: Arc::new(tokio::sync::RwLock::new(Vec::new())),
@@ -319,6 +332,37 @@ pub trait TitleRepository: Send + Sync {
     /// Return titles that have never been hydrated (metadata_fetched_at IS NULL),
     /// ordered by creation time, up to `limit`.
     async fn list_unhydrated(&self, limit: usize) -> AppResult<Vec<Title>>;
+}
+
+#[async_trait]
+pub trait TitleImageRepository: Send + Sync {
+    async fn list_titles_requiring_image_refresh(
+        &self,
+        kind: TitleImageKind,
+        limit: usize,
+    ) -> AppResult<Vec<TitleImageSyncTask>>;
+
+    async fn replace_title_image(
+        &self,
+        title_id: &str,
+        replacement: TitleImageReplacement,
+    ) -> AppResult<()>;
+
+    async fn get_title_image_blob(
+        &self,
+        title_id: &str,
+        kind: TitleImageKind,
+        variant_key: &str,
+    ) -> AppResult<Option<TitleImageBlob>>;
+}
+
+#[async_trait]
+pub trait TitleImageProcessor: Send + Sync {
+    async fn fetch_and_process_image(
+        &self,
+        kind: TitleImageKind,
+        source_url: &str,
+    ) -> AppResult<TitleImageReplacement>;
 }
 
 #[async_trait]
@@ -552,6 +596,10 @@ pub trait DownloadSubmissionRepository: Send + Sync {
         download_client_type: &str,
         download_client_item_id: &str,
     ) -> AppResult<Option<DownloadSubmission>>;
+
+    async fn list_for_title(&self, title_id: &str) -> AppResult<Vec<DownloadSubmission>>;
+
+    async fn delete_for_title(&self, title_id: &str) -> AppResult<()>;
 }
 
 #[async_trait]
@@ -612,6 +660,7 @@ pub struct SubtitleStreamDetail {
 }
 
 /// Mirrors `scryer_mediainfo::MediaAnalysis` without depending on that crate.
+#[derive(Clone)]
 pub struct MediaFileAnalysis {
     pub video_codec: Option<String>,
     pub video_width: Option<i32>,
@@ -631,6 +680,7 @@ pub struct MediaFileAnalysis {
     pub subtitle_streams: Vec<SubtitleStreamDetail>,
     pub has_multiaudio: bool,
     pub duration_seconds: Option<i32>,
+    pub num_chapters: Option<i32>,
     pub container_format: Option<String>,
     pub raw_json: String,
 }
@@ -665,6 +715,11 @@ pub trait MediaFileRepository: Send + Sync {
     async fn link_file_to_episode(&self, file_id: &str, episode_id: &str) -> AppResult<()>;
 
     async fn list_media_files_for_title(&self, title_id: &str) -> AppResult<Vec<TitleMediaFile>>;
+
+    async fn list_title_media_size_summaries(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<TitleMediaSizeSummary>>;
 
     async fn update_media_file_analysis(
         &self,
@@ -750,6 +805,7 @@ pub trait PendingReleaseRepository: Send + Sync {
         wanted_item_id: &str,
         except_id: &str,
     ) -> AppResult<()>;
+    async fn delete_pending_releases_for_title(&self, title_id: &str) -> AppResult<()>;
 }
 
 #[async_trait]
@@ -875,7 +931,8 @@ pub trait IndexerPluginProvider: Send + Sync {
     }
     /// Returns the plugin's default base URL for a provider type, if set.
     /// When present, the plugin has a fixed public endpoint and doesn't need
-    /// user-supplied base_url or api_key.
+    /// a user-supplied base_url. Some providers may still use the standard
+    /// api_key field.
     fn default_base_url_for_provider(&self, _provider_type: &str) -> Option<String> {
         None
     }
@@ -907,6 +964,7 @@ pub struct DownloadClientAddRequest {
     pub source_title: Option<String>,
     pub source_password: Option<String>,
     pub category: Option<String>,
+    pub queue_priority: Option<String>,
     pub download_directory: Option<String>,
     pub release_title: Option<String>,
     pub indexer_name: Option<String>,
@@ -933,6 +991,7 @@ impl DownloadClientAddRequest {
             source_title,
             source_password,
             category,
+            queue_priority: None,
             download_directory: None,
             release_title: None,
             indexer_name: None,
@@ -1249,6 +1308,7 @@ fn sanitize_ids(ids: Vec<ExternalId>) -> Vec<ExternalId> {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use std::collections::HashMap;
     use tokio::sync::Mutex;
 
     #[derive(Default)]
@@ -1679,7 +1739,30 @@ mod tests {
             for tid in title_ids {
                 if let Some(c) = collections
                     .iter()
-                    .find(|c| c.title_id == *tid && c.collection_index == "0")
+                    .filter(|c| c.title_id == *tid)
+                    .filter(|c| {
+                        c.collection_type.eq_ignore_ascii_case("movie") || c.collection_index == "0"
+                    })
+                    .min_by(|left, right| {
+                        let left_key = (
+                            !left.collection_type.eq_ignore_ascii_case("movie"),
+                            left.ordered_path
+                                .as_deref()
+                                .map_or(true, |path| path.trim().is_empty()),
+                            left.collection_index.parse::<u32>().unwrap_or(u32::MAX),
+                            left.collection_index.clone(),
+                        );
+                        let right_key = (
+                            !right.collection_type.eq_ignore_ascii_case("movie"),
+                            right
+                                .ordered_path
+                                .as_deref()
+                                .map_or(true, |path| path.trim().is_empty()),
+                            right.collection_index.parse::<u32>().unwrap_or(u32::MAX),
+                            right.collection_index.clone(),
+                        );
+                        left_key.cmp(&right_key)
+                    })
                 {
                     out.push(PrimaryCollectionSummary {
                         title_id: tid.clone(),
@@ -1750,6 +1833,75 @@ mod tests {
                 grab_current: None,
                 grab_max: None,
             })
+        }
+    }
+
+    struct MockMetadataGateway {
+        movies: HashMap<i64, MovieMetadata>,
+    }
+
+    #[async_trait]
+    impl MetadataGateway for MockMetadataGateway {
+        async fn search_tvdb(
+            &self,
+            _query: &str,
+            _type_hint: &str,
+        ) -> AppResult<Vec<MetadataSearchItem>> {
+            Err(AppError::Repository("not implemented in tests".into()))
+        }
+
+        async fn search_tvdb_rich(
+            &self,
+            _query: &str,
+            _type_hint: &str,
+            _limit: i32,
+            _language: &str,
+        ) -> AppResult<Vec<RichMetadataSearchItem>> {
+            Err(AppError::Repository("not implemented in tests".into()))
+        }
+
+        async fn search_tvdb_multi(
+            &self,
+            _query: &str,
+            _limit: i32,
+            _language: &str,
+        ) -> AppResult<MultiMetadataSearchResult> {
+            Err(AppError::Repository("not implemented in tests".into()))
+        }
+
+        async fn get_movie(&self, tvdb_id: i64, _language: &str) -> AppResult<MovieMetadata> {
+            self.movies
+                .get(&tvdb_id)
+                .cloned()
+                .ok_or_else(|| AppError::NotFound(format!("movie {tvdb_id}")))
+        }
+
+        async fn get_series(&self, _tvdb_id: i64, _language: &str) -> AppResult<SeriesMetadata> {
+            Err(AppError::Repository("not implemented in tests".into()))
+        }
+
+        async fn get_movies_bulk(
+            &self,
+            tvdb_ids: &[i64],
+            _language: &str,
+        ) -> AppResult<HashMap<i64, MovieMetadata>> {
+            Ok(tvdb_ids
+                .iter()
+                .filter_map(|tvdb_id| {
+                    self.movies
+                        .get(tvdb_id)
+                        .cloned()
+                        .map(|movie| (*tvdb_id, movie))
+                })
+                .collect())
+        }
+
+        async fn get_series_bulk(
+            &self,
+            _tvdb_ids: &[i64],
+            _language: &str,
+        ) -> AppResult<HashMap<i64, SeriesMetadata>> {
+            Err(AppError::Repository("not implemented in tests".into()))
         }
     }
 
@@ -2020,6 +2172,120 @@ mod tests {
         }
     }
 
+    #[derive(Default, Clone)]
+    struct TrackingDownloadSubmissionRepo {
+        store: Arc<Mutex<Vec<DownloadSubmission>>>,
+        deleted_title_ids: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
+        async fn record_submission(&self, submission: DownloadSubmission) -> AppResult<()> {
+            let mut entries = self.store.lock().await;
+            if let Some(existing) = entries.iter_mut().find(|entry| {
+                entry.download_client_type == submission.download_client_type
+                    && entry.download_client_item_id == submission.download_client_item_id
+            }) {
+                *existing = submission;
+            } else {
+                entries.push(submission);
+            }
+            Ok(())
+        }
+
+        async fn find_by_client_item_id(
+            &self,
+            download_client_type: &str,
+            download_client_item_id: &str,
+        ) -> AppResult<Option<DownloadSubmission>> {
+            let entries = self.store.lock().await;
+            Ok(entries
+                .iter()
+                .find(|entry| {
+                    entry.download_client_type == download_client_type
+                        && entry.download_client_item_id == download_client_item_id
+                })
+                .cloned())
+        }
+
+        async fn list_for_title(&self, title_id: &str) -> AppResult<Vec<DownloadSubmission>> {
+            let entries = self.store.lock().await;
+            Ok(entries
+                .iter()
+                .filter(|entry| entry.title_id == title_id)
+                .cloned()
+                .collect())
+        }
+
+        async fn delete_for_title(&self, title_id: &str) -> AppResult<()> {
+            self.deleted_title_ids
+                .lock()
+                .await
+                .push(title_id.to_string());
+            self.store
+                .lock()
+                .await
+                .retain(|entry| entry.title_id != title_id);
+            Ok(())
+        }
+    }
+
+    #[derive(Default, Clone)]
+    struct TrackingPendingReleaseRepo {
+        deleted_title_ids: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl PendingReleaseRepository for TrackingPendingReleaseRepo {
+        async fn insert_pending_release(&self, release: &PendingRelease) -> AppResult<String> {
+            Ok(release.id.clone())
+        }
+
+        async fn list_expired_pending_releases(&self, _: &str) -> AppResult<Vec<PendingRelease>> {
+            Ok(vec![])
+        }
+
+        async fn list_waiting_pending_releases(&self) -> AppResult<Vec<PendingRelease>> {
+            Ok(vec![])
+        }
+
+        async fn get_pending_release(&self, _: &str) -> AppResult<Option<PendingRelease>> {
+            Ok(None)
+        }
+
+        async fn list_pending_releases_for_wanted_item(
+            &self,
+            _: &str,
+        ) -> AppResult<Vec<PendingRelease>> {
+            Ok(vec![])
+        }
+
+        async fn update_pending_release_status(
+            &self,
+            _: &str,
+            _: &str,
+            _: Option<&str>,
+        ) -> AppResult<()> {
+            Ok(())
+        }
+
+        async fn supersede_pending_releases_for_wanted_item(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> AppResult<()> {
+            Ok(())
+        }
+
+        async fn delete_pending_releases_for_title(&self, title_id: &str) -> AppResult<()> {
+            self.deleted_title_ids
+                .lock()
+                .await
+                .push(title_id.to_string());
+            Ok(())
+        }
+    }
+
     #[async_trait]
     impl EventRepository for MockEventRepo {
         async fn list(
@@ -2047,7 +2313,11 @@ mod tests {
         }
     }
 
-    struct StubDownloadClient;
+    #[derive(Default, Clone)]
+    struct StubDownloadClient {
+        queue_items: Arc<Mutex<Vec<DownloadQueueItem>>>,
+        deleted_items: Arc<Mutex<Vec<(String, bool)>>>,
+    }
 
     #[async_trait]
     impl DownloadClient for StubDownloadClient {
@@ -2059,6 +2329,18 @@ mod tests {
                 job_id: format!("job-for-{}", request.title.id),
                 client_type: "nzbget".to_string(),
             })
+        }
+
+        async fn list_queue(&self) -> AppResult<Vec<DownloadQueueItem>> {
+            Ok(self.queue_items.lock().await.clone())
+        }
+
+        async fn delete_queue_item(&self, id: &str, is_history: bool) -> AppResult<()> {
+            self.deleted_items
+                .lock()
+                .await
+                .push((id.to_string(), is_history));
+            Ok(())
         }
     }
 
@@ -2072,7 +2354,7 @@ mod tests {
         let release_attempts = Arc::new(MockReleaseAttemptRepo);
         let settings = Arc::new(MockSettingsRepo);
         let quality_profiles = Arc::new(MockQualityProfileRepo);
-        let download_client = Arc::new(StubDownloadClient);
+        let download_client = Arc::new(StubDownloadClient::default());
         let indexer_client = Arc::new(MockIndexerClient);
 
         let services = AppServices::with_default_channels(
@@ -2089,6 +2371,61 @@ mod tests {
             quality_profiles,
             String::new(),
         );
+        let mut registry = FacetRegistry::new();
+        registry.register(Arc::new(MovieFacetHandler));
+        registry.register(Arc::new(SeriesFacetHandler::new(
+            scryer_domain::MediaFacet::Tv,
+        )));
+        registry.register(Arc::new(SeriesFacetHandler::new(
+            scryer_domain::MediaFacet::Anime,
+        )));
+        let app = AppUseCase::new(
+            services,
+            JwtAuthConfig {
+                issuer: "scryer-test".to_string(),
+                access_ttl_seconds: 3600,
+                jwt_hmac_secret: "dGVzdC1zZWNyZXQtZm9yLXVuaXQtdGVzdHMtb25seS0zMmJ5dGVzISE="
+                    .to_string(),
+            },
+            Arc::new(registry),
+        );
+
+        (app, User::new_admin("admin"))
+    }
+
+    fn bootstrap_with_cleanup_tracking(
+        download_client: Arc<StubDownloadClient>,
+        download_submissions: Arc<TrackingDownloadSubmissionRepo>,
+        pending_releases: Arc<TrackingPendingReleaseRepo>,
+    ) -> (AppUseCase, User) {
+        let titles = Arc::new(MockTitleRepo::default());
+        let shows = Arc::new(MockShowRepo::default());
+        let users = Arc::new(MockUserRepo::default());
+        let events = Arc::new(MockEventRepo::default());
+        let indexer_configs = Arc::new(MockIndexerConfigRepo::default());
+        let download_client_configs = Arc::new(MockDownloadClientConfigRepo::default());
+        let release_attempts = Arc::new(MockReleaseAttemptRepo);
+        let settings = Arc::new(MockSettingsRepo);
+        let quality_profiles = Arc::new(MockQualityProfileRepo);
+        let indexer_client = Arc::new(MockIndexerClient);
+
+        let mut services = AppServices::with_default_channels(
+            titles,
+            shows,
+            users,
+            events,
+            indexer_configs,
+            indexer_client,
+            download_client,
+            download_client_configs,
+            release_attempts,
+            settings,
+            quality_profiles,
+            String::new(),
+        );
+        services.download_submissions = download_submissions;
+        services.pending_releases = pending_releases;
+
         let mut registry = FacetRegistry::new();
         registry.register(Arc::new(MovieFacetHandler));
         registry.register(Arc::new(SeriesFacetHandler::new(
@@ -2291,6 +2628,142 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_title_cancels_queue_items_linked_via_submission_metadata() {
+        let download_client = Arc::new(StubDownloadClient::default());
+        let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+        let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+        let (app, user) = bootstrap_with_cleanup_tracking(
+            download_client.clone(),
+            download_submissions.clone(),
+            pending_releases.clone(),
+        );
+
+        let created = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: "Delete Me".into(),
+                    facet: MediaFacet::Movie,
+                    monitored: false,
+                    tags: vec![],
+                    external_ids: vec![],
+                    min_availability: None,
+
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create title");
+
+        download_submissions
+            .record_submission(DownloadSubmission {
+                title_id: created.id.clone(),
+                facet: "movie".to_string(),
+                download_client_type: "sabnzbd".to_string(),
+                download_client_item_id: "queue-fallback".to_string(),
+                source_title: Some(created.name.clone()),
+            })
+            .await
+            .expect("record submission");
+
+        *download_client.queue_items.lock().await = vec![
+            DownloadQueueItem {
+                id: "queue-direct".to_string(),
+                title_id: Some(created.id.clone()),
+                title_name: created.name.clone(),
+                facet: Some("movie".to_string()),
+                client_id: "primary".to_string(),
+                client_name: "Primary".to_string(),
+                client_type: "nzbget".to_string(),
+                state: DownloadQueueState::Queued,
+                progress_percent: 0,
+                size_bytes: None,
+                remaining_seconds: None,
+                queued_at: None,
+                last_updated_at: None,
+                attention_required: false,
+                attention_reason: None,
+                download_client_item_id: "queue-direct".to_string(),
+                import_status: None,
+                import_error_message: None,
+                imported_at: None,
+                is_scryer_origin: true,
+            },
+            DownloadQueueItem {
+                id: "queue-fallback".to_string(),
+                title_id: None,
+                title_name: created.name.clone(),
+                facet: None,
+                client_id: "primary".to_string(),
+                client_name: "Primary".to_string(),
+                client_type: "sabnzbd".to_string(),
+                state: DownloadQueueState::Queued,
+                progress_percent: 0,
+                size_bytes: None,
+                remaining_seconds: None,
+                queued_at: None,
+                last_updated_at: None,
+                attention_required: false,
+                attention_reason: None,
+                download_client_item_id: "queue-fallback".to_string(),
+                import_status: None,
+                import_error_message: None,
+                imported_at: None,
+                is_scryer_origin: false,
+            },
+            DownloadQueueItem {
+                id: "queue-unrelated".to_string(),
+                title_id: None,
+                title_name: "Other".to_string(),
+                facet: None,
+                client_id: "primary".to_string(),
+                client_name: "Primary".to_string(),
+                client_type: "sabnzbd".to_string(),
+                state: DownloadQueueState::Queued,
+                progress_percent: 0,
+                size_bytes: None,
+                remaining_seconds: None,
+                queued_at: None,
+                last_updated_at: None,
+                attention_required: false,
+                attention_reason: None,
+                download_client_item_id: "queue-unrelated".to_string(),
+                import_status: None,
+                import_error_message: None,
+                imported_at: None,
+                is_scryer_origin: false,
+            },
+        ];
+
+        app.delete_title(&user, &created.id, false)
+            .await
+            .expect("delete title");
+
+        let deleted_items = download_client.deleted_items.lock().await.clone();
+        assert_eq!(
+            deleted_items,
+            vec![
+                ("queue-direct".to_string(), false),
+                ("queue-fallback".to_string(), false),
+            ]
+        );
+        assert_eq!(
+            pending_releases.deleted_title_ids.lock().await.clone(),
+            vec![created.id.clone()]
+        );
+        assert_eq!(
+            download_submissions.deleted_title_ids.lock().await.clone(),
+            vec![created.id.clone()]
+        );
+        assert!(download_submissions
+            .store
+            .lock()
+            .await
+            .iter()
+            .all(|entry| entry.title_id != created.id));
+    }
+
+    #[tokio::test]
     async fn update_user_entitlements_changes_permissions() {
         let (app, user) = bootstrap();
 
@@ -2468,6 +2941,248 @@ mod tests {
         assert_eq!(collections[0].id, collection.id);
         assert_eq!(episodes.len(), 1);
         assert_eq!(episodes[0].id, episode.id);
+    }
+
+    #[tokio::test]
+    async fn anime_hybrid_movie_mapping_creates_interstitial_collection() {
+        let (mut app, user) = bootstrap();
+        app.services.metadata_gateway = Arc::new(MockMetadataGateway {
+            movies: HashMap::from([(
+                131_963,
+                MovieMetadata {
+                    tvdb_id: 131_963,
+                    name: "Mugen Train".into(),
+                    slug: "mugen-train".into(),
+                    year: Some(2020),
+                    content_status: "Released".into(),
+                    overview: "A train mission.".into(),
+                    poster_url: "https://example.com/mugen-train.jpg".into(),
+                    language: "eng".into(),
+                    runtime_minutes: 117,
+                    sort_title: "Mugen Train".into(),
+                    imdb_id: "tt11032374".into(),
+                    genres: vec!["Action".into(), "Anime".into()],
+                    studio: "ufotable".into(),
+                    tmdb_release_date: Some("2020-10-16".into()),
+                },
+            )]),
+        });
+        let title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: "Demon Slayer".into(),
+                    facet: MediaFacet::Anime,
+                    monitored: true,
+                    tags: vec![],
+                    external_ids: vec![ExternalId {
+                        source: "tvdb".into(),
+                        value: "348545".into(),
+                    }],
+                    min_availability: None,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create title");
+
+        let seasons = vec![
+            SeasonMetadata {
+                tvdb_id: 10,
+                number: 0,
+                label: "Specials".into(),
+                episode_type: "special".into(),
+            },
+            SeasonMetadata {
+                tvdb_id: 11,
+                number: 1,
+                label: "Season 1".into(),
+                episode_type: "official".into(),
+            },
+        ];
+        let episodes = vec![
+            EpisodeMetadata {
+                tvdb_id: 1001,
+                episode_number: 1,
+                name: "Cruelty".into(),
+                aired: "2019-04-06".into(),
+                runtime_minutes: 24,
+                is_filler: false,
+                is_recap: false,
+                overview: "Episode 1".into(),
+                absolute_number: "1".into(),
+                season_number: 1,
+            },
+            EpisodeMetadata {
+                tvdb_id: 1002,
+                episode_number: 26,
+                name: "New Mission".into(),
+                aired: "2019-09-28".into(),
+                runtime_minutes: 24,
+                is_filler: false,
+                is_recap: false,
+                overview: "Episode 26".into(),
+                absolute_number: "26".into(),
+                season_number: 1,
+            },
+            EpisodeMetadata {
+                tvdb_id: 2001,
+                episode_number: 1,
+                name: "Mugen Train".into(),
+                aired: "2020-10-10".into(),
+                runtime_minutes: 117,
+                is_filler: false,
+                is_recap: false,
+                overview: "Special cut".into(),
+                absolute_number: String::new(),
+                season_number: 0,
+            },
+        ];
+        let anime_mappings = vec![AnimeMapping {
+            mal_id: Some(40456),
+            anilist_id: None,
+            anidb_id: None,
+            kitsu_id: None,
+            thetvdb_id: Some(348545),
+            alt_tvdb_id: Some(131_963),
+            thetvdb_season: Some(0),
+            score: None,
+            anime_media_type: "TV".into(),
+            global_media_type: "series".into(),
+            status: "finished".into(),
+            episode_mappings: vec![AnimeEpisodeMapping {
+                tvdb_season: 0,
+                episode_start: 1,
+                episode_end: 1,
+            }],
+        }];
+
+        app.create_series_seasons_and_episodes(&title, &seasons, &episodes, &anime_mappings)
+            .await;
+
+        let collections = app
+            .list_collections(&user, &title.id)
+            .await
+            .expect("list collections");
+        let interstitial = collections
+            .iter()
+            .find(|collection| collection.collection_type == "interstitial")
+            .expect("interstitial collection should exist");
+        assert_eq!(interstitial.collection_index, "1.1");
+        assert_eq!(
+            interstitial
+                .interstitial_movie
+                .as_ref()
+                .map(|movie| movie.tvdb_id.as_str()),
+            Some("131963")
+        );
+        assert_eq!(interstitial.label.as_deref(), Some("Mugen Train"));
+
+        let interstitial_episodes = app
+            .list_episodes(&user, &interstitial.id)
+            .await
+            .expect("list interstitial episodes");
+        assert_eq!(interstitial_episodes.len(), 1);
+        assert_eq!(
+            interstitial_episodes[0].title.as_deref(),
+            Some("Mugen Train")
+        );
+    }
+
+    #[tokio::test]
+    async fn anime_mapping_without_movie_link_does_not_create_interstitial_collection() {
+        let (app, user) = bootstrap();
+        let title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: "Given".into(),
+                    facet: MediaFacet::Anime,
+                    monitored: true,
+                    tags: vec![],
+                    external_ids: vec![ExternalId {
+                        source: "tvdb".into(),
+                        value: "361218".into(),
+                    }],
+                    min_availability: None,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create title");
+
+        let seasons = vec![
+            SeasonMetadata {
+                tvdb_id: 20,
+                number: 0,
+                label: "Specials".into(),
+                episode_type: "special".into(),
+            },
+            SeasonMetadata {
+                tvdb_id: 21,
+                number: 1,
+                label: "Season 1".into(),
+                episode_type: "official".into(),
+            },
+        ];
+        let episodes = vec![
+            EpisodeMetadata {
+                tvdb_id: 3001,
+                episode_number: 1,
+                name: "Boys in the Band".into(),
+                aired: "2019-07-12".into(),
+                runtime_minutes: 23,
+                is_filler: false,
+                is_recap: false,
+                overview: "Episode 1".into(),
+                absolute_number: "1".into(),
+                season_number: 1,
+            },
+            EpisodeMetadata {
+                tvdb_id: 3002,
+                episode_number: 1,
+                name: "OVA".into(),
+                aired: "2020-02-01".into(),
+                runtime_minutes: 23,
+                is_filler: false,
+                is_recap: false,
+                overview: "Special".into(),
+                absolute_number: String::new(),
+                season_number: 0,
+            },
+        ];
+        let anime_mappings = vec![AnimeMapping {
+            mal_id: Some(40421),
+            anilist_id: None,
+            anidb_id: None,
+            kitsu_id: None,
+            thetvdb_id: Some(361218),
+            alt_tvdb_id: None,
+            thetvdb_season: Some(0),
+            score: None,
+            anime_media_type: "TV".into(),
+            global_media_type: "series".into(),
+            status: "finished".into(),
+            episode_mappings: vec![AnimeEpisodeMapping {
+                tvdb_season: 0,
+                episode_start: 1,
+                episode_end: 1,
+            }],
+        }];
+
+        app.create_series_seasons_and_episodes(&title, &seasons, &episodes, &anime_mappings)
+            .await;
+
+        let collections = app
+            .list_collections(&user, &title.id)
+            .await
+            .expect("list collections");
+        assert!(
+            collections
+                .iter()
+                .all(|collection| collection.collection_type != "interstitial"),
+            "unexpected interstitial collection created"
+        );
     }
 
     #[tokio::test]

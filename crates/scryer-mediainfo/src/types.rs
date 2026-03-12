@@ -49,6 +49,8 @@ pub(crate) struct RawContainer {
     pub format_name: String,
     /// Total duration in fractional seconds.
     pub duration_seconds: Option<f64>,
+    /// Number of chapters detected in the container, when supported.
+    pub num_chapters: Option<i32>,
     /// All tracks found in the container.
     pub tracks: Vec<RawTrack>,
 }

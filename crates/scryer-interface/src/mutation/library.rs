@@ -112,6 +112,20 @@ impl LibraryMutations {
         Ok(from_library_scan_summary(summary))
     }
 
+    async fn scan_title_library(
+        &self,
+        ctx: &Context<'_>,
+        input: TitleIdInput,
+    ) -> GqlResult<LibraryScanSummaryPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let summary = app
+            .scan_title_library(&actor, &input.title_id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_library_scan_summary(summary))
+    }
+
     async fn apply_media_rename(
         &self,
         ctx: &Context<'_>,

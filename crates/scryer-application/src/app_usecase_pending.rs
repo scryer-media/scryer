@@ -396,6 +396,13 @@ impl AppUseCase {
             .await;
 
         let download_cat = self.derive_download_category(&title.facet).await;
+        let is_recent = self.is_recent_for_queue_priority(
+            wanted
+                .baseline_date
+                .as_deref()
+                .or(title.first_aired.as_deref())
+                .or(title.digital_release_date.as_deref()),
+        );
 
         info!(
             title = title.name.as_str(),
@@ -407,14 +414,23 @@ impl AppUseCase {
         let grab_result = self
             .services
             .download_client
-            .submit_to_download_queue(
-                &title,
-                source_hint.clone(),
+            .submit_download(&DownloadClientAddRequest {
+                title: title.clone(),
+                source_hint: source_hint.clone(),
                 source_kind,
-                source_title.clone(),
-                None,
-                Some(download_cat),
-            )
+                source_title: source_title.clone(),
+                source_password: None,
+                category: Some(download_cat),
+                queue_priority: None,
+                download_directory: None,
+                release_title: Some(pr.release_title.clone()),
+                indexer_name: pr.indexer_source.clone(),
+                info_hash_hint: None,
+                seed_goal_ratio: None,
+                seed_goal_seconds: None,
+                is_recent,
+                season_pack: None,
+            })
             .await;
 
         match grab_result {

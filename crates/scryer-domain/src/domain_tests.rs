@@ -220,6 +220,7 @@ fn import_status_as_str() {
 #[test]
 fn import_decision_as_str() {
     assert_eq!(ImportDecision::Imported.as_str(), "imported");
+    assert_eq!(ImportDecision::Rejected.as_str(), "rejected");
     assert_eq!(ImportDecision::Skipped.as_str(), "skipped");
     assert_eq!(ImportDecision::Conflict.as_str(), "conflict");
     assert_eq!(ImportDecision::Unmatched.as_str(), "unmatched");

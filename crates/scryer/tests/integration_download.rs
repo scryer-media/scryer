@@ -1,9 +1,11 @@
+#![recursion_limit = "256"]
+
 mod common;
 
 use std::sync::Arc;
 
 use serde_json::json;
-use wiremock::matchers::{body_json_string, method, path, query_param};
+use wiremock::matchers::{body_json_string, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use common::{load_fixture, TestContext};
@@ -505,6 +507,85 @@ async fn nzbget_submit_download() {
     assert!(result.is_ok(), "submit should succeed: {:?}", result.err());
     let grab = result.unwrap();
     assert!(!grab.job_id.is_empty(), "should return a non-empty job ID");
+}
+
+#[tokio::test]
+async fn nzbget_submit_download_supports_v25_3_append_signature() {
+    let ctx = TestContext::new().await;
+    let nzb_xml = load_fixture("nzbgeek/nzb_content.xml");
+
+    Mock::given(method("GET"))
+        .and(path("/getnzb/test.nzb"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(nzb_xml)
+                .insert_header("content-type", "application/x-nzb"),
+        )
+        .mount(&ctx.nzbget_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/jsonrpc"))
+        .and(body_json_string(
+            r#"{"version":"2.0","method":"version","params":[],"id":"scryer-rpc"}"#,
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "version": "2.0",
+            "id": "scryer-rpc",
+            "result": "25.3"
+        })))
+        .mount(&ctx.nzbget_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/jsonrpc"))
+        .and(header("content-encoding", "gzip"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(load_fixture("nzbget/append.json")),
+        )
+        .mount(&ctx.nzbget_server)
+        .await;
+
+    let title = scryer_domain::Title {
+        id: "test-title-id".to_string(),
+        name: "Test Movie Title".to_string(),
+        facet: scryer_domain::MediaFacet::Movie,
+        monitored: true,
+        tags: vec![],
+        external_ids: vec![],
+        created_by: None,
+        created_at: chrono::Utc::now(),
+        year: Some(2024),
+        overview: None,
+        poster_url: None,
+        sort_title: None,
+        slug: None,
+        imdb_id: None,
+        runtime_minutes: None,
+        genres: vec![],
+        content_status: None,
+        language: None,
+        first_aired: None,
+        network: None,
+        studio: None,
+        country: None,
+        aliases: vec![],
+        metadata_language: None,
+        metadata_fetched_at: None,
+        min_availability: None,
+        digital_release_date: None,
+    };
+
+    let source_hint = format!("{}/getnzb/test.nzb", ctx.nzbget_server.uri());
+    let result = new_nzbget_client(&ctx.nzbget_server.uri())
+        .submit_to_download_queue(&title, Some(source_hint), None, None, None, None)
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "submit against nzbget 25.3 should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[tokio::test]

@@ -6,6 +6,7 @@ import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { syntaxHighlighting } from "@codemirror/language";
 import { defaultKeymap, indentWithTab } from "@codemirror/commands";
 import { useTheme } from "next-themes";
+import { isDarkTheme } from "@/lib/theme";
 
 type RegoEditorProps = {
   value: string;
@@ -38,6 +39,19 @@ const scryerDark = EditorView.theme({
   ".cm-line": { padding: "0 4px" },
 }, { dark: true });
 
+const prideTheme = EditorView.theme({
+  "&": { backgroundColor: "#100d20", color: "#fff0fb" },
+  ".cm-content": { fontFamily: CODE_FONT, caretColor: "#ff5ca8", paddingLeft: "8px" },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "#ff5ca8" },
+  ".cm-gutters": { backgroundColor: "#0d0a1b", color: "#9587b7", borderRight: "1px solid rgba(255,255,255,0.14)", fontFamily: CODE_FONT, paddingRight: "8px" },
+  ".cm-activeLineGutter": { backgroundColor: "rgba(255,255,255,0.05)", color: "#ffd8f0" },
+  ".cm-activeLine": { backgroundColor: "rgba(255,255,255,0.04)" },
+  "&.cm-focused": { outline: "2px solid var(--ring)" },
+  ".cm-selectionBackground, ::selection": { backgroundColor: "rgba(255,92,168,0.24)" },
+  "&.cm-focused .cm-selectionBackground": { backgroundColor: "rgba(255,92,168,0.35)" },
+  ".cm-line": { padding: "0 4px" },
+}, { dark: true });
+
 export default function RegoEditor({ value, onChange, readOnly = false, height = "320px" }: RegoEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -49,7 +63,8 @@ export default function RegoEditor({ value, onChange, readOnly = false, height =
   useEffect(() => {
     if (!containerRef.current) return;
 
-    const isDark = resolvedTheme === "dark";
+    const usePrideTheme = resolvedTheme === "pride";
+    const useDarkTheme = isDarkTheme(resolvedTheme);
 
     const updateListener = EditorView.updateListener.of((update) => {
       if (update.docChanged) {
@@ -63,7 +78,11 @@ export default function RegoEditor({ value, onChange, readOnly = false, height =
       keymap.of([...defaultKeymap, indentWithTab]),
       updateListener,
       EditorView.lineWrapping,
-      isDark ? [scryerDark, syntaxHighlighting(oneDarkHighlightStyle)] : lightTheme,
+      usePrideTheme
+        ? [prideTheme, syntaxHighlighting(oneDarkHighlightStyle)]
+        : useDarkTheme
+          ? [scryerDark, syntaxHighlighting(oneDarkHighlightStyle)]
+          : lightTheme,
     ];
 
     if (readOnly) {

@@ -35,7 +35,7 @@ pub(crate) async fn ui_fallback(method: Method, uri: Uri) -> Response {
     match ui_asset_mode() {
         UiAssetMode::Filesystem(dist_dir) => serve_ui_path(dist_dir, request_path, head_only).await,
         UiAssetMode::Embedded => serve_embedded_ui(request_path, head_only).await,
-        UiAssetMode::Fallback => index_page().await.into_response(),
+        UiAssetMode::Fallback => serve_fallback_ui(request_path).await,
     }
 }
 
@@ -68,7 +68,7 @@ pub(crate) fn resolve_ui_asset_mode() -> UiAssetMode {
 }
 
 pub(crate) async fn serve_embedded_ui(request_path: &str, head_only: bool) -> Response {
-    if should_fallback_to_index(request_path) {
+    if should_serve_spa_index(request_path) {
         return serve_embedded_index(head_only).await;
     }
 
@@ -78,7 +78,7 @@ pub(crate) async fn serve_embedded_ui(request_path: &str, head_only: bool) -> Re
         || relative_path.ends_with('/')
         || contains_unsafe_path_segments(relative_path)
     {
-        return serve_embedded_index(head_only).await;
+        return StatusCode::NOT_FOUND.into_response();
     }
 
     match embedded_ui_asset(relative_path) {
@@ -108,7 +108,7 @@ pub(crate) async fn serve_embedded_ui(request_path: &str, head_only: bool) -> Re
                     .expect("response build")
             })
         }
-        None => serve_embedded_index(head_only).await,
+        None => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
@@ -157,40 +157,74 @@ pub(crate) async fn serve_ui_path(
     head_only: bool,
 ) -> Response {
     if !dist_dir.exists() {
-        return index_page().await.into_response();
+        return serve_fallback_ui(request_path).await;
     }
 
-    if should_fallback_to_index(request_path) {
+    if should_serve_spa_index(request_path) {
         return serve_index_html(dist_dir, head_only).await;
     }
 
     let decoded = percent_encoding::percent_decode_str(request_path).decode_utf8_lossy();
     let relative_path = decoded.trim_start_matches('/');
     if contains_unsafe_path_segments(relative_path) {
-        return serve_index_html(dist_dir, head_only).await;
+        return StatusCode::NOT_FOUND.into_response();
     }
 
     let candidate = dist_dir.join(relative_path);
     let canonical = match candidate.canonicalize() {
         Ok(path) => path,
-        Err(_) => return serve_index_html(dist_dir, head_only).await,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
     };
     let canonical_root = match dist_dir.canonicalize() {
         Ok(path) => path,
-        Err(_) => return serve_index_html(dist_dir, head_only).await,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
     };
     if !canonical.starts_with(&canonical_root) {
-        return serve_index_html(dist_dir, head_only).await;
+        return StatusCode::NOT_FOUND.into_response();
     }
     match fs::metadata(&canonical).await {
         Ok(metadata) if metadata.is_file() => serve_file(canonical, head_only).await,
-        Ok(metadata) if metadata.is_dir() => serve_index_html(dist_dir, head_only).await,
-        _ => serve_index_html(dist_dir, head_only).await,
+        Ok(metadata) if metadata.is_dir() => StatusCode::NOT_FOUND.into_response(),
+        _ => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
-pub(crate) fn should_fallback_to_index(request_path: &str) -> bool {
-    request_path == "/" || request_path.trim().is_empty()
+pub(crate) async fn serve_fallback_ui(request_path: &str) -> Response {
+    if should_serve_spa_index(request_path) {
+        index_page().await.into_response()
+    } else {
+        StatusCode::NOT_FOUND.into_response()
+    }
+}
+
+pub(crate) fn should_serve_spa_index(request_path: &str) -> bool {
+    let normalized = request_path.trim();
+    if normalized.is_empty() || normalized == "/" {
+        return true;
+    }
+
+    !is_reserved_non_spa_path(normalized) && !looks_like_static_asset_request(normalized)
+}
+
+pub(crate) fn is_reserved_non_spa_path(request_path: &str) -> bool {
+    let first_segment = request_path
+        .trim_matches('/')
+        .split('/')
+        .find(|segment| !segment.is_empty());
+
+    matches!(
+        first_segment,
+        Some("graphql" | "graphiql" | "health" | "metrics" | "admin" | "images")
+    )
+}
+
+pub(crate) fn looks_like_static_asset_request(request_path: &str) -> bool {
+    let last_segment = request_path
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or_default();
+    Path::new(last_segment).extension().is_some()
 }
 
 pub(crate) fn contains_unsafe_path_segments(path: &str) -> bool {
@@ -221,7 +255,7 @@ pub(crate) fn infer_content_type(path: &Path) -> &'static str {
         Some("jpg") | Some("jpeg") => "image/jpeg",
         Some("webp") => "image/webp",
         Some("gif") => "image/gif",
-        Some("svg") => "image/svg+xml; charset=utf-8",
+        Some("svg") => "image/svg+xml",
         Some("ico") => "image/x-icon",
         Some("txt") => "text/plain; charset=utf-8",
         Some("xml") => "application/xml; charset=utf-8",
@@ -316,4 +350,47 @@ fn render_index_html(index_html: &[u8]) -> Vec<u8> {
         .replace(BASE_PATH_PLACEHOLDER, base_path.basename())
         .replace(GRAPHQL_URL_PLACEHOLDER, &graphql_url)
         .into_bytes()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        infer_content_type, looks_like_static_asset_request, serve_fallback_ui,
+        should_serve_spa_index,
+    };
+    use axum::http::StatusCode;
+    use std::path::Path;
+
+    #[test]
+    fn spa_index_is_served_for_catalog_routes() {
+        assert!(should_serve_spa_index("/"));
+        assert!(should_serve_spa_index("/anime"));
+        assert!(should_serve_spa_index("/titles/attack-on-titan"));
+    }
+
+    #[test]
+    fn spa_index_is_not_served_for_reserved_or_asset_like_paths() {
+        assert!(!should_serve_spa_index("/images/titles/abc/poster/w500"));
+        assert!(!should_serve_spa_index("/graphql"));
+        assert!(!should_serve_spa_index("/health"));
+        assert!(!should_serve_spa_index("/assets/app.js"));
+        assert!(looks_like_static_asset_request("/assets/app.js"));
+    }
+
+    #[test]
+    fn svg_content_type_omits_charset_for_compression_compatibility() {
+        assert_eq!(infer_content_type(Path::new("logo.svg")), "image/svg+xml");
+    }
+
+    #[tokio::test]
+    async fn fallback_mode_returns_not_found_for_reserved_image_paths() {
+        let response = serve_fallback_ui("/images/titles/missing/poster/w500").await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn fallback_mode_serves_index_for_spa_routes() {
+        let response = serve_fallback_ui("/anime").await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 }

@@ -976,94 +976,15 @@ pub(crate) fn build_user_rule_input(
     title_tags: &[String],
     runtime_minutes: Option<i32>,
 ) -> scryer_rules::UserRuleInput {
-    use scryer_rules::*;
-
-    let is_anime = title_tags.iter().any(|t| t.eq_ignore_ascii_case("anime"))
-        || category.is_some_and(|c| c.eq_ignore_ascii_case("anime"));
-
-    UserRuleInput {
-        release: ReleaseDoc {
-            raw_title: parsed.raw_title.clone(),
-            quality: parsed.quality.clone(),
-            source: parsed.source.clone(),
-            video_codec: parsed.video_codec.clone(),
-            audio: parsed.audio.clone(),
-            audio_codecs: parsed.audio_codecs.clone(),
-            audio_channels: parsed.audio_channels.clone(),
-            languages_audio: parsed.languages_audio.clone(),
-            languages_subtitles: parsed.languages_subtitles.clone(),
-            is_dual_audio: parsed.is_dual_audio,
-            is_atmos: parsed.is_atmos,
-            is_dolby_vision: parsed.is_dolby_vision,
-            detected_hdr: parsed.detected_hdr,
-            is_remux: parsed.is_remux,
-            is_bd_disk: parsed.is_bd_disk,
-            is_proper_upload: parsed.is_proper_upload,
-            is_repack: parsed.is_repack,
-            is_ai_enhanced: parsed.is_ai_enhanced,
-            is_hardcoded_subs: parsed.is_hardcoded_subs,
-            is_hdr10plus: parsed.is_hdr10plus,
-            is_hlg: parsed.is_hlg,
-            streaming_service: parsed.streaming_service.clone(),
-            edition: parsed.edition.clone(),
-            anime_version: parsed.anime_version,
-            release_group: parsed.release_group.clone(),
-            year: parsed.year,
-            parse_confidence: parsed.parse_confidence,
-            size_bytes: result.size_bytes,
-            age_days: result
-                .published_at
-                .as_deref()
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .map(|dt| (chrono::Utc::now() - dt.with_timezone(&chrono::Utc)).num_days()),
-            thumbs_up: result.thumbs_up,
-            thumbs_down: result.thumbs_down,
-            extra: result.extra.clone(),
-        },
-        profile: ProfileDoc {
-            id: profile.id.clone(),
-            name: profile.name.clone(),
-            quality_tiers: profile.criteria.quality_tiers.clone(),
-            archival_quality: profile.criteria.archival_quality.clone(),
-            allow_unknown_quality: profile.criteria.allow_unknown_quality,
-            source_allowlist: profile.criteria.source_allowlist.clone(),
-            source_blocklist: profile.criteria.source_blocklist.clone(),
-            video_codec_allowlist: profile.criteria.video_codec_allowlist.clone(),
-            video_codec_blocklist: profile.criteria.video_codec_blocklist.clone(),
-            audio_codec_allowlist: profile.criteria.audio_codec_allowlist.clone(),
-            audio_codec_blocklist: profile.criteria.audio_codec_blocklist.clone(),
-            atmos_preferred: profile.criteria.atmos_preferred,
-            dolby_vision_allowed: profile.criteria.dolby_vision_allowed,
-            detected_hdr_allowed: profile.criteria.detected_hdr_allowed,
-            prefer_remux: profile.criteria.prefer_remux,
-            allow_bd_disk: profile.criteria.allow_bd_disk,
-            allow_upgrades: profile.criteria.allow_upgrades,
-            prefer_dual_audio: profile.criteria.prefer_dual_audio,
-            required_audio_languages: profile.criteria.required_audio_languages.clone(),
-        },
-        context: ContextDoc {
-            title_id: None,
-            media_type: category.unwrap_or("unknown").to_string(),
-            category: category.unwrap_or("unknown").to_string(),
-            tags: title_tags.to_vec(),
-            has_existing_file: false,
-            existing_score: None,
-            search_mode: "auto".to_string(),
-            runtime_minutes,
-            is_anime,
-            is_filler: false,
-        },
-        builtin_score: BuiltinScoreDoc {
-            total: decision.release_score,
-            blocked: !decision.allowed,
-            codes: decision
-                .scoring_log
-                .iter()
-                .map(|e| e.code.clone())
-                .collect(),
-        },
-        file: None,
-    }
+    crate::user_rule_input::build_search_rule_input(
+        parsed,
+        profile,
+        result,
+        decision,
+        category,
+        title_tags,
+        runtime_minutes,
+    )
 }
 
 #[cfg(test)]

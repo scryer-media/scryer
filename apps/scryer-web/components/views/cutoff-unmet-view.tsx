@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/table";
 import { Loader2, Search } from "lucide-react";
 import { useTranslate } from "@/lib/context/translate-context";
+import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 
 export type CutoffUnmetItem = {
   id: string;
@@ -139,12 +140,14 @@ export function CutoffUnmetView({ state }: { state: CutoffUnmetViewState }) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filtered.map((item) => (
+              {filtered.map((item) => {
+                const posterUrl = selectPosterVariantUrl(item.posterUrl, "w70");
+                return (
                 <TableRow key={item.id}>
                   <TableCell>
-                    {item.posterUrl ? (
+                    {posterUrl ? (
                       <img
-                        src={item.posterUrl}
+                        src={posterUrl}
                         alt={item.name}
                         className="h-8 w-6 rounded object-cover"
                         loading="lazy"
@@ -175,7 +178,8 @@ export function CutoffUnmetView({ state }: { state: CutoffUnmetViewState }) {
                     </Button>
                   </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
               {filtered.length === 0 && !loading && (
                 <TableRow>
                   <TableCell colSpan={6} className="text-center text-muted-foreground">

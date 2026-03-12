@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 mod common;
 
 use std::sync::Arc;
@@ -45,7 +47,6 @@ async fn nzbgeek_search_movie_by_category() {
     let ctx = TestContext::new().await;
     Mock::given(method("GET"))
         .and(path("/api"))
-        .and(query_param("t", "movie"))
         .and(query_param("apikey", "test-api-key"))
         .respond_with(
             ResponseTemplate::new(200).set_body_string(load_fixture("nzbgeek/search_movie.json")),
@@ -69,6 +70,28 @@ async fn nzbgeek_search_movie_by_category() {
         .await
         .expect("search should succeed")
         .results;
+
+    let requests = ctx
+        .nzbgeek_server
+        .received_requests()
+        .await
+        .expect("should capture search request");
+    assert_eq!(
+        requests.len(),
+        1,
+        "movie search should complete in one request"
+    );
+    let query: std::collections::HashMap<String, String> = requests[0]
+        .url
+        .query_pairs()
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    assert_eq!(query.get("t").map(String::as_str), Some("movie"));
+    assert_eq!(query.get("q").map(String::as_str), Some("Test Movie"));
+    assert_eq!(query.get("imdbid").map(String::as_str), Some("001234567"));
+    assert_eq!(query.get("o").map(String::as_str), Some("json"));
+    assert_eq!(query.get("extended").map(String::as_str), Some("1"));
+    assert_eq!(query.get("limit").map(String::as_str), Some("100"));
 
     assert_eq!(results.len(), 2);
     assert!(
@@ -161,6 +184,11 @@ async fn nzbgeek_search_tv_by_category() {
     Mock::given(method("GET"))
         .and(path("/api"))
         .and(query_param("t", "tvsearch"))
+        .and(query_param("q", "Test Show"))
+        .and(query_param("tvdbid", "345678"))
+        .and(query_param("o", "json"))
+        .and(query_param("extended", "1"))
+        .and(query_param("limit", "100"))
         .respond_with(
             ResponseTemplate::new(200).set_body_string(load_fixture("nzbgeek/search_tv.json")),
         )

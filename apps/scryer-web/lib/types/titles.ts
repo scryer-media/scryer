@@ -11,6 +11,7 @@ export type TitleRecord = {
   facet: string;
   monitored: boolean;
   tags: string[];
+  imdbId?: string | null;
   externalIds: ExternalId[];
   qualityTier?: string | null;
   sizeBytes?: number | null;

@@ -66,16 +66,42 @@ pub struct FileDoc {
     pub video_bit_depth: Option<i32>,
     /// e.g. "Dolby Vision", "HDR10", "HLG"
     pub video_hdr_format: Option<String>,
+    pub dovi_profile: Option<u8>,
+    pub dovi_bl_compat_id: Option<u8>,
+    pub video_frame_rate: Option<String>,
+    pub video_profile: Option<String>,
     /// Primary audio stream codec name.
     pub audio_codec: Option<String>,
     pub audio_channels: Option<i32>,
+    pub audio_bitrate_kbps: Option<i32>,
     /// BCP-47/ISO 639-2 codes from all audio streams.
     pub audio_languages: Vec<String>,
+    pub audio_streams: Vec<AudioStreamDoc>,
     /// Language codes from all subtitle streams.
     pub subtitle_languages: Vec<String>,
+    pub subtitle_codecs: Vec<String>,
+    pub subtitle_streams: Vec<SubtitleStreamDoc>,
     pub has_multiaudio: bool,
     pub duration_seconds: Option<i32>,
+    pub num_chapters: Option<i32>,
     pub container_format: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AudioStreamDoc {
+    pub codec: Option<String>,
+    pub channels: Option<i32>,
+    pub language: Option<String>,
+    pub bitrate_kbps: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SubtitleStreamDoc {
+    pub codec: Option<String>,
+    pub language: Option<String>,
+    pub name: Option<String>,
+    pub forced: bool,
+    pub default: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -843,6 +869,55 @@ score_entry["nzbgeek_english_confirmed"] := 200 if {
         assert_eq!(result.entries[0].delta, 200);
     }
 
+    #[test]
+    fn post_download_rule_blocks_on_num_chapters() {
+        let policy = UserPolicy {
+            id: "chapter_gate".to_string(),
+            rego_source: rewrite_package_declaration(
+                r#"
+score_entry["too_few_chapters"] := scryer.block_score() if {
+    input.file != null
+    input.file.num_chapters < 2
+}
+"#,
+                "chapter_gate",
+            ),
+            applied_facets: vec!["movie".to_string()],
+        };
+
+        let engine = UserRulesEngine::build(&[policy]).unwrap();
+        let mut evaluator = engine.evaluator();
+        let mut input = test_input();
+        input.file = Some(test_file_doc());
+
+        let result = evaluator.evaluate(&input, "movie").unwrap();
+        assert_eq!(result.entries.len(), 1);
+        assert_eq!(result.entries[0].code, "too_few_chapters");
+        assert_eq!(result.entries[0].delta, -10000);
+    }
+
+    #[test]
+    fn post_download_rule_is_noop_pre_download_when_file_is_null() {
+        let policy = UserPolicy {
+            id: "chapter_gate".to_string(),
+            rego_source: rewrite_package_declaration(
+                r#"
+score_entry["too_few_chapters"] := scryer.block_score() if {
+    input.file != null
+    input.file.num_chapters < 2
+}
+"#,
+                "chapter_gate",
+            ),
+            applied_facets: vec!["movie".to_string()],
+        };
+
+        let engine = UserRulesEngine::build(&[policy]).unwrap();
+        let mut evaluator = engine.evaluator();
+        let result = evaluator.evaluate(&test_input(), "movie").unwrap();
+        assert!(result.entries.is_empty());
+    }
+
     fn test_input() -> UserRuleInput {
         UserRuleInput {
             release: ReleaseDoc {
@@ -918,6 +993,44 @@ score_entry["nzbgeek_english_confirmed"] := 200 if {
                 codes: vec![],
             },
             file: None,
+        }
+    }
+
+    fn test_file_doc() -> FileDoc {
+        FileDoc {
+            video_codec: Some("hevc".to_string()),
+            video_width: Some(3840),
+            video_height: Some(2160),
+            video_bitrate_kbps: Some(40000),
+            video_bit_depth: Some(10),
+            video_hdr_format: Some("HDR10".to_string()),
+            dovi_profile: Some(8),
+            dovi_bl_compat_id: Some(1),
+            video_frame_rate: Some("23.976".to_string()),
+            video_profile: Some("Main 10".to_string()),
+            audio_codec: Some("eac3".to_string()),
+            audio_channels: Some(6),
+            audio_bitrate_kbps: Some(640),
+            audio_languages: vec!["eng".to_string()],
+            audio_streams: vec![AudioStreamDoc {
+                codec: Some("eac3".to_string()),
+                channels: Some(6),
+                language: Some("eng".to_string()),
+                bitrate_kbps: Some(640),
+            }],
+            subtitle_languages: vec!["eng".to_string()],
+            subtitle_codecs: vec!["subrip".to_string()],
+            subtitle_streams: vec![SubtitleStreamDoc {
+                codec: Some("subrip".to_string()),
+                language: Some("eng".to_string()),
+                name: Some("English".to_string()),
+                forced: false,
+                default: true,
+            }],
+            has_multiaudio: false,
+            duration_seconds: Some(7200),
+            num_chapters: Some(1),
+            container_format: Some("matroska".to_string()),
         }
     }
 }

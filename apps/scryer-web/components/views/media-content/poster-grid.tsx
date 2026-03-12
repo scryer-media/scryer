@@ -5,8 +5,46 @@ import { Loader2, Trash2, Zap } from "lucide-react";
 import type { ViewId } from "@/components/root/types";
 import type { TitleRecord } from "@/lib/types";
 import type { ParsedQualityProfile } from "@/lib/types/quality-profiles";
+import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 
 const QP_TAG_PREFIX = "scryer:quality-profile:";
+
+function formatProfileLabel(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.toLowerCase() === "4k") {
+    return "4K";
+  }
+  if (/^\d{3,4}p$/i.test(trimmed)) {
+    return trimmed.toUpperCase();
+  }
+  return trimmed;
+}
+
+function resolveTitleProfileName(
+  title: TitleRecord,
+  qualityProfiles: ParsedQualityProfile[],
+  resolvedProfileName: string | null,
+) {
+  const tag = title.tags?.find((tg) => tg.startsWith(QP_TAG_PREFIX));
+  if (tag) {
+    const id = tag.slice(QP_TAG_PREFIX.length);
+    const match = qualityProfiles.find((p) => p.id === id);
+    if (match) return match.name;
+    return formatProfileLabel(id);
+  }
+  return formatProfileLabel(resolvedProfileName) ?? resolvedProfileName;
+}
+
+function resolveDisplayedQualityLabel(
+  title: TitleRecord,
+  qualityProfiles: ParsedQualityProfile[],
+  resolvedProfileName: string | null,
+) {
+  return resolveTitleProfileName(title, qualityProfiles, resolvedProfileName);
+}
 
 type PosterGridProps = {
   titles: TitleRecord[];
@@ -103,17 +141,12 @@ function PosterCard({
   overviewTargetView,
 }: PosterCardProps) {
   const t = useTranslate();
-  const qualityLabel = isMovieView
-    ? title.qualityTier
-    : (() => {
-        const tag = title.tags?.find((tg) => tg.startsWith(QP_TAG_PREFIX));
-        if (tag) {
-          const id = tag.slice(QP_TAG_PREFIX.length);
-          const match = qualityProfiles.find((p) => p.id === id);
-          if (match) return match.name;
-        }
-        return resolvedProfileName;
-      })();
+  const posterUrl = selectPosterVariantUrl(title.posterUrl, "w250");
+  const qualityLabel = resolveDisplayedQualityLabel(
+    title,
+    qualityProfiles,
+    resolvedProfileName,
+  );
 
   return (
     <div className="cv-auto-poster group relative">
@@ -124,9 +157,9 @@ function PosterCard({
         aria-label={title.name}
       >
         <div className="relative aspect-[2/3]">
-          {title.posterUrl ? (
+          {posterUrl ? (
             <img
-              src={title.posterUrl}
+              src={posterUrl}
               alt={t("media.posterAlt", { name: title.name })}
               className="h-full w-full object-cover"
               loading="lazy"
@@ -138,8 +171,8 @@ function PosterCard({
             </div>
           )}
 
-          {/* Bottom gradient with title name */}
-          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent px-2 pb-2 pt-8">
+          {/* Reveal the title only on hover/focus; most posters already carry their own typography. */}
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/80 via-black/40 to-transparent px-2 pb-2 pt-8 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
             <p className="line-clamp-2 text-sm font-semibold leading-tight text-white">
               {title.name}
             </p>
@@ -147,20 +180,26 @@ function PosterCard({
 
           {/* Monitored badge - top left */}
           {title.monitored ? (
-            <div className="absolute left-1.5 top-1.5 rounded-full bg-primary/90 px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground">
+            <div className="absolute left-1.5 top-1.5 z-20 rounded-full bg-primary/90 px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground">
               {t("title.monitored")}
             </div>
           ) : null}
 
           {/* Quality badge - top right */}
           {qualityLabel ? (
-            <div className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">
+            <div className="absolute right-1.5 top-1.5 z-20 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">
               {qualityLabel}
             </div>
           ) : null}
 
+          {/* Hover scrim */}
+          <div
+            aria-hidden="true"
+            className="absolute inset-0 z-10 bg-black/50 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+          />
+
           {/* Hover overlay with actions */}
-          <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/50 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+          <div className="absolute inset-0 z-30 flex items-center justify-center gap-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
             {isMovieView ? (
               <Button
                 variant="secondary"

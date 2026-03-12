@@ -138,11 +138,16 @@ impl SettingsMutations {
             .await;
 
         let scope_name = scope.to_string();
+        let keys = updated_keys
+            .iter()
+            .map(|key_name| (scope_name.clone(), key_name.clone(), input.scope_id.clone()))
+            .collect();
         let items = db
-            .list_settings_with_defaults(scope_name.clone(), input.scope_id.clone())
+            .batch_get_settings_with_defaults(keys)
             .await
             .map_err(to_gql_error)?
             .into_iter()
+            .flatten()
             .map(map_admin_setting)
             .collect();
 

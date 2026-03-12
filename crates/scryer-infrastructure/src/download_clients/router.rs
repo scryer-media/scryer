@@ -15,12 +15,30 @@ use super::{
     parse_download_client_config_json, read_config_string, resolve_download_client_base_url,
 };
 
+const DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY: &str = "download_client.routing";
+const LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY: &str = "nzbget.client_routing";
+
 #[derive(Clone)]
 pub struct PrioritizedDownloadClientRouter {
     download_client_configs: Arc<dyn DownloadClientConfigRepository>,
     settings: Arc<dyn SettingsRepository>,
     fallback_client: Arc<dyn DownloadClient>,
     plugin_provider: Option<Arc<dyn DownloadClientPluginProvider>>,
+}
+
+struct FacetClientSelection {
+    clients: Vec<DownloadClientConfig>,
+    all_disabled_for_facet: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct DownloadClientRoutingEntry {
+    enabled: bool,
+    category: Option<String>,
+    recent_queue_priority: Option<String>,
+    older_queue_priority: Option<String>,
+    remove_completed: bool,
+    remove_failed: bool,
 }
 
 impl PrioritizedDownloadClientRouter {
@@ -93,27 +111,120 @@ impl PrioritizedDownloadClientRouter {
         }
     }
 
-    /// Return enabled clients ordered by per-facet routing priority.
-    /// Falls back to global `client_priority` if the facet has no routing config.
-    async fn list_clients_for_facet(
-        &self,
-        facet: &MediaFacet,
-    ) -> AppResult<Vec<DownloadClientConfig>> {
-        let scope_id = match facet {
-            MediaFacet::Movie => "movie",
-            MediaFacet::Tv => "series",
-            MediaFacet::Anime => "anime",
-            _ => return self.list_enabled_clients_by_priority().await,
-        };
+    fn routing_entry_enabled(config: &serde_json::Value) -> bool {
+        match config.get("enabled") {
+            Some(serde_json::Value::Bool(enabled)) => *enabled,
+            Some(serde_json::Value::String(enabled)) => !matches!(
+                enabled.trim().to_ascii_lowercase().as_str(),
+                "false" | "0" | "no"
+            ),
+            Some(serde_json::Value::Number(number)) => number.as_i64() != Some(0),
+            _ => true,
+        }
+    }
 
-        let routing_json = self
+    fn read_trimmed_string(raw_value: Option<&serde_json::Value>) -> Option<String> {
+        raw_value
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    }
+
+    fn read_bool(raw_value: Option<&serde_json::Value>, default: bool) -> bool {
+        match raw_value {
+            Some(serde_json::Value::Bool(value)) => *value,
+            Some(serde_json::Value::String(value)) => !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "false" | "0" | "no"
+            ),
+            Some(serde_json::Value::Number(value)) => value.as_i64() != Some(0),
+            _ => default,
+        }
+    }
+
+    fn parse_routing_object(raw_json: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
+        serde_json::from_str::<serde_json::Value>(raw_json)
+            .ok()?
+            .as_object()
+            .cloned()
+    }
+
+    fn parse_routing_entry(config: &serde_json::Value) -> DownloadClientRoutingEntry {
+        DownloadClientRoutingEntry {
+            enabled: Self::routing_entry_enabled(config),
+            category: Self::read_trimmed_string(config.get("category")),
+            recent_queue_priority: Self::read_trimmed_string(
+                config
+                    .get("recentQueuePriority")
+                    .or_else(|| config.get("recentPriority"))
+                    .or_else(|| config.get("recent_priority")),
+            ),
+            older_queue_priority: Self::read_trimmed_string(
+                config
+                    .get("olderQueuePriority")
+                    .or_else(|| config.get("olderPriority"))
+                    .or_else(|| config.get("older_priority")),
+            ),
+            remove_completed: Self::read_bool(
+                config
+                    .get("removeCompleted")
+                    .or_else(|| config.get("remove_completed"))
+                    .or_else(|| config.get("removeComplete")),
+                false,
+            ),
+            remove_failed: Self::read_bool(
+                config
+                    .get("removeFailed")
+                    .or_else(|| config.get("remove_failed"))
+                    .or_else(|| config.get("removeFailure")),
+                false,
+            ),
+        }
+    }
+
+    fn facet_scope_id(facet: &MediaFacet) -> Option<&'static str> {
+        match facet {
+            MediaFacet::Movie => Some("movie"),
+            MediaFacet::Tv => Some("series"),
+            MediaFacet::Anime => Some("anime"),
+            MediaFacet::Other => None,
+        }
+    }
+
+    async fn get_download_client_routing_json(&self, scope_id: &str) -> AppResult<Option<String>> {
+        if let Some(routing_json) = self
             .settings
             .get_setting_json(
                 "system",
-                "nzbget.client_routing",
+                DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY,
                 Some(scope_id.to_string()),
             )
-            .await?;
+            .await?
+        {
+            return Ok(Some(routing_json));
+        }
+
+        self.settings
+            .get_setting_json(
+                "system",
+                LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY,
+                Some(scope_id.to_string()),
+            )
+            .await
+    }
+
+    /// Return enabled clients ordered by per-facet routing priority.
+    /// Falls back to global `client_priority` if the facet has no routing config.
+    async fn list_clients_for_facet(&self, facet: &MediaFacet) -> AppResult<FacetClientSelection> {
+        let Some(scope_id) = Self::facet_scope_id(facet) else {
+            return Ok(FacetClientSelection {
+                clients: self.list_enabled_clients_by_priority().await?,
+                all_disabled_for_facet: false,
+            });
+        };
+
+        let routing_json = self.get_download_client_routing_json(scope_id).await?;
 
         let mut clients = self
             .download_client_configs
@@ -122,24 +233,35 @@ impl PrioritizedDownloadClientRouter {
             .into_iter()
             .filter(|config| config.is_enabled)
             .collect::<Vec<_>>();
+        let any_globally_enabled = !clients.is_empty();
+        let mut all_disabled_for_facet = false;
 
         match routing_json {
             Some(json_str) => {
-                // JSON key insertion order = priority (requires serde_json preserve_order)
-                let ordered_ids: Vec<String> = serde_json::from_str::<serde_json::Value>(&json_str)
-                    .ok()
-                    .and_then(|v| v.as_object().map(|obj| obj.keys().cloned().collect()))
-                    .unwrap_or_default();
+                let routing_object = Self::parse_routing_object(&json_str);
 
-                if ordered_ids.is_empty() {
-                    clients.sort_by_key(|c| c.client_priority);
-                } else {
-                    clients.sort_by_key(|c| {
-                        ordered_ids
-                            .iter()
-                            .position(|id| id == &c.id)
-                            .unwrap_or(usize::MAX)
+                if let Some(routing_object) = routing_object {
+                    let ordered_ids: Vec<String> = routing_object.keys().cloned().collect();
+                    clients.retain(|client| {
+                        routing_object
+                            .get(&client.id)
+                            .map(Self::routing_entry_enabled)
+                            .unwrap_or(true)
                     });
+                    all_disabled_for_facet = any_globally_enabled && clients.is_empty();
+
+                    if ordered_ids.is_empty() {
+                        clients.sort_by_key(|c| c.client_priority);
+                    } else {
+                        clients.sort_by_key(|c| {
+                            ordered_ids
+                                .iter()
+                                .position(|id| id == &c.id)
+                                .unwrap_or(usize::MAX)
+                        });
+                    }
+                } else {
+                    clients.sort_by_key(|c| c.client_priority);
                 }
             }
             None => {
@@ -147,7 +269,66 @@ impl PrioritizedDownloadClientRouter {
             }
         }
 
-        Ok(clients)
+        Ok(FacetClientSelection {
+            clients,
+            all_disabled_for_facet,
+        })
+    }
+
+    async fn routing_entry_for_client(
+        &self,
+        facet: &MediaFacet,
+        client_id: &str,
+    ) -> AppResult<Option<DownloadClientRoutingEntry>> {
+        let Some(scope_id) = Self::facet_scope_id(facet) else {
+            return Ok(None);
+        };
+
+        let Some(raw_json) = self.get_download_client_routing_json(scope_id).await? else {
+            return Ok(None);
+        };
+
+        let Some(routing_object) = Self::parse_routing_object(&raw_json) else {
+            return Ok(None);
+        };
+
+        Ok(routing_object.get(client_id).map(Self::parse_routing_entry))
+    }
+
+    fn normalized_request_category(request: &DownloadClientAddRequest) -> Option<String> {
+        request
+            .category
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    }
+
+    async fn apply_selected_client_routing(
+        &self,
+        request: &DownloadClientAddRequest,
+        client_id: &str,
+    ) -> AppResult<DownloadClientAddRequest> {
+        let mut effective_request = request.clone();
+        let routing_entry = self
+            .routing_entry_for_client(&request.title.facet, client_id)
+            .await?;
+
+        effective_request.category = routing_entry
+            .as_ref()
+            .and_then(|entry| entry.category.clone())
+            .or_else(|| Self::normalized_request_category(request));
+
+        let is_recent = request.is_recent.unwrap_or(false);
+        effective_request.queue_priority = routing_entry.and_then(|entry| {
+            if is_recent {
+                entry.recent_queue_priority
+            } else {
+                entry.older_queue_priority
+            }
+        });
+
+        Ok(effective_request)
     }
 
     fn client_from_config(
@@ -215,6 +396,72 @@ impl PrioritizedDownloadClientRouter {
             ))),
         }
     }
+
+    async fn resolve_client_for_queue_action(
+        &self,
+        id: &str,
+        is_history: bool,
+    ) -> AppResult<Option<Arc<dyn DownloadClient>>> {
+        let configs = self.list_enabled_clients_by_priority().await?;
+        if configs.is_empty() {
+            return Ok(None);
+        }
+
+        let mut clients = Vec::new();
+        for config in configs {
+            match Self::client_from_config(&config, self.plugin_provider.as_ref()) {
+                Ok(client) => clients.push((config, client)),
+                Err(error) => {
+                    warn!(
+                        client_id = config.id.as_str(),
+                        client_name = config.name.as_str(),
+                        client_type = config.client_type.as_str(),
+                        error = %error,
+                        "download client skipped while routing queue action"
+                    );
+                }
+            }
+        }
+
+        if clients.is_empty() {
+            return Ok(None);
+        }
+
+        for (config, client) in &clients {
+            let items = if is_history {
+                client.list_history().await
+            } else {
+                client.list_queue().await
+            };
+
+            match items {
+                Ok(items) => {
+                    if items.iter().any(|item| item.download_client_item_id == id) {
+                        return Ok(Some(Arc::clone(client)));
+                    }
+                }
+                Err(error) => {
+                    warn!(
+                        client_id = config.id.as_str(),
+                        client_name = config.name.as_str(),
+                        client_type = config.client_type.as_str(),
+                        queue_item_id = id,
+                        history = is_history,
+                        error = %error,
+                        "failed to inspect download client while routing queue action"
+                    );
+                }
+            }
+        }
+
+        if clients.len() == 1 {
+            return Ok(Some(Arc::clone(&clients[0].1)));
+        }
+
+        Err(AppError::Validation(format!(
+            "download client item not found: {id}"
+        )))
+    }
 }
 
 #[async_trait]
@@ -223,7 +470,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         &self,
         request: &DownloadClientAddRequest,
     ) -> AppResult<DownloadGrabResult> {
-        let mut clients = match self.list_clients_for_facet(&request.title.facet).await {
+        let selection = match self.list_clients_for_facet(&request.title.facet).await {
             Ok(configs) => configs,
             Err(error) => {
                 warn!(
@@ -235,6 +482,14 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 return self.fallback_client.submit_download(request).await;
             }
         };
+
+        if selection.all_disabled_for_facet {
+            return Err(AppError::Validation(
+                "no download client enabled for this facet".to_string(),
+            ));
+        }
+
+        let mut clients = selection.clients;
 
         if clients.is_empty() {
             return self.fallback_client.submit_download(request).await;
@@ -284,7 +539,25 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 }
             };
 
-            match client.submit_download(request).await {
+            let effective_request = match self
+                .apply_selected_client_routing(request, &config.id)
+                .await
+            {
+                Ok(effective_request) => effective_request,
+                Err(error) => {
+                    warn!(
+                        client_id = config.id.as_str(),
+                        client_name = config.name.as_str(),
+                        client_type = config.client_type.as_str(),
+                        error = %error,
+                        "download client skipped because routing configuration could not be resolved"
+                    );
+                    last_error = Some(error);
+                    continue;
+                }
+            };
+
+            match client.submit_download(&effective_request).await {
                 Ok(result) => {
                     return Ok(DownloadGrabResult {
                         job_id: result.job_id,
@@ -407,31 +680,22 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
     }
 
     async fn pause_queue_item(&self, id: &str) -> AppResult<()> {
-        let clients = self.list_enabled_clients_by_priority().await?;
-        for config in clients {
-            if let Ok(client) = Self::client_from_config(&config, self.plugin_provider.as_ref()) {
-                return client.pause_queue_item(id).await;
-            }
+        if let Some(client) = self.resolve_client_for_queue_action(id, false).await? {
+            return client.pause_queue_item(id).await;
         }
         self.fallback_client.pause_queue_item(id).await
     }
 
     async fn resume_queue_item(&self, id: &str) -> AppResult<()> {
-        let clients = self.list_enabled_clients_by_priority().await?;
-        for config in clients {
-            if let Ok(client) = Self::client_from_config(&config, self.plugin_provider.as_ref()) {
-                return client.resume_queue_item(id).await;
-            }
+        if let Some(client) = self.resolve_client_for_queue_action(id, false).await? {
+            return client.resume_queue_item(id).await;
         }
         self.fallback_client.resume_queue_item(id).await
     }
 
     async fn delete_queue_item(&self, id: &str, is_history: bool) -> AppResult<()> {
-        let clients = self.list_enabled_clients_by_priority().await?;
-        for config in clients {
-            if let Ok(client) = Self::client_from_config(&config, self.plugin_provider.as_ref()) {
-                return client.delete_queue_item(id, is_history).await;
-            }
+        if let Some(client) = self.resolve_client_for_queue_action(id, is_history).await? {
+            return client.delete_queue_item(id, is_history).await;
         }
         self.fallback_client.delete_queue_item(id, is_history).await
     }
@@ -441,6 +705,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
 mod tests {
     use super::*;
     use chrono::Utc;
+    use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
     struct MockDownloadClientConfigRepository {
@@ -456,8 +721,8 @@ mod tests {
             Ok(self.configs.clone())
         }
 
-        async fn get_by_id(&self, _id: &str) -> AppResult<Option<DownloadClientConfig>> {
-            Ok(None)
+        async fn get_by_id(&self, id: &str) -> AppResult<Option<DownloadClientConfig>> {
+            Ok(self.configs.iter().find(|config| config.id == id).cloned())
         }
 
         async fn create(&self, _config: DownloadClientConfig) -> AppResult<DownloadClientConfig> {
@@ -485,7 +750,10 @@ mod tests {
         }
     }
 
-    struct MockSettingsRepository;
+    #[derive(Default)]
+    struct MockSettingsRepository {
+        routing_by_scope: HashMap<String, String>,
+    }
 
     #[async_trait]
     impl SettingsRepository for MockSettingsRepository {
@@ -493,15 +761,20 @@ mod tests {
             &self,
             _scope: &str,
             _key_name: &str,
-            _scope_id: Option<String>,
+            scope_id: Option<String>,
         ) -> AppResult<Option<String>> {
-            Ok(None)
+            Ok(scope_id.and_then(|id| self.routing_by_scope.get(&id).cloned()))
         }
     }
 
     #[derive(Default)]
     struct MockDownloadClient {
         submissions: Mutex<Vec<DownloadClientAddRequest>>,
+        queue_items: Mutex<Vec<DownloadQueueItem>>,
+        history_items: Mutex<Vec<DownloadQueueItem>>,
+        paused: Mutex<Vec<String>>,
+        resumed: Mutex<Vec<String>>,
+        deleted: Mutex<Vec<(String, bool)>>,
     }
 
     #[async_trait]
@@ -516,19 +789,48 @@ mod tests {
                 client_type: "mock".to_string(),
             })
         }
+
+        async fn list_queue(&self) -> AppResult<Vec<DownloadQueueItem>> {
+            Ok(self.queue_items.lock().unwrap().clone())
+        }
+
+        async fn list_history(&self) -> AppResult<Vec<DownloadQueueItem>> {
+            Ok(self.history_items.lock().unwrap().clone())
+        }
+
+        async fn pause_queue_item(&self, id: &str) -> AppResult<()> {
+            self.paused.lock().unwrap().push(id.to_string());
+            Ok(())
+        }
+
+        async fn resume_queue_item(&self, id: &str) -> AppResult<()> {
+            self.resumed.lock().unwrap().push(id.to_string());
+            Ok(())
+        }
+
+        async fn delete_queue_item(&self, id: &str, is_history: bool) -> AppResult<()> {
+            self.deleted
+                .lock()
+                .unwrap()
+                .push((id.to_string(), is_history));
+            Ok(())
+        }
     }
 
     struct MockDownloadClientPluginProvider {
         accepted_inputs: Vec<String>,
-        client: Arc<dyn DownloadClient>,
+        clients: Vec<(String, Arc<dyn DownloadClient>)>,
     }
 
     impl DownloadClientPluginProvider for MockDownloadClientPluginProvider {
         fn client_for_config(
             &self,
-            _config: &DownloadClientConfig,
+            config: &DownloadClientConfig,
         ) -> Option<Arc<dyn DownloadClient>> {
-            Some(Arc::clone(&self.client))
+            self.clients
+                .iter()
+                .find(|(id, _)| id == &config.id)
+                .map(|(_, client)| Arc::clone(client))
         }
 
         fn available_provider_types(&self) -> Vec<String> {
@@ -540,11 +842,11 @@ mod tests {
         }
     }
 
-    fn test_title() -> scryer_domain::Title {
+    fn test_title_for_facet(facet: MediaFacet) -> scryer_domain::Title {
         scryer_domain::Title {
             id: "title-1".to_string(),
             name: "Test Title".to_string(),
-            facet: MediaFacet::Movie,
+            facet,
             monitored: true,
             tags: vec![],
             external_ids: vec![],
@@ -572,6 +874,10 @@ mod tests {
         }
     }
 
+    fn test_title() -> scryer_domain::Title {
+        test_title_for_facet(MediaFacet::Movie)
+    }
+
     fn test_config(id: &str, name: &str, client_type: &str, priority: i64) -> DownloadClientConfig {
         DownloadClientConfig {
             id: id.to_string(),
@@ -589,13 +895,50 @@ mod tests {
         }
     }
 
+    fn disabled_test_config(
+        id: &str,
+        name: &str,
+        client_type: &str,
+        priority: i64,
+    ) -> DownloadClientConfig {
+        DownloadClientConfig {
+            is_enabled: false,
+            ..test_config(id, name, client_type, priority)
+        }
+    }
+
+    fn test_queue_item(id: &str) -> DownloadQueueItem {
+        DownloadQueueItem {
+            id: format!("queue-{id}"),
+            title_id: None,
+            title_name: "Test Download".to_string(),
+            facet: None,
+            client_id: String::new(),
+            client_name: String::new(),
+            client_type: "mock".to_string(),
+            state: scryer_domain::DownloadQueueState::Queued,
+            progress_percent: 0,
+            size_bytes: None,
+            remaining_seconds: None,
+            queued_at: None,
+            last_updated_at: None,
+            attention_required: false,
+            attention_reason: None,
+            download_client_item_id: id.to_string(),
+            import_status: None,
+            import_error_message: None,
+            imported_at: None,
+            is_scryer_origin: false,
+        }
+    }
+
     #[tokio::test]
     async fn submit_download_skips_incompatible_clients_by_source_kind() {
         let torrent_client = Arc::new(MockDownloadClient::default());
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
                 accepted_inputs: vec!["torrent_file".to_string(), "magnet_uri".to_string()],
-                client: torrent_client.clone(),
+                clients: vec![("torrent".to_string(), torrent_client.clone())],
             });
         let router = PrioritizedDownloadClientRouter::new(
             Arc::new(MockDownloadClientConfigRepository {
@@ -604,7 +947,7 @@ mod tests {
                     test_config("torrent", "qBittorrent", "qbittorrent", 1),
                 ],
             }),
-            Arc::new(MockSettingsRepository),
+            Arc::new(MockSettingsRepository::default()),
             Arc::new(MockDownloadClient::default()),
             Some(plugin_provider),
         );
@@ -617,6 +960,7 @@ mod tests {
                 source_title: Some("Test Release".to_string()),
                 source_password: None,
                 category: None,
+                queue_priority: None,
                 download_directory: None,
                 release_title: None,
                 indexer_name: None,
@@ -639,7 +983,7 @@ mod tests {
             Arc::new(MockDownloadClientConfigRepository {
                 configs: vec![test_config("nzb", "NZBGet", "nzbget", 0)],
             }),
-            Arc::new(MockSettingsRepository),
+            Arc::new(MockSettingsRepository::default()),
             Arc::new(MockDownloadClient::default()),
             None,
         );
@@ -652,6 +996,7 @@ mod tests {
                 source_title: Some("Test Release".to_string()),
                 source_password: None,
                 category: None,
+                queue_priority: None,
                 download_directory: None,
                 release_title: None,
                 indexer_name: None,
@@ -670,5 +1015,472 @@ mod tests {
             }
             other => panic!("expected validation error, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn submit_download_skips_clients_disabled_for_facet() {
+        let primary = Arc::new(MockDownloadClient::default());
+        let secondary = Arc::new(MockDownloadClient::default());
+        let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
+            Arc::new(MockDownloadClientPluginProvider {
+                accepted_inputs: Vec::new(),
+                clients: vec![
+                    ("primary".to_string(), primary.clone()),
+                    ("secondary".to_string(), secondary.clone()),
+                ],
+            });
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: vec![
+                    test_config("primary", "Primary", "qbittorrent", 0),
+                    test_config("secondary", "Secondary", "qbittorrent", 1),
+                ],
+            }),
+            Arc::new(MockSettingsRepository {
+                routing_by_scope: HashMap::from([(
+                    "movie".to_string(),
+                    r#"{
+                        "primary": { "enabled": false },
+                        "secondary": { "enabled": true }
+                    }"#
+                    .to_string(),
+                )]),
+            }),
+            Arc::new(MockDownloadClient::default()),
+            Some(plugin_provider),
+        );
+
+        let result = router
+            .submit_download(&DownloadClientAddRequest {
+                title: test_title(),
+                source_hint: Some("https://example.invalid/release.nzb".to_string()),
+                source_kind: Some(DownloadSourceKind::NzbUrl),
+                source_title: Some("Test Release".to_string()),
+                source_password: None,
+                category: None,
+                queue_priority: None,
+                download_directory: None,
+                release_title: None,
+                indexer_name: None,
+                info_hash_hint: None,
+                seed_goal_ratio: None,
+                seed_goal_seconds: None,
+                is_recent: None,
+                season_pack: None,
+            })
+            .await
+            .expect("secondary client should be used when primary is disabled for facet");
+
+        assert_eq!(result.client_type, "qbittorrent");
+        assert!(primary.submissions.lock().unwrap().is_empty());
+        assert_eq!(secondary.submissions.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn submit_download_respects_facet_specific_enablement_per_scope() {
+        let primary = Arc::new(MockDownloadClient::default());
+        let secondary = Arc::new(MockDownloadClient::default());
+        let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
+            Arc::new(MockDownloadClientPluginProvider {
+                accepted_inputs: Vec::new(),
+                clients: vec![
+                    ("primary".to_string(), primary.clone()),
+                    ("secondary".to_string(), secondary.clone()),
+                ],
+            });
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: vec![
+                    test_config("primary", "Primary", "qbittorrent", 0),
+                    test_config("secondary", "Secondary", "qbittorrent", 1),
+                ],
+            }),
+            Arc::new(MockSettingsRepository {
+                routing_by_scope: HashMap::from([
+                    (
+                        "movie".to_string(),
+                        r#"{
+                            "primary": { "enabled": false },
+                            "secondary": { "enabled": true }
+                        }"#
+                        .to_string(),
+                    ),
+                    (
+                        "anime".to_string(),
+                        r#"{
+                            "primary": { "enabled": true },
+                            "secondary": { "enabled": true }
+                        }"#
+                        .to_string(),
+                    ),
+                ]),
+            }),
+            Arc::new(MockDownloadClient::default()),
+            Some(plugin_provider),
+        );
+
+        router
+            .submit_download(&DownloadClientAddRequest {
+                title: test_title_for_facet(MediaFacet::Movie),
+                source_hint: Some("https://example.invalid/movie.nzb".to_string()),
+                source_kind: Some(DownloadSourceKind::NzbUrl),
+                source_title: Some("Movie Release".to_string()),
+                source_password: None,
+                category: None,
+                queue_priority: None,
+                download_directory: None,
+                release_title: None,
+                indexer_name: None,
+                info_hash_hint: None,
+                seed_goal_ratio: None,
+                seed_goal_seconds: None,
+                is_recent: None,
+                season_pack: None,
+            })
+            .await
+            .expect("movie request should use secondary");
+
+        router
+            .submit_download(&DownloadClientAddRequest {
+                title: test_title_for_facet(MediaFacet::Anime),
+                source_hint: Some("https://example.invalid/anime.nzb".to_string()),
+                source_kind: Some(DownloadSourceKind::NzbUrl),
+                source_title: Some("Anime Release".to_string()),
+                source_password: None,
+                category: None,
+                queue_priority: None,
+                download_directory: None,
+                release_title: None,
+                indexer_name: None,
+                info_hash_hint: None,
+                seed_goal_ratio: None,
+                seed_goal_seconds: None,
+                is_recent: None,
+                season_pack: None,
+            })
+            .await
+            .expect("anime request should use primary");
+
+        assert_eq!(primary.submissions.lock().unwrap().len(), 1);
+        assert_eq!(secondary.submissions.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn submit_download_ignores_facet_enabled_flag_for_globally_disabled_clients() {
+        let secondary = Arc::new(MockDownloadClient::default());
+        let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
+            Arc::new(MockDownloadClientPluginProvider {
+                accepted_inputs: Vec::new(),
+                clients: vec![("secondary".to_string(), secondary.clone())],
+            });
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: vec![
+                    disabled_test_config("primary", "Primary", "qbittorrent", 0),
+                    test_config("secondary", "Secondary", "qbittorrent", 1),
+                ],
+            }),
+            Arc::new(MockSettingsRepository {
+                routing_by_scope: HashMap::from([(
+                    "movie".to_string(),
+                    r#"{
+                        "primary": { "enabled": true },
+                        "secondary": { "enabled": true }
+                    }"#
+                    .to_string(),
+                )]),
+            }),
+            Arc::new(MockDownloadClient::default()),
+            Some(plugin_provider),
+        );
+
+        router
+            .submit_download(&DownloadClientAddRequest {
+                title: test_title(),
+                source_hint: Some("https://example.invalid/release.nzb".to_string()),
+                source_kind: Some(DownloadSourceKind::NzbUrl),
+                source_title: Some("Test Release".to_string()),
+                source_password: None,
+                category: None,
+                queue_priority: None,
+                download_directory: None,
+                release_title: None,
+                indexer_name: None,
+                info_hash_hint: None,
+                seed_goal_ratio: None,
+                seed_goal_seconds: None,
+                is_recent: None,
+                season_pack: None,
+            })
+            .await
+            .expect("secondary client should be used because primary is globally disabled");
+
+        assert_eq!(secondary.submissions.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn submit_download_applies_selected_client_category_and_recent_queue_priority() {
+        let primary = Arc::new(MockDownloadClient::default());
+        let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
+            Arc::new(MockDownloadClientPluginProvider {
+                accepted_inputs: vec!["nzb_url".to_string()],
+                clients: vec![("primary".to_string(), primary.clone())],
+            });
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: vec![test_config("primary", "Primary", "qbittorrent", 0)],
+            }),
+            Arc::new(MockSettingsRepository {
+                routing_by_scope: HashMap::from([(
+                    "movie".to_string(),
+                    r#"{
+                        "primary": {
+                            "enabled": true,
+                            "category": "Movies",
+                            "recentQueuePriority": "high",
+                            "olderQueuePriority": "low"
+                        }
+                    }"#
+                    .to_string(),
+                )]),
+            }),
+            Arc::new(MockDownloadClient::default()),
+            Some(plugin_provider),
+        );
+
+        router
+            .submit_download(&DownloadClientAddRequest {
+                title: test_title(),
+                source_hint: Some("https://example.invalid/release.nzb".to_string()),
+                source_kind: Some(DownloadSourceKind::NzbUrl),
+                source_title: Some("Test Release".to_string()),
+                source_password: None,
+                category: Some("Fallback".to_string()),
+                queue_priority: None,
+                download_directory: None,
+                release_title: None,
+                indexer_name: None,
+                info_hash_hint: None,
+                seed_goal_ratio: None,
+                seed_goal_seconds: None,
+                is_recent: Some(true),
+                season_pack: None,
+            })
+            .await
+            .expect("request should be routed");
+
+        let submissions = primary.submissions.lock().unwrap();
+        let request = submissions.first().expect("submission should be recorded");
+        assert_eq!(request.category.as_deref(), Some("Movies"));
+        assert_eq!(request.queue_priority.as_deref(), Some("high"));
+    }
+
+    #[tokio::test]
+    async fn submit_download_uses_older_queue_priority_when_request_is_not_recent() {
+        let primary = Arc::new(MockDownloadClient::default());
+        let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
+            Arc::new(MockDownloadClientPluginProvider {
+                accepted_inputs: vec!["nzb_url".to_string()],
+                clients: vec![("primary".to_string(), primary.clone())],
+            });
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: vec![test_config("primary", "Primary", "qbittorrent", 0)],
+            }),
+            Arc::new(MockSettingsRepository {
+                routing_by_scope: HashMap::from([(
+                    "movie".to_string(),
+                    r#"{
+                        "primary": {
+                            "enabled": true,
+                            "olderPriority": "very low"
+                        }
+                    }"#
+                    .to_string(),
+                )]),
+            }),
+            Arc::new(MockDownloadClient::default()),
+            Some(plugin_provider),
+        );
+
+        router
+            .submit_download(&DownloadClientAddRequest {
+                title: test_title(),
+                source_hint: Some("https://example.invalid/release.nzb".to_string()),
+                source_kind: Some(DownloadSourceKind::NzbUrl),
+                source_title: Some("Test Release".to_string()),
+                source_password: None,
+                category: None,
+                queue_priority: None,
+                download_directory: None,
+                release_title: None,
+                indexer_name: None,
+                info_hash_hint: None,
+                seed_goal_ratio: None,
+                seed_goal_seconds: None,
+                is_recent: Some(false),
+                season_pack: None,
+            })
+            .await
+            .expect("request should be routed");
+
+        let submissions = primary.submissions.lock().unwrap();
+        let request = submissions.first().expect("submission should be recorded");
+        assert_eq!(request.queue_priority.as_deref(), Some("very low"));
+    }
+
+    #[tokio::test]
+    async fn submit_download_fails_when_all_clients_disabled_for_facet() {
+        let fallback = Arc::new(MockDownloadClient::default());
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: vec![test_config("primary", "Primary", "qbittorrent", 0)],
+            }),
+            Arc::new(MockSettingsRepository {
+                routing_by_scope: HashMap::from([(
+                    "movie".to_string(),
+                    r#"{
+                        "primary": { "enabled": false }
+                    }"#
+                    .to_string(),
+                )]),
+            }),
+            fallback.clone(),
+            Some(Arc::new(MockDownloadClientPluginProvider {
+                accepted_inputs: Vec::new(),
+                clients: vec![(
+                    "primary".to_string(),
+                    Arc::new(MockDownloadClient::default()),
+                )],
+            })),
+        );
+
+        let error = router
+            .submit_download(&DownloadClientAddRequest {
+                title: test_title(),
+                source_hint: Some("https://example.invalid/release.nzb".to_string()),
+                source_kind: Some(DownloadSourceKind::NzbUrl),
+                source_title: Some("Test Release".to_string()),
+                source_password: None,
+                category: None,
+                queue_priority: None,
+                download_directory: None,
+                release_title: None,
+                indexer_name: None,
+                info_hash_hint: None,
+                seed_goal_ratio: None,
+                seed_goal_seconds: None,
+                is_recent: None,
+                season_pack: None,
+            })
+            .await
+            .expect_err("facet-disabled clients should fail fast");
+
+        match error {
+            AppError::Validation(message) => {
+                assert!(message.contains("no download client enabled"));
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
+
+        assert!(fallback.submissions.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pause_queue_item_routes_to_matching_client_item_id() {
+        let nzb_client = Arc::new(MockDownloadClient::default());
+        nzb_client
+            .queue_items
+            .lock()
+            .unwrap()
+            .push(test_queue_item("123"));
+
+        let sab_client = Arc::new(MockDownloadClient::default());
+        sab_client
+            .queue_items
+            .lock()
+            .unwrap()
+            .push(test_queue_item("SABnzbd_nzo_95u9pco9"));
+
+        let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
+            Arc::new(MockDownloadClientPluginProvider {
+                accepted_inputs: Vec::new(),
+                clients: vec![
+                    ("nzb".to_string(), nzb_client.clone()),
+                    ("sab".to_string(), sab_client.clone()),
+                ],
+            });
+
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: vec![
+                    test_config("nzb", "NZBGet", "nzbget", 0),
+                    test_config("sab", "SABnzbd", "sabnzbd", 1),
+                ],
+            }),
+            Arc::new(MockSettingsRepository::default()),
+            Arc::new(MockDownloadClient::default()),
+            Some(plugin_provider),
+        );
+
+        router
+            .pause_queue_item("SABnzbd_nzo_95u9pco9")
+            .await
+            .expect("pause should route to sabnzbd client");
+
+        assert!(nzb_client.paused.lock().unwrap().is_empty());
+        assert_eq!(
+            sab_client.paused.lock().unwrap().as_slice(),
+            ["SABnzbd_nzo_95u9pco9"]
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_history_item_routes_to_matching_client_item_id() {
+        let nzb_client = Arc::new(MockDownloadClient::default());
+        nzb_client
+            .history_items
+            .lock()
+            .unwrap()
+            .push(test_queue_item("42"));
+
+        let sab_client = Arc::new(MockDownloadClient::default());
+        sab_client
+            .history_items
+            .lock()
+            .unwrap()
+            .push(test_queue_item("SABnzbd_nzo_hist01"));
+
+        let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
+            Arc::new(MockDownloadClientPluginProvider {
+                accepted_inputs: Vec::new(),
+                clients: vec![
+                    ("nzb".to_string(), nzb_client.clone()),
+                    ("sab".to_string(), sab_client.clone()),
+                ],
+            });
+
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: vec![
+                    test_config("nzb", "NZBGet", "nzbget", 0),
+                    test_config("sab", "SABnzbd", "sabnzbd", 1),
+                ],
+            }),
+            Arc::new(MockSettingsRepository::default()),
+            Arc::new(MockDownloadClient::default()),
+            Some(plugin_provider),
+        );
+
+        router
+            .delete_queue_item("SABnzbd_nzo_hist01", true)
+            .await
+            .expect("history delete should route to sabnzbd client");
+
+        assert!(nzb_client.deleted.lock().unwrap().is_empty());
+        assert_eq!(
+            sab_client.deleted.lock().unwrap().as_slice(),
+            [("SABnzbd_nzo_hist01".to_string(), true)]
+        );
     }
 }

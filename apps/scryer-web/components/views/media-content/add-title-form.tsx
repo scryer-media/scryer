@@ -35,8 +35,6 @@ type AddTitleFormProps = {
   setMonitorSpecialsForQueue: (value: boolean) => void;
   interSeasonMoviesForQueue: boolean;
   setInterSeasonMoviesForQueue: (value: boolean) => void;
-  preferredSubGroupForQueue: string;
-  setPreferredSubGroupForQueue: (value: string) => void;
   minAvailabilityForQueue: string;
   setMinAvailabilityForQueue: (value: string) => void;
   onAddSubmit: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
@@ -71,8 +69,6 @@ export function AddTitleForm({
   setMonitorSpecialsForQueue,
   interSeasonMoviesForQueue,
   setInterSeasonMoviesForQueue,
-  preferredSubGroupForQueue,
-  setPreferredSubGroupForQueue,
   minAvailabilityForQueue,
   setMinAvailabilityForQueue,
   onAddSubmit,
@@ -218,14 +214,6 @@ export function AddTitleForm({
                     }
                   />
                   <span className="text-sm">{t("settings.interSeasonMoviesLabel")}</span>
-                </label>
-                <label className="md:col-span-2">
-                  <Label className="mb-2 block">{t("settings.preferredSubGroupLabel")}</Label>
-                  <Input
-                    value={preferredSubGroupForQueue}
-                    onChange={(e) => setPreferredSubGroupForQueue(e.target.value)}
-                    placeholder={t("settings.preferredSubGroupPlaceholder")}
-                  />
                 </label>
               </>
             )}

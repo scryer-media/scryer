@@ -1,4 +1,3 @@
-
 import * as React from "react";
 import { MediaContentView } from "@/components/views/media-content-view";
 import {
@@ -7,10 +6,15 @@ import {
   queueExistingMutation,
   scanLibraryMutation,
   deleteTitleMutation,
+  setTitleMonitoredMutation,
   updateRuleSetMutation,
   saveAdminSettingsMutation,
 } from "@/lib/graphql/mutations";
-import { titlesQuery, ruleSetsQuery } from "@/lib/graphql/queries";
+import {
+  titlesQuery,
+  ruleSetsQuery,
+  routingPageInitQuery,
+} from "@/lib/graphql/queries";
 import {
   CATEGORY_SCOPE_MAP,
   QUALITY_PROFILE_CATALOG_KEY,
@@ -29,11 +33,7 @@ import { useIndexerRouting } from "@/lib/hooks/use-indexer-routing";
 import { useMediaSettings } from "@/lib/hooks/use-media-settings";
 import { useQueueFormState } from "@/lib/hooks/use-queue-form-state";
 import { useTitleManagementState } from "@/lib/hooks/use-title-management-state";
-import type {
-  Release,
-  TitleRecord,
-  RuleSetRecord,
-} from "@/lib/types";
+import type { Release, TitleRecord, RuleSetRecord } from "@/lib/types";
 import type { ScoringPersonaId } from "@/lib/types/quality-profiles";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
@@ -54,33 +54,66 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   onOpenOverview,
 }: MediaContentContainerProps) {
   const searchState = useSearchContext();
-  const { queueFacet, setQueueFacet, runTvdbSearch, runSearch, searchNzbForSelectedTvdb, selectedTvdb, tvdbCandidates, selectedTvdbId, selectTvdbCandidate, searchResults, catalogChangeSignal } = searchState;
+  const {
+    queueFacet,
+    setQueueFacet,
+    runTvdbSearch,
+    runSearch,
+    searchNzbForSelectedTvdb,
+    selectedTvdb,
+    tvdbCandidates,
+    selectedTvdbId,
+    selectTvdbCandidate,
+    searchResults,
+    catalogChangeSignal,
+  } = searchState;
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
   const client = useClient();
   const activeFacet = viewToFacet[view as keyof typeof viewToFacet] ?? "movie";
-  const activeQualityScopeId = CATEGORY_SCOPE_MAP[view as keyof typeof CATEGORY_SCOPE_MAP] ?? "movie";
+  const activeQualityScopeId =
+    CATEGORY_SCOPE_MAP[view as keyof typeof CATEGORY_SCOPE_MAP] ?? "movie";
+  const isMediaView =
+    view === "movies" || view === "series" || view === "anime";
+  const shouldLoadCatalogTitles =
+    isMediaView && contentSettingsSection === "overview";
+  const shouldLoadMediaSettings =
+    isMediaView && contentSettingsSection !== "routing";
 
   const {
-    titleNameForQueue, setTitleNameForQueue,
-    monitoredForQueue, setMonitoredForQueue,
-    seasonFoldersForQueue, setSeasonFoldersForQueue,
-    monitorSpecialsForQueue, setMonitorSpecialsForQueue,
-    interSeasonMoviesForQueue, setInterSeasonMoviesForQueue,
-    preferredSubGroupForQueue, setPreferredSubGroupForQueue,
-    minAvailabilityForQueue, setMinAvailabilityForQueue,
+    titleNameForQueue,
+    setTitleNameForQueue,
+    monitoredForQueue,
+    setMonitoredForQueue,
+    seasonFoldersForQueue,
+    setSeasonFoldersForQueue,
+    monitorSpecialsForQueue,
+    setMonitorSpecialsForQueue,
+    interSeasonMoviesForQueue,
+    setInterSeasonMoviesForQueue,
+    minAvailabilityForQueue,
+    setMinAvailabilityForQueue,
   } = useQueueFormState();
 
   const {
-    titleFilter, setTitleFilter,
-    monitoredTitles, setMonitoredTitles,
-    titleLoading, setTitleLoading,
-    titleStatus, setTitleStatus,
-    titleToDelete, setTitleToDelete,
-    deleteFilesOnDisk, setDeleteFilesOnDisk,
-    deleteTitleLoadingById, setDeleteTitleLoadingById,
-    libraryScanLoading, setLibraryScanLoading,
-    libraryScanSummary, setLibraryScanSummary,
+    titleFilter,
+    setTitleFilter,
+    monitoredTitles,
+    setMonitoredTitles,
+    titleLoading,
+    setTitleLoading,
+    titleStatus,
+    setTitleStatus,
+    titleToDelete,
+    setTitleToDelete,
+    deleteFilesOnDisk,
+    setDeleteFilesOnDisk,
+    deleteTitleLoadingById,
+    setDeleteTitleLoadingById,
+    libraryScanLoading,
+    setLibraryScanLoading,
+    libraryScanSummary,
+    setLibraryScanSummary,
   } = useTitleManagementState();
 
   const {
@@ -111,8 +144,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     setCategoryMonitorSpecials,
     categoryInterSeasonMovies,
     setCategoryInterSeasonMovies,
-    categoryPreferredSubGroup,
-    setCategoryPreferredSubGroup,
     nfoWriteOnImport,
     setNfoWriteOnImport,
     plexmatchWriteOnImport,
@@ -122,6 +153,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   } = useMediaSettings({
     activeQualityScopeId,
     view,
+    contentSettingsSection,
   });
 
   const contentSettingsLabel =
@@ -136,10 +168,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     activeScopeRoutingOrder,
     downloadClientRoutingLoading,
     downloadClientRoutingSaving,
-    refreshDownloadClientRouting,
+    hydrateDownloadClientRouting,
     updateDownloadClientRoutingForScope,
     moveDownloadClientInScope,
-    saveDownloadClientRouting,
   } = useDownloadClientRouting({
     activeQualityScopeId,
   });
@@ -149,17 +180,21 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     activeScopeRoutingOrder: activeScopeIndexerRoutingOrder,
     indexerRoutingLoading,
     indexerRoutingSaving,
-    refreshIndexerRouting,
+    hydrateIndexerRouting,
     setIndexerEnabledForScope,
     updateIndexerRoutingForScope,
     moveIndexerInScope,
   } = useIndexerRouting({
     activeQualityScopeId,
   });
+  const [routingInitLoading, setRoutingInitLoading] = React.useState(false);
 
   const [ruleSets, setRuleSets] = React.useState<RuleSetRecord[]>([]);
   const [rulesLoading, setRulesLoading] = React.useState(true);
   const [rulesSaving, setRulesSaving] = React.useState(false);
+  const [titleMonitoringLoadingById, setTitleMonitoringLoadingById] = React.useState<
+    Record<string, boolean>
+  >({});
 
   const refreshRuleSets = React.useCallback(async () => {
     setRulesLoading(true);
@@ -206,7 +241,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         );
         await refreshRuleSets();
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.failedToUpdate"),
+        );
       } finally {
         setRulesSaving(false);
       }
@@ -217,34 +254,50 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   React.useEffect(() => {
     setMonitorSpecialsForQueue(categoryMonitorSpecials.anime !== "false");
     setInterSeasonMoviesForQueue(categoryInterSeasonMovies.anime !== "false");
-    setPreferredSubGroupForQueue(categoryPreferredSubGroup.anime);
-  }, [categoryMonitorSpecials.anime, categoryInterSeasonMovies.anime, categoryPreferredSubGroup.anime, setInterSeasonMoviesForQueue, setMonitorSpecialsForQueue, setPreferredSubGroupForQueue]);
+  }, [
+    categoryMonitorSpecials.anime,
+    categoryInterSeasonMovies.anime,
+    setInterSeasonMoviesForQueue,
+    setMonitorSpecialsForQueue,
+  ]);
 
   const refreshTitles = React.useCallback(async () => {
     setTitleLoading(true);
     setTitleStatus(t("title.loading"));
     try {
-      const { data, error } = await client.query(titlesQuery, {
-        facet: activeFacet,
-        query: titleFilter || undefined,
-      }).toPromise();
+      const { data, error } = await client
+        .query(titlesQuery, {
+          facet: activeFacet,
+          query: titleFilter || undefined,
+        })
+        .toPromise();
       if (error) throw error;
       const titles = (data?.titles || []) as TitleRecord[];
       setMonitoredTitles(titles);
       setTitleStatus(t("title.statusTemplate", { count: titles.length }));
     } catch (error) {
-      setTitleStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setTitleStatus(
+        error instanceof Error ? error.message : t("status.failedToLoad"),
+      );
     } finally {
       setTitleLoading(false);
     }
-  }, [activeFacet, client, t, titleFilter, setMonitoredTitles, setTitleLoading, setTitleStatus]);
+  }, [
+    activeFacet,
+    client,
+    t,
+    titleFilter,
+    setMonitoredTitles,
+    setTitleLoading,
+    setTitleStatus,
+  ]);
 
   React.useEffect(() => {
-    if (!catalogChangeSignal) {
+    if (!catalogChangeSignal || !shouldLoadCatalogTitles) {
       return;
     }
     void refreshTitles();
-  }, [catalogChangeSignal, refreshTitles]);
+  }, [catalogChangeSignal, refreshTitles, shouldLoadCatalogTitles]);
 
   const onAddSubmit = React.useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
@@ -286,30 +339,33 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       const tags = [
         `scryer:monitor-type:${monitorType}`,
         ...(queueFacet !== "movie"
-          ? [`scryer:season-folder:${seasonFoldersForQueue ? "enabled" : "disabled"}`]
+          ? [
+              `scryer:season-folder:${seasonFoldersForQueue ? "enabled" : "disabled"}`,
+            ]
           : []),
         ...(queueFacet === "anime"
           ? [
               `scryer:monitor-specials:${monitorSpecialsForQueue ? "true" : "false"}`,
               `scryer:inter-season-movies:${interSeasonMoviesForQueue ? "true" : "false"}`,
-              ...(preferredSubGroupForQueue.trim()
-                ? [`scryer:preferred-sub-group:${preferredSubGroupForQueue.trim()}`]
-                : []),
             ]
           : []),
       ];
 
       try {
-        const { data, error } = await client.mutation(addTitleMutation, {
-          input: {
-            name,
-            facet: queueFacet,
-            monitored: monitoredForQueue,
-            tags,
-            externalIds,
-            ...(queueFacet === "movie" ? { minAvailability: minAvailabilityForQueue } : {}),
-          },
-        }).toPromise();
+        const { data, error } = await client
+          .mutation(addTitleMutation, {
+            input: {
+              name,
+              facet: queueFacet,
+              monitored: monitoredForQueue,
+              tags,
+              externalIds,
+              ...(queueFacet === "movie"
+                ? { minAvailability: minAvailabilityForQueue }
+                : {}),
+            },
+          })
+          .toPromise();
         if (error) throw error;
         setTitleNameForQueue(data.addTitle.title.name);
         setGlobalStatus(
@@ -322,16 +378,31 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         );
         await refreshTitles();
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.queueFailed"));
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.queueFailed"),
+        );
       }
     },
-    [interSeasonMoviesForQueue, minAvailabilityForQueue, monitorSpecialsForQueue, monitoredForQueue, preferredSubGroupForQueue, queueFacet, refreshTitles, client, setGlobalStatus, t, seasonFoldersForQueue, setTitleNameForQueue],
+    [
+      interSeasonMoviesForQueue,
+      minAvailabilityForQueue,
+      monitorSpecialsForQueue,
+      monitoredForQueue,
+      queueFacet,
+      refreshTitles,
+      client,
+      setGlobalStatus,
+      t,
+      seasonFoldersForQueue,
+      setTitleNameForQueue,
+    ],
   );
 
   const queueFromSearch = React.useCallback(
     async (release: Release) => {
       if (
-        release.qualityProfileDecision && release.qualityProfileDecision.allowed === false
+        release.qualityProfileDecision &&
+        release.qualityProfileDecision.allowed === false
       ) {
         const reason =
           release.qualityProfileDecision.blockCodes.join(", ") ||
@@ -354,23 +425,21 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       const queueTags = [
         `scryer:monitor-type:${queueMonitorType}`,
         ...(queueFacet !== "movie"
-          ? [`scryer:season-folder:${seasonFoldersForQueue ? "enabled" : "disabled"}`]
+          ? [
+              `scryer:season-folder:${seasonFoldersForQueue ? "enabled" : "disabled"}`,
+            ]
           : []),
         ...(queueFacet === "anime"
           ? [
               `scryer:monitor-specials:${monitorSpecialsForQueue ? "true" : "false"}`,
               `scryer:inter-season-movies:${interSeasonMoviesForQueue ? "true" : "false"}`,
-              ...(preferredSubGroupForQueue.trim()
-                ? [`scryer:preferred-sub-group:${preferredSubGroupForQueue.trim()}`]
-                : []),
             ]
           : []),
       ];
 
       try {
-        const { data, error } = await client.mutation(
-          addTitleAndQueueMutation,
-          {
+        const { data, error } = await client
+          .mutation(addTitleAndQueueMutation, {
             input: {
               name: queuedTitle,
               facet: queueFacet,
@@ -387,17 +456,21 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
               sourceHint,
               sourceKind: release.sourceKind ?? null,
               sourceTitle: release.title,
-              ...(queueFacet === "movie" ? { minAvailability: minAvailabilityForQueue } : {}),
+              ...(queueFacet === "movie"
+                ? { minAvailability: minAvailabilityForQueue }
+                : {}),
             },
-          },
-        ).toPromise();
+          })
+          .toPromise();
         if (error) throw error;
         const queuedName = data.addTitleAndQueueDownload.title.name;
         const queuedMessage = t("status.queueSuccess", { name: queuedName });
         setGlobalStatus(queuedMessage);
         await refreshTitles();
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.queueFailed"));
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.queueFailed"),
+        );
       }
     },
     [
@@ -405,7 +478,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       minAvailabilityForQueue,
       monitorSpecialsForQueue,
       monitoredForQueue,
-      preferredSubGroupForQueue,
       queueFacet,
       refreshTitles,
       client,
@@ -421,6 +493,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const queueExisting = React.useCallback(
     async (title: TitleRecord) => {
       const imdbId =
+        title.imdbId?.trim() ||
         title.externalIds
           ?.find((externalId) => externalId.source.toLowerCase() === "imdb")
           ?.value?.trim() || null;
@@ -433,7 +506,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         tvdbId,
         limit: title.facet === "movie" ? 50 : 15,
       });
-      const top = payload.find((result) => result.qualityProfileDecision?.allowed ?? true);
+      const top = payload.find(
+        (result) => result.qualityProfileDecision?.allowed ?? true,
+      );
       if (!top) {
         setGlobalStatus(t("status.noReleaseForTitle", { name: title.name }));
         return;
@@ -445,19 +520,23 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       }
 
       try {
-        const { error } = await client.mutation(queueExistingMutation, {
-          input: {
-            titleId: title.id,
-            sourceHint,
-            sourceKind: top.sourceKind ?? null,
-            sourceTitle: top.title,
-          },
-        }).toPromise();
+        const { error } = await client
+          .mutation(queueExistingMutation, {
+            input: {
+              titleId: title.id,
+              sourceHint,
+              sourceKind: top.sourceKind ?? null,
+              sourceTitle: top.title,
+            },
+          })
+          .toPromise();
         if (error) throw error;
         const queuedMessage = t("status.queuedLatest", { name: title.name });
         setGlobalStatus(queuedMessage);
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.queueFailed"));
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.queueFailed"),
+        );
       }
     },
     [client, runSearch, setGlobalStatus, t],
@@ -466,6 +545,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const runInteractiveSearchForTitle = React.useCallback(
     async (title: TitleRecord) => {
       const imdbId =
+        title.imdbId?.trim() ||
         title.externalIds
           ?.find((externalId) => externalId.source.toLowerCase() === "imdb")
           ?.value?.trim() || null;
@@ -485,7 +565,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
 
   const queueExistingFromRelease = React.useCallback(
     async (title: TitleRecord, release: Release) => {
-      if (release.qualityProfileDecision && release.qualityProfileDecision.allowed === false) {
+      if (
+        release.qualityProfileDecision &&
+        release.qualityProfileDecision.allowed === false
+      ) {
         const reason =
           release.qualityProfileDecision.blockCodes.join(", ") ||
           t("settings.qualityProfileUnknown", { id: t("label.default") });
@@ -500,28 +583,74 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       }
 
       try {
-        const { error } = await client.mutation(queueExistingMutation, {
-          input: {
-            titleId: title.id,
-            sourceHint,
-            sourceKind: release.sourceKind ?? null,
-            sourceTitle: release.title,
-          },
-        }).toPromise();
+        const { error } = await client
+          .mutation(queueExistingMutation, {
+            input: {
+              titleId: title.id,
+              sourceHint,
+              sourceKind: release.sourceKind ?? null,
+              sourceTitle: release.title,
+            },
+          })
+          .toPromise();
         if (error) throw error;
         const queuedMessage = t("status.queuedLatest", { name: title.name });
         setGlobalStatus(queuedMessage);
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.queueFailed"));
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.queueFailed"),
+        );
       }
     },
     [client, setGlobalStatus, t],
   );
 
-  const requestDeleteTitle = React.useCallback((title: TitleRecord) => {
-    setTitleToDelete(title);
-    setDeleteFilesOnDisk(false);
-  }, [setTitleToDelete, setDeleteFilesOnDisk]);
+  const toggleTitleMonitored = React.useCallback(
+    async (title: TitleRecord, monitored: boolean) => {
+      const titleId = title.id;
+      setTitleMonitoringLoadingById((previous) => ({
+        ...previous,
+        [titleId]: true,
+      }));
+      try {
+        const { error } = await client
+          .mutation(setTitleMonitoredMutation, {
+            input: { titleId, monitored },
+          })
+          .toPromise();
+        if (error) throw error;
+        setMonitoredTitles((previous) =>
+          previous.map((item) =>
+            item.id === titleId ? { ...item, monitored } : item,
+          ),
+        );
+        setGlobalStatus(
+          monitored
+            ? t("status.titleMonitoringEnabled")
+            : t("status.titleMonitoringDisabled"),
+        );
+      } catch (error) {
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.apiError"),
+        );
+      } finally {
+        setTitleMonitoringLoadingById((previous) => {
+          const next = { ...previous };
+          delete next[titleId];
+          return next;
+        });
+      }
+    },
+    [client, setGlobalStatus, setMonitoredTitles, t],
+  );
+
+  const requestDeleteTitle = React.useCallback(
+    (title: TitleRecord) => {
+      setTitleToDelete(title);
+      setDeleteFilesOnDisk(false);
+    },
+    [setTitleToDelete, setDeleteFilesOnDisk],
+  );
 
   const closeDeleteTitleDialog = React.useCallback(() => {
     setTitleToDelete(null);
@@ -548,14 +677,18 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         payload.deleteFilesOnDisk = true;
       }
 
-      const { error } = await client.mutation(deleteTitleMutation, {
-        input: payload,
-      }).toPromise();
+      const { error } = await client
+        .mutation(deleteTitleMutation, {
+          input: payload,
+        })
+        .toPromise();
       if (error) throw error;
       setGlobalStatus(t("status.titleDeleted", { name: titleToDelete.name }));
       await refreshTitles();
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"));
+      setGlobalStatus(
+        error instanceof Error ? error.message : t("status.failedToDelete"),
+      );
     } finally {
       setDeleteTitleLoadingById((previous) => {
         const next = { ...previous };
@@ -564,13 +697,24 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       });
       closeDeleteTitleDialog();
     }
-  }, [closeDeleteTitleDialog, deleteFilesOnDisk, refreshTitles, client, t, titleToDelete, setGlobalStatus, setDeleteTitleLoadingById]);
+  }, [
+    closeDeleteTitleDialog,
+    deleteFilesOnDisk,
+    refreshTitles,
+    client,
+    t,
+    titleToDelete,
+    setGlobalStatus,
+    setDeleteTitleLoadingById,
+  ]);
 
   const handleLibraryScan = React.useCallback(async () => {
     setLibraryScanLoading(true);
     setGlobalStatus(t("settings.libraryScanRunning"));
     try {
-      const { data, error } = await client.mutation(scanLibraryMutation, { facet: activeFacet }).toPromise();
+      const { data, error } = await client
+        .mutation(scanLibraryMutation, { facet: activeFacet })
+        .toPromise();
       if (error) throw error;
       setLibraryScanSummary(data.scanLibrary);
       setGlobalStatus(
@@ -582,11 +726,23 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       );
       await refreshTitles();
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("settings.libraryScanFailed"));
+      setGlobalStatus(
+        error instanceof Error
+          ? error.message
+          : t("settings.libraryScanFailed"),
+      );
     } finally {
       setLibraryScanLoading(false);
     }
-  }, [activeFacet, refreshTitles, client, setGlobalStatus, t, setLibraryScanLoading, setLibraryScanSummary]);
+  }, [
+    activeFacet,
+    refreshTitles,
+    client,
+    setGlobalStatus,
+    t,
+    setLibraryScanLoading,
+    setLibraryScanSummary,
+  ]);
 
   React.useEffect(() => {
     if (!titleStatus) {
@@ -598,9 +754,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     async (persona: ScoringPersonaId | null) => {
       const entries = parseQualityProfileCatalogEntries(qualityProfilesText);
       const overrideId = categoryQualityProfileOverrides[activeQualityScopeId];
-      const effectiveProfileId = (!overrideId || overrideId === QUALITY_PROFILE_INHERIT_VALUE)
-        ? globalQualityProfileId
-        : overrideId;
+      const effectiveProfileId =
+        !overrideId || overrideId === QUALITY_PROFILE_INHERIT_VALUE
+          ? globalQualityProfileId
+          : overrideId;
       const entry = entries.find((e) => e.id === effectiveProfileId);
       if (!entry) return;
       const nextOverrides = { ...entry.criteria.facet_persona_overrides };
@@ -616,36 +773,99 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       const catalogPatchText = normalizeQualityProfilesForSave(
         JSON.stringify([updatedEntry]),
       );
-      await client.mutation(saveAdminSettingsMutation, {
-        input: {
-          scope: "system",
-          items: [{ keyName: QUALITY_PROFILE_CATALOG_KEY, value: catalogPatchText }],
-        },
-      }).toPromise();
+      await client
+        .mutation(saveAdminSettingsMutation, {
+          input: {
+            scope: "system",
+            items: [
+              { keyName: QUALITY_PROFILE_CATALOG_KEY, value: catalogPatchText },
+            ],
+          },
+        })
+        .toPromise();
       await refreshMediaSettings();
     },
-    [qualityProfilesText, categoryQualityProfileOverrides, activeQualityScopeId, globalQualityProfileId, client, refreshMediaSettings],
+    [
+      qualityProfilesText,
+      categoryQualityProfileOverrides,
+      activeQualityScopeId,
+      globalQualityProfileId,
+      client,
+      refreshMediaSettings,
+    ],
   );
 
   React.useEffect(() => {
-    if (view !== "movies" && view !== "series" && view !== "anime") {
+    if (!isMediaView) {
       return;
     }
 
-    void refreshTitles();
-    void refreshMediaSettings();
-    if (contentSettingsSection === "settings") {
-      void refreshDownloadClientRouting();
-      void refreshIndexerRouting();
+    const isGeneralSettingsSection =
+      contentSettingsSection === "settings" ||
+      contentSettingsSection === "general";
+    const isRoutingSection = contentSettingsSection === "routing";
+
+    if (shouldLoadCatalogTitles) {
+      void refreshTitles();
+    }
+    if (shouldLoadMediaSettings) {
+      void refreshMediaSettings();
+    }
+    if (isRoutingSection) {
+      let cancelled = false;
+      setRoutingInitLoading(true);
+      void client
+        .query(routingPageInitQuery, { scopeId: activeQualityScopeId })
+        .toPromise()
+        .then(({ data, error }) => {
+          if (cancelled) {
+            return;
+          }
+          if (error) {
+            throw error;
+          }
+          hydrateDownloadClientRouting(
+            data?.downloadClientConfigs || [],
+            data.categorySettings,
+          );
+          hydrateIndexerRouting(data?.indexers || [], data.categorySettings);
+        })
+        .catch((error) => {
+          if (cancelled) {
+            return;
+          }
+          setGlobalStatus(
+            error instanceof Error ? error.message : t("status.failedToLoad"),
+          );
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setRoutingInitLoading(false);
+          }
+        });
+
+      return () => {
+        cancelled = true;
+      };
+    }
+    setRoutingInitLoading(false);
+    if (isGeneralSettingsSection) {
       void refreshRuleSets();
     }
   }, [
+    activeQualityScopeId,
+    client,
     contentSettingsSection,
-    refreshDownloadClientRouting,
-    refreshIndexerRouting,
+    hydrateDownloadClientRouting,
+    hydrateIndexerRouting,
+    isMediaView,
     refreshMediaSettings,
     refreshRuleSets,
     refreshTitles,
+    setGlobalStatus,
+    shouldLoadCatalogTitles,
+    shouldLoadMediaSettings,
+    t,
     view,
   ]);
 
@@ -683,8 +903,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           setCategoryMonitorSpecials,
           categoryInterSeasonMovies,
           setCategoryInterSeasonMovies,
-          categoryPreferredSubGroup,
-          setCategoryPreferredSubGroup,
           nfoWriteOnImport,
           setNfoWriteOnImport,
           plexmatchWriteOnImport,
@@ -707,8 +925,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           setMonitorSpecialsForQueue,
           interSeasonMoviesForQueue,
           setInterSeasonMoviesForQueue,
-          preferredSubGroupForQueue,
-          setPreferredSubGroupForQueue,
           minAvailabilityForQueue,
           setMinAvailabilityForQueue,
           selectedTvdb,
@@ -726,20 +942,22 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           titleStatus,
           monitoredTitles,
           queueExisting,
+          toggleTitleMonitored,
           runInteractiveSearchForTitle,
           queueExistingFromRelease,
+          isTogglingTitleMonitoredById: titleMonitoringLoadingById,
           downloadClients,
           activeScopeRouting,
           activeScopeRoutingOrder,
-          downloadClientRoutingLoading,
+          downloadClientRoutingLoading:
+            downloadClientRoutingLoading || routingInitLoading,
           downloadClientRoutingSaving,
           updateDownloadClientRoutingForScope,
           moveDownloadClientInScope,
-          saveDownloadClientRouting,
           indexers,
           activeScopeIndexerRouting,
           activeScopeIndexerRoutingOrder,
-          indexerRoutingLoading,
+          indexerRoutingLoading: indexerRoutingLoading || routingInitLoading,
           indexerRoutingSaving,
           setIndexerEnabledForScope,
           updateIndexerRoutingForScope,
@@ -766,17 +984,29 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         }
         confirmLabel={t("label.delete")}
         cancelLabel={t("label.cancel")}
-        isBusy={titleToDelete !== null ? !!deleteTitleLoadingById[titleToDelete.id] : false}
+        isBusy={
+          titleToDelete !== null
+            ? !!deleteTitleLoadingById[titleToDelete.id]
+            : false
+        }
         onConfirm={confirmDeleteTitle}
         onCancel={closeDeleteTitleDialog}
       >
         <label className="flex items-center gap-2">
           <Checkbox
             checked={deleteFilesOnDisk}
-            onCheckedChange={(checked) => setDeleteFilesOnDisk(checked === true)}
-            disabled={titleToDelete !== null ? !!deleteTitleLoadingById[titleToDelete.id] : false}
+            onCheckedChange={(checked) =>
+              setDeleteFilesOnDisk(checked === true)
+            }
+            disabled={
+              titleToDelete !== null
+                ? !!deleteTitleLoadingById[titleToDelete.id]
+                : false
+            }
           />
-          <span className="text-xs text-card-foreground">{t("title.deleteFilesOnDisk")}</span>
+          <span className="text-xs text-card-foreground">
+            {t("title.deleteFilesOnDisk")}
+          </span>
         </label>
       </ConfirmDialog>
     </>

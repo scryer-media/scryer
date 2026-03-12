@@ -160,6 +160,16 @@ export const scanLibraryMutation = `mutation ScanLibrary($facet: String!) {
   }
 }`;
 
+export const scanTitleLibraryMutation = `mutation ScanTitleLibrary($input: TitleIdInput!) {
+  scanTitleLibrary(input: $input) {
+    scanned
+    matched
+    imported
+    skipped
+    unmatched
+  }
+}`;
+
 export const applyMediaRenameMutation = `mutation ApplyMediaRename($input: MediaRenameApplyInput!) {
   applyMediaRename(input: $input) {
     planFingerprint
@@ -205,21 +215,11 @@ export const saveAdminSettingsMutation = `mutation SaveAdminSettings($input: Adm
     scope
     scopeId
     items {
-      category
-      scope
       keyName
-      dataType
       defaultValueJson
       effectiveValueJson
       valueJson
-      source
       hasOverride
-      isSensitive
-      validationJson
-      scopeId
-      updatedByUserId
-      createdAt
-      updatedAt
     }
   }
 }`;
@@ -298,6 +298,10 @@ export const setEpisodeMonitoredMutation = `mutation SetEpisodeMonitored($input:
   setEpisodeMonitored(input: $input) { id monitored }
 }`;
 
+export const setTitleMonitoredMutation = `mutation SetTitleMonitored($input: SetTitleMonitoredInput!) {
+  setTitleMonitored(input: $input) { id monitored }
+}`;
+
 export const updateTitleMutation = `mutation UpdateTitle($input: UpdateTitleInput!) {
   updateTitle(input: $input) { id name facet tags monitored }
 }`;
@@ -328,6 +332,10 @@ export const executeManualImportMutation = `mutation ExecuteManualImport($input:
 
 export const triggerWantedSearchMutation = `mutation TriggerWantedSearch($input: WantedItemIdInput!) {
   triggerWantedSearch(input: $input)
+}`;
+
+export const triggerTitleWantedSearchMutation = `mutation TriggerTitleWantedSearch($input: TitleIdInput!) {
+  triggerTitleWantedSearch(input: $input)
 }`;
 
 export const pauseWantedItemMutation = `mutation PauseWantedItem($input: WantedItemIdInput!) {

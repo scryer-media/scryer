@@ -188,8 +188,10 @@ fn plugin_name_and_default_url_accessible() {
         provider.plugin_name_for_provider("newznab").is_some(),
         "newznab should have a plugin name"
     );
-    // These builtins do NOT have default_base_url
-    assert!(provider.default_base_url_for_provider("nzbgeek").is_none());
+    assert_eq!(
+        provider.default_base_url_for_provider("nzbgeek").as_deref(),
+        Some("https://api.nzbgeek.info")
+    );
     assert!(provider.default_base_url_for_provider("newznab").is_none());
 }
 

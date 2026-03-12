@@ -19,7 +19,6 @@ export const ANIME_FILLER_POLICY_KEY = "anime.filler_policy";
 export const ANIME_RECAP_POLICY_KEY = "anime.recap_policy";
 export const ANIME_MONITOR_SPECIALS_KEY = "anime.monitor_specials";
 export const ANIME_INTER_SEASON_MOVIES_KEY = "anime.inter_season_movies";
-export const ANIME_PREFERRED_SUB_GROUP_KEY = "anime.preferred_sub_group";
 
 // NFO sidecar writing on import (per facet)
 export const NFO_WRITE_ON_IMPORT_MOVIE_KEY = "nfo.write_on_import.movie";

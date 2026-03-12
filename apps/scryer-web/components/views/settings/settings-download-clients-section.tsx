@@ -1,6 +1,6 @@
 
 import * as React from "react";
-import { ChevronDown, ChevronUp, Edit, Server, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Edit, Power, PowerOff, Server, Trash2 } from "lucide-react";
 import { InfoHelp } from "@/components/common/info-help";
 import { RenderBooleanIcon } from "@/components/common/boolean-icon";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,12 @@ import {
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { DownloadClientRecord, DownloadClientDraft, DownloadClientTypeOption } from "@/lib/types";
+import { cn } from "@/lib/utils";
+import {
+  boxedActionButtonBaseClass,
+  boxedActionButtonToneClass,
+  type BoxedActionButtonTone,
+} from "@/lib/utils/action-button-styles";
 
 type DownloadClientTypeLogoOption = {
   value: string;
@@ -102,6 +108,35 @@ const SabnzbdIcon = (props: React.ComponentPropsWithoutRef<"svg">) => (
     />
   </svg>
 );
+
+function DownloadClientActionButton({
+  label,
+  tone,
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof Button> & {
+  label: string;
+  tone: Extract<BoxedActionButtonTone, "edit" | "enabled" | "disabled" | "delete">;
+}) {
+  return (
+    <Button
+      type="button"
+      size="icon-sm"
+      variant="secondary"
+      title={label}
+      aria-label={label}
+      className={cn(
+        boxedActionButtonBaseClass,
+        boxedActionButtonToneClass[tone],
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </Button>
+  );
+}
 
 export type SettingsDownloadClientsSectionProps = {
   editingDownloadClientId: string | null;
@@ -282,36 +317,33 @@ export function SettingsDownloadClientsSection({
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => editDownloadClient(client)}
-                      >
-                        <Edit className="mr-1 h-3.5 w-3.5" />
-                        {t("label.edit")}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        className={
-                          client.isEnabled
-                            ? "border-red-700/70 bg-red-900/60 text-red-200 hover:bg-red-900/80 hover:text-red-100"
-                            : "border-emerald-300/70 dark:border-emerald-700/70 bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-100 hover:bg-emerald-200 dark:hover:bg-emerald-800/80"
-                        }
+                      <DownloadClientActionButton
+                        tone={client.isEnabled ? "disabled" : "enabled"}
                         onClick={() => void toggleDownloadClientEnabled(client)}
                         disabled={mutatingDownloadClientId === client.id}
+                        label={client.isEnabled ? t("label.disable") : t("label.enable")}
                       >
-                        {client.isEnabled ? t("label.disable") : t("label.enable")}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="destructive"
+                        {client.isEnabled ? (
+                          <PowerOff className="h-4 w-4" />
+                        ) : (
+                          <Power className="h-4 w-4" />
+                        )}
+                      </DownloadClientActionButton>
+                      <DownloadClientActionButton
+                        tone="edit"
+                        onClick={() => editDownloadClient(client)}
+                        label={t("label.edit")}
+                      >
+                        <Edit className="h-4 w-4" />
+                      </DownloadClientActionButton>
+                      <DownloadClientActionButton
+                        tone="delete"
                         onClick={() => void deleteDownloadClient(client)}
                         disabled={mutatingDownloadClientId === client.id}
+                        label={mutatingDownloadClientId === client.id ? t("label.deleting") : t("label.delete")}
                       >
-                        <Trash2 className="mr-1 h-3.5 w-3.5" />
-                        {mutatingDownloadClientId === client.id ? t("label.deleting") : t("label.delete")}
-                      </Button>
+                        <Trash2 className="h-4 w-4" />
+                      </DownloadClientActionButton>
                     </div>
                   </TableCell>
                   </TableRow>

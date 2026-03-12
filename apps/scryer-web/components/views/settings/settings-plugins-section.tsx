@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
-import { ArrowUpCircle, Download, Power, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowUpCircle, Download, Power, PowerOff, RefreshCw, Trash2 } from "lucide-react";
+import { RenderBooleanIcon } from "@/components/common/boolean-icon";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -18,6 +19,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
+import { cn } from "@/lib/utils";
+import {
+  boxedActionButtonBaseClass,
+  boxedActionButtonToneClass,
+  type BoxedActionButtonTone,
+} from "@/lib/utils/action-button-styles";
 
 export type RegistryPluginRecord = {
   id: string;
@@ -53,6 +60,35 @@ type FilterState = {
 };
 
 type Translate = (key: string, values?: Record<string, string | number | boolean | null | undefined>) => string;
+
+function PluginActionButton({
+  label,
+  tone,
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof Button> & {
+  label: string;
+  tone: Extract<BoxedActionButtonTone, "install" | "upgrade" | "enabled" | "disabled" | "delete">;
+}) {
+  return (
+    <Button
+      type="button"
+      size="icon-sm"
+      variant="secondary"
+      title={label}
+      aria-label={label}
+      className={cn(
+        boxedActionButtonBaseClass,
+        boxedActionButtonToneClass[tone],
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </Button>
+  );
+}
 
 function categoryLabel(pluginType: string, t: Translate): string {
   switch (pluginType) {
@@ -189,58 +225,59 @@ function PluginTable({
                 </div>
               </TableCell>
               {showActions === "installed" && (
-                <TableCell>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    disabled={isBusy}
-                    onClick={() => onTogglePlugin(plugin)}
-                    title={plugin.isEnabled ? t("label.disable") : t("label.enable")}
-                  >
-                    <Power
-                      className={`h-4 w-4 ${plugin.isEnabled ? "text-green-400" : "text-muted-foreground"}`}
-                    />
-                  </Button>
+                <TableCell className="text-center">
+                  <RenderBooleanIcon
+                    value={plugin.isEnabled}
+                    label={`${t("label.enabled")}: ${plugin.name}`}
+                  />
                 </TableCell>
               )}
               <TableCell className="text-right">
                 <div className="flex items-center justify-end gap-1">
                   {showActions === "installed" ? (
                     <>
+                      <PluginActionButton
+                        tone={plugin.isEnabled ? "disabled" : "enabled"}
+                        disabled={isBusy}
+                        onClick={() => onTogglePlugin(plugin)}
+                        label={plugin.isEnabled ? t("label.disable") : t("label.enable")}
+                      >
+                        {plugin.isEnabled ? (
+                          <PowerOff className="h-4 w-4" />
+                        ) : (
+                          <Power className="h-4 w-4" />
+                        )}
+                      </PluginActionButton>
                       {plugin.updateAvailable && (
-                        <Button
-                          variant="outline"
-                          size="sm"
+                        <PluginActionButton
+                          tone="upgrade"
                           disabled={isBusy}
                           onClick={() => onUpgradePlugin(plugin)}
-                          className="border-amber-600/70 bg-amber-900/40 text-amber-200 hover:bg-amber-900/60"
+                          label={t("settings.pluginUpgrade", { version: plugin.version })}
                         >
-                          <ArrowUpCircle className="mr-1 h-3 w-3" />
-                          {t("settings.pluginUpgrade", { version: plugin.version })}
-                        </Button>
+                          <ArrowUpCircle className="h-4 w-4" />
+                        </PluginActionButton>
                       )}
                       {!plugin.builtin && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
+                        <PluginActionButton
+                          tone="delete"
                           disabled={isBusy}
                           onClick={() => onUninstallPlugin(plugin)}
-                          title={t("settings.pluginUninstall")}
+                          label={t("settings.pluginUninstall")}
                         >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
+                          <Trash2 className="h-4 w-4" />
+                        </PluginActionButton>
                       )}
                     </>
                   ) : (
-                    <Button
-                      variant="outline"
-                      size="sm"
+                    <PluginActionButton
+                      tone="install"
                       disabled={isBusy}
                       onClick={() => onInstallPlugin(plugin)}
+                      label={t("settings.pluginInstall")}
                     >
-                      <Download className="mr-1 h-3 w-3" />
-                      {t("settings.pluginInstall")}
-                    </Button>
+                      <Download className="h-4 w-4" />
+                    </PluginActionButton>
                   )}
                 </div>
               </TableCell>

@@ -1,4 +1,5 @@
 use super::*;
+use crate::post_download_gate::{facet_to_category_hint, missing_audio_languages};
 use scryer_domain::{MediaFacet, Title};
 
 // ── helpers ───────────────────────────────────────────────────────────────────

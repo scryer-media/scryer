@@ -1,18 +1,20 @@
 import { ExternalLink } from "lucide-react";
 import type { InterstitialMovieMetadata } from "@/components/containers/series-overview-container";
+import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 import { getImdbUrl, getTvdbMovieUrl, formatRuntimeFromMinutes } from "./helpers";
 
 export function InterstitialMoviePanel({ movie }: { movie: InterstitialMovieMetadata }) {
   const imdbUrl = getImdbUrl(movie.imdbId);
   const tvdbUrl = getTvdbMovieUrl(movie);
   const runtime = formatRuntimeFromMinutes(movie.runtimeMinutes);
+  const posterUrl = selectPosterVariantUrl(movie.posterUrl, "w250");
 
   return (
     <div className="flex items-start gap-4">
       <div className="shrink-0">
-        {movie.posterUrl ? (
+        {posterUrl ? (
           <img
-            src={movie.posterUrl}
+            src={posterUrl}
             alt={movie.name}
             className="h-auto w-[140px] rounded-lg object-cover shadow-md"
           />

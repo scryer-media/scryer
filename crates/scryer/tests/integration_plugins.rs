@@ -199,14 +199,14 @@ async fn reconcile_noop_for_builtins_without_default_url() {
     let ctx = TestContext::new().await;
     ctx.app.seed_builtin_plugins().await.unwrap();
 
-    // nzbgeek and newznab do NOT have default_base_url, so reconcile
-    // should not create any configs
+    // newznab has no default URL, and nzbgeek is intentionally skipped from
+    // auto-creation because it still needs a manual API key.
     ctx.app.reconcile_indexer_configs().await.unwrap();
 
     let configs = IndexerConfigRepository::list(&ctx.db, None).await.unwrap();
     assert!(
         configs.is_empty(),
-        "no configs should be auto-created for builtins without default_base_url"
+        "no builtin configs should be auto-created during reconciliation"
     );
 }
 

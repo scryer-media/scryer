@@ -9,7 +9,7 @@ pub(crate) async fn upsert_wanted_item_query(
 ) -> AppResult<String> {
     let now = Utc::now().to_rfc3339();
 
-    sqlx::query(
+    let sql = if item.episode_id.is_some() {
         "INSERT INTO wanted_items
          (id, title_id, episode_id, media_type, search_phase, next_search_at, last_search_at,
           search_count, baseline_date, status, grabbed_release, current_score, created_at, updated_at)
@@ -23,25 +23,42 @@ pub(crate) async fn upsert_wanted_item_query(
                 THEN wanted_items.status
                 ELSE excluded.status
             END,
-            updated_at = excluded.updated_at",
-    )
-    .bind(&item.id)
-    .bind(&item.title_id)
-    .bind(&item.episode_id)
-    .bind(&item.media_type)
-    .bind(&item.search_phase)
-    .bind(&item.next_search_at)
-    .bind(&item.last_search_at)
-    .bind(item.search_count)
-    .bind(&item.baseline_date)
-    .bind(&item.status)
-    .bind(&item.grabbed_release)
-    .bind(item.current_score)
-    .bind(&now)
-    .bind(&now)
-    .execute(pool)
-    .await
-    .map_err(|err| AppError::Repository(err.to_string()))?;
+            updated_at = excluded.updated_at"
+    } else {
+        "INSERT INTO wanted_items
+         (id, title_id, episode_id, media_type, search_phase, next_search_at, last_search_at,
+          search_count, baseline_date, status, grabbed_release, current_score, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(title_id) WHERE episode_id IS NULL DO UPDATE SET
+            search_phase = excluded.search_phase,
+            next_search_at = excluded.next_search_at,
+            baseline_date = excluded.baseline_date,
+            status = CASE
+                WHEN wanted_items.status IN ('completed', 'paused') AND excluded.status = 'wanted'
+                THEN wanted_items.status
+                ELSE excluded.status
+            END,
+            updated_at = excluded.updated_at"
+    };
+
+    sqlx::query(sql)
+        .bind(&item.id)
+        .bind(&item.title_id)
+        .bind(&item.episode_id)
+        .bind(&item.media_type)
+        .bind(&item.search_phase)
+        .bind(&item.next_search_at)
+        .bind(&item.last_search_at)
+        .bind(item.search_count)
+        .bind(&item.baseline_date)
+        .bind(&item.status)
+        .bind(&item.grabbed_release)
+        .bind(item.current_score)
+        .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
 
     Ok(item.id.clone())
 }

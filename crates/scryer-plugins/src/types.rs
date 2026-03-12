@@ -30,9 +30,10 @@ pub struct PluginDescriptor {
     /// in `IndexerConfig.config_json` and injected via Extism `config::get()`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config_fields: Vec<ConfigFieldDef>,
-    /// If set, the plugin has a fixed public endpoint and doesn't need
-    /// user-supplied base_url or api_key. The frontend hides those fields
-    /// and uses this URL when auto-creating an IndexerConfig.
+    /// If set, the plugin has a fixed public endpoint and doesn't need a
+    /// user-supplied base_url. The frontend can hide the Base URL field and
+    /// use this URL when creating or editing an IndexerConfig. Some providers
+    /// may still use the standard api_key field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_base_url: Option<String>,
     /// Additional hostnames the plugin is allowed to reach beyond the
@@ -173,6 +174,8 @@ pub struct PluginDownloadTitle {
 pub struct PluginDownloadRouting {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation_value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_priority: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub download_directory: Option<String>,
 }

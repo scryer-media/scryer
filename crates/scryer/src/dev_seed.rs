@@ -1,11 +1,15 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
-use scryer_application::AppUseCase;
-use scryer_domain::{ExternalId, MediaFacet, NewDownloadClientConfig, NewIndexerConfig, NewTitle};
+use scryer_application::{AppUseCase, InsertMediaFileInput};
+use scryer_domain::{
+    ExternalId, MediaFacet, NewDownloadClientConfig, NewIndexerConfig, NewTitle, Title,
+};
 use scryer_infrastructure::SqliteServices;
 use serde::Deserialize;
 
 use crate::admin_routes::normalize_base_url;
+use crate::settings_bootstrap::MOVIES_PATH_KEY;
 
 #[derive(Deserialize)]
 struct SeedConfig {
@@ -34,6 +38,8 @@ struct SeedTitle {
     /// Optional name hint — used only for logging. SMG hydrates the real name.
     #[serde(default)]
     name: Option<String>,
+    #[serde(default)]
+    quality_tier: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -100,6 +106,202 @@ fn toml_value_to_json_string(value: &toml::Value) -> String {
         }
         toml::Value::Datetime(dt) => serde_json::to_string(&dt.to_string()).unwrap(),
     }
+}
+
+const DEFAULT_MOVIE_MEDIA_ROOT: &str = "/media/movies";
+const DEV_SEED_MOVIE_COLLECTION_INDEX: &str = "1";
+
+fn read_seed_media_root(settings: &[SeedSetting], key: &str, fallback: &str) -> PathBuf {
+    settings
+        .iter()
+        .rev()
+        .find(|setting| setting.scope == "media" && setting.key == key)
+        .and_then(|setting| setting.value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(fallback))
+}
+
+fn sanitize_path_component(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut last_was_sep = false;
+    for ch in raw.chars() {
+        let normalized = match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' => Some(ch),
+            ' ' | '-' | '_' | '.' => Some(ch),
+            '&' => Some('+'),
+            _ => None,
+        };
+        if let Some(ch) = normalized {
+            let is_sep = matches!(ch, ' ' | '-' | '_' | '.');
+            if is_sep && last_was_sep {
+                continue;
+            }
+            out.push(ch);
+            last_was_sep = is_sep;
+        } else if !last_was_sep {
+            out.push(' ');
+            last_was_sep = true;
+        }
+    }
+    let trimmed = out.trim_matches(|ch: char| matches!(ch, ' ' | '-' | '_' | '.'));
+    if trimmed.is_empty() {
+        "untitled".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn normalize_seed_quality_tier(tvdb_id: i64, configured: Option<&str>) -> String {
+    if let Some(value) = configured.map(str::trim).filter(|value| !value.is_empty()) {
+        return value.to_ascii_uppercase();
+    }
+    match tvdb_id.rem_euclid(3) {
+        0 => "2160P".to_string(),
+        1 => "1080P".to_string(),
+        _ => "720P".to_string(),
+    }
+}
+
+fn seeded_movie_size_bytes(quality_tier: &str) -> u64 {
+    match quality_tier.trim().to_ascii_uppercase().as_str() {
+        "2160P" => 30 * 1024 * 1024 * 1024,
+        "1080P" => 10 * 1024 * 1024 * 1024,
+        "720P" => 4 * 1024 * 1024 * 1024,
+        _ => 2 * 1024 * 1024 * 1024,
+    }
+}
+
+fn build_seeded_movie_path(media_root: &Path, title_name: &str, quality_tier: &str) -> PathBuf {
+    let folder_name = sanitize_path_component(title_name);
+    let file_stem = sanitize_path_component(title_name).replace(' ', ".");
+    media_root
+        .join(&folder_name)
+        .join(format!("{file_stem}.{quality_tier}.mkv"))
+}
+
+fn ensure_placeholder_media_file(path: &Path, size_bytes: u64) -> Result<(), std::io::Error> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)?;
+    if file.metadata()?.len() < size_bytes {
+        file.set_len(size_bytes)?;
+    }
+    Ok(())
+}
+
+async fn ensure_seeded_movie_import(
+    app: &AppUseCase,
+    actor: &scryer_domain::User,
+    title: &Title,
+    seed: &SeedTitle,
+    movie_media_root: &Path,
+) -> Result<bool, String> {
+    let existing_collections = app.list_collections(actor, &title.id).await.map_err(|e| {
+        format!(
+            "dev seed: failed to list collections for '{}': {e}",
+            title.name
+        )
+    })?;
+
+    let quality_tier = normalize_seed_quality_tier(seed.tvdb_id, seed.quality_tier.as_deref());
+    let file_path = build_seeded_movie_path(movie_media_root, &title.name, &quality_tier);
+    let file_path_string = file_path.to_string_lossy().into_owned();
+    let has_movie_collection = existing_collections
+        .iter()
+        .any(|collection| collection.collection_type.eq_ignore_ascii_case("movie"));
+    let existing_media_files = app
+        .services
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .map_err(|e| {
+            format!(
+                "dev seed: failed to list media files for '{}': {e}",
+                title.name
+            )
+        })?;
+    let has_media_file = existing_media_files
+        .iter()
+        .any(|media_file| media_file.file_path == file_path_string);
+
+    if has_movie_collection && has_media_file {
+        return Ok(false);
+    }
+
+    if let Err(error) =
+        ensure_placeholder_media_file(&file_path, seeded_movie_size_bytes(&quality_tier))
+    {
+        tracing::warn!(
+            title_id = %title.id,
+            path = %file_path.display(),
+            error = %error,
+            "dev seed: failed to create placeholder movie file"
+        );
+    }
+
+    let mut changed = false;
+
+    if !has_media_file {
+        let file_size_bytes = std::fs::metadata(&file_path)
+            .map(|metadata| metadata.len() as i64)
+            .unwrap_or_else(|_| seeded_movie_size_bytes(&quality_tier) as i64);
+        app.services
+            .media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: file_path_string.clone(),
+                size_bytes: file_size_bytes,
+                quality_label: Some(quality_tier.clone()),
+                resolution: Some(quality_tier.clone()),
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| {
+                format!(
+                    "dev seed: failed to insert media file for '{}': {e}",
+                    title.name
+                )
+            })?;
+        changed = true;
+    }
+
+    if !has_movie_collection {
+        app.create_collection(
+            actor,
+            title.id.clone(),
+            "movie".to_string(),
+            DEV_SEED_MOVIE_COLLECTION_INDEX.to_string(),
+            Some(quality_tier.clone()),
+            Some(file_path_string.clone()),
+            None,
+            None,
+        )
+        .await
+        .map_err(|e| {
+            format!(
+                "dev seed: failed to create movie collection for '{}': {e}",
+                title.name
+            )
+        })?;
+        changed = true;
+    }
+
+    tracing::debug!(
+        title_id = %title.id,
+        quality_tier = %quality_tier,
+        path = %file_path.display(),
+        changed = changed,
+        "dev seed: ensured synthetic movie import"
+    );
+
+    Ok(changed)
 }
 
 pub(crate) async fn apply_dev_seed(app: &AppUseCase, db: &SqliteServices) -> Result<(), String> {
@@ -254,14 +456,18 @@ pub(crate) async fn apply_dev_seed(app: &AppUseCase, db: &SqliteServices) -> Res
     tracing::info!(seed_file = %seed_path, "dev seed: completed");
 
     // Title seeding (separate file, separate env var)
-    if let Err(e) = apply_title_seed(app, &actor).await {
+    if let Err(e) = apply_title_seed(app, &actor, &config.settings).await {
         tracing::warn!(error = %e, "dev seed: title seeding failed");
     }
 
     Ok(())
 }
 
-async fn apply_title_seed(app: &AppUseCase, actor: &scryer_domain::User) -> Result<(), String> {
+async fn apply_title_seed(
+    app: &AppUseCase,
+    actor: &scryer_domain::User,
+    settings: &[SeedSetting],
+) -> Result<(), String> {
     let seed_path = match std::env::var("SCRYER_DEV_SEED_TITLES_FILE") {
         Ok(path) if !path.trim().is_empty() => path.trim().to_string(),
         _ => return Ok(()),
@@ -291,18 +497,22 @@ async fn apply_title_seed(app: &AppUseCase, actor: &scryer_domain::User) -> Resu
         .await
         .map_err(|e| format!("dev seed: failed to list titles: {e}"))?;
 
-    let existing_tvdb_ids: HashSet<i64> = existing_titles
+    let existing_titles_by_tvdb: HashMap<i64, Title> = existing_titles
         .iter()
         .filter_map(|t| {
             t.external_ids
                 .iter()
                 .find(|eid| eid.source == "tvdb")
                 .and_then(|eid| eid.value.parse::<i64>().ok())
+                .map(|tvdb_id| (tvdb_id, t.clone()))
         })
         .collect();
 
     let mut created = 0u32;
     let mut skipped = 0u32;
+    let mut imported_movies = 0u32;
+    let movie_media_root =
+        read_seed_media_root(settings, MOVIES_PATH_KEY, DEFAULT_MOVIE_MEDIA_ROOT);
 
     let sections: Vec<(MediaFacet, &[SeedTitle])> = vec![
         (MediaFacet::Movie, &config.movies),
@@ -312,8 +522,28 @@ async fn apply_title_seed(app: &AppUseCase, actor: &scryer_domain::User) -> Resu
 
     for (facet, titles) in sections {
         for seed in titles {
-            if existing_tvdb_ids.contains(&seed.tvdb_id) {
+            if let Some(existing_title) = existing_titles_by_tvdb.get(&seed.tvdb_id) {
                 skipped += 1;
+                if facet == MediaFacet::Movie {
+                    match ensure_seeded_movie_import(
+                        app,
+                        actor,
+                        existing_title,
+                        seed,
+                        &movie_media_root,
+                    )
+                    .await
+                    {
+                        Ok(true) => imported_movies += 1,
+                        Ok(false) => {}
+                        Err(error) => tracing::warn!(
+                            tvdb_id = seed.tvdb_id,
+                            name = %existing_title.name,
+                            error = %error,
+                            "dev seed: failed to backfill synthetic movie import"
+                        ),
+                    }
+                }
                 continue;
             }
 
@@ -348,6 +578,26 @@ async fn apply_title_seed(app: &AppUseCase, actor: &scryer_domain::User) -> Resu
                         facet = ?facet,
                         "dev seed: created title"
                     );
+                    if facet == MediaFacet::Movie {
+                        match ensure_seeded_movie_import(
+                            app,
+                            actor,
+                            &title,
+                            seed,
+                            &movie_media_root,
+                        )
+                        .await
+                        {
+                            Ok(true) => imported_movies += 1,
+                            Ok(false) => {}
+                            Err(error) => tracing::warn!(
+                                tvdb_id = seed.tvdb_id,
+                                name = %title.name,
+                                error = %error,
+                                "dev seed: failed to create synthetic movie import"
+                            ),
+                        }
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -366,6 +616,7 @@ async fn apply_title_seed(app: &AppUseCase, actor: &scryer_domain::User) -> Resu
     tracing::info!(
         created = created,
         skipped = skipped,
+        imported_movies = imported_movies,
         "dev seed: title seeding completed"
     );
     Ok(())
@@ -398,12 +649,12 @@ value = "/media/movies"
 
 [[settings]]
 scope = "system"
-key = "nzbget.client_routing"
+key = "download_client.routing"
 scope_id = "movie"
 
 [settings.value.home-nzbget]
 category = "Movies"
-recentPriority = "normal"
+recentQueuePriority = "normal"
 "#;
         let config: SeedConfig = toml::from_str(toml_str).expect("nested tables should parse");
         assert_eq!(config.settings.len(), 2);
@@ -442,9 +693,31 @@ name = "Attack on Titan"
         assert_eq!(config.anime.len(), 1);
         assert_eq!(config.movies[0].tvdb_id, 12345);
         assert_eq!(config.movies[0].name.as_deref(), Some("The Dark Knight"));
+        assert!(config.movies[0].quality_tier.is_none());
         assert_eq!(config.movies[1].tvdb_id, 67890);
         assert!(config.movies[1].name.is_none());
         assert_eq!(config.anime[0].tvdb_id, 267440);
+    }
+
+    #[test]
+    fn normalize_seed_quality_uses_explicit_or_deterministic_default() {
+        assert_eq!(normalize_seed_quality_tier(10, Some("1080p")), "1080P");
+        assert_eq!(normalize_seed_quality_tier(9, None), "2160P");
+        assert_eq!(normalize_seed_quality_tier(10, None), "1080P");
+        assert_eq!(normalize_seed_quality_tier(11, None), "720P");
+    }
+
+    #[test]
+    fn build_seeded_movie_path_sanitizes_title() {
+        let path = build_seeded_movie_path(
+            Path::new("/media/movies"),
+            "Spider-Man: No Way/Home",
+            "2160P",
+        );
+        assert_eq!(
+            path,
+            PathBuf::from("/media/movies/Spider-Man No Way Home/Spider-Man.No.Way.Home.2160P.mkv")
+        );
     }
 
     #[test]

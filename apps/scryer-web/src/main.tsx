@@ -5,6 +5,7 @@ import { Provider as UrqlProvider } from "urql";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "@/components/ui/sonner";
 import { backendClient } from "@/lib/graphql/urql-client";
+import { SELECTABLE_THEMES } from "@/lib/theme";
 
 import "@fontsource/inter/latin-400.css";
 import "@fontsource/inter/latin-600.css";
@@ -16,7 +17,7 @@ import { router } from "./router";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem themes={[...SELECTABLE_THEMES]}>
       <UrqlProvider value={backendClient}>
         <RouterProvider router={router} />
         <Toaster position="top-right" duration={10000} />

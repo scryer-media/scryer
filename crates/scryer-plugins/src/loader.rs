@@ -16,6 +16,7 @@ use crate::notification_adapter::WasmNotificationClient;
 use crate::types::PluginDescriptor;
 
 const SUPPORTED_SDK_MAJOR: &str = "0";
+const NZBGEEK_DEFAULT_BASE_URL: &str = "https://api.nzbgeek.info";
 const SUPPORTED_PLUGIN_TYPES: &[&str] = &[
     "indexer",
     "usenet_indexer",
@@ -121,6 +122,7 @@ impl WasmIndexerPluginProvider {
     pub fn with_builtin(mut self, wasm_bytes: &[u8]) -> Self {
         match load_from_bytes(wasm_bytes) {
             Ok((descriptor, bytes)) => {
+                let descriptor = apply_builtin_indexer_overrides(descriptor);
                 if !validate_indexer_descriptor(&descriptor) {
                     return self;
                 }
@@ -179,6 +181,14 @@ impl WasmIndexerPluginProvider {
         }
         self
     }
+}
+
+fn apply_builtin_indexer_overrides(mut descriptor: PluginDescriptor) -> PluginDescriptor {
+    if descriptor.provider_type.eq_ignore_ascii_case("nzbgeek") {
+        descriptor.default_base_url = Some(NZBGEEK_DEFAULT_BASE_URL.to_string());
+    }
+
+    descriptor
 }
 
 impl IndexerPluginProvider for WasmIndexerPluginProvider {

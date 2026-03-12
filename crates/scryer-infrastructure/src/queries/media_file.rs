@@ -1,6 +1,7 @@
 use chrono::Utc;
 use scryer_application::{
     AppError, AppResult, InsertMediaFileInput, MediaFileAnalysis, TitleMediaFile,
+    TitleMediaSizeSummary,
 };
 use scryer_domain::Id;
 use sqlx::sqlite::SqliteRow;
@@ -104,7 +105,7 @@ pub(crate) async fn list_media_files_for_title_query(
                 mf.video_bitrate_kbps, mf.video_bit_depth,
                 mf.video_hdr_format, mf.video_frame_rate, mf.video_profile,
                 mf.audio_codec, mf.audio_channels, mf.audio_bitrate_kbps,
-                mf.duration_seconds, mf.container_format,
+                mf.duration_seconds, mf.num_chapters, mf.container_format,
                 mf.audio_languages_json, mf.audio_streams_json,
                 mf.subtitle_languages_json,
                 mf.subtitle_codecs_json, mf.subtitle_streams_json,
@@ -128,6 +129,47 @@ pub(crate) async fn list_media_files_for_title_query(
     for row in &rows {
         out.push(row_to_title_media_file(row)?);
     }
+    Ok(out)
+}
+
+pub(crate) async fn list_title_media_size_summaries_query(
+    pool: &SqlitePool,
+    title_ids: &[String],
+) -> AppResult<Vec<TitleMediaSizeSummary>> {
+    if title_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let placeholders = title_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT title_id, COALESCE(SUM(CASE WHEN size_bytes > 0 THEN size_bytes ELSE 0 END), 0) AS total_size_bytes
+         FROM media_files
+         WHERE title_id IN ({placeholders})
+         GROUP BY title_id"
+    );
+
+    let mut query = sqlx::query(&sql);
+    for title_id in title_ids {
+        query = query.bind(title_id);
+    }
+
+    let rows = query
+        .fetch_all(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        out.push(TitleMediaSizeSummary {
+            title_id: row
+                .try_get("title_id")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+            total_size_bytes: row
+                .try_get("total_size_bytes")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+        });
+    }
+
     Ok(out)
 }
 
@@ -165,6 +207,7 @@ fn row_to_title_media_file(row: &SqliteRow) -> AppResult<TitleMediaFile> {
     let audio_channels: Option<i32> = row.try_get("audio_channels").unwrap_or(None);
     let audio_bitrate_kbps: Option<i32> = row.try_get("audio_bitrate_kbps").unwrap_or(None);
     let duration_seconds: Option<i32> = row.try_get("duration_seconds").unwrap_or(None);
+    let num_chapters: Option<i32> = row.try_get("num_chapters").unwrap_or(None);
     let container_format: Option<String> = row.try_get("container_format").unwrap_or(None);
     let has_multiaudio: i64 = row.try_get("has_multiaudio").unwrap_or(0i64);
 
@@ -238,6 +281,7 @@ fn row_to_title_media_file(row: &SqliteRow) -> AppResult<TitleMediaFile> {
         subtitle_streams,
         has_multiaudio: has_multiaudio != 0,
         duration_seconds,
+        num_chapters,
         container_format,
         scene_name,
         release_group,
@@ -286,6 +330,7 @@ pub(crate) async fn update_media_file_analysis_query(
             audio_channels = ?,
             audio_bitrate_kbps = ?,
             duration_seconds = ?,
+            num_chapters = ?,
             container_format = ?,
             ffprobe_json = ?,
             audio_languages_json = ?,
@@ -309,6 +354,7 @@ pub(crate) async fn update_media_file_analysis_query(
     .bind(analysis.audio_channels)
     .bind(analysis.audio_bitrate_kbps)
     .bind(analysis.duration_seconds)
+    .bind(analysis.num_chapters)
     .bind(&analysis.container_format)
     .bind(&analysis.raw_json)
     .bind(&audio_languages_json)

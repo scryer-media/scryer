@@ -8,7 +8,7 @@ use scryer_application::{
     QualityProfile as ApplicationQualityProfile, QualityProfileRepository,
     ReleaseAttemptRepository, ReleaseDecision, ReleaseDownloadAttemptOutcome,
     ReleaseDownloadFailureSignature, RuleSetRepository, SettingsRepository, ShowRepository,
-    SystemInfoProvider, TitleMediaFile, TitleMetadataUpdate, TitleReleaseBlocklistEntry,
+    SystemInfoProvider, TitleMediaFile, TitleMediaSizeSummary, TitleMetadataUpdate, TitleReleaseBlocklistEntry,
     TitleRepository, UserRepository, WantedItem, WantedItemRepository,
 };
 use scryer_domain::{
@@ -893,6 +893,14 @@ impl DownloadSubmissionRepository for SqliteServices {
         self.find_download_submission(download_client_type, download_client_item_id)
             .await
     }
+
+    async fn list_for_title(&self, title_id: &str) -> AppResult<Vec<DownloadSubmission>> {
+        self.list_download_submissions_for_title(title_id).await
+    }
+
+    async fn delete_for_title(&self, title_id: &str) -> AppResult<()> {
+        self.delete_download_submissions_for_title(title_id).await
+    }
 }
 
 #[async_trait]
@@ -988,6 +996,13 @@ impl MediaFileRepository for SqliteServices {
 
     async fn list_media_files_for_title(&self, title_id: &str) -> AppResult<Vec<TitleMediaFile>> {
         self.list_media_files_for_title(title_id).await
+    }
+
+    async fn list_title_media_size_summaries(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<TitleMediaSizeSummary>> {
+        self.list_title_media_size_summaries(title_ids).await
     }
 
     async fn update_media_file_analysis(
@@ -1667,5 +1682,9 @@ impl PendingReleaseRepository for SqliteServices {
     ) -> AppResult<()> {
         self.supersede_pending_releases_for_wanted_item(wanted_item_id, except_id)
             .await
+    }
+
+    async fn delete_pending_releases_for_title(&self, title_id: &str) -> AppResult<()> {
+        self.delete_pending_releases_for_title(title_id).await
     }
 }

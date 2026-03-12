@@ -136,6 +136,30 @@ async fn list_pending_releases_returns_only_waiting() {
     assert_eq!(pending[0].release_score, 500);
 }
 
+#[tokio::test]
+async fn list_wanted_items_does_not_duplicate_movies_across_syncs() {
+    let ctx = TestContext::new().await;
+    let app = app_with_pending(&ctx);
+
+    seed_title(&ctx, "title-1").await;
+
+    let (first_items, first_total) = app
+        .list_wanted_items(None, None, None, 50, 0)
+        .await
+        .expect("first wanted list");
+    assert_eq!(first_total, 1);
+    assert_eq!(first_items.len(), 1);
+    assert_eq!(first_items[0].title_id, "title-1");
+
+    let (second_items, second_total) = app
+        .list_wanted_items(None, None, None, 50, 0)
+        .await
+        .expect("second wanted list");
+    assert_eq!(second_total, 1);
+    assert_eq!(second_items.len(), 1);
+    assert_eq!(second_items[0].title_id, "title-1");
+}
+
 // ---------------------------------------------------------------------------
 // dismiss_pending_release
 // ---------------------------------------------------------------------------

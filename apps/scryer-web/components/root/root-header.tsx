@@ -1,6 +1,6 @@
 
 import * as React from "react";
-import { Loader2, Monitor, Moon, Plus, Search, Sun, X } from "lucide-react";
+import { Loader2, Monitor, Moon, Plus, Rainbow, Search, Sun, X } from "lucide-react";
 import { useTheme } from "next-themes";
 import ScryerLogo from "@/components/scryer-logo";
 import { Button } from "@/components/ui/button";
@@ -26,7 +26,10 @@ import {
   viewFromFacet,
   defaultMonitorTypeForFacet,
 } from "@/lib/facets/helpers";
+import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 import { useSearchContext } from "@/lib/context/search-context";
+import { cn } from "@/lib/utils";
+import { getNextTheme, getThemeLabel } from "@/lib/theme";
 
 type RootHeaderProps = {
   routeCommandPalette?: RouteCommandPaletteConfig;
@@ -57,6 +60,7 @@ export const RootHeader = React.memo(function RootHeader({
   const searchState = useSearchContext();
   const {
     resolveDefaultQualityProfileIdForFacet,
+    animeCatalogDefaults,
     addMetadataSearchResultToCatalog,
     closeGlobalSearchPanel,
     openGlobalSearchPanel,
@@ -71,10 +75,9 @@ export const RootHeader = React.memo(function RootHeader({
   const [mounted, setMounted] = React.useState(false);
   React.useEffect(() => setMounted(true), []);
   const cycleTheme = React.useCallback(() => {
-    if (theme === "light") setTheme("dark");
-    else if (theme === "dark") setTheme("system");
-    else setTheme("light");
+    setTheme(getNextTheme(theme));
   }, [theme, setTheme]);
+  const searchShellRef = React.useRef<HTMLDivElement>(null);
   const searchPanelRef = React.useRef<HTMLDivElement>(null);
   const hasAnyMatches =
     searchState.catalogSearchResults.length > 0 ||
@@ -108,8 +111,14 @@ export const RootHeader = React.memo(function RootHeader({
       seasonFolder: facet !== "movie",
       monitorType: defaultMonitorTypeForFacet(facet),
       ...(facet === "movie" ? { minAvailability: "announced" } : {}),
+      ...(facet === "anime"
+        ? {
+            monitorSpecials: animeCatalogDefaults.monitorSpecials,
+            interSeasonMovies: animeCatalogDefaults.interSeasonMovies,
+          }
+        : {}),
     }),
-    [resolveDefaultQualityProfileIdForFacet],
+    [animeCatalogDefaults, resolveDefaultQualityProfileIdForFacet],
   );
 
   const toggleMetadataAddOptionsCard = React.useCallback(
@@ -140,7 +149,9 @@ export const RootHeader = React.memo(function RootHeader({
           current.qualityProfileId === next.qualityProfileId &&
           current.seasonFolder === next.seasonFolder &&
           current.monitorType === next.monitorType &&
-          current.minAvailability === next.minAvailability
+          current.minAvailability === next.minAvailability &&
+          current.monitorSpecials === next.monitorSpecials &&
+          current.interSeasonMovies === next.interSeasonMovies
         ) {
           return previous;
         }
@@ -202,9 +213,8 @@ export const RootHeader = React.memo(function RootHeader({
   const handleSearchSubmit = React.useCallback(
     (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
-      closeGlobalSearchPanel();
     },
-    [closeGlobalSearchPanel],
+    [],
   );
 
   const handleSearchChange = React.useCallback(
@@ -218,17 +228,6 @@ export const RootHeader = React.memo(function RootHeader({
   const handleSearchFocus = React.useCallback(() => {
     openGlobalSearchPanel();
   }, [openGlobalSearchPanel]);
-
-  const handleSearchBlur = React.useCallback(
-    (event: React.FocusEvent<HTMLInputElement>) => {
-      const nextTarget = event.relatedTarget as Node | null;
-      if (nextTarget && searchPanelRef.current?.contains(nextTarget)) {
-        return;
-      }
-      closeGlobalSearchPanel();
-    },
-    [closeGlobalSearchPanel],
-  );
 
   const handleSearchEscape = React.useCallback(
     (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -253,6 +252,7 @@ export const RootHeader = React.memo(function RootHeader({
         const tvdbId = title.externalIds
           .find((externalId) => externalId.source.toLowerCase() === "tvdb")
           ?.value.trim();
+        const posterUrl = selectPosterVariantUrl(title.posterUrl, "w70");
         return (
           <button
             key={title.id}
@@ -266,9 +266,9 @@ export const RootHeader = React.memo(function RootHeader({
           >
             <div className="mb-2 flex min-h-20 items-start gap-3">
               <div className="h-20 w-14 flex-none overflow-hidden rounded-md border border-border bg-muted">
-                {title.posterUrl ? (
+                {posterUrl ? (
                   <img
-                    src={title.posterUrl}
+                    src={posterUrl}
                     alt={t("media.posterAlt", { name: title.name })}
                     className="h-full w-full object-cover"
                     loading="lazy"
@@ -298,6 +298,55 @@ export const RootHeader = React.memo(function RootHeader({
     closeGlobalSearchPanel();
     globalSearchInputRef.current?.blur();
   }, [globalSearchInputRef, closeGlobalSearchPanel]);
+
+  React.useEffect(() => {
+    if (!searchState.isGlobalSearchPanelOpen || isMobile) {
+      return;
+    }
+
+    const handleGlobalSearchPanelPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      const targetElement = target instanceof Element ? target : null;
+      if (target && searchShellRef.current?.contains(target)) {
+        return;
+      }
+      if (targetElement?.closest("[data-slot='select-content']")) {
+        return;
+      }
+      closeGlobalSearchPanel();
+      globalSearchInputRef.current?.blur();
+    };
+
+    window.addEventListener("pointerdown", handleGlobalSearchPanelPointerDown);
+    return () => window.removeEventListener("pointerdown", handleGlobalSearchPanelPointerDown);
+  }, [
+    closeGlobalSearchPanel,
+    globalSearchInputRef,
+    isMobile,
+    searchState.isGlobalSearchPanelOpen,
+  ]);
+
+  React.useEffect(() => {
+    if (!searchState.isGlobalSearchPanelOpen || isMobile) {
+      return;
+    }
+
+    const handleGlobalSearchPanelEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+      closeGlobalSearchPanel();
+      globalSearchInputRef.current?.blur();
+    };
+
+    window.addEventListener("keydown", handleGlobalSearchPanelEscape);
+    return () => window.removeEventListener("keydown", handleGlobalSearchPanelEscape);
+  }, [
+    closeGlobalSearchPanel,
+    globalSearchInputRef,
+    isMobile,
+    searchState.isGlobalSearchPanelOpen,
+  ]);
 
   React.useEffect(() => {
     if (!searchState.isGlobalSearchPanelOpen) {
@@ -332,6 +381,7 @@ export const RootHeader = React.memo(function RootHeader({
                 { value: "allEpisodes", label: t("search.monitorType.allEpisodes") },
                 { value: "none", label: t("search.monitorType.none") },
               ];
+        const posterUrl = selectPosterVariantUrl(result.posterUrl, "w70");
         return (
           <div
             key={cardKey}
@@ -340,9 +390,9 @@ export const RootHeader = React.memo(function RootHeader({
             <div className="mb-2 flex items-start justify-between gap-3">
               <div className="flex min-h-20 gap-3">
                 <div className="h-20 w-14 flex-none overflow-hidden rounded-md border border-border bg-muted">
-                  {result.posterUrl ? (
+                  {posterUrl ? (
                     <img
-                      src={result.posterUrl}
+                      src={posterUrl}
                       alt={t("media.posterAlt", { name: result.name })}
                       className="h-full w-full object-cover"
                       loading="lazy"
@@ -444,6 +494,44 @@ export const RootHeader = React.memo(function RootHeader({
                     </Select>
                   </label>
                 ) : null}
+                {facet === "anime" ? (
+                  <>
+                    <label className="space-y-1">
+                      <span className="block text-xs font-medium text-card-foreground">
+                        {t("settings.monitorSpecialsLabel")}
+                      </span>
+                      <div className="flex min-h-9 w-full items-center">
+                        <Checkbox
+                          className="h-8 w-8"
+                          checked={draft.monitorSpecials !== false}
+                          onCheckedChange={(checked) =>
+                            updateMetadataAddDraft(cardKey, facet, {
+                              monitorSpecials: checked === true,
+                            })
+                          }
+                          disabled={isAdding}
+                        />
+                      </div>
+                    </label>
+                    <label className="space-y-1">
+                      <span className="block text-xs font-medium text-card-foreground">
+                        {t("settings.interSeasonMoviesLabel")}
+                      </span>
+                      <div className="flex min-h-9 w-full items-center">
+                        <Checkbox
+                          className="h-8 w-8"
+                          checked={draft.interSeasonMovies !== false}
+                          onCheckedChange={(checked) =>
+                            updateMetadataAddDraft(cardKey, facet, {
+                              interSeasonMovies: checked === true,
+                            })
+                          }
+                          disabled={isAdding}
+                        />
+                      </div>
+                    </label>
+                  </>
+                ) : null}
                 {facet === "movie" ? (
                   <>
                     <label className="space-y-1">
@@ -462,29 +550,6 @@ export const RootHeader = React.memo(function RootHeader({
                           disabled={isAdding}
                         />
                       </div>
-                    </label>
-                    <label className="space-y-1">
-                      <span className="block text-xs font-medium text-card-foreground">
-                        {t("settings.minAvailabilityLabel")}
-                      </span>
-                      <Select
-                        value={draft.minAvailability ?? "announced"}
-                        onValueChange={(v) =>
-                          updateMetadataAddDraft(cardKey, facet, {
-                            minAvailability: v,
-                          })
-                        }
-                        disabled={isAdding}
-                      >
-                        <SelectTrigger className="h-9 w-full">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="announced">{t("settings.minAvailability.announced")}</SelectItem>
-                          <SelectItem value="in_cinemas">{t("settings.minAvailability.in_cinemas")}</SelectItem>
-                          <SelectItem value="released">{t("settings.minAvailability.released")}</SelectItem>
-                        </SelectContent>
-                      </Select>
                     </label>
                   </>
                 ) : (
@@ -548,18 +613,21 @@ export const RootHeader = React.memo(function RootHeader({
 
   return (
     <>
-      <header className="relative sticky top-0 z-50 border-b border-border bg-background/90 pt-safe backdrop-blur">
+      <header
+        data-slot="root-header"
+        className="relative sticky top-0 z-50 border-b border-border bg-background/90 pt-safe backdrop-blur"
+      >
         <RouteCommandPalette config={routeCommandPalette} />
         <div className="mx-auto flex w-full max-w-[1480px] items-center gap-4 px-3 py-3">
           <div className="flex items-center" style={{ fontFamily: "var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif" }}>
             <ScryerLogo />
-            <span className="ml-3 text-2xl font-bold tracking-tight text-foreground">Scryer</span>
+            <span data-slot="brand-wordmark" className="ml-3 text-2xl font-bold tracking-tight text-foreground">Scryer</span>
           </div>
           <form
             className="relative ml-auto flex w-full items-center gap-3"
             onSubmit={handleSearchSubmit}
           >
-            <div className="relative flex-1">
+            <div ref={searchShellRef} className="relative flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-7 w-7 -translate-y-1/2 text-muted-foreground" />
               <Input
                 ref={searchState.globalSearchInputRef}
@@ -567,9 +635,12 @@ export const RootHeader = React.memo(function RootHeader({
                 onChange={handleSearchChange}
                 onFocus={isMobile ? undefined : handleSearchFocus}
                 onClick={isMobile ? handleSearchFocus : undefined}
-                onBlur={isMobile ? undefined : handleSearchBlur}
                 onKeyDown={handleSearchEscape}
-                className="h-14 w-full border-emerald-500/70 pl-12 text-xl placeholder:text-xl md:text-xl md:placeholder:text-xl placeholder-heading-font focus-visible:border-emerald-400 focus-visible:ring-emerald-400/45"
+                data-ui="global-search"
+                className={cn(
+                  "h-14 w-full pl-12 text-xl placeholder:text-xl md:text-xl md:placeholder:text-xl placeholder-heading-font",
+                  theme !== "pride" && "border-emerald-500/70 focus-visible:border-emerald-400 focus-visible:ring-emerald-400/45",
+                )}
                 placeholder={t("search.globalPlaceholder")}
                 aria-label={t("search.globalPlaceholder")}
                 readOnly={isMobile}
@@ -587,6 +658,7 @@ export const RootHeader = React.memo(function RootHeader({
               {searchState.isGlobalSearchPanelOpen && !isMobile ? (
                 <div
                   ref={searchPanelRef}
+                  data-slot="global-search-panel"
                   className="absolute left-0 top-full z-30 mt-2 w-full max-h-[65vh] overflow-y-auto rounded-xl border border-border bg-card p-4 shadow-lg"
                 >
                 {showSectionResults ? (
@@ -657,13 +729,19 @@ export const RootHeader = React.memo(function RootHeader({
               variant="ghost"
               size="icon"
               onClick={cycleTheme}
-              title={theme === "light" ? "Light" : theme === "dark" ? "Dark" : "System"}
-              className="pointer-events-auto mt-3"
+              title={getThemeLabel(theme)}
+              aria-label={`Switch theme (current: ${getThemeLabel(theme)})`}
+              className={cn(
+                "pointer-events-auto mt-3",
+                theme === "pride" && "text-pink-200 hover:text-pink-100",
+              )}
             >
               {theme === "light" ? (
                 <Sun className="h-5 w-5" />
               ) : theme === "dark" ? (
                 <Moon className="h-5 w-5" />
+              ) : theme === "pride" ? (
+                <Rainbow className="h-5 w-5" />
               ) : (
                 <Monitor className="h-5 w-5" />
               )}

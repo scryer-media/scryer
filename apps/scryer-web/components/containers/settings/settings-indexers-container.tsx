@@ -1,15 +1,23 @@
-
-import { type ComponentProps, type FormEvent, useCallback, useEffect, useState } from "react";
+import {
+  type ComponentProps,
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useState,
+} from "react";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { SettingsIndexersSection } from "@/components/views/settings/settings-indexers-section";
 import { useClient } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import type { IndexerRecord, ProviderTypeInfo } from "@/lib/types";
-import { indexersQuery, indexerProviderTypesQuery } from "@/lib/graphql/queries";
+import {
+  indexersQuery,
+  indexerProviderTypesQuery,
+} from "@/lib/graphql/queries";
 import {
   resolveIndexerBaseUrl,
-  showStandardIndexerConnectionFields,
+  showIndexerApiKeyField,
 } from "@/lib/utils/indexers";
 import {
   createIndexerMutation,
@@ -18,7 +26,9 @@ import {
   updateIndexerMutation,
 } from "@/lib/graphql/mutations";
 
-type SettingsIndexersSectionProps = ComponentProps<typeof SettingsIndexersSection>;
+type SettingsIndexersSectionProps = ComponentProps<
+  typeof SettingsIndexersSection
+>;
 
 const INDEXER_INITIAL_DRAFT = {
   name: "",
@@ -31,11 +41,15 @@ const INDEXER_INITIAL_DRAFT = {
   configValues: {} as Record<string, string>,
 };
 
-function serializeConfigJson(configValues: Record<string, string>): string | undefined {
+function serializeConfigJson(
+  configValues: Record<string, string>,
+): string | undefined {
   const nonEmpty = Object.fromEntries(
     Object.entries(configValues).filter(([, v]) => v !== ""),
   );
-  return Object.keys(nonEmpty).length > 0 ? JSON.stringify(nonEmpty) : undefined;
+  return Object.keys(nonEmpty).length > 0
+    ? JSON.stringify(nonEmpty)
+    : undefined;
 }
 
 function parseConfigJson(configJson: string | null): Record<string, string> {
@@ -53,14 +67,17 @@ export function SettingsIndexersContainer() {
   const client = useClient();
   const [settingsIndexers, setSettingsIndexers] = useState<IndexerRecord[]>([]);
   const [settingsIndexerFilter, setSettingsIndexerFilter] = useState("");
-  const [mutatingIndexerId, setMutatingIndexerId] = useState<string | null>(null);
+  const [mutatingIndexerId, setMutatingIndexerId] = useState<string | null>(
+    null,
+  );
   const [editingIndexerId, setEditingIndexerId] = useState<string | null>(null);
-  const [pendingDeleteIndexer, setPendingDeleteIndexer] = useState<IndexerRecord | null>(null);
+  const [pendingDeleteIndexer, setPendingDeleteIndexer] =
+    useState<IndexerRecord | null>(null);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [providerTypes, setProviderTypes] = useState<ProviderTypeInfo[]>([]);
-  const [indexerDraft, setIndexerDraft] = useState<SettingsIndexersSectionProps["indexerDraft"]>(
-    () => ({ ...INDEXER_INITIAL_DRAFT }),
-  );
+  const [indexerDraft, setIndexerDraft] = useState<
+    SettingsIndexersSectionProps["indexerDraft"]
+  >(() => ({ ...INDEXER_INITIAL_DRAFT }));
 
   const resetIndexerDraft = useCallback(() => {
     setEditingIndexerId(null);
@@ -69,13 +86,17 @@ export function SettingsIndexersContainer() {
 
   const refreshIndexers = useCallback(async () => {
     try {
-      const { data, error } = await client.query(indexersQuery, {
-        providerType: settingsIndexerFilter || undefined,
-      }).toPromise();
+      const { data, error } = await client
+        .query(indexersQuery, {
+          providerType: settingsIndexerFilter || undefined,
+        })
+        .toPromise();
       if (error) throw error;
       setSettingsIndexers(data.indexers || []);
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(
+        error instanceof Error ? error.message : t("status.failedToLoad"),
+      );
     }
   }, [client, settingsIndexerFilter, setGlobalStatus, t]);
 
@@ -85,29 +106,36 @@ export function SettingsIndexersContainer() {
 
   // Fetch available provider types from loaded plugins
   useEffect(() => {
-    client.query(indexerProviderTypesQuery, {}).toPromise().then(({ data }) => {
-      if (data?.indexerProviderTypes) {
-        setProviderTypes(data.indexerProviderTypes);
-      }
-    }).catch(() => { /* ignore — provider types are optional */ });
+    client
+      .query(indexerProviderTypesQuery, {})
+      .toPromise()
+      .then(({ data }) => {
+        if (data?.indexerProviderTypes) {
+          setProviderTypes(data.indexerProviderTypes);
+        }
+      })
+      .catch(() => {
+        /* ignore — provider types are optional */
+      });
   }, [client]);
 
   const submitIndexer = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const selectedProvider = providerTypes.find(
-      (pt) => pt.providerType === indexerDraft.providerType.trim().toLowerCase(),
+      (pt) =>
+        pt.providerType === indexerDraft.providerType.trim().toLowerCase(),
     );
     const effectiveBaseUrl = resolveIndexerBaseUrl(
       selectedProvider,
       indexerDraft.baseUrl,
       indexerDraft.configValues,
     );
-    const useStandardConnectionFields = showStandardIndexerConnectionFields(selectedProvider);
+    const shouldIncludeApiKey = showIndexerApiKeyField(selectedProvider);
     const payload = {
       name: indexerDraft.name.trim(),
       providerType: indexerDraft.providerType.trim(),
       baseUrl: effectiveBaseUrl,
-      apiKey: useStandardConnectionFields ? indexerDraft.apiKey.trim() : "",
+      apiKey: shouldIncludeApiKey ? indexerDraft.apiKey.trim() : "",
       isEnabled: indexerDraft.isEnabled,
       enableInteractiveSearch: indexerDraft.enableInteractiveSearch,
       enableAutoSearch: indexerDraft.enableAutoSearch,
@@ -122,41 +150,47 @@ export function SettingsIndexersContainer() {
     setMutatingIndexerId(editingIndexerId || "new");
     try {
       if (editingIndexerId) {
-        const { error } = await client.mutation(updateIndexerMutation, {
-          input: {
-            id: editingIndexerId,
-            name: payload.name,
-            providerType: payload.providerType,
-            baseUrl: payload.baseUrl,
-            apiKey: payload.apiKey || undefined,
-            isEnabled: payload.isEnabled,
-            enableInteractiveSearch: payload.enableInteractiveSearch,
-            enableAutoSearch: payload.enableAutoSearch,
-            configJson: payload.configJson,
-          },
-        }).toPromise();
+        const { error } = await client
+          .mutation(updateIndexerMutation, {
+            input: {
+              id: editingIndexerId,
+              name: payload.name,
+              providerType: payload.providerType,
+              baseUrl: payload.baseUrl,
+              apiKey: payload.apiKey || undefined,
+              isEnabled: payload.isEnabled,
+              enableInteractiveSearch: payload.enableInteractiveSearch,
+              enableAutoSearch: payload.enableAutoSearch,
+              configJson: payload.configJson,
+            },
+          })
+          .toPromise();
         if (error) throw error;
         setGlobalStatus(t("settings.indexerUpdated"));
       } else {
-        const { error } = await client.mutation(createIndexerMutation, {
-          input: {
-            name: payload.name,
-            providerType: payload.providerType,
-            baseUrl: payload.baseUrl,
-            apiKey: payload.apiKey || undefined,
-            isEnabled: payload.isEnabled,
-            enableInteractiveSearch: payload.enableInteractiveSearch,
-            enableAutoSearch: payload.enableAutoSearch,
-            configJson: payload.configJson,
-          },
-        }).toPromise();
+        const { error } = await client
+          .mutation(createIndexerMutation, {
+            input: {
+              name: payload.name,
+              providerType: payload.providerType,
+              baseUrl: payload.baseUrl,
+              apiKey: payload.apiKey || undefined,
+              isEnabled: payload.isEnabled,
+              enableInteractiveSearch: payload.enableInteractiveSearch,
+              enableAutoSearch: payload.enableAutoSearch,
+              configJson: payload.configJson,
+            },
+          })
+          .toPromise();
         if (error) throw error;
         setGlobalStatus(t("settings.indexerCreated"));
       }
       resetIndexerDraft();
       await refreshIndexers();
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      setGlobalStatus(
+        error instanceof Error ? error.message : t("status.failedToUpdate"),
+      );
     } finally {
       setMutatingIndexerId(null);
     }
@@ -181,25 +215,32 @@ export function SettingsIndexersContainer() {
     setPendingDeleteIndexer(indexer);
   };
 
-  const toggleIndexerEnabled = useCallback(async (indexer: IndexerRecord) => {
-    const nextIsEnabled = !indexer.isEnabled;
-    setMutatingIndexerId(indexer.id);
-    try {
-      const { error } = await client.mutation(updateIndexerMutation, {
-        input: {
-          id: indexer.id,
-          isEnabled: nextIsEnabled,
-        },
-      }).toPromise();
-      if (error) throw error;
-      setGlobalStatus(t("status.indexerUpdated"));
-      await refreshIndexers();
-    } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
-    } finally {
-      setMutatingIndexerId(null);
-    }
-  }, [client, refreshIndexers, setGlobalStatus, t]);
+  const toggleIndexerEnabled = useCallback(
+    async (indexer: IndexerRecord) => {
+      const nextIsEnabled = !indexer.isEnabled;
+      setMutatingIndexerId(indexer.id);
+      try {
+        const { error } = await client
+          .mutation(updateIndexerMutation, {
+            input: {
+              id: indexer.id,
+              isEnabled: nextIsEnabled,
+            },
+          })
+          .toPromise();
+        if (error) throw error;
+        setGlobalStatus(t("status.indexerUpdated"));
+        await refreshIndexers();
+      } catch (error) {
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.failedToUpdate"),
+        );
+      } finally {
+        setMutatingIndexerId(null);
+      }
+    },
+    [client, refreshIndexers, setGlobalStatus, t],
+  );
 
   const confirmDeleteIndexer = async () => {
     if (!pendingDeleteIndexer) {
@@ -208,9 +249,11 @@ export function SettingsIndexersContainer() {
     const indexer = pendingDeleteIndexer;
     setMutatingIndexerId(indexer.id);
     try {
-      const { error } = await client.mutation(deleteIndexerMutation, {
-        input: { id: indexer.id },
-      }).toPromise();
+      const { error } = await client
+        .mutation(deleteIndexerMutation, {
+          input: { id: indexer.id },
+        })
+        .toPromise();
       if (error) throw error;
       setGlobalStatus(t("status.indexerDeleted", { name: indexer.name }));
       await refreshIndexers();
@@ -218,7 +261,9 @@ export function SettingsIndexersContainer() {
         resetIndexerDraft();
       }
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"));
+      setGlobalStatus(
+        error instanceof Error ? error.message : t("status.failedToDelete"),
+      );
     } finally {
       setMutatingIndexerId(null);
       setPendingDeleteIndexer(null);
@@ -227,18 +272,21 @@ export function SettingsIndexersContainer() {
 
   const testIndexerConnection = async () => {
     const selectedProvider = providerTypes.find(
-      (pt) => pt.providerType === indexerDraft.providerType.trim().toLowerCase(),
+      (pt) =>
+        pt.providerType === indexerDraft.providerType.trim().toLowerCase(),
     );
     const effectiveBaseUrl = resolveIndexerBaseUrl(
       selectedProvider,
       indexerDraft.baseUrl,
       indexerDraft.configValues,
     );
-    const useStandardConnectionFields = showStandardIndexerConnectionFields(selectedProvider);
+    const shouldIncludeApiKey = showIndexerApiKeyField(selectedProvider);
     const payload = {
       providerType: indexerDraft.providerType.trim(),
       baseUrl: effectiveBaseUrl,
-      apiKey: useStandardConnectionFields ? indexerDraft.apiKey.trim() || undefined : undefined,
+      apiKey: shouldIncludeApiKey
+        ? indexerDraft.apiKey.trim() || undefined
+        : undefined,
       configJson: serializeConfigJson(indexerDraft.configValues),
     };
 
@@ -250,17 +298,20 @@ export function SettingsIndexersContainer() {
     setIsTestingConnection(true);
     try {
       setGlobalStatus(t("status.testingIndexerConnection"));
-      const { data: testData, error: testError } = await client.mutation(
-        testIndexerConnectionMutation,
-        { input: payload },
-      ).toPromise();
+      const { data: testData, error: testError } = await client
+        .mutation(testIndexerConnectionMutation, { input: payload })
+        .toPromise();
       if (testError) throw testError;
       if (!testData.testIndexerConnection) {
         throw new Error(t("status.indexerConnectionTestFailed"));
       }
       setGlobalStatus(t("status.indexerConnectionTestPassed"));
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.indexerConnectionTestFailed"));
+      setGlobalStatus(
+        error instanceof Error
+          ? error.message
+          : t("status.indexerConnectionTestFailed"),
+      );
     } finally {
       setIsTestingConnection(false);
     }
@@ -289,7 +340,9 @@ export function SettingsIndexersContainer() {
         open={pendingDeleteIndexer !== null}
         title={t("label.delete")}
         description={
-          pendingDeleteIndexer ? t("status.deletingIndexer", { name: pendingDeleteIndexer.name }) : ""
+          pendingDeleteIndexer
+            ? t("status.deletingIndexer", { name: pendingDeleteIndexer.name })
+            : ""
         }
         confirmLabel={t("label.delete")}
         cancelLabel={t("label.cancel")}

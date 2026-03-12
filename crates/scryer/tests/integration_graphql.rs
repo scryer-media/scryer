@@ -1,5 +1,9 @@
+#![recursion_limit = "256"]
+
 mod common;
 
+use scryer_application::{PendingRelease, ShowRepository, TitleRepository, WantedItem};
+use scryer_domain::{Collection, Episode, Id, MediaFacet, Title};
 use serde_json::{json, Value};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
@@ -279,6 +283,179 @@ async fn graphql_set_title_monitored() {
 }
 
 #[tokio::test]
+async fn graphql_trigger_title_wanted_search() {
+    let ctx = TestContext::new().await;
+    let id = add_test_title(&ctx, "Search Monitored Test", "movie").await;
+
+    let body = gql(
+        &ctx,
+        r#"mutation($input: TitleIdInput!) {
+            triggerTitleWantedSearch(input: $input)
+        }"#,
+        json!({ "input": { "titleId": id } }),
+    )
+    .await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["triggerTitleWantedSearch"], 1);
+
+    let body = gql(
+        &ctx,
+        r#"query($titleId: String) {
+            wantedItems(titleId: $titleId) {
+                total
+                items { titleId mediaType status }
+            }
+        }"#,
+        json!({ "titleId": id }),
+    )
+    .await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["wantedItems"]["total"], 1);
+    assert_eq!(body["data"]["wantedItems"]["items"][0]["titleId"], id);
+    assert_eq!(
+        body["data"]["wantedItems"]["items"][0]["mediaType"],
+        "movie"
+    );
+    assert_eq!(body["data"]["wantedItems"]["items"][0]["status"], "wanted");
+}
+
+#[tokio::test]
+async fn graphql_scan_title_library() {
+    let ctx = TestContext::new().await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+
+    let title = Title {
+        id: Id::new().0,
+        name: "Scan Show".to_string(),
+        facet: MediaFacet::Tv,
+        monitored: true,
+        tags: vec![format!(
+            "scryer:root-folder:{}",
+            media_root.path().display()
+        )],
+        external_ids: vec![],
+        created_by: None,
+        created_at: chrono::Utc::now(),
+        year: Some(2024),
+        overview: None,
+        poster_url: None,
+        sort_title: None,
+        slug: None,
+        imdb_id: None,
+        runtime_minutes: Some(24),
+        genres: vec![],
+        content_status: None,
+        language: None,
+        first_aired: None,
+        network: None,
+        studio: None,
+        country: None,
+        aliases: vec![],
+        metadata_language: None,
+        metadata_fetched_at: None,
+        min_availability: None,
+        digital_release_date: None,
+    };
+    let title = ctx.db.create(title).await.expect("create series title");
+
+    let collection = Collection {
+        id: Id::new().0,
+        title_id: title.id.clone(),
+        collection_type: "season".to_string(),
+        collection_index: "1".to_string(),
+        label: Some("Season 1".to_string()),
+        ordered_path: None,
+        narrative_order: None,
+        first_episode_number: Some("1".to_string()),
+        last_episode_number: Some("1".to_string()),
+        interstitial_movie: None,
+        monitored: true,
+        created_at: chrono::Utc::now(),
+    };
+    let collection = ctx
+        .db
+        .create_collection(collection)
+        .await
+        .expect("create season collection");
+
+    let episode = Episode {
+        id: Id::new().0,
+        title_id: title.id.clone(),
+        collection_id: Some(collection.id.clone()),
+        episode_type: "standard".to_string(),
+        episode_number: Some("1".to_string()),
+        season_number: Some("1".to_string()),
+        episode_label: Some("S01E01".to_string()),
+        title: Some("Pilot".to_string()),
+        air_date: None,
+        duration_seconds: Some(1440),
+        has_multi_audio: false,
+        has_subtitle: false,
+        is_filler: false,
+        is_recap: false,
+        absolute_number: None,
+        overview: None,
+        monitored: true,
+        created_at: chrono::Utc::now(),
+    };
+    let episode = ctx
+        .db
+        .create_episode(episode)
+        .await
+        .expect("create episode");
+
+    let season_dir = media_root.path().join(&title.name).join("Season 01");
+    std::fs::create_dir_all(&season_dir).expect("create season dir");
+    let file_path = season_dir.join("Scan.Show.S01E01.1080p.WEB-DL.mkv");
+    std::fs::write(&file_path, b"not-a-real-video").expect("write fake video");
+
+    let body = gql(
+        &ctx,
+        r#"mutation($input: TitleIdInput!) {
+            scanTitleLibrary(input: $input) {
+                scanned
+                matched
+                imported
+                skipped
+                unmatched
+            }
+        }"#,
+        json!({ "input": { "titleId": title.id } }),
+    )
+    .await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["scanTitleLibrary"]["scanned"], 1);
+    assert_eq!(body["data"]["scanTitleLibrary"]["matched"], 1);
+    assert_eq!(body["data"]["scanTitleLibrary"]["imported"], 1);
+    assert_eq!(body["data"]["scanTitleLibrary"]["skipped"], 0);
+    assert_eq!(body["data"]["scanTitleLibrary"]["unmatched"], 0);
+
+    let body = gql(
+        &ctx,
+        r#"query($titleId: String!) {
+            titleMediaFiles(titleId: $titleId) {
+                episodeId
+                filePath
+                scanStatus
+            }
+        }"#,
+        json!({ "titleId": title.id }),
+    )
+    .await;
+    assert_no_errors(&body);
+    let files = body["data"]["titleMediaFiles"]
+        .as_array()
+        .expect("media files array");
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0]["episodeId"], episode.id);
+    assert_eq!(
+        files[0]["filePath"],
+        file_path.to_string_lossy().to_string()
+    );
+    assert_eq!(files[0]["scanStatus"], "scan_failed");
+}
+
+#[tokio::test]
 async fn graphql_delete_title() {
     let ctx = TestContext::new().await;
     let id = add_test_title(&ctx, "To Delete", "movie").await;
@@ -300,6 +477,93 @@ async fn graphql_delete_title() {
     )
     .await;
     assert!(body["data"]["title"].is_null(), "title should be gone");
+}
+
+#[tokio::test]
+async fn graphql_delete_title_cleans_title_workflow_state() {
+    let ctx = TestContext::new().await;
+    let id = add_test_title(&ctx, "Delete With Cleanup", "movie").await;
+
+    ctx.db
+        .upsert_wanted_item(&WantedItem {
+            id: Id::new().0,
+            title_id: id.clone(),
+            title_name: Some("Delete With Cleanup".to_string()),
+            episode_id: None,
+            season_number: None,
+            media_type: "movie".to_string(),
+            search_phase: "auto".to_string(),
+            next_search_at: None,
+            last_search_at: None,
+            search_count: 0,
+            baseline_date: None,
+            status: "queued".to_string(),
+            grabbed_release: None,
+            current_score: None,
+            created_at: "2026-03-12T00:00:00Z".to_string(),
+            updated_at: "2026-03-12T00:00:00Z".to_string(),
+        })
+        .await
+        .expect("seed wanted item");
+    ctx.db
+        .insert_pending_release(&PendingRelease {
+            id: Id::new().0,
+            wanted_item_id: "wanted-delete".to_string(),
+            title_id: id.clone(),
+            release_title: "Delete With Cleanup 2026".to_string(),
+            release_url: Some("https://example.invalid/release.nzb".to_string()),
+            source_kind: None,
+            release_size_bytes: Some(1_024),
+            release_score: 100,
+            scoring_log_json: None,
+            indexer_source: Some("test-indexer".to_string()),
+            release_guid: Some("guid-delete".to_string()),
+            added_at: "2026-03-12T00:00:00Z".to_string(),
+            delay_until: "2026-03-13T00:00:00Z".to_string(),
+            status: "waiting".to_string(),
+            grabbed_at: None,
+        })
+        .await
+        .expect("seed pending release");
+    ctx.db
+        .record_download_submission(
+            id.clone(),
+            "movie".to_string(),
+            "sabnzbd".to_string(),
+            "queue-delete".to_string(),
+            Some("Delete With Cleanup".to_string()),
+        )
+        .await
+        .expect("seed download submission");
+
+    let body = gql(
+        &ctx,
+        r#"mutation($input: DeleteTitleInput!) { deleteTitle(input: $input) }"#,
+        json!({ "input": { "titleId": id } }),
+    )
+    .await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["deleteTitle"], true);
+
+    assert!(ctx
+        .db
+        .list_wanted_items(None, None, Some(&id), 10, 0)
+        .await
+        .expect("wanted items")
+        .is_empty());
+    assert!(ctx
+        .db
+        .list_waiting_pending_releases()
+        .await
+        .expect("pending releases")
+        .iter()
+        .all(|entry| entry.title_id != id));
+    assert!(ctx
+        .db
+        .list_download_submissions_for_title(&id)
+        .await
+        .expect("download submissions")
+        .is_empty());
 }
 
 #[tokio::test]

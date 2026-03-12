@@ -713,7 +713,7 @@ impl AppUseCase {
             if dl_snapshot.is_active(&candidate.title) {
                 continue;
             }
-            if dl_snapshot.failed_reason(&candidate.title).is_some() {
+            if dl_snapshot.failed_item(&candidate.title).is_some() {
                 continue;
             }
             if db_blocklist.contains(&candidate.title.to_ascii_lowercase()) {
@@ -867,6 +867,12 @@ impl AppUseCase {
             .await;
 
         let download_cat = self.derive_download_category(&title.facet).await;
+        let is_recent = self.is_recent_for_queue_priority(
+            best.published_at
+                .as_deref()
+                .or(title.first_aired.as_deref())
+                .or(title.digital_release_date.as_deref()),
+        );
 
         info!(
             title = title.name.as_str(),
@@ -878,14 +884,27 @@ impl AppUseCase {
         let grab_result = self
             .services
             .download_client
-            .submit_to_download_queue(
-                title,
-                source_hint.clone(),
-                best.source_kind,
-                source_title.clone(),
-                source_password.clone(),
-                Some(download_cat),
-            )
+            .submit_download(&DownloadClientAddRequest {
+                title: title.clone(),
+                source_hint: source_hint.clone(),
+                source_kind: best.source_kind,
+                source_title: source_title.clone(),
+                source_password: source_password.clone(),
+                category: Some(download_cat),
+                queue_priority: None,
+                download_directory: None,
+                release_title: Some(best.title.clone()),
+                indexer_name: Some(best.source.clone()),
+                info_hash_hint: best
+                    .extra
+                    .get("info_hash")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string),
+                seed_goal_ratio: None,
+                seed_goal_seconds: None,
+                is_recent,
+                season_pack: None,
+            })
             .await;
 
         match grab_result {

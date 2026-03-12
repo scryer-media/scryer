@@ -173,9 +173,10 @@ const COLLECTION_EPISODE_FIELDS = `
     monitored
     createdAt`;
 
-export function buildCollectionEpisodesBatchQuery(
-  collectionIds: string[],
-): { query: string; variables: Record<string, string> } {
+export function buildCollectionEpisodesBatchQuery(collectionIds: string[]): {
+  query: string;
+  variables: Record<string, string>;
+} {
   if (collectionIds.length === 0) {
     return { query: "query Empty { __typename }", variables: {} };
   }
@@ -184,7 +185,9 @@ export function buildCollectionEpisodesBatchQuery(
   const parts: string[] = [];
   for (let i = 0; i < collectionIds.length; i++) {
     variables[`cid${i}`] = collectionIds[i];
-    parts.push(`  c${i}: collectionEpisodes(collectionId: $cid${i}) {${COLLECTION_EPISODE_FIELDS}\n  }`);
+    parts.push(
+      `  c${i}: collectionEpisodes(collectionId: $cid${i}) {${COLLECTION_EPISODE_FIELDS}\n  }`,
+    );
   }
 
   const varDecls = collectionIds.map((_, i) => `$cid${i}: String!`).join(", ");
@@ -331,6 +334,7 @@ export const titlesQuery = `query Titles($facet: String, $query: String) {
     facet
     monitored
     tags
+    imdbId
     posterUrl
     qualityTier
     sizeBytes
@@ -432,6 +436,7 @@ export const titleMediaFilesQuery = `query TitleMediaFiles($titleId: String!) {
     }
     hasMultiaudio
     durationSeconds
+    numChapters
     containerFormat
     sceneName
     releaseGroup
@@ -583,8 +588,8 @@ export const downloadClientsQuery = `query DownloadClients {
   }
 }`;
 
-export const adminSettingsQuery = `query AdminSettings($scope: String, $scopeId: String, $category: String) {
-  adminSettings(scope: $scope, scopeId: $scopeId, category: $category) {
+export const adminSettingsQuery = `query AdminSettings($scope: String, $scopeId: String, $category: String, $keyNames: [String!]) {
+  adminSettings(scope: $scope, scopeId: $scopeId, category: $category, keyNames: $keyNames) {
     scope
     scopeId
     items {
@@ -724,17 +729,44 @@ export const qualityProfilesInitQuery = `query QualityProfilesInit {
   }
 }`;
 
-// Batched query for media settings: 5 requests → 1
-export const mediaSettingsInitQuery = `query MediaSettingsInit {
-  mediaSettings: adminSettings(scope: "media", category: "media") {${adminSettingsFieldSelection}
+// Batched query for media settings with current-scope key filtering.
+export const mediaSettingsInitQuery = `query MediaSettingsInit(
+  $scopeId: String!
+  $mediaKeyNames: [String!]
+  $systemKeyNames: [String!]
+  $categoryKeyNames: [String!]
+) {
+  systemSettings: adminSettings(scope: "system", category: "media", keyNames: $systemKeyNames) {${adminSettingsFieldSelection}
   }
-  systemSettings: adminSettings(scope: "system", category: "media") {${adminSettingsFieldSelection}
+  mediaSettings: adminSettings(scope: "system", category: "media", keyNames: $mediaKeyNames) {${adminSettingsFieldSelection}
   }
-  movieSettings: adminSettings(scope: "system", scopeId: "movie", category: "media") {${adminSettingsFieldSelection}
+  categorySettings: adminSettings(scope: "system", scopeId: $scopeId, category: "media", keyNames: $categoryKeyNames) {${adminSettingsFieldSelection}
   }
-  seriesSettings: adminSettings(scope: "system", scopeId: "series", category: "media") {${adminSettingsFieldSelection}
+}`;
+
+export const globalSearchInitQuery = `query GlobalSearchInit(
+  $systemKeyNames: [String!]
+  $movieKeyNames: [String!]
+  $seriesKeyNames: [String!]
+  $animeKeyNames: [String!]
+) {
+  systemSettings: adminSettings(scope: "system", category: "media", keyNames: $systemKeyNames) {${adminSettingsFieldSelection}
   }
-  animeSettings: adminSettings(scope: "system", scopeId: "anime", category: "media") {${adminSettingsFieldSelection}
+  movieSettings: adminSettings(scope: "system", scopeId: "movie", category: "media", keyNames: $movieKeyNames) {${adminSettingsFieldSelection}
+  }
+  seriesSettings: adminSettings(scope: "system", scopeId: "series", category: "media", keyNames: $seriesKeyNames) {${adminSettingsFieldSelection}
+  }
+  animeSettings: adminSettings(scope: "system", scopeId: "anime", category: "media", keyNames: $animeKeyNames) {${adminSettingsFieldSelection}
+  }
+}`;
+
+// Batched query for routing page bootstrap.
+export const routingPageInitQuery = `query RoutingPageInit($scopeId: String!) {
+  downloadClientConfigs {${downloadClientFieldSelection}
+  }
+  indexers {${indexerFieldSelection}
+  }
+  categorySettings: adminSettings(scope: "system", scopeId: $scopeId, category: "media") {${adminSettingsFieldSelection}
   }
 }`;
 

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ArrowLeft, ExternalLink, FileInput, FolderOpen, Settings2 } from "lucide-react";
+import { ExternalLink, FileInput, FolderOpen, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Clapperboard } from "lucide-react";
@@ -29,11 +29,14 @@ import {
   episodeSortValue,
   formatDate,
 } from "./helpers";
+import { OverviewControlPanel } from "../overview-control-panel";
+import { OverviewBackLink } from "../overview-back-link";
 import { TitleSettingsPanel } from "./title-settings-panel";
 import { SeasonSection } from "./season-section";
 
 type Props = {
   loading: boolean;
+  hydrating: boolean;
   title: TitleDetail | null;
   collections: TitleCollection[];
   events: TitleEvent[];
@@ -44,6 +47,9 @@ type Props = {
   onBackToList?: () => void;
   onSetCollectionMonitored?: (collectionId: string, monitored: boolean) => Promise<void>;
   onSetEpisodeMonitored?: (episodeId: string, monitored: boolean) => Promise<void>;
+  onSetTitleMonitored?: (monitored: boolean) => Promise<void>;
+  onSearchMonitored?: () => Promise<void> | void;
+  onRefreshAndScan?: () => Promise<void> | void;
   onAutoSearchEpisode?: (episode: CollectionEpisode) => Promise<void> | void;
   qualityProfiles?: { id: string; name: string }[];
   defaultRootFolder?: string;
@@ -55,10 +61,16 @@ type Props = {
   seasonSearchLoadingByCollection?: Record<string, boolean>;
   onRunSeasonSearch?: (collection: TitleCollection) => Promise<void> | void;
   onQueueFromSeasonSearch?: (release: Release) => Promise<void> | void;
+  monitoredUpdating?: boolean;
+  searchMonitoredLoading?: boolean;
+  refreshAndScanLoading?: boolean;
+  onRequestDeleteTitle?: () => void;
+  deleteLoading?: boolean;
 };
 
 export function SeriesOverviewView({
   loading,
+  hydrating,
   title,
   collections,
   events,
@@ -69,6 +81,9 @@ export function SeriesOverviewView({
   onBackToList,
   onSetCollectionMonitored,
   onSetEpisodeMonitored,
+  onSetTitleMonitored,
+  onSearchMonitored,
+  onRefreshAndScan,
   onAutoSearchEpisode,
   qualityProfiles,
   defaultRootFolder,
@@ -80,10 +95,16 @@ export function SeriesOverviewView({
   seasonSearchLoadingByCollection,
   onRunSeasonSearch,
   onQueueFromSeasonSearch,
+  monitoredUpdating = false,
+  searchMonitoredLoading = false,
+  refreshAndScanLoading = false,
+  onRequestDeleteTitle,
+  deleteLoading = false,
 }: Props) {
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
   const client = useClient();
+  const backLabel = title?.facet === "anime" ? t("nav.anime") : t("nav.series");
   const sortedCollections = React.useMemo(
     () => sortDbCollections(collections),
     [collections],
@@ -298,13 +319,10 @@ export function SeriesOverviewView({
   if (!title) {
     return (
       <div className="space-y-4">
-        <button
-          type="button"
-          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        <OverviewBackLink
+          label={`Back to ${backLabel}`}
           onClick={() => onBackToList?.()}
-        >
-          <ArrowLeft className="h-4 w-4" /> Back to {t("nav.series")}
-        </button>
+        />
         <Card>
           <CardContent className="pt-6">
             <p className="text-muted-foreground">Title not found.</p>
@@ -316,13 +334,10 @@ export function SeriesOverviewView({
 
   return (
     <div className="space-y-4">
-      <button
-        type="button"
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+      <OverviewBackLink
+        label={`Back to ${backLabel}`}
         onClick={() => onBackToList?.()}
-      >
-        <ArrowLeft className="h-4 w-4" /> Back to {t("nav.series")}
-      </button>
+      />
 
       <Card>
         <CardContent className="p-4">
@@ -426,111 +441,126 @@ export function SeriesOverviewView({
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <FolderOpen className="h-4 w-4" />
-              Seasons and Episodes
-            </CardTitle>
-            {onOpenManualImport && completedDownloads && completedDownloads.length > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onOpenManualImport(completedDownloads[0])}
-              >
-                <FileInput className="mr-1.5 h-4 w-4" />
-                Manual Import
-              </Button>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {sortedCollections.length > 0 ? (
-            sortedCollections.map((collection) => {
-              const key = `s-${collection.id}`;
-              const sortedEpisodes = [
-                ...(episodesByCollection[collection.id] ?? []),
-              ].sort((left, right) => episodeSortValue(right) - episodeSortValue(left));
-
-              return (
-                <SeasonSection
-                  key={key}
-                  collection={collection}
-                  episodes={sortedEpisodes}
-                  facet={title.facet}
-                  expanded={expandedKeys.has(key)}
-                  onToggle={() => toggleKey(key)}
-                  expandedEpisodeRows={episodePanel.expandedEpisodeRows}
-                  episodeActiveTab={episodePanel.episodeActiveTab}
-                  mediaFilesByEpisode={mediaFilesByEpisode}
-                  releaseBlocklistEntries={releaseBlocklistEntries}
-                  searchResultsByEpisode={episodePanel.searchResultsByEpisode}
-                  searchLoadingByEpisode={episodePanel.searchLoadingByEpisode}
-                  autoSearchLoadingByEpisode={episodePanel.autoSearchLoadingByEpisode}
-                  onToggleEpisodeSearch={handleToggleEpisodeSearch}
-                  onToggleEpisodeDetails={handleToggleEpisodeDetails}
-                  onEpisodeTabChange={handleEpisodeTabChange}
-                  onRunEpisodeSearch={handleRunEpisodeSearch}
-                  onQueueFromEpisodeSearch={handleQueueFromEpisodeSearch}
-                  onAutoSearchEpisode={handleAutoSearchEpisode}
-                  onSetCollectionMonitored={onSetCollectionMonitored}
-                  onSetEpisodeMonitored={onSetEpisodeMonitored}
-                  seasonSearchResults={seasonSearchResultsByCollection?.[collection.id]}
-                  seasonSearchLoading={seasonSearchLoadingByCollection?.[collection.id] === true}
-                  onRunSeasonSearch={onRunSeasonSearch ? () => onRunSeasonSearch(collection) : undefined}
-                  onQueueFromSeasonSearch={onQueueFromSeasonSearch}
-                />
-              );
-            })
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              No seasons are tracked for this show yet.
-            </p>
-          )}
-        </CardContent>
-      </Card>
-
-      {onUpdateTitleTags && qualityProfiles && defaultRootFolder ? (
-        <details className="rounded-xl border border-border bg-card text-card-foreground overflow-hidden">
-          <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-card-foreground">
-            <span className="inline-flex items-center gap-2">
-              <Settings2 className="h-4 w-4" />
-              {t("title.settings")}
-            </span>
-          </summary>
-          <div className="border-t border-border">
+      <OverviewControlPanel
+        monitored={title.monitored}
+        monitoredUpdating={monitoredUpdating}
+        searchMonitoredLoading={searchMonitoredLoading}
+        refreshAndScanLoading={refreshAndScanLoading}
+        deleteLoading={deleteLoading}
+        onToggleMonitoring={onSetTitleMonitored ? () => void onSetTitleMonitored(!title.monitored) : undefined}
+        onSearchMonitored={onSearchMonitored ? () => void onSearchMonitored() : undefined}
+        onRefreshAndScan={onRefreshAndScan ? () => void onRefreshAndScan() : undefined}
+        onRequestDelete={onRequestDeleteTitle}
+        settingsPanel={
+          onUpdateTitleTags && qualityProfiles && defaultRootFolder ? (
             <TitleSettingsPanel
               title={title}
               qualityProfiles={qualityProfiles}
               defaultRootFolder={defaultRootFolder}
               onUpdateTitleTags={onUpdateTitleTags}
             />
-          </div>
-        </details>
-      ) : null}
+          ) : undefined
+        }
+      />
+
+      <div>
+        <Card className="relative overflow-hidden">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <FolderOpen className="h-4 w-4" />
+                Seasons and Episodes
+              </CardTitle>
+              {onOpenManualImport && completedDownloads && completedDownloads.length > 0 ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onOpenManualImport(completedDownloads[0])}
+                >
+                  <FileInput className="mr-1.5 h-4 w-4" />
+                  Manual Import
+                </Button>
+              ) : null}
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {sortedCollections.length > 0 ? (
+              sortedCollections.map((collection) => {
+                const key = `s-${collection.id}`;
+                const sortedEpisodes = [
+                  ...(episodesByCollection[collection.id] ?? []),
+                ].sort((left, right) => episodeSortValue(right) - episodeSortValue(left));
+
+                return (
+                  <SeasonSection
+                    key={key}
+                    collection={collection}
+                    episodes={sortedEpisodes}
+                    facet={title.facet}
+                    expanded={expandedKeys.has(key)}
+                    onToggle={() => toggleKey(key)}
+                    expandedEpisodeRows={episodePanel.expandedEpisodeRows}
+                    episodeActiveTab={episodePanel.episodeActiveTab}
+                    mediaFilesByEpisode={mediaFilesByEpisode}
+                    releaseBlocklistEntries={releaseBlocklistEntries}
+                    searchResultsByEpisode={episodePanel.searchResultsByEpisode}
+                    searchLoadingByEpisode={episodePanel.searchLoadingByEpisode}
+                    autoSearchLoadingByEpisode={episodePanel.autoSearchLoadingByEpisode}
+                    onToggleEpisodeSearch={handleToggleEpisodeSearch}
+                    onToggleEpisodeDetails={handleToggleEpisodeDetails}
+                    onEpisodeTabChange={handleEpisodeTabChange}
+                    onRunEpisodeSearch={handleRunEpisodeSearch}
+                    onQueueFromEpisodeSearch={handleQueueFromEpisodeSearch}
+                    onAutoSearchEpisode={handleAutoSearchEpisode}
+                    onSetCollectionMonitored={onSetCollectionMonitored}
+                    onSetEpisodeMonitored={onSetEpisodeMonitored}
+                    seasonSearchResults={seasonSearchResultsByCollection?.[collection.id]}
+                    seasonSearchLoading={seasonSearchLoadingByCollection?.[collection.id] === true}
+                    onRunSeasonSearch={onRunSeasonSearch ? () => onRunSeasonSearch(collection) : undefined}
+                    onQueueFromSeasonSearch={onQueueFromSeasonSearch}
+                  />
+                );
+              })
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                No seasons are tracked for this show yet.
+              </p>
+            )}
+          </CardContent>
+          {hydrating ? (
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/75 backdrop-blur-sm">
+              <div className="flex items-center gap-3 rounded-full border border-border bg-card/95 px-4 py-2 text-sm font-medium text-foreground shadow-lg">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>Fetching data</span>
+              </div>
+            </div>
+          ) : null}
+        </Card>
+      </div>
 
       {events.length > 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Recent Activity</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {events.map((event) => (
-                <div key={event.id} className="flex items-start gap-3 text-sm">
-                  <span className="shrink-0 text-xs text-muted-foreground/60">
-                    {formatDate(event.occurredAt)}
-                  </span>
-                  <span className="capitalize text-muted-foreground">
-                    {event.eventType.replace(/_/g, " ")}
-                  </span>
-                  <span className="text-muted-foreground">{event.message}</span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+        <div>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Recent Activity</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                {events.map((event) => (
+                  <div key={event.id} className="flex items-start gap-3 text-sm">
+                    <span className="shrink-0 text-xs text-muted-foreground/60">
+                      {formatDate(event.occurredAt)}
+                    </span>
+                    <span className="capitalize text-muted-foreground">
+                      {event.eventType.replace(/_/g, " ")}
+                    </span>
+                    <span className="text-muted-foreground">{event.message}</span>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       ) : null}
     </div>
   );

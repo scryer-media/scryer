@@ -9,9 +9,13 @@ import {
   titleOverviewInitQuery,
 } from "@/lib/graphql/queries";
 import {
+  deleteTitleMutation,
+  scanTitleLibraryMutation,
   setCollectionMonitoredMutation,
   queueExistingMutation,
   setEpisodeMonitoredMutation,
+  setTitleMonitoredMutation,
+  triggerTitleWantedSearchMutation,
   updateTitleMutation,
 } from "@/lib/graphql/mutations";
 import { downloadQueueQuery, searchSeasonQuery } from "@/lib/graphql/queries";
@@ -30,6 +34,8 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { SeriesOverviewView } from "@/components/views/series-overview-view";
 import { ManualImportDialog } from "@/components/dialogs/manual-import-dialog";
+import { ConfirmDialog } from "@/components/common/confirm-dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 
 export type TitleDetail = {
   id: string;
@@ -155,6 +161,7 @@ export type EpisodeMediaFile = {
   subtitleStreams: { codec: string | null; language: string | null; name: string | null; forced: boolean; default: boolean }[];
   hasMultiaudio: boolean;
   durationSeconds: number | null;
+  numChapters: number | null;
   containerFormat: string | null;
   sceneName: string | null;
   releaseGroup: string | null;
@@ -205,8 +212,15 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   >({});
   const [completedDownloads, setCompletedDownloads] = React.useState<DownloadQueueItem[]>([]);
   const [manualImportItem, setManualImportItem] = React.useState<DownloadQueueItem | null>(null);
+  const [hydratingFromActivity, setHydratingFromActivity] = React.useState(false);
+  const [monitoredUpdating, setMonitoredUpdating] = React.useState(false);
+  const [searchMonitoredLoading, setSearchMonitoredLoading] = React.useState(false);
+  const [refreshAndScanLoading, setRefreshAndScanLoading] = React.useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
+  const [deleteFilesOnDisk, setDeleteFilesOnDisk] = React.useState(false);
+  const [deleteLoading, setDeleteLoading] = React.useState(false);
 
-  const refreshTitleDetail = React.useCallback(async () => {
+  const refreshTitleDetail = React.useCallback(async (_options?: { quiet?: boolean }) => {
     const { data, error } = await client.query(titleOverviewInitQuery, { id: titleId, blocklistLimit: 300 }, { requestPolicy: "network-only" }).toPromise();
     if (error) throw error;
     setTitle(data.title ?? null);
@@ -241,6 +255,31 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       onTitleNotFound?.();
     }
   }, [loading, title, onTitleNotFound]);
+
+  React.useEffect(() => {
+    setHydratingFromActivity(false);
+  }, [titleId]);
+
+  const inferredHydrating = React.useMemo(() => {
+    if (!title) {
+      return false;
+    }
+
+    const metadataFetchedAt = title.metadataFetchedAt ? Date.parse(title.metadataFetchedAt) : NaN;
+    const metadataJustHydrated =
+      Number.isFinite(metadataFetchedAt) &&
+      Date.now() - metadataFetchedAt < 30_000;
+
+    return title.metadataFetchedAt === null || (collections.length === 0 && metadataJustHydrated);
+  }, [title, collections.length]);
+
+  const hydrating = inferredHydrating || hydratingFromActivity;
+
+  React.useEffect(() => {
+    if (!inferredHydrating && hydratingFromActivity) {
+      setHydratingFromActivity(false);
+    }
+  }, [inferredHydrating, hydratingFromActivity]);
 
   // Fetch quality profile catalog and default root folder
   React.useEffect(() => {
@@ -338,6 +377,147 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     },
     [client],
   );
+
+  const handleSetTitleMonitored = React.useCallback(
+    async (monitored: boolean) => {
+      if (!title) return;
+      setMonitoredUpdating(true);
+      try {
+        const { error } = await client.mutation(setTitleMonitoredMutation, {
+          input: { titleId: title.id, monitored },
+        }).toPromise();
+        if (error) throw error;
+        setGlobalStatus(
+          monitored
+            ? t("status.titleMonitoringEnabled")
+            : t("status.titleMonitoringDisabled"),
+        );
+        await refreshTitleDetail();
+      } catch (error: unknown) {
+        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+      } finally {
+        setMonitoredUpdating(false);
+      }
+    },
+    [client, refreshTitleDetail, setGlobalStatus, t, title],
+  );
+
+  const handleSearchMonitored = React.useCallback(async () => {
+    if (!title) return;
+
+    setSearchMonitoredLoading(true);
+    try {
+      const { data, error } = await client.mutation(triggerTitleWantedSearchMutation, {
+        input: { titleId: title.id },
+      }).toPromise();
+      if (error) throw error;
+
+      const queued = data?.triggerTitleWantedSearch ?? 0;
+      setGlobalStatus(
+        queued > 0
+          ? t("status.searchMonitoredQueued", { count: queued })
+          : t("status.searchMonitoredEmpty"),
+      );
+    } catch (error: unknown) {
+      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+    } finally {
+      setSearchMonitoredLoading(false);
+    }
+  }, [client, setGlobalStatus, t, title]);
+
+  // Reusable callback to (re)fetch media files for the title
+  const refreshMediaFiles = React.useCallback(async () => {
+    if (!title) return;
+    try {
+      const { data, error } = await client.query(titleMediaFilesQuery, { titleId: title.id }).toPromise();
+      if (error) throw error;
+      const grouped: Record<string, EpisodeMediaFile[]> = {};
+      for (const file of data.titleMediaFiles ?? []) {
+        const key = file.episodeId ?? "__unlinked__";
+        (grouped[key] ??= []).push(file);
+      }
+      setMediaFilesByEpisode(grouped);
+    } catch {
+      // Media files fetch is best-effort
+    }
+  }, [title, client]);
+
+  const handleRefreshAndScan = React.useCallback(async () => {
+    if (!title) return;
+
+    setRefreshAndScanLoading(true);
+    try {
+      const { data, error } = await client.mutation(scanTitleLibraryMutation, {
+        input: { titleId: title.id },
+      }).toPromise();
+      if (error) throw error;
+
+      const summary = data?.scanTitleLibrary;
+      setGlobalStatus(
+        t("status.titleScanSuccess", {
+          imported: summary?.imported ?? 0,
+          skipped: summary?.skipped ?? 0,
+          unmatched: summary?.unmatched ?? 0,
+        }),
+      );
+      await Promise.all([refreshTitleDetail(), refreshMediaFiles()]);
+    } catch (error: unknown) {
+      setGlobalStatus(error instanceof Error ? error.message : t("settings.libraryScanFailed"));
+    } finally {
+      setRefreshAndScanLoading(false);
+    }
+  }, [client, refreshMediaFiles, refreshTitleDetail, setGlobalStatus, t, title]);
+
+  const handleRequestDeleteTitle = React.useCallback(() => {
+    setDeleteFilesOnDisk(false);
+    setDeleteDialogOpen(true);
+  }, []);
+
+  const handleCancelDeleteTitle = React.useCallback(() => {
+    if (deleteLoading) return;
+    setDeleteDialogOpen(false);
+    setDeleteFilesOnDisk(false);
+  }, [deleteLoading]);
+
+  const handleConfirmDeleteTitle = React.useCallback(async () => {
+    if (!title) return;
+    setDeleteLoading(true);
+    try {
+      const payload: { titleId: string; deleteFilesOnDisk?: boolean } = {
+        titleId: title.id,
+      };
+      if (deleteFilesOnDisk) {
+        payload.deleteFilesOnDisk = true;
+      }
+
+      const { error } = await client.mutation(deleteTitleMutation, {
+        input: payload,
+      }).toPromise();
+      if (error) throw error;
+
+      setGlobalStatus(t("status.titleDeleted", { name: title.name }));
+      setDeleteDialogOpen(false);
+      setDeleteFilesOnDisk(false);
+
+      if (onBackToList) {
+        onBackToList();
+        return;
+      }
+      onTitleNotFound?.();
+    } catch (error: unknown) {
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"));
+    } finally {
+      setDeleteLoading(false);
+    }
+  }, [
+    client,
+    deleteFilesOnDisk,
+    onBackToList,
+    onTitleNotFound,
+    setGlobalStatus,
+    t,
+    title,
+  ]);
 
   const handleAutoSearchEpisode = React.useCallback(
     async (episode: CollectionEpisode) => {
@@ -544,23 +724,6 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     [],
   );
 
-  // Reusable callback to (re)fetch media files for the title
-  const refreshMediaFiles = React.useCallback(async () => {
-    if (!title) return;
-    try {
-      const { data, error } = await client.query(titleMediaFilesQuery, { titleId: title.id }).toPromise();
-      if (error) throw error;
-      const grouped: Record<string, EpisodeMediaFile[]> = {};
-      for (const file of data.titleMediaFiles ?? []) {
-        const key = file.episodeId ?? "__unlinked__";
-        (grouped[key] ??= []).push(file);
-      }
-      setMediaFilesByEpisode(grouped);
-    } catch {
-      // Media files fetch is best-effort
-    }
-  }, [title, client]);
-
   const handleManualImportComplete = React.useCallback(async () => {
     await refreshTitleDetail();
     await refreshMediaFiles();
@@ -581,11 +744,19 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     () => new Set(["movie_downloaded", "series_episode_imported", "file_upgraded"]),
     [],
   );
+  const HYDRATION_STARTED_KIND = "metadata_hydration_started";
+  const HYDRATION_COMPLETED_KIND = "metadata_hydration_completed";
+  const HYDRATION_FAILED_KIND = "metadata_hydration_failed";
 
   // Use a ref for title so the effect only fires on new subscription data,
   // not when refreshMediaFiles() updates state (which would loop).
   const titleRef = React.useRef(title);
   titleRef.current = title;
+  const processedActivityEventIdsRef = React.useRef<Set<string>>(new Set());
+
+  React.useEffect(() => {
+    processedActivityEventIdsRef.current.clear();
+  }, [titleId]);
 
   const [activitySub] = useSubscription({
     query: activitySubscriptionQuery,
@@ -600,17 +771,57 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       const activity = normalizeActivityEvent(
         raw as Partial<ReturnType<typeof normalizeActivityEvent>>,
       );
-      if (activity.titleId === currentTitle.id && IMPORT_KINDS.has(activity.kind)) {
+      const processedEventIds = processedActivityEventIdsRef.current;
+      if (processedEventIds.has(activity.id)) {
+        continue;
+      }
+      processedEventIds.add(activity.id);
+      if (processedEventIds.size > 200) {
+        const oldestProcessedEventId = processedEventIds.values().next().value;
+        if (oldestProcessedEventId) {
+          processedEventIds.delete(oldestProcessedEventId);
+        }
+      }
+      if (activity.titleId !== currentTitle.id) {
+        continue;
+      }
+
+      if (activity.kind === HYDRATION_STARTED_KIND) {
+        setHydratingFromActivity(true);
+        continue;
+      }
+
+      if (activity.kind === HYDRATION_COMPLETED_KIND) {
+        setHydratingFromActivity(false);
+        void refreshTitleDetail();
+        return;
+      }
+
+      if (activity.kind === HYDRATION_FAILED_KIND) {
+        setHydratingFromActivity(false);
+        continue;
+      }
+
+      if (IMPORT_KINDS.has(activity.kind)) {
         void refreshMediaFiles();
         return;
       }
     }
-  }, [IMPORT_KINDS, refreshMediaFiles, activitySub.data]);
+  }, [
+    HYDRATION_COMPLETED_KIND,
+    HYDRATION_FAILED_KIND,
+    HYDRATION_STARTED_KIND,
+    IMPORT_KINDS,
+    refreshMediaFiles,
+    refreshTitleDetail,
+    activitySub.data,
+  ]);
 
   return (
     <>
       <SeriesOverviewView
         loading={loading}
+        hydrating={hydrating}
         title={title}
         collections={collections}
         events={events}
@@ -621,6 +832,8 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         onBackToList={onBackToList}
         onSetCollectionMonitored={handleSetCollectionMonitored}
         onSetEpisodeMonitored={handleSetEpisodeMonitored}
+        onSetTitleMonitored={handleSetTitleMonitored}
+        onSearchMonitored={handleSearchMonitored}
         onAutoSearchEpisode={handleAutoSearchEpisode}
         qualityProfiles={qualityProfiles}
         defaultRootFolder={defaultRootFolder}
@@ -632,7 +845,36 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         seasonSearchLoadingByCollection={seasonSearchLoadingByCollection}
         onRunSeasonSearch={handleRunSeasonSearch}
         onQueueFromSeasonSearch={handleQueueFromSeasonSearch}
+        monitoredUpdating={monitoredUpdating}
+        searchMonitoredLoading={searchMonitoredLoading}
+        onRefreshAndScan={handleRefreshAndScan}
+        refreshAndScanLoading={refreshAndScanLoading}
+        onRequestDeleteTitle={handleRequestDeleteTitle}
+        deleteLoading={deleteLoading}
       />
+      <ConfirmDialog
+        open={deleteDialogOpen && title !== null}
+        title={t("label.delete")}
+        description={
+          title
+            ? t("status.deleteCatalogConfirm", { name: title.name })
+            : t("label.delete")
+        }
+        confirmLabel={t("label.delete")}
+        cancelLabel={t("label.cancel")}
+        isBusy={deleteLoading}
+        onConfirm={handleConfirmDeleteTitle}
+        onCancel={handleCancelDeleteTitle}
+      >
+        <label className="flex items-center gap-2">
+          <Checkbox
+            checked={deleteFilesOnDisk}
+            onCheckedChange={(checked) => setDeleteFilesOnDisk(checked === true)}
+            disabled={deleteLoading}
+          />
+          <span className="text-sm text-muted-foreground">{t("title.deleteFilesOnDisk")}</span>
+        </label>
+      </ConfirmDialog>
       {manualImportItem && title && (
         <ManualImportDialog
           open={true}

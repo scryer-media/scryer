@@ -8,7 +8,7 @@ import type { LocaleCode } from "@/lib/i18n";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import {
-  mediaSettingsInitQuery,
+  globalSearchInitQuery,
   metadataMovieQuery,
   metadataSeriesQuery,
   searchMetadataMultiQuery,
@@ -19,6 +19,8 @@ import {
 import { scryerFetch } from "@/lib/graphql/urql-client";
 import { addTitleMutation } from "@/lib/graphql/mutations";
 import {
+  ANIME_INTER_SEASON_MOVIES_KEY,
+  ANIME_MONITOR_SPECIALS_KEY,
   QUALITY_PROFILE_CATALOG_KEY,
   QUALITY_PROFILE_ID_KEY,
   QUALITY_PROFILE_INHERIT_VALUE,
@@ -56,6 +58,13 @@ export type MetadataCatalogAddOptions = {
   seasonFolder: boolean;
   monitorType: MetadataCatalogMonitorType;
   minAvailability?: string;
+  monitorSpecials?: boolean;
+  interSeasonMovies?: boolean;
+};
+
+export type AnimeCatalogDefaults = {
+  monitorSpecials: boolean;
+  interSeasonMovies: boolean;
 };
 
 function isMetadataEmpty(results: MetadataSearchResults): boolean {
@@ -65,6 +74,19 @@ function isMetadataEmpty(results: MetadataSearchResults): boolean {
 const AUTOCOMPLETE_MIN_CHARS = 2;
 const AUTOCOMPLETE_DEBOUNCE_MS = 250;
 const AUTOCOMPLETE_LIMIT = 10;
+
+const GLOBAL_SEARCH_SYSTEM_KEY_NAMES = [
+  QUALITY_PROFILE_CATALOG_KEY,
+  QUALITY_PROFILE_ID_KEY,
+];
+
+const GLOBAL_SEARCH_MOVIE_KEY_NAMES = [QUALITY_PROFILE_ID_KEY];
+const GLOBAL_SEARCH_SERIES_KEY_NAMES = [QUALITY_PROFILE_ID_KEY];
+const GLOBAL_SEARCH_ANIME_KEY_NAMES = [
+  QUALITY_PROFILE_ID_KEY,
+  ANIME_MONITOR_SPECIALS_KEY,
+  ANIME_INTER_SEASON_MOVIES_KEY,
+];
 
 type UseGlobalSearchArgs = {
   queueFacet: Facet;
@@ -109,6 +131,7 @@ export interface UseGlobalSearchResult {
   closeGlobalSearchPanel: () => void;
   catalogQualityProfileOptions: CatalogQualityProfileOption[];
   resolveDefaultQualityProfileIdForFacet: (facet: Facet) => string;
+  animeCatalogDefaults: AnimeCatalogDefaults;
   addMetadataSearchResultToCatalog: (
     result: MetadataTvdbSearchItem,
     facet: Facet,
@@ -175,6 +198,10 @@ export function useGlobalSearch({
   const [globalQualityProfileId, setGlobalQualityProfileId] = useState<string>(
     QUALITY_PROFILE_INHERIT_VALUE,
   );
+  const [animeCatalogDefaults, setAnimeCatalogDefaults] = useState<AnimeCatalogDefaults>({
+    monitorSpecials: true,
+    interSeasonMovies: true,
+  });
   const [categoryQualityProfileOverrides, setCategoryQualityProfileOverrides] = useState<
     Record<ViewCategoryId, string>
   >(
@@ -249,7 +276,12 @@ export function useGlobalSearch({
 
   const refreshCatalogQualityProfileState = useCallback(async () => {
     try {
-      const { data, error } = await client.query(mediaSettingsInitQuery, {}).toPromise();
+      const { data, error } = await client.query(globalSearchInitQuery, {
+        systemKeyNames: GLOBAL_SEARCH_SYSTEM_KEY_NAMES,
+        movieKeyNames: GLOBAL_SEARCH_MOVIE_KEY_NAMES,
+        seriesKeyNames: GLOBAL_SEARCH_SERIES_KEY_NAMES,
+        animeKeyNames: GLOBAL_SEARCH_ANIME_KEY_NAMES,
+      }).toPromise();
       if (error) throw error;
 
       const profileCatalogRecord = data.systemSettings.items.find(
@@ -306,6 +338,23 @@ export function useGlobalSearch({
         previous.anime === nextOverrides.anime
           ? previous
           : nextOverrides,
+      );
+
+      const animeMonitorSpecialsRecord = data.animeSettings.items.find(
+        (item: AdminSetting) => item.keyName === ANIME_MONITOR_SPECIALS_KEY,
+      );
+      const animeInterSeasonMoviesRecord = data.animeSettings.items.find(
+        (item: AdminSetting) => item.keyName === ANIME_INTER_SEASON_MOVIES_KEY,
+      );
+      const nextAnimeDefaults: AnimeCatalogDefaults = {
+        monitorSpecials: getSettingDisplayValue(animeMonitorSpecialsRecord) !== "false",
+        interSeasonMovies: getSettingDisplayValue(animeInterSeasonMoviesRecord) !== "false",
+      };
+      setAnimeCatalogDefaults((previous) =>
+        previous.monitorSpecials === nextAnimeDefaults.monitorSpecials &&
+        previous.interSeasonMovies === nextAnimeDefaults.interSeasonMovies
+          ? previous
+          : nextAnimeDefaults,
       );
     } catch {
       // ignore settings fetch failures here; search remains functional
@@ -757,6 +806,12 @@ export function useGlobalSearch({
         ...(facet === "movie"
           ? []
           : [`scryer:season-folder:${options.seasonFolder ? "enabled" : "disabled"}`]),
+        ...(facet === "anime"
+          ? [
+              `scryer:monitor-specials:${options.monitorSpecials !== false ? "true" : "false"}`,
+              `scryer:inter-season-movies:${options.interSeasonMovies !== false ? "true" : "false"}`,
+            ]
+          : []),
       ];
 
       try {
@@ -877,6 +932,7 @@ export function useGlobalSearch({
     closeGlobalSearchPanel,
     catalogQualityProfileOptions,
     resolveDefaultQualityProfileIdForFacet,
+    animeCatalogDefaults,
     addMetadataSearchResultToCatalog,
     isMetadataSearchResultInCatalog,
     queueFacet,

@@ -1,6 +1,9 @@
 use super::*;
 use chrono::Utc;
-use scryer_application::UserRepository;
+use scryer_application::{
+    TitleImageBlob, TitleImageKind, TitleImageReplacement, TitleImageRepository,
+    TitleImageStorageMode, TitleImageVariantRecord, TitleRepository, UserRepository,
+};
 use scryer_domain::{
     Collection, Entitlement, Episode, InterstitialMovieMetadata, MediaFacet, Title,
 };
@@ -22,6 +25,38 @@ async fn sqlite_can_initialize() {
     let _ = std::fs::remove_file(db);
 }
 
+fn make_test_title(id: &str, poster_url: Option<&str>) -> Title {
+    Title {
+        id: id.to_string(),
+        name: "Poster Test".to_string(),
+        facet: MediaFacet::Movie,
+        monitored: true,
+        tags: vec![],
+        external_ids: vec![],
+        created_by: None,
+        created_at: Utc::now(),
+        year: Some(2026),
+        overview: Some("overview".to_string()),
+        poster_url: poster_url.map(str::to_string),
+        sort_title: None,
+        slug: None,
+        imdb_id: None,
+        runtime_minutes: None,
+        genres: vec![],
+        content_status: None,
+        language: None,
+        first_aired: None,
+        network: None,
+        studio: None,
+        country: None,
+        aliases: vec![],
+        metadata_language: None,
+        metadata_fetched_at: None,
+        min_availability: None,
+        digital_release_date: None,
+    }
+}
+
 #[tokio::test]
 async fn nzbget_client_is_sendable() {
     let client = NzbgetDownloadClient::new(
@@ -32,6 +67,279 @@ async fn nzbget_client_is_sendable() {
     );
     // We only validate that it can be built and is callable in type system.
     let _ = client.endpoint();
+}
+
+#[tokio::test]
+async fn title_queries_prefer_local_cached_poster_url() {
+    let db = std::env::temp_dir().join(format!(
+        "scryer_title_poster_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let services = SqliteServices::new(db.to_string_lossy())
+        .await
+        .expect("db should initialize");
+
+    let title = make_test_title("title-1", Some("https://tvdb.example/poster.jpg"));
+    <SqliteServices as TitleRepository>::create(&services, title.clone())
+        .await
+        .expect("title should insert");
+
+    let before_cache = <SqliteServices as TitleRepository>::get_by_id(&services, &title.id)
+        .await
+        .expect("title lookup should succeed")
+        .expect("title should exist");
+    assert_eq!(
+        before_cache.poster_url.as_deref(),
+        Some("https://tvdb.example/poster.jpg")
+    );
+
+    <SqliteServices as TitleImageRepository>::replace_title_image(
+        &services,
+        &title.id,
+        TitleImageReplacement {
+            kind: TitleImageKind::Poster,
+            source_url: "https://tvdb.example/poster.jpg".to_string(),
+            source_etag: Some("\"etag-1\"".to_string()),
+            source_last_modified: None,
+            source_format: "jpeg".to_string(),
+            source_width: 1000,
+            source_height: 1500,
+            storage_mode: TitleImageStorageMode::AvifMaster,
+            master_format: "avif".to_string(),
+            master_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            master_width: 1000,
+            master_height: 1500,
+            master_bytes: vec![1, 2, 3],
+            variants: vec![TitleImageVariantRecord {
+                variant_key: "w500".to_string(),
+                format: "avif".to_string(),
+                width: 500,
+                height: 750,
+                bytes: vec![7, 8, 9],
+                sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            }],
+        },
+    )
+    .await
+    .expect("title image should insert");
+
+    let after_cache = <SqliteServices as TitleRepository>::get_by_id(&services, &title.id)
+        .await
+        .expect("title lookup should succeed")
+        .expect("title should exist");
+    assert_eq!(
+        after_cache.poster_url.as_deref(),
+        Some("/images/titles/title-1/poster/w500?v=bbbbbbbbbbbbbbbb")
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn title_queries_change_local_version_when_cached_poster_changes() {
+    let db = std::env::temp_dir().join(format!(
+        "scryer_title_poster_version_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let services = SqliteServices::new(db.to_string_lossy())
+        .await
+        .expect("db should initialize");
+
+    let title = make_test_title("title-2", Some("https://tvdb.example/poster-a.jpg"));
+    <SqliteServices as TitleRepository>::create(&services, title.clone())
+        .await
+        .expect("title should insert");
+
+    for (source_url, sha) in [
+        (
+            "https://tvdb.example/poster-a.jpg",
+            "11111111111111111111111111111111",
+        ),
+        (
+            "https://tvdb.example/poster-b.jpg",
+            "22222222222222222222222222222222",
+        ),
+    ] {
+        <SqliteServices as TitleImageRepository>::replace_title_image(
+            &services,
+            &title.id,
+            TitleImageReplacement {
+                kind: TitleImageKind::Poster,
+                source_url: source_url.to_string(),
+                source_etag: None,
+                source_last_modified: None,
+                source_format: "jpeg".to_string(),
+                source_width: 1000,
+                source_height: 1500,
+                storage_mode: TitleImageStorageMode::AvifMaster,
+                master_format: "avif".to_string(),
+                master_sha256: sha.to_string(),
+                master_width: 1000,
+                master_height: 1500,
+                master_bytes: vec![1, 2, 3],
+                variants: vec![TitleImageVariantRecord {
+                    variant_key: "w500".to_string(),
+                    format: "avif".to_string(),
+                    width: 500,
+                    height: 750,
+                    bytes: vec![7, 8, 9],
+                    sha256: sha.to_string(),
+                }],
+            },
+        )
+        .await
+        .expect("title image should upsert");
+
+        sqlx::query("UPDATE titles SET poster_url = ? WHERE id = ?")
+            .bind(source_url)
+            .bind(&title.id)
+            .execute(&services.pool)
+            .await
+            .expect("source url should update");
+    }
+
+    let updated = <SqliteServices as TitleRepository>::get_by_id(&services, &title.id)
+        .await
+        .expect("title lookup should succeed")
+        .expect("title should exist");
+    assert_eq!(
+        updated.poster_url.as_deref(),
+        Some("/images/titles/title-2/poster/w500?v=2222222222222222")
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn title_queries_use_local_original_url_for_original_storage_mode() {
+    let db = std::env::temp_dir().join(format!(
+        "scryer_title_poster_original_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let services = SqliteServices::new(db.to_string_lossy())
+        .await
+        .expect("db should initialize");
+
+    let title = make_test_title("title-3", Some("https://tvdb.example/poster-original.jpg"));
+    <SqliteServices as TitleRepository>::create(&services, title.clone())
+        .await
+        .expect("title should insert");
+
+    <SqliteServices as TitleImageRepository>::replace_title_image(
+        &services,
+        &title.id,
+        TitleImageReplacement {
+            kind: TitleImageKind::Poster,
+            source_url: "https://tvdb.example/poster-original.jpg".to_string(),
+            source_etag: None,
+            source_last_modified: None,
+            source_format: "jpeg".to_string(),
+            source_width: 400,
+            source_height: 600,
+            storage_mode: TitleImageStorageMode::Original,
+            master_format: "jpeg".to_string(),
+            master_sha256: "cccccccccccccccccccccccccccccccc".to_string(),
+            master_width: 400,
+            master_height: 600,
+            master_bytes: vec![3, 2, 1],
+            variants: Vec::new(),
+        },
+    )
+    .await
+    .expect("title image should insert");
+
+    let updated = <SqliteServices as TitleRepository>::get_by_id(&services, &title.id)
+        .await
+        .expect("title lookup should succeed")
+        .expect("title should exist");
+    assert_eq!(
+        updated.poster_url.as_deref(),
+        Some("/images/titles/title-3/poster/original?v=cccccccccccccccc")
+    );
+
+    let original = <SqliteServices as TitleImageRepository>::get_title_image_blob(
+        &services,
+        &title.id,
+        TitleImageKind::Poster,
+        "original",
+    )
+    .await
+    .expect("original blob lookup should succeed");
+    assert_eq!(
+        original,
+        Some(TitleImageBlob {
+            content_type: "image/jpeg".to_string(),
+            etag: "cccccccccccccccccccccccccccccccc".to_string(),
+            bytes: vec![3, 2, 1],
+        })
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn title_queries_fall_back_to_original_when_w500_variant_is_missing() {
+    let db = std::env::temp_dir().join(format!(
+        "scryer_title_poster_incomplete_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let services = SqliteServices::new(db.to_string_lossy())
+        .await
+        .expect("db should initialize");
+
+    let title = make_test_title(
+        "title-4",
+        Some("https://tvdb.example/poster-incomplete.jpg"),
+    );
+    <SqliteServices as TitleRepository>::create(&services, title.clone())
+        .await
+        .expect("title should insert");
+
+    <SqliteServices as TitleImageRepository>::replace_title_image(
+        &services,
+        &title.id,
+        TitleImageReplacement {
+            kind: TitleImageKind::Poster,
+            source_url: "https://tvdb.example/poster-incomplete.jpg".to_string(),
+            source_etag: None,
+            source_last_modified: None,
+            source_format: "jpeg".to_string(),
+            source_width: 1000,
+            source_height: 1500,
+            storage_mode: TitleImageStorageMode::AvifMaster,
+            master_format: "avif".to_string(),
+            master_sha256: "dddddddddddddddddddddddddddddddd".to_string(),
+            master_width: 1000,
+            master_height: 1500,
+            master_bytes: vec![9, 8, 7],
+            variants: Vec::new(),
+        },
+    )
+    .await
+    .expect("title image should insert");
+
+    let updated = <SqliteServices as TitleRepository>::get_by_id(&services, &title.id)
+        .await
+        .expect("title lookup should succeed")
+        .expect("title should exist");
+    assert_eq!(
+        updated.poster_url.as_deref(),
+        Some("/images/titles/title-4/poster/original?v=dddddddddddddddd")
+    );
+
+    let pending = <SqliteServices as TitleImageRepository>::list_titles_requiring_image_refresh(
+        &services,
+        TitleImageKind::Poster,
+        10,
+    )
+    .await
+    .expect("list pending poster refresh should succeed");
+    assert!(
+        pending.iter().any(|task| task.title_id == title.id),
+        "incomplete AVIF cache rows should be re-queued for repair"
+    );
+
+    let _ = std::fs::remove_file(db);
 }
 
 #[tokio::test]

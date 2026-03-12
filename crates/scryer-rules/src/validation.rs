@@ -1,6 +1,6 @@
 use crate::{
-    builtins, BuiltinScoreDoc, ContextDoc, FileDoc, ProfileDoc, ReleaseDoc, RulesError,
-    UserRuleInput,
+    builtins, AudioStreamDoc, BuiltinScoreDoc, ContextDoc, FileDoc, ProfileDoc, ReleaseDoc,
+    RulesError, SubtitleStreamDoc, UserRuleInput,
 };
 use regorus::{Engine, Value};
 
@@ -209,12 +209,32 @@ fn synthetic_test_input() -> UserRuleInput {
             video_bitrate_kbps: Some(40000),
             video_bit_depth: Some(10),
             video_hdr_format: Some("HDR10".to_string()),
+            dovi_profile: Some(8),
+            dovi_bl_compat_id: Some(1),
+            video_frame_rate: Some("23.976".to_string()),
+            video_profile: Some("Main 10".to_string()),
             audio_codec: Some("eac3".to_string()),
             audio_channels: Some(6),
+            audio_bitrate_kbps: Some(640),
             audio_languages: vec!["eng".to_string()],
+            audio_streams: vec![AudioStreamDoc {
+                codec: Some("eac3".to_string()),
+                channels: Some(6),
+                language: Some("eng".to_string()),
+                bitrate_kbps: Some(640),
+            }],
             subtitle_languages: vec!["eng".to_string()],
+            subtitle_codecs: vec!["subrip".to_string()],
+            subtitle_streams: vec![SubtitleStreamDoc {
+                codec: Some("subrip".to_string()),
+                language: Some("eng".to_string()),
+                name: Some("English".to_string()),
+                forced: false,
+                default: true,
+            }],
             has_multiaudio: false,
             duration_seconds: Some(7200),
+            num_chapters: Some(12),
             container_format: Some("matroska".to_string()),
         }),
     }

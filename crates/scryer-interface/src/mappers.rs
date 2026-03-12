@@ -510,6 +510,7 @@ pub(crate) fn from_title_media_file(
             .collect(),
         has_multiaudio: file.has_multiaudio,
         duration_seconds: file.duration_seconds,
+        num_chapters: file.num_chapters,
         container_format: file.container_format,
         scene_name: file.scene_name,
         release_group: file.release_group,

@@ -14,8 +14,8 @@ use scryer_application::{
     MovieFacetHandler, SeriesFacetHandler,
 };
 use scryer_infrastructure::{
-    MetadataGatewayClient, MultiIndexerSearchClient, NzbgetDownloadClient, SmgEnrollmentConfig,
-    SqliteServices,
+    FileSystemLibraryScanner, MetadataGatewayClient, MultiIndexerSearchClient,
+    NzbgetDownloadClient, SmgEnrollmentConfig, SqliteServices,
 };
 use scryer_interface::{build_schema, ApiSchema};
 
@@ -129,10 +129,15 @@ impl TestContext {
             ":memory:".to_string(),
         );
         services.metadata_gateway = Arc::new(metadata_gateway);
+        services.library_scanner = Arc::new(FileSystemLibraryScanner::new());
+        services.media_files = Arc::new(db.clone());
         services.indexer_stats = indexer_stats;
         services.plugin_provider = Some(plugin_provider);
         services.plugin_installations = Arc::new(db.clone());
         services.rule_sets = Arc::new(db.clone());
+        services.wanted_items = Arc::new(db.clone());
+        services.download_submissions = Arc::new(db.clone());
+        services.pending_releases = Arc::new(db.clone());
 
         // Facet registry with all built-in facets
         let mut registry = FacetRegistry::new();

@@ -1,52 +1,40 @@
 import type { AdminSetting } from "@/lib/types";
 import type {
   DownloadClientRecord,
-  NzbgetCategoryRoutingSettings,
-  NzbgetClientRoutingSettingsByClient,
+  DownloadClientRoutingSettings,
+  DownloadClientRoutingSettingsByClient,
 } from "@/lib/types";
 import {
-  NZBGET_CATEGORY_SETTING_KEY,
+  DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY,
+  DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY,
   NZBGET_CLIENT_ROUTING_DEFAULT_ID,
-  NZBGET_CLIENT_ROUTING_EMPTY,
-  NZBGET_CLIENT_ROUTING_SETTINGS_KEY,
+  DOWNLOAD_CLIENT_ROUTING_EMPTY,
+  LEGACY_NZBGET_CATEGORY_SETTING_KEY,
   NZBGET_REMOVE_COMPLETED_SETTING_KEY,
   NZBGET_REMOVE_FAILED_SETTING_KEY,
   NZBGET_OLDER_PRIORITY_SETTING_KEY,
   NZBGET_RECENT_PRIORITY_SETTING_KEY,
-  NZBGET_TAGS_SETTING_KEY,
 } from "@/lib/constants/nzbget";
 import { getSettingStringFromItems } from "./settings";
 import { readConfigValueAsBoolean, readConfigValueAsString } from "./download-clients";
 
-function parseNzbgetTags(rawValue: unknown): string[] {
-  if (Array.isArray(rawValue)) {
-    return rawValue
-      .map((value) => (typeof value === "string" ? value.trim() : ""))
-      .filter((value) => value.length > 0);
-  }
+const LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY = "nzbget.client_routing";
 
-  if (typeof rawValue === "string") {
-    return rawValue
-      .split(",")
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0);
-  }
-
-  return [];
-}
-
-export function parseNzbgetCategoryRoutingSetting(rawValue: unknown): NzbgetCategoryRoutingSettings {
+export function parseDownloadClientRoutingSetting(rawValue: unknown): DownloadClientRoutingSettings {
   if (!rawValue || typeof rawValue !== "object" || Array.isArray(rawValue)) {
-    return NZBGET_CLIENT_ROUTING_EMPTY;
+    return DOWNLOAD_CLIENT_ROUTING_EMPTY;
   }
   const value = rawValue as Record<string, unknown>;
   return {
-    category: readConfigValueAsString(value.category),
-    recentPriority: readConfigValueAsString(
-      value.recentPriority ?? value.recent_priority,
+    enabled: readConfigValueAsBoolean(
+      value.enabled ?? value.is_enabled ?? value.isEnabled ?? true,
     ),
-    olderPriority: readConfigValueAsString(
-      value.olderPriority ?? value.older_priority,
+    category: readConfigValueAsString(value.category),
+    recentQueuePriority: readConfigValueAsString(
+      value.recentQueuePriority ?? value.recentPriority ?? value.recent_priority,
+    ),
+    olderQueuePriority: readConfigValueAsString(
+      value.olderQueuePriority ?? value.olderPriority ?? value.older_priority,
     ),
     removeCompleted: readConfigValueAsBoolean(
       value.removeCompleted ?? value.remove_completed ?? value.removeComplete,
@@ -54,13 +42,12 @@ export function parseNzbgetCategoryRoutingSetting(rawValue: unknown): NzbgetCate
     removeFailed: readConfigValueAsBoolean(
       value.removeFailed ?? value.remove_failed ?? value.removeFailure,
     ),
-    tags: parseNzbgetTags(value.tags),
   };
 }
 
-export function parseNzbgetCategoryRoutingFromJson(
+export function parseDownloadClientRoutingFromJson(
   rawValue?: string | null,
-): NzbgetClientRoutingSettingsByClient {
+): DownloadClientRoutingSettingsByClient {
   if (!rawValue) {
     return {};
   }
@@ -72,9 +59,9 @@ export function parseNzbgetCategoryRoutingFromJson(
     }
 
     const source = parsed as Record<string, unknown>;
-    const output: NzbgetClientRoutingSettingsByClient = {};
+    const output: DownloadClientRoutingSettingsByClient = {};
     for (const [clientId, clientValue] of Object.entries(source)) {
-      const clientSettings = parseNzbgetCategoryRoutingSetting(clientValue);
+      const clientSettings = parseDownloadClientRoutingSetting(clientValue);
       if (!clientId.trim()) {
         continue;
       }
@@ -90,7 +77,9 @@ export function parseNzbgetCategoryRoutingFromJson(
 }
 
 export function parseLegacyNzbgetCategoryRoutingFromItems(categoryPayloadItems: AdminSetting[]) {
-  const category = getSettingStringFromItems(categoryPayloadItems, NZBGET_CATEGORY_SETTING_KEY);
+  const category =
+    getSettingStringFromItems(categoryPayloadItems, DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY) ??
+    getSettingStringFromItems(categoryPayloadItems, LEGACY_NZBGET_CATEGORY_SETTING_KEY);
   const recentPriority = getSettingStringFromItems(
     categoryPayloadItems,
     NZBGET_RECENT_PRIORITY_SETTING_KEY,
@@ -107,19 +96,18 @@ export function parseLegacyNzbgetCategoryRoutingFromItems(categoryPayloadItems: 
     categoryPayloadItems,
     NZBGET_REMOVE_FAILED_SETTING_KEY,
   );
-  const tags = getSettingStringFromItems(categoryPayloadItems, NZBGET_TAGS_SETTING_KEY);
   return {
+    enabled: true,
     category,
-    recentPriority,
-    olderPriority,
+    recentQueuePriority: recentPriority,
+    olderQueuePriority: olderPriority,
     removeCompleted: readConfigValueAsBoolean(removeCompletedValue),
     removeFailed: readConfigValueAsBoolean(removeFailedValue),
-    tags: parseNzbgetTags(tags),
   };
 }
 
 export function getDefaultNzbgetCategoryRoutingValue(rawValue: string | null | undefined) {
-  const rawPayload = parseNzbgetCategoryRoutingFromJson(rawValue);
+  const rawPayload = parseDownloadClientRoutingFromJson(rawValue);
   if (Object.keys(rawPayload).length > 0) {
     return rawPayload;
   }
@@ -129,9 +117,16 @@ export function getDefaultNzbgetCategoryRoutingValue(rawValue: string | null | u
 export function buildNzbgetCategoryRoutingForScope(
   categoryPayloadItems: AdminSetting[],
   downloadClients: DownloadClientRecord[],
-): NzbgetClientRoutingSettingsByClient {
+): DownloadClientRoutingSettingsByClient {
   const rawPayload = getDefaultNzbgetCategoryRoutingValue(
-    getSettingStringFromItems(categoryPayloadItems, NZBGET_CLIENT_ROUTING_SETTINGS_KEY),
+    getSettingStringFromItems(
+      categoryPayloadItems,
+      DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY,
+    ) ??
+      getSettingStringFromItems(
+        categoryPayloadItems,
+        LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY,
+      ),
   );
   const nzbgetClients = downloadClients.filter((client) =>
     client.clientType.trim().toLowerCase() === "nzbget",
@@ -142,7 +137,7 @@ export function buildNzbgetCategoryRoutingForScope(
     return rawPayload;
   }
 
-  const ordered: NzbgetClientRoutingSettingsByClient = {};
+  const ordered: DownloadClientRoutingSettingsByClient = {};
   const assignedClientIds = new Set<string>();
   for (const [clientId, clientRouting] of Object.entries(rawPayload)) {
     const normalizedClientId = clientId.trim();
@@ -165,7 +160,7 @@ export function buildNzbgetCategoryRoutingForScope(
 
   for (const clientId of nzbgetClientIds) {
     if (!ordered[clientId]) {
-      ordered[clientId] = NZBGET_CLIENT_ROUTING_EMPTY;
+      ordered[clientId] = DOWNLOAD_CLIENT_ROUTING_EMPTY;
       assignedClientIds.add(clientId);
     }
   }
@@ -185,3 +180,6 @@ export function buildNzbgetCategoryRoutingForScope(
 
   return ordered;
 }
+
+export const parseNzbgetCategoryRoutingSetting = parseDownloadClientRoutingSetting;
+export const parseNzbgetCategoryRoutingFromJson = parseDownloadClientRoutingFromJson;

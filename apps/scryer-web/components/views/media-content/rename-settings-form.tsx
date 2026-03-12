@@ -236,8 +236,6 @@ export function RenameSettingsForm({
   handleMonitorSpecialsChange,
   categoryInterSeasonMovies,
   handleInterSeasonMoviesChange,
-  categoryPreferredSubGroup,
-  handlePreferredSubGroupChange,
   nfoWriteOnImport,
   handleNfoWriteChange,
   plexmatchWriteOnImport,
@@ -269,8 +267,6 @@ export function RenameSettingsForm({
   handleMonitorSpecialsChange: (checked: boolean) => void;
   categoryInterSeasonMovies: Record<ViewCategoryId, string>;
   handleInterSeasonMoviesChange: (checked: boolean) => void;
-  categoryPreferredSubGroup: Record<ViewCategoryId, string>;
-  handlePreferredSubGroupChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
   nfoWriteOnImport: Record<ViewCategoryId, string>;
   handleNfoWriteChange: (checked: boolean) => void;
   plexmatchWriteOnImport: Record<ViewCategoryId, string>;
@@ -529,17 +525,6 @@ export function RenameSettingsForm({
                   <span className="text-xs text-muted-foreground">{t("settings.interSeasonMoviesDescription")}</span>
                 </div>
               </div>
-              <label className="space-y-2">
-                <Label className="text-sm text-card-foreground">
-                  {t("settings.preferredSubGroupLabel")}
-                </Label>
-                <Input
-                  value={categoryPreferredSubGroup[activeQualityScopeId]}
-                  onChange={handlePreferredSubGroupChange}
-                  placeholder={t("settings.preferredSubGroupPlaceholder")}
-                  disabled={mediaSettingsLoading}
-                />
-              </label>
             </div>
           )}
 

@@ -1,8 +1,9 @@
 import * as React from "react";
 import { useTranslate } from "@/lib/context/translate-context";
 import { Button } from "@/components/ui/button";
+import { RenderBooleanIcon } from "@/components/common/boolean-icon";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, Power, PowerOff } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -14,9 +15,45 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { DownloadClientRecord, NzbgetCategoryRoutingSettings } from "@/lib/types";
+import type { DownloadClientRecord, DownloadClientRoutingSettings } from "@/lib/types";
+import { cn } from "@/lib/utils";
+import { DOWNLOAD_CLIENT_ROUTING_EMPTY } from "@/lib/constants/nzbget";
+import {
+  boxedActionButtonBaseClass,
+  boxedActionButtonToneClass,
+  type BoxedActionButtonTone,
+} from "@/lib/utils/action-button-styles";
 
-type ScopeRoutingRecord = Record<string, NzbgetCategoryRoutingSettings>;
+type ScopeRoutingRecord = Record<string, DownloadClientRoutingSettings>;
+
+function DownloadClientRoutingActionButton({
+  label,
+  tone,
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof Button> & {
+  label: string;
+  tone: Extract<BoxedActionButtonTone, "enabled" | "disabled" | "reorder">;
+}) {
+  return (
+    <Button
+      type="button"
+      size="icon-sm"
+      variant="secondary"
+      title={label}
+      aria-label={label}
+      className={cn(
+        boxedActionButtonBaseClass,
+        boxedActionButtonToneClass[tone],
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </Button>
+  );
+}
 
 export const NzbgetIcon = (props: React.ComponentPropsWithoutRef<"svg">) => (
   <svg
@@ -175,17 +212,6 @@ function normalizePriorityValueForSave(rawValue: string): string {
   return PRIORITY_VALUES.has(aliased) ? aliased : "normal";
 }
 
-function parseTagsInput(raw: string): string[] {
-  return raw
-    .split(",")
-    .map((value) => value.trim())
-    .map((value) => (value.length === 0 ? "" : value));
-}
-
-function formatTagsInput(tags: string[]): string {
-  return tags.join(", ");
-}
-
 type DownloadClientRoutingPanelProps = {
   scopeLabel: string;
   downloadClients: DownloadClientRecord[];
@@ -193,9 +219,12 @@ type DownloadClientRoutingPanelProps = {
   activeScopeRoutingOrder: string[];
   downloadClientRoutingLoading: boolean;
   downloadClientRoutingSaving: boolean;
-  updateDownloadClientRoutingForScope: (clientId: string, nextValue: Partial<NzbgetCategoryRoutingSettings>) => void;
+  updateDownloadClientRoutingForScope: (
+    clientId: string,
+    nextValue: Partial<DownloadClientRoutingSettings>,
+    options?: { save?: boolean },
+  ) => Promise<void> | void;
   moveDownloadClientInScope: (clientId: string, direction: "up" | "down") => void;
-  saveDownloadClientRouting: () => Promise<void> | void;
 };
 
 export const DownloadClientRoutingPanel = React.memo(function DownloadClientRoutingPanel({
@@ -207,7 +236,6 @@ export const DownloadClientRoutingPanel = React.memo(function DownloadClientRout
   downloadClientRoutingSaving,
   updateDownloadClientRoutingForScope,
   moveDownloadClientInScope,
-  saveDownloadClientRouting,
 }: DownloadClientRoutingPanelProps) {
   const t = useTranslate();
   const clientById = React.useMemo(
@@ -224,27 +252,23 @@ export const DownloadClientRoutingPanel = React.memo(function DownloadClientRout
     return [...configuredIds, ...missingIds];
   }, [activeScopeRoutingOrder, clientById, downloadClients]);
 
-  const handleSubmit = React.useCallback(
-    (event: React.FormEvent<HTMLFormElement>) => {
-      event.preventDefault();
-      void saveDownloadClientRouting();
-    },
-    [saveDownloadClientRouting],
-  );
-
   const handleRoutingCategoryChange = React.useCallback(
     (clientId: string, value: string) => {
-      updateDownloadClientRoutingForScope(clientId, {
-        category: value,
-      });
+      void updateDownloadClientRoutingForScope(
+        clientId,
+        {
+          category: value,
+        },
+        { save: false },
+      );
     },
     [updateDownloadClientRoutingForScope],
   );
 
-  const handleRoutingTagsChange = React.useCallback(
+  const handleRoutingCategoryBlur = React.useCallback(
     (clientId: string, value: string) => {
-      updateDownloadClientRoutingForScope(clientId, {
-        tags: parseTagsInput(value),
+      void updateDownloadClientRoutingForScope(clientId, {
+        category: value,
       });
     },
     [updateDownloadClientRoutingForScope],
@@ -252,8 +276,8 @@ export const DownloadClientRoutingPanel = React.memo(function DownloadClientRout
 
   const handleRoutingRecentPriorityChange = React.useCallback(
     (clientId: string, value: string) => {
-      updateDownloadClientRoutingForScope(clientId, {
-        recentPriority: normalizePriorityValueForSave(value),
+      void updateDownloadClientRoutingForScope(clientId, {
+        recentQueuePriority: normalizePriorityValueForSave(value),
       });
     },
     [updateDownloadClientRoutingForScope],
@@ -261,8 +285,8 @@ export const DownloadClientRoutingPanel = React.memo(function DownloadClientRout
 
   const handleRoutingOlderPriorityChange = React.useCallback(
     (clientId: string, value: string) => {
-      updateDownloadClientRoutingForScope(clientId, {
-        olderPriority: normalizePriorityValueForSave(value),
+      void updateDownloadClientRoutingForScope(clientId, {
+        olderQueuePriority: normalizePriorityValueForSave(value),
       });
     },
     [updateDownloadClientRoutingForScope],
@@ -270,7 +294,7 @@ export const DownloadClientRoutingPanel = React.memo(function DownloadClientRout
 
   const handleRoutingRemoveCompletedChange = React.useCallback(
     (clientId: string, checked: boolean) => {
-      updateDownloadClientRoutingForScope(clientId, {
+      void updateDownloadClientRoutingForScope(clientId, {
         removeCompleted: checked,
       });
     },
@@ -279,7 +303,7 @@ export const DownloadClientRoutingPanel = React.memo(function DownloadClientRout
 
   const handleRoutingRemoveFailedChange = React.useCallback(
     (clientId: string, checked: boolean) => {
-      updateDownloadClientRoutingForScope(clientId, {
+      void updateDownloadClientRoutingForScope(clientId, {
         removeFailed: checked,
       });
     },
@@ -301,178 +325,194 @@ export const DownloadClientRoutingPanel = React.memo(function DownloadClientRout
   );
 
   return (
-    <form onSubmit={handleSubmit}>
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            {t("settings.downloadClientRoutingScope", {
-              scope: scopeLabel,
-            })}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto rounded border border-border">
-            <Table>
-              <TableHeader>
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          {t("settings.downloadClientRoutingScope", {
+            scope: scopeLabel,
+          })}
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="overflow-x-auto rounded border border-border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t("settings.downloadClientPriority")}</TableHead>
+                <TableHead>{t("label.name")}</TableHead>
+                <TableHead>{t("label.type")}</TableHead>
+                <TableHead className="text-center">{t("settings.downloadClientRoutingGloballyEnabled")}</TableHead>
+                <TableHead className="text-center">{t("settings.downloadClientRoutingEnabled")}</TableHead>
+                <TableHead>{t("settings.downloadClientCategory")}</TableHead>
+                <TableHead>{t("settings.downloadClientRecentPriority")}</TableHead>
+                <TableHead>{t("settings.downloadClientOlderPriority")}</TableHead>
+                <TableHead className="text-center">{t("settings.downloadClientRemoveCompleted")}</TableHead>
+                <TableHead className="text-center">{t("settings.downloadClientRemoveFailed")}</TableHead>
+                <TableHead className="text-right">{t("label.actions")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {orderedDownloadClientIds.length === 0 ? (
                 <TableRow>
-                  <TableHead>{t("settings.downloadClientPriority")}</TableHead>
-                  <TableHead>{t("label.name")}</TableHead>
-                  <TableHead>{t("label.type")}</TableHead>
-                  <TableHead>{t("settings.downloadClientCategory")}</TableHead>
-                  <TableHead>{t("settings.downloadClientTags")}</TableHead>
-                  <TableHead>{t("settings.downloadClientRecentPriority")}</TableHead>
-                  <TableHead>{t("settings.downloadClientOlderPriority")}</TableHead>
-                  <TableHead className="text-center">{t("settings.downloadClientRemoveCompleted")}</TableHead>
-                  <TableHead className="text-center">{t("settings.downloadClientRemoveFailed")}</TableHead>
-                  <TableHead className="text-right">{t("label.actions")}</TableHead>
+                  <TableCell colSpan={11} className="text-muted-foreground">
+                    {t("settings.noDownloadClientsFound")}
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {orderedDownloadClientIds.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={10} className="text-muted-foreground">
-                      {t("settings.noDownloadClientsFound")}
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  orderedDownloadClientIds.map((clientId, index) => {
-                    const client = clientById[clientId];
-                    if (!client) {
-                      return null;
-                    }
-                    const routing = activeScopeRouting[client.id] ?? {
-                      category: "",
-                      recentPriority: "",
-                      olderPriority: "",
-                      tags: [],
-                      removeCompleted: false,
-                      removeFailed: false,
-                    };
-                    return (
-                      <TableRow key={client.id}>
-                        <TableCell>{index + 1}</TableCell>
-                        <TableCell>{client.name}</TableCell>
-                        <TableCell className="text-center">
-                          <span className="inline-flex items-center justify-center">
-                            <DownloadClientTypeLogo typeValue={client.clientType} />
-                            <span className="sr-only">{client.clientType}</span>
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            value={routing.category}
-                            onChange={(event) =>
-                              handleRoutingCategoryChange(client.id, event.target.value)
+              ) : (
+                orderedDownloadClientIds.map((clientId, index) => {
+                  const client = clientById[clientId];
+                  if (!client) {
+                    return null;
+                  }
+                  const routing =
+                    activeScopeRouting[client.id] ?? DOWNLOAD_CLIENT_ROUTING_EMPTY;
+                  const controlsDisabled =
+                    downloadClientRoutingLoading || downloadClientRoutingSaving;
+
+                  return (
+                    <TableRow key={client.id}>
+                      <TableCell>{index + 1}</TableCell>
+                      <TableCell>{client.name}</TableCell>
+                      <TableCell className="text-center">
+                        <span className="inline-flex items-center justify-center">
+                          <DownloadClientTypeLogo typeValue={client.clientType} />
+                          <span className="sr-only">{client.clientType}</span>
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-center align-middle">
+                        <RenderBooleanIcon
+                          value={client.isEnabled}
+                          label={`${t("settings.downloadClientRoutingGloballyEnabled")}: ${client.name}`}
+                        />
+                      </TableCell>
+                      <TableCell className="text-center align-middle">
+                        <RenderBooleanIcon
+                          value={client.isEnabled && routing.enabled}
+                          label={`${t("settings.downloadClientRoutingEnabled")}: ${client.name}`}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Input
+                          value={routing.category}
+                          onChange={(event) =>
+                            handleRoutingCategoryChange(client.id, event.target.value)
+                          }
+                          onBlur={(event) =>
+                            handleRoutingCategoryBlur(client.id, event.target.value)
+                          }
+                          disabled={controlsDisabled}
+                          placeholder={t("settings.downloadClientCategoryPlaceholder")}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Select
+                          value={normalizePriorityValue(routing.recentQueuePriority)}
+                          onValueChange={(value) =>
+                            handleRoutingRecentPriorityChange(client.id, value)
+                          }
+                          disabled={controlsDisabled}
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {DOWNLOAD_PRIORITY_OPTIONS.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {t(option.label)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
+                      <TableCell>
+                        <Select
+                          value={normalizePriorityValue(routing.olderQueuePriority)}
+                          onValueChange={(value) =>
+                            handleRoutingOlderPriorityChange(client.id, value)
+                          }
+                          disabled={controlsDisabled}
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {DOWNLOAD_PRIORITY_OPTIONS.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {t(option.label)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <Checkbox
+                          checked={routing.removeCompleted}
+                          onCheckedChange={(checked) =>
+                            handleRoutingRemoveCompletedChange(client.id, checked === true)
+                          }
+                          disabled={controlsDisabled}
+                        />
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <Checkbox
+                          checked={routing.removeFailed}
+                          onCheckedChange={(checked) =>
+                            handleRoutingRemoveFailedChange(client.id, checked === true)
+                          }
+                          disabled={controlsDisabled}
+                        />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <DownloadClientRoutingActionButton
+                            tone={routing.enabled ? "disabled" : "enabled"}
+                            label={
+                              routing.enabled
+                                ? t("label.disable")
+                                : t("label.enable")
                             }
-                            disabled={downloadClientRoutingLoading}
-                            placeholder={t("settings.downloadClientCategoryPlaceholder")}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            value={formatTagsInput(routing.tags)}
-                            onChange={(event) => handleRoutingTagsChange(client.id, event.target.value)}
-                            disabled={downloadClientRoutingLoading}
-                            placeholder={t("settings.downloadClientTagsPlaceholder")}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Select value={normalizePriorityValue(routing.recentPriority)} onValueChange={(v) => handleRoutingRecentPriorityChange(client.id, v)} disabled={downloadClientRoutingLoading}>
-                            <SelectTrigger className="w-full">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {DOWNLOAD_PRIORITY_OPTIONS.map((option) => (
-                                <SelectItem key={option.value} value={option.value}>{t(option.label)}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </TableCell>
-                        <TableCell>
-                          <Select value={normalizePriorityValue(routing.olderPriority)} onValueChange={(v) => handleRoutingOlderPriorityChange(client.id, v)} disabled={downloadClientRoutingLoading}>
-                            <SelectTrigger className="w-full">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {DOWNLOAD_PRIORITY_OPTIONS.map((option) => (
-                                <SelectItem key={option.value} value={option.value}>{t(option.label)}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </TableCell>
-                        <TableCell className="text-center">
-                          <Checkbox
-                            checked={routing.removeCompleted}
-                            onCheckedChange={(checked) =>
-                              handleRoutingRemoveCompletedChange(client.id, checked === true)
+                            onClick={() =>
+                              void updateDownloadClientRoutingForScope(client.id, {
+                                enabled: !routing.enabled,
+                              })
                             }
-                            disabled={downloadClientRoutingLoading}
-                          />
-                        </TableCell>
-                        <TableCell className="text-center">
-                          <Checkbox
-                            checked={routing.removeFailed}
-                            onCheckedChange={(checked) =>
-                              handleRoutingRemoveFailedChange(client.id, checked === true)
+                            disabled={controlsDisabled || !client.isEnabled}
+                          >
+                            {routing.enabled ? (
+                              <PowerOff className="h-4 w-4" />
+                            ) : (
+                              <Power className="h-4 w-4" />
+                            )}
+                          </DownloadClientRoutingActionButton>
+                          <DownloadClientRoutingActionButton
+                            tone="reorder"
+                            label={`${t("label.moveUp")} ${client.name}`}
+                            onClick={() => moveClientUp(client.id)}
+                            disabled={controlsDisabled || index === 0}
+                          >
+                            <ChevronUp className="h-4 w-4" />
+                          </DownloadClientRoutingActionButton>
+                          <DownloadClientRoutingActionButton
+                            tone="reorder"
+                            label={`${t("label.moveDown")} ${client.name}`}
+                            onClick={() => moveClientDown(client.id)}
+                            disabled={
+                              controlsDisabled ||
+                              index >= orderedDownloadClientIds.length - 1
                             }
-                            disabled={downloadClientRoutingLoading}
-                          />
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              type="button"
-                              className="border border-border bg-card/80 hover:bg-accent"
-                              aria-label={`${t("label.moveUp")} ${client.name}`}
-                              onClick={() => moveClientUp(client.id)}
-                              disabled={
-                                downloadClientRoutingLoading ||
-                                downloadClientRoutingSaving ||
-                                index === 0
-                              }
-                            >
-                              <ChevronUp className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              type="button"
-                              className="border border-border bg-card/80 hover:bg-accent"
-                              aria-label={`${t("label.moveDown")} ${client.name}`}
-                              onClick={() => moveClientDown(client.id)}
-                              disabled={
-                                downloadClientRoutingLoading ||
-                                downloadClientRoutingSaving ||
-                                index >= orderedDownloadClientIds.length - 1
-                              }
-                            >
-                              <ChevronDown className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })
-                )}
-              </TableBody>
-            </Table>
-          </div>
-          <div className="mt-3 flex justify-end">
-            <Button
-              type="submit"
-              disabled={
-                downloadClientRoutingLoading ||
-                downloadClientRoutingSaving ||
-                orderedDownloadClientIds.length === 0
-              }
-            >
-              {downloadClientRoutingSaving ? t("label.saving") : t("label.save")}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    </form>
+                          >
+                            <ChevronDown className="h-4 w-4" />
+                          </DownloadClientRoutingActionButton>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
   );
 });

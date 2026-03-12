@@ -14,8 +14,9 @@ use crate::{
     HousekeepingRepository, ImportRepository, IndexerQueryStats, IndexerStatsTracker,
     MediaFileRepository, NotificationChannelRepository, NotificationSubscriptionRepository,
     PendingRelease, PendingReleaseRepository, PluginInstallationRepository, ReleaseDecision,
-    RuleSetRepository, SettingsRepository, SystemInfoProvider, TitleMediaFile, WantedItem,
-    WantedItemRepository,
+    RuleSetRepository, SettingsRepository, SystemInfoProvider, TitleImageBlob, TitleImageKind,
+    TitleImageProcessor, TitleImageReplacement, TitleImageRepository, TitleImageSyncTask,
+    TitleMediaFile, TitleMediaSizeSummary, WantedItem, WantedItemRepository,
 };
 
 #[derive(Default)]
@@ -77,6 +78,13 @@ impl MediaFileRepository for NullMediaFileRepository {
         ))
     }
 
+    async fn list_title_media_size_summaries(
+        &self,
+        _title_ids: &[String],
+    ) -> AppResult<Vec<TitleMediaSizeSummary>> {
+        Ok(Vec::new())
+    }
+
     async fn update_media_file_analysis(
         &self,
         _file_id: &str,
@@ -108,6 +116,55 @@ impl FileImporter for NullFileImporter {
     async fn import_file(&self, _source: &Path, _dest: &Path) -> AppResult<ImportFileResult> {
         Err(AppError::Repository(
             "file importer is not configured".to_string(),
+        ))
+    }
+}
+
+#[derive(Default)]
+pub struct NullTitleImageRepository;
+
+#[async_trait]
+impl TitleImageRepository for NullTitleImageRepository {
+    async fn list_titles_requiring_image_refresh(
+        &self,
+        _kind: TitleImageKind,
+        _limit: usize,
+    ) -> AppResult<Vec<TitleImageSyncTask>> {
+        Ok(vec![])
+    }
+
+    async fn replace_title_image(
+        &self,
+        _title_id: &str,
+        _replacement: TitleImageReplacement,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "title image repository is not configured".to_string(),
+        ))
+    }
+
+    async fn get_title_image_blob(
+        &self,
+        _title_id: &str,
+        _kind: TitleImageKind,
+        _variant_key: &str,
+    ) -> AppResult<Option<TitleImageBlob>> {
+        Ok(None)
+    }
+}
+
+#[derive(Default)]
+pub struct NullTitleImageProcessor;
+
+#[async_trait]
+impl TitleImageProcessor for NullTitleImageProcessor {
+    async fn fetch_and_process_image(
+        &self,
+        _kind: TitleImageKind,
+        _source_url: &str,
+    ) -> AppResult<TitleImageReplacement> {
+        Err(AppError::Repository(
+            "title image processor is not configured".to_string(),
         ))
     }
 }
@@ -453,6 +510,12 @@ impl DownloadSubmissionRepository for NullDownloadSubmissionRepository {
     ) -> AppResult<Option<DownloadSubmission>> {
         Ok(None)
     }
+    async fn list_for_title(&self, _: &str) -> AppResult<Vec<DownloadSubmission>> {
+        Ok(vec![])
+    }
+    async fn delete_for_title(&self, _: &str) -> AppResult<()> {
+        Ok(())
+    }
 }
 
 pub struct NullPendingReleaseRepository;
@@ -486,6 +549,9 @@ impl PendingReleaseRepository for NullPendingReleaseRepository {
         Ok(())
     }
     async fn supersede_pending_releases_for_wanted_item(&self, _: &str, _: &str) -> AppResult<()> {
+        Ok(())
+    }
+    async fn delete_pending_releases_for_title(&self, _: &str) -> AppResult<()> {
         Ok(())
     }
 }

@@ -14,7 +14,7 @@ use crate::{
 use scryer_application::QualityProfile;
 use scryer_application::{
     AppError, AppResult, PendingRelease, PrimaryCollectionSummary, ReleaseDecision,
-    ReleaseDownloadAttemptOutcome, TitleMetadataUpdate, WantedItem,
+    ReleaseDownloadAttemptOutcome, TitleMediaSizeSummary, TitleMetadataUpdate, WantedItem,
 };
 use scryer_domain::{
     CalendarEpisode, Collection, DownloadClientConfig, Episode, HistoryEvent, ImportRecord,
@@ -369,6 +369,14 @@ pub(crate) enum DbCommand {
         download_client_item_id: String,
         reply: Sender<AppResult<Option<scryer_application::DownloadSubmission>>>,
     },
+    ListDownloadSubmissionsForTitle {
+        title_id: String,
+        reply: Sender<AppResult<Vec<scryer_application::DownloadSubmission>>>,
+    },
+    DeleteDownloadSubmissionsForTitle {
+        title_id: String,
+        reply: Sender<AppResult<()>>,
+    },
     GetImportBySourceRef {
         source_system: String,
         source_ref: String,
@@ -403,6 +411,10 @@ pub(crate) enum DbCommand {
     ListMediaFilesForTitle {
         title_id: String,
         reply: Sender<AppResult<Vec<scryer_application::TitleMediaFile>>>,
+    },
+    ListTitleMediaSizeSummaries {
+        title_ids: Vec<String>,
+        reply: Sender<AppResult<Vec<TitleMediaSizeSummary>>>,
     },
     UpdateMediaFileAnalysis {
         file_id: String,
@@ -524,6 +536,10 @@ pub(crate) enum DbCommand {
     GetPendingRelease {
         id: String,
         reply: Sender<AppResult<Option<PendingRelease>>>,
+    },
+    DeletePendingReleasesForTitle {
+        title_id: String,
+        reply: Sender<AppResult<()>>,
     },
     // ── Rule Sets ──────────────────────────────────────────────────────
     ListRuleSets {
@@ -1229,6 +1245,14 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                         .await,
                     );
                 }
+                DbCommand::ListDownloadSubmissionsForTitle { title_id, reply } => {
+                    let _ = reply
+                        .send(list_download_submissions_for_title_query(&pool, &title_id).await);
+                }
+                DbCommand::DeleteDownloadSubmissionsForTitle { title_id, reply } => {
+                    let _ = reply
+                        .send(delete_download_submissions_for_title_query(&pool, &title_id).await);
+                }
                 DbCommand::CreateImportRequest {
                     source_system,
                     source_ref,
@@ -1318,6 +1342,14 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     let _ = reply.send(
                         crate::queries::media_file::list_media_files_for_title_query(
                             &pool, &title_id,
+                        )
+                        .await,
+                    );
+                }
+                DbCommand::ListTitleMediaSizeSummaries { title_ids, reply } => {
+                    let _ = reply.send(
+                        crate::queries::media_file::list_title_media_size_summaries_query(
+                            &pool, &title_ids,
                         )
                         .await,
                     );
@@ -1591,6 +1623,14 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     let _ = reply.send(
                         crate::queries::pending_releases::get_pending_release_query(&pool, &id)
                             .await,
+                    );
+                }
+                DbCommand::DeletePendingReleasesForTitle { title_id, reply } => {
+                    let _ = reply.send(
+                        crate::queries::pending_releases::delete_pending_releases_for_title_query(
+                            &pool, &title_id,
+                        )
+                        .await,
                     );
                 }
                 // ── Rule Sets ──────────────────────────────────────────────

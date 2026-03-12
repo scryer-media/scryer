@@ -38,3 +38,15 @@ extism = "1.13"
 semver = "1"
 metrics = "0.24"
 wiremock = "0.6"
+
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.ravif]
+opt-level = 3
+
+[profile.dev.package.rav1e]
+opt-level = 3
+
+[profile.dev.package.fast_image_resize]
+opt-level = 3

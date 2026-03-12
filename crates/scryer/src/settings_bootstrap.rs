@@ -15,11 +15,13 @@ pub(crate) const SERIES_PATH_KEY: &str = "series.path";
 pub(crate) const ANIME_PATH_KEY: &str = "anime.path";
 pub(crate) const QUALITY_PROFILE_ID_KEY: &str = "quality.profile_id";
 pub(crate) const QUALITY_PROFILE_CATALOG_KEY: &str = "quality.profiles";
-pub(crate) const NZBGET_CATEGORY_SETTING_KEY: &str = "nzbget.category";
+pub(crate) const DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY: &str =
+    "download_client.default_category";
+pub(crate) const LEGACY_NZBGET_CATEGORY_SETTING_KEY: &str = "nzbget.category";
 pub(crate) const NZBGET_RECENT_PRIORITY_SETTING_KEY: &str = "nzbget.recent_priority";
 pub(crate) const NZBGET_OLDER_PRIORITY_SETTING_KEY: &str = "nzbget.older_priority";
-pub(crate) const NZBGET_TAGS_SETTING_KEY: &str = "nzbget.tags";
-pub(crate) const NZBGET_CLIENT_ROUTING_SETTINGS_KEY: &str = "nzbget.client_routing";
+pub(crate) const DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY: &str = "download_client.routing";
+pub(crate) const LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY: &str = "nzbget.client_routing";
 pub(crate) const INDEXER_ROUTING_SETTINGS_KEY: &str = "indexer.routing";
 pub(crate) const TLS_CERT_KEY: &str = "tls.cert_path";
 pub(crate) const TLS_KEY_KEY: &str = "tls.key_path";
@@ -213,7 +215,7 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_MEDIA,
             scope: SETTINGS_SCOPE_SYSTEM,
-            key_name: NZBGET_CATEGORY_SETTING_KEY,
+            key_name: DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY,
             data_type: "string",
             default_value_json: "\"\"",
             is_sensitive: false,
@@ -237,15 +239,7 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_MEDIA,
             scope: SETTINGS_SCOPE_SYSTEM,
-            key_name: NZBGET_TAGS_SETTING_KEY,
-            data_type: "string",
-            default_value_json: "\"\"",
-            is_sensitive: false,
-        },
-        ServiceSettingSeed {
-            category: SETTINGS_CATEGORY_MEDIA,
-            scope: SETTINGS_SCOPE_SYSTEM,
-            key_name: NZBGET_CLIENT_ROUTING_SETTINGS_KEY,
+            key_name: DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY,
             data_type: "string",
             default_value_json: "{}",
             is_sensitive: false,
@@ -370,14 +364,6 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             key_name: "anime.inter_season_movies",
             data_type: "string",
             default_value_json: "\"true\"",
-            is_sensitive: false,
-        },
-        ServiceSettingSeed {
-            category: SETTINGS_CATEGORY_MEDIA,
-            scope: SETTINGS_SCOPE_SYSTEM,
-            key_name: "anime.preferred_sub_group",
-            data_type: "string",
-            default_value_json: "\"\"",
             is_sensitive: false,
         },
         // Acquisition settings
@@ -629,6 +615,138 @@ pub(crate) async fn seed_service_settings_from_environment(
         .batch_upsert_settings_if_not_overridden(entries)
         .await
         .map_err(|error| format!("failed to batch persist env settings: {error}"))
+}
+
+pub(crate) async fn migrate_legacy_download_client_routing_settings(
+    database: &SqliteServices,
+) -> Result<(), String> {
+    for scope_id in [None, Some("movie"), Some("series"), Some("anime")] {
+        let scope_id_string = scope_id.map(str::to_string);
+        let current = database
+            .get_setting_with_defaults(
+                SETTINGS_SCOPE_SYSTEM,
+                DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY,
+                scope_id_string.clone(),
+            )
+            .await
+            .map_err(|error| {
+                format!(
+                    "failed to read {DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY} during bootstrap migration for scope {:?}: {error}",
+                    scope_id
+                )
+            })?;
+
+        if current
+            .as_ref()
+            .and_then(|record| record.value_json.as_ref())
+            .is_some()
+        {
+            continue;
+        }
+
+        let legacy = database
+            .get_setting_with_defaults(
+                SETTINGS_SCOPE_SYSTEM,
+                LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY,
+                scope_id_string.clone(),
+            )
+            .await
+            .map_err(|error| {
+                format!(
+                    "failed to read {LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY} during bootstrap migration for scope {:?}: {error}",
+                    scope_id
+                )
+            })?;
+
+        let Some(legacy_value_json) = legacy.and_then(|record| record.value_json) else {
+            continue;
+        };
+
+        database
+            .upsert_setting_value(
+                SETTINGS_SCOPE_SYSTEM,
+                DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY,
+                scope_id_string,
+                legacy_value_json,
+                "legacy-migration",
+                None,
+            )
+            .await
+            .map_err(|error| {
+                format!(
+                    "failed to persist migrated {DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY} for scope {:?}: {error}",
+                    scope_id
+                )
+            })?;
+    }
+
+    Ok(())
+}
+
+pub(crate) async fn migrate_legacy_download_client_default_category_settings(
+    database: &SqliteServices,
+) -> Result<(), String> {
+    for scope_id in [None, Some("movie"), Some("series"), Some("anime")] {
+        let scope_id_string = scope_id.map(str::to_string);
+        let current = database
+            .get_setting_with_defaults(
+                SETTINGS_SCOPE_SYSTEM,
+                DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY,
+                scope_id_string.clone(),
+            )
+            .await
+            .map_err(|error| {
+                format!(
+                    "failed to read {DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY} during bootstrap migration for scope {:?}: {error}",
+                    scope_id
+                )
+            })?;
+
+        if current
+            .as_ref()
+            .and_then(|record| record.value_json.as_ref())
+            .is_some()
+        {
+            continue;
+        }
+
+        let legacy = database
+            .get_setting_with_defaults(
+                SETTINGS_SCOPE_SYSTEM,
+                LEGACY_NZBGET_CATEGORY_SETTING_KEY,
+                scope_id_string.clone(),
+            )
+            .await
+            .map_err(|error| {
+                format!(
+                    "failed to read {LEGACY_NZBGET_CATEGORY_SETTING_KEY} during bootstrap migration for scope {:?}: {error}",
+                    scope_id
+                )
+            })?;
+
+        let Some(legacy_value_json) = legacy.and_then(|record| record.value_json) else {
+            continue;
+        };
+
+        database
+            .upsert_setting_value(
+                SETTINGS_SCOPE_SYSTEM,
+                DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY,
+                scope_id_string,
+                legacy_value_json,
+                "legacy-migration",
+                None,
+            )
+            .await
+            .map_err(|error| {
+                format!(
+                    "failed to persist migrated {DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY} for scope {:?}: {error}",
+                    scope_id
+                )
+            })?;
+    }
+
+    Ok(())
 }
 
 pub(crate) async fn normalize_media_path_setting(

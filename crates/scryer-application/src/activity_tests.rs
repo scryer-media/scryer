@@ -112,6 +112,18 @@ fn activity_kind_as_str_all_variants() {
     assert_eq!(ActivityKind::SettingSaved.as_str(), "setting_saved");
     assert_eq!(ActivityKind::MovieFetched.as_str(), "movie_fetched");
     assert_eq!(ActivityKind::MovieAdded.as_str(), "movie_added");
+    assert_eq!(
+        ActivityKind::MetadataHydrationStarted.as_str(),
+        "metadata_hydration_started"
+    );
+    assert_eq!(
+        ActivityKind::MetadataHydrationCompleted.as_str(),
+        "metadata_hydration_completed"
+    );
+    assert_eq!(
+        ActivityKind::MetadataHydrationFailed.as_str(),
+        "metadata_hydration_failed"
+    );
     assert_eq!(ActivityKind::MovieDownloaded.as_str(), "movie_downloaded");
     assert_eq!(
         ActivityKind::SeriesEpisodeImported.as_str(),

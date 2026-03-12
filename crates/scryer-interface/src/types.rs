@@ -50,7 +50,7 @@ pub struct TitlePayload {
     pub digital_release_date: Option<String>,
     /// Primary collection label (quality tier), populated in list queries.
     pub quality_tier: Option<String>,
-    /// Primary collection file size in bytes, populated in list queries.
+    /// Aggregated media-file size in bytes for the title, populated in list queries.
     pub size_bytes: Option<i64>,
 }
 
@@ -164,6 +164,7 @@ pub struct TitleMediaFilePayload {
     pub subtitle_streams: Vec<SubtitleStreamDetailPayload>,
     pub has_multiaudio: bool,
     pub duration_seconds: Option<i32>,
+    pub num_chapters: Option<i32>,
     pub container_format: Option<String>,
     // Rich metadata (populated at import from parsed release name)
     pub scene_name: Option<String>,
@@ -948,6 +949,11 @@ pub struct ReleaseDecisionPayload {
 #[derive(InputObject)]
 pub struct WantedItemIdInput {
     pub wanted_item_id: String,
+}
+
+#[derive(InputObject)]
+pub struct TitleIdInput {
+    pub title_id: String,
 }
 
 // ── Rule Sets ──────────────────────────────────────────────────────────────

@@ -9,7 +9,7 @@ use scryer_infrastructure::external_import::{
 use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx};
 use crate::types::*;
 
-use super::config::ensure_nzbget_routing_entry_for_client;
+use super::config::ensure_download_client_routing_entry_for_client;
 
 const SETTINGS_SCOPE_MEDIA: &str = "media";
 
@@ -313,8 +313,10 @@ impl ExternalImportMutations {
                 Ok(config) => {
                     result.download_clients_created += 1;
                     if scryer_type == "nzbget" || scryer_type == "sabnzbd" {
-                        let _ = ensure_nzbget_routing_entry_for_client(&db, &config.id, &actor.id)
-                            .await;
+                        let _ = ensure_download_client_routing_entry_for_client(
+                            &db, &config.id, &actor.id,
+                        )
+                        .await;
                     }
                 }
                 Err(err) => {

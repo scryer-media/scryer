@@ -609,3 +609,54 @@ pub(crate) async fn find_download_submission_query(
         None => Ok(None),
     }
 }
+
+pub(crate) async fn list_download_submissions_for_title_query(
+    pool: &SqlitePool,
+    title_id: &str,
+) -> AppResult<Vec<DownloadSubmission>> {
+    let rows = sqlx::query(
+        "SELECT title_id, facet, download_client_type, download_client_item_id, source_title
+         FROM download_submissions
+         WHERE title_id = ?",
+    )
+    .bind(title_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        out.push(DownloadSubmission {
+            title_id: row
+                .try_get("title_id")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+            facet: row
+                .try_get("facet")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+            download_client_type: row
+                .try_get("download_client_type")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+            download_client_item_id: row
+                .try_get("download_client_item_id")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+            source_title: row
+                .try_get("source_title")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+        });
+    }
+
+    Ok(out)
+}
+
+pub(crate) async fn delete_download_submissions_for_title_query(
+    pool: &SqlitePool,
+    title_id: &str,
+) -> AppResult<()> {
+    sqlx::query("DELETE FROM download_submissions WHERE title_id = ?")
+        .bind(title_id)
+        .execute(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(())
+}

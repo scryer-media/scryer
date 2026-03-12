@@ -290,6 +290,7 @@ impl ImportStatus {
 #[serde(rename_all = "snake_case")]
 pub enum ImportDecision {
     Imported,
+    Rejected,
     Skipped,
     Conflict,
     Unmatched,
@@ -300,6 +301,7 @@ impl ImportDecision {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Imported => "imported",
+            Self::Rejected => "rejected",
             Self::Skipped => "skipped",
             Self::Conflict => "conflict",
             Self::Unmatched => "unmatched",
@@ -313,6 +315,7 @@ impl ImportDecision {
 pub enum ImportSkipReason {
     AlreadyImported,
     DuplicateFile,
+    PostDownloadRuleBlocked,
     PolicyMismatch,
     UnresolvedIdentity,
     NoVideoFiles,
@@ -325,6 +328,7 @@ impl ImportSkipReason {
         match self {
             Self::AlreadyImported => "already_imported",
             Self::DuplicateFile => "duplicate_file",
+            Self::PostDownloadRuleBlocked => "post_download_rule_blocked",
             Self::PolicyMismatch => "policy_mismatch",
             Self::UnresolvedIdentity => "unresolved_identity",
             Self::NoVideoFiles => "no_video_files",
