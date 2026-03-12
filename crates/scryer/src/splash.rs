@@ -198,3 +198,104 @@ h1 {
   margin: 0 auto 1.5rem;
 }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::{build_splash_router, BootstrapStatus, SplashState};
+    use crate::base_path::BasePath;
+    use crate::middleware::CorsConfig;
+    use axum::body::Body;
+    use axum::http::{header, Request, StatusCode};
+    use axum::routing::get;
+    use axum::Router;
+    use tokio::sync::watch;
+    use tower::ServiceExt;
+
+    fn ready_splash_router(inner: Router) -> Router {
+        let (_status_tx, status_rx) = watch::channel(BootstrapStatus::Ready(inner));
+        build_splash_router(
+            SplashState { status_rx },
+            CorsConfig {
+                allow_all: false,
+                allowed_origins: vec![],
+            },
+            BasePath::from_raw(Some("/scryer/")),
+        )
+    }
+
+    #[tokio::test]
+    async fn prefixed_ready_router_serves_ui_root_without_redirect_loop() {
+        let app = ready_splash_router(Router::new().route("/", get(|| async { StatusCode::OK })));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/scryer/")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn prefixed_ready_router_serves_subpaths() {
+        let app =
+            ready_splash_router(Router::new().route("/login", get(|| async { StatusCode::OK })));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/scryer/login")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn prefixed_splash_router_redirects_root_to_ui_prefix() {
+        let app = ready_splash_router(Router::new().route("/", get(|| async { StatusCode::OK })));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("/scryer/")
+        );
+    }
+
+    #[tokio::test]
+    async fn prefixed_splash_health_uses_base_path() {
+        let app = ready_splash_router(Router::new().route("/", get(|| async { StatusCode::OK })));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/scryer/health")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+}

@@ -36,6 +36,15 @@ function renderMetadataResultKey(section: string, tvdbId: string, name: string, 
   return `${section}-${tvdbId}-${name}-${year ?? ""}`;
 }
 
+function SearchSectionLoading({ label }: { label: string }) {
+  return (
+    <div className="flex min-h-20 items-center gap-3 rounded-lg border border-dashed border-border/80 bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+      <Loader2 className="h-4 w-4 animate-spin text-emerald-500" />
+      <span>{label}</span>
+    </div>
+  );
+}
+
 export function MobileSearchOverlay({
   onClose,
   onOpenOverview,
@@ -66,9 +75,9 @@ export function MobileSearchOverlay({
     };
   }, []);
 
-  const hasAnyMatches =
-    searchState.catalogSearchResults.length > 0 ||
-    FACET_REGISTRY.some((f) => (searchState.metadataSearchResults[f.metadataKey] ?? []).length > 0);
+  const hasMetadataMatches = FACET_REGISTRY.some(
+    (f) => (searchState.metadataSearchResults[f.metadataKey] ?? []).length > 0,
+  );
 
   const catalogSearchSections = React.useMemo(
     () => Object.fromEntries(
@@ -403,16 +412,24 @@ export function MobileSearchOverlay({
     ],
   );
 
-  const renderCatalogSection = (items: import("@/lib/types").TitleRecord[], facet: Facet) => {
-    if (items.length === 0) return null;
+  const renderCatalogSection = (
+    items: import("@/lib/types").TitleRecord[],
+    facet: Facet,
+    loading: boolean,
+  ) => {
+    if (!loading && items.length === 0) return null;
     return (
       <div className="space-y-2">
         <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {sectionLabelForFacet(t, facet)}
         </h4>
-        <div className="space-y-2">
-          {items.slice(0, 3).map((title) => renderCatalogItem(title, facet))}
-        </div>
+        {loading ? (
+          <SearchSectionLoading label={t("label.loading")} />
+        ) : (
+          <div className="space-y-2">
+            {items.slice(0, 3).map((title) => renderCatalogItem(title, facet))}
+          </div>
+        )}
       </div>
     );
   };
@@ -421,21 +438,29 @@ export function MobileSearchOverlay({
     items: MetadataTvdbSearchItem[],
     facet: Facet,
     section: string,
+    loading: boolean,
   ) => {
-    if (items.length === 0) return null;
+    if (!loading && items.length === 0) return null;
     return (
       <div className="space-y-2">
         <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {sectionLabelForFacet(t, facet)}
         </h4>
-        <div className="space-y-2">
-          {items.slice(0, 3).map((result) => renderMetadataItem(result, facet, section))}
-        </div>
+        {loading ? (
+          <SearchSectionLoading label={t("label.loading")} />
+        ) : (
+          <div className="space-y-2">
+            {items.slice(0, 3).map((result) => renderMetadataItem(result, facet, section))}
+          </div>
+        )}
       </div>
     );
   };
 
   const hasCatalog = catalogSearchSections.movie.length > 0 || catalogSearchSections.tv.length > 0 || catalogSearchSections.anime.length > 0;
+  const showCatalogSection = searchState.catalogSearchLoading || hasCatalog;
+  const showMetadataSection = searchState.metadataSearchLoading || hasMetadataMatches;
+  const showSectionResults = showCatalogSection || showMetadataSection;
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-background">
@@ -479,23 +504,38 @@ export function MobileSearchOverlay({
 
       {/* Scrollable results */}
       <div className="flex-1 overflow-y-auto px-3 py-4 pb-safe">
-        {hasAnyMatches ? (
+        {showSectionResults ? (
           <div className="space-y-6">
-            {hasCatalog ? (
+            {showCatalogSection ? (
               <section className="space-y-3">
                 <h3 className="text-sm font-semibold text-foreground">{t("search.catalog")}</h3>
                 <div className="space-y-3">
-                  {FACET_REGISTRY.map((f) => renderCatalogSection(catalogSearchSections[f.id] ?? [], f.id))}
+                  {FACET_REGISTRY.map((f) =>
+                    renderCatalogSection(
+                      catalogSearchSections[f.id] ?? [],
+                      f.id,
+                      searchState.catalogSearchLoading,
+                    ),
+                  )}
                 </div>
               </section>
             ) : null}
 
-            <section className="space-y-3">
-              <h3 className="text-sm font-semibold text-foreground">{t("search.metadataSearch")}</h3>
-              <div className="space-y-3">
-                {FACET_REGISTRY.map((f) => renderMetadataSection(searchState.metadataSearchResults[f.metadataKey] ?? [], f.id, f.metadataKey))}
-              </div>
-            </section>
+            {showMetadataSection ? (
+              <section className="space-y-3">
+                <h3 className="text-sm font-semibold text-foreground">{t("search.metadataSearch")}</h3>
+                <div className="space-y-3">
+                  {FACET_REGISTRY.map((f) =>
+                    renderMetadataSection(
+                      searchState.metadataSearchResults[f.metadataKey] ?? [],
+                      f.id,
+                      f.metadataKey,
+                      searchState.metadataSearchLoading,
+                    ),
+                  )}
+                </div>
+              </section>
+            ) : null}
           </div>
         ) : searchState.searching ? (
           <div className="flex items-center gap-3 py-6">

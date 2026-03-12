@@ -77,6 +77,8 @@ export interface UseGlobalSearchResult {
   setGlobalSearch: (value: string) => void;
   globalSearchInputRef: React.RefObject<HTMLInputElement | null>;
   searching: boolean;
+  catalogSearchLoading: boolean;
+  metadataSearchLoading: boolean;
   searchResults: Release[];
   tvdbCandidates: MetadataTvdbSearchItem[];
   selectedTvdbId: string | null;
@@ -158,6 +160,8 @@ export function useGlobalSearch({
   const [globalSearch, setGlobalSearch] = useState("");
   const globalSearchInputRef = useRef<HTMLInputElement>(null);
   const [searching, setSearching] = useState(false);
+  const [catalogSearchLoading, setCatalogSearchLoading] = useState(false);
+  const [metadataSearchLoading, setMetadataSearchLoading] = useState(false);
   const [searchResults, setSearchResults] = useState<Release[]>([]);
   const [tvdbCandidates, setTvdbCandidates] = useState<MetadataTvdbSearchItem[]>([]);
   const [selectedTvdbId, setSelectedTvdbId] = useState<string | null>(null);
@@ -462,6 +466,8 @@ export function useGlobalSearch({
     async (query: string) => {
       const trimmed = query.trim();
       if (!trimmed) {
+        setCatalogSearchLoading(false);
+        setMetadataSearchLoading(false);
         setCatalogSearchResults((previous) => (previous.length === 0 ? previous : []));
         setMetadataSearchResults((previous) => {
           if (isMetadataEmpty(previous)) {
@@ -475,6 +481,8 @@ export function useGlobalSearch({
 
       const requestId = ++autocompleteRequestId.current;
       setSearching(true);
+      setCatalogSearchLoading(true);
+      setMetadataSearchLoading(true);
 
       // Abort previous in-flight autocomplete HTTP requests so cancellation
       // propagates through Rust all the way to the SMG database query.
@@ -492,66 +500,76 @@ export function useGlobalSearch({
       const catalogPromise = client.query(titlesQuery, {
         query: trimmed,
         facet: null,
-      }, { fetch: abortableFetch }).toPromise().then(async ({ data, error }) => {
-        if (error) throw error;
-        if (requestId !== autocompleteRequestId.current) return;
-        const catalogEntries = data.titles || [];
-        const enriched = await Promise.all(
-          catalogEntries.map((title: TitleRecord) => resolveCatalogPosterUrl(title)),
-        );
-        if (requestId !== autocompleteRequestId.current) return;
-        const next = enriched.slice(0, AUTOCOMPLETE_LIMIT);
-        setCatalogSearchResults((previous) =>
-          previous.length === next.length &&
-          previous.every(
-            (item, index) =>
-              item.id === next[index]?.id &&
-              (item.posterUrl ?? null) === (next[index]?.posterUrl ?? null),
-          )
-            ? previous
-            : next,
-        );
-      });
+      }, { fetch: abortableFetch }).toPromise()
+        .then(async ({ data, error }) => {
+          if (error) throw error;
+          if (requestId !== autocompleteRequestId.current) return;
+          const catalogEntries = data.titles || [];
+          const enriched = await Promise.all(
+            catalogEntries.map((title: TitleRecord) => resolveCatalogPosterUrl(title)),
+          );
+          if (requestId !== autocompleteRequestId.current) return;
+          const next = enriched.slice(0, AUTOCOMPLETE_LIMIT);
+          setCatalogSearchResults((previous) =>
+            previous.length === next.length &&
+            previous.every(
+              (item, index) =>
+                item.id === next[index]?.id &&
+                (item.posterUrl ?? null) === (next[index]?.posterUrl ?? null),
+            )
+              ? previous
+              : next,
+          );
+        })
+        .finally(() => {
+          if (requestId !== autocompleteRequestId.current) return;
+          setCatalogSearchLoading(false);
+        });
 
       const metadataPromise = client.query(searchMetadataMultiQuery, {
         query: trimmed,
         limit: AUTOCOMPLETE_LIMIT,
         language: uiLanguage,
-      }, { fetch: abortableFetch }).toPromise().then(({ data, error }) => {
-        if (error) throw error;
-        if (requestId !== autocompleteRequestId.current) return;
-        const multi = data.searchMetadataMulti ?? { movies: [], series: [], anime: [] };
-        const movieResults = sortByRelevance(
-          filterMetadataSearchResults("movie", (multi.movies || []) as MetadataTvdbSearchItem[]),
-          trimmed,
-        );
-        const animeResults = sortByRelevance(
-          filterMetadataSearchResults("anime", (multi.anime || []) as MetadataTvdbSearchItem[]),
-          trimmed,
-        );
-        const animeTvdbIds = new Set(
-          animeResults.map((item) => String(item.tvdbId).trim()),
-        );
-        const seriesResults = sortByRelevance(
-          filterMetadataSearchResults("tv", (multi.series || []) as MetadataTvdbSearchItem[]).filter(
-            (item) => !animeTvdbIds.has(String(item.tvdbId).trim()),
-          ),
-          trimmed,
-        );
-        const nextMetadata: MetadataSearchResults = {
-          movie: movieResults,
-          series: seriesResults,
-          anime: animeResults,
-        };
-        setMetadataSearchResults((previous) => {
-          const unchanged = Object.keys(nextMetadata).every((key) => {
-            const prev = previous[key] ?? [];
-            const next = nextMetadata[key] ?? [];
-            return prev.length === next.length && prev.every((item, i) => item.tvdbId === next[i]?.tvdbId);
+      }, { fetch: abortableFetch }).toPromise()
+        .then(({ data, error }) => {
+          if (error) throw error;
+          if (requestId !== autocompleteRequestId.current) return;
+          const multi = data.searchMetadataMulti ?? { movies: [], series: [], anime: [] };
+          const movieResults = sortByRelevance(
+            filterMetadataSearchResults("movie", (multi.movies || []) as MetadataTvdbSearchItem[]),
+            trimmed,
+          );
+          const animeResults = sortByRelevance(
+            filterMetadataSearchResults("anime", (multi.anime || []) as MetadataTvdbSearchItem[]),
+            trimmed,
+          );
+          const animeTvdbIds = new Set(
+            animeResults.map((item) => String(item.tvdbId).trim()),
+          );
+          const seriesResults = sortByRelevance(
+            filterMetadataSearchResults("tv", (multi.series || []) as MetadataTvdbSearchItem[]).filter(
+              (item) => !animeTvdbIds.has(String(item.tvdbId).trim()),
+            ),
+            trimmed,
+          );
+          const nextMetadata: MetadataSearchResults = {
+            movie: movieResults,
+            series: seriesResults,
+            anime: animeResults,
+          };
+          setMetadataSearchResults((previous) => {
+            const unchanged = Object.keys(nextMetadata).every((key) => {
+              const prev = previous[key] ?? [];
+              const next = nextMetadata[key] ?? [];
+              return prev.length === next.length && prev.every((item, i) => item.tvdbId === next[i]?.tvdbId);
+            });
+            return unchanged ? previous : nextMetadata;
           });
-          return unchanged ? previous : nextMetadata;
+        })
+        .finally(() => {
+          if (requestId !== autocompleteRequestId.current) return;
+          setMetadataSearchLoading(false);
         });
-      });
 
       const [catalogResult, metadataResult] = await Promise.allSettled([
         catalogPromise,
@@ -599,6 +617,8 @@ export function useGlobalSearch({
     if (trimmed.length < AUTOCOMPLETE_MIN_CHARS) {
       autocompleteAbortRef.current?.abort();
       autocompleteAbortRef.current = null;
+      setCatalogSearchLoading(false);
+      setMetadataSearchLoading(false);
       setCatalogSearchResults((previous) => (previous.length === 0 ? previous : []));
       setMetadataSearchResults((previous) => {
         if (previous.movie.length === 0 && previous.series.length === 0 && previous.anime.length === 0) {
@@ -834,6 +854,8 @@ export function useGlobalSearch({
     setGlobalSearch,
     globalSearchInputRef,
     searching,
+    catalogSearchLoading,
+    metadataSearchLoading,
     searchResults,
     tvdbCandidates,
     selectedTvdbId,
