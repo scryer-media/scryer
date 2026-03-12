@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 mod common;
 
 use serde_json::{json, Value};

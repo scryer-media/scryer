@@ -21,7 +21,7 @@ pub(crate) struct ImportedFileAcceptance {
     pub scan_error: Option<String>,
 }
 
-pub(crate) struct ImportedFileRejection {
+pub struct ImportedFileRejection {
     pub message: String,
     pub recycle_reason: &'static str,
     pub skip_reason: Option<ImportSkipReason>,
