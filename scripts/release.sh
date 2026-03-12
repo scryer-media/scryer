@@ -2,7 +2,7 @@
 #
 # release.sh — pre-release validation and tagging script
 #
-# Validates: cargo fmt · cargo clippy (linux ci target) · cargo audit · cargo nextest · web lint/build
+# Validates: cargo fmt · cargo audit · cargo nextest · cargo clippy (linux ci target) · web lint/build
 # Then:      bumps crates/scryer version · signed tag · push
 #
 # Usage:
@@ -90,13 +90,6 @@ fi
 
 ok "Pre-flight OK"
 
-# ── Rust clippy (before cargo update so failures don't dirty Cargo.lock) ───────
-step "Running cargo clippy (linux ci target)"
-
-"$REPO_ROOT/scripts/clippy-ci.sh" --linux-only 2>&1 || die "Clippy errors — fix before releasing"
-
-ok "Clippy passed"
-
 # ── Release group database validation (AI-assisted) ──────────────────────────
 step "Validating release group database"
 
@@ -117,6 +110,13 @@ step "Validating release group database"
 #     fi
 # fi
 warn "Claude release group validation temporarily disabled — skipping"
+
+# ── cargo fmt ──────────────────────────────────────────────────────────────────
+step "Running cargo fmt --all --check"
+
+cargo fmt --all --check 2>&1 || die "Rust formatting drift detected — fix before releasing"
+
+ok "cargo fmt passed"
 
 # ── cargo update (bump Cargo.lock to latest compatible deps) ───────────────────
 step "Updating Cargo.lock (cargo update)"
@@ -154,13 +154,6 @@ done
 cargo audit "${CARGO_AUDIT_ARGS[@]}" 2>&1 || die "cargo audit found vulnerabilities — fix before releasing"
 ok "cargo audit passed"
 
-# ── cargo fmt ──────────────────────────────────────────────────────────────────
-step "Running cargo fmt --all --check"
-
-cargo fmt --all --check 2>&1 || die "Rust formatting drift detected — fix before releasing"
-
-ok "cargo fmt passed"
-
 # ── Rust tests ─────────────────────────────────────────────────────────────────
 step "Running Rust tests (cargo nextest run --workspace --locked)"
 
@@ -172,6 +165,13 @@ fi
 cargo nextest run --workspace --locked 2>&1 || die "Rust tests failed — fix before releasing"
 
 ok "Rust tests passed"
+
+# ── Rust clippy ────────────────────────────────────────────────────────────────
+step "Running cargo clippy (linux ci target)"
+
+"$REPO_ROOT/scripts/clippy-ci.sh" --linux-only 2>&1 || die "Clippy errors — fix before releasing"
+
+ok "Clippy passed"
 
 # ── npm audit fix ─────────────────────────────────────────────────────────────
 step "Running npm audit fix"
