@@ -976,7 +976,10 @@ impl AppUseCase {
                     let grab_envelope = crate::activity::NotificationEnvelope {
                         event_type: NotificationEventType::Grab,
                         title: format!("Grabbed: {}", title.name),
-                        body: format!("RSS sync grabbed '{}' for {} (score: {})", best.title, title.name, candidate_score),
+                        body: format!(
+                            "RSS sync grabbed '{}' for {} (score: {})",
+                            best.title, title.name, candidate_score
+                        ),
                         facet: Some(format!("{:?}", title.facet).to_lowercase()),
                         metadata: grab_meta,
                     };

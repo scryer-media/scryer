@@ -502,12 +502,18 @@ impl AppUseCase {
                 {
                     let mut grab_meta = HashMap::new();
                     grab_meta.insert("title_name".to_string(), serde_json::json!(title.name));
-                    grab_meta.insert("release_title".to_string(), serde_json::json!(pr.release_title));
+                    grab_meta.insert(
+                        "release_title".to_string(),
+                        serde_json::json!(pr.release_title),
+                    );
                     grab_meta.insert("score".to_string(), serde_json::json!(pr.release_score));
                     let grab_envelope = crate::activity::NotificationEnvelope {
                         event_type: NotificationEventType::Grab,
                         title: format!("Grabbed: {}", title.name),
-                        body: format!("Pending release '{}' grabbed for {} (score: {})", pr.release_title, title.name, pr.release_score),
+                        body: format!(
+                            "Pending release '{}' grabbed for {} (score: {})",
+                            pr.release_title, title.name, pr.release_score
+                        ),
                         facet: Some(format!("{:?}", title.facet).to_lowercase()),
                         metadata: grab_meta,
                     };

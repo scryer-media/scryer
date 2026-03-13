@@ -734,14 +734,27 @@ async fn process_single_wanted_item(
                                     .map(|d| d.preference_score)
                                     .unwrap_or(0);
                                 let mut grab_meta = HashMap::new();
-                                grab_meta.insert("title_name".to_string(), serde_json::json!(title.name));
-                                grab_meta.insert("release_title".to_string(), serde_json::json!(best_pack.title));
-                                grab_meta.insert("indexer".to_string(), serde_json::json!(best_pack.source));
-                                grab_meta.insert("score".to_string(), serde_json::json!(pack_score));
+                                grab_meta.insert(
+                                    "title_name".to_string(),
+                                    serde_json::json!(title.name),
+                                );
+                                grab_meta.insert(
+                                    "release_title".to_string(),
+                                    serde_json::json!(best_pack.title),
+                                );
+                                grab_meta.insert(
+                                    "indexer".to_string(),
+                                    serde_json::json!(best_pack.source),
+                                );
+                                grab_meta
+                                    .insert("score".to_string(), serde_json::json!(pack_score));
                                 let grab_envelope = crate::activity::NotificationEnvelope {
                                     event_type: NotificationEventType::Grab,
                                     title: format!("Grabbed: {} S{:0>2}", title.name, season_num),
-                                    body: format!("Season pack '{}' grabbed for {}", best_pack.title, title.name),
+                                    body: format!(
+                                        "Season pack '{}' grabbed for {}",
+                                        best_pack.title, title.name
+                                    ),
                                     facet: Some(format!("{:?}", title.facet).to_lowercase()),
                                     metadata: grab_meta,
                                 };
@@ -1100,7 +1113,10 @@ async fn process_single_wanted_item(
         let grab_envelope = crate::activity::NotificationEnvelope {
             event_type: NotificationEventType::Grab,
             title: format!("Grabbed: {}", title.name),
-            body: format!("'{}' grabbed for {} (score: {})", best.title, title.name, candidate_score),
+            body: format!(
+                "'{}' grabbed for {} (score: {})",
+                best.title, title.name, candidate_score
+            ),
             facet: Some(format!("{:?}", title.facet).to_lowercase()),
             metadata: grab_meta,
         };
@@ -1292,7 +1308,10 @@ async fn process_single_wanted_item(
             let grab_envelope = crate::activity::NotificationEnvelope {
                 event_type: NotificationEventType::Grab,
                 title: format!("Grabbed: {}", title.name),
-                body: format!("'{}' auto-grabbed for {} (score: {})", best.title, title.name, candidate_score),
+                body: format!(
+                    "'{}' auto-grabbed for {} (score: {})",
+                    best.title, title.name, candidate_score
+                ),
                 facet: Some(format!("{:?}", title.facet).to_lowercase()),
                 metadata: grab_meta,
             };

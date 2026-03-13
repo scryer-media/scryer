@@ -32,11 +32,7 @@ pub async fn start_notification_dispatcher(app: AppUseCase, cancel: Cancellation
     }
 }
 
-async fn dispatch_event(
-    app: &AppUseCase,
-    event: &ActivityEvent,
-    envelope: &NotificationEnvelope,
-) {
+async fn dispatch_event(app: &AppUseCase, event: &ActivityEvent, envelope: &NotificationEnvelope) {
     let event_type_str = envelope.event_type.as_str();
     debug!(event_type = event_type_str, title_id = ?event.title_id, "dispatching notification");
 

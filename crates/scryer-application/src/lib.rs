@@ -16,7 +16,6 @@ mod app_usecase_integration;
 pub(crate) mod app_usecase_library;
 mod app_usecase_notifications;
 mod app_usecase_pending;
-mod notification_dispatcher;
 mod app_usecase_plugins;
 pub mod app_usecase_post_processing;
 pub(crate) mod app_usecase_rss;
@@ -32,6 +31,7 @@ pub(crate) mod import_checks;
 mod library_rename;
 mod library_scan;
 pub(crate) mod nfo;
+mod notification_dispatcher;
 mod null_repositories;
 mod post_download_gate;
 mod quality_profile;
@@ -67,7 +67,6 @@ pub use acquisition_policy::AcquisitionThresholds;
 pub use activity::{
     ActivityChannel, ActivityEvent, ActivityKind, ActivitySeverity, NotificationEnvelope,
 };
-pub use notification_dispatcher::start_notification_dispatcher;
 pub use app_usecase_acquisition::start_background_acquisition_poller;
 pub use app_usecase_backup::BackupService;
 pub use app_usecase_catalog::start_background_hydration_loop;
@@ -102,6 +101,7 @@ pub use library_scan::{
     MovieMetadata, MultiMetadataSearchResult, RichMetadataSearchItem, SeasonMetadata,
     SeriesMetadata,
 };
+pub use notification_dispatcher::start_notification_dispatcher;
 pub use null_repositories::{
     NullDownloadSubmissionRepository, NullFileImporter, NullHousekeepingRepository,
     NullImportRepository, NullIndexerStatsTracker, NullMediaFileRepository,

@@ -103,17 +103,19 @@ pub(crate) fn mount_router(router: Router, base_path: &BasePath) -> Router {
             }),
         )
         .nest_service(&base_prefix, router)
-        .layer(axum::middleware::from_fn(move |req: Request, next: Next| {
-            let bare = bare.clone();
-            let target = target.clone();
-            async move {
-                if req.uri().path() == bare {
-                    Redirect::temporary(&target).into_response()
-                } else {
-                    next.run(req).await
+        .layer(axum::middleware::from_fn(
+            move |req: Request, next: Next| {
+                let bare = bare.clone();
+                let target = target.clone();
+                async move {
+                    if req.uri().path() == bare {
+                        Redirect::temporary(&target).into_response()
+                    } else {
+                        next.run(req).await
+                    }
                 }
-            }
-        }))
+            },
+        ))
 }
 
 #[cfg(test)]
@@ -191,7 +193,12 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
         assert_eq!(
-            response.headers().get("location").unwrap().to_str().unwrap(),
+            response
+                .headers()
+                .get("location")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "/scryer/"
         );
     }

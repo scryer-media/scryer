@@ -681,9 +681,7 @@ impl MetadataGatewayClient {
         debug!(status = %status, body_len = raw_text.len(), "metadata gateway response");
 
         // On 401 cert rejection, invalidate enrollment and retry once with fresh creds.
-        if status == reqwest::StatusCode::UNAUTHORIZED
-            && raw_text.contains("certificate")
-        {
+        if status == reqwest::StatusCode::UNAUTHORIZED && raw_text.contains("certificate") {
             if !self.invalidate_enrollment().await {
                 return Err(AppError::Repository(format!(
                     "metadata gateway cert rejected ({status}), re-enrollment on cooldown: {raw_text}"
