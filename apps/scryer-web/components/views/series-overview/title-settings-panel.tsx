@@ -116,8 +116,8 @@ export function TitleSettingsPanel({
 
   return (
     <div className="p-4">
-      <div className="flex flex-wrap items-end gap-4">
-        <div className="min-w-[200px] flex-1">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="min-w-0">
           <label className="mb-1 block text-xs font-medium text-muted-foreground">
             {t("title.qualityProfile")}
           </label>
@@ -142,11 +142,11 @@ export function TitleSettingsPanel({
           </Select>
         </div>
 
-        <div className="min-w-[280px] flex-[2]">
+        <div className="min-w-0 xl:col-span-2">
           <label className="mb-1 block text-xs font-medium text-muted-foreground">
             {t("title.rootFolder")}
           </label>
-          <div className="flex gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row">
             <Input
               className="h-9 font-mono text-sm"
               value={rootFolderDraft}
@@ -159,7 +159,7 @@ export function TitleSettingsPanel({
             {rootFolderDraft.trim() !== (currentRootFolder || defaultRootFolder) && (
               <Button
                 size="sm"
-                className="h-9"
+                className="h-9 sm:self-auto"
                 onClick={() => void handleRootFolderSave()}
                 disabled={saving}
               >
@@ -169,7 +169,7 @@ export function TitleSettingsPanel({
           </div>
         </div>
 
-        <div className="min-w-[160px]">
+        <div className="min-w-0">
           <label className="mb-1 block text-xs font-medium text-muted-foreground">
             {t("search.addConfigSeasonFolder")}
           </label>
@@ -190,7 +190,7 @@ export function TitleSettingsPanel({
 
         {title.facet === "anime" ? (
           <>
-            <div className="min-w-[180px]">
+            <div className="min-w-0">
               <label className="mb-1 block text-xs font-medium text-muted-foreground">
                 {t("settings.fillerPolicyLabel")}
               </label>
@@ -210,7 +210,7 @@ export function TitleSettingsPanel({
               </Select>
             </div>
 
-            <div className="min-w-[180px]">
+            <div className="min-w-0">
               <label className="mb-1 block text-xs font-medium text-muted-foreground">
                 {t("settings.recapPolicyLabel")}
               </label>

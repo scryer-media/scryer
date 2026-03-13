@@ -12,6 +12,7 @@ import type {
   MoreLinkContentArg,
 } from "@fullcalendar/core";
 import { Card, CardContent } from "@/components/ui/card";
+import { useIsMobile } from "@/lib/hooks/use-mobile";
 
 export type CalendarEpisodeItem = {
   id: string;
@@ -110,6 +111,7 @@ export function CalendarView({
   onEpisodeClick,
 }: CalendarViewProps) {
   const t = useTranslate();
+  const isMobile = useIsMobile();
   const [facetFilter, setFacetFilter] = useState<string[]>(["anime", "movie", "tv"]);
 
   const filteredEpisodes = useMemo(
@@ -209,7 +211,7 @@ export function CalendarView({
   return (
     <Card>
       <CardContent className="pt-6">
-        <div className="mb-3 flex items-center gap-2">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
           {Object.entries(FACET_LABELS).map(([facet, label]) => {
             const active = facetFilter.includes(facet);
             return (
@@ -242,8 +244,9 @@ export function CalendarView({
         )}
         <div className="fc-scryer">
           <FullCalendar
+            key={isMobile ? "calendar-mobile" : "calendar-desktop"}
             plugins={[dayGridPlugin]}
-            initialView="dayGridWeek"
+            initialView={isMobile ? "dayGridMonth" : "dayGridWeek"}
             events={events}
             eventClick={handleEventClick}
             eventDidMount={handleEventDidMount}
@@ -272,16 +275,24 @@ export function CalendarView({
             }}
             moreLinkClassNames={() => ["fc-scryer-more-link"]}
             moreLinkContent={renderMoreLinkContent}
-            headerToolbar={{
-              left: "prev,next today",
-              center: "title",
-              right: "dayGridMonth,dayGridWeek",
-            }}
+            headerToolbar={
+              isMobile
+                ? {
+                    left: "prev,next",
+                    center: "title",
+                    right: "today",
+                  }
+                : {
+                    left: "prev,next today",
+                    center: "title",
+                    right: "dayGridMonth,dayGridWeek",
+                  }
+            }
             views={{
               dayGridMonth: {
                 fixedWeekCount: true,
                 showNonCurrentDates: true,
-                dayMaxEvents: 3,
+                dayMaxEvents: isMobile ? 2 : 3,
               },
               dayGridWeek: {
                 dayMaxEvents: false,

@@ -618,17 +618,22 @@ export const RootHeader = React.memo(function RootHeader({
         className="relative sticky top-0 z-50 border-b border-border bg-background/90 pt-safe backdrop-blur"
       >
         <RouteCommandPalette config={routeCommandPalette} />
-        <div className="mx-auto flex w-full max-w-[1480px] items-center gap-4 px-3 py-3">
-          <div className="flex items-center" style={{ fontFamily: "var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif" }}>
+        <div className="mx-auto flex w-full max-w-[1480px] items-center gap-3 px-3 py-3 pr-14 sm:gap-4 sm:pr-3">
+          <div
+            className="shrink-0"
+            style={{ fontFamily: "var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif" }}
+          >
             <ScryerLogo />
-            <span data-slot="brand-wordmark" className="ml-3 text-2xl font-bold tracking-tight text-foreground">Scryer</span>
+            <span data-slot="brand-wordmark" className="ml-3 hidden text-2xl font-bold tracking-tight text-foreground sm:inline">
+              Scryer
+            </span>
           </div>
           <form
-            className="relative ml-auto flex w-full items-center gap-3"
+            className="relative ml-auto flex w-full min-w-0 items-center gap-3"
             onSubmit={handleSearchSubmit}
           >
             <div ref={searchShellRef} className="relative flex-1">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-7 w-7 -translate-y-1/2 text-muted-foreground" />
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground sm:h-7 sm:w-7" />
               <Input
                 ref={searchState.globalSearchInputRef}
                 value={searchState.globalSearch}
@@ -637,7 +642,7 @@ export const RootHeader = React.memo(function RootHeader({
                 onKeyDown={handleSearchEscape}
                 data-ui="global-search"
                 className={cn(
-                  "h-14 w-full pl-12 text-xl placeholder:text-xl md:text-xl md:placeholder:text-xl placeholder-heading-font",
+                  "h-12 w-full pl-10 pr-3 text-base placeholder:text-base sm:h-14 sm:pl-12 sm:text-xl sm:placeholder:text-xl placeholder-heading-font",
                   theme !== "pride" && "border-emerald-500/70 focus-visible:border-emerald-400 focus-visible:ring-emerald-400/45",
                 )}
                 placeholder={t("search.globalPlaceholder")}
@@ -720,7 +725,7 @@ export const RootHeader = React.memo(function RootHeader({
             </div>
           </form>
         </div>
-        <div className="pointer-events-none absolute right-3 top-0 z-20 flex pt-safe">
+      <div className="pointer-events-none absolute right-3 top-0 z-20 flex pt-safe">
           {mounted ? (
             <Button
               type="button"
@@ -730,7 +735,7 @@ export const RootHeader = React.memo(function RootHeader({
               title={getThemeLabel(theme)}
               aria-label={`Switch theme (current: ${getThemeLabel(theme)})`}
               className={cn(
-                "pointer-events-auto mt-3",
+                "pointer-events-auto mt-2 sm:mt-3",
                 theme === "pride" && "text-pink-200 hover:text-pink-100",
               )}
             >

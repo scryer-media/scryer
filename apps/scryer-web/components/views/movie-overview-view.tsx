@@ -226,9 +226,8 @@ function TitleSettingsPanel({
 
   return (
     <div className="p-4">
-      <div className="flex flex-wrap items-end gap-4">
-        {/* Quality Profile */}
-        <div className="min-w-[200px] flex-1">
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="min-w-0">
           <label className="mb-1 block text-xs font-medium text-muted-foreground">
             {t("title.qualityProfile")}
           </label>
@@ -253,12 +252,11 @@ function TitleSettingsPanel({
           </Select>
         </div>
 
-        {/* Root Folder */}
-        <div className="min-w-[280px] flex-[2]">
+        <div className="min-w-0">
           <label className="mb-1 block text-xs font-medium text-muted-foreground">
             {t("title.rootFolder")}
           </label>
-          <div className="flex gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row">
             <Input
               className="h-9 font-mono text-sm"
               value={rootFolderDraft}
@@ -271,7 +269,7 @@ function TitleSettingsPanel({
             {rootFolderDraft.trim() !== (currentRootFolder || defaultRootFolder) && (
               <Button
                 size="sm"
-                className="h-9"
+                className="h-9 sm:self-auto"
                 onClick={() => void handleRootFolderSave()}
                 disabled={saving}
               >
@@ -441,30 +439,31 @@ export function MovieOverviewView({
       {/* title header with poster */}
       <Card>
         <CardContent className="p-4">
-          <div className="flex gap-5">
-            {/* poster */}
-            <div className="shrink-0">
+          <div className="flex flex-col gap-4 sm:flex-row sm:gap-5">
+            <div className="mx-auto shrink-0 sm:mx-0">
               {posterUrl ? (
                 <img
                   src={posterUrl}
                   alt={title.name}
-                  className="h-auto w-[180px] rounded-lg object-cover shadow-lg block"
+                  className="block h-auto w-32 rounded-lg object-cover shadow-lg sm:w-[180px]"
                 />
               ) : (
-                <div className="flex h-[270px] w-[180px] items-center justify-center rounded-lg bg-muted text-sm text-muted-foreground/60">
+                <div className="flex h-48 w-32 items-center justify-center rounded-lg bg-muted text-sm text-muted-foreground/60 sm:h-[270px] sm:w-[180px]">
                   No Poster
                 </div>
               )}
             </div>
 
-            {/* title info */}
             <div className="min-w-0 flex-1">
-              <h1 className="text-2xl font-bold text-foreground">
+              <h1 className="text-xl font-bold text-foreground sm:text-2xl">
                 {title.name}
-                {year ? <span className="ml-2 text-lg font-normal text-muted-foreground">({year})</span> : null}
+                {year ? (
+                  <span className="block text-base font-normal text-muted-foreground sm:ml-2 sm:inline sm:text-lg">
+                    ({year})
+                  </span>
+                ) : null}
               </h1>
 
-              {/* meta chips */}
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${title.monitored ? "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300" : "bg-accent text-muted-foreground"}`}>
                   {title.monitored ? "Monitored" : "Unmonitored"}
@@ -577,7 +576,6 @@ export function MovieOverviewView({
                 <p className="mt-4 text-sm leading-relaxed text-muted-foreground">{overview}</p>
               ) : null}
 
-              {/* external IDs */}
               <div className="mt-3 flex flex-wrap gap-3 text-sm">
                 {imdbId ? (
                   <a
@@ -605,7 +603,7 @@ export function MovieOverviewView({
                   ))}
               </div>
 
-              <p className="mt-2 text-right text-xs text-muted-foreground/60">Added {formatDate(title.createdAt)}</p>
+              <p className="mt-2 text-left text-xs text-muted-foreground/60 sm:text-right">Added {formatDate(title.createdAt)}</p>
             </div>
           </div>
         </CardContent>
@@ -638,12 +636,13 @@ export function MovieOverviewView({
       {/* files on disk */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <CardTitle className="flex items-center gap-2 text-base">
               <FolderOpen className="h-4 w-4" />
               Files on Disk
             </CardTitle>
             <Button
+              className="w-full sm:w-auto"
               size="sm"
               variant="secondary"
               onClick={onPreviewRename}

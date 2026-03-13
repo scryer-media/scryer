@@ -341,26 +341,26 @@ export function SeriesOverviewView({
 
       <Card>
         <CardContent className="p-4">
-          <div className="flex gap-5">
-            <div className="shrink-0">
+          <div className="flex flex-col gap-4 sm:flex-row sm:gap-5">
+            <div className="mx-auto shrink-0 sm:mx-0">
               {title.posterUrl ? (
                 <img
                   src={title.posterUrl}
                   alt={title.name}
-                  className="h-auto w-[180px] rounded-lg object-cover shadow-lg block"
+                  className="block h-auto w-32 rounded-lg object-cover shadow-lg sm:w-[180px]"
                 />
               ) : (
-                <div className="flex h-[270px] w-[180px] items-center justify-center rounded-lg bg-muted text-sm text-muted-foreground/60">
+                <div className="flex h-48 w-32 items-center justify-center rounded-lg bg-muted text-sm text-muted-foreground/60 sm:h-[270px] sm:w-[180px]">
                   No Poster
                 </div>
               )}
             </div>
 
             <div className="min-w-0 flex-1">
-              <h1 className="text-2xl font-bold text-foreground">
+              <h1 className="text-xl font-bold text-foreground sm:text-2xl">
                 {title.name}
                 {title.year ? (
-                  <span className="ml-2 text-lg font-normal text-muted-foreground">
+                  <span className="block text-base font-normal text-muted-foreground sm:ml-2 sm:inline sm:text-lg">
                     ({title.year})
                   </span>
                 ) : null}
@@ -433,7 +433,7 @@ export function SeriesOverviewView({
                 </p>
               ) : null}
 
-              <p className="mt-2 text-right text-xs text-muted-foreground/60">
+              <p className="mt-2 text-left text-xs text-muted-foreground/60 sm:text-right">
                 Added {formatDate(title.createdAt)}
               </p>
             </div>
@@ -466,13 +466,14 @@ export function SeriesOverviewView({
       <div>
         <Card className="relative overflow-hidden">
           <CardHeader>
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <CardTitle className="flex items-center gap-2 text-base">
                 <FolderOpen className="h-4 w-4" />
                 Seasons and Episodes
               </CardTitle>
               {onOpenManualImport && completedDownloads && completedDownloads.length > 0 ? (
                 <Button
+                  className="w-full sm:w-auto"
                   variant="outline"
                   size="sm"
                   onClick={() => onOpenManualImport(completedDownloads[0])}

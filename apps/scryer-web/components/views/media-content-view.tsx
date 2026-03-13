@@ -29,6 +29,7 @@ import { TitleTable } from "./media-content/title-table";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { RuleSetRecord } from "@/lib/types/rule-sets";
 import type { ParsedQualityProfileEntry, ScoringPersonaId } from "@/lib/types/quality-profiles";
+import { useIsMobile } from "@/lib/hooks/use-mobile";
 
 type Facet = "movie" | "tv" | "anime";
 type ContentSettingsSection = "overview" | "settings" | "general" | "quality" | "renaming" | "routing";
@@ -194,6 +195,7 @@ export function MediaContentView({
   };
 }) {
   const t = useTranslate();
+  const isMobile = useIsMobile();
   const {
     view,
     contentSettingsSection,
@@ -308,6 +310,7 @@ export function MediaContentView({
   React.useEffect(() => {
     try { localStorage.setItem("scryer:content-view-mode", viewMode); } catch { /* noop */ }
   }, [viewMode]);
+  const effectiveViewMode: ContentViewMode = isMobile ? "poster" : viewMode;
 
   const handleMoviesPathChange = React.useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -588,30 +591,32 @@ export function MediaContentView({
               <CardTitle>{view === "movies" ? t("title.manageMovies") : view === "anime" ? t("nav.anime") : t("nav.series")}</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="mb-3 flex items-center gap-2">
+              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
                 <Input
                   placeholder={t("title.filterPlaceholder")}
                   value={titleFilter}
                   onChange={handleTitleFilterChange}
-                  className="flex-1"
+                  className="w-full sm:flex-1"
                 />
-                <ToggleGroup
-                  type="single"
-                  value={viewMode}
-                  onValueChange={(v) => {
-                    if (v === "table" || v === "poster") setViewMode(v);
-                  }}
-                  size="sm"
-                  aria-label={t("title.viewModeToggle")}
-                >
-                  <ToggleGroupItem value="table" size="sm" aria-label={t("title.viewModeTable")}>
-                    <LayoutList className="h-4 w-4" />
-                  </ToggleGroupItem>
-                  <ToggleGroupItem value="poster" size="sm" aria-label={t("title.viewModePoster")}>
-                    <LayoutGrid className="h-4 w-4" />
-                  </ToggleGroupItem>
-                </ToggleGroup>
-                <Button variant="secondary" onClick={handleRefreshTitles} disabled={titleLoading}>
+                {!isMobile ? (
+                  <ToggleGroup
+                    type="single"
+                    value={viewMode}
+                    onValueChange={(v) => {
+                      if (v === "table" || v === "poster") setViewMode(v);
+                    }}
+                    size="sm"
+                    aria-label={t("title.viewModeToggle")}
+                  >
+                    <ToggleGroupItem value="table" size="sm" aria-label={t("title.viewModeTable")}>
+                      <LayoutList className="h-4 w-4" />
+                    </ToggleGroupItem>
+                    <ToggleGroupItem value="poster" size="sm" aria-label={t("title.viewModePoster")}>
+                      <LayoutGrid className="h-4 w-4" />
+                    </ToggleGroupItem>
+                  </ToggleGroup>
+                ) : null}
+                <Button className="w-full sm:w-auto" variant="secondary" onClick={handleRefreshTitles} disabled={titleLoading}>
                   {titleLoading ? t("label.refreshing") : t("label.refresh")}
                 </Button>
               </div>
@@ -630,7 +635,7 @@ export function MediaContentView({
                     ?? null;
                 })();
 
-                if (viewMode === "poster") {
+                if (effectiveViewMode === "poster") {
                   return (
                     <PosterGrid
                       titles={monitoredTitles}
