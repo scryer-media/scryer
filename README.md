@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/scryer-hero.png" alt="scryer" width="200"/>
+  <img src="docs/img/scryer-hero.png" alt="scryer" width="200"/>
 </p>
 
 <h1 align="center">scryer</h1>
