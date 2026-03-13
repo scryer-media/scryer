@@ -18,15 +18,13 @@
 
 Scryer manages movies, TV series, and anime in one place. It monitors your library, searches indexers for releases, sends downloads to your Usenet client, and organizes the results into your media directories. The backend is written in Rust and the UI is a Vite + React static app embedded directly into the binary — no runtime dependencies at deploy time.
 
-A companion service called **SMG (Scryer Metadata Gateway)** handles all communication with metadata providers (TVDB, TMDB). SMG caches metadata in PostgreSQL so upstream APIs are not hammered, keeping you within rate limits. SMG is hosted centrally — you don't need to run it yourself.
-
 ## Getting Started
 
 See the **[Getting Started guide](docs/getting-started.md)** for setup instructions covering:
 
 - One-command setup with `scryer init`
 - Default credentials and encryption key management
-- Download client and metadata gateway configuration
+- Download client configuration
 - Upgrading and backup/restore
 
 ## Comparison with Other Tools
@@ -39,7 +37,7 @@ Scryer occupies the same space as Sonarr, Radarr, and SickChill. Each tool makes
 | **Runtime** | Rust binary (~30 MB), <100 MB RAM typical | .NET, ~200-300 MB RAM each | Python, ~150-200 MB RAM |
 | **UI** | Embedded static React app, no separate runtime | Embedded frontend | Web UI |
 | **Anime support** | First-class facet with anime-specific metadata mapping | Community-supported via Sonarr | Built-in |
-| **Metadata** | Centrally cached via SMG (TVDB, TMDB) | Direct API calls per instance | Direct API calls (TVDB) |
+| **Metadata** | Centrally cached (TVDB, TMDB) | Direct API calls per instance | Direct API calls (TVDB) |
 | **Download clients** | NZBGet, SABnzbd | NZBGet, SABnzbd, qBittorrent, Deluge, and others | NZBGet, SABnzbd, and torrent clients |
 | **Indexer support** | Plugin-based (NZBGeek, Newznab-compatible) | Broad Newznab/Torznab support, Prowlarr integration | Built-in indexer support |
 | **Maturity** | Early, active development | Mature, large community and ecosystem | Mature, smaller community |
