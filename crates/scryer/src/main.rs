@@ -19,9 +19,9 @@ use axum::routing::{get, post};
 use axum::Router;
 use scryer_application::{
     start_background_acquisition_poller, start_background_hydration_loop,
-    start_background_poster_loop, start_download_queue_poller, AppServices, AppUseCase,
-    DownloadClientPluginProvider, FacetRegistry, IndexerPluginProvider, MovieFacetHandler,
-    SeriesFacetHandler, TitleImageKind, TitleImageRepository,
+    start_background_poster_loop, start_download_queue_poller, start_notification_dispatcher,
+    AppServices, AppUseCase, DownloadClientPluginProvider, FacetRegistry, IndexerPluginProvider,
+    MovieFacetHandler, SeriesFacetHandler, TitleImageKind, TitleImageRepository,
 };
 use scryer_infrastructure::{
     start_weaver_subscription_bridge, FileSystemLibraryRenamer, FileSystemLibraryScanner,
@@ -593,6 +593,10 @@ async fn bootstrap_application(
         shutdown_token.child_token(),
     ));
     tokio::spawn(start_background_poster_loop(
+        app_use_case.clone(),
+        shutdown_token.child_token(),
+    ));
+    tokio::spawn(start_notification_dispatcher(
         app_use_case.clone(),
         shutdown_token.child_token(),
     ));

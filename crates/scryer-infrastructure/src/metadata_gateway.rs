@@ -281,11 +281,21 @@ fn apply_instance_auth_headers(
     let body_hash = sha256_hex_bytes(body_bytes);
     let signature = smg_enrollment::sign_request(&auth.private_key_pem, timestamp, &body_hash)
         .map_err(|e| AppError::Repository(format!("failed to sign request: {e}")))?;
+    debug!(
+        timestamp,
+        cert_b64_len = auth.cert_der_b64.len(),
+        sig_len = signature.len(),
+        body_hash,
+        "attaching X-Scryer-* instance auth headers"
+    );
     Ok(req
         .header("X-Scryer-Cert", &*auth.cert_der_b64)
         .header("X-Scryer-Timestamp", timestamp.to_string())
         .header("X-Scryer-Signature", signature))
 }
+
+/// Minimum interval between cert-rejection re-enrollment attempts.
+const REENROLLMENT_COOLDOWN: Duration = Duration::from_secs(60);
 
 pub struct MetadataGatewayClient {
     http: Client,
@@ -294,6 +304,7 @@ pub struct MetadataGatewayClient {
     enrollment_config: SmgEnrollmentConfig,
     db: crate::SqliteServices,
     mtls_state: tokio::sync::RwLock<MtlsState>,
+    last_reenrollment: tokio::sync::Mutex<Option<Instant>>,
     search_hash: String,
     search_rich_hash: String,
     search_multi_hash: String,
@@ -350,6 +361,7 @@ impl MetadataGatewayClient {
             endpoint,
             registration_url,
             enrollment_config,
+            last_reenrollment: tokio::sync::Mutex::new(None),
             db,
             mtls_state: tokio::sync::RwLock::new(MtlsState::NotAttempted),
             search_hash,
@@ -465,6 +477,32 @@ impl MetadataGatewayClient {
                 cert_der_b64: Arc::new(cert_der_b64),
             },
         ))
+    }
+
+    /// Invalidate cached enrollment after a cert rejection (401) from SMG.
+    /// Clears SQLite cache and resets state so the next request triggers fresh enrollment.
+    /// Returns `true` if invalidation happened, `false` if still within cooldown.
+    async fn invalidate_enrollment(&self) -> bool {
+        let mut last = self.last_reenrollment.lock().await;
+        if let Some(prev) = *last {
+            if prev.elapsed() < REENROLLMENT_COOLDOWN {
+                debug!(
+                    cooldown_remaining_secs = (REENROLLMENT_COOLDOWN - prev.elapsed()).as_secs(),
+                    "skipping re-enrollment (cooldown active)"
+                );
+                return false;
+            }
+        }
+        *last = Some(Instant::now());
+        drop(last);
+
+        warn!("SMG rejected certificate — clearing cached enrollment for re-registration");
+        if let Err(e) = smg_enrollment::clear_enrollment_cache(&self.db).await {
+            warn!(error = %e, "failed to clear enrollment cache from SQLite");
+        }
+        let mut guard = self.mtls_state.write().await;
+        *guard = MtlsState::NotAttempted;
+        true
     }
 
     /// Eagerly trigger enrollment in a background task so the mTLS client is ready before
@@ -590,6 +628,13 @@ impl MetadataGatewayClient {
                     .data
                     .ok_or_else(|| AppError::Repository("APQ GET: empty data".into()))
             }
+            Ok(resp) if resp.status() == reqwest::StatusCode::UNAUTHORIZED => {
+                // Cert rejection — invalidate before falling through to POST retry
+                // (execute_graphql will handle the actual re-enrollment + retry)
+                self.invalidate_enrollment().await;
+                self.execute_graphql_apq_register(query, &extensions, &variables)
+                    .await
+            }
             Ok(resp) => {
                 let status = resp.status();
                 debug!(status = %status, hash, "APQ GET failed, falling back to POST");
@@ -635,6 +680,31 @@ impl MetadataGatewayClient {
 
         debug!(status = %status, body_len = raw_text.len(), "metadata gateway response");
 
+        // On 401 cert rejection, invalidate enrollment and retry once with fresh creds.
+        if status == reqwest::StatusCode::UNAUTHORIZED
+            && raw_text.contains("certificate")
+        {
+            if !self.invalidate_enrollment().await {
+                return Err(AppError::Repository(format!(
+                    "metadata gateway cert rejected ({status}), re-enrollment on cooldown: {raw_text}"
+                )));
+            }
+            info!("retrying metadata request after re-enrollment");
+            let retry_resp = self.send_with_retry(&payload).await?;
+            let retry_status = retry_resp.status();
+            let retry_text = retry_resp
+                .text()
+                .await
+                .map_err(|err| AppError::Repository(err.to_string()))?;
+            if !retry_status.is_success() {
+                warn!(status = %retry_status, body = %retry_text, "metadata gateway request failed after re-enrollment");
+                return Err(AppError::Repository(format!(
+                    "metadata gateway request failed ({retry_status}): {retry_text}"
+                )));
+            }
+            return self.parse_graphql_response(&retry_text);
+        }
+
         if !status.is_success() {
             warn!(status = %status, body = %raw_text, "metadata gateway request failed");
             return Err(AppError::Repository(format!(
@@ -642,7 +712,14 @@ impl MetadataGatewayClient {
             )));
         }
 
-        let parsed: GraphqlResponse<T> = serde_json::from_str(&raw_text).map_err(|err| {
+        self.parse_graphql_response(&raw_text)
+    }
+
+    fn parse_graphql_response<T: serde::de::DeserializeOwned>(
+        &self,
+        raw_text: &str,
+    ) -> AppResult<T> {
+        let parsed: GraphqlResponse<T> = serde_json::from_str(raw_text).map_err(|err| {
             warn!(body = %raw_text, error = %err, "metadata gateway returned invalid JSON");
             AppError::Repository(format!("metadata gateway returned invalid JSON: {err}"))
         })?;
@@ -751,13 +828,50 @@ impl MetadataGatewayClient {
             .await
             .map_err(|e| AppError::Repository(format!("bulk metadata read body: {e}")))?;
 
+        // On 401 cert rejection, invalidate and retry with fresh creds.
+        if status == reqwest::StatusCode::UNAUTHORIZED && body.contains("certificate") {
+            if !self.invalidate_enrollment().await {
+                return Err(AppError::Repository(format!(
+                    "bulk metadata cert rejected ({status}), re-enrollment on cooldown: {body}"
+                )));
+            }
+            info!("retrying bulk metadata request after re-enrollment");
+            let (client2, auth2) = self.get_http_client().await?;
+            let mut req2 = client2
+                .post(&self.endpoint)
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(body_bytes.clone());
+            if let Some(ref auth2) = auth2 {
+                req2 = apply_instance_auth_headers(req2, auth2, &body_bytes)?;
+            }
+            let resp2 = req2
+                .send()
+                .await
+                .map_err(|e| AppError::Repository(format!("bulk metadata retry failed: {e}")))?;
+            let status2 = resp2.status();
+            let body2 = resp2
+                .text()
+                .await
+                .map_err(|e| AppError::Repository(format!("bulk metadata read body: {e}")))?;
+            if !status2.is_success() {
+                return Err(AppError::Repository(format!(
+                    "bulk metadata request failed after re-enrollment ({status2}): {body2}"
+                )));
+            }
+            return self.parse_partial_response(&body2);
+        }
+
         if !status.is_success() {
             return Err(AppError::Repository(format!(
                 "bulk metadata request failed ({status}): {body}"
             )));
         }
 
-        let parsed: serde_json::Value = serde_json::from_str(&body)
+        self.parse_partial_response(&body)
+    }
+
+    fn parse_partial_response(&self, body: &str) -> AppResult<serde_json::Value> {
+        let parsed: serde_json::Value = serde_json::from_str(body)
             .map_err(|e| AppError::Repository(format!("bulk metadata invalid JSON: {e}")))?;
 
         if let Some(errors) = parsed.get("errors") {

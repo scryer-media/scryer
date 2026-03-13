@@ -108,7 +108,7 @@ pub(crate) fn mount_router(router: Router, base_path: &BasePath) -> Router {
             let target = target.clone();
             async move {
                 if req.uri().path() == bare {
-                    Redirect::permanent(&target).into_response()
+                    Redirect::temporary(&target).into_response()
                 } else {
                     next.run(req).await
                 }
@@ -173,7 +173,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prefixed_router_redirects_bare_root_to_trailing_slash() {
+    async fn prefixed_router_temporarily_redirects_bare_root_to_trailing_slash() {
         let app = mount_router(
             Router::new().route("/", get(|| async { StatusCode::OK })),
             &BasePath::from_raw(Some("/scryer/")),
@@ -189,7 +189,7 @@ mod tests {
             .await
             .expect("response");
 
-        assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
         assert_eq!(
             response.headers().get("location").unwrap().to_str().unwrap(),
             "/scryer/"

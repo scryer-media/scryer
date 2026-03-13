@@ -343,8 +343,7 @@ impl AppUseCase {
             .and_then(|p| p.plugin_name_for_provider(provider_type))
     }
 
-    // Helper to get notification channel repository
-    fn notification_channels(
+    pub fn notification_channels_repo(
         &self,
     ) -> AppResult<&std::sync::Arc<dyn crate::NotificationChannelRepository>> {
         self.services.notification_channels.as_ref().ok_or_else(|| {
@@ -352,8 +351,7 @@ impl AppUseCase {
         })
     }
 
-    // Helper to get notification subscription repository
-    fn notification_subscriptions(
+    pub fn notification_subscriptions_repo(
         &self,
     ) -> AppResult<&std::sync::Arc<dyn crate::NotificationSubscriptionRepository>> {
         self.services
@@ -364,5 +362,19 @@ impl AppUseCase {
                     "notification subscription repository is not configured".into(),
                 )
             })
+    }
+
+    // Helper to get notification channel repository
+    fn notification_channels(
+        &self,
+    ) -> AppResult<&std::sync::Arc<dyn crate::NotificationChannelRepository>> {
+        self.notification_channels_repo()
+    }
+
+    // Helper to get notification subscription repository
+    fn notification_subscriptions(
+        &self,
+    ) -> AppResult<&std::sync::Arc<dyn crate::NotificationSubscriptionRepository>> {
+        self.notification_subscriptions_repo()
     }
 }

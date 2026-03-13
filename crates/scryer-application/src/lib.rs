@@ -16,6 +16,7 @@ mod app_usecase_integration;
 pub(crate) mod app_usecase_library;
 mod app_usecase_notifications;
 mod app_usecase_pending;
+mod notification_dispatcher;
 mod app_usecase_plugins;
 pub mod app_usecase_post_processing;
 pub(crate) mod app_usecase_rss;
@@ -63,7 +64,10 @@ pub type AppResult<T> = Result<T, AppError>;
 
 use crate::quality_profile::resolve_profile_id_for_title;
 pub use acquisition_policy::AcquisitionThresholds;
-pub use activity::{ActivityChannel, ActivityEvent, ActivityKind, ActivitySeverity};
+pub use activity::{
+    ActivityChannel, ActivityEvent, ActivityKind, ActivitySeverity, NotificationEnvelope,
+};
+pub use notification_dispatcher::start_notification_dispatcher;
 pub use app_usecase_acquisition::start_background_acquisition_poller;
 pub use app_usecase_backup::BackupService;
 pub use app_usecase_catalog::start_background_hydration_loop;
@@ -304,6 +308,23 @@ impl AppServices {
         channels: Vec<ActivityChannel>,
     ) -> AppResult<()> {
         let event = ActivityEvent::new(kind, actor_user_id, title_id, message, severity, channels);
+        self.activity_stream.push(event.clone()).await;
+        let _ = self.activity_event_broadcast.send(event);
+        Ok(())
+    }
+
+    pub async fn record_activity_event_with_notification(
+        &self,
+        actor_user_id: Option<String>,
+        title_id: Option<String>,
+        kind: ActivityKind,
+        message: String,
+        severity: ActivitySeverity,
+        channels: Vec<ActivityChannel>,
+        envelope: crate::activity::NotificationEnvelope,
+    ) -> AppResult<()> {
+        let event = ActivityEvent::new(kind, actor_user_id, title_id, message, severity, channels)
+            .with_notification(envelope);
         self.activity_stream.push(event.clone()).await;
         let _ = self.activity_event_broadcast.send(event);
         Ok(())

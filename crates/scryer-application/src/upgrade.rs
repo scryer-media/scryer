@@ -4,6 +4,7 @@
 //! the old file is recycled and the new one takes its place. If the new import
 //! fails, the old file is restored from the recycle bin to avoid data loss.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::activity::{ActivityChannel, ActivityKind, ActivitySeverity};
@@ -11,7 +12,7 @@ use crate::recycle_bin::{self, RecycleBinConfig, RecycleManifest};
 use crate::release_parser::ParsedReleaseMetadata;
 use crate::types::TitleMediaFile;
 use crate::{AppError, AppResult, AppUseCase, InsertMediaFileInput};
-use scryer_domain::{CompletedDownload, Title, User};
+use scryer_domain::{CompletedDownload, NotificationEventType, Title, User};
 
 /// Result of a successful upgrade operation.
 #[derive(Debug)]
@@ -184,16 +185,33 @@ pub async fn execute_upgrade(
                 new_score,
                 new_score - old_score
             );
-            app.services
-                .record_activity_event(
-                    None,
-                    Some(title.id.clone()),
-                    ActivityKind::FileUpgraded,
-                    message,
-                    ActivitySeverity::Success,
-                    vec![ActivityChannel::WebUi, ActivityChannel::Toast],
-                )
-                .await?;
+            {
+                let mut meta = HashMap::new();
+                meta.insert("title_name".to_string(), serde_json::json!(title.name));
+                meta.insert("old_score".to_string(), serde_json::json!(old_score));
+                meta.insert("new_score".to_string(), serde_json::json!(new_score));
+                if let Some(ref poster) = title.poster_url {
+                    meta.insert("poster_url".to_string(), serde_json::json!(poster));
+                }
+                let envelope = crate::activity::NotificationEnvelope {
+                    event_type: NotificationEventType::Upgrade,
+                    title: format!("Upgraded: {}", title.name),
+                    body: message.clone(),
+                    facet: Some(format!("{:?}", title.facet).to_lowercase()),
+                    metadata: meta,
+                };
+                app.services
+                    .record_activity_event_with_notification(
+                        None,
+                        Some(title.id.clone()),
+                        ActivityKind::FileUpgraded,
+                        message,
+                        ActivitySeverity::Success,
+                        vec![ActivityChannel::WebUi, ActivityChannel::Toast],
+                        envelope,
+                    )
+                    .await?;
+            }
 
             Ok(UpgradeResult::Upgraded(UpgradeOutcome {
                 old_score,

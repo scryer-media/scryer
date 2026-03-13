@@ -1,6 +1,8 @@
 use super::*;
 use crate::acquisition_policy::{compute_search_schedule, evaluate_upgrade, AcquisitionThresholds};
 use chrono::{DateTime, Utc};
+use scryer_domain::NotificationEventType;
+use std::collections::HashMap;
 use tracing::{info, warn};
 
 impl AppUseCase {
@@ -731,9 +733,21 @@ async fn process_single_wanted_item(
                                     .as_ref()
                                     .map(|d| d.preference_score)
                                     .unwrap_or(0);
+                                let mut grab_meta = HashMap::new();
+                                grab_meta.insert("title_name".to_string(), serde_json::json!(title.name));
+                                grab_meta.insert("release_title".to_string(), serde_json::json!(best_pack.title));
+                                grab_meta.insert("indexer".to_string(), serde_json::json!(best_pack.source));
+                                grab_meta.insert("score".to_string(), serde_json::json!(pack_score));
+                                let grab_envelope = crate::activity::NotificationEnvelope {
+                                    event_type: NotificationEventType::Grab,
+                                    title: format!("Grabbed: {} S{:0>2}", title.name, season_num),
+                                    body: format!("Season pack '{}' grabbed for {}", best_pack.title, title.name),
+                                    facet: Some(format!("{:?}", title.facet).to_lowercase()),
+                                    metadata: grab_meta,
+                                };
                                 let _ = app
                                     .services
-                                    .record_activity_event(
+                                    .record_activity_event_with_notification(
                                         None,
                                         Some(title.id.clone()),
                                         ActivityKind::AcquisitionCandidateAccepted,
@@ -743,6 +757,7 @@ async fn process_single_wanted_item(
                                         ),
                                         ActivitySeverity::Success,
                                         vec![ActivityChannel::WebUi, ActivityChannel::Toast],
+                                        grab_envelope,
                                     )
                                     .await;
                                 info!(
@@ -1076,23 +1091,38 @@ async fn process_single_wanted_item(
         return Ok(());
     }
 
-    let _ = app
-        .services
-        .record_activity_event(
-            None,
-            Some(title.id.clone()),
-            ActivityKind::AcquisitionCandidateAccepted,
-            format!(
-                "'{}' score={} delta={} ({})",
-                best.title,
-                candidate_score,
-                decision_record.score_delta.unwrap_or(candidate_score),
-                title.name
-            ),
-            ActivitySeverity::Success,
-            vec![ActivityChannel::WebUi, ActivityChannel::Toast],
-        )
-        .await;
+    {
+        let mut grab_meta = HashMap::new();
+        grab_meta.insert("title_name".to_string(), serde_json::json!(title.name));
+        grab_meta.insert("release_title".to_string(), serde_json::json!(best.title));
+        grab_meta.insert("indexer".to_string(), serde_json::json!(best.source));
+        grab_meta.insert("score".to_string(), serde_json::json!(candidate_score));
+        let grab_envelope = crate::activity::NotificationEnvelope {
+            event_type: NotificationEventType::Grab,
+            title: format!("Grabbed: {}", title.name),
+            body: format!("'{}' grabbed for {} (score: {})", best.title, title.name, candidate_score),
+            facet: Some(format!("{:?}", title.facet).to_lowercase()),
+            metadata: grab_meta,
+        };
+        let _ = app
+            .services
+            .record_activity_event_with_notification(
+                None,
+                Some(title.id.clone()),
+                ActivityKind::AcquisitionCandidateAccepted,
+                format!(
+                    "'{}' score={} delta={} ({})",
+                    best.title,
+                    candidate_score,
+                    decision_record.score_delta.unwrap_or(candidate_score),
+                    title.name
+                ),
+                ActivitySeverity::Success,
+                vec![ActivityChannel::WebUi, ActivityChannel::Toast],
+                grab_envelope,
+            )
+            .await;
+    }
 
     // Submit to download client
     let source_hint = best.download_url.clone().or_else(|| best.link.clone());
@@ -1254,15 +1284,28 @@ async fn process_single_wanted_item(
                 )
                 .await;
 
+            let mut grab_meta = HashMap::new();
+            grab_meta.insert("title_name".to_string(), serde_json::json!(title.name));
+            grab_meta.insert("release_title".to_string(), serde_json::json!(best.title));
+            grab_meta.insert("indexer".to_string(), serde_json::json!(best.source));
+            grab_meta.insert("score".to_string(), serde_json::json!(candidate_score));
+            let grab_envelope = crate::activity::NotificationEnvelope {
+                event_type: NotificationEventType::Grab,
+                title: format!("Grabbed: {}", title.name),
+                body: format!("'{}' auto-grabbed for {} (score: {})", best.title, title.name, candidate_score),
+                facet: Some(format!("{:?}", title.facet).to_lowercase()),
+                metadata: grab_meta,
+            };
             let _ = app
                 .services
-                .record_activity_event(
+                .record_activity_event_with_notification(
                     None,
                     Some(title.id.clone()),
                     ActivityKind::MovieDownloaded,
                     format!("auto-grabbed: {} (score: {})", best.title, candidate_score),
                     ActivitySeverity::Success,
                     vec![ActivityChannel::WebUi, ActivityChannel::Toast],
+                    grab_envelope,
                 )
                 .await;
         }

@@ -39,6 +39,20 @@ pub async fn ensure_instance_id(db: &crate::SqliteServices) -> Result<String, St
     Ok(instance_id)
 }
 
+/// Clear cached enrollment data from the database so the next call to
+/// `ensure_enrolled` performs a fresh registration.
+pub async fn clear_enrollment_cache(db: &crate::SqliteServices) -> Result<(), String> {
+    for key in &[
+        "smg.client_key",
+        "smg.client_cert",
+        "smg.cert_expires_at",
+        "smg.ca_cert",
+    ] {
+        persist_setting(db, key, "").await?;
+    }
+    Ok(())
+}
+
 /// Load existing enrollment from DB, or enroll with SMG if missing/expired.
 ///
 /// Follows the same ensure pattern as `jwt_keys::ensure_jwt_hmac_secret`.
@@ -59,8 +73,19 @@ pub async fn ensure_enrolled(
         if let Ok(expires_at) = expires_str.parse::<DateTime<Utc>>() {
             let days_remaining = (expires_at - Utc::now()).num_days();
             if days_remaining > RENEWAL_THRESHOLD_DAYS {
+                let instance_id = ensure_instance_id(db).await?;
+                let ca_cn = extract_pem_cn(&ca_cert).unwrap_or_default();
+                let cert_cn = extract_pem_cn(&cert).unwrap_or_default();
+                info!(
+                    %instance_id,
+                    days_remaining,
+                    %expires_at,
+                    cert_cn,
+                    ca_cn,
+                    "using cached SMG enrollment (skipping /api/register)"
+                );
                 return Ok(EnrollmentState {
-                    instance_id: ensure_instance_id(db).await?,
+                    instance_id,
                     client_key_pem: key,
                     client_cert_pem: cert,
                     ca_cert_pem: ca_cert,
@@ -157,10 +182,14 @@ async fn enroll_with_smg(
     persist_setting(db, "smg.cert_expires_at", &reg.expires_at).await?;
     persist_setting(db, "smg.ca_cert", &reg.ca_certificate).await?;
 
+    let ca_cn = extract_pem_cn(&reg.ca_certificate).unwrap_or_default();
+    let cert_issuer = extract_pem_issuer_cn(&reg.certificate).unwrap_or_default();
     info!(
         instance_id,
         expires_at = %expires_at,
-        "enrolled with SMG"
+        ca_cn,
+        cert_issuer,
+        "enrolled with SMG (fresh registration)"
     );
 
     Ok(EnrollmentState {
@@ -281,4 +310,30 @@ fn parse_string_json(raw: &str) -> Option<String> {
         Ok(serde_json::Value::String(s)) if !s.is_empty() => Some(s),
         _ => None,
     }
+}
+
+/// Extract the Subject CN from a PEM-encoded certificate for logging.
+fn extract_pem_cn(pem_str: &str) -> Option<String> {
+    let (_, pem) = x509_parser::pem::parse_x509_pem(pem_str.as_bytes()).ok()?;
+    let (_, cert) = x509_parser::parse_x509_certificate(&pem.contents).ok()?;
+    let cn = cert
+        .subject()
+        .iter_common_name()
+        .next()
+        .and_then(|attr| attr.as_str().ok())
+        .map(|s| s.to_string());
+    cn
+}
+
+/// Extract the Issuer CN from a PEM-encoded certificate for logging.
+fn extract_pem_issuer_cn(pem_str: &str) -> Option<String> {
+    let (_, pem) = x509_parser::pem::parse_x509_pem(pem_str.as_bytes()).ok()?;
+    let (_, cert) = x509_parser::parse_x509_certificate(&pem.contents).ok()?;
+    let cn = cert
+        .issuer()
+        .iter_common_name()
+        .next()
+        .and_then(|attr| attr.as_str().ok())
+        .map(|s| s.to_string());
+    cn
 }

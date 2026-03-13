@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
-use std::collections::VecDeque;
+use scryer_domain::NotificationEventType;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -86,6 +87,20 @@ impl ActivityKind {
     }
 }
 
+/// Envelope attached to an `ActivityEvent` to trigger notification dispatch.
+///
+/// Events that carry this envelope are automatically routed to notification
+/// plugins by the background notification dispatcher. Events without it are
+/// UI-only (existing behaviour preserved).
+#[derive(Clone, Debug, PartialEq)]
+pub struct NotificationEnvelope {
+    pub event_type: NotificationEventType,
+    pub title: String,
+    pub body: String,
+    pub facet: Option<String>,
+    pub metadata: HashMap<String, serde_json::Value>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ActivityEvent {
     pub id: String,
@@ -96,6 +111,7 @@ pub struct ActivityEvent {
     pub title_id: Option<String>,
     pub message: String,
     pub occurred_at: DateTime<Utc>,
+    pub notification: Option<NotificationEnvelope>,
 }
 
 impl ActivityEvent {
@@ -116,6 +132,7 @@ impl ActivityEvent {
             title_id,
             message,
             occurred_at: Utc::now(),
+            notification: None,
         }
     }
 
@@ -133,6 +150,11 @@ impl ActivityEvent {
             ActivitySeverity::Info,
             vec![ActivityChannel::WebUi],
         )
+    }
+
+    pub fn with_notification(mut self, envelope: NotificationEnvelope) -> Self {
+        self.notification = Some(envelope);
+        self
     }
 }
 

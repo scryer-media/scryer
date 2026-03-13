@@ -482,24 +482,13 @@ impl AppUseCase {
             )
             .await?;
 
-        if let Some(handler) = self.facet_registry.get(&title.facet) {
-            if let Some(activity_kind) = handler.title_added_activity_kind() {
-                self.services
-                    .record_activity_event(
-                        Some(actor.id.clone()),
-                        Some(title.id.clone()),
-                        activity_kind,
-                        format!("new {} added: {}", handler.facet_id(), title.name),
-                        ActivitySeverity::Info,
-                        vec![ActivityChannel::WebUi],
-                    )
-                    .await?;
-            }
-        }
-
-        // Dispatch notification for title added
         {
             let facet_str = format!("{:?}", title.facet).to_lowercase();
+            let activity_kind = self
+                .facet_registry
+                .get(&title.facet)
+                .and_then(|h| h.title_added_activity_kind())
+                .unwrap_or(ActivityKind::MovieAdded);
             let mut metadata = HashMap::new();
             metadata.insert("title_name".to_string(), serde_json::json!(title.name));
             if let Some(ref year) = title.year {
@@ -509,13 +498,24 @@ impl AppUseCase {
             if let Some(ref poster) = title.poster_url {
                 metadata.insert("poster_url".to_string(), serde_json::json!(poster));
             }
-            self.dispatch_notification(
-                NotificationEventType::TitleAdded.as_str(),
-                &format!("{} added: {}", facet_str, title.name),
-                &format!("{} has been added to your library.", title.name),
-                &metadata,
-            )
-            .await;
+            let envelope = crate::activity::NotificationEnvelope {
+                event_type: NotificationEventType::TitleAdded,
+                title: format!("{} added: {}", facet_str, title.name),
+                body: format!("{} has been added to your library.", title.name),
+                facet: Some(facet_str),
+                metadata,
+            };
+            self.services
+                .record_activity_event_with_notification(
+                    Some(actor.id.clone()),
+                    Some(title.id.clone()),
+                    activity_kind,
+                    format!("new title added: {}", title.name),
+                    ActivitySeverity::Info,
+                    vec![ActivityChannel::WebUi],
+                    envelope,
+                )
+                .await?;
         }
 
         // Wake the background hydration loop to fetch rich metadata from SMG.
@@ -1228,16 +1228,33 @@ impl AppUseCase {
                 ),
             )
             .await?;
-        self.services
-            .record_activity_event(
-                Some(actor.id.clone()),
-                Some(title.id.clone()),
-                ActivityKind::MovieDownloaded,
-                format!("movie downloaded: {}", title.name),
-                ActivitySeverity::Success,
-                vec![ActivityChannel::Toast, ActivityChannel::WebUi],
-            )
-            .await?;
+        {
+            let facet_str = format!("{:?}", title.facet).to_lowercase();
+            let mut grab_meta = HashMap::new();
+            grab_meta.insert("title_name".to_string(), serde_json::json!(title.name));
+            grab_meta.insert("title_facet".to_string(), serde_json::json!(facet_str));
+            if let Some(ref poster) = title.poster_url {
+                grab_meta.insert("poster_url".to_string(), serde_json::json!(poster));
+            }
+            let envelope = crate::activity::NotificationEnvelope {
+                event_type: NotificationEventType::Grab,
+                title: format!("Grabbed: {}", title.name),
+                body: format!("Download queued for {}", title.name),
+                facet: Some(facet_str),
+                metadata: grab_meta,
+            };
+            self.services
+                .record_activity_event_with_notification(
+                    Some(actor.id.clone()),
+                    Some(title.id.clone()),
+                    ActivityKind::MovieDownloaded,
+                    format!("movie downloaded: {}", title.name),
+                    ActivitySeverity::Success,
+                    vec![ActivityChannel::Toast, ActivityChannel::WebUi],
+                    envelope,
+                )
+                .await?;
+        }
 
         Ok((title, grab.job_id))
     }
@@ -1369,16 +1386,33 @@ impl AppUseCase {
                 ),
             )
             .await?;
-        self.services
-            .record_activity_event(
-                Some(actor.id.clone()),
-                Some(title.id.clone()),
-                ActivityKind::MovieDownloaded,
-                format!("movie downloaded: {}", title.name),
-                ActivitySeverity::Success,
-                vec![ActivityChannel::Toast, ActivityChannel::WebUi],
-            )
-            .await?;
+        {
+            let facet_str = format!("{:?}", title.facet).to_lowercase();
+            let mut grab_meta = HashMap::new();
+            grab_meta.insert("title_name".to_string(), serde_json::json!(title.name));
+            grab_meta.insert("title_facet".to_string(), serde_json::json!(facet_str));
+            if let Some(ref poster) = title.poster_url {
+                grab_meta.insert("poster_url".to_string(), serde_json::json!(poster));
+            }
+            let envelope = crate::activity::NotificationEnvelope {
+                event_type: NotificationEventType::Grab,
+                title: format!("Grabbed: {}", title.name),
+                body: format!("Download queued for {}", title.name),
+                facet: Some(facet_str),
+                metadata: grab_meta,
+            };
+            self.services
+                .record_activity_event_with_notification(
+                    Some(actor.id.clone()),
+                    Some(title.id.clone()),
+                    ActivityKind::MovieDownloaded,
+                    format!("movie downloaded: {}", title.name),
+                    ActivitySeverity::Success,
+                    vec![ActivityChannel::Toast, ActivityChannel::WebUi],
+                    envelope,
+                )
+                .await?;
+        }
 
         Ok(grab.job_id)
     }
@@ -1722,7 +1756,7 @@ impl AppUseCase {
             .await?;
         self.services.titles.delete(id).await?;
 
-        // Dispatch notification for title deleted
+        // Emit activity event with notification envelope for title deleted
         {
             let facet_str = format!("{:?}", title.facet).to_lowercase();
             let mut metadata = HashMap::new();
@@ -1731,13 +1765,25 @@ impl AppUseCase {
                 metadata.insert("title_year".to_string(), serde_json::json!(year));
             }
             metadata.insert("title_facet".to_string(), serde_json::json!(facet_str));
-            self.dispatch_notification(
-                NotificationEventType::TitleDeleted.as_str(),
-                &format!("{} deleted: {}", facet_str, title.name),
-                &format!("{} has been removed from your library.", title.name),
-                &metadata,
-            )
-            .await;
+            let envelope = crate::activity::NotificationEnvelope {
+                event_type: NotificationEventType::TitleDeleted,
+                title: format!("{} deleted: {}", facet_str, title.name),
+                body: format!("{} has been removed from your library.", title.name),
+                facet: Some(facet_str),
+                metadata,
+            };
+            let _ = self
+                .services
+                .record_activity_event_with_notification(
+                    Some(actor.id.clone()),
+                    Some(id.to_string()),
+                    ActivityKind::SystemNotice,
+                    format!("title deleted: {}", title.name),
+                    ActivitySeverity::Info,
+                    vec![ActivityChannel::WebUi],
+                    envelope,
+                )
+                .await;
         }
 
         Ok(())

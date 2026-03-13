@@ -1,5 +1,7 @@
 use super::*;
 use chrono::{Duration, Utc};
+use scryer_domain::NotificationEventType;
+use std::collections::HashMap;
 use tracing::{info, warn};
 
 use crate::delay_profile::DelayProfile;
@@ -497,20 +499,34 @@ impl AppUseCase {
                     )
                     .await;
 
-                let _ = self
-                    .services
-                    .record_activity_event(
-                        None,
-                        Some(title.id.clone()),
-                        ActivityKind::MovieDownloaded,
-                        format!(
-                            "Pending release grabbed: {} (score: {})",
-                            pr.release_title, pr.release_score
-                        ),
-                        ActivitySeverity::Success,
-                        vec![ActivityChannel::WebUi, ActivityChannel::Toast],
-                    )
-                    .await;
+                {
+                    let mut grab_meta = HashMap::new();
+                    grab_meta.insert("title_name".to_string(), serde_json::json!(title.name));
+                    grab_meta.insert("release_title".to_string(), serde_json::json!(pr.release_title));
+                    grab_meta.insert("score".to_string(), serde_json::json!(pr.release_score));
+                    let grab_envelope = crate::activity::NotificationEnvelope {
+                        event_type: NotificationEventType::Grab,
+                        title: format!("Grabbed: {}", title.name),
+                        body: format!("Pending release '{}' grabbed for {} (score: {})", pr.release_title, title.name, pr.release_score),
+                        facet: Some(format!("{:?}", title.facet).to_lowercase()),
+                        metadata: grab_meta,
+                    };
+                    let _ = self
+                        .services
+                        .record_activity_event_with_notification(
+                            None,
+                            Some(title.id.clone()),
+                            ActivityKind::MovieDownloaded,
+                            format!(
+                                "Pending release grabbed: {} (score: {})",
+                                pr.release_title, pr.release_score
+                            ),
+                            ActivitySeverity::Success,
+                            vec![ActivityChannel::WebUi, ActivityChannel::Toast],
+                            grab_envelope,
+                        )
+                        .await;
+                }
 
                 Ok(true)
             }

@@ -2,6 +2,7 @@ use super::*;
 use crate::acquisition_policy::{evaluate_upgrade, AcquisitionThresholds};
 use crate::delay_profile::DelayProfile;
 use chrono::{DateTime, Utc};
+use scryer_domain::NotificationEventType;
 use std::collections::{HashMap, HashSet};
 use tracing::{info, warn};
 
@@ -966,20 +967,35 @@ impl AppUseCase {
                     )
                     .await;
 
-                let _ = self
-                    .services
-                    .record_activity_event(
-                        None,
-                        Some(title.id.clone()),
-                        ActivityKind::MovieDownloaded,
-                        format!(
-                            "RSS sync grabbed: {} (score: {})",
-                            best.title, candidate_score
-                        ),
-                        ActivitySeverity::Success,
-                        vec![ActivityChannel::WebUi, ActivityChannel::Toast],
-                    )
-                    .await;
+                {
+                    let mut grab_meta = HashMap::new();
+                    grab_meta.insert("title_name".to_string(), serde_json::json!(title.name));
+                    grab_meta.insert("release_title".to_string(), serde_json::json!(best.title));
+                    grab_meta.insert("indexer".to_string(), serde_json::json!(best.source));
+                    grab_meta.insert("score".to_string(), serde_json::json!(candidate_score));
+                    let grab_envelope = crate::activity::NotificationEnvelope {
+                        event_type: NotificationEventType::Grab,
+                        title: format!("Grabbed: {}", title.name),
+                        body: format!("RSS sync grabbed '{}' for {} (score: {})", best.title, title.name, candidate_score),
+                        facet: Some(format!("{:?}", title.facet).to_lowercase()),
+                        metadata: grab_meta,
+                    };
+                    let _ = self
+                        .services
+                        .record_activity_event_with_notification(
+                            None,
+                            Some(title.id.clone()),
+                            ActivityKind::MovieDownloaded,
+                            format!(
+                                "RSS sync grabbed: {} (score: {})",
+                                best.title, candidate_score
+                            ),
+                            ActivitySeverity::Success,
+                            vec![ActivityChannel::WebUi, ActivityChannel::Toast],
+                            grab_envelope,
+                        )
+                        .await;
+                }
 
                 report.releases_grabbed += 1;
             }

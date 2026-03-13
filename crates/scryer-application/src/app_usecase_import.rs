@@ -7,9 +7,11 @@ use crate::{
 use chrono::Utc;
 use scryer_domain::{
     is_video_file, Collection, CompletedDownload, DownloadQueueItem, DownloadQueueState,
-    Entitlement, EventType, Id, ImportDecision, ImportResult, ImportSkipReason, MediaFacet, User,
+    Entitlement, EventType, Id, ImportDecision, ImportResult, ImportSkipReason, MediaFacet,
+    NotificationEventType, User,
 };
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 const SERIES_PATH_KEY: &str = "series.path";
@@ -897,16 +899,31 @@ async fn import_movie_download(
                     event_message.clone(),
                 )
                 .await;
-            app.services
-                .record_activity_event(
-                    Some(actor.id.clone()),
-                    Some(title.id.clone()),
-                    ActivityKind::MovieDownloaded,
-                    event_message,
-                    ActivitySeverity::Success,
-                    vec![ActivityChannel::WebUi],
-                )
-                .await?;
+            {
+                let mut meta = HashMap::new();
+                meta.insert("title_name".to_string(), serde_json::json!(title.name));
+                if let Some(ref poster) = title.poster_url {
+                    meta.insert("poster_url".to_string(), serde_json::json!(poster));
+                }
+                let envelope = crate::activity::NotificationEnvelope {
+                    event_type: NotificationEventType::Download,
+                    title: format!("Downloaded: {}", title.name),
+                    body: event_message.clone(),
+                    facet: Some(format!("{:?}", title.facet).to_lowercase()),
+                    metadata: meta,
+                };
+                app.services
+                    .record_activity_event_with_notification(
+                        Some(actor.id.clone()),
+                        Some(title.id.clone()),
+                        ActivityKind::MovieDownloaded,
+                        event_message,
+                        ActivitySeverity::Success,
+                        vec![ActivityChannel::WebUi],
+                        envelope,
+                    )
+                    .await?;
+            }
 
             Ok(result)
         }
@@ -1051,16 +1068,31 @@ async fn import_series_download(
                 event_message.clone(),
             )
             .await;
-        app.services
-            .record_activity_event(
-                Some(actor.id.clone()),
-                Some(title.id.clone()),
-                ActivityKind::SeriesEpisodeImported,
-                event_message,
-                ActivitySeverity::Success,
-                vec![ActivityChannel::WebUi],
-            )
-            .await?;
+        {
+            let mut meta = HashMap::new();
+            meta.insert("title_name".to_string(), serde_json::json!(title.name));
+            if let Some(ref poster) = title.poster_url {
+                meta.insert("poster_url".to_string(), serde_json::json!(poster));
+            }
+            let envelope = crate::activity::NotificationEnvelope {
+                event_type: NotificationEventType::ImportComplete,
+                title: format!("Import complete: {}", title.name),
+                body: event_message.clone(),
+                facet: Some(format!("{:?}", title.facet).to_lowercase()),
+                metadata: meta,
+            };
+            app.services
+                .record_activity_event_with_notification(
+                    Some(actor.id.clone()),
+                    Some(title.id.clone()),
+                    ActivityKind::SeriesEpisodeImported,
+                    event_message,
+                    ActivitySeverity::Success,
+                    vec![ActivityChannel::WebUi],
+                    envelope,
+                )
+                .await?;
+        }
     }
 
     Ok(result)
@@ -2169,16 +2201,31 @@ pub async fn execute_manual_import(
             event_message.clone(),
         )
         .await;
-    app.services
-        .record_activity_event(
-            Some(actor.id.clone()),
-            Some(title.id.clone()),
-            ActivityKind::SeriesEpisodeImported,
-            event_message,
-            ActivitySeverity::Success,
-            vec![ActivityChannel::WebUi],
-        )
-        .await?;
+    {
+        let mut meta = HashMap::new();
+        meta.insert("title_name".to_string(), serde_json::json!(title.name));
+        if let Some(ref poster) = title.poster_url {
+            meta.insert("poster_url".to_string(), serde_json::json!(poster));
+        }
+        let envelope = crate::activity::NotificationEnvelope {
+            event_type: NotificationEventType::ImportComplete,
+            title: format!("Import complete: {}", title.name),
+            body: event_message.clone(),
+            facet: Some(format!("{:?}", title.facet).to_lowercase()),
+            metadata: meta,
+        };
+        app.services
+            .record_activity_event_with_notification(
+                Some(actor.id.clone()),
+                Some(title.id.clone()),
+                ActivityKind::SeriesEpisodeImported,
+                event_message,
+                ActivitySeverity::Success,
+                vec![ActivityChannel::WebUi],
+                envelope,
+            )
+            .await?;
+    }
 
     Ok(results)
 }
