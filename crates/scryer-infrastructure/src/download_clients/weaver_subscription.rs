@@ -102,11 +102,7 @@ pub async fn start_weaver_subscription_bridge(
                     info!("weaver WebSocket unreliable — starting GraphQL HTTP polling fallback");
                     let poll_token = token.child_token();
                     poll_cancel = Some(poll_token.clone());
-                    tokio::spawn(run_fallback_poller(
-                        app.clone(),
-                        actor.clone(),
-                        poll_token,
-                    ));
+                    tokio::spawn(run_fallback_poller(app.clone(), actor.clone(), poll_token));
                 }
             }
             SubscriptionOutcome::Disconnected(error) => {
@@ -206,8 +202,7 @@ async fn run_subscription(
         Ok(uri) => uri,
         Err(e) => return SubscriptionOutcome::ConnectError(format!("invalid WebSocket URL: {e}")),
     };
-    let mut request = ClientRequestBuilder::new(uri)
-        .with_sub_protocol("graphql-transport-ws");
+    let mut request = ClientRequestBuilder::new(uri).with_sub_protocol("graphql-transport-ws");
     if let Some(api_key) = api_key {
         request = request.with_header("x-api-key", api_key);
     }
@@ -258,9 +253,7 @@ async fn run_subscription(
             )
         }
         Err(_) => {
-            return SubscriptionOutcome::ConnectError(
-                "timeout waiting for connection_ack".into(),
-            )
+            return SubscriptionOutcome::ConnectError("timeout waiting for connection_ack".into())
         }
     };
 
@@ -274,9 +267,7 @@ async fn run_subscription(
     };
     let ack_json: Value = match serde_json::from_str(ack_text) {
         Ok(v) => v,
-        Err(e) => {
-            return SubscriptionOutcome::ConnectError(format!("invalid ack json: {e}"))
-        }
+        Err(e) => return SubscriptionOutcome::ConnectError(format!("invalid ack json: {e}")),
     };
     let msg_type = ack_json.get("type").and_then(Value::as_str).unwrap_or("");
     if msg_type != "connection_ack" {
