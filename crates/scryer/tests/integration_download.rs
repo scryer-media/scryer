@@ -5,7 +5,7 @@ mod common;
 use std::sync::Arc;
 
 use serde_json::json;
-use wiremock::matchers::{body_json_string, header, method, path, query_param};
+use wiremock::matchers::{body_json_string, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use common::{load_fixture, TestContext};
@@ -537,9 +537,11 @@ async fn nzbget_submit_download_supports_v25_3_append_signature() {
         .mount(&ctx.nzbget_server)
         .await;
 
+    // Append mock — matches any POST /jsonrpc that doesn't match the
+    // version mock above (wiremock tries mocks in reverse registration
+    // order, so version's exact-body matcher is checked first).
     Mock::given(method("POST"))
         .and(path("/jsonrpc"))
-        .and(header("content-encoding", "gzip"))
         .respond_with(
             ResponseTemplate::new(200).set_body_string(load_fixture("nzbget/append.json")),
         )
