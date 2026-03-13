@@ -23,6 +23,11 @@ export function useInstallPrompt(): InstallPromptState {
   const [isIosSafari, setIsIosSafari] = useState(false);
 
   useEffect(() => {
+    // PWA installation requires a secure context (HTTPS or localhost).
+    if (!window.isSecureContext) {
+      return;
+    }
+
     // Check if already running in standalone (installed PWA)
     const isStandalone =
       window.matchMedia("(display-mode: standalone)").matches ||

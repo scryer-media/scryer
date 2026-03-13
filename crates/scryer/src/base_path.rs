@@ -1,4 +1,6 @@
-use axum::response::Redirect;
+use axum::extract::Request;
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Redirect};
 use axum::routing::get;
 use axum::Router;
 
@@ -85,6 +87,13 @@ pub(crate) fn mount_router(router: Router, base_path: &BasePath) -> Router {
     let ui_root = base_path.ui_root();
     let base_prefix = base_path.basename().to_string();
 
+    // Redirect the bare prefix (e.g. `/scryer`) to the trailing-slash version
+    // (`/scryer/`).  Without the trailing slash the browser resolves relative
+    // asset paths (`./manifest.json`) against the parent directory (`/`) instead
+    // of the base path, breaking all static asset loads.
+    let bare = base_prefix.clone();
+    let target = ui_root.clone();
+
     Router::new()
         .route(
             "/",
@@ -94,6 +103,17 @@ pub(crate) fn mount_router(router: Router, base_path: &BasePath) -> Router {
             }),
         )
         .nest_service(&base_prefix, router)
+        .layer(axum::middleware::from_fn(move |req: Request, next: Next| {
+            let bare = bare.clone();
+            let target = target.clone();
+            async move {
+                if req.uri().path() == bare {
+                    Redirect::permanent(&target).into_response()
+                } else {
+                    next.run(req).await
+                }
+            }
+        }))
 }
 
 #[cfg(test)]
@@ -153,7 +173,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prefixed_router_serves_bare_root() {
+    async fn prefixed_router_redirects_bare_root_to_trailing_slash() {
         let app = mount_router(
             Router::new().route("/", get(|| async { StatusCode::OK })),
             &BasePath::from_raw(Some("/scryer/")),
@@ -169,7 +189,11 @@ mod tests {
             .await
             .expect("response");
 
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(
+            response.headers().get("location").unwrap().to_str().unwrap(),
+            "/scryer/"
+        );
     }
 
     #[tokio::test]

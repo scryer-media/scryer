@@ -226,8 +226,8 @@ export const RootHeader = React.memo(function RootHeader({
   );
 
   const handleSearchFocus = React.useCallback(() => {
-    openGlobalSearchPanel();
-  }, [openGlobalSearchPanel]);
+    openGlobalSearchPanel(isMobile || undefined);
+  }, [openGlobalSearchPanel, isMobile]);
 
   const handleSearchEscape = React.useCallback(
     (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -633,8 +633,7 @@ export const RootHeader = React.memo(function RootHeader({
                 ref={searchState.globalSearchInputRef}
                 value={searchState.globalSearch}
                 onChange={handleSearchChange}
-                onFocus={isMobile ? undefined : handleSearchFocus}
-                onClick={isMobile ? handleSearchFocus : undefined}
+                onFocus={handleSearchFocus}
                 onKeyDown={handleSearchEscape}
                 data-ui="global-search"
                 className={cn(
@@ -643,7 +642,6 @@ export const RootHeader = React.memo(function RootHeader({
                 )}
                 placeholder={t("search.globalPlaceholder")}
                 aria-label={t("search.globalPlaceholder")}
-                readOnly={isMobile}
               />
               {searchState.globalSearch && !isMobile ? (
                 <button

@@ -127,7 +127,7 @@ export interface UseGlobalSearchResult {
   catalogSearchResults: TitleRecord[];
   metadataSearchResults: MetadataSearchResults;
   isGlobalSearchPanelOpen: boolean;
-  openGlobalSearchPanel: () => void;
+  openGlobalSearchPanel: (force?: boolean) => void;
   closeGlobalSearchPanel: () => void;
   catalogQualityProfileOptions: CatalogQualityProfileOption[];
   resolveDefaultQualityProfileIdForFacet: (facet: Facet) => string;
@@ -208,6 +208,7 @@ export function useGlobalSearch({
     () => Object.fromEntries(FACET_REGISTRY.map((f) => [f.scopeId, QUALITY_PROFILE_INHERIT_VALUE])) as Record<ViewCategoryId, string>,
   );
   const [isGlobalSearchPanelOpen, setIsGlobalSearchPanelOpen] = useState(false);
+  const forcedOpenRef = useRef(false);
   const autocompleteRequestId = useRef(0);
   const autocompleteAbortRef = useRef<AbortController | null>(null);
 
@@ -675,7 +676,10 @@ export function useGlobalSearch({
         }
         return emptyMetadataSearchResults;
       });
-      setIsGlobalSearchPanelOpen((isOpen) => (isOpen ? false : isOpen));
+      // Don't auto-close when the panel was force-opened (mobile overlay).
+      if (!forcedOpenRef.current) {
+        setIsGlobalSearchPanelOpen((isOpen) => (isOpen ? false : isOpen));
+      }
       return;
     }
 
@@ -688,13 +692,19 @@ export function useGlobalSearch({
     };
   }, [globalSearch, runMetadataAutocomplete, emptyMetadataSearchResults]);
 
-  const openGlobalSearchPanel = useCallback(() => {
+  const openGlobalSearchPanel = useCallback((force?: boolean) => {
+    if (force) {
+      forcedOpenRef.current = true;
+      setIsGlobalSearchPanelOpen(true);
+      return;
+    }
     if (globalSearch.trim().length >= AUTOCOMPLETE_MIN_CHARS) {
       setIsGlobalSearchPanelOpen(true);
     }
   }, [globalSearch]);
 
   const closeGlobalSearchPanel = useCallback(() => {
+    forcedOpenRef.current = false;
     setIsGlobalSearchPanelOpen(false);
   }, []);
 
