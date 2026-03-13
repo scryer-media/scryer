@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200">
+  <defs>
+    <clipPath id="rounded">
+      <rect width="200" height="200" rx="24" ry="24"/>
+    </clipPath>
+  </defs>
+  <image href="https://raw.githubusercontent.com/scryer-media/scryer/main/docs/scryer-mascot.png" width="200" height="200" clip-path="url(#rounded)"/>
+</svg>

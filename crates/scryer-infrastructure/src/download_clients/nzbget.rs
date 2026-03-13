@@ -1,11 +1,8 @@
 use std::collections::HashMap;
-use std::io::Write;
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
 use chrono::{DateTime, Utc};
-use flate2::write::GzEncoder;
-use flate2::Compression;
 use reqwest::Client;
 use scryer_application::{
     AppError, AppResult, DownloadClient, DownloadClientAddRequest, DownloadGrabResult,
@@ -321,23 +318,11 @@ impl NzbgetDownloadClient {
             payload = %request_payload_for_log,
             "nzbget append request payload"
         );
-        let json_bytes = serde_json::to_vec(&request_payload).map_err(|err| {
-            AppError::Repository(format!("nzbget append payload serialization failed: {err}"))
-        })?;
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
-        encoder.write_all(&json_bytes).map_err(|err| {
-            AppError::Repository(format!("nzbget append gzip compression failed: {err}"))
-        })?;
-        let compressed = encoder.finish().map_err(|err| {
-            AppError::Repository(format!("nzbget append gzip finalization failed: {err}"))
-        })?;
-
         let mut request = self
             .http_client
             .post(&endpoint)
             .header("Content-Type", "application/json")
-            .header("Content-Encoding", "gzip")
-            .body(compressed);
+            .json(&request_payload);
 
         if let Some(username) = self.username.clone() {
             request = request.basic_auth(username, self.password.as_deref());

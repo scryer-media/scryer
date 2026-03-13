@@ -1,20 +1,17 @@
 services:
 
   nzbget:
-    build:
-      context: ./docker
-      dockerfile: scryer-nzbget-dev.Dockerfile
+    image: lscr.io/linuxserver/nzbget:latest
     container_name: scryer-nzbget
+    environment:
+      PUID: 1000
+      PGID: 1000
+      TZ: Etc/UTC
     ports:
       - "6789:6789"
     volumes:
       - ./tmp/nzbget/config:/config
       - ./tmp/scryer-media:/media
-    command: >
-      bash -lc '
-        mkdir -p /media/nzb /media/queue /media/tmp /media/inter /media/completed /media/logs
-        nzbget -s -o OutputMode=loggable -o WebDir=/usr/share/nzbget/webui -o ConfigTemplate=/usr/share/nzbget/webui/nzbget.conf -o MainDir=/media -o DestDir=/media/completed -o InterDir=/media/inter -o NzbDir=/media/nzb -o QueueDir=/media/queue -o TempDir=/media/tmp -o LogFile=/media/logs/nzbget.log -o CertStore=/etc/ssl/certs/ca-certificates.crt -c /config/nzbget.conf
-      '
 
   sabnzbd:
     image: lscr.io/linuxserver/sabnzbd:latest
@@ -94,7 +91,7 @@ services:
       - scryer-node_modules:/app/node_modules
     environment:
       SCRYER_GRAPHQL_URL: /graphql
-      SCRYER_METADATA_GATEWAY_GRAPHQL_URL: https://smg2.scryer.media/graphql
+      SCRYER_METADATA_GATEWAY_GRAPHQL_URL: https://smg.scryer.media/graphql
     command: >
       sh -c '
         set -eu

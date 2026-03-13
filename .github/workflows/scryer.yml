@@ -68,7 +68,7 @@ jobs:
         working-directory: apps/scryer-web
         env:
           SCRYER_GRAPHQL_URL: /graphql
-          SCRYER_METADATA_GATEWAY_GRAPHQL_URL: https://smg2.scryer.media/graphql
+          SCRYER_METADATA_GATEWAY_GRAPHQL_URL: https://smg.scryer.media/graphql
         run: npm run build
       - name: Verify static output
         run: test -f apps/scryer-web/dist/index.html

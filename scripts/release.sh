@@ -106,7 +106,7 @@ run_web_validation() {
     step "Running web build"
 
     SCRYER_GRAPHQL_URL=/graphql \
-    SCRYER_METADATA_GATEWAY_GRAPHQL_URL=https://smg2.scryer.media/graphql \
+    SCRYER_METADATA_GATEWAY_GRAPHQL_URL=https://smg.scryer.media/graphql \
         npm run build 2>&1 || die "Web build failed — fix before releasing"
 
     ok "Web build passed"

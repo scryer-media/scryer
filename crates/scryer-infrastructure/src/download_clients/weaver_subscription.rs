@@ -4,6 +4,10 @@
 //! protocol and receives real-time job snapshots. These are mapped to
 //! scryer's `DownloadQueueItem` and broadcast through the same channel
 //! that the HTTP-based download queue poller uses for NZBGet/SABnzbd.
+//!
+//! If the WebSocket connection fails repeatedly, the bridge automatically
+//! falls back to GraphQL HTTP polling so the UI stays up-to-date. When the
+//! WebSocket reconnects the poller is stopped and real-time push resumes.
 
 use std::collections::HashSet;
 
@@ -11,7 +15,7 @@ use futures_util::{SinkExt, StreamExt};
 use scryer_application::AppUseCase;
 use scryer_domain::DownloadQueueState;
 use serde_json::{json, Value};
-use tokio_tungstenite::tungstenite::{http::Request, Message};
+use tokio_tungstenite::tungstenite::{ClientRequestBuilder, Message};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -30,6 +34,12 @@ const JOB_UPDATES_QUERY: &str = r#"
     }
 "#;
 
+/// Number of consecutive WebSocket failures before falling back to HTTP polling.
+const POLL_FALLBACK_THRESHOLD: u32 = 3;
+
+/// Interval between HTTP polls when in fallback mode (seconds).
+const POLL_FALLBACK_INTERVAL_SECS: u64 = 2;
+
 /// Start a WebSocket subscription bridge to Weaver.
 ///
 /// This replaces the HTTP polling loop (`start_download_queue_poller`) when
@@ -41,6 +51,9 @@ const JOB_UPDATES_QUERY: &str = r#"
 /// 3. Triggers auto-import for newly completed downloads
 ///
 /// Reconnects automatically on disconnect with exponential backoff.
+/// After [`POLL_FALLBACK_THRESHOLD`] consecutive failures the bridge starts
+/// a GraphQL HTTP polling loop so that download-queue data keeps flowing to
+/// the UI. When the WebSocket reconnects the poller is stopped automatically.
 pub async fn start_weaver_subscription_bridge(
     app: AppUseCase,
     token: CancellationToken,
@@ -57,6 +70,9 @@ pub async fn start_weaver_subscription_bridge(
 
     let mut backoff_secs: u64 = 5;
     let max_backoff: u64 = 60;
+    let mut consecutive_failures: u32 = 0;
+    // Token used to stop fallback polling when WS reconnects.
+    let mut poll_cancel: Option<CancellationToken> = None;
 
     loop {
         if token.is_cancelled() {
@@ -67,23 +83,48 @@ pub async fn start_weaver_subscription_bridge(
         info!(url = ws_url.as_str(), "connecting to weaver WebSocket");
 
         match run_subscription(&app, &actor, &ws_url, api_key.as_deref(), &token).await {
-            Ok(()) => {
-                // Clean shutdown (e.g. cancellation token fired).
+            SubscriptionOutcome::Shutdown => {
+                stop_fallback_poller(&mut poll_cancel);
                 info!("weaver subscription bridge stopped cleanly");
                 return;
             }
-            Err(error) => {
+            SubscriptionOutcome::ConnectError(error) => {
+                consecutive_failures += 1;
                 warn!(
                     error = %error,
                     backoff_secs,
-                    "weaver subscription disconnected; reconnecting"
+                    consecutive_failures,
+                    "weaver WebSocket connect failed; retrying"
                 );
+
+                // Start fallback polling after repeated connect failures.
+                if consecutive_failures >= POLL_FALLBACK_THRESHOLD && poll_cancel.is_none() {
+                    info!("weaver WebSocket unreliable — starting GraphQL HTTP polling fallback");
+                    let poll_token = token.child_token();
+                    poll_cancel = Some(poll_token.clone());
+                    tokio::spawn(run_fallback_poller(
+                        app.clone(),
+                        actor.clone(),
+                        poll_token,
+                    ));
+                }
+            }
+            SubscriptionOutcome::Disconnected(error) => {
+                // The subscription *was* working. Reset failure state and stop
+                // the poller (if any) on the next successful reconnect — but
+                // since we know the server was reachable, reset backoff now
+                // and try again quickly.
+                warn!(error = %error, "weaver subscription disconnected; reconnecting");
+                backoff_secs = 5;
+                consecutive_failures = 0;
+                stop_fallback_poller(&mut poll_cancel);
             }
         }
 
         // Exponential backoff before reconnect.
         tokio::select! {
             _ = token.cancelled() => {
+                stop_fallback_poller(&mut poll_cancel);
                 info!("weaver subscription bridge shutting down during backoff");
                 return;
             }
@@ -93,31 +134,95 @@ pub async fn start_weaver_subscription_bridge(
     }
 }
 
+/// Cancel the fallback poller if one is running.
+fn stop_fallback_poller(poll_cancel: &mut Option<CancellationToken>) {
+    if let Some(cancel) = poll_cancel.take() {
+        info!("stopping GraphQL HTTP polling fallback");
+        cancel.cancel();
+    }
+}
+
+/// HTTP polling loop used as fallback when the WebSocket is down.
+///
+/// Polls `list_download_queue` every [`POLL_FALLBACK_INTERVAL_SECS`] seconds,
+/// broadcasting results through the same channel the subscription uses.
+async fn run_fallback_poller(
+    app: AppUseCase,
+    actor: scryer_domain::User,
+    token: CancellationToken,
+) {
+    let mut interval =
+        tokio::time::interval(std::time::Duration::from_secs(POLL_FALLBACK_INTERVAL_SECS));
+
+    loop {
+        tokio::select! {
+            _ = token.cancelled() => {
+                info!("weaver fallback poller stopped");
+                return;
+            }
+            _ = interval.tick() => {
+                match app.list_download_queue(&actor, true, false).await {
+                    Ok(items) => {
+                        scryer_application::try_import_completed_downloads(
+                            &app, &actor, &items,
+                        )
+                        .await;
+
+                        emit_queue_metrics(&items);
+
+                        let _ = app.services.download_queue_broadcast.send(items);
+                    }
+                    Err(error) => {
+                        warn!(error = %error, "weaver fallback poll failed");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Outcome of a single `run_subscription` attempt. Tells the caller whether
+/// the WebSocket ever became fully operational (subscribed and received at
+/// least one handshake) so backoff/fallback state can be reset appropriately.
+enum SubscriptionOutcome {
+    /// Clean shutdown via cancellation token — no reconnect needed.
+    Shutdown,
+    /// Failed before the subscription was active (connect, handshake, or
+    /// subscribe failed). Counts toward `consecutive_failures`.
+    ConnectError(String),
+    /// Was active but later disconnected. Backoff should be reset since the
+    /// connection *did* work, but we still need to reconnect.
+    Disconnected(String),
+}
+
 async fn run_subscription(
     app: &AppUseCase,
     actor: &scryer_domain::User,
     ws_url: &str,
     api_key: Option<&str>,
     token: &CancellationToken,
-) -> Result<(), String> {
-    let mut request_builder = Request::builder()
-        .uri(ws_url)
-        .header("Sec-WebSocket-Protocol", "graphql-transport-ws");
+) -> SubscriptionOutcome {
+    let uri: tokio_tungstenite::tungstenite::http::Uri = match ws_url.parse() {
+        Ok(uri) => uri,
+        Err(e) => return SubscriptionOutcome::ConnectError(format!("invalid WebSocket URL: {e}")),
+    };
+    let mut request = ClientRequestBuilder::new(uri)
+        .with_sub_protocol("graphql-transport-ws");
     if let Some(api_key) = api_key {
-        request_builder = request_builder.header("x-api-key", api_key);
+        request = request.with_header("x-api-key", api_key);
     }
-    let request = request_builder
-        .body(())
-        .map_err(|e| format!("failed to build WebSocket request: {e}"))?;
 
-    let (ws_stream, _response) = tokio_tungstenite::connect_async(request)
-        .await
-        .map_err(|e| format!("WebSocket connect failed: {e}"))?;
+    let (ws_stream, _response) = match tokio_tungstenite::connect_async(request).await {
+        Ok(pair) => pair,
+        Err(e) => {
+            return SubscriptionOutcome::ConnectError(format!("WebSocket connect failed: {e}"))
+        }
+    };
 
     let (mut write, mut read) = ws_stream.split();
 
     // --- graphql-ws handshake: connection_init ---
-    write
+    if let Err(e) = write
         .send(Message::Text(
             match api_key {
                 Some(api_key) => json!({
@@ -135,24 +240,49 @@ async fn run_subscription(
             .into(),
         ))
         .await
-        .map_err(|e| format!("failed to send connection_init: {e}"))?;
+    {
+        return SubscriptionOutcome::ConnectError(format!("failed to send connection_init: {e}"));
+    }
 
     // Wait for connection_ack.
-    let ack = tokio::time::timeout(std::time::Duration::from_secs(10), read.next())
-        .await
-        .map_err(|_| "timeout waiting for connection_ack".to_string())?
-        .ok_or("WebSocket closed before connection_ack")?
-        .map_err(|e| format!("WebSocket error waiting for ack: {e}"))?;
+    let ack = match tokio::time::timeout(std::time::Duration::from_secs(10), read.next()).await {
+        Ok(Some(Ok(msg))) => msg,
+        Ok(Some(Err(e))) => {
+            return SubscriptionOutcome::ConnectError(format!(
+                "WebSocket error waiting for ack: {e}"
+            ))
+        }
+        Ok(None) => {
+            return SubscriptionOutcome::ConnectError(
+                "WebSocket closed before connection_ack".into(),
+            )
+        }
+        Err(_) => {
+            return SubscriptionOutcome::ConnectError(
+                "timeout waiting for connection_ack".into(),
+            )
+        }
+    };
 
     let ack_text = match &ack {
         Message::Text(t) => t.as_ref(),
-        _ => return Err("expected text message for connection_ack".into()),
+        _ => {
+            return SubscriptionOutcome::ConnectError(
+                "expected text message for connection_ack".into(),
+            )
+        }
     };
-    let ack_json: Value =
-        serde_json::from_str(ack_text).map_err(|e| format!("invalid ack json: {e}"))?;
+    let ack_json: Value = match serde_json::from_str(ack_text) {
+        Ok(v) => v,
+        Err(e) => {
+            return SubscriptionOutcome::ConnectError(format!("invalid ack json: {e}"))
+        }
+    };
     let msg_type = ack_json.get("type").and_then(Value::as_str).unwrap_or("");
     if msg_type != "connection_ack" {
-        return Err(format!("expected connection_ack, got {msg_type}"));
+        return SubscriptionOutcome::ConnectError(format!(
+            "expected connection_ack, got {msg_type}"
+        ));
     }
 
     debug!("weaver WebSocket connection_ack received");
@@ -165,39 +295,45 @@ async fn run_subscription(
             "query": JOB_UPDATES_QUERY,
         }
     });
-    write
+    if let Err(e) = write
         .send(Message::Text(subscribe_msg.to_string().into()))
         .await
-        .map_err(|e| format!("failed to send subscribe: {e}"))?;
+    {
+        return SubscriptionOutcome::ConnectError(format!("failed to send subscribe: {e}"));
+    }
 
     info!("weaver subscription active");
 
-    // Track which completed jobs we've already triggered imports for.
+    // ── From here on the subscription is live; any failure is a Disconnected. ──
+
     let mut imported_job_ids: HashSet<String> = HashSet::new();
 
-    // Message loop.
     loop {
         let msg = tokio::select! {
-            _ = token.cancelled() => return Ok(()),
+            _ = token.cancelled() => return SubscriptionOutcome::Shutdown,
             msg = read.next() => {
                 match msg {
                     Some(Ok(msg)) => msg,
-                    Some(Err(e)) => return Err(format!("WebSocket read error: {e}")),
-                    None => return Err("WebSocket stream ended".into()),
+                    Some(Err(e)) => return SubscriptionOutcome::Disconnected(format!("WebSocket read error: {e}")),
+                    None => return SubscriptionOutcome::Disconnected("WebSocket stream ended".into()),
                 }
             }
         };
 
         match msg {
             Message::Text(text) => {
-                handle_ws_message(text.as_ref(), app, actor, &mut write, &mut imported_job_ids)
-                    .await?;
+                if let Err(e) =
+                    handle_ws_message(text.as_ref(), app, actor, &mut write, &mut imported_job_ids)
+                        .await
+                {
+                    return SubscriptionOutcome::Disconnected(e);
+                }
             }
             Message::Ping(data) => {
                 let _ = write.send(Message::Pong(data)).await;
             }
             Message::Close(_) => {
-                return Err("WebSocket closed by server".into());
+                return SubscriptionOutcome::Disconnected("WebSocket closed by server".into());
             }
             _ => {}
         }
@@ -251,23 +387,9 @@ where
     Ok(())
 }
 
-async fn process_job_snapshot(
-    snapshot: &Value,
-    app: &AppUseCase,
-    actor: &scryer_domain::User,
-    imported_job_ids: &mut HashSet<String>,
-) {
-    let jobs = match snapshot.get("jobs").and_then(Value::as_array) {
-        Some(jobs) => jobs,
-        None => return,
-    };
-
-    let items: Vec<scryer_domain::DownloadQueueItem> =
-        jobs.iter().filter_map(weaver_job_to_queue_item).collect();
-
-    // Emit download queue gauge by state.
+fn emit_queue_metrics(items: &[scryer_domain::DownloadQueueItem]) {
     let mut counts = [0u64; 9];
-    for item in &items {
+    for item in items {
         match item.state {
             DownloadQueueState::Queued => counts[0] += 1,
             DownloadQueueState::Downloading => counts[1] += 1,
@@ -294,6 +416,23 @@ async fn process_job_snapshot(
     for (label, &count) in labels.iter().zip(&counts) {
         metrics::gauge!("scryer_download_queue_items", "state" => *label).set(count as f64);
     }
+}
+
+async fn process_job_snapshot(
+    snapshot: &Value,
+    app: &AppUseCase,
+    actor: &scryer_domain::User,
+    imported_job_ids: &mut HashSet<String>,
+) {
+    let jobs = match snapshot.get("jobs").and_then(Value::as_array) {
+        Some(jobs) => jobs,
+        None => return,
+    };
+
+    let items: Vec<scryer_domain::DownloadQueueItem> =
+        jobs.iter().filter_map(weaver_job_to_queue_item).collect();
+
+    emit_queue_metrics(&items);
 
     // Broadcast to scryer's download queue channel (feeds the UI subscription).
     let _ = app.services.download_queue_broadcast.send(items.clone());

@@ -2,191 +2,122 @@
 
 This document covers the development setup, architecture, and workflows for contributors.
 
-
-## Repo layout
+## Repo Layout
 
 ```
 scryer/
-  docs/
-    architecture/
-    intentions/
-    specs/
-    adr/
   crates/
-    scryer-domain/
-    scryer-application/
-    scryer-infrastructure/
-    scryer-interface/
-    scryer/
+    scryer-domain/          # Domain models and traits
+    scryer-application/     # Use cases and business logic
+    scryer-infrastructure/  # External integrations (DB, HTTP, download clients)
+    scryer-interface/       # GraphQL API and WebSocket layer
+    scryer-release-parser/  # Release title parsing and scoring
+    scryer-rules/           # OPA/Rego policy engine
+    scryer-plugins/         # WASM plugin runtime and built-in plugins
+    scryer-mediainfo/       # Media file analysis (ffprobe)
+    scryer/                 # Binary entry point, CLI, server bootstrap
+    scryer-mock-apis/       # Mock services for testing
   apps/
-    scryer-web/            # Next.js SPA
-    scryer-metadata-gateway/ # Go metadata gateway (SMG)
+    scryer-web/             # Vite + React 19 + React Router 7 SPA
+  docker/                   # Dockerfiles for build, dev, and release
+  scripts/                  # Dev stack orchestration and release tooling
+  docs/                     # Getting started guide and assets
 ```
 
-## Design-first loop
+## Design-First Workflow
 
-This repo is intentionally scaffolded around intent and architecture documentation before
-implementation:
+Architecture documentation lives in the [scryer-docs](https://github.com/scryer-media/scryer-docs) sibling repo:
 
-- `docs/intentions` defines the initial intentions and product direction.
-- `docs/specs` captures expected behavior in bounded requirements.
-- `docs/architecture` stores the declarative architecture declaration and derived notes.
-- `docs/adr` tracks architectural decisions as they are made.
+1. Update or add an intention in `intentions/`
+2. Derive/adjust specs from that intention in `specs/`
+3. Update `architecture/manifest.yaml` if structure changes
+4. Record decisions in `adr/`
+5. Implement code only after artifacts are aligned
 
-The workflow:
+## UI Architecture
 
-1. Update or add an intention.
-2. Derive/adjust specs from that intention.
-3. Update `docs/architecture/manifest.yaml` if structure or boundaries change.
-4. Record the decision in an ADR.
-5. Implement code only after the above artifacts are aligned.
+The frontend is a **Vite + React 19 + React Router 7** single-page application with a unified media model behind the API, where media-type is a facet (`movie`, `series`, `anime`) filtered at UI boundaries.
 
-## UI model
-
-The first architectural principle is a **unified media model** behind the API with
-media-type as a facet (`movie`, `tv`, `anime`) filtered at UI boundaries.
+- **UI primitives**: shadcn/ui components in `apps/scryer-web/components/ui/`
+- **Theme**: Tailwind v4 with semantic color tokens in `apps/scryer-web/app/globals.css`
+- **i18n**: All visible strings go through `t(...)` from `apps/scryer-web/lib/i18n/`
+- **GraphQL**: urql with `network-only` policy (no client-side caching)
 
 ## Prerequisites
 
 - **Rust** (stable toolchain) + Cargo
 - **Node.js** 22+ and npm
-- **Go** 1.24+
-- **Docker** (for PostgreSQL)
-- **Docker Compose** (for the full dev stack orchestration, optional)
+- **Docker** and Docker Compose
 
-## Development Run (Docker Compose)
+## Development Stack
 
-For local development, use the script runner to orchestrate the Docker Compose stack:
+The dev stack is orchestrated via Docker Compose:
 
 ```bash
 ./scripts/stack-up.sh
 ```
 
-The orchestrator brings up:
+This brings up:
+- NZBGet container (download client for testing)
+- Scryer Rust service (compiled and run inside the container)
+- Vite dev server for the web UI
+- Nginx reverse proxy combining both on port 3000
 
-- PostgreSQL container for metadata gateway cache
-- Metadata gateway service task (`go run`) for GraphQL + TVDB normalization
-- Rust service (`raw_exec`, separate Next.js dev server)
-- Next.js SPA (`raw_exec`, separate process)
-
-To stop the stack:
+To stop:
 
 ```bash
 ./scripts/stack-down.sh
 ```
 
-The stack can be run in foreground (default, Ctrl+C to stop app services) or detached:
+View logs:
 
 ```bash
-DETACHED=1 ./scripts/stack-up.sh
+./scripts/stack-logs.sh
 ```
 
-Docker Compose must already be running. Set `NOMAD_ADDR` for a reachable endpoint before running:
+## Running Services Individually
+
+### Scryer (Rust backend)
 
 ```bash
-NOMAD_ADDR="http://127.0.0.1:4646" ./scripts/stack-up.sh
+cargo run -p scryer
 ```
 
-SMG TVDB credentials are loaded from `apps/scryer-metadata-gateway/.env`.
+Environment is loaded from `crates/scryer/.env`.
 
-Job variables can be overridden by environment before stack startup (for example `SCRYER_WEB_PORT` / `SCRYER_BIND` / `NOMAD_GATEWAY_PORT` / `NOMAD_DATACENTER` / `NOMAD_NETWORK_MODE`).
-
-## Running services individually
-
-### Scryer (Rust service + Next.js UI)
+### Web UI (Vite dev server)
 
 ```bash
-cd crates/scryer && cargo run -p scryer
+cd apps/scryer-web && npm run dev
 ```
 
-Use separate terminals for each process below. Environment is loaded from `.env` files at the repo root and in `crates/scryer/`.
-
-Run only the backend:
+## Build & Test
 
 ```bash
-cd crates/scryer && cargo run -p scryer
-```
+# Rust
+cargo build --workspace --locked
+cargo nextest run --workspace --locked
 
-Run only the web UI dev server:
+# Frontend
+cd apps/scryer-web && npm ci && npm run build
 
-```bash
-cd apps/scryer-web && NEXT_PUBLIC_SCRYER_GRAPHQL_URL="${NEXT_PUBLIC_SCRYER_GRAPHQL_URL:-http://127.0.0.1:8080/graphql}" npm run dev -- --port "${SCRYER_WEB_PORT:-3000}"
-```
-
-### Metadata Gateway (SMG)
-
-```bash
-cd apps/scryer-metadata-gateway && GOCACHE=/tmp/gocache go run .
-```
-
-SMG loads its environment from `apps/scryer-metadata-gateway/.env`. See `.env.example` in that directory for all available variables.
-
-Regenerate GraphQL bindings after schema changes:
-
-```bash
-cd apps/scryer-metadata-gateway && GOCACHE=/tmp/gocache go run github.com/99designs/gqlgen@v0.17.86 generate
-```
-
-Run SMG tests:
-
-```bash
-cd apps/scryer-metadata-gateway && go test ./...
-```
-
-## Release pipeline (single-command binary + embedded UI)
-
-From repo root:
-
-```bash
-cd apps/scryer-web && NEXT_PUBLIC_SCRYER_GRAPHQL_URL=/graphql npm run build
-rm -rf crates/scryer/ui
-mkdir -p crates/scryer/ui
-cp -R apps/scryer-web/out/. crates/scryer/ui/
-SCRYER_PROFILE=release SCRYER_WEB_DIST_DIR=crates/scryer/ui cargo run -p scryer
-```
-
-This command:
-
-- Builds the Next.js SPA (static export)
-- Copies the export into `crates/scryer/ui`
-- Builds the Rust service (`--release` by default)
-- Runs the Rust service serving GraphQL and embedded static UI
-
-Set `SCRYER_PROFILE=debug` if you want a debug Rust binary instead:
-
-```bash
-SCRYER_PROFILE=debug SCRYER_WEB_DIST_DIR=crates/scryer/ui cargo run -p scryer
-```
-
-## Tests and checks
-
-```bash
-cd crates/scryer && cargo test -p scryer
-cd crates/scryer && cargo check -p scryer
+# Lint
+cargo clippy --workspace --locked -- -D warnings
 cd apps/scryer-web && npm run lint
-cd apps/scryer-metadata-gateway && go test ./...
 ```
 
-## NZBGet (local dev)
+## Release
 
-Start a local NZBGet daemon for development:
+From the repo root:
 
 ```bash
-/opt/homebrew/bin/nzbget -D -o OutputMode=loggable \
-	-o WebDir=/opt/homebrew/opt/nzbget/share/nzbget/webui \
-	-o ConfigTemplate=/opt/homebrew/opt/nzbget/share/nzbget/nzbget.conf \
-	-o CertStore=/opt/homebrew/opt/ca-certificates/share/ca-certificates/cacert.pem \
-	-c tmp/nzbget/config/nzbget.conf
+./scripts/release.sh          # patch bump
+./scripts/release.sh --minor  # minor bump
+./scripts/release.sh --dry-run
 ```
 
-Stop it:
+The script handles: cargo update, audit, clippy, tests, npm audit fix, lint, version bumping all workspace crates, cargo check, signed tag, and push. CI builds and publishes the release on tag push.
 
-```bash
-pkill -f "/opt/homebrew/bin/nzbget -D -o OutputMode=loggable -o WebDir=/opt/homebrew/opt/nzbget/share/nzbget/webui -o ConfigTemplate=/opt/homebrew/opt/nzbget/share/nzbget/nzbget.conf -o CertStore=/opt/homebrew/opt/ca-certificates/share/ca-certificates/cacert.pem -c tmp/nzbget/config/nzbget.conf"
-```
+## Reporting Issues
 
-Requires NZBGet installed at `/opt/homebrew/bin/nzbget` and a config file at `tmp/nzbget/config/nzbget.conf`.
-
-## Command reference
-
-Use the scripts and shell commands shown above for all common workflows.
+File bug reports and feature requests in the [GitHub Issues](https://github.com/scryer-media/scryer/issues) tab.
