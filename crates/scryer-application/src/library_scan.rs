@@ -188,20 +188,20 @@ pub trait MetadataGateway: Send + Sync {
 
     async fn get_series(&self, tvdb_id: i64, language: &str) -> AppResult<SeriesMetadata>;
 
-    /// Fetch metadata for multiple movies in a single round-trip.
-    /// Returns a map from tvdb_id → metadata. IDs that fail to resolve are omitted.
-    async fn get_movies_bulk(
+    /// Fetch metadata for movies and series in a single GraphQL round-trip.
+    /// Returns resolved results; IDs that fail to resolve are omitted from the maps.
+    async fn get_metadata_bulk(
         &self,
-        tvdb_ids: &[i64],
+        movie_tvdb_ids: &[i64],
+        series_tvdb_ids: &[i64],
         language: &str,
-    ) -> AppResult<std::collections::HashMap<i64, MovieMetadata>>;
+    ) -> AppResult<BulkMetadataResult>;
+}
 
-    /// Fetch metadata for multiple series in a single round-trip.
-    async fn get_series_bulk(
-        &self,
-        tvdb_ids: &[i64],
-        language: &str,
-    ) -> AppResult<std::collections::HashMap<i64, SeriesMetadata>>;
+#[derive(Debug, Clone, Default)]
+pub struct BulkMetadataResult {
+    pub movies: std::collections::HashMap<i64, MovieMetadata>,
+    pub series: std::collections::HashMap<i64, SeriesMetadata>,
 }
 
 #[async_trait]
@@ -275,21 +275,12 @@ impl MetadataGateway for NullMetadataGateway {
         ))
     }
 
-    async fn get_movies_bulk(
+    async fn get_metadata_bulk(
         &self,
-        _tvdb_ids: &[i64],
+        _movie_tvdb_ids: &[i64],
+        _series_tvdb_ids: &[i64],
         _language: &str,
-    ) -> AppResult<std::collections::HashMap<i64, MovieMetadata>> {
-        Err(AppError::Repository(
-            "metadata gateway is not configured".into(),
-        ))
-    }
-
-    async fn get_series_bulk(
-        &self,
-        _tvdb_ids: &[i64],
-        _language: &str,
-    ) -> AppResult<std::collections::HashMap<i64, SeriesMetadata>> {
+    ) -> AppResult<BulkMetadataResult> {
         Err(AppError::Repository(
             "metadata gateway is not configured".into(),
         ))

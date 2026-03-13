@@ -93,9 +93,10 @@ pub use library_rename::{
     RenameMissingMetadataPolicy, RenamePlan, RenamePlanItem, RenameWriteAction,
 };
 pub use library_scan::{
-    AnimeEpisodeMapping, AnimeMapping, AnimeMovie, EpisodeMetadata, LibraryFile,
-    LibraryScanSummary, LibraryScanner, MetadataGateway, MetadataSearchItem, MovieMetadata,
-    MultiMetadataSearchResult, RichMetadataSearchItem, SeasonMetadata, SeriesMetadata,
+    AnimeEpisodeMapping, AnimeMapping, AnimeMovie, BulkMetadataResult, EpisodeMetadata,
+    LibraryFile, LibraryScanSummary, LibraryScanner, MetadataGateway, MetadataSearchItem,
+    MovieMetadata, MultiMetadataSearchResult, RichMetadataSearchItem, SeasonMetadata,
+    SeriesMetadata,
 };
 pub use null_repositories::{
     NullDownloadSubmissionRepository, NullFileImporter, NullHousekeepingRepository,
@@ -1880,12 +1881,13 @@ mod tests {
             Err(AppError::Repository("not implemented in tests".into()))
         }
 
-        async fn get_movies_bulk(
+        async fn get_metadata_bulk(
             &self,
-            tvdb_ids: &[i64],
+            movie_tvdb_ids: &[i64],
+            _series_tvdb_ids: &[i64],
             _language: &str,
-        ) -> AppResult<HashMap<i64, MovieMetadata>> {
-            Ok(tvdb_ids
+        ) -> AppResult<BulkMetadataResult> {
+            let movies = movie_tvdb_ids
                 .iter()
                 .filter_map(|tvdb_id| {
                     self.movies
@@ -1893,15 +1895,11 @@ mod tests {
                         .cloned()
                         .map(|movie| (*tvdb_id, movie))
                 })
-                .collect())
-        }
-
-        async fn get_series_bulk(
-            &self,
-            _tvdb_ids: &[i64],
-            _language: &str,
-        ) -> AppResult<HashMap<i64, SeriesMetadata>> {
-            Err(AppError::Repository("not implemented in tests".into()))
+                .collect();
+            Ok(BulkMetadataResult {
+                movies,
+                series: HashMap::new(),
+            })
         }
     }
 

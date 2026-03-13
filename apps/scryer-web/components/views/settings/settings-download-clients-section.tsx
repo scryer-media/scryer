@@ -184,6 +184,7 @@ const DOWNLOAD_CLIENT_TYPE_LOGO_OPTIONS: DownloadClientTypeLogoOption[] = [
   },
   {
     value: "weaver",
+    iconSrc: "/download-clients/weaver.webp",
     icon: WeaverIcon,
   },
   {
@@ -245,6 +246,10 @@ export function SettingsDownloadClientsSection({
   const t = useTranslate();
   const urlPreview = buildUrlPreview(downloadClientDraft);
   const normalizedClientType = downloadClientDraft.clientType.trim().toLowerCase();
+  const configuredClientLabel = downloadClientDraft.clientType.trim();
+  const selectedDownloadClientLabel =
+    downloadClientTypeOptions.find((option) => option.value === normalizedClientType)?.label ??
+    (configuredClientLabel || "Download client");
   const hasApiKeyField =
     normalizedClientType === "sabnzbd" || normalizedClientType === "weaver";
   const weaverApiKeyUrl =
@@ -600,7 +605,9 @@ export function SettingsDownloadClientsSection({
                 onClick={() => void testDownloadClientConnection()}
                 disabled={isTestingDownloadClientConnection || mutatingDownloadClientId !== null}
               >
-                {isTestingDownloadClientConnection ? t("status.testingDownloadClient") : t("label.testConnection")}
+                {isTestingDownloadClientConnection
+                  ? t("status.testingDownloadClient", { client: selectedDownloadClientLabel })
+                  : t("label.testConnection")}
               </Button>
               <Button type="submit" disabled={mutatingDownloadClientId === "new"}>
                 {mutatingDownloadClientId === "new"

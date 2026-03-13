@@ -2408,69 +2408,48 @@ pub async fn start_background_hydration_loop(
             let mut had_failures = false;
             let language = "eng";
 
-            // ---- Bulk-fetch movies (single GraphQL call) ----
-            if !movie_titles.is_empty() {
-                let tvdb_ids: Vec<i64> = movie_titles.iter().filter_map(extract_tvdb_id).collect();
+            // ---- Single bulk fetch for all movies + series ----
+            let movie_ids: Vec<i64> = movie_titles.iter().filter_map(extract_tvdb_id).collect();
+            let series_ids: Vec<i64> = series_titles.iter().filter_map(extract_tvdb_id).collect();
 
-                match app
-                    .services
-                    .metadata_gateway
-                    .get_movies_bulk(&tvdb_ids, language)
-                    .await
-                {
-                    Ok(metadata_map) => {
-                        for title in movie_titles {
-                            let tvdb_id = extract_tvdb_id(&title);
-                            if let Some(movie) = tvdb_id.and_then(|id| metadata_map.get(&id)) {
-                                let result =
-                                    super::movie_to_hydration_result(movie.clone(), language);
-                                let hydrated = app.apply_hydration_result(title, result).await;
-                                if hydrated.metadata_fetched_at.is_some() {
-                                    app.emit_hydration_completed(&hydrated).await;
-                                }
-                                sync_wanted_after_hydration(&app, &hydrated).await;
-                            } else {
-                                had_failures = true;
+            match app
+                .services
+                .metadata_gateway
+                .get_metadata_bulk(&movie_ids, &series_ids, language)
+                .await
+            {
+                Ok(bulk) => {
+                    for title in movie_titles {
+                        let tvdb_id = extract_tvdb_id(&title);
+                        if let Some(movie) = tvdb_id.and_then(|id| bulk.movies.get(&id)) {
+                            let result = super::movie_to_hydration_result(movie.clone(), language);
+                            let hydrated = app.apply_hydration_result(title, result).await;
+                            if hydrated.metadata_fetched_at.is_some() {
+                                app.emit_hydration_completed(&hydrated).await;
                             }
+                            sync_wanted_after_hydration(&app, &hydrated).await;
+                        } else {
+                            had_failures = true;
                         }
                     }
-                    Err(err) => {
-                        warn!(error = %err, "hydration loop: bulk movie fetch failed");
-                        had_failures = true;
+                    for title in series_titles {
+                        let tvdb_id = extract_tvdb_id(&title);
+                        if let Some(series) = tvdb_id.and_then(|id| bulk.series.get(&id)) {
+                            let result =
+                                super::series_to_hydration_result(series.clone(), language);
+                            let hydrated = app.apply_hydration_result(title, result).await;
+                            if hydrated.metadata_fetched_at.is_some() {
+                                app.emit_hydration_completed(&hydrated).await;
+                            }
+                            sync_wanted_after_hydration(&app, &hydrated).await;
+                        } else {
+                            had_failures = true;
+                        }
                     }
                 }
-            }
-
-            // ---- Bulk-fetch series + anime (single GraphQL call) ----
-            if !series_titles.is_empty() {
-                let tvdb_ids: Vec<i64> = series_titles.iter().filter_map(extract_tvdb_id).collect();
-
-                match app
-                    .services
-                    .metadata_gateway
-                    .get_series_bulk(&tvdb_ids, language)
-                    .await
-                {
-                    Ok(metadata_map) => {
-                        for title in series_titles {
-                            let tvdb_id = extract_tvdb_id(&title);
-                            if let Some(series) = tvdb_id.and_then(|id| metadata_map.get(&id)) {
-                                let result =
-                                    super::series_to_hydration_result(series.clone(), language);
-                                let hydrated = app.apply_hydration_result(title, result).await;
-                                if hydrated.metadata_fetched_at.is_some() {
-                                    app.emit_hydration_completed(&hydrated).await;
-                                }
-                                sync_wanted_after_hydration(&app, &hydrated).await;
-                            } else {
-                                had_failures = true;
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        warn!(error = %err, "hydration loop: bulk series fetch failed");
-                        had_failures = true;
-                    }
+                Err(err) => {
+                    warn!(error = %err, "hydration loop: bulk metadata fetch failed");
+                    had_failures = true;
                 }
             }
 

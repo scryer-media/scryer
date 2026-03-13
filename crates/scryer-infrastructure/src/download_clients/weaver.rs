@@ -499,7 +499,16 @@ impl DownloadClient for WeaverDownloadClient {
 
     async fn list_queue(&self) -> AppResult<Vec<DownloadQueueItem>> {
         let jobs = self.query_jobs(None).await?;
-        Ok(jobs.iter().filter_map(weaver_job_to_queue_item).collect())
+        Ok(jobs
+            .iter()
+            .filter_map(weaver_job_to_queue_item)
+            .filter(|item| {
+                !matches!(
+                    item.state,
+                    DownloadQueueState::Completed | DownloadQueueState::Failed
+                )
+            })
+            .collect())
     }
 
     async fn list_history(&self) -> AppResult<Vec<DownloadQueueItem>> {

@@ -3,6 +3,7 @@ use async_graphql::{
     Context, Subscription,
 };
 use scryer_domain::DownloadQueueState;
+use std::collections::HashSet;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::context::LogBuffer;
@@ -112,26 +113,11 @@ impl SubscriptionRoot {
             loop {
                 match receiver.recv().await {
                     Ok(items) => {
-                        let mut items = if include_all_activity {
-                            items
-                        } else if include_history_only {
-                            items
-                                .into_iter()
-                                .filter(|item| {
-                                    matches!(
-                                        item.state,
-                                        DownloadQueueState::Completed
-                                            | DownloadQueueState::Failed
-                                            | DownloadQueueState::ImportPending
-                                    )
-                                })
-                                .collect()
-                        } else {
-                            items
-                                .into_iter()
-                                .filter(|item| item.is_scryer_origin)
-                                .collect()
-                        };
+                        let mut items = filter_download_queue_items(
+                            items,
+                            include_all_activity,
+                            include_history_only,
+                        );
 
                         if include_history_only {
                             items.sort_by(|left, right| {
@@ -220,4 +206,135 @@ fn parse_sort_value_desc(left: Option<&str>, right: Option<&str>) -> std::cmp::O
     }
 
     parse(left).cmp(&parse(right))
+}
+
+fn filter_download_queue_items(
+    items: Vec<scryer_domain::DownloadQueueItem>,
+    include_all_activity: bool,
+    include_history_only: bool,
+) -> Vec<scryer_domain::DownloadQueueItem> {
+    dedupe_download_queue_items(items)
+        .into_iter()
+        .filter(|item| {
+            if include_all_activity {
+                return true;
+            }
+
+            if include_history_only {
+                return matches!(
+                    item.state,
+                    DownloadQueueState::Completed
+                        | DownloadQueueState::Failed
+                        | DownloadQueueState::ImportPending
+                );
+            }
+
+            item.is_scryer_origin
+                && matches!(
+                    item.state,
+                    DownloadQueueState::ImportPending
+                        | DownloadQueueState::Failed
+                        | DownloadQueueState::Downloading
+                        | DownloadQueueState::Queued
+                        | DownloadQueueState::Paused
+                )
+        })
+        .collect()
+}
+
+fn dedupe_download_queue_items(
+    items: Vec<scryer_domain::DownloadQueueItem>,
+) -> Vec<scryer_domain::DownloadQueueItem> {
+    let mut seen = HashSet::with_capacity(items.len());
+    let mut deduped = Vec::with_capacity(items.len());
+
+    for item in items {
+        let key = if item.client_type.trim().is_empty() && item.download_client_item_id.is_empty() {
+            item.id.clone()
+        } else {
+            format!(
+                "{}:{}",
+                item.client_type.trim().to_ascii_lowercase(),
+                item.download_client_item_id.trim()
+            )
+        };
+
+        if seen.insert(key) {
+            deduped.push(item);
+        }
+    }
+
+    deduped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{dedupe_download_queue_items, filter_download_queue_items};
+    use chrono::Utc;
+    use scryer_domain::{DownloadQueueItem, DownloadQueueState};
+
+    fn item(id: &str, state: DownloadQueueState, is_scryer_origin: bool) -> DownloadQueueItem {
+        DownloadQueueItem {
+            id: id.to_string(),
+            title_id: None,
+            title_name: "Example".to_string(),
+            facet: None,
+            client_id: "client-1".to_string(),
+            client_name: "Weaver".to_string(),
+            client_type: "weaver".to_string(),
+            state,
+            progress_percent: 100,
+            size_bytes: None,
+            remaining_seconds: None,
+            queued_at: Some(Utc::now().timestamp_millis().to_string()),
+            last_updated_at: Some(Utc::now().timestamp_millis().to_string()),
+            attention_required: false,
+            attention_reason: None,
+            download_client_item_id: id.to_string(),
+            import_status: None,
+            import_error_message: None,
+            imported_at: None,
+            is_scryer_origin,
+        }
+    }
+
+    #[test]
+    fn dedupe_download_queue_items_keeps_first_instance_for_duplicate_client_job_ids() {
+        let items = vec![
+            item("job-1", DownloadQueueState::Completed, true),
+            item("job-1", DownloadQueueState::Completed, true),
+            item("job-2", DownloadQueueState::Failed, true),
+        ];
+
+        let deduped = dedupe_download_queue_items(items);
+
+        assert_eq!(deduped.len(), 2);
+        assert_eq!(deduped[0].download_client_item_id, "job-1");
+        assert_eq!(deduped[1].download_client_item_id, "job-2");
+    }
+
+    #[test]
+    fn filter_download_queue_items_hides_completed_entries_from_scryer_only_live_view() {
+        let items = vec![
+            item("job-1", DownloadQueueState::Completed, true),
+            item("job-2", DownloadQueueState::Failed, true),
+            item("job-3", DownloadQueueState::Queued, true),
+            item("job-4", DownloadQueueState::Queued, false),
+        ];
+
+        let filtered = filter_download_queue_items(items, false, false);
+
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|item| item.is_scryer_origin));
+        assert!(filtered.iter().all(|item| {
+            matches!(
+                item.state,
+                DownloadQueueState::Failed
+                    | DownloadQueueState::ImportPending
+                    | DownloadQueueState::Downloading
+                    | DownloadQueueState::Queued
+                    | DownloadQueueState::Paused
+            )
+        }));
+    }
 }

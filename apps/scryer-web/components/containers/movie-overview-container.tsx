@@ -486,7 +486,7 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
           },
         }).toPromise();
         if (error) throw error;
-        const queuedMessage = t("status.queued", { name: release.title });
+        const queuedMessage = t("status.queueSuccess", { name: release.title });
         setGlobalStatus(queuedMessage);
         await refreshTitleDetail();
       } catch (err) {

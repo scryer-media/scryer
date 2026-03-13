@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashMap;
 
 fn extract_url_origin(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
@@ -364,6 +365,8 @@ impl AppUseCase {
                 item.facet = Some(submission.facet);
             }
         }
+
+        let items = dedupe_download_queue_items(items);
 
         let merged = items
             .into_iter()
@@ -902,6 +905,109 @@ fn parse_sort_value(left: Option<&str>, right: Option<&str>) -> std::cmp::Orderi
     parse(left).cmp(&parse(right))
 }
 
+fn dedupe_download_queue_items(items: Vec<DownloadQueueItem>) -> Vec<DownloadQueueItem> {
+    let mut deduped: Vec<DownloadQueueItem> = Vec::with_capacity(items.len());
+    let mut key_to_index: HashMap<String, usize> = HashMap::with_capacity(items.len());
+
+    for item in items {
+        let key = download_queue_item_key(&item);
+        if let Some(index) = key_to_index.get(&key).copied() {
+            merge_download_queue_item(&mut deduped[index], item);
+            continue;
+        }
+
+        key_to_index.insert(key, deduped.len());
+        deduped.push(item);
+    }
+
+    deduped
+}
+
+fn download_queue_item_key(item: &DownloadQueueItem) -> String {
+    if item.client_type.trim().is_empty() && item.download_client_item_id.trim().is_empty() {
+        return item.id.clone();
+    }
+
+    format!(
+        "{}:{}",
+        item.client_type.trim().to_ascii_lowercase(),
+        item.download_client_item_id.trim()
+    )
+}
+
+fn merge_download_queue_item(existing: &mut DownloadQueueItem, incoming: DownloadQueueItem) {
+    if existing.title_id.is_none() {
+        existing.title_id = incoming.title_id.clone();
+    }
+    if existing.title_name.trim().is_empty() || existing.title_name == "Unnamed download" {
+        existing.title_name = incoming.title_name.clone();
+    }
+    if existing.facet.is_none() {
+        existing.facet = incoming.facet.clone();
+    }
+    if existing.client_id.is_empty() {
+        existing.client_id = incoming.client_id.clone();
+    }
+    if existing.client_name.is_empty() {
+        existing.client_name = incoming.client_name.clone();
+    }
+    if existing.client_type.is_empty() {
+        existing.client_type = incoming.client_type.clone();
+    }
+
+    if let Some(size_bytes) = incoming.size_bytes {
+        existing.size_bytes = Some(existing.size_bytes.unwrap_or(size_bytes).max(size_bytes));
+    }
+    if existing.remaining_seconds.is_none() {
+        existing.remaining_seconds = incoming.remaining_seconds;
+    }
+    if existing.queued_at.is_none() {
+        existing.queued_at = incoming.queued_at.clone();
+    }
+    if existing.last_updated_at.is_none() {
+        existing.last_updated_at = incoming.last_updated_at.clone();
+    }
+
+    if queue_state_merge_rank(&incoming.state) > queue_state_merge_rank(&existing.state)
+        || (incoming.progress_percent > existing.progress_percent
+            && queue_state_merge_rank(&incoming.state) == queue_state_merge_rank(&existing.state))
+    {
+        existing.state = incoming.state;
+        existing.progress_percent = incoming.progress_percent;
+    } else {
+        existing.progress_percent = existing.progress_percent.max(incoming.progress_percent);
+    }
+
+    existing.attention_required |= incoming.attention_required;
+    if existing.attention_reason.is_none() {
+        existing.attention_reason = incoming.attention_reason.clone();
+    }
+    if incoming.import_status.is_some() {
+        existing.import_status = incoming.import_status.clone();
+    }
+    if incoming.import_error_message.is_some() {
+        existing.import_error_message = incoming.import_error_message.clone();
+    }
+    if incoming.imported_at.is_some() {
+        existing.imported_at = incoming.imported_at.clone();
+    }
+    existing.is_scryer_origin |= incoming.is_scryer_origin;
+}
+
+fn queue_state_merge_rank(state: &DownloadQueueState) -> u8 {
+    match state {
+        DownloadQueueState::Paused => 0,
+        DownloadQueueState::Queued => 1,
+        DownloadQueueState::Downloading => 2,
+        DownloadQueueState::Verifying
+        | DownloadQueueState::Repairing
+        | DownloadQueueState::Extracting => 3,
+        DownloadQueueState::Completed => 4,
+        DownloadQueueState::ImportPending => 5,
+        DownloadQueueState::Failed => 6,
+    }
+}
+
 fn queue_state_sort_rank(state: &DownloadQueueState) -> u8 {
     match state {
         DownloadQueueState::Downloading => 0,
@@ -913,5 +1019,59 @@ fn queue_state_sort_rank(state: &DownloadQueueState) -> u8 {
         DownloadQueueState::ImportPending => 3,
         DownloadQueueState::Completed => 3,
         DownloadQueueState::Failed => 4,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dedupe_download_queue_items;
+    use chrono::Utc;
+    use scryer_domain::{DownloadQueueItem, DownloadQueueState};
+
+    fn item(id: &str, state: DownloadQueueState) -> DownloadQueueItem {
+        DownloadQueueItem {
+            id: id.to_string(),
+            title_id: None,
+            title_name: "Example".to_string(),
+            facet: None,
+            client_id: "client-1".to_string(),
+            client_name: "Weaver".to_string(),
+            client_type: "weaver".to_string(),
+            state,
+            progress_percent: 100,
+            size_bytes: Some(100),
+            remaining_seconds: None,
+            queued_at: Some(Utc::now().timestamp_millis().to_string()),
+            last_updated_at: Some(Utc::now().timestamp_millis().to_string()),
+            attention_required: false,
+            attention_reason: None,
+            download_client_item_id: id.to_string(),
+            import_status: None,
+            import_error_message: None,
+            imported_at: None,
+            is_scryer_origin: true,
+        }
+    }
+
+    #[test]
+    fn dedupe_download_queue_items_merges_duplicate_client_job_ids() {
+        let mut first = item("job-1", DownloadQueueState::Completed);
+        first.import_error_message = Some("failed to import".to_string());
+        let mut second = item("job-1", DownloadQueueState::Completed);
+        second.title_id = Some("title-1".to_string());
+
+        let deduped = dedupe_download_queue_items(vec![
+            first,
+            second,
+            item("job-2", DownloadQueueState::Queued),
+        ]);
+
+        assert_eq!(deduped.len(), 2);
+        assert_eq!(deduped[0].download_client_item_id, "job-1");
+        assert_eq!(deduped[0].title_id.as_deref(), Some("title-1"));
+        assert_eq!(
+            deduped[0].import_error_message.as_deref(),
+            Some("failed to import")
+        );
     }
 }

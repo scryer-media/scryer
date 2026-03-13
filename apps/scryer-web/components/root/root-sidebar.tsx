@@ -13,6 +13,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarMenu,
@@ -28,7 +29,10 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Monitor, Moon, Rainbow, Sun } from "lucide-react";
+import { useTheme } from "next-themes";
+import { getNextTheme, getThemeLabel } from "@/lib/theme";
+import { cn } from "@/lib/utils";
 
 type NavItem = {
   id: ViewId;
@@ -143,6 +147,12 @@ function RootSidebarContent({
   const isMobile = useIsMobile();
   const { setOpenMobile } = useSidebar();
   const client = useClient();
+  const { theme, setTheme } = useTheme();
+  const [themeMounted, setThemeMounted] = React.useState(false);
+  React.useEffect(() => setThemeMounted(true), []);
+  const cycleTheme = React.useCallback(() => {
+    setTheme(getNextTheme(theme));
+  }, [theme, setTheme]);
   const [pluginUpgradeCount, setPluginUpgradeCount] = React.useState(0);
 
   React.useEffect(() => {
@@ -340,6 +350,30 @@ function RootSidebarContent({
             </SidebarMenu>
           </SidebarGroup>
         </SidebarContent>
+        <SidebarFooter className="px-2 py-1.5">
+          {themeMounted ? (
+            <button
+              type="button"
+              onClick={cycleTheme}
+              aria-label={`Switch theme (current: ${getThemeLabel(theme)})`}
+              className={cn(
+                "flex w-fit items-center gap-2 rounded-md px-2 py-1.5 text-sm text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                theme === "pride" && "text-pink-200 hover:text-pink-100",
+              )}
+            >
+              {theme === "light" ? (
+                <Sun className="h-4 w-4" />
+              ) : theme === "dark" ? (
+                <Moon className="h-4 w-4" />
+              ) : theme === "pride" ? (
+                <Rainbow className="h-4 w-4" />
+              ) : (
+                <Monitor className="h-4 w-4" />
+              )}
+              Theme
+            </button>
+          ) : null}
+        </SidebarFooter>
       </Sidebar>
       <SidebarInset className="relative bg-background md:ml-4">
         <div className="mb-3 flex items-center gap-3 rounded-xl border border-border bg-card/80 px-3 py-2 md:hidden">
