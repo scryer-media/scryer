@@ -118,6 +118,8 @@ async function precacheShell() {
     resolveScopeUrl("./icons/icon-192.png"),
     resolveScopeUrl("./icons/icon-512.png"),
     resolveScopeUrl("./icons/icon-maskable-512.png"),
+    resolveScopeUrl("./favicon-light.png"),
+    resolveScopeUrl("./favicon-dark.png"),
     resolveScopeUrl("./favicon.webp"),
     resolveScopeUrl("./manifest.json"),
   ];

@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/table";
 import type { DownloadQueueItem, ImportRecord } from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useIsMobile } from "@/lib/hooks/use-mobile";
 
 type QueueMode = "scryer" | "all" | "history";
 
@@ -198,6 +199,7 @@ function formatTimestamp(ts: string | null): string {
 
 export function ActivityView({ state }: { state: ActivityViewState }) {
   const t = useTranslate();
+  const isMobile = useIsMobile();
   const {
     queueItems,
     queueLoading,
@@ -275,7 +277,7 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
         <CardHeader className="space-y-3">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <CardTitle>{t("activity.title")}</CardTitle>
-            <div className="flex items-center gap-2 sm:justify-end">
+            <div className="overflow-x-auto">
               <ToggleGroup
                 type="single"
                 value={queueMode}
@@ -292,26 +294,26 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
                 }}
                 aria-label={t("activity.filterToggleLabel")}
                 size="lg"
-                className="h-14 rounded-xl border-0 bg-card/80 overflow-hidden divide-x divide-border/40"
+                className="h-14 min-w-max rounded-xl border-0 bg-card/80 divide-x divide-border/40"
               >
                 <ToggleGroupItem
                   value="scryer"
                   size="lg"
-                  className="h-full min-w-36 rounded-none px-6 text-base font-semibold first:rounded-l-xl last:rounded-r-xl data-[state=off]:bg-accent/80 data-[state=off]:text-foreground data-[state=off]:hover:bg-accent/80 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground data-[state=on]:border-0 data-[state=on]:shadow-none"
+                  className="h-full min-w-28 rounded-none px-4 text-sm font-semibold sm:min-w-36 sm:px-6 sm:text-base first:rounded-l-xl last:rounded-r-xl data-[state=off]:bg-accent/80 data-[state=off]:text-foreground data-[state=off]:hover:bg-accent/80 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground data-[state=on]:border-0 data-[state=on]:shadow-none"
                 >
                   {t("activity.scryerOnly")}
                 </ToggleGroupItem>
                 <ToggleGroupItem
                   value="all"
                   size="lg"
-                  className="h-full min-w-36 rounded-none px-6 text-base font-semibold first:rounded-l-xl last:rounded-r-xl data-[state=off]:bg-accent/80 data-[state=off]:text-foreground data-[state=off]:hover:bg-accent/80 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground data-[state=on]:border-0 data-[state=on]:shadow-none"
+                  className="h-full min-w-28 rounded-none px-4 text-sm font-semibold sm:min-w-36 sm:px-6 sm:text-base first:rounded-l-xl last:rounded-r-xl data-[state=off]:bg-accent/80 data-[state=off]:text-foreground data-[state=off]:hover:bg-accent/80 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground data-[state=on]:border-0 data-[state=on]:shadow-none"
                 >
                   {t("activity.allActivity")}
                 </ToggleGroupItem>
                 <ToggleGroupItem
                   value="history"
                   size="lg"
-                  className="h-full min-w-28 rounded-none px-6 text-base font-semibold first:rounded-l-xl last:rounded-r-xl data-[state=off]:bg-accent/80 data-[state=off]:text-foreground data-[state=off]:hover:bg-accent/80 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground data-[state=on]:border-0 data-[state=on]:shadow-none"
+                  className="h-full min-w-24 rounded-none px-4 text-sm font-semibold sm:min-w-28 sm:px-6 sm:text-base first:rounded-l-xl last:rounded-r-xl data-[state=off]:bg-accent/80 data-[state=off]:text-foreground data-[state=off]:hover:bg-accent/80 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground data-[state=on]:border-0 data-[state=on]:shadow-none"
                 >
                   {t("activity.history")}
                 </ToggleGroupItem>
@@ -328,27 +330,219 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
             </p>
           ) : null}
 
-          <div className="overflow-x-auto">
-            <Table className="table-fixed">
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[34%] min-w-0">{t("queue.title")}</TableHead>
-                  <TableHead className="w-32 min-w-0">{t("queue.client")}</TableHead>
-                  <TableHead className="w-44 min-w-0">{t("queue.status")}</TableHead>
-                  <TableHead className="w-52 min-w-52">{t("queue.progress")}</TableHead>
-                  <TableHead className="w-24 min-w-24">{t("queue.size")}</TableHead>
-                  <TableHead className="w-44 min-w-44 text-right">{t("label.actions")}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {queueItems.length === 0 && !queueLoading ? (
+          {isMobile ? (
+            queueItems.length === 0 && !queueLoading ? (
+              <p className="text-sm text-muted-foreground">{t("queue.empty")}</p>
+            ) : (
+              <div className="space-y-3">
+                {queueItems.map((queueItem) => {
+                    const stateKey = normalizeQueueState(queueItem.state);
+                    const displayStateKey = deriveDisplayState(queueItem);
+                    const percent = formatProgress(queueItem.progressPercent);
+                    const remainingLabel = formatRemainingDuration(queueItem.remainingSeconds);
+                    const needsManualImport =
+                      queueItem.attentionRequired || queueStateAttention[stateKey];
+                    const manualImportPending = manualImportingId === queueItem.id;
+                    const isActionLoading = actionLoadingId === queueItem.id;
+                    const isRowBusy = rowActionBusy[queueItem.id] ?? rowActionBusyRef.current[queueItem.id] ?? false;
+                    const isRowBlocked = isRowBusy || manualImportPending || isActionLoading;
+                    const isDeleteConfirming = deleteConfirmItem?.id === queueItem.id;
+                    const isRowFullyBusy = isRowBlocked || isDeleteConfirming;
+
+                    const canPause = stateKey === "downloading" || stateKey === "queued";
+                    const canResume = stateKey === "paused";
+                    const isCompleted = stateKey === "completed" || stateKey === "import_pending";
+                    const failureReason = (
+                      queueItem.attentionReason ||
+                      queueItem.importErrorMessage ||
+                      ""
+                    ).trim();
+                    const stageLabel = queueItem.attentionReason?.trim() ?? "";
+                    const statusLabel =
+                      displayStateKey === "post_processing" && stageLabel.length > 0
+                        ? stageLabel
+                        : t(queueStateLabels[displayStateKey] ?? "queue.state.unknown");
+                    const failedReason = stateKey === "failed" && failureReason.length > 0;
+                    const rowActionVisualClass = isRowFullyBusy
+                      ? "pointer-events-none opacity-45 grayscale"
+                      : "";
+
+                    return (
+                      <div key={queueItem.id} className="rounded-xl border border-border bg-card/40 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <p className="break-words text-sm font-medium text-foreground">
+                              {queueItem.titleName || "\u2014"}
+                            </p>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {queueItem.clientName || queueItem.clientType} • {queueItem.clientType}
+                            </p>
+                          </div>
+                          <div className="shrink-0">
+                            {failedReason ? (
+                              <HoverCard openDelay={250} closeDelay={75}>
+                                <HoverCardTrigger asChild>
+                                  <button
+                                    type="button"
+                                    className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${queueStateClasses[displayStateKey] ?? "border-border bg-muted text-card-foreground"}`}
+                                  >
+                                    {statusLabel}
+                                  </button>
+                                </HoverCardTrigger>
+                                <HoverCardContent sideOffset={4} className="max-w-sm text-sm">
+                                  <p className="whitespace-pre-wrap break-words text-foreground">
+                                    {failureReason}
+                                  </p>
+                                </HoverCardContent>
+                              </HoverCard>
+                            ) : (
+                              <span
+                                className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${queueStateClasses[displayStateKey] ?? "border-border bg-muted text-card-foreground"}`}
+                              >
+                                {statusLabel}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {queueItem.importErrorMessage && !failedReason ? (
+                          <p className="mt-2 break-words text-xs text-rose-400">{queueItem.importErrorMessage}</p>
+                        ) : null}
+                        <div className="mt-3 space-y-1">
+                          <div className="flex items-center justify-between text-xs">
+                            <p className="font-semibold text-foreground">{percent}%</p>
+                            <p className="text-muted-foreground">{remainingLabel ?? "\u2014"}</p>
+                          </div>
+                          <Progress
+                            value={percent}
+                            className="h-2.5 bg-muted/90"
+                            indicatorClassName={getProgressBarColor(displayStateKey)}
+                          />
+                        </div>
+                        <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
+                          <span>{formatBytes(queueItem.sizeBytes)}</span>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {canPause && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              className={`flex-1 ${rowActionVisualClass}`}
+                              disabled={isRowFullyBusy}
+                              onClick={() => {
+                                if (rowActionBusyRef.current[queueItem.id] || isActionLoading || isRowBlocked) {
+                                  return;
+                                }
+                                setActionLoadingId(queueItem.id);
+                                setRowBusy(queueItem.id, true);
+                                void requestPause(queueItem).finally(() => {
+                                  setRowBusy(queueItem.id, false);
+                                  setActionLoadingId((c) => (c === queueItem.id ? null : c));
+                                });
+                              }}
+                            >
+                              <Pause className="h-4 w-4" />
+                              <span>{t("queue.pause")}</span>
+                            </Button>
+                          )}
+                          {canResume && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              className={`flex-1 ${rowActionVisualClass}`}
+                              disabled={isRowFullyBusy}
+                              onClick={() => {
+                                if (rowActionBusyRef.current[queueItem.id] || isActionLoading || isRowBlocked) {
+                                  return;
+                                }
+                                setActionLoadingId(queueItem.id);
+                                setRowBusy(queueItem.id, true);
+                                void requestResume(queueItem).finally(() => {
+                                  setRowBusy(queueItem.id, false);
+                                  setActionLoadingId((c) => (c === queueItem.id ? null : c));
+                                });
+                              }}
+                            >
+                              <Play className="h-4 w-4" />
+                              <span>{t("queue.resume")}</span>
+                            </Button>
+                          )}
+                          {isCompleted && needsManualImport && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              className={`flex-1 ${rowActionVisualClass}`}
+                              disabled={isRowFullyBusy}
+                              onClick={() => {
+                                if (rowActionBusyRef.current[queueItem.id] || isActionLoading || isRowBlocked) {
+                                  return;
+                                }
+                                if (manualImportPending) return;
+                                setManualImportingId(queueItem.id);
+                                setRowBusy(queueItem.id, true);
+                                void requestManualImport(queueItem).finally(() => {
+                                  setRowBusy(queueItem.id, false);
+                                  setManualImportingId((current) =>
+                                    current === queueItem.id ? null : current,
+                                  );
+                                });
+                              }}
+                            >
+                              {manualImportPending ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <ArrowDownToLine className="h-4 w-4" />
+                              )}
+                              <span>{manualImportPending ? t("queue.manualImporting") : t("queue.manualImportTooltip")}</span>
+                            </Button>
+                          )}
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="destructive"
+                            className={`flex-1 ${rowActionVisualClass}`}
+                            disabled={isRowFullyBusy}
+                            onClick={() => {
+                              if (rowActionBusyRef.current[queueItem.id] || isActionLoading || isRowBlocked) {
+                                return;
+                              }
+                              setRowBusy(queueItem.id, true);
+                              setDeleteConfirmItem(queueItem);
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            <span>{t("label.delete")}</span>
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                })}
+              </div>
+            )
+          ) : (
+            <div className="overflow-x-auto">
+              <Table className="table-fixed min-w-[820px]">
+                <TableHeader>
                   <TableRow>
-                    <TableCell colSpan={6} className="text-sm text-muted-foreground">
-                      {t("queue.empty")}
-                    </TableCell>
+                    <TableHead className="w-[34%] min-w-0">{t("queue.title")}</TableHead>
+                    <TableHead className="w-32 min-w-0">{t("queue.client")}</TableHead>
+                    <TableHead className="w-44 min-w-0">{t("queue.status")}</TableHead>
+                    <TableHead className="w-52 min-w-52">{t("queue.progress")}</TableHead>
+                    <TableHead className="w-24 min-w-24">{t("queue.size")}</TableHead>
+                    <TableHead className="w-44 min-w-44 text-right">{t("label.actions")}</TableHead>
                   </TableRow>
-                ) : (
-                  queueItems.map((queueItem) => {
+                </TableHeader>
+                <TableBody>
+                  {queueItems.length === 0 && !queueLoading ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-sm text-muted-foreground">
+                        {t("queue.empty")}
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    queueItems.map((queueItem) => {
                     const stateKey = normalizeQueueState(queueItem.state);
                     const displayStateKey = deriveDisplayState(queueItem);
                     const percent = formatProgress(queueItem.progressPercent);
@@ -539,18 +733,19 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
                         </TableCell>
                       </TableRow>
                     );
-                  })
-                )}
-              </TableBody>
-            </Table>
-          </div>
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          )}
         </CardContent>
       </Card>
 
       {/* Import History Section */}
       <Card className="mt-6">
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <button
               type="button"
               className="flex items-center gap-2 text-left"
@@ -567,6 +762,7 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
             {importHistoryExpanded && (
               <Button
                 type="button"
+                className="w-full sm:w-auto"
                 size="sm"
                 variant="secondary"
                 disabled={importHistoryLoading}
@@ -587,32 +783,13 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
             ) : importHistory.length === 0 ? (
               <p className="text-sm text-muted-foreground">{t("importHistory.empty")}</p>
             ) : (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>{t("importHistory.status")}</TableHead>
-                      <TableHead>{t("importHistory.sourceRef")}</TableHead>
-                      <TableHead>{t("importHistory.decision")}</TableHead>
-                      <TableHead>{t("importHistory.error")}</TableHead>
-                      <TableHead>{t("importHistory.createdAt")}</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {importHistory.map((record) => (
-                      <TableRow key={record.id}>
-                        <TableCell>
-                          <span
-                            className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${importStatusClasses[record.status] ?? "border-border bg-muted text-card-foreground"}`}
-                          >
-                            {record.status}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          <p
-                            className="max-w-xs whitespace-normal break-words text-sm"
-                            title={record.sourceTitle ?? record.sourceRef}
-                          >
+              isMobile ? (
+                <div className="space-y-2">
+                  {importHistory.map((record) => (
+                    <div key={record.id} className="rounded-lg border border-border bg-card/30 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="break-words text-sm font-medium text-foreground" title={record.sourceTitle ?? record.sourceRef}>
                             {record.sourceTitle ?? record.sourceRef}
                           </p>
                           {record.sourceTitle ? (
@@ -621,37 +798,93 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
                             </p>
                           ) : null}
                           <p className="text-xs text-muted-foreground">{record.importType}</p>
-                        </TableCell>
-                        <TableCell>
-                          {record.decision && (
-                            <span className="text-xs">{record.decision}</span>
-                          )}
-                          {record.skipReason && (
-                            <p className="text-xs text-muted-foreground">{record.skipReason}</p>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          {record.errorMessage ? (
-                            <p
-                              className="max-w-xs whitespace-normal break-words text-xs text-rose-400"
-                              title={record.errorMessage}
-                            >
-                              {record.errorMessage}
-                            </p>
-                          ) : (
-                            <span className="text-xs text-muted-foreground/60">{"\u2014"}</span>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <p className="text-xs text-muted-foreground">
-                            {formatTimestamp(record.createdAt)}
-                          </p>
-                        </TableCell>
+                        </div>
+                        <span
+                          className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${importStatusClasses[record.status] ?? "border-border bg-muted text-card-foreground"}`}
+                        >
+                          {record.status}
+                        </span>
+                      </div>
+                      {(record.decision || record.skipReason) ? (
+                        <div className="mt-2 text-xs">
+                          {record.decision ? <span>{record.decision}</span> : null}
+                          {record.skipReason ? <p className="text-muted-foreground">{record.skipReason}</p> : null}
+                        </div>
+                      ) : null}
+                      {record.errorMessage ? (
+                        <p className="mt-2 break-words text-xs text-rose-400">{record.errorMessage}</p>
+                      ) : null}
+                      <p className="mt-2 text-xs text-muted-foreground">{formatTimestamp(record.createdAt)}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table className="min-w-[720px]">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>{t("importHistory.status")}</TableHead>
+                        <TableHead>{t("importHistory.sourceRef")}</TableHead>
+                        <TableHead>{t("importHistory.decision")}</TableHead>
+                        <TableHead>{t("importHistory.error")}</TableHead>
+                        <TableHead>{t("importHistory.createdAt")}</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                    </TableHeader>
+                    <TableBody>
+                      {importHistory.map((record) => (
+                        <TableRow key={record.id}>
+                          <TableCell>
+                            <span
+                              className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${importStatusClasses[record.status] ?? "border-border bg-muted text-card-foreground"}`}
+                            >
+                              {record.status}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            <p
+                              className="max-w-xs whitespace-normal break-words text-sm"
+                              title={record.sourceTitle ?? record.sourceRef}
+                            >
+                              {record.sourceTitle ?? record.sourceRef}
+                            </p>
+                            {record.sourceTitle ? (
+                              <p className="text-xs text-muted-foreground" title={record.sourceRef}>
+                                {record.sourceRef}
+                              </p>
+                            ) : null}
+                            <p className="text-xs text-muted-foreground">{record.importType}</p>
+                          </TableCell>
+                          <TableCell>
+                            {record.decision && (
+                              <span className="text-xs">{record.decision}</span>
+                            )}
+                            {record.skipReason && (
+                              <p className="text-xs text-muted-foreground">{record.skipReason}</p>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {record.errorMessage ? (
+                              <p
+                                className="max-w-xs whitespace-normal break-words text-xs text-rose-400"
+                                title={record.errorMessage}
+                              >
+                                {record.errorMessage}
+                              </p>
+                            ) : (
+                              <span className="text-xs text-muted-foreground/60">{"\u2014"}</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <p className="text-xs text-muted-foreground">
+                              {formatTimestamp(record.createdAt)}
+                            </p>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )
             )}
           </CardContent>
         )}

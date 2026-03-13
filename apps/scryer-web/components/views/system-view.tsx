@@ -16,6 +16,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { serviceLogsQuery, serviceLogLinesSubscription } from "@/lib/graphql/queries";
 import { wsClient } from "@/lib/graphql/ws-client";
+import { useIsMobile } from "@/lib/hooks/use-mobile";
 
 type RssSyncState = {
   syncing: boolean;
@@ -131,6 +132,7 @@ const MAX_BUFFER = 2000;
 
 function LogViewer() {
   const client = useClient();
+  const isMobile = useIsMobile();
   const [search, setSearch] = useState("");
   const [level, setLevel] = useState("all");
   const [paused, setPaused] = useState(false);
@@ -223,11 +225,11 @@ function LogViewer() {
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="grid gap-3 sm:flex sm:flex-wrap sm:items-end">
         <div className="space-y-1">
           <Label className="text-xs text-muted-foreground">Level</Label>
           <Select value={level} onValueChange={setLevel}>
-            <SelectTrigger size="sm" className="w-[100px]">
+            <SelectTrigger size="sm" className="w-full sm:w-[100px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -247,16 +249,22 @@ function LogViewer() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="filter..."
-            className="h-8 w-48 text-sm"
+            className="h-8 w-full text-sm sm:w-48"
           />
         </div>
-        <div className="flex items-end gap-2 self-end">
-          <Button size="sm" variant="secondary" onClick={() => setPaused((p) => !p)}>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          <Button
+            size="sm"
+            variant="secondary"
+            className="w-full sm:w-auto"
+            onClick={() => setPaused((p) => !p)}
+          >
             {paused ? "Resume" : "Pause"}
           </Button>
           <Button
             size="sm"
             variant="secondary"
+            className="w-full sm:w-auto"
             onClick={() => {
               setLines([]);
               autoScrollRef.current = true;
@@ -265,7 +273,7 @@ function LogViewer() {
             Clear
           </Button>
         </div>
-        <div className="ml-auto flex items-center gap-1.5 self-end text-xs text-muted-foreground">
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground sm:ml-auto">
           <span
             className={`inline-block size-2 rounded-full ${connected ? "bg-green-400" : "bg-red-400"}`}
           />
@@ -276,7 +284,7 @@ function LogViewer() {
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="h-[calc(100vh-320px)] min-h-[400px] overflow-y-auto rounded-lg border border-border bg-[#0a0e1a] text-xs leading-5"
+        className={`overflow-y-auto rounded-lg border border-border bg-[#0a0e1a] text-xs leading-5 ${isMobile ? "h-[55vh] min-h-[280px]" : "h-[calc(100vh-320px)] min-h-[400px]"}`}
         style={{ fontFamily: "'Fira Code', 'Fira Mono', 'JetBrains Mono', 'Source Code Pro', 'Cascadia Code', 'Consolas', monospace" }}
       >
         {filteredLines.length === 0 ? (
@@ -317,9 +325,15 @@ export function SystemView({
       {/* Service Health */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <CardTitle>{t("system.title")}</CardTitle>
-            <Button size="sm" variant="secondary" onClick={() => void refreshSystem()} disabled={systemLoading}>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="w-full sm:w-auto"
+              onClick={() => void refreshSystem()}
+              disabled={systemLoading}
+            >
               {systemLoading ? t("system.refreshing") : t("label.refresh")}
             </Button>
           </div>
@@ -333,7 +347,7 @@ export function SystemView({
                 {t("system.serviceReady")}: {systemHealth.serviceReady ? t("label.yes") : t("label.no")}
               </p>
               <p className="text-sm">
-                {t("system.dbPathLabel")}: {systemHealth.dbPath}
+                {t("system.dbPathLabel")}: <span className="break-all">{systemHealth.dbPath}</span>
               </p>
               <p className="text-sm">
                 {t("system.totalTitlesLabel")}: {systemHealth.totalTitles}
@@ -365,11 +379,12 @@ export function SystemView({
       {/* RSS Sync */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <CardTitle className="text-base">{t("system.rssSync")}</CardTitle>
             <Button
               size="sm"
               variant="secondary"
+              className="w-full sm:w-auto"
               onClick={() => void rssSync.triggerSync()}
               disabled={rssSync.syncing}
             >

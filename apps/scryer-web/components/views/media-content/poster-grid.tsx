@@ -6,6 +6,7 @@ import type { ViewId } from "@/components/root/types";
 import type { TitleRecord } from "@/lib/types";
 import type { ParsedQualityProfile } from "@/lib/types/quality-profiles";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
+import { useIsMobile } from "@/lib/hooks/use-mobile";
 
 const QP_TAG_PREFIX = "scryer:quality-profile:";
 
@@ -70,6 +71,7 @@ export function PosterGrid({
   overviewTargetView,
 }: PosterGridProps) {
   const t = useTranslate();
+  const isMobile = useIsMobile();
   const [autoQueueLoadingById, setAutoQueueLoadingById] = React.useState<Record<string, boolean>>({});
 
   const handleAutoQueue = React.useCallback(
@@ -109,6 +111,7 @@ export function PosterGrid({
           deleteLoading={isDeletingById[title.id] === true}
           autoQueueLoading={autoQueueLoadingById[title.id] === true}
           overviewTargetView={overviewTargetView}
+          isMobile={isMobile}
         />
       ))}
     </div>
@@ -126,6 +129,7 @@ type PosterCardProps = {
   deleteLoading: boolean;
   autoQueueLoading: boolean;
   overviewTargetView: ViewId;
+  isMobile: boolean;
 };
 
 function PosterCard({
@@ -139,6 +143,7 @@ function PosterCard({
   deleteLoading,
   autoQueueLoading,
   overviewTargetView,
+  isMobile,
 }: PosterCardProps) {
   const t = useTranslate();
   const posterUrl = selectPosterVariantUrl(title.posterUrl, "w250");
@@ -149,94 +154,130 @@ function PosterCard({
   );
 
   return (
-    <div className="cv-auto-poster group relative">
-      <button
-        type="button"
-        onClick={() => onOpenOverview(overviewTargetView, title.id)}
-        className="block w-full overflow-hidden rounded-lg border border-border bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        aria-label={title.name}
-      >
-        <div className="relative aspect-[2/3]">
-          {posterUrl ? (
-            <img
-              src={posterUrl}
-              alt={t("media.posterAlt", { name: title.name })}
-              className="h-full w-full object-cover"
-              loading="lazy"
-              decoding="async"
-            />
-          ) : (
-            <div className="flex h-full w-full items-center justify-center text-sm text-muted-foreground">
-              {t("label.noArt")}
-            </div>
-          )}
-
-          {/* Reveal the title only on hover/focus; most posters already carry their own typography. */}
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/80 via-black/40 to-transparent px-2 pb-2 pt-8 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-            <p className="line-clamp-2 text-sm font-semibold leading-tight text-white">
-              {title.name}
-            </p>
-          </div>
-
-          {/* Monitored badge - top left */}
-          {title.monitored ? (
-            <div className="absolute left-1.5 top-1.5 z-20 rounded-full bg-primary/90 px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground">
-              {t("title.monitored")}
-            </div>
-          ) : null}
-
-          {/* Quality badge - top right */}
-          {qualityLabel ? (
-            <div className="absolute right-1.5 top-1.5 z-20 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">
-              {qualityLabel}
-            </div>
-          ) : null}
-
-          {/* Hover scrim */}
-          <div
-            aria-hidden="true"
-            className="absolute inset-0 z-10 bg-black/50 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
-          />
-
-          {/* Hover overlay with actions */}
-          <div className="absolute inset-0 z-30 flex items-center justify-center gap-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-            {isMovieView ? (
-              <Button
-                variant="secondary"
-                size="sm"
-                aria-label={t("label.search")}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onAutoQueue(title);
-                }}
-                disabled={autoQueueLoading}
-              >
-                {autoQueueLoading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Zap className="h-4 w-4" />
-                )}
-              </Button>
-            ) : null}
-            <Button
-              variant="destructive"
-              size="sm"
-              aria-label={t("label.delete")}
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete(title);
-              }}
-              disabled={deleteLoading}
-            >
-              {deleteLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+    <div className="cv-auto-poster group">
+      <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => onOpenOverview(overviewTargetView, title.id)}
+            className="block w-full overflow-hidden bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label={title.name}
+          >
+            <div className="relative aspect-[2/3]">
+              {posterUrl ? (
+                <img
+                  src={posterUrl}
+                  alt={t("media.posterAlt", { name: title.name })}
+                  className="h-full w-full object-cover"
+                  loading="lazy"
+                  decoding="async"
+                />
               ) : (
-                <Trash2 className="h-4 w-4" />
+                <div className="flex h-full w-full items-center justify-center text-sm text-muted-foreground">
+                  {t("label.noArt")}
+                </div>
               )}
-            </Button>
-          </div>
+
+              {!isMobile ? (
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/80 via-black/40 to-transparent px-2 pb-2 pt-8 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                  <p className="line-clamp-2 text-sm font-semibold leading-tight text-white">
+                    {title.name}
+                  </p>
+                </div>
+              ) : null}
+
+              {title.monitored ? (
+                <div className="absolute left-1.5 top-1.5 z-20 rounded-full bg-primary/90 px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground">
+                  {t("title.monitored")}
+                </div>
+              ) : null}
+
+              {qualityLabel ? (
+                <div className="absolute right-1.5 top-1.5 z-20 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">
+                  {qualityLabel}
+                </div>
+              ) : null}
+            </div>
+          </button>
+
+          {!isMobile ? (
+            <>
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 z-10 bg-black/50 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+              />
+              <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center gap-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                {isMovieView ? (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="pointer-events-auto"
+                    aria-label={t("label.search")}
+                    onClick={() => onAutoQueue(title)}
+                    disabled={autoQueueLoading}
+                  >
+                    {autoQueueLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Zap className="h-4 w-4" />
+                    )}
+                  </Button>
+                ) : null}
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  className="pointer-events-auto"
+                  aria-label={t("label.delete")}
+                  onClick={() => onDelete(title)}
+                  disabled={deleteLoading}
+                >
+                  {deleteLoading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
+            </>
+          ) : null}
         </div>
-      </button>
+
+        {isMobile ? (
+          <div className="space-y-2 p-2">
+            <button
+              type="button"
+              onClick={() => onOpenOverview(overviewTargetView, title.id)}
+              className="block w-full text-left"
+            >
+              <p className="line-clamp-2 text-sm font-semibold text-foreground">{title.name}</p>
+            </button>
+            <div className="flex gap-2">
+              {isMovieView ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => onAutoQueue(title)}
+                  disabled={autoQueueLoading}
+                >
+                  {autoQueueLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+                  <span>{t("label.search")}</span>
+                </Button>
+              ) : null}
+              <Button
+                variant="destructive"
+                size="sm"
+                className={isMovieView ? "flex-1" : "w-full"}
+                onClick={() => onDelete(title)}
+                disabled={deleteLoading}
+              >
+                {deleteLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                <span>{t("label.delete")}</span>
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

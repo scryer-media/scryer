@@ -11,16 +11,16 @@ export function InterstitialMoviePanel({ movie }: { movie: InterstitialMovieMeta
   const badges = buildMovieBadges(movie);
 
   return (
-    <div className="flex items-start gap-4">
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
       <div className="shrink-0">
         {posterUrl ? (
           <img
             src={posterUrl}
             alt={movie.name}
-            className="h-auto w-[140px] rounded-lg object-cover shadow-md"
+            className="h-auto w-28 rounded-lg object-cover shadow-md sm:w-[140px]"
           />
         ) : (
-          <div className="flex h-[210px] w-[140px] items-center justify-center rounded-lg bg-muted text-sm text-muted-foreground/60">
+          <div className="flex h-40 w-28 items-center justify-center rounded-lg bg-muted text-sm text-muted-foreground/60 sm:h-[210px] sm:w-[140px]">
             No Poster
           </div>
         )}

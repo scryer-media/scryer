@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/table";
 import type { ImportRecord } from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useIsMobile } from "@/lib/hooks/use-mobile";
 
 type ImportHistoryViewProps = {
   records: ImportRecord[];
@@ -68,6 +69,7 @@ export function ImportHistoryView({
   onRefresh,
 }: ImportHistoryViewProps) {
   const t = useTranslate();
+  const isMobile = useIsMobile();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
   const filtered =
@@ -85,12 +87,12 @@ export function ImportHistoryView({
               ({filtered.length}{filtered.length !== records.length ? ` / ${records.length}` : ""})
             </span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <Select
               value={statusFilter}
               onValueChange={(v) => setStatusFilter(v as StatusFilter)}
             >
-              <SelectTrigger className="h-9 w-36">
+              <SelectTrigger className="h-9 w-full sm:w-36">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -104,7 +106,7 @@ export function ImportHistoryView({
               value={String(limit)}
               onValueChange={(v) => onLimitChange(Number(v))}
             >
-              <SelectTrigger className="h-9 w-28">
+              <SelectTrigger className="h-9 w-full sm:w-28">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -118,6 +120,7 @@ export function ImportHistoryView({
               type="button"
               size="sm"
               variant="secondary"
+              className="w-full sm:w-auto"
               disabled={loading}
               onClick={onRefresh}
             >
@@ -136,9 +139,76 @@ export function ImportHistoryView({
           <p className="text-sm text-muted-foreground">{t("label.loading")}</p>
         ) : filtered.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t("importHistory.empty")}</p>
+        ) : isMobile ? (
+          <div className="space-y-3">
+            {filtered.map((record) => {
+              const hasPaths = record.sourcePath || record.destPath;
+              return (
+                <div key={record.id} className="rounded-xl border border-border bg-card/30 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p
+                        className="break-words text-sm font-medium text-foreground"
+                        title={record.sourceTitle ?? record.sourceRef}
+                      >
+                        {record.sourceTitle ?? record.sourceRef}
+                      </p>
+                      {record.sourceTitle ? (
+                        <p
+                          className="mt-1 break-words text-xs text-muted-foreground"
+                          title={record.sourceRef}
+                        >
+                          {record.sourceRef}
+                        </p>
+                      ) : null}
+                    </div>
+                    <span
+                      className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${statusClasses[record.status] ?? "border-border bg-muted text-card-foreground"}`}
+                    >
+                      {record.status}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                    <span>{record.importType}</span>
+                    <span>{formatTimestamp(record.createdAt)}</span>
+                    {record.finishedAt && record.finishedAt !== record.createdAt ? (
+                      <span>{formatTimestamp(record.finishedAt)}</span>
+                    ) : null}
+                  </div>
+                  {record.decision ? (
+                    <p className="mt-2 text-xs text-foreground">{record.decision}</p>
+                  ) : null}
+                  {record.skipReason ? (
+                    <p className="mt-1 break-words text-xs text-muted-foreground">
+                      {record.skipReason}
+                    </p>
+                  ) : null}
+                  {record.errorMessage ? (
+                    <p className="mt-2 break-words text-xs text-rose-400">{record.errorMessage}</p>
+                  ) : null}
+                  {hasPaths ? (
+                    <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                      {record.sourcePath ? (
+                        <p className="break-all">
+                          <span className="font-medium text-foreground/80">From:</span>{" "}
+                          {record.sourcePath}
+                        </p>
+                      ) : null}
+                      {record.destPath ? (
+                        <p className="break-all">
+                          <span className="font-medium text-foreground/80">To:</span>{" "}
+                          {record.destPath}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
         ) : (
           <div className="overflow-x-auto">
-            <Table className="table-fixed">
+            <Table className="table-fixed min-w-[860px]">
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-28 min-w-28">{t("importHistory.status")}</TableHead>

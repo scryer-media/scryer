@@ -24,6 +24,8 @@ import {
   SidebarInset,
   SidebarProvider,
   SidebarSeparator,
+  SidebarTrigger,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { ChevronRight } from "lucide-react";
@@ -128,7 +130,7 @@ function getMediaSettingsLabel(_viewId: ViewId, t: Translate): string {
   return t("nav.settings");
 }
 
-export const RootSidebar = React.memo(function RootSidebar({
+function RootSidebarContent({
   topNav,
   view,
   settingsSection,
@@ -139,6 +141,7 @@ export const RootSidebar = React.memo(function RootSidebar({
 }: RootSidebarProps) {
   const t = useTranslate();
   const isMobile = useIsMobile();
+  const { setOpenMobile } = useSidebar();
   const client = useClient();
   const [pluginUpgradeCount, setPluginUpgradeCount] = React.useState(0);
 
@@ -173,18 +176,47 @@ export const RootSidebar = React.memo(function RootSidebar({
     ) => {
       event.preventDefault();
       onNavigate(nextView, nextSettingsSection, nextContentSection);
+      if (isMobile) {
+        setOpenMobile(false);
+      }
     },
-    [onNavigate],
+    [isMobile, onNavigate, setOpenMobile],
   );
 
+  const currentTopLevelLabel = React.useMemo(
+    () => topNav.find((item) => item.id === view)?.label ?? t("nav.library"),
+    [topNav, t, view],
+  );
+
+  const currentSubsectionLabel = React.useMemo(() => {
+    if (view === "settings") {
+      return visibleSettingsEntries.find((entry) => entry.id === settingsSection)?.label(t) ?? null;
+    }
+
+    if (view === "movies" || view === "series" || view === "anime") {
+      if (contentSettingsSection === "overview") {
+        return getMediaOverviewLabel(view, t);
+      }
+
+      if (isSettingsSubPage(contentSettingsSection)) {
+        const mediaSettingsLabel = MEDIA_SETTINGS_SUB_PAGES.find(
+          (subPage) => subPage.id === contentSettingsSection,
+        )?.labelKey;
+        return mediaSettingsLabel ? t(mediaSettingsLabel) : getMediaSettingsLabel(view, t);
+      }
+    }
+
+    return null;
+  }, [contentSettingsSection, settingsSection, t, view, visibleSettingsEntries]);
+
   return (
-    <SidebarProvider>
+    <>
       <Sidebar
         variant="floating"
         collapsible={isMobile ? "offcanvas" : "none"}
-        className="-ml-4 rounded-xl border border-border overflow-hidden"
+        className="overflow-hidden rounded-xl border border-border md:-ml-4"
       >
-        <SidebarContent className="bg-background overflow-hidden rounded-lg">
+        <SidebarContent className="overflow-y-auto rounded-lg bg-background">
           <SidebarGroup>
             <SidebarMenu className="space-y-1">
               {topNav.map((item, index) => {
@@ -309,9 +341,26 @@ export const RootSidebar = React.memo(function RootSidebar({
           </SidebarGroup>
         </SidebarContent>
       </Sidebar>
-      <SidebarInset className="relative bg-background ml-4">
+      <SidebarInset className="relative bg-background md:ml-4">
+        <div className="mb-3 flex items-center gap-3 rounded-xl border border-border bg-card/80 px-3 py-2 md:hidden">
+          <SidebarTrigger className="size-9 rounded-lg border border-border bg-background text-foreground shadow-none" />
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-foreground">{currentTopLevelLabel}</p>
+            {currentSubsectionLabel && currentSubsectionLabel !== currentTopLevelLabel ? (
+              <p className="truncate text-xs text-muted-foreground">{currentSubsectionLabel}</p>
+            ) : null}
+          </div>
+        </div>
         {children}
       </SidebarInset>
+    </>
+  );
+}
+
+export const RootSidebar = React.memo(function RootSidebar(props: RootSidebarProps) {
+  return (
+    <SidebarProvider>
+      <RootSidebarContent {...props} />
     </SidebarProvider>
   );
 });
