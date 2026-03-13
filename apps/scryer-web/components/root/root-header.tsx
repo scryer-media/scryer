@@ -1,6 +1,6 @@
 
 import * as React from "react";
-import { Loader2, Monitor, Moon, Plus, Rainbow, Search, Sun, X } from "lucide-react";
+import { Loader2, Plus, Search, X } from "lucide-react";
 import { useTheme } from "next-themes";
 import ScryerLogo from "@/components/scryer-logo";
 import { Button } from "@/components/ui/button";
@@ -29,7 +29,7 @@ import {
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 import { useSearchContext } from "@/lib/context/search-context";
 import { cn } from "@/lib/utils";
-import { getNextTheme, getThemeLabel } from "@/lib/theme";
+
 
 type RootHeaderProps = {
   routeCommandPalette?: RouteCommandPaletteConfig;
@@ -71,12 +71,7 @@ export const RootHeader = React.memo(function RootHeader({
   } = searchState;
   const t = useTranslate();
   const isMobile = useIsMobile();
-  const { theme, setTheme } = useTheme();
-  const [mounted, setMounted] = React.useState(false);
-  React.useEffect(() => setMounted(true), []);
-  const cycleTheme = React.useCallback(() => {
-    setTheme(getNextTheme(theme));
-  }, [theme, setTheme]);
+  const { theme } = useTheme();
   const searchShellRef = React.useRef<HTMLDivElement>(null);
   const searchPanelRef = React.useRef<HTMLDivElement>(null);
   const hasAnyMatches =
@@ -724,34 +719,6 @@ export const RootHeader = React.memo(function RootHeader({
               ) : null}
             </div>
           </form>
-        </div>
-      <div className="pointer-events-none absolute right-3 top-0 z-20 flex pt-safe">
-          {mounted ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={cycleTheme}
-              title={getThemeLabel(theme)}
-              aria-label={`Switch theme (current: ${getThemeLabel(theme)})`}
-              className={cn(
-                "pointer-events-auto mt-2 sm:mt-3",
-                theme === "pride" && "text-pink-200 hover:text-pink-100",
-              )}
-            >
-              {theme === "light" ? (
-                <Sun className="h-5 w-5" />
-              ) : theme === "dark" ? (
-                <Moon className="h-5 w-5" />
-              ) : theme === "pride" ? (
-                <Rainbow className="h-5 w-5" />
-              ) : (
-                <Monitor className="h-5 w-5" />
-              )}
-            </Button>
-          ) : (
-            <div className="mt-3 h-9 w-9" />
-          )}
         </div>
       </header>
       {searchState.isGlobalSearchPanelOpen && !isMobile ? (

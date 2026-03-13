@@ -48,7 +48,7 @@ fn default_download_client_routing_entry(priority: i64) -> Value {
         "category": "",
         "recentQueuePriority": "",
         "olderQueuePriority": "",
-        "removeCompleted": false,
+        "removeCompleted": true,
         "removeFailed": false,
         "priority": priority,
     })

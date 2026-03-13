@@ -13,7 +13,7 @@ export const DOWNLOAD_CLIENT_ROUTING_EMPTY: DownloadClientRoutingSettings = {
   category: "",
   recentQueuePriority: "",
   olderQueuePriority: "",
-  removeCompleted: false,
+  removeCompleted: true,
   removeFailed: false,
 };
 export const NZBGET_CLIENT_ROUTING_EMPTY = DOWNLOAD_CLIENT_ROUTING_EMPTY;

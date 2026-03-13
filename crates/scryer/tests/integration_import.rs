@@ -179,6 +179,7 @@ async fn seed_series_episode(ctx: &TestContext, title: &Title) -> Episode {
         first_episode_number: Some("1".to_string()),
         last_episode_number: Some("1".to_string()),
         interstitial_movie: None,
+        specials_movies: vec![],
         monitored: true,
         created_at: chrono::Utc::now(),
     };

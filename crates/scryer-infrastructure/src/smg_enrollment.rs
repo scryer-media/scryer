@@ -207,6 +207,42 @@ pub fn build_ca_certificate(state: &EnrollmentState) -> Result<reqwest::Certific
         .map_err(|e| format!("failed to parse CA certificate: {e}"))
 }
 
+/// Sign a request for application-layer instance authentication.
+///
+/// Constructs message `"{timestamp}:{body_hash}"` and signs with ECDSA P-256 SHA-256.
+/// Returns a base64-encoded ASN.1 DER signature.
+///
+/// The verifier (SMG) computes SHA-256 of the same message and calls
+/// `ecdsa.VerifyASN1(pubKey, sha256(message), signature)`. The p256 `Signer`
+/// trait internally hashes with SHA-256 before signing, so both sides agree on
+/// the digest: `SHA-256("{timestamp}:{body_hash}")`.
+pub fn sign_request(
+    private_key_pem: &str,
+    timestamp: i64,
+    body_hash: &str,
+) -> Result<String, String> {
+    use base64::Engine as _;
+    use p256::ecdsa::{signature::Signer, DerSignature, SigningKey};
+    use p256::pkcs8::DecodePrivateKey;
+
+    let signing_key = SigningKey::from_pkcs8_pem(private_key_pem)
+        .map_err(|e| format!("failed to parse private key for signing: {e}"))?;
+
+    let message = format!("{timestamp}:{body_hash}");
+    let signature: DerSignature = signing_key.sign(message.as_bytes());
+
+    Ok(base64::engine::general_purpose::STANDARD.encode(signature.as_ref()))
+}
+
+/// Convert a PEM-encoded certificate to base64-encoded DER for the `X-Scryer-Cert` header.
+pub fn cert_pem_to_base64_der(cert_pem: &str) -> Result<String, String> {
+    use base64::Engine as _;
+
+    let (_, pem) = x509_parser::pem::parse_x509_pem(cert_pem.as_bytes())
+        .map_err(|e| format!("failed to parse certificate PEM: {e}"))?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&pem.contents))
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

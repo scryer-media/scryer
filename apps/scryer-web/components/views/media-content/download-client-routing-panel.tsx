@@ -148,6 +148,7 @@ export const WeaverIcon = (props: React.ComponentPropsWithoutRef<"svg">) => (
 
 type DownloadClientTypeOption = {
   value: string;
+  iconSrc?: string;
   icon: (props: React.ComponentPropsWithoutRef<"svg">) => React.JSX.Element;
 };
 
@@ -162,6 +163,7 @@ const DOWNLOAD_CLIENT_TYPE_OPTIONS: DownloadClientTypeOption[] = [
   },
   {
     value: "weaver",
+    iconSrc: "/download-clients/weaver.webp",
     icon: WeaverIcon,
   },
   {
@@ -187,7 +189,21 @@ export function DownloadClientTypeLogo({
 }) {
   const option = getDownloadClientTypeOption(typeValue);
   const FallbackIcon = option.icon;
-  return <FallbackIcon className={`${className} object-contain`} aria-hidden="true" role="img" />;
+  const [failedToLoadImage, setFailedToLoadImage] = React.useState(false);
+
+  if (failedToLoadImage || !option.iconSrc) {
+    return <FallbackIcon className={`${className} object-contain`} aria-hidden="true" role="img" />;
+  }
+
+  return (
+    <img
+      src={option.iconSrc}
+      alt=""
+      className={`${className} object-contain`}
+      role="img"
+      onError={() => setFailedToLoadImage(true)}
+    />
+  );
 }
 
 export const DOWNLOAD_PRIORITY_OPTIONS = [
