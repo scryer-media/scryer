@@ -239,12 +239,8 @@ pub(crate) async fn serve_ui_path(
                     if gz_canonical.starts_with(&canonical_root) {
                         if let Ok(gz_meta) = fs::metadata(&gz_canonical).await {
                             if gz_meta.is_file() {
-                                return serve_file_gzipped(
-                                    gz_canonical,
-                                    &canonical,
-                                    head_only,
-                                )
-                                .await;
+                                return serve_file_gzipped(gz_canonical, &canonical, head_only)
+                                    .await;
                             }
                         }
                     }
@@ -381,11 +377,7 @@ pub(crate) async fn serve_file(path: PathBuf, head_only: bool) -> Response {
 }
 
 /// Serve a pre-compressed `.gz` file with the content type of the original path.
-async fn serve_file_gzipped(
-    gz_path: PathBuf,
-    original_path: &Path,
-    head_only: bool,
-) -> Response {
+async fn serve_file_gzipped(gz_path: PathBuf, original_path: &Path, head_only: bool) -> Response {
     match fs::read(&gz_path).await {
         Ok(bytes) => {
             let asset_path = original_path.to_string_lossy();
@@ -401,10 +393,7 @@ async fn serve_file_gzipped(
                 .header(header::CONTENT_TYPE, infer_content_type(original_path))
                 .header(header::CONTENT_ENCODING, "gzip")
                 .header(header::CONTENT_LENGTH, &content_len)
-                .header(
-                    header::CACHE_CONTROL,
-                    cache_control_for_asset(relative_key),
-                )
+                .header(header::CACHE_CONTROL, cache_control_for_asset(relative_key))
                 .body(if head_only {
                     Body::empty()
                 } else {
