@@ -10,6 +10,7 @@ import {
   BUILT_IN_DOWNLOAD_CLIENT_TYPES,
   DEFAULT_DOWNLOAD_CLIENT_TYPE,
   DEFAULT_DOWNLOAD_CLIENT_DRAFT,
+  WEAVER_API_KEY_SETUP_PATH,
 } from "@/lib/constants/download-clients";
 
 type BuiltInDownloadClientType = (typeof BUILT_IN_DOWNLOAD_CLIENT_TYPES)[number];
@@ -231,7 +232,7 @@ export function buildDownloadClientConfigJson(draft: DownloadClientDraft) {
     client_type: normalizedClientType,
   };
 
-  if (normalizedClientType === "sabnzbd") {
+  if (normalizedClientType === "sabnzbd" || normalizedClientType === "weaver") {
     payload.api_key = draft.apiKey.trim();
   }
 
@@ -260,4 +261,12 @@ export function buildDownloadClientDraftFromRecord(record: DownloadClientRecord)
 
 export function buildUrlPreview(draft: DownloadClientDraft): string {
   return buildDownloadClientBaseUrl(draft);
+}
+
+export function buildWeaverApiKeyUrl(draft: DownloadClientDraft): string {
+  const baseUrl = buildDownloadClientBaseUrl(draft).replace(/\/+$/, "");
+  if (!baseUrl) {
+    return "";
+  }
+  return `${baseUrl}${WEAVER_API_KEY_SETUP_PATH}`;
 }

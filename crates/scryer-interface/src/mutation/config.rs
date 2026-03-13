@@ -14,6 +14,13 @@ const DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY: &str = "download_client.routing";
 const LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY: &str = "nzbget.client_routing";
 const DOWNLOAD_CLIENT_ROUTING_SCOPE_IDS: [&str; 3] = ["movie", "series", "anime"];
 
+fn should_seed_download_client_routing(client_type: &str) -> bool {
+    matches!(
+        client_type.trim().to_ascii_lowercase().as_str(),
+        "nzbget" | "sabnzbd" | "weaver"
+    )
+}
+
 fn parse_download_client_routing_priority(raw_priority: &Value) -> Option<i64> {
     match raw_priority {
         Value::Number(number) => number.as_i64(),
@@ -240,7 +247,7 @@ impl ConfigMutations {
             .await
             .map_err(to_gql_error)?;
 
-        if config.client_type == "nzbget" || config.client_type == "sabnzbd" {
+        if should_seed_download_client_routing(&config.client_type) {
             ensure_download_client_routing_entry_for_client(&db, &config.id, &actor.id).await?;
         }
 
@@ -268,7 +275,7 @@ impl ConfigMutations {
             .await
             .map_err(to_gql_error)?;
 
-        if config.client_type == "nzbget" || config.client_type == "sabnzbd" {
+        if should_seed_download_client_routing(&config.client_type) {
             ensure_download_client_routing_entry_for_client(&db, &config.id, &actor.id).await?;
         }
 
@@ -361,6 +368,20 @@ impl ConfigMutations {
                     .ok_or_else(|| Error::new("sabnzbd requires an API key"))?;
 
                 scryer_infrastructure::SabnzbdDownloadClient::new(base_url, api_key)
+                    .test_connection()
+                    .await
+                    .map_err(to_gql_error)?;
+            }
+            "weaver" => {
+                let api_key = config
+                    .get("api_key")
+                    .or_else(|| config.get("apiKey"))
+                    .or_else(|| config.get("apikey"))
+                    .and_then(Value::as_str)
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty());
+
+                scryer_infrastructure::WeaverDownloadClient::new(base_url, api_key)
                     .test_connection()
                     .await
                     .map_err(to_gql_error)?;

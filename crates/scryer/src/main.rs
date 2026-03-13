@@ -565,7 +565,7 @@ async fn bootstrap_application(
     // Use push-based WebSocket subscription for weaver; fall back to HTTP
     // polling for NZBGet/SABnzbd.
     match resolve_weaver_ws_url(&app_use_case).await {
-        Some(ws_url) => {
+        Some((ws_url, api_key)) => {
             tracing::info!(
                 url = ws_url.as_str(),
                 "using weaver subscription bridge for download queue"
@@ -574,6 +574,7 @@ async fn bootstrap_application(
                 app_use_case.clone(),
                 shutdown_token.child_token(),
                 ws_url,
+                api_key,
             ));
         }
         None => {
@@ -1158,8 +1159,8 @@ pub(crate) fn normalize_env_option_with_legacy<'a>(
     None
 }
 
-/// Check if the primary download client is weaver and return its WebSocket URL.
-async fn resolve_weaver_ws_url(app: &AppUseCase) -> Option<String> {
+/// Check if the primary download client is weaver and return its WebSocket URL and API key.
+async fn resolve_weaver_ws_url(app: &AppUseCase) -> Option<(String, Option<String>)> {
     let configs = app.services.download_client_configs.list(None).await.ok()?;
     let primary = configs
         .into_iter()
@@ -1170,11 +1171,6 @@ async fn resolve_weaver_ws_url(app: &AppUseCase) -> Option<String> {
         return None;
     }
 
-    let base_url = primary.base_url.as_deref()?.trim();
-    if base_url.is_empty() {
-        return None;
-    }
-
-    let client = WeaverDownloadClient::new(base_url.to_string());
-    Some(client.ws_url())
+    let client = WeaverDownloadClient::from_config(&primary).ok()?;
+    Some((client.ws_url(), client.api_key().map(str::to_string)))
 }

@@ -281,7 +281,7 @@ impl ExternalImportMutations {
                 serde_json::Value::String(scryer_type.to_string()),
             );
 
-            if scryer_type == "sabnzbd" {
+            if scryer_type == "sabnzbd" || scryer_type == "weaver" {
                 if let Some(api_key) = external_import::field_str(&dc.fields, "apiKey") {
                     config_obj.insert("api_key".into(), serde_json::Value::String(api_key));
                 }
@@ -312,7 +312,10 @@ impl ExternalImportMutations {
             {
                 Ok(config) => {
                     result.download_clients_created += 1;
-                    if scryer_type == "nzbget" || scryer_type == "sabnzbd" {
+                    if scryer_type == "nzbget"
+                        || scryer_type == "sabnzbd"
+                        || scryer_type == "weaver"
+                    {
                         let _ = ensure_download_client_routing_entry_for_client(
                             &db, &config.id, &actor.id,
                         )

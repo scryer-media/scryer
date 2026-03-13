@@ -2,24 +2,27 @@
   "name": "Scryer",
   "short_name": "Scryer",
   "description": "Media automation and management",
-  "start_url": "/",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
-  "background_color": "#f8f9fc",
-  "theme_color": "#f8f9fc",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "background_color": "#070b18",
+  "theme_color": "#070b18",
   "orientation": "any",
   "icons": [
     {
-      "src": "/icons/icon-192.png",
+      "src": "./icons/icon-192.png",
       "sizes": "192x192",
       "type": "image/png"
     },
     {
-      "src": "/icons/icon-512.png",
+      "src": "./icons/icon-512.png",
       "sizes": "512x512",
       "type": "image/png"
     },
     {
-      "src": "/icons/icon-maskable-512.png",
+      "src": "./icons/icon-maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

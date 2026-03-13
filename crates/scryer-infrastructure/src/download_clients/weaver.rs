@@ -5,30 +5,54 @@ use reqwest::Client;
 use scryer_application::{
     AppError, AppResult, DownloadClient, DownloadClientAddRequest, DownloadGrabResult,
 };
-use scryer_domain::{CompletedDownload, DownloadQueueItem, DownloadQueueState};
+use scryer_domain::{
+    CompletedDownload, DownloadClientConfig, DownloadQueueItem, DownloadQueueState,
+};
 use serde_json::{json, Value};
 use tracing::debug;
 
-use super::is_http_url;
+use super::{
+    is_http_url, parse_download_client_config_json, read_config_string,
+    resolve_download_client_base_url,
+};
 
 #[derive(Clone)]
 pub struct WeaverDownloadClient {
     graphql_url: String,
+    api_key: Option<String>,
     http_client: Client,
 }
 
 impl WeaverDownloadClient {
-    pub fn new(base_url: String) -> Self {
+    pub fn new(base_url: String, api_key: Option<String>) -> Self {
         let base = base_url.trim_end_matches('/').to_string();
         let graphql_url = format!("{base}/graphql");
         Self {
             graphql_url,
+            api_key,
             http_client: Client::new(),
         }
     }
 
+    pub fn from_config(config: &DownloadClientConfig) -> AppResult<Self> {
+        let parsed_config = parse_download_client_config_json(&config.config_json)?;
+        let base_url =
+            resolve_download_client_base_url(config, &parsed_config).ok_or_else(|| {
+                AppError::Validation(format!(
+                    "download client {} has no valid base URL",
+                    config.id
+                ))
+            })?;
+        let api_key = read_config_string(&parsed_config, &["api_key", "apiKey", "apikey"]);
+        Ok(Self::new(base_url, api_key))
+    }
+
     pub fn graphql_url(&self) -> &str {
         &self.graphql_url
+    }
+
+    pub fn api_key(&self) -> Option<&str> {
+        self.api_key.as_deref()
     }
 
     /// Derive the WebSocket URL from the HTTP GraphQL endpoint.
@@ -40,14 +64,23 @@ impl WeaverDownloadClient {
         format!("{url}/ws")
     }
 
+    fn with_auth_headers(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match self.api_key.as_deref() {
+            Some(api_key) => request.header("x-api-key", api_key),
+            None => request,
+        }
+    }
+
     async fn graphql_request(&self, query: &str, variables: Value) -> AppResult<Value> {
         let payload = json!({ "query": query, "variables": variables });
 
         let response = self
-            .http_client
-            .post(&self.graphql_url)
-            .header("Content-Type", "application/json")
-            .json(&payload)
+            .with_auth_headers(
+                self.http_client
+                    .post(&self.graphql_url)
+                    .header("Content-Type", "application/json")
+                    .json(&payload),
+            )
             .send()
             .await
             .map_err(|err| AppError::Repository(format!("weaver request failed: {err}")))?;
@@ -155,6 +188,71 @@ impl WeaverDownloadClient {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use serde_json::json;
+
+    use super::{weaver_job_to_queue_item, WeaverDownloadClient};
+    use scryer_domain::{DownloadClientConfig, DownloadQueueState};
+
+    fn test_config(config_json: &str, base_url: Option<&str>) -> DownloadClientConfig {
+        DownloadClientConfig {
+            id: "dc-weaver".to_string(),
+            name: "Weaver".to_string(),
+            client_type: "weaver".to_string(),
+            base_url: base_url.map(str::to_string),
+            config_json: config_json.to_string(),
+            client_priority: 1,
+            is_enabled: true,
+            status: "unknown".to_string(),
+            last_error: None,
+            last_seen_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn from_config_reads_api_key_and_base_url() {
+        let config = test_config(
+            r#"{"api_key":"wvr_test","host":"weaver.local","port":"9090"}"#,
+            None,
+        );
+
+        let client =
+            WeaverDownloadClient::from_config(&config).expect("weaver config should parse");
+
+        assert_eq!(client.graphql_url(), "http://weaver.local:9090/graphql");
+        assert_eq!(client.api_key(), Some("wvr_test"));
+        assert_eq!(client.ws_url(), "ws://weaver.local:9090/graphql/ws");
+    }
+
+    #[test]
+    fn weaver_job_to_queue_item_marks_failed_job_attention() {
+        let job = json!({
+            "id": 42,
+            "name": "Example Job",
+            "status": "FAILED",
+            "error": "archive corrupt",
+            "progress": 0.25,
+            "totalBytes": 4000,
+            "createdAt": 1_700_000_000_000_f64,
+            "metadata": [
+                { "key": "*scryer_title_id", "value": "title-1" },
+                { "key": "*scryer_facet", "value": "anime" }
+            ]
+        });
+
+        let item = weaver_job_to_queue_item(&job).expect("job should map");
+
+        assert_eq!(item.state, DownloadQueueState::Failed);
+        assert_eq!(item.title_id.as_deref(), Some("title-1"));
+        assert!(item.is_scryer_origin);
+        assert_eq!(item.attention_reason.as_deref(), Some("archive corrupt"));
     }
 }
 
