@@ -10,6 +10,7 @@ import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input"
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
+  buildWeaverApiKeyUrl,
   buildUrlPreview,
 } from "@/lib/utils/download-clients";
 import {
@@ -109,6 +110,19 @@ const SabnzbdIcon = (props: React.ComponentPropsWithoutRef<"svg">) => (
   </svg>
 );
 
+const WeaverIcon = (props: React.ComponentPropsWithoutRef<"svg">) => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" {...props}>
+    <rect x="8" y="10" width="48" height="44" rx="12" fill="#141c2b" />
+    <path
+      d="M18 20l8 24 6-18 6 18 8-24"
+      stroke="#78f0c5"
+      strokeWidth="5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 function DownloadClientActionButton({
   label,
   tone,
@@ -169,6 +183,10 @@ const DOWNLOAD_CLIENT_TYPE_LOGO_OPTIONS: DownloadClientTypeLogoOption[] = [
     icon: SabnzbdIcon,
   },
   {
+    value: "weaver",
+    icon: WeaverIcon,
+  },
+  {
     value: "qbittorrent",
     iconSrc: "/download-clients/qbittorrent.svg",
     icon: QBitTorrentIcon,
@@ -227,7 +245,10 @@ export function SettingsDownloadClientsSection({
   const t = useTranslate();
   const urlPreview = buildUrlPreview(downloadClientDraft);
   const normalizedClientType = downloadClientDraft.clientType.trim().toLowerCase();
-  const hasApiKeyField = normalizedClientType === "sabnzbd";
+  const hasApiKeyField =
+    normalizedClientType === "sabnzbd" || normalizedClientType === "weaver";
+  const weaverApiKeyUrl =
+    normalizedClientType === "weaver" ? buildWeaverApiKeyUrl(downloadClientDraft) : "";
 
   const clientById = React.useMemo(
     () => Object.fromEntries(settingsDownloadClients.map((c) => [c.id, c])),
@@ -490,6 +511,23 @@ export function SettingsDownloadClientsSection({
                     placeholder={t("form.apiKeyInputPlaceholder")}
                     type="password"
                   />
+                  {normalizedClientType === "weaver" ? (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Create an integration API key in Weaver:{" "}
+                      {weaverApiKeyUrl ? (
+                        <a
+                          href={weaverApiKeyUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="underline underline-offset-4 hover:text-foreground"
+                        >
+                          open Weaver security settings
+                        </a>
+                      ) : (
+                        <span>finish the Weaver URL above to generate the link.</span>
+                      )}
+                    </p>
+                  ) : null}
                 </label>
               ) : null}
               {!hasApiKeyField ? (

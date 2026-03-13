@@ -379,15 +379,7 @@ impl PrioritizedDownloadClientRouter {
                 Ok(Arc::new(client))
             }
             "weaver" => {
-                let parsed_config = parse_download_client_config_json(&config.config_json)?;
-                let base_url = resolve_download_client_base_url(config, &parsed_config)
-                    .ok_or_else(|| {
-                        AppError::Validation(format!(
-                            "download client {} has no valid base URL",
-                            config.id
-                        ))
-                    })?;
-                let client = WeaverDownloadClient::new(base_url);
+                let client = WeaverDownloadClient::from_config(config)?;
                 Ok(Arc::new(client))
             }
             _ => Err(AppError::Validation(format!(

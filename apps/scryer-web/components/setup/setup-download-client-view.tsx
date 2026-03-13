@@ -5,6 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { DownloadClientDraft, DownloadClientTypeOption } from "@/lib/types/download-clients";
+import { buildWeaverApiKeyUrl } from "@/lib/utils/download-clients";
 
 interface SetupDownloadClientViewProps {
   t: (key: string) => string;
@@ -37,8 +38,9 @@ export function SetupDownloadClientView({
   saved,
   error,
 }: SetupDownloadClientViewProps) {
-  const showApiKey = draft.clientType === "sabnzbd";
+  const showApiKey = draft.clientType === "sabnzbd" || draft.clientType === "weaver";
   const showCredentials = draft.clientType === "nzbget" || draft.clientType === "qbittorrent";
+  const weaverApiKeyUrl = draft.clientType === "weaver" ? buildWeaverApiKeyUrl(draft) : "";
   const canTest = draft.name.trim().length > 0 && draft.host.trim().length > 0;
   const canProceed = saved;
 
@@ -110,6 +112,23 @@ export function SetupDownloadClientView({
               value={draft.apiKey}
               onChange={(e) => onDraftChange({ apiKey: e.target.value })}
             />
+            {draft.clientType === "weaver" ? (
+              <p className="text-xs text-muted-foreground">
+                Create an integration API key in Weaver:{" "}
+                {weaverApiKeyUrl ? (
+                  <a
+                    href={weaverApiKeyUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline underline-offset-4 hover:text-foreground"
+                  >
+                    open Weaver security settings
+                  </a>
+                ) : (
+                  <span>finish the Weaver URL above to generate the link.</span>
+                )}
+              </p>
+            ) : null}
           </div>
         )}
         {showCredentials && (

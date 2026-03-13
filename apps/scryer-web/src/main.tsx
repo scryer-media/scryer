@@ -13,6 +13,7 @@ import "@fontsource/space-grotesk/latin-600.css";
 
 import "@/app/globals.css";
 
+import { registerServiceWorker } from "@/lib/pwa/register-service-worker";
 import { router } from "./router";
 
 createRoot(document.getElementById("root")!).render(
@@ -25,6 +26,8 @@ createRoot(document.getElementById("root")!).render(
     </ThemeProvider>
   </StrictMode>,
 );
+
+registerServiceWorker();
 
 // Defer non-critical font weights
 import("@/lib/fonts/deferred-fonts").then((m) => m.loadDeferredFonts());

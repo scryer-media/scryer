@@ -1,6 +1,6 @@
 import type { DownloadClientDraft } from "@/lib/types/download-clients";
 
-export const BUILT_IN_DOWNLOAD_CLIENT_TYPES = ["nzbget", "sabnzbd"] as const;
+export const BUILT_IN_DOWNLOAD_CLIENT_TYPES = ["nzbget", "sabnzbd", "weaver"] as const;
 
 export const DEFAULT_DOWNLOAD_CLIENT_TYPE = "nzbget";
 
@@ -10,7 +10,11 @@ export const BUILT_IN_DOWNLOAD_CLIENT_TYPE_LABELS: Record<
 > = {
   nzbget: "NZBGet",
   sabnzbd: "SABnzbd",
+  weaver: "Weaver",
 };
+
+export const WEAVER_API_KEY_SETUP_PATH =
+  "/settings/security?createApiKey=1&name=Scryer&scope=integration";
 
 export const DEFAULT_DOWNLOAD_CLIENT_DRAFT: DownloadClientDraft = {
   name: "",

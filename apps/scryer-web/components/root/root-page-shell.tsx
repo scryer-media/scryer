@@ -15,7 +15,6 @@ import { useLanguage } from "@/lib/hooks/use-language";
 import { ScryerGraphqlProvider } from "@/lib/graphql/urql-provider";
 import { useOnlineStatus } from "@/lib/hooks/use-online-status";
 import { useInstallPrompt } from "@/lib/hooks/use-install-prompt";
-import { useIsMobile } from "@/lib/hooks/use-mobile";
 import { useBackendRestarting } from "@/lib/hooks/use-backend-restarting";
 import type { ViewId, SettingsSection, ContentSettingsSection } from "@/components/root/types";
 import type { Facet } from "@/lib/types";
@@ -72,6 +71,8 @@ const ImportHistoryContainer = lazy(() =>
 const GlobalSearchProvider = lazy(() =>
   import("@/components/root/global-search-provider").then((m) => ({ default: m.GlobalSearchProvider })),
 );
+
+const INSTALL_BANNER_DISMISSED_KEY = "scryer.pwa.installBannerDismissed";
 
 function OverviewContainerForView({ view, initialEpisodeId, ...props }: { view: ViewId; titleId: string; onBackToList: () => void; onTitleNotFound: () => void; initialEpisodeId?: string | null }) {
   const facet = facetForView(view);
@@ -227,9 +228,8 @@ function AuthenticatedHomePage({
   setServiceRestarting: (value: boolean) => void;
 }) {
   const { user } = useAuth();
-  const isMobile = useIsMobile();
   const isOnline = useOnlineStatus();
-  const { canPrompt, isInstalled, promptInstall } = useInstallPrompt();
+  const { canPrompt, isInstalled, isIosSafari, promptInstall } = useInstallPrompt();
 
   const { pathname } = useLocation();
   const [searchParams] = useSearchParams();
@@ -278,7 +278,30 @@ function AuthenticatedHomePage({
     [getLanguageLabel, setLanguagePreference, t, setGlobalStatus],
   );
 
-  const [installBannerDismissed, setInstallBannerDismissed] = useState(false);
+  const [installBannerDismissed, setInstallBannerDismissed] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+
+    return window.localStorage.getItem(INSTALL_BANNER_DISMISSED_KEY) === "true";
+  });
+  const showInstallBanner = !isInstalled && !installBannerDismissed && (canPrompt || isIosSafari);
+
+  useEffect(() => {
+    if (!isInstalled || typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.removeItem(INSTALL_BANNER_DISMISSED_KEY);
+    setInstallBannerDismissed(false);
+  }, [isInstalled]);
+
+  const dismissInstallBanner = useCallback(() => {
+    setInstallBannerDismissed(true);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(INSTALL_BANNER_DISMISSED_KEY, "true");
+    }
+  }, []);
 
   const onCatalogChanged = useCallback(() => {}, []);
 
@@ -419,20 +442,22 @@ function AuthenticatedHomePage({
             </div>
           ) : null}
 
-          {isMobile && canPrompt && !isInstalled && !installBannerDismissed ? (
+          {showInstallBanner ? (
             <div className="flex items-center justify-center gap-3 bg-emerald-100 dark:bg-emerald-900/60 px-4 py-2 text-sm text-emerald-800 dark:text-emerald-100">
               <Download className="h-4 w-4 flex-none" />
-              <span>{t("pwa.installApp")}</span>
+              <span>{isIosSafari ? t("pwa.iosInstallHint") : t("pwa.installApp")}</span>
+              {canPrompt ? (
+                <button
+                  type="button"
+                  onClick={() => void promptInstall()}
+                  className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-medium text-foreground hover:bg-emerald-500"
+                >
+                  {t("pwa.installApp")}
+                </button>
+              ) : null}
               <button
                 type="button"
-                onClick={() => void promptInstall()}
-                className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-medium text-foreground hover:bg-emerald-500"
-              >
-                {t("pwa.installApp")}
-              </button>
-              <button
-                type="button"
-                onClick={() => setInstallBannerDismissed(true)}
+                onClick={dismissInstallBanner}
                 className="ml-auto text-emerald-700 dark:text-emerald-300 hover:text-foreground"
                 aria-label={t("label.dismiss")}
               >

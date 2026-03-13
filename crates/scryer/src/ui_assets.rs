@@ -237,7 +237,7 @@ pub(crate) fn contains_unsafe_path_segments(path: &str) -> bool {
 pub(crate) fn cache_control_for_asset(path: &str) -> &'static str {
     if path.starts_with("assets/") || path.starts_with("_next/static/") {
         "public, max-age=31536000, immutable"
-    } else if path == "index.html" {
+    } else if path == "index.html" || path == "manifest.json" || path == "service-worker.js" {
         "no-cache"
     } else {
         "public, max-age=3600"
@@ -245,6 +245,10 @@ pub(crate) fn cache_control_for_asset(path: &str) -> &'static str {
 }
 
 pub(crate) fn infer_content_type(path: &Path) -> &'static str {
+    if path.file_name().and_then(|name| name.to_str()) == Some("manifest.json") {
+        return "application/manifest+json; charset=utf-8";
+    }
+
     match path.extension().and_then(|ext| ext.to_str()) {
         Some("html") => "text/html; charset=utf-8",
         Some("css") => "text/css; charset=utf-8",
@@ -355,8 +359,8 @@ fn render_index_html(index_html: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::{
-        infer_content_type, looks_like_static_asset_request, serve_fallback_ui,
-        should_serve_spa_index,
+        cache_control_for_asset, infer_content_type, looks_like_static_asset_request,
+        serve_fallback_ui, should_serve_spa_index,
     };
     use axum::http::StatusCode;
     use std::path::Path;
@@ -380,6 +384,16 @@ mod tests {
     #[test]
     fn svg_content_type_omits_charset_for_compression_compatibility() {
         assert_eq!(infer_content_type(Path::new("logo.svg")), "image/svg+xml");
+    }
+
+    #[test]
+    fn manifest_and_service_worker_headers_are_pwa_safe() {
+        assert_eq!(
+            infer_content_type(Path::new("manifest.json")),
+            "application/manifest+json; charset=utf-8"
+        );
+        assert_eq!(cache_control_for_asset("manifest.json"), "no-cache");
+        assert_eq!(cache_control_for_asset("service-worker.js"), "no-cache");
     }
 
     #[tokio::test]

@@ -133,6 +133,19 @@ export const SabnzbdIcon = (props: React.ComponentPropsWithoutRef<"svg">) => (
   </svg>
 );
 
+export const WeaverIcon = (props: React.ComponentPropsWithoutRef<"svg">) => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" {...props}>
+    <rect x="8" y="10" width="48" height="44" rx="12" fill="#141c2b" />
+    <path
+      d="M18 20l8 24 6-18 6 18 8-24"
+      stroke="#78f0c5"
+      strokeWidth="5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 type DownloadClientTypeOption = {
   value: string;
   icon: (props: React.ComponentPropsWithoutRef<"svg">) => React.JSX.Element;
@@ -146,6 +159,10 @@ const DOWNLOAD_CLIENT_TYPE_OPTIONS: DownloadClientTypeOption[] = [
   {
     value: "sabnzbd",
     icon: SabnzbdIcon,
+  },
+  {
+    value: "weaver",
+    icon: WeaverIcon,
   },
   {
     value: "qbittorrent",

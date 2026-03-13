@@ -11,7 +11,7 @@ use futures_util::{SinkExt, StreamExt};
 use scryer_application::AppUseCase;
 use scryer_domain::DownloadQueueState;
 use serde_json::{json, Value};
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{http::Request, Message};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -45,6 +45,7 @@ pub async fn start_weaver_subscription_bridge(
     app: AppUseCase,
     token: CancellationToken,
     ws_url: String,
+    api_key: Option<String>,
 ) {
     let actor = match app.find_or_create_default_user().await {
         Ok(actor) => actor,
@@ -65,7 +66,7 @@ pub async fn start_weaver_subscription_bridge(
 
         info!(url = ws_url.as_str(), "connecting to weaver WebSocket");
 
-        match run_subscription(&app, &actor, &ws_url, &token).await {
+        match run_subscription(&app, &actor, &ws_url, api_key.as_deref(), &token).await {
             Ok(()) => {
                 // Clean shutdown (e.g. cancellation token fired).
                 info!("weaver subscription bridge stopped cleanly");
@@ -96,9 +97,20 @@ async fn run_subscription(
     app: &AppUseCase,
     actor: &scryer_domain::User,
     ws_url: &str,
+    api_key: Option<&str>,
     token: &CancellationToken,
 ) -> Result<(), String> {
-    let (ws_stream, _response) = tokio_tungstenite::connect_async(ws_url)
+    let mut request_builder = Request::builder()
+        .uri(ws_url)
+        .header("Sec-WebSocket-Protocol", "graphql-transport-ws");
+    if let Some(api_key) = api_key {
+        request_builder = request_builder.header("x-api-key", api_key);
+    }
+    let request = request_builder
+        .body(())
+        .map_err(|e| format!("failed to build WebSocket request: {e}"))?;
+
+    let (ws_stream, _response) = tokio_tungstenite::connect_async(request)
         .await
         .map_err(|e| format!("WebSocket connect failed: {e}"))?;
 
@@ -107,7 +119,20 @@ async fn run_subscription(
     // --- graphql-ws handshake: connection_init ---
     write
         .send(Message::Text(
-            json!({"type": "connection_init"}).to_string().into(),
+            match api_key {
+                Some(api_key) => json!({
+                    "type": "connection_init",
+                    "payload": {
+                        "api_key": api_key,
+                    }
+                }),
+                None => json!({
+                    "type": "connection_init",
+                    "payload": {},
+                }),
+            }
+            .to_string()
+            .into(),
         ))
         .await
         .map_err(|e| format!("failed to send connection_init: {e}"))?;
