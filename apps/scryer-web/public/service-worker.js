@@ -64,6 +64,10 @@ function isStaticAssetPath(relativePath) {
     return true;
   }
 
+  if (relativePath.endsWith(".gz")) {
+    return false;
+  }
+
   return /\.(?:css|js|mjs|woff2?|png|webp|svg|jpg|jpeg|gif|ico|txt|xml)$/i.test(relativePath);
 }
 

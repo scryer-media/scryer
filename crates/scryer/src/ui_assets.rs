@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use axum::body::Body;
-use axum::http::{header, Method, StatusCode, Uri};
+use axum::http::{header, HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use tokio::fs;
 
@@ -25,18 +25,28 @@ pub(crate) enum UiAssetMode {
     Fallback,
 }
 
-pub(crate) async fn ui_fallback(method: Method, uri: Uri) -> Response {
+pub(crate) async fn ui_fallback(method: Method, uri: Uri, headers: HeaderMap) -> Response {
     if method != Method::GET && method != Method::HEAD {
         return StatusCode::METHOD_NOT_ALLOWED.into_response();
     }
 
     let request_path = uri.path();
     let head_only = method == Method::HEAD;
+    let accept_gzip = accepts_gzip(&headers);
     match ui_asset_mode() {
-        UiAssetMode::Filesystem(dist_dir) => serve_ui_path(dist_dir, request_path, head_only).await,
-        UiAssetMode::Embedded => serve_embedded_ui(request_path, head_only).await,
+        UiAssetMode::Filesystem(dist_dir) => {
+            serve_ui_path(dist_dir, request_path, head_only, accept_gzip).await
+        }
+        UiAssetMode::Embedded => serve_embedded_ui(request_path, head_only, accept_gzip).await,
         UiAssetMode::Fallback => serve_fallback_ui(request_path).await,
     }
+}
+
+fn accepts_gzip(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("gzip"))
 }
 
 pub(crate) fn ui_asset_mode() -> &'static UiAssetMode {
@@ -67,7 +77,11 @@ pub(crate) fn resolve_ui_asset_mode() -> UiAssetMode {
     UiAssetMode::Fallback
 }
 
-pub(crate) async fn serve_embedded_ui(request_path: &str, head_only: bool) -> Response {
+pub(crate) async fn serve_embedded_ui(
+    request_path: &str,
+    head_only: bool,
+    accept_gzip: bool,
+) -> Response {
     if should_serve_spa_index(request_path) {
         return serve_embedded_index(head_only).await;
     }
@@ -81,20 +95,48 @@ pub(crate) async fn serve_embedded_ui(request_path: &str, head_only: bool) -> Re
         return StatusCode::NOT_FOUND.into_response();
     }
 
+    // Don't serve .gz files directly — they're only used as pre-compressed variants.
+    if relative_path.ends_with(".gz") {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
     match embedded_ui_asset(relative_path) {
         Some(bytes) => {
+            let content_type = infer_content_type(Path::new(relative_path));
+            let cache_control = cache_control_for_asset(relative_path);
+
+            // Serve pre-compressed .gz variant if client accepts gzip.
+            if accept_gzip {
+                let gz_path = format!("{relative_path}.gz");
+                if let Some(gz_bytes) = embedded_ui_asset(&gz_path) {
+                    let content_len = gz_bytes.len().to_string();
+                    let response = Response::builder()
+                        .status(StatusCode::OK)
+                        .header(header::CONTENT_TYPE, content_type)
+                        .header(header::CONTENT_ENCODING, "gzip")
+                        .header(header::CONTENT_LENGTH, &content_len)
+                        .header(header::CACHE_CONTROL, cache_control)
+                        .body(if head_only {
+                            Body::empty()
+                        } else {
+                            Body::from(gz_bytes)
+                        });
+                    return response.unwrap_or_else(|error| {
+                        tracing::warn!(error = %error, path = relative_path, "failed to build compressed asset response");
+                        Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(Body::empty())
+                            .expect("response build")
+                    });
+                }
+            }
+
             let content_len = bytes.len().to_string();
             let response = Response::builder()
                 .status(StatusCode::OK)
-                .header(
-                    header::CONTENT_TYPE,
-                    infer_content_type(Path::new(relative_path)),
-                )
+                .header(header::CONTENT_TYPE, content_type)
                 .header(header::CONTENT_LENGTH, &content_len)
-                .header(
-                    header::CACHE_CONTROL,
-                    cache_control_for_asset(relative_path),
-                )
+                .header(header::CACHE_CONTROL, cache_control)
                 .body(if head_only {
                     Body::empty()
                 } else {
@@ -155,6 +197,7 @@ pub(crate) async fn serve_ui_path(
     dist_dir: &Path,
     request_path: &str,
     head_only: bool,
+    accept_gzip: bool,
 ) -> Response {
     if !dist_dir.exists() {
         return serve_fallback_ui(request_path).await;
@@ -167,6 +210,11 @@ pub(crate) async fn serve_ui_path(
     let decoded = percent_encoding::percent_decode_str(request_path).decode_utf8_lossy();
     let relative_path = decoded.trim_start_matches('/');
     if contains_unsafe_path_segments(relative_path) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    // Don't serve .gz files directly.
+    if relative_path.ends_with(".gz") {
         return StatusCode::NOT_FOUND.into_response();
     }
 
@@ -183,7 +231,27 @@ pub(crate) async fn serve_ui_path(
         return StatusCode::NOT_FOUND.into_response();
     }
     match fs::metadata(&canonical).await {
-        Ok(metadata) if metadata.is_file() => serve_file(canonical, head_only).await,
+        Ok(metadata) if metadata.is_file() => {
+            // Try pre-compressed variant for filesystem mode too.
+            if accept_gzip {
+                let gz_candidate = dist_dir.join(format!("{relative_path}.gz"));
+                if let Ok(gz_canonical) = gz_candidate.canonicalize() {
+                    if gz_canonical.starts_with(&canonical_root) {
+                        if let Ok(gz_meta) = fs::metadata(&gz_canonical).await {
+                            if gz_meta.is_file() {
+                                return serve_file_gzipped(
+                                    gz_canonical,
+                                    &canonical,
+                                    head_only,
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                }
+            }
+            serve_file(canonical, head_only).await
+        }
         Ok(metadata) if metadata.is_dir() => StatusCode::NOT_FOUND.into_response(),
         _ => StatusCode::NOT_FOUND.into_response(),
     }
@@ -309,6 +377,48 @@ pub(crate) async fn serve_file(path: PathBuf, head_only: bool) -> Response {
                 .body(Body::empty())
                 .expect("response build")
         }
+    }
+}
+
+/// Serve a pre-compressed `.gz` file with the content type of the original path.
+async fn serve_file_gzipped(
+    gz_path: PathBuf,
+    original_path: &Path,
+    head_only: bool,
+) -> Response {
+    match fs::read(&gz_path).await {
+        Ok(bytes) => {
+            let asset_path = original_path.to_string_lossy();
+            let relative_key = asset_path
+                .rsplit_once("/dist/")
+                .map(|(_, rest)| rest)
+                .or_else(|| asset_path.rsplit_once("/out/").map(|(_, rest)| rest))
+                .or_else(|| asset_path.rsplit_once("/ui/").map(|(_, rest)| rest))
+                .unwrap_or(&asset_path);
+            let content_len = bytes.len().to_string();
+            let response = Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, infer_content_type(original_path))
+                .header(header::CONTENT_ENCODING, "gzip")
+                .header(header::CONTENT_LENGTH, &content_len)
+                .header(
+                    header::CACHE_CONTROL,
+                    cache_control_for_asset(relative_key),
+                )
+                .body(if head_only {
+                    Body::empty()
+                } else {
+                    Body::from(bytes)
+                });
+            response.unwrap_or_else(|error| {
+                tracing::warn!(error = %error, path = %gz_path.display(), "failed to build gzipped file response");
+                Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(Body::empty())
+                    .expect("response build")
+            })
+        }
+        Err(_) => serve_file(original_path.to_path_buf(), head_only).await,
     }
 }
 
