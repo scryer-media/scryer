@@ -1,8 +1,7 @@
 
 import * as React from "react";
-import { ArrowLeft, Loader2, Plus, Search, X } from "lucide-react";
+import { ArrowLeft, Eye, EyeOff, Loader2, Plus, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { ViewId } from "@/components/root/types";
@@ -96,6 +95,7 @@ export function MobileSearchOverlay({
     addMetadataSearchResultToCatalog,
     isMetadataSearchResultInCatalog,
     catalogQualityProfileOptions,
+    rootFoldersByFacet,
   } = searchState;
   const defaultAddOptionsForFacet = React.useCallback(
     (facet: Facet): MetadataCatalogAddOptions => ({
@@ -135,7 +135,8 @@ export function MobileSearchOverlay({
           current.monitorType === next.monitorType &&
           current.minAvailability === next.minAvailability &&
           current.monitorSpecials === next.monitorSpecials &&
-          current.interSeasonMovies === next.interSeasonMovies
+          current.interSeasonMovies === next.interSeasonMovies &&
+          current.rootFolder === next.rootFolder
         )
           return previous;
         return { ...previous, [cardKey]: next };
@@ -320,6 +321,29 @@ export function MobileSearchOverlay({
                 </Select>
               </label>
 
+              {rootFoldersByFacet[facet].length >= 2 ? (
+                <label className="space-y-1">
+                  <span className="block text-xs font-medium text-card-foreground">
+                    {t("search.addConfigRootFolder")}
+                  </span>
+                  <Select
+                    value={draft.rootFolder || rootFoldersByFacet[facet].find((rf) => rf.isDefault)?.path || rootFoldersByFacet[facet][0]?.path || ""}
+                    onValueChange={(v) => updateMetadataAddDraft(cardKey, facet, { rootFolder: v })}
+                    disabled={isAdding}
+                  >
+                    <SelectTrigger className="h-10 w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {rootFoldersByFacet[facet].map((rf) => (
+                        <SelectItem key={rf.path} value={rf.path}>
+                          {rf.path.split("/").filter(Boolean).pop() || rf.path}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </label>
+              ) : null}
               {facet !== "movie" ? (
                 <label className="space-y-1">
                   <span className="block text-xs font-medium text-card-foreground">
@@ -347,14 +371,20 @@ export function MobileSearchOverlay({
                       {t("settings.monitorSpecialsLabel")}
                     </span>
                     <div className="flex min-h-10 w-full items-center">
-                      <Checkbox
-                        className="h-8 w-8"
-                        checked={draft.monitorSpecials !== false}
-                        onCheckedChange={(checked) =>
-                          updateMetadataAddDraft(cardKey, facet, { monitorSpecials: checked === true })
+                      <button
+                        type="button"
+                        className="inline-flex items-center justify-center disabled:opacity-50"
+                        onClick={() =>
+                          updateMetadataAddDraft(cardKey, facet, { monitorSpecials: draft.monitorSpecials === false })
                         }
                         disabled={isAdding}
-                      />
+                      >
+                        {draft.monitorSpecials !== false ? (
+                          <Eye className="h-5 w-5 text-emerald-600 dark:text-emerald-300" />
+                        ) : (
+                          <EyeOff className="h-5 w-5 text-rose-600 dark:text-rose-300" />
+                        )}
+                      </button>
                     </div>
                   </label>
                   <label className="space-y-1">
@@ -362,14 +392,20 @@ export function MobileSearchOverlay({
                       {t("settings.interSeasonMoviesLabel")}
                     </span>
                     <div className="flex min-h-10 w-full items-center">
-                      <Checkbox
-                        className="h-8 w-8"
-                        checked={draft.interSeasonMovies !== false}
-                        onCheckedChange={(checked) =>
-                          updateMetadataAddDraft(cardKey, facet, { interSeasonMovies: checked === true })
+                      <button
+                        type="button"
+                        className="inline-flex items-center justify-center disabled:opacity-50"
+                        onClick={() =>
+                          updateMetadataAddDraft(cardKey, facet, { interSeasonMovies: draft.interSeasonMovies === false })
                         }
                         disabled={isAdding}
-                      />
+                      >
+                        {draft.interSeasonMovies !== false ? (
+                          <Eye className="h-5 w-5 text-emerald-600 dark:text-emerald-300" />
+                        ) : (
+                          <EyeOff className="h-5 w-5 text-rose-600 dark:text-rose-300" />
+                        )}
+                      </button>
                     </div>
                   </label>
                 </>
@@ -380,14 +416,20 @@ export function MobileSearchOverlay({
                   <label className="space-y-1">
                     <span className="block text-xs font-medium text-card-foreground">{t("title.monitored")}</span>
                     <div className="flex min-h-10 w-full items-center">
-                      <Checkbox
-                        className="h-8 w-8"
-                        checked={draft.monitorType === "monitored"}
-                        onCheckedChange={(checked) =>
-                          updateMetadataAddDraft(cardKey, facet, { monitorType: checked ? "monitored" : "unmonitored" })
+                      <button
+                        type="button"
+                        className="inline-flex items-center justify-center disabled:opacity-50"
+                        onClick={() =>
+                          updateMetadataAddDraft(cardKey, facet, { monitorType: draft.monitorType === "monitored" ? "unmonitored" : "monitored" })
                         }
                         disabled={isAdding}
-                      />
+                      >
+                        {draft.monitorType === "monitored" ? (
+                          <Eye className="h-5 w-5 text-emerald-600 dark:text-emerald-300" />
+                        ) : (
+                          <EyeOff className="h-5 w-5 text-rose-600 dark:text-rose-300" />
+                        )}
+                      </button>
                     </div>
                   </label>
                 </>
@@ -435,6 +477,7 @@ export function MobileSearchOverlay({
       metadataAddedKeys,
       metadataAddInFlightKeys,
       resolveDefaultQualityProfileIdForFacet,
+      rootFoldersByFacet,
       submitMetadataAddFromCard,
       t,
       toggleMetadataAddOptionsCard,

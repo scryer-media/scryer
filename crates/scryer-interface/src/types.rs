@@ -369,6 +369,12 @@ pub struct IndexerConfigPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+pub struct RootFolderPayload {
+    pub path: String,
+    pub is_default: bool,
+}
+
+#[derive(SimpleObject, Clone)]
 pub struct DownloadClientConfigPayload {
     pub id: String,
     pub name: String,

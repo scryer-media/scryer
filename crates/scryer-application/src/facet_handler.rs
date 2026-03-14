@@ -120,6 +120,9 @@ pub trait FacetHandler: Send + Sync {
     /// Settings key for the library root path (e.g. "movies.path").
     fn library_path_key(&self) -> &str;
 
+    /// Settings key for the root folders JSON array (e.g. "movies.root_folders").
+    fn root_folders_key(&self) -> &str;
+
     /// Settings key for the global rename template (e.g. "rename.template.movie.global").
     fn rename_template_key(&self) -> &str;
 

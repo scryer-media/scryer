@@ -2,7 +2,7 @@ use async_graphql::{Context, Error, Object, Result as GqlResult};
 
 use chrono::Utc;
 use scryer_application::{parse_release_metadata, RenamePlan};
-use scryer_domain::PolicyInput;
+use scryer_domain::{MediaFacet, PolicyInput};
 use serde_json::json;
 
 use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_error};
@@ -494,6 +494,26 @@ impl QueryRoot {
             }
         }
         Ok(payload)
+    }
+
+    async fn root_folders(
+        &self,
+        ctx: &Context<'_>,
+        facet: String,
+    ) -> GqlResult<Vec<RootFolderPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let media_facet = parse_facet(Some(facet)).unwrap_or(MediaFacet::Movie);
+        let entries = app
+            .root_folders_for_facet(&media_facet)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(entries
+            .into_iter()
+            .map(|e| RootFolderPayload {
+                path: e.path,
+                is_default: e.is_default,
+            })
+            .collect())
     }
 
     async fn download_client_configs(

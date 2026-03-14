@@ -29,6 +29,10 @@ impl FacetHandler for MovieFacetHandler {
         "movies.path"
     }
 
+    fn root_folders_key(&self) -> &str {
+        "movies.root_folders"
+    }
+
     fn rename_template_key(&self) -> &str {
         "rename.template.movie.global"
     }

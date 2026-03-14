@@ -435,6 +435,56 @@ impl AppUseCase {
             .await
     }
 
+    /// Return the configured root folders for a facet.
+    ///
+    /// Reads the `<facet>.root_folders` JSON setting.  When absent or empty,
+    /// falls back to the single `<facet>.path` setting and returns it as the
+    /// sole default entry.
+    pub async fn root_folders_for_facet(
+        &self,
+        facet: &scryer_domain::MediaFacet,
+    ) -> AppResult<Vec<scryer_domain::RootFolderEntry>> {
+        let handler = self.facet_registry.get(facet);
+        let root_folders_key = handler.map(|h| h.root_folders_key());
+        let library_path_key = handler.map(|h| h.library_path_key());
+        let default_path = handler
+            .map(|h| h.default_library_path())
+            .unwrap_or("/media");
+
+        // Try the root_folders JSON array first.
+        if let Some(key) = root_folders_key {
+            if let Some(raw) = self
+                .read_setting_string_value_for_scope(super::SETTINGS_SCOPE_MEDIA, key, None)
+                .await?
+            {
+                let trimmed = raw.trim();
+                if !trimmed.is_empty() && trimmed != "[]" {
+                    if let Ok(entries) =
+                        serde_json::from_str::<Vec<scryer_domain::RootFolderEntry>>(trimmed)
+                    {
+                        if !entries.is_empty() {
+                            return Ok(entries);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fall back to the single path setting.
+        let path = if let Some(key) = library_path_key {
+            self.read_setting_string_value_for_scope(super::SETTINGS_SCOPE_MEDIA, key, None)
+                .await?
+                .unwrap_or_else(|| default_path.to_string())
+        } else {
+            default_path.to_string()
+        };
+
+        Ok(vec![scryer_domain::RootFolderEntry {
+            path,
+            is_default: true,
+        }])
+    }
+
     pub async fn add_title(&self, actor: &User, request: NewTitle) -> AppResult<Title> {
         require(actor, &Entitlement::ManageTitle)?;
 
@@ -711,6 +761,25 @@ impl AppUseCase {
             "creating series seasons and episodes"
         );
 
+        // Fetch existing collections so we can reuse them instead of creating
+        // duplicates on every metadata refresh cycle.
+        let existing_collections = self
+            .services
+            .shows
+            .list_collections_for_title(&title.id)
+            .await
+            .unwrap_or_default();
+        let existing_collection_map: std::collections::HashMap<(String, String), String> =
+            existing_collections
+                .iter()
+                .map(|c| {
+                    (
+                        (c.collection_type.clone(), c.collection_index.clone()),
+                        c.id.clone(),
+                    )
+                })
+                .collect();
+
         // Build a map from season number -> collection_id for episode assignment.
         // Only create one collection per season number, preferring "official" episode_type.
         let mut best_season_by_number: std::collections::HashMap<i32, &SeasonMetadata> =
@@ -792,11 +861,19 @@ impl AppUseCase {
             } else {
                 "season".to_string()
             };
+            let collection_index = season.number.to_string();
+            if let Some(existing_id) =
+                existing_collection_map.get(&(collection_type.clone(), collection_index.clone()))
+            {
+                season_number_to_collection.insert(season.number, existing_id.clone());
+                continue;
+            }
+
             let collection = Collection {
                 id: Id::new().0,
                 title_id: title.id.clone(),
                 collection_type,
-                collection_index: season.number.to_string(),
+                collection_index,
                 label: Some(season.label.clone()),
                 ordered_path: None,
                 narrative_order: Some(season.number.to_string()),
@@ -901,6 +978,23 @@ impl AppUseCase {
                     } else {
                         format!("Movie {}", seq + 1)
                     };
+
+                    // Reuse existing interstitial collection if one already exists.
+                    if let Some(existing_id) = existing_collection_map
+                        .get(&("interstitial".to_string(), narrative_order.clone()))
+                    {
+                        for key in anime_movie_identity_keys(movie) {
+                            if let Some(linked_episodes) = mapping_episode_links.get(&key) {
+                                for (season_num, episode_num) in linked_episodes {
+                                    interstitial_episode_lookup.insert(
+                                        (*season_num, *episode_num),
+                                        existing_id.clone(),
+                                    );
+                                }
+                            }
+                        }
+                        continue;
+                    }
 
                     let collection = Collection {
                         id: Id::new().0,
@@ -1064,6 +1158,20 @@ impl AppUseCase {
                 season_episode_types.get(&ep.season_number).copied(),
                 anime_media_type,
             );
+
+            // Skip episode if it already exists for this title.
+            if let Ok(Some(_)) = self
+                .services
+                .shows
+                .find_episode_by_title_and_numbers(
+                    &title.id,
+                    &ep.season_number.to_string(),
+                    &ep.episode_number.to_string(),
+                )
+                .await
+            {
+                continue;
+            }
 
             let episode = Episode {
                 id: Id::new().0,
@@ -1844,6 +1952,30 @@ impl AppUseCase {
             delete_from_disk = %delete_from_disk,
             "media file deleted"
         );
+
+        // Record title history: FileDeleted
+        {
+            let mut data = HashMap::new();
+            data.insert("file_path".into(), serde_json::json!(&media_file.file_path));
+            data.insert("size_bytes".into(), serde_json::json!(media_file.size_bytes));
+            data.insert(
+                "reason".into(),
+                serde_json::json!(if delete_from_disk { "manual_disk" } else { "manual_db_only" }),
+            );
+            let _ = self
+                .services
+                .record_title_history(NewTitleHistoryEvent {
+                    title_id: media_file.title_id.clone(),
+                    episode_id: media_file.episode_id.clone(),
+                    collection_id: None,
+                    event_type: TitleHistoryEventType::FileDeleted,
+                    source_title: Some(media_file.file_path.clone()),
+                    quality: None,
+                    download_id: None,
+                    data,
+                })
+                .await;
+        }
 
         Ok(())
     }

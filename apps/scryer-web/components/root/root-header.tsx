@@ -1,10 +1,9 @@
 
 import * as React from "react";
-import { Loader2, Plus, Search, X } from "lucide-react";
+import { Eye, EyeOff, Loader2, Plus, Search, X } from "lucide-react";
 import { useTheme } from "next-themes";
 import ScryerLogo from "@/components/scryer-logo";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RouteCommandPalette } from "@/components/common/route-command-palette";
@@ -68,6 +67,7 @@ export const RootHeader = React.memo(function RootHeader({
     globalSearchInputRef,
     isMetadataSearchResultInCatalog,
     catalogQualityProfileOptions,
+    rootFoldersByFacet,
   } = searchState;
   const t = useTranslate();
   const isMobile = useIsMobile();
@@ -146,7 +146,8 @@ export const RootHeader = React.memo(function RootHeader({
           current.monitorType === next.monitorType &&
           current.minAvailability === next.minAvailability &&
           current.monitorSpecials === next.monitorSpecials &&
-          current.interSeasonMovies === next.interSeasonMovies
+          current.interSeasonMovies === next.interSeasonMovies &&
+          current.rootFolder === next.rootFolder
         ) {
           return previous;
         }
@@ -465,6 +466,31 @@ export const RootHeader = React.memo(function RootHeader({
                     </SelectContent>
                   </Select>
                 </label>
+                {rootFoldersByFacet[facet].length >= 2 ? (
+                  <label className="space-y-1">
+                    <span className="block text-xs font-medium text-card-foreground">
+                      {t("search.addConfigRootFolder")}
+                    </span>
+                    <Select
+                      value={draft.rootFolder || rootFoldersByFacet[facet].find((rf) => rf.isDefault)?.path || rootFoldersByFacet[facet][0]?.path || ""}
+                      onValueChange={(v) =>
+                        updateMetadataAddDraft(cardKey, facet, { rootFolder: v })
+                      }
+                      disabled={isAdding}
+                    >
+                      <SelectTrigger className="h-9 w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {rootFoldersByFacet[facet].map((rf) => (
+                          <SelectItem key={rf.path} value={rf.path}>
+                            {rf.path.split("/").filter(Boolean).pop() || rf.path}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </label>
+                ) : null}
                 {facet !== "movie" ? (
                   <label className="space-y-1">
                     <span className="block text-xs font-medium text-card-foreground">
@@ -496,16 +522,22 @@ export const RootHeader = React.memo(function RootHeader({
                         {t("settings.monitorSpecialsLabel")}
                       </span>
                       <div className="flex min-h-9 w-full items-center">
-                        <Checkbox
-                          className="h-8 w-8"
-                          checked={draft.monitorSpecials !== false}
-                          onCheckedChange={(checked) =>
+                        <button
+                          type="button"
+                          className="inline-flex items-center justify-center disabled:opacity-50"
+                          onClick={() =>
                             updateMetadataAddDraft(cardKey, facet, {
-                              monitorSpecials: checked === true,
+                              monitorSpecials: draft.monitorSpecials === false,
                             })
                           }
                           disabled={isAdding}
-                        />
+                        >
+                          {draft.monitorSpecials !== false ? (
+                            <Eye className="h-5 w-5 text-emerald-600 dark:text-emerald-300" />
+                          ) : (
+                            <EyeOff className="h-5 w-5 text-rose-600 dark:text-rose-300" />
+                          )}
+                        </button>
                       </div>
                     </label>
                     <label className="space-y-1">
@@ -513,16 +545,22 @@ export const RootHeader = React.memo(function RootHeader({
                         {t("settings.interSeasonMoviesLabel")}
                       </span>
                       <div className="flex min-h-9 w-full items-center">
-                        <Checkbox
-                          className="h-8 w-8"
-                          checked={draft.interSeasonMovies !== false}
-                          onCheckedChange={(checked) =>
+                        <button
+                          type="button"
+                          className="inline-flex items-center justify-center disabled:opacity-50"
+                          onClick={() =>
                             updateMetadataAddDraft(cardKey, facet, {
-                              interSeasonMovies: checked === true,
+                              interSeasonMovies: draft.interSeasonMovies === false,
                             })
                           }
                           disabled={isAdding}
-                        />
+                        >
+                          {draft.interSeasonMovies !== false ? (
+                            <Eye className="h-5 w-5 text-emerald-600 dark:text-emerald-300" />
+                          ) : (
+                            <EyeOff className="h-5 w-5 text-rose-600 dark:text-rose-300" />
+                          )}
+                        </button>
                       </div>
                     </label>
                   </>
@@ -534,16 +572,22 @@ export const RootHeader = React.memo(function RootHeader({
                         {t("title.monitored")}
                       </span>
                       <div className="flex min-h-9 w-full items-center">
-                        <Checkbox
-                          className="h-8 w-8"
-                          checked={draft.monitorType === "monitored"}
-                          onCheckedChange={(checked) =>
+                        <button
+                          type="button"
+                          className="inline-flex items-center justify-center disabled:opacity-50"
+                          onClick={() =>
                             updateMetadataAddDraft(cardKey, facet, {
-                              monitorType: checked ? "monitored" : "unmonitored",
+                              monitorType: draft.monitorType === "monitored" ? "unmonitored" : "monitored",
                             })
                           }
                           disabled={isAdding}
-                        />
+                        >
+                          {draft.monitorType === "monitored" ? (
+                            <Eye className="h-5 w-5 text-emerald-600 dark:text-emerald-300" />
+                          ) : (
+                            <EyeOff className="h-5 w-5 text-rose-600 dark:text-rose-300" />
+                          )}
+                        </button>
                       </div>
                     </label>
                   </>
@@ -599,6 +643,7 @@ export const RootHeader = React.memo(function RootHeader({
       metadataAddedKeys,
       metadataAddInFlightKeys,
       resolveDefaultQualityProfileIdForFacet,
+      rootFoldersByFacet,
       submitMetadataAddFromCard,
       t,
       toggleMetadataAddOptionsCard,

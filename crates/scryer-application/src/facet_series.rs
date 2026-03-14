@@ -50,6 +50,13 @@ impl FacetHandler for SeriesFacetHandler {
         }
     }
 
+    fn root_folders_key(&self) -> &str {
+        match self.media_facet {
+            MediaFacet::Anime => "anime.root_folders",
+            _ => "series.root_folders",
+        }
+    }
+
     fn rename_template_key(&self) -> &str {
         match self.media_facet {
             MediaFacet::Anime => "rename.template.anime.global",

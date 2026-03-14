@@ -835,6 +835,9 @@ export const globalSearchInitQuery = `query GlobalSearchInit(
   }
   animeSettings: adminSettings(scope: "system", scopeId: "anime", category: "media", keyNames: $animeKeyNames) {${adminSettingsFieldSelection}
   }
+  movieRootFolders: rootFolders(facet: "movie") { path isDefault }
+  seriesRootFolders: rootFolders(facet: "tv") { path isDefault }
+  animeRootFolders: rootFolders(facet: "anime") { path isDefault }
 }`;
 
 // Batched query for routing page bootstrap.

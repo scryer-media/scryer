@@ -347,6 +347,7 @@ const en: LocaleDictionary = {
   "search.alreadyCataloged": "Already in catalog",
   "search.configureAdd": "Configure add options",
   "search.addConfigQualityProfile": "Quality profile",
+  "search.addConfigRootFolder": "Root folder",
   "search.addConfigSeasonFolder": "Season folder",
   "search.addConfigMonitorType": "Monitor type",
   "search.addConfigSelectQualityProfile": "Select quality profile",

@@ -13,6 +13,9 @@ pub(crate) const SETTINGS_CATEGORY_MEDIA: &str = "media";
 pub(crate) const MOVIES_PATH_KEY: &str = "movies.path";
 pub(crate) const SERIES_PATH_KEY: &str = "series.path";
 pub(crate) const ANIME_PATH_KEY: &str = "anime.path";
+pub(crate) const MOVIES_ROOT_FOLDERS_KEY: &str = "movies.root_folders";
+pub(crate) const SERIES_ROOT_FOLDERS_KEY: &str = "series.root_folders";
+pub(crate) const ANIME_ROOT_FOLDERS_KEY: &str = "anime.root_folders";
 pub(crate) const QUALITY_PROFILE_ID_KEY: &str = "quality.profile_id";
 pub(crate) const QUALITY_PROFILE_CATALOG_KEY: &str = "quality.profiles";
 pub(crate) const DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY: &str =
@@ -113,6 +116,30 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             key_name: ANIME_PATH_KEY,
             data_type: "string",
             default_value_json: "\"/media/anime\"",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_MEDIA,
+            key_name: MOVIES_ROOT_FOLDERS_KEY,
+            data_type: "json",
+            default_value_json: "[]",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_MEDIA,
+            key_name: SERIES_ROOT_FOLDERS_KEY,
+            data_type: "json",
+            default_value_json: "[]",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_MEDIA,
+            key_name: ANIME_ROOT_FOLDERS_KEY,
+            data_type: "json",
+            default_value_json: "[]",
             is_sensitive: false,
         },
         ServiceSettingSeed {

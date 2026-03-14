@@ -53,6 +53,11 @@ export type MetadataCatalogMonitorType =
   | "allEpisodes"
   | "none";
 
+export type RootFolderOption = {
+  path: string;
+  isDefault: boolean;
+};
+
 export type MetadataCatalogAddOptions = {
   qualityProfileId: string;
   seasonFolder: boolean;
@@ -60,6 +65,7 @@ export type MetadataCatalogAddOptions = {
   minAvailability?: string;
   monitorSpecials?: boolean;
   interSeasonMovies?: boolean;
+  rootFolder?: string;
 };
 
 export type AnimeCatalogDefaults = {
@@ -141,6 +147,7 @@ export interface UseGlobalSearchResult {
     facet: Facet,
     result: MetadataTvdbSearchItem,
   ) => boolean;
+  rootFoldersByFacet: Record<Facet, RootFolderOption[]>;
   queueFacet: Facet;
   setQueueFacet: (value: Facet) => void;
   catalogChangeSignal: number;
@@ -208,6 +215,9 @@ export function useGlobalSearch({
     () => Object.fromEntries(FACET_REGISTRY.map((f) => [f.scopeId, QUALITY_PROFILE_INHERIT_VALUE])) as Record<ViewCategoryId, string>,
   );
   const [isGlobalSearchPanelOpen, setIsGlobalSearchPanelOpen] = useState(false);
+  const [rootFoldersByFacet, setRootFoldersByFacet] = useState<Record<Facet, RootFolderOption[]>>(
+    () => ({ movie: [], tv: [], anime: [] }),
+  );
   const forcedOpenRef = useRef(false);
   const autocompleteRequestId = useRef(0);
   const autocompleteAbortRef = useRef<AbortController | null>(null);
@@ -357,6 +367,20 @@ export function useGlobalSearch({
           ? previous
           : nextAnimeDefaults,
       );
+
+      const nextRootFolders: Record<Facet, RootFolderOption[]> = {
+        movie: data.movieRootFolders ?? [],
+        tv: data.seriesRootFolders ?? [],
+        anime: data.animeRootFolders ?? [],
+      };
+      setRootFoldersByFacet((previous) => {
+        const same = (["movie", "tv", "anime"] as Facet[]).every((f) => {
+          const prev = previous[f];
+          const next = nextRootFolders[f];
+          return prev.length === next.length && prev.every((e, i) => e.path === next[i]?.path && e.isDefault === next[i]?.isDefault);
+        });
+        return same ? previous : nextRootFolders;
+      });
     } catch {
       // ignore settings fetch failures here; search remains functional
     }
@@ -822,6 +846,7 @@ export function useGlobalSearch({
               `scryer:inter-season-movies:${options.interSeasonMovies !== false ? "true" : "false"}`,
             ]
           : []),
+        ...(options.rootFolder ? [`scryer:root-folder:${options.rootFolder}`] : []),
       ];
 
       try {
@@ -945,6 +970,7 @@ export function useGlobalSearch({
     animeCatalogDefaults,
     addMetadataSearchResultToCatalog,
     isMetadataSearchResultInCatalog,
+    rootFoldersByFacet,
     queueFacet,
     setQueueFacet,
     catalogChangeSignal,
