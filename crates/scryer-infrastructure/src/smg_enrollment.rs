@@ -179,13 +179,14 @@ async fn enroll_with_smg(
     // POST to SMG registration endpoint
     let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30));
     if let Some(ca_pem) = ca_cert_override {
-        let cert = reqwest::Certificate::from_pem(ca_pem.as_bytes())
-            .map_err(|e| EnrollmentError::Other(format!("failed to parse SCRYER_SMG_CA_CERT: {e}")))?;
+        let cert = reqwest::Certificate::from_pem(ca_pem.as_bytes()).map_err(|e| {
+            EnrollmentError::Other(format!("failed to parse SCRYER_SMG_CA_CERT: {e}"))
+        })?;
         builder = builder.add_root_certificate(cert);
     }
-    let http = builder
-        .build()
-        .map_err(|e| EnrollmentError::Other(format!("failed to build HTTP client for enrollment: {e}")))?;
+    let http = builder.build().map_err(|e| {
+        EnrollmentError::Other(format!("failed to build HTTP client for enrollment: {e}"))
+    })?;
 
     let response = http
         .post(registration_url)
@@ -232,18 +233,15 @@ async fn enroll_with_smg(
         )));
     }
 
-    let reg: RegisterResponse = response
-        .json()
-        .await
-        .map_err(|e| EnrollmentError::Other(format!("failed to parse SMG registration response: {e}")))?;
+    let reg: RegisterResponse = response.json().await.map_err(|e| {
+        EnrollmentError::Other(format!("failed to parse SMG registration response: {e}"))
+    })?;
 
-    let expires_at = reg
-        .expires_at
-        .parse::<DateTime<Utc>>()
-        .map_err(|e| EnrollmentError::Other(format!("invalid expires_at in registration response: {e}")))?;
+    let expires_at = reg.expires_at.parse::<DateTime<Utc>>().map_err(|e| {
+        EnrollmentError::Other(format!("invalid expires_at in registration response: {e}"))
+    })?;
 
-    validate_certificate(&reg.certificate, instance_id)
-        .map_err(EnrollmentError::Other)?;
+    validate_certificate(&reg.certificate, instance_id).map_err(EnrollmentError::Other)?;
 
     // Persist all enrollment data (smg.client_key is sensitive → auto-encrypted by DB layer)
     persist_setting(db, "smg.client_key", &private_key_pem)
