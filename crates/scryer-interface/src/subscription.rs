@@ -196,6 +196,59 @@ impl SubscriptionRoot {
 
         Box::pin(stream)
     }
+
+    async fn import_history_changed(&self, ctx: &Context<'_>) -> BoxStream<'static, bool> {
+        let empty_stream = || -> BoxStream<'static, bool> { Box::pin(stream::empty()) };
+
+        let app = match app_from_ctx(ctx) {
+            Ok(app) => app,
+            Err(e) => {
+                tracing::warn!("import_history_changed: app_from_ctx failed: {e:?}");
+                return empty_stream();
+            }
+        };
+
+        let actor = match actor_from_ctx(ctx) {
+            Ok(actor) => actor,
+            Err(e) => {
+                tracing::warn!("import_history_changed: actor_from_ctx failed: {e:?}");
+                return empty_stream();
+            }
+        };
+
+        let receiver = match app.subscribe_import_history(&actor) {
+            Ok(receiver) => receiver,
+            Err(e) => {
+                tracing::warn!("import_history_changed: subscribe failed: {e}");
+                return empty_stream();
+            }
+        };
+
+        tracing::debug!(
+            "import_history_changed: subscription started for user {}",
+            actor.id
+        );
+
+        let stream = unfold(receiver, move |mut receiver| async move {
+            loop {
+                match receiver.recv().await {
+                    Ok(()) => return Some((true, receiver)),
+                    Err(RecvError::Lagged(n)) => {
+                        tracing::debug!(
+                            "import_history_changed: receiver lagged, skipped {n} messages"
+                        );
+                        continue;
+                    }
+                    Err(RecvError::Closed) => {
+                        tracing::debug!("import_history_changed: broadcast channel closed");
+                        return None;
+                    }
+                }
+            }
+        });
+
+        Box::pin(stream)
+    }
 }
 
 fn parse_sort_value_desc(left: Option<&str>, right: Option<&str>) -> std::cmp::Ordering {
@@ -237,6 +290,9 @@ fn filter_download_queue_items(
                         | DownloadQueueState::Downloading
                         | DownloadQueueState::Queued
                         | DownloadQueueState::Paused
+                        | DownloadQueueState::Verifying
+                        | DownloadQueueState::Repairing
+                        | DownloadQueueState::Extracting
                 )
         })
         .collect()
@@ -336,5 +392,20 @@ mod tests {
                     | DownloadQueueState::Paused
             )
         }));
+    }
+
+    #[test]
+    fn filter_keeps_processing_states_in_scryer_only_view() {
+        let items = vec![
+            item("job-1", DownloadQueueState::Verifying, true),
+            item("job-2", DownloadQueueState::Repairing, true),
+            item("job-3", DownloadQueueState::Extracting, true),
+            item("job-4", DownloadQueueState::Extracting, false),
+        ];
+
+        let filtered = filter_download_queue_items(items, false, false);
+
+        assert_eq!(filtered.len(), 3);
+        assert!(filtered.iter().all(|item| item.is_scryer_origin));
     }
 }

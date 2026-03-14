@@ -1789,6 +1789,68 @@ impl AppUseCase {
         Ok(())
     }
 
+    pub async fn delete_media_file(
+        &self,
+        actor: &User,
+        file_id: &str,
+        delete_from_disk: bool,
+    ) -> AppResult<()> {
+        require(actor, &Entitlement::ManageTitle)?;
+
+        let media_file = self
+            .services
+            .media_files
+            .get_media_file_by_id(file_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("media file {}", file_id)))?;
+
+        if delete_from_disk {
+            let file_path = media_file.file_path.trim().to_string();
+            if !file_path.is_empty() {
+                let recycle_config =
+                    crate::recycle_bin::config_from_file_path(Path::new(&file_path));
+
+                let manifest = crate::recycle_bin::RecycleManifest {
+                    recycled_at: chrono::Utc::now().to_rfc3339(),
+                    original_path: file_path.clone(),
+                    size_bytes: fs::metadata(&file_path)
+                        .await
+                        .map(|m| m.len())
+                        .unwrap_or(0),
+                    title_id: Some(media_file.title_id.clone()),
+                    reason: "file_deleted".to_string(),
+                };
+
+                if let Err(error) = crate::recycle_bin::recycle_file(
+                    &recycle_config,
+                    Path::new(&file_path),
+                    manifest,
+                )
+                .await
+                {
+                    warn!(
+                        file_id = %file_id,
+                        file_path = %file_path,
+                        error = %error,
+                        "failed to recycle media file"
+                    );
+                    return Err(error);
+                }
+            }
+        }
+
+        self.services.media_files.delete_media_file(file_id).await?;
+
+        info!(
+            file_id = %file_id,
+            file_path = %media_file.file_path,
+            delete_from_disk = %delete_from_disk,
+            "media file deleted"
+        );
+
+        Ok(())
+    }
+
     pub async fn update_title_metadata(
         &self,
         actor: &User,

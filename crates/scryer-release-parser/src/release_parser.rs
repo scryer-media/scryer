@@ -203,6 +203,24 @@ fn parse_episode_fragment(fragment: &str) -> Vec<u32> {
             Err(_) => continue,
         };
 
+        // Skip anime version suffix (V2-V9) — not a second episode number.
+        if idx < bytes.len() && bytes[idx] == b'V' {
+            let ver_start = idx + 1;
+            if ver_start < bytes.len() && bytes[ver_start].is_ascii_digit() {
+                let ver_end = ver_start + 1;
+                let at_boundary =
+                    ver_end >= bytes.len() || !bytes[ver_end].is_ascii_digit();
+                if at_boundary {
+                    let ver = bytes[ver_start] - b'0';
+                    if (2..=9).contains(&ver) {
+                        episodes.push(left);
+                        idx = ver_end;
+                        continue;
+                    }
+                }
+            }
+        }
+
         let mut has_range = false;
         while idx < bytes.len() {
             if bytes[idx] == b'-' || bytes[idx] == b'~' {
@@ -1407,7 +1425,8 @@ fn normalize_title_tokens(tokens: &[String], episode: &Option<ParsedEpisodeMetad
     out.join(" ")
 }
 
-fn parse_episode_token(token: &str) -> Option<(Option<u32>, Vec<u32>)> {
+/// Returns (season, episodes, anime_version).
+fn parse_episode_token(token: &str) -> Option<(Option<u32>, Vec<u32>, Option<u32>)> {
     if token.len() < 3 {
         return None;
     }
@@ -1430,7 +1449,8 @@ fn parse_episode_token(token: &str) -> Option<(Option<u32>, Vec<u32>)> {
 
         let episodes = parse_episode_fragment(episode_fragment);
         if !episodes.is_empty() {
-            return Some((Some(season), episodes));
+            let version = extract_trailing_version(episode_fragment);
+            return Some((Some(season), episodes, version));
         }
     }
 
@@ -1438,11 +1458,25 @@ fn parse_episode_token(token: &str) -> Option<(Option<u32>, Vec<u32>)> {
         if let Ok(season) = left.parse::<u32>() {
             let episodes = parse_episode_fragment(right);
             if !episodes.is_empty() {
-                return Some((Some(season), episodes));
+                let version = extract_trailing_version(right);
+                return Some((Some(season), episodes, version));
             }
         }
     }
 
+    None
+}
+
+/// Extract a trailing anime version suffix (V2-V9) from a fragment like "01V2" or "01-03V2".
+fn extract_trailing_version(fragment: &str) -> Option<u32> {
+    let bytes = fragment.as_bytes();
+    let len = bytes.len();
+    if len >= 2 && bytes[len - 2] == b'V' {
+        let ver = bytes[len - 1] - b'0';
+        if (2..=9).contains(&ver) {
+            return Some(ver as u32);
+        }
+    }
     None
 }
 
@@ -1461,7 +1495,7 @@ pub fn parse_series_episode(raw_title: &str) -> Option<ParsedEpisodeMetadata> {
     for (idx, token) in tokens.iter().enumerate() {
         let next = tokens.get(idx + 1).map(|value| value.as_str());
 
-        if let Some((season, episodes)) = parse_episode_token(token) {
+        if let Some((season, episodes, _)) = parse_episode_token(token) {
             if episodes
                 .iter()
                 .all(|value| is_reasonable_episode_number(*value))
@@ -2025,6 +2059,17 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
     }
 
     parsed.episode = parse_series_episode(raw_title);
+
+    // Detect anime version embedded in the episode token (e.g. S05E01V2).
+    if parsed.anime_version.is_none() {
+        if let Some(ref raw) = parsed.episode.as_ref().and_then(|ep| ep.raw.clone()) {
+            let upper = raw.to_ascii_uppercase();
+            if let Some(ver) = extract_trailing_version(&upper) {
+                parsed.anime_version = Some(ver);
+                parsed.is_proper_upload = true;
+            }
+        }
+    }
     parsed.normalized_title = normalize_title_tokens(&tokens, &parsed.episode);
     if parsed.normalized_title.is_empty() {
         parsed.normalized_title = tokens

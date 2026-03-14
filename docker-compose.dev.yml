@@ -11,7 +11,7 @@ services:
       - "6789:6789"
     volumes:
       - ./tmp/nzbget/config:/config
-      - ./tmp/scryer-media:/media
+      - ./tmp/nzbget-downloads:/nzbget-downloads
 
   sabnzbd:
     image: lscr.io/linuxserver/sabnzbd:latest
@@ -25,23 +25,16 @@ services:
       - "8085:8080"
     volumes:
       - ./tmp/sabnzbd/config:/config
-      - ./tmp/scryer-media:/media
+      - ./tmp/sabnzbd-downloads:/sabnzbd-downloads
 
-  # smg:
-  #   build:
-  #     context: ./apps/scryer-metadata-gateway
-  #     dockerfile: ../../docker/scryer-metadata-gateway.Dockerfile
-  #   container_name: scryer-metadata-gateway
-  #   depends_on:
-  #     - postgres
-  #   env_file:
-  #     - apps/scryer-metadata-gateway/.env
-  #   environment:
-  #     METADATA_GATEWAY_LISTEN_ADDR: 0.0.0.0:8090
-  #     METADATA_GATEWAY_DATABASE_DSN: postgres://scryer:scryer@postgres:5432/scryer_metadata?sslmode=disable
-  #     CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://0.0.0.0:3000,http://host.docker.internal:3000,http://nodejs:3000,http://localhost:8080,http://127.0.0.1:8080,http://0.0.0.0:8080,http://scryer:8080
-  #   ports:
-  #     - "8090:8090"
+  weaver:
+    image: ghcr.io/scryer-media/weaver:latest
+    container_name: scryer-weaver
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./tmp/weaver/data:/data
+      - ./tmp/weaver-downloads:/weaver-downloads
 
   scryer:
     build:
@@ -79,6 +72,9 @@ services:
       - scryer-cargo-git:/usr/local/cargo/git
       - ./tmp/scryer-data:/data
       - ./tmp/scryer-media:/media
+      - ./tmp/nzbget-downloads:/nzbget-downloads
+      - ./tmp/sabnzbd-downloads:/sabnzbd-downloads
+      - ./tmp/weaver-downloads:/weaver-downloads
     ports:
       - "8080:8080"
 

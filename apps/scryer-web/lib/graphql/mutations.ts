@@ -150,6 +150,10 @@ export const addTitleAndQueueMutation = `mutation AddTitleAndQueue($input: AddTi
   }
 }`;
 
+export const deleteMediaFileMutation = `mutation DeleteMediaFile($input: DeleteMediaFileInput!) {
+  deleteMediaFile(input: $input)
+}`;
+
 export const scanLibraryMutation = `mutation ScanLibrary($facet: String!) {
   scanLibrary(facet: $facet) {
     scanned

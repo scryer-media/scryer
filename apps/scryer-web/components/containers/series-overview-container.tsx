@@ -9,6 +9,7 @@ import {
   titleOverviewInitQuery,
 } from "@/lib/graphql/queries";
 import {
+  deleteMediaFileMutation,
   deleteTitleMutation,
   scanTitleLibraryMutation,
   setCollectionMonitoredMutation,
@@ -448,6 +449,18 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     }
   }, [title, client]);
 
+  const handleDeleteMediaFile = React.useCallback(async (fileId: string) => {
+    try {
+      const { error } = await client.mutation(deleteMediaFileMutation, {
+        input: { fileId, deleteFromDisk: true },
+      }).toPromise();
+      if (error) throw error;
+      await refreshMediaFiles();
+    } catch (error: unknown) {
+      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+    }
+  }, [client, refreshMediaFiles, setGlobalStatus, t]);
+
   const handleRefreshAndScan = React.useCallback(async () => {
     if (!title) return;
 
@@ -857,6 +870,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         refreshAndScanLoading={refreshAndScanLoading}
         onRequestDeleteTitle={handleRequestDeleteTitle}
         deleteLoading={deleteLoading}
+        onDeleteFile={handleDeleteMediaFile}
       />
       <ConfirmDialog
         open={deleteDialogOpen && title !== null}

@@ -1,9 +1,8 @@
 import * as React from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslate } from "@/lib/context/translate-context";
-import { RenderBooleanIcon } from "@/components/common/boolean-icon";
 import { Button } from "@/components/ui/button";
-import { Bell, BellOff, Loader2, Search, Trash2, Zap } from "lucide-react";
+import { Eye, EyeOff, Loader2, Search, Trash2, Zap } from "lucide-react";
 import {
   HoverCard,
   HoverCardContent,
@@ -292,10 +291,17 @@ export function TitleTable({
           </TableCell>
           {isMovieView ? <TableCell className="align-middle whitespace-nowrap">{bytesToReadable(item.sizeBytes)}</TableCell> : null}
           <TableCell className="text-center align-middle">
-            <RenderBooleanIcon
-              value={item.monitored}
-              label={`${t("title.table.monitored")}: ${item.name}`}
-            />
+            <span
+              className="inline-flex h-5 w-5 shrink-0 items-center justify-center"
+              title={`${t("title.table.monitored")}: ${item.name}`}
+              aria-label={`${t("title.table.monitored")}: ${item.name}`}
+            >
+              {item.monitored ? (
+                <Eye className="h-4 w-4 text-emerald-600 dark:text-emerald-300" />
+              ) : (
+                <EyeOff className="h-4 w-4 text-rose-600 dark:text-rose-300" />
+              )}
+            </span>
           </TableCell>
           <TableCell className="text-right align-middle">
             <div data-ui="row-actions" className="inline-flex items-center justify-end gap-2">
@@ -346,9 +352,9 @@ export function TitleTable({
                   {monitorToggleLoading ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : item.monitored ? (
-                    <BellOff className="h-4 w-4" />
+                    <EyeOff className="h-4 w-4" />
                   ) : (
-                    <Bell className="h-4 w-4" />
+                    <Eye className="h-4 w-4" />
                   )}
                 </TitleTableActionButton>
               ) : null}

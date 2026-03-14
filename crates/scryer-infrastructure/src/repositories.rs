@@ -948,7 +948,10 @@ impl ImportRepository for SqliteServices {
             .get_import_by_source_ref(source_system, source_ref)
             .await?
         {
-            Some(record) => Ok(record.status == "completed"),
+            Some(record) => Ok(matches!(
+                record.status.as_str(),
+                "completed" | "failed" | "skipped"
+            )),
             None => Ok(false),
         }
     }
@@ -1015,6 +1018,10 @@ impl MediaFileRepository for SqliteServices {
 
     async fn mark_scan_failed(&self, file_id: &str, error: &str) -> AppResult<()> {
         self.mark_scan_failed(file_id, error).await
+    }
+
+    async fn get_media_file_by_id(&self, file_id: &str) -> AppResult<Option<TitleMediaFile>> {
+        self.get_media_file_by_id(file_id).await
     }
 
     async fn delete_media_file(&self, file_id: &str) -> AppResult<()> {

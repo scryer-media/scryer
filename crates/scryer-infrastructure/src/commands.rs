@@ -426,6 +426,10 @@ pub(crate) enum DbCommand {
         error: String,
         reply: Sender<AppResult<()>>,
     },
+    GetMediaFileById {
+        file_id: String,
+        reply: Sender<AppResult<Option<scryer_application::TitleMediaFile>>>,
+    },
     DeleteMediaFile {
         file_id: String,
         reply: Sender<AppResult<()>>,
@@ -1373,6 +1377,12 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 } => {
                     let _ = reply.send(
                         crate::queries::media_file::mark_scan_failed_query(&pool, &file_id, &error)
+                            .await,
+                    );
+                }
+                DbCommand::GetMediaFileById { file_id, reply } => {
+                    let _ = reply.send(
+                        crate::queries::media_file::get_media_file_by_id_query(&pool, &file_id)
                             .await,
                     );
                 }

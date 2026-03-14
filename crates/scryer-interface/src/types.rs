@@ -852,6 +852,12 @@ pub struct DeleteEpisodeInput {
 }
 
 #[derive(InputObject)]
+pub struct DeleteMediaFileInput {
+    pub file_id: String,
+    pub delete_from_disk: Option<bool>,
+}
+
+#[derive(InputObject)]
 pub struct PauseDownloadInput {
     pub download_client_item_id: String,
 }

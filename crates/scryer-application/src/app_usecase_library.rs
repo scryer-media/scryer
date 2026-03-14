@@ -576,6 +576,16 @@ impl AppUseCase {
         let title_dir = PathBuf::from(&media_root).join(&title.name);
         let title_dir_str = title_dir.to_string_lossy().to_string();
 
+        // If the title directory was deleted, recreate it and treat as empty.
+        if !title_dir.exists() {
+            tokio::fs::create_dir_all(&title_dir).await.map_err(|err| {
+                AppError::Repository(format!(
+                    "failed to recreate title directory {}: {err}",
+                    title_dir.display()
+                ))
+            })?;
+        }
+
         let files = self
             .services
             .library_scanner

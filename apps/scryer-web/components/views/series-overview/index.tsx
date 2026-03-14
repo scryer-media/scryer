@@ -66,6 +66,7 @@ type Props = {
   refreshAndScanLoading?: boolean;
   onRequestDeleteTitle?: () => void;
   deleteLoading?: boolean;
+  onDeleteFile?: (fileId: string) => void;
 };
 
 export function SeriesOverviewView({
@@ -100,6 +101,7 @@ export function SeriesOverviewView({
   refreshAndScanLoading = false,
   onRequestDeleteTitle,
   deleteLoading = false,
+  onDeleteFile,
 }: Props) {
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
@@ -519,6 +521,7 @@ export function SeriesOverviewView({
                     seasonSearchLoading={seasonSearchLoadingByCollection?.[collection.id] === true}
                     onRunSeasonSearch={onRunSeasonSearch ? () => onRunSeasonSearch(collection) : undefined}
                     onQueueFromSeasonSearch={onQueueFromSeasonSearch}
+                    onDeleteFile={onDeleteFile}
                   />
                 );
               })

@@ -106,6 +106,10 @@ impl MediaFileRepository for NullMediaFileRepository {
             "media file repository is not configured".to_string(),
         ))
     }
+
+    async fn get_media_file_by_id(&self, _file_id: &str) -> AppResult<Option<TitleMediaFile>> {
+        Ok(None)
+    }
 }
 
 #[derive(Default)]

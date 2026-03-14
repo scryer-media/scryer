@@ -6,7 +6,7 @@ REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 COMPOSE_FILE="${SCRYER_DOCKER_COMPOSE_FILE:-$REPO_DIR/docker-compose.dev.yml}"
 COMPOSE_ORCHESTRATION_SERVICE="${SCRYER_DOCKER_STACK_NAME:-scryer-dev}"
 SCRYER_DOCKER_RESTART_SERVICES="${SCRYER_DOCKER_RESTART_SERVICES:-scryer nodejs proxy}"
-SCRYER_DOCKER_INFRA_SERVICES="${SCRYER_DOCKER_INFRA_SERVICES:-nzbget}"
+SCRYER_DOCKER_INFRA_SERVICES="${SCRYER_DOCKER_INFRA_SERVICES:-nzbget sabnzbd weaver}"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "docker is required to run this command." >&2
@@ -28,14 +28,12 @@ export SCRYER_AUTH_ENABLED="false"
 mkdir -p "$REPO_DIR/tmp/scryer-data"
 mkdir -p "$REPO_DIR/tmp/scryer-media/movies"
 mkdir -p "$REPO_DIR/tmp/scryer-media/series"
-mkdir -p "$REPO_DIR/tmp/scryer-media/completed"
 mkdir -p "$REPO_DIR/tmp/nzbget/config"
-
-if [ ! -f "$REPO_DIR/tmp/nzbget/config/nzbget.conf" ]; then
-  echo "Expected NZBGet config at $REPO_DIR/tmp/nzbget/config/nzbget.conf." >&2
-  echo "Copy a working nzbget.conf there before continuing." >&2
-  exit 1
-fi
+mkdir -p "$REPO_DIR/tmp/nzbget-downloads"
+mkdir -p "$REPO_DIR/tmp/sabnzbd/config"
+mkdir -p "$REPO_DIR/tmp/sabnzbd-downloads"
+mkdir -p "$REPO_DIR/tmp/weaver/data"
+mkdir -p "$REPO_DIR/tmp/weaver-downloads"
 
 compose_cmd=(
   docker compose

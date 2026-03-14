@@ -213,7 +213,7 @@ async fn main() {
             let shutdown_token_tls = shutdown_token.clone();
             tokio::spawn(async move {
                 shutdown_signal(shutdown_token_tls).await;
-                shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
+                shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(5)));
             });
             tracing::info!("scryer service listening on {addr} with TLS");
             tracing::info!(
@@ -811,13 +811,35 @@ async fn run_validate_only(db_path: &str, migration_mode: MigrationMode) {
 
 async fn shutdown_signal(token: CancellationToken) {
     let ctrl_c = tokio::signal::ctrl_c();
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
     tokio::select! {
         _ = ctrl_c => {
-            tracing::info!("received ctrl-c, shutting down");
+            tracing::info!("received SIGINT, shutting down");
+        }
+        _ = terminate => {
+            tracing::info!("received SIGTERM, shutting down");
         }
         _ = token.cancelled() => {}
     }
     token.cancel();
+
+    // Hard exit if graceful shutdown takes too long.
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        tracing::warn!("graceful shutdown timed out, forcing exit");
+        std::process::exit(0);
+    });
 }
 
 fn load_env_file() {

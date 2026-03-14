@@ -4,6 +4,8 @@ import {
   ChevronDown,
   ChevronRight,
   Clock3,
+  Eye,
+  EyeOff,
   Film,
   Loader2,
   Search,
@@ -11,7 +13,6 @@ import {
   Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   HoverCard,
   HoverCardContent,
@@ -108,6 +109,7 @@ export function SeasonSection({
   seasonSearchLoading,
   onRunSeasonSearch,
   onQueueFromSeasonSearch,
+  onDeleteFile,
 }: {
   collection: TitleCollection;
   facet: string;
@@ -133,6 +135,7 @@ export function SeasonSection({
   seasonSearchLoading?: boolean;
   onRunSeasonSearch?: () => void;
   onQueueFromSeasonSearch?: (release: Release) => Promise<void> | void;
+  onDeleteFile?: (fileId: string) => void;
 }) {
   const t = useTranslate();
   const isMobile = useIsMobile();
@@ -226,7 +229,7 @@ export function SeasonSection({
           <TabsTrigger value="blocklist" className="shrink-0">Blocklist</TabsTrigger>
         </TabsList>
         <TabsContent value="details">
-          <EpisodeDetailsPanel episode={episode} mediaFiles={episodeFiles} />
+          <EpisodeDetailsPanel episode={episode} mediaFiles={episodeFiles} onDeleteFile={onDeleteFile} />
         </TabsContent>
         <TabsContent value="search">
           <div className="mb-2 flex items-center justify-end">
@@ -284,20 +287,34 @@ export function SeasonSection({
         className="flex w-full cursor-pointer flex-wrap items-center justify-between gap-3 bg-card/60 px-4 py-2 text-left transition hover:bg-accent/80"
       >
         <div className="flex items-center gap-2">
-          <Checkbox
-            checked={seasonCheckedState}
+          <button
+            type="button"
             disabled={seasonToggling}
             aria-label={t("title.seasonMonitored")}
-            className="size-6 [&_svg]:size-4"
-            onCheckedChange={() => {
+            className={cn(
+              "inline-flex size-6 shrink-0 items-center justify-center rounded transition-colors",
+              seasonToggling && "opacity-50",
+              seasonCheckedState === true
+                ? "text-emerald-600 dark:text-emerald-300"
+                : seasonCheckedState === "indeterminate"
+                  ? "text-amber-500 dark:text-amber-400"
+                  : "text-muted-foreground/60",
+            )}
+            onClick={(e) => {
+              e.stopPropagation();
               if (!onSetCollectionMonitored) return;
               setSeasonToggling(true);
               const nextMonitored = seasonCheckedState !== true;
               onSetCollectionMonitored(collection.id, nextMonitored)
                 .finally(() => setSeasonToggling(false));
             }}
-            onClick={(e) => e.stopPropagation()}
-          />
+          >
+            {seasonCheckedState === false ? (
+              <EyeOff className="size-5" />
+            ) : (
+              <Eye className="size-5" />
+            )}
+          </button>
           <Chevron className="h-4 w-4 shrink-0 text-muted-foreground" />
           <div>
             <p className="text-sm font-semibold text-foreground">
@@ -423,12 +440,18 @@ export function SeasonSection({
                           )}
                         >
                           <div className="flex items-start gap-3">
-                            <Checkbox
-                              checked={episode.monitored}
+                            <button
+                              type="button"
                               disabled={episodeToggling.has(episode.id)}
                               aria-label={t("title.episodeMonitored")}
-                              className="mt-0.5 size-6 shrink-0 [&_svg]:size-4"
-                              onCheckedChange={() => {
+                              className={cn(
+                                "mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded transition-colors",
+                                episodeToggling.has(episode.id) && "opacity-50",
+                                episode.monitored
+                                  ? "text-emerald-600 dark:text-emerald-300"
+                                  : "text-muted-foreground/60",
+                              )}
+                              onClick={() => {
                                 if (!onSetEpisodeMonitored) return;
                                 setEpisodeToggling((prev) => new Set(prev).add(episode.id));
                                 onSetEpisodeMonitored(episode.id, !episode.monitored)
@@ -440,7 +463,13 @@ export function SeasonSection({
                                     });
                                   });
                               }}
-                            />
+                            >
+                              {episode.monitored ? (
+                                <Eye className="size-5" />
+                              ) : (
+                                <EyeOff className="size-5" />
+                              )}
+                            </button>
                             <div className="min-w-0 flex-1">
                               <div className="flex items-start justify-between gap-3">
                                 <button
@@ -532,7 +561,7 @@ export function SeasonSection({
                     <TableHeader>
                       <TableRow>
                         <TableHead className="w-10 text-center" />
-                        <TableHead className="w-28 text-center">Episode</TableHead>
+                        <TableHead className="w-16 text-center">Episode</TableHead>
                         <TableHead>Title</TableHead>
                         <TableHead className="w-40">Air Date</TableHead>
                         <TableHead className="w-28 text-center">{t("episode.quality")}</TableHead>
@@ -552,25 +581,39 @@ export function SeasonSection({
                         return (
                           <React.Fragment key={episode.id}>
                             <TableRow data-episode-id={episode.id} className={`cv-auto-row-sm${episode.monitored ? "" : " opacity-50"}`}>
-                              <TableCell className="px-2 text-center align-middle">
-                                <Checkbox
-                                  checked={episode.monitored}
-                                  disabled={episodeToggling.has(episode.id)}
-                                  aria-label={t("title.episodeMonitored")}
-                                  className="size-6 [&_svg]:size-4"
-                                  onCheckedChange={() => {
-                                    if (!onSetEpisodeMonitored) return;
-                                    setEpisodeToggling((prev) => new Set(prev).add(episode.id));
-                                    onSetEpisodeMonitored(episode.id, !episode.monitored)
-                                      .finally(() => {
-                                        setEpisodeToggling((prev) => {
-                                          const next = new Set(prev);
-                                          next.delete(episode.id);
-                                          return next;
+                              <TableCell className="pl-2 pr-0 text-right align-middle">
+                                <div className="flex items-center justify-end">
+                                  <button
+                                    type="button"
+                                    disabled={episodeToggling.has(episode.id)}
+                                    aria-label={t("title.episodeMonitored")}
+                                    className={cn(
+                                      "inline-flex size-6 items-center justify-center rounded transition-colors",
+                                      episodeToggling.has(episode.id) && "opacity-50",
+                                      episode.monitored
+                                        ? "text-emerald-600 dark:text-emerald-300"
+                                        : "text-muted-foreground/60",
+                                    )}
+                                    onClick={() => {
+                                      if (!onSetEpisodeMonitored) return;
+                                      setEpisodeToggling((prev) => new Set(prev).add(episode.id));
+                                      onSetEpisodeMonitored(episode.id, !episode.monitored)
+                                        .finally(() => {
+                                          setEpisodeToggling((prev) => {
+                                            const next = new Set(prev);
+                                            next.delete(episode.id);
+                                            return next;
+                                          });
                                         });
-                                      });
-                                  }}
-                                />
+                                    }}
+                                  >
+                                    {episode.monitored ? (
+                                      <Eye className="size-5" />
+                                    ) : (
+                                      <EyeOff className="size-5" />
+                                    )}
+                                  </button>
+                                </div>
                               </TableCell>
                               <TableCell className="text-center align-middle font-mono text-sm text-card-foreground">
                                 <div className="flex flex-col items-center gap-0.5">

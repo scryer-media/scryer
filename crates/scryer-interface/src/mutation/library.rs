@@ -168,6 +168,23 @@ impl LibraryMutations {
         Ok(from_media_rename_apply(result))
     }
 
+    async fn delete_media_file(
+        &self,
+        ctx: &Context<'_>,
+        input: DeleteMediaFileInput,
+    ) -> GqlResult<bool> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        app.delete_media_file(
+            &actor,
+            &input.file_id,
+            input.delete_from_disk.unwrap_or(true),
+        )
+        .await
+        .map(|_| true)
+        .map_err(to_gql_error)
+    }
+
     async fn apply_media_rename_bulk(
         &self,
         ctx: &Context<'_>,

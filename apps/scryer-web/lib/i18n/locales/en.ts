@@ -1024,6 +1024,7 @@ const en: LocaleDictionary = {
   "mediaFile.audioCount": "{{count}} Audio",
   "mediaFile.subtitles": "Subtitles",
   "mediaFile.subtitleCount": "{{count}} Subs",
+  "mediaFile.delete": "Delete file",
   "anime.malLink": "MyAnimeList",
   "anime.anilistLink": "AniList",
   "anime.anidbLink": "AniDB",

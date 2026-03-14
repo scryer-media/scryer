@@ -188,6 +188,7 @@ pub struct AppServices {
     pub event_broadcast: broadcast::Sender<HistoryEvent>,
     pub activity_event_broadcast: broadcast::Sender<ActivityEvent>,
     pub download_queue_broadcast: broadcast::Sender<Vec<DownloadQueueItem>>,
+    pub import_history_broadcast: broadcast::Sender<()>,
     pub acquisition_wake: Arc<tokio::sync::Notify>,
     pub hydration_wake: Arc<tokio::sync::Notify>,
     pub poster_wake: Arc<tokio::sync::Notify>,
@@ -215,6 +216,7 @@ impl AppServices {
         let (tx, _rx) = broadcast::channel(256);
         let (activity_tx, _activity_rx) = broadcast::channel(256);
         let (queue_tx, _queue_rx) = broadcast::channel(16);
+        let (import_history_tx, _) = broadcast::channel::<()>(16);
         Self {
             titles,
             shows,
@@ -254,6 +256,7 @@ impl AppServices {
             event_broadcast: tx,
             activity_event_broadcast: activity_tx,
             download_queue_broadcast: queue_tx,
+            import_history_broadcast: import_history_tx,
             acquisition_wake: Arc::new(tokio::sync::Notify::new()),
             hydration_wake: Arc::new(tokio::sync::Notify::new()),
             poster_wake: Arc::new(tokio::sync::Notify::new()),
@@ -327,6 +330,19 @@ impl AppServices {
             .with_notification(envelope);
         self.activity_stream.push(event.clone()).await;
         let _ = self.activity_event_broadcast.send(event);
+        Ok(())
+    }
+
+    pub async fn update_import_status_and_notify(
+        &self,
+        import_id: &str,
+        status: &str,
+        result_json: Option<String>,
+    ) -> AppResult<()> {
+        self.imports
+            .update_import_status(import_id, status, result_json)
+            .await?;
+        let _ = self.import_history_broadcast.send(());
         Ok(())
     }
 }
@@ -750,6 +766,8 @@ pub trait MediaFileRepository: Send + Sync {
     ) -> AppResult<()>;
 
     async fn mark_scan_failed(&self, file_id: &str, error: &str) -> AppResult<()>;
+
+    async fn get_media_file_by_id(&self, file_id: &str) -> AppResult<Option<TitleMediaFile>>;
 
     async fn delete_media_file(&self, file_id: &str) -> AppResult<()>;
 }

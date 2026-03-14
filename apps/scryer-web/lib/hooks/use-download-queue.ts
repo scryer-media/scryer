@@ -34,16 +34,24 @@ export function useDownloadQueue({
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Track whether the initial HTTP query has completed so the WS subscription
+  // doesn't race with it and overwrite the authoritative query data.
+  const [initialFetchDone, setInitialFetchDone] = useState(false);
+
   // --- WS subscription via graphql-ws ---
   // Deferred-cleanup pattern to survive React StrictMode's fake unmount/remount.
   // On cleanup, we delay the actual unsubscribe. If the effect re-runs within
   // the grace period (StrictMode re-mount), we cancel the teardown and keep
   // the existing subscription alive.
+  //
+  // The subscription is gated on `initialFetchDone` so the first broadcast
+  // (which may carry stale/un-enriched data) cannot overwrite the HTTP query
+  // result that the user is already looking at.
   const unsubRef = useRef<(() => void) | null>(null);
   const teardownTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (includeHistoryOnly) {
+    if (includeHistoryOnly || !initialFetchDone) {
       if (teardownTimer.current) {
         clearTimeout(teardownTimer.current);
         teardownTimer.current = null;
@@ -102,7 +110,7 @@ export function useDownloadQueue({
         unsubRef.current = null;
       }, 200);
     };
-  }, [includeAllActivity, includeHistoryOnly]);
+  }, [includeAllActivity, includeHistoryOnly, initialFetchDone]);
 
   // --- Query fetch (initial load + manual refresh) ---
   const refreshQueue = useCallback(async () => {
@@ -128,9 +136,10 @@ export function useDownloadQueue({
     }
   }, [client, includeAllActivity, includeHistoryOnly, setGlobalStatus]);
 
-  // --- Polling for history-only mode (no subscription) ---
+  // --- Initial fetch + polling for history-only mode ---
   useEffect(() => {
-    void refreshQueue();
+    setInitialFetchDone(false);
+    refreshQueue().finally(() => setInitialFetchDone(true));
 
     if (includeHistoryOnly) {
       pollingRef.current = setInterval(() => void refreshQueue(), 10_000);

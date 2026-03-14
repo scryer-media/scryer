@@ -1,4 +1,4 @@
-import { HardDrive } from "lucide-react";
+import { HardDrive, Trash2 } from "lucide-react";
 import { useTranslate } from "@/lib/context/translate-context";
 import type {
   CollectionEpisode,
@@ -10,9 +10,11 @@ import { formatDate, formatFileSize } from "./helpers";
 export function EpisodeDetailsPanel({
   episode,
   mediaFiles,
+  onDeleteFile,
 }: {
   episode: CollectionEpisode;
   mediaFiles: EpisodeMediaFile[];
+  onDeleteFile?: (fileId: string) => void;
 }) {
   const t = useTranslate();
   return (
@@ -43,6 +45,16 @@ export function EpisodeDetailsPanel({
                     <span className="text-xs text-muted-foreground/60" title={file.scoringLog ?? undefined}>
                       {t("mediaFile.score", { score: file.acquisitionScore })}
                     </span>
+                  ) : null}
+                  {onDeleteFile ? (
+                    <button
+                      type="button"
+                      onClick={() => onDeleteFile(file.id)}
+                      className="ml-auto shrink-0 rounded p-1 text-muted-foreground/40 transition-colors hover:bg-destructive/10 hover:text-destructive"
+                      title={t("mediaFile.delete")}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   ) : null}
                 </div>
                 <MediaInfoBadges file={file} />

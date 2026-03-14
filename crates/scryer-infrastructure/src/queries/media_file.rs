@@ -386,6 +386,41 @@ pub(crate) async fn mark_scan_failed_query(
     Ok(())
 }
 
+pub(crate) async fn get_media_file_by_id_query(
+    pool: &SqlitePool,
+    file_id: &str,
+) -> AppResult<Option<TitleMediaFile>> {
+    let row: Option<SqliteRow> = sqlx::query(
+        "SELECT mf.id, mf.title_id, NULL AS episode_id, mf.file_path,
+                mf.size_bytes, mf.quality_id, mf.scan_status, mf.created_at,
+                mf.video_codec, mf.video_width, mf.video_height,
+                mf.video_bitrate_kbps, mf.video_bit_depth,
+                mf.video_hdr_format, mf.video_frame_rate, mf.video_profile,
+                mf.audio_codec, mf.audio_channels, mf.audio_bitrate_kbps,
+                mf.duration_seconds, mf.num_chapters, mf.container_format,
+                mf.audio_languages_json, mf.audio_streams_json,
+                mf.subtitle_languages_json,
+                mf.subtitle_codecs_json, mf.subtitle_streams_json,
+                mf.has_multiaudio,
+                mf.scene_name, mf.release_group, mf.source_type, mf.resolution,
+                mf.video_codec_parsed, mf.audio_codec_parsed,
+                mf.acquisition_score, mf.scoring_log,
+                mf.indexer_source, mf.grabbed_release_title, mf.grabbed_at,
+                mf.edition, mf.original_file_path, mf.release_hash
+         FROM media_files mf
+         WHERE mf.id = ?",
+    )
+    .bind(file_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    match row {
+        Some(ref r) => Ok(Some(row_to_title_media_file(r)?)),
+        None => Ok(None),
+    }
+}
+
 pub(crate) async fn delete_media_file_query(pool: &SqlitePool, file_id: &str) -> AppResult<()> {
     sqlx::query("DELETE FROM media_files WHERE id = ?")
         .bind(file_id)

@@ -908,6 +908,10 @@ export const importHistoryQuery = `query ImportHistory($limit: Int) {
   }
 }`;
 
+export const importHistoryChangedSubscription = `subscription ImportHistoryChanged {
+  importHistoryChanged
+}`;
+
 export const systemHealthQuery = `query SystemHealth {
   systemHealth {
     serviceReady

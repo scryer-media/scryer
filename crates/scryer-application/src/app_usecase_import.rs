@@ -290,8 +290,7 @@ pub async fn import_completed_download(
 
     // Mark as processing
     app.services
-        .imports
-        .update_import_status(&import_id, "processing", None)
+        .update_import_status_and_notify(&import_id, "processing", None)
         .await?;
 
     // From here on, any error must update the import record to "failed" rather than
@@ -315,8 +314,7 @@ pub async fn import_completed_download(
             let result_json = serde_json::to_string(&result).ok();
             let _ = app
                 .services
-                .imports
-                .update_import_status(&import_id, "failed", result_json)
+                .update_import_status_and_notify(&import_id, "failed", result_json)
                 .await;
             Ok(result)
         }
@@ -389,8 +387,7 @@ async fn run_import(
             };
             let result_json = serde_json::to_string(&result).ok();
             app.services
-                .imports
-                .update_import_status(import_id, "failed", result_json)
+                .update_import_status_and_notify(import_id, "failed", result_json)
                 .await?;
 
             let unmatched_msg = format!(
@@ -446,8 +443,7 @@ async fn run_import(
         };
         let result_json = serde_json::to_string(&result).ok();
         app.services
-            .imports
-            .update_import_status(import_id, "skipped", result_json)
+            .update_import_status_and_notify(import_id, "skipped", result_json)
             .await?;
         return Ok(result);
     }
@@ -473,8 +469,7 @@ async fn run_import(
         };
         let result_json = serde_json::to_string(&result).ok();
         app.services
-            .imports
-            .update_import_status(import_id, "failed", result_json)
+            .update_import_status_and_notify(import_id, "failed", result_json)
             .await?;
         return Ok(result);
     }
@@ -588,8 +583,7 @@ async fn import_movie_download(
         };
         let result_json = serde_json::to_string(&result).ok();
         app.services
-            .imports
-            .update_import_status(import_id, "skipped", result_json)
+            .update_import_status_and_notify(import_id, "skipped", result_json)
             .await?;
         return Ok(result);
     }
@@ -659,8 +653,7 @@ async fn import_movie_download(
                         mark_wanted_completed(app, &title.id, None, None).await;
                         let result_json = serde_json::to_string(&result).ok();
                         app.services
-                            .imports
-                            .update_import_status(import_id, "completed", result_json)
+                            .update_import_status_and_notify(import_id, "completed", result_json)
                             .await?;
                         return Ok(result);
                     }
@@ -680,8 +673,7 @@ async fn import_movie_download(
                         };
                         let result_json = serde_json::to_string(&result).ok();
                         app.services
-                            .imports
-                            .update_import_status(import_id, "failed", result_json)
+                            .update_import_status_and_notify(import_id, "failed", result_json)
                             .await?;
                         return Ok(result);
                     }
@@ -746,8 +738,7 @@ async fn import_movie_download(
             };
             let result_json = serde_json::to_string(&result).ok();
             app.services
-                .imports
-                .update_import_status(import_id, "failed", result_json)
+                .update_import_status_and_notify(import_id, "failed", result_json)
                 .await?;
             Ok(result)
         }
@@ -879,8 +870,7 @@ async fn import_movie_download(
             };
             let result_json = serde_json::to_string(&result).ok();
             app.services
-                .imports
-                .update_import_status(import_id, "completed", result_json)
+                .update_import_status_and_notify(import_id, "completed", result_json)
                 .await?;
 
             // Emit events
@@ -1048,8 +1038,7 @@ async fn import_series_download(
     };
     let result_json = serde_json::to_string(&result).ok();
     app.services
-        .imports
-        .update_import_status(import_id, status, result_json)
+        .update_import_status_and_notify(import_id, status, result_json)
         .await?;
 
     if imported_count > 0 {
@@ -1157,13 +1146,28 @@ async fn import_single_episode_file(
     let season = ep_meta.season.unwrap_or(1);
     let season_str = season.to_string();
 
+    // Resolve target episodes early so we can enrich rename tokens with DB
+    // metadata (e.g. absolute_number from TVDB).
+    let target_episodes = resolve_target_episodes(app, title, ep_meta, &season_str).await;
+    let target_episode_ids: Vec<String> = target_episodes
+        .iter()
+        .map(|episode| episode.id.clone())
+        .collect();
+    let is_filler = target_episodes.iter().any(|episode| episode.is_filler);
+
     // Build rename tokens
     let mut tokens = build_rename_tokens(title, &parsed, &ext);
     tokens.insert("season".to_string(), season_str.clone());
+    tokens.insert("season_order".to_string(), season_str.clone());
     if let Some(ep_num) = ep_meta.episode_numbers.first() {
         tokens.insert("episode".to_string(), ep_num.to_string());
     }
     if let Some(abs) = ep_meta.absolute_episode {
+        tokens.insert("absolute_episode".to_string(), abs.to_string());
+    } else if let Some(abs) = target_episodes
+        .first()
+        .and_then(|ep| ep.absolute_number.as_deref())
+    {
         tokens.insert("absolute_episode".to_string(), abs.to_string());
     }
 
@@ -1200,13 +1204,6 @@ async fn import_single_episode_file(
         tracing::debug!(file = %dest_path.display(), %code, %reason, "skipping episode file");
         return Ok(EpisodeImportOutcome::Skipped);
     }
-
-    let target_episodes = resolve_target_episodes(app, title, ep_meta, &season_str).await;
-    let target_episode_ids: Vec<String> = target_episodes
-        .iter()
-        .map(|episode| episode.id.clone())
-        .collect();
-    let is_filler = target_episodes.iter().any(|episode| episode.is_filler);
 
     // Upgrade check for episodes: find existing file for same dest path
     if !existing_files.is_empty() {

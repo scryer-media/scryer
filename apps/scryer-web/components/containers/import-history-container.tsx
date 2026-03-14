@@ -4,6 +4,7 @@ import { useClient } from "urql";
 
 import { ImportHistoryView } from "@/components/views/import-history-view";
 import { importHistoryQuery } from "@/lib/graphql/queries";
+import { useImportHistorySubscription } from "@/lib/hooks/use-import-history-subscription";
 import type { ImportRecord } from "@/lib/types";
 
 export const ImportHistoryContainer = memo(function ImportHistoryContainer() {
@@ -39,6 +40,8 @@ export const ImportHistoryContainer = memo(function ImportHistoryContainer() {
     void refresh();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useImportHistorySubscription(() => void refresh());
 
   return (
     <ImportHistoryView

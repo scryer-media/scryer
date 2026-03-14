@@ -1,7 +1,7 @@
 import * as React from "react";
 import {
-  Bell,
-  BellOff,
+  Eye,
+  EyeOff,
   Edit,
   Loader2,
   RefreshCw,
@@ -118,7 +118,7 @@ export function OverviewControlPanel({
         >
           <ActionButton
             label={monitored ? "Stop Monitoring" : "Monitor"}
-            icon={monitored ? BellOff : Bell}
+            icon={monitored ? EyeOff : Eye}
             active={monitored}
             destructive={monitored}
             loading={monitoredUpdating}
