@@ -144,6 +144,7 @@ async fn list_wanted_items_does_not_duplicate_movies_across_syncs() {
     let app = app_with_pending(&ctx);
 
     seed_title(&ctx, "title-1").await;
+    seed_wanted_item(&ctx, "title-1", "wanted").await;
 
     let (first_items, first_total) = app
         .list_wanted_items(None, None, None, 50, 0)
