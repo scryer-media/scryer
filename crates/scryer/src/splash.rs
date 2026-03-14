@@ -205,7 +205,7 @@ mod tests {
     use crate::base_path::BasePath;
     use crate::middleware::CorsConfig;
     use axum::body::Body;
-    use axum::http::{header, Request, StatusCode};
+    use axum::http::{Request, StatusCode};
     use axum::routing::get;
     use axum::Router;
     use tokio::sync::watch;

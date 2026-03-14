@@ -18,6 +18,7 @@ pub(crate) struct TitleHistoryRow {
     pub created_at: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn insert_title_history_event_query(
     pool: &SqlitePool,
     title_id: &str,

@@ -1361,6 +1361,7 @@ impl SqliteServices {
 
     // ── Title History ─────────────────────────────────────────────────────────
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_title_history_event(
         &self,
         title_id: String,
@@ -1492,6 +1493,7 @@ impl SqliteServices {
 
     // ── Blocklist ─────────────────────────────────────────────────────────────
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_blocklist_entry(
         &self,
         title_id: String,
