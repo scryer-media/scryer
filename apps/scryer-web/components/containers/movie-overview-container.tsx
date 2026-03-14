@@ -32,6 +32,7 @@ import {
 import { useClient, useSubscription } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { useImportHistorySubscription } from "@/lib/hooks/use-import-history-subscription";
 import type { Release, WantedItem } from "@/lib/types";
 import { MovieOverviewView } from "@/components/views/movie-overview-view";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
@@ -628,6 +629,11 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
     t,
     title,
   ]);
+
+  // Fallback: also listen to importHistoryChanged — fires from a different
+  // broadcast channel so the page still refreshes even if the activity
+  // subscription misses an event (e.g. transient WebSocket gap).
+  useImportHistorySubscription(refreshTitleDetail);
 
   // Subscribe to activity events via WebSocket — refresh title detail (including
   // collection quality labels) when an import or upgrade completes for this movie.

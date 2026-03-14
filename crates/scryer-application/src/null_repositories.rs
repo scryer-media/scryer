@@ -9,14 +9,18 @@ use scryer_domain::RuleSet;
 use crate::InsertMediaFileInput;
 use scryer_domain::PluginInstallation;
 
+use scryer_domain::{BlocklistEntry, TitleHistoryEventType, TitleHistoryRecord};
+
 use crate::{
-    AppError, AppResult, DownloadSubmission, DownloadSubmissionRepository, FileImporter,
-    HousekeepingRepository, ImportRepository, IndexerQueryStats, IndexerStatsTracker,
-    MediaFileRepository, NotificationChannelRepository, NotificationSubscriptionRepository,
-    PendingRelease, PendingReleaseRepository, PluginInstallationRepository, ReleaseDecision,
-    RuleSetRepository, SettingsRepository, SystemInfoProvider, TitleImageBlob, TitleImageKind,
-    TitleImageProcessor, TitleImageReplacement, TitleImageRepository, TitleImageSyncTask,
-    TitleMediaFile, TitleMediaSizeSummary, WantedItem, WantedItemRepository,
+    AppError, AppResult, BlocklistRepository, DownloadSubmission, DownloadSubmissionRepository,
+    FileImporter, HousekeepingRepository, ImportRepository, IndexerQueryStats,
+    IndexerStatsTracker, MediaFileRepository, NewBlocklistEntry, NewTitleHistoryEvent,
+    NotificationChannelRepository, NotificationSubscriptionRepository, PendingRelease,
+    PendingReleaseRepository, PluginInstallationRepository, ReleaseDecision, RuleSetRepository,
+    SettingsRepository, SystemInfoProvider, TitleHistoryFilter, TitleHistoryPage,
+    TitleHistoryRepository, TitleImageBlob, TitleImageKind, TitleImageProcessor,
+    TitleImageReplacement, TitleImageRepository, TitleImageSyncTask, TitleMediaFile,
+    TitleMediaSizeSummary, WantedItem, WantedItemRepository,
 };
 
 #[derive(Default)]
@@ -572,6 +576,58 @@ impl SettingsRepository for NullSettingsRepository {
         _: Option<String>,
     ) -> AppResult<Option<String>> {
         Ok(None)
+    }
+}
+
+#[derive(Default)]
+pub struct NullTitleHistoryRepository;
+
+#[async_trait]
+impl TitleHistoryRepository for NullTitleHistoryRepository {
+    async fn record_event(&self, _: &NewTitleHistoryEvent) -> AppResult<String> {
+        Ok(String::new())
+    }
+    async fn list_history(&self, _: &TitleHistoryFilter) -> AppResult<TitleHistoryPage> {
+        Ok(TitleHistoryPage { records: vec![], total_count: 0 })
+    }
+    async fn list_for_title(
+        &self, _: &str, _: Option<&[TitleHistoryEventType]>, _: usize, _: usize,
+    ) -> AppResult<TitleHistoryPage> {
+        Ok(TitleHistoryPage { records: vec![], total_count: 0 })
+    }
+    async fn list_for_episode(&self, _: &str, _: usize) -> AppResult<Vec<TitleHistoryRecord>> {
+        Ok(vec![])
+    }
+    async fn find_by_download_id(&self, _: &str) -> AppResult<Vec<TitleHistoryRecord>> {
+        Ok(vec![])
+    }
+    async fn delete_for_title(&self, _: &str) -> AppResult<()> {
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+pub struct NullBlocklistRepository;
+
+#[async_trait]
+impl BlocklistRepository for NullBlocklistRepository {
+    async fn add(&self, _: &NewBlocklistEntry) -> AppResult<String> {
+        Ok(String::new())
+    }
+    async fn list_for_title(&self, _: &str, _: usize) -> AppResult<Vec<BlocklistEntry>> {
+        Ok(vec![])
+    }
+    async fn list_all(&self, _: usize, _: usize) -> AppResult<(Vec<BlocklistEntry>, i64)> {
+        Ok((vec![], 0))
+    }
+    async fn remove(&self, _: &str) -> AppResult<()> {
+        Ok(())
+    }
+    async fn is_blocklisted(&self, _: &str, _: &str) -> AppResult<bool> {
+        Ok(false)
+    }
+    async fn delete_for_title(&self, _: &str) -> AppResult<()> {
+        Ok(())
     }
 }
 

@@ -36,6 +36,13 @@ pub enum MediaFacet {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RootFolderEntry {
+    pub path: String,
+    #[serde(rename = "isDefault")]
+    pub is_default: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExternalId {
     pub source: String,
     pub value: String,
@@ -403,6 +410,97 @@ pub struct ImportFileResult {
     pub dest_path: std::path::PathBuf,
     pub size_bytes: u64,
 }
+
+// ── Title history ────────────────────────────────────────────────────────────
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TitleHistoryEventType {
+    Grabbed,
+    DownloadCompleted,
+    Imported,
+    ImportFailed,
+    ImportSkipped,
+    FileDeleted,
+    FileRenamed,
+    DownloadIgnored,
+}
+
+impl TitleHistoryEventType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Grabbed => "grabbed",
+            Self::DownloadCompleted => "download_completed",
+            Self::Imported => "imported",
+            Self::ImportFailed => "import_failed",
+            Self::ImportSkipped => "import_skipped",
+            Self::FileDeleted => "file_deleted",
+            Self::FileRenamed => "file_renamed",
+            Self::DownloadIgnored => "download_ignored",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "grabbed" => Some(Self::Grabbed),
+            "download_completed" => Some(Self::DownloadCompleted),
+            "imported" => Some(Self::Imported),
+            "import_failed" => Some(Self::ImportFailed),
+            "import_skipped" => Some(Self::ImportSkipped),
+            "file_deleted" => Some(Self::FileDeleted),
+            "file_renamed" => Some(Self::FileRenamed),
+            "download_ignored" => Some(Self::DownloadIgnored),
+            _ => None,
+        }
+    }
+
+    pub const ALL: &[Self] = &[
+        Self::Grabbed,
+        Self::DownloadCompleted,
+        Self::Imported,
+        Self::ImportFailed,
+        Self::ImportSkipped,
+        Self::FileDeleted,
+        Self::FileRenamed,
+        Self::DownloadIgnored,
+    ];
+}
+
+impl std::fmt::Display for TitleHistoryEventType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TitleHistoryRecord {
+    pub id: String,
+    pub title_id: String,
+    pub episode_id: Option<String>,
+    pub collection_id: Option<String>,
+    pub event_type: String,
+    pub source_title: Option<String>,
+    pub quality: Option<String>,
+    pub download_id: Option<String>,
+    pub data_json: Option<String>,
+    pub occurred_at: String,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct BlocklistEntry {
+    pub id: String,
+    pub title_id: String,
+    pub source_title: Option<String>,
+    pub source_hint: Option<String>,
+    pub quality: Option<String>,
+    pub download_id: Option<String>,
+    pub reason: Option<String>,
+    pub data_json: Option<String>,
+    pub created_at: String,
+}
+
+// ── Titles ───────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NewTitle {

@@ -2,7 +2,7 @@ use scryer_application::{
     AppError, AppResult, QualityProfile, ReleaseDownloadAttemptOutcome,
     ReleaseDownloadFailureSignature, TitleReleaseBlocklistEntry,
 };
-use scryer_domain::{DownloadClientConfig, Episode, ImportRecord};
+use scryer_domain::{BlocklistEntry, DownloadClientConfig, Episode, ImportRecord, TitleHistoryRecord};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::commands::{spawn_db_command_worker, DbCommand};
@@ -1352,6 +1352,249 @@ impl SqliteServices {
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
 
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    // ── Title History ─────────────────────────────────────────────────────────
+
+    pub async fn insert_title_history_event(
+        &self,
+        title_id: String,
+        episode_id: Option<String>,
+        collection_id: Option<String>,
+        event_type: String,
+        source_title: Option<String>,
+        quality: Option<String>,
+        download_id: Option<String>,
+        data_json: Option<String>,
+    ) -> AppResult<String> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::InsertTitleHistoryEvent {
+                title_id,
+                episode_id,
+                collection_id,
+                event_type,
+                source_title,
+                quality,
+                download_id,
+                data_json,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn list_title_history(
+        &self,
+        event_types: Option<Vec<String>>,
+        title_ids: Option<Vec<String>>,
+        download_id: Option<String>,
+        limit: usize,
+        offset: usize,
+    ) -> AppResult<(Vec<TitleHistoryRecord>, i64)> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::ListTitleHistory {
+                event_types,
+                title_ids,
+                download_id,
+                limit,
+                offset,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn list_title_history_for_title(
+        &self,
+        title_id: &str,
+        event_types: Option<Vec<String>>,
+        limit: usize,
+        offset: usize,
+    ) -> AppResult<(Vec<TitleHistoryRecord>, i64)> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::ListTitleHistoryForTitle {
+                title_id: title_id.to_string(),
+                event_types,
+                limit,
+                offset,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn list_title_history_for_episode(
+        &self,
+        episode_id: &str,
+        limit: usize,
+    ) -> AppResult<Vec<TitleHistoryRecord>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::ListTitleHistoryForEpisode {
+                episode_id: episode_id.to_string(),
+                limit,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn find_title_history_by_download_id(
+        &self,
+        download_id: &str,
+    ) -> AppResult<Vec<TitleHistoryRecord>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::FindTitleHistoryByDownloadId {
+                download_id: download_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn delete_title_history_for_title(&self, title_id: &str) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::DeleteTitleHistoryForTitle {
+                title_id: title_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    // ── Blocklist ─────────────────────────────────────────────────────────────
+
+    pub async fn insert_blocklist_entry(
+        &self,
+        title_id: String,
+        source_title: Option<String>,
+        source_hint: Option<String>,
+        quality: Option<String>,
+        download_id: Option<String>,
+        reason: Option<String>,
+        data_json: Option<String>,
+    ) -> AppResult<String> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::InsertBlocklistEntry {
+                title_id,
+                source_title,
+                source_hint,
+                quality,
+                download_id,
+                reason,
+                data_json,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn list_blocklist_for_title(
+        &self,
+        title_id: &str,
+        limit: usize,
+    ) -> AppResult<Vec<BlocklistEntry>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::ListBlocklistForTitle {
+                title_id: title_id.to_string(),
+                limit,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn list_blocklist_all(
+        &self,
+        limit: usize,
+        offset: usize,
+    ) -> AppResult<(Vec<BlocklistEntry>, i64)> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::ListBlocklistAll {
+                limit,
+                offset,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn delete_blocklist_entry(&self, id: &str) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::DeleteBlocklistEntry {
+                id: id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn is_blocklisted(&self, title_id: &str, source_title: &str) -> AppResult<bool> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::IsBlocklisted {
+                title_id: title_id.to_string(),
+                source_title: source_title.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn delete_blocklist_for_title(&self, title_id: &str) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::DeleteBlocklistForTitle {
+                title_id: title_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
         reply_rx
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?

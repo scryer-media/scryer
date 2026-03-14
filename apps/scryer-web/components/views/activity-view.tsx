@@ -108,6 +108,9 @@ function isPostProcessingReason(reason: string | null | undefined): boolean {
 
 function deriveDisplayState(queueItem: DownloadQueueItem): string {
   const stateKey = normalizeQueueState(queueItem.state);
+  if (stateKey === "extracting" || stateKey === "verifying" || stateKey === "repairing") {
+    return "post_processing";
+  }
   if (stateKey === "downloading" && isPostProcessingReason(queueItem.attentionReason)) {
     return "post_processing";
   }

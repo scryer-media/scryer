@@ -1,3 +1,4 @@
+pub mod blocklist;
 pub mod common;
 pub mod download_client;
 pub mod event;
@@ -12,6 +13,7 @@ pub mod quality;
 pub mod rule_set;
 pub mod settings;
 pub mod title;
+pub mod title_history;
 pub mod user;
 pub mod wanted;
 pub mod workflow;

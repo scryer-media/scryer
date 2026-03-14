@@ -1,20 +1,22 @@
 use async_trait::async_trait;
 use scryer_application::{
-    AppError, AppResult, DownloadClientConfigRepository, DownloadSubmission,
+    AppError, AppResult, BlocklistRepository, DownloadClientConfigRepository, DownloadSubmission,
     DownloadSubmissionRepository, EventRepository, HousekeepingRepository, ImportRepository,
-    IndexerConfigRepository, InsertMediaFileInput, MediaFileRepository,
-    NotificationChannelRepository, NotificationSubscriptionRepository, PendingRelease,
-    PendingReleaseRepository, PluginInstallationRepository, PrimaryCollectionSummary,
-    QualityProfile as ApplicationQualityProfile, QualityProfileRepository,
-    ReleaseAttemptRepository, ReleaseDecision, ReleaseDownloadAttemptOutcome,
-    ReleaseDownloadFailureSignature, RuleSetRepository, SettingsRepository, ShowRepository,
-    SystemInfoProvider, TitleMediaFile, TitleMediaSizeSummary, TitleMetadataUpdate,
+    IndexerConfigRepository, InsertMediaFileInput, MediaFileRepository, NewBlocklistEntry,
+    NewTitleHistoryEvent, NotificationChannelRepository, NotificationSubscriptionRepository,
+    PendingRelease, PendingReleaseRepository, PluginInstallationRepository,
+    PrimaryCollectionSummary, QualityProfile as ApplicationQualityProfile,
+    QualityProfileRepository, ReleaseAttemptRepository, ReleaseDecision,
+    ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature, RuleSetRepository,
+    SettingsRepository, ShowRepository, SystemInfoProvider, TitleHistoryFilter, TitleHistoryPage,
+    TitleHistoryRepository, TitleMediaFile, TitleMediaSizeSummary, TitleMetadataUpdate,
     TitleReleaseBlocklistEntry, TitleRepository, UserRepository, WantedItem, WantedItemRepository,
 };
 use scryer_domain::{
-    CalendarEpisode, Collection, DownloadClientConfig, Entitlement, Episode, HistoryEvent,
-    ImportRecord, IndexerConfig, MediaFacet, NotificationChannelConfig, NotificationSubscription,
-    PluginInstallation, RuleSet, Title, User,
+    BlocklistEntry, CalendarEpisode, Collection, DownloadClientConfig, Entitlement, Episode,
+    HistoryEvent, ImportRecord, IndexerConfig, MediaFacet, NotificationChannelConfig,
+    NotificationSubscription, PluginInstallation, RuleSet, Title, TitleHistoryEventType,
+    TitleHistoryRecord, User,
 };
 use tokio::sync::oneshot;
 
@@ -1693,5 +1695,127 @@ impl PendingReleaseRepository for SqliteServices {
 
     async fn delete_pending_releases_for_title(&self, title_id: &str) -> AppResult<()> {
         self.delete_pending_releases_for_title(title_id).await
+    }
+}
+
+#[async_trait]
+impl TitleHistoryRepository for SqliteServices {
+    async fn record_event(&self, event: &NewTitleHistoryEvent) -> AppResult<String> {
+        let data_json = if event.data.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&event.data).map_err(|e| AppError::Repository(e.to_string()))?)
+        };
+        self.insert_title_history_event(
+            event.title_id.clone(),
+            event.episode_id.clone(),
+            event.collection_id.clone(),
+            event.event_type.as_str().to_string(),
+            event.source_title.clone(),
+            event.quality.clone(),
+            event.download_id.clone(),
+            data_json,
+        )
+        .await
+    }
+
+    async fn list_history(&self, filter: &TitleHistoryFilter) -> AppResult<TitleHistoryPage> {
+        let event_types = filter.event_types.as_ref().map(|types| {
+            types.iter().map(|t| t.as_str().to_string()).collect::<Vec<_>>()
+        });
+        let (records, total_count) = self
+            .list_title_history(
+                event_types,
+                filter.title_ids.clone(),
+                filter.download_id.clone(),
+                filter.limit,
+                filter.offset,
+            )
+            .await?;
+        Ok(TitleHistoryPage { records, total_count })
+    }
+
+    async fn list_for_title(
+        &self,
+        title_id: &str,
+        event_types: Option<&[TitleHistoryEventType]>,
+        limit: usize,
+        offset: usize,
+    ) -> AppResult<TitleHistoryPage> {
+        let type_strings = event_types.map(|types| {
+            types.iter().map(|t| t.as_str().to_string()).collect::<Vec<_>>()
+        });
+        let (records, total_count) = self
+            .list_title_history_for_title(title_id, type_strings, limit, offset)
+            .await?;
+        Ok(TitleHistoryPage { records, total_count })
+    }
+
+    async fn list_for_episode(
+        &self,
+        episode_id: &str,
+        limit: usize,
+    ) -> AppResult<Vec<TitleHistoryRecord>> {
+        self.list_title_history_for_episode(episode_id, limit).await
+    }
+
+    async fn find_by_download_id(
+        &self,
+        download_id: &str,
+    ) -> AppResult<Vec<TitleHistoryRecord>> {
+        self.find_title_history_by_download_id(download_id).await
+    }
+
+    async fn delete_for_title(&self, title_id: &str) -> AppResult<()> {
+        self.delete_title_history_for_title(title_id).await
+    }
+}
+
+#[async_trait]
+impl BlocklistRepository for SqliteServices {
+    async fn add(&self, entry: &NewBlocklistEntry) -> AppResult<String> {
+        let data_json = if entry.data.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&entry.data).map_err(|e| AppError::Repository(e.to_string()))?)
+        };
+        self.insert_blocklist_entry(
+            entry.title_id.clone(),
+            entry.source_title.clone(),
+            entry.source_hint.clone(),
+            entry.quality.clone(),
+            entry.download_id.clone(),
+            entry.reason.clone(),
+            data_json,
+        )
+        .await
+    }
+
+    async fn list_for_title(
+        &self,
+        title_id: &str,
+        limit: usize,
+    ) -> AppResult<Vec<BlocklistEntry>> {
+        self.list_blocklist_for_title(title_id, limit).await
+    }
+
+    async fn list_all(
+        &self,
+        limit: usize,
+        offset: usize,
+    ) -> AppResult<(Vec<BlocklistEntry>, i64)> {
+        self.list_blocklist_all(limit, offset).await
+    }
+
+    async fn remove(&self, id: &str) -> AppResult<()> {
+        self.delete_blocklist_entry(id).await
+    }
+
+    async fn is_blocklisted(&self, title_id: &str, source_title: &str) -> AppResult<bool> {
+        self.is_blocklisted(title_id, source_title).await
+    }
+
+    async fn delete_for_title(&self, title_id: &str) -> AppResult<()> {
+        self.delete_blocklist_for_title(title_id).await
     }
 }

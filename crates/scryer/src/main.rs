@@ -524,6 +524,8 @@ async fn bootstrap_application(
     services.media_files = Arc::new(db.clone());
     services.wanted_items = Arc::new(db.clone());
     services.pending_releases = Arc::new(db.clone());
+    services.title_history = Arc::new(db.clone());
+    services.blocklist_repo = Arc::new(db.clone());
     services.rule_sets = Arc::new(db.clone());
     services.plugin_installations = Arc::new(db.clone());
     services.system_info = Arc::new(db.clone());

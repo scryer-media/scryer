@@ -33,6 +33,7 @@ import {
 import { useClient, useSubscription } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { useImportHistorySubscription } from "@/lib/hooks/use-import-history-subscription";
 import { SeriesOverviewView } from "@/components/views/series-overview-view";
 import { ManualImportDialog } from "@/components/dialogs/manual-import-dialog";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
@@ -756,6 +757,11 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     }
     void refreshMediaFiles();
   }, [title, refreshMediaFiles]);
+
+  // Fallback: also listen to importHistoryChanged — fires from a different
+  // broadcast channel so the page still refreshes even if the activity
+  // subscription misses an event (e.g. transient WebSocket gap).
+  useImportHistorySubscription(refreshMediaFiles);
 
   // Subscribe to activity events via WebSocket — refetch media files when an
   // import completes for this title (movie_downloaded / series_episode_imported / file_upgraded).

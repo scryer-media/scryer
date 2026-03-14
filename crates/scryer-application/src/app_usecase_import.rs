@@ -12,6 +12,7 @@ use scryer_domain::{
 };
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 const SERIES_PATH_KEY: &str = "series.path";
@@ -19,11 +20,17 @@ const RENAME_TEMPLATE_SERIES_GLOBAL_KEY: &str = "rename.template.series.global";
 
 /// Called from the download queue poller on every tick (currently 2 seconds).
 /// Filters completed items, checks dedup, fetches CompletedDownload data, and triggers import.
+///
+/// Returns the set of `download_client_item_id`s that were actually processed
+/// (imported, already-imported, or permanently non-importable). Callers should
+/// only suppress future retries for these IDs — items skipped due to transient
+/// conditions (e.g. no matching CompletedDownload yet, empty dest_dir) are NOT
+/// included so they can be retried on the next snapshot.
 pub async fn try_import_completed_downloads(
     app: &AppUseCase,
     actor: &User,
     items: &[DownloadQueueItem],
-) {
+) -> HashSet<String> {
     // TODO: increase to 600 (10 minutes) for production — large NAS copies can take a while
     match app
         .services
@@ -63,8 +70,16 @@ pub async fn try_import_completed_downloads(
         .collect();
 
     if completed_items.is_empty() {
-        return;
+        return HashSet::new();
     }
+
+    let mut processed_ids: HashSet<String> = HashSet::new();
+
+    tracing::debug!(
+        count = completed_items.len(),
+        items = %completed_items.iter().map(|i| format!("{}({})", i.title_name, i.download_client_item_id)).collect::<Vec<_>>().join(", "),
+        "import: found completed items to evaluate"
+    );
 
     // Fetch completed downloads from the download client (single RPC call)
     let completed_downloads = match app
@@ -73,10 +88,17 @@ pub async fn try_import_completed_downloads(
         .list_completed_downloads()
         .await
     {
-        Ok(downloads) => downloads,
+        Ok(downloads) => {
+            tracing::debug!(
+                count = downloads.len(),
+                ids = %downloads.iter().map(|d| d.download_client_item_id.as_str()).collect::<Vec<_>>().join(", "),
+                "import: fetched completed downloads from client"
+            );
+            downloads
+        }
         Err(error) => {
             tracing::warn!(error = %error, "failed to fetch completed downloads for import");
-            return;
+            return HashSet::new();
         }
     };
 
@@ -89,7 +111,15 @@ pub async fn try_import_completed_downloads(
             .is_already_imported(&item.client_type, source_ref)
             .await
         {
-            Ok(true) => continue,
+            Ok(true) => {
+                tracing::debug!(
+                    source_ref = %source_ref,
+                    title = %item.title_name,
+                    "import: skipping already-imported download"
+                );
+                processed_ids.insert(source_ref.clone());
+                continue;
+            }
             Ok(false) => {}
             Err(error) => {
                 tracing::warn!(error = %error, source_ref = %source_ref, "import dedup check failed");
@@ -103,11 +133,23 @@ pub async fn try_import_completed_downloads(
             .find(|cd| cd.download_client_item_id == item.download_client_item_id)
         {
             Some(cd) => cd,
-            None => continue, // Not found in completed downloads (might still be processing)
+            None => {
+                tracing::debug!(
+                    source_ref = %source_ref,
+                    title = %item.title_name,
+                    "import: no matching CompletedDownload from client history (item may still be processing or status != Completed)"
+                );
+                continue;
+            }
         };
 
         // Skip if dest_dir is empty
         if completed.dest_dir.is_empty() {
+            tracing::debug!(
+                source_ref = %source_ref,
+                title = %item.title_name,
+                "import: skipping download with empty dest_dir"
+            );
             continue;
         }
 
@@ -133,12 +175,38 @@ pub async fn try_import_completed_downloads(
                     ];
                     patched
                 }
-                _ => continue, // Not a scryer-originated download
+                Ok(None) => {
+                    tracing::debug!(
+                        source_ref = %source_ref,
+                        title = %item.title_name,
+                        client_type = %completed.client_type,
+                        "import: no scryer origin — not in parameters or download_submissions table"
+                    );
+                    processed_ids.insert(source_ref.clone());
+                    continue;
+                }
+                Err(error) => {
+                    tracing::debug!(
+                        source_ref = %source_ref,
+                        title = %item.title_name,
+                        error = %error,
+                        "import: download_submissions lookup failed"
+                    );
+                    continue;
+                }
             }
         };
 
         let facet_label = extract_parameter(&completed.parameters, "*scryer_facet")
             .unwrap_or_else(|| "unknown".to_string());
+        tracing::info!(
+            source_ref = %source_ref,
+            title = %item.title_name,
+            dest_dir = %completed.dest_dir,
+            facet = %facet_label,
+            "import: triggering import for completed download"
+        );
+        processed_ids.insert(source_ref.clone());
         let import_start = std::time::Instant::now();
         match import_completed_download(app, actor, &completed).await {
             Ok(result) => {
@@ -197,6 +265,8 @@ pub async fn try_import_completed_downloads(
             }
         }
     }
+
+    processed_ids
 }
 
 fn facet_for_completed_download(completed: &CompletedDownload) -> Option<MediaFacet> {

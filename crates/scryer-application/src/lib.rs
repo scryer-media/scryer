@@ -48,11 +48,11 @@ use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use rand_core::OsRng;
 use scryer_domain::{
-    CalendarEpisode, Collection, CompletedDownload, DownloadClientConfig, DownloadQueueItem,
-    DownloadQueueState, Entitlement, Episode, EventType, ExternalId, HistoryEvent, Id,
-    ImportFileResult, ImportRecord, IndexerConfig, MediaFacet, NewDownloadClientConfig,
-    NewIndexerConfig, NewTitle, PluginInstallation, PolicyInput, PolicyOutput, RuleSet, Title,
-    User,
+    BlocklistEntry, CalendarEpisode, Collection, CompletedDownload, DownloadClientConfig,
+    DownloadQueueItem, DownloadQueueState, Entitlement, Episode, EventType, ExternalId,
+    HistoryEvent, Id, ImportFileResult, ImportRecord, ImportResult, IndexerConfig, MediaFacet,
+    NewDownloadClientConfig, NewIndexerConfig, NewTitle, PluginInstallation, PolicyInput,
+    PolicyOutput, RuleSet, Title, TitleHistoryEventType, TitleHistoryRecord, User,
 };
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -103,11 +103,12 @@ pub use library_scan::{
 };
 pub use notification_dispatcher::start_notification_dispatcher;
 pub use null_repositories::{
-    NullDownloadSubmissionRepository, NullFileImporter, NullHousekeepingRepository,
-    NullImportRepository, NullIndexerStatsTracker, NullMediaFileRepository,
-    NullNotificationChannelRepository, NullNotificationSubscriptionRepository,
-    NullPendingReleaseRepository, NullPluginInstallationRepository, NullRuleSetRepository,
-    NullSettingsRepository, NullSystemInfoProvider, NullTitleImageProcessor,
+    NullBlocklistRepository, NullDownloadSubmissionRepository, NullFileImporter,
+    NullHousekeepingRepository, NullImportRepository, NullIndexerStatsTracker,
+    NullMediaFileRepository, NullNotificationChannelRepository,
+    NullNotificationSubscriptionRepository, NullPendingReleaseRepository,
+    NullPluginInstallationRepository, NullRuleSetRepository, NullSettingsRepository,
+    NullSystemInfoProvider, NullTitleHistoryRepository, NullTitleImageProcessor,
     NullTitleImageRepository, NullWantedItemRepository,
 };
 pub use quality_profile::{
@@ -195,6 +196,8 @@ pub struct AppServices {
     pub housekeeping: Arc<dyn HousekeepingRepository>,
     pub health_check_results: Arc<tokio::sync::RwLock<Vec<HealthCheckResult>>>,
     pub pending_releases: Arc<dyn PendingReleaseRepository>,
+    pub title_history: Arc<dyn TitleHistoryRepository>,
+    pub blocklist_repo: Arc<dyn BlocklistRepository>,
     pub rss_seen_guids: Arc<tokio::sync::RwLock<HashSet<String>>>,
 }
 
@@ -262,6 +265,8 @@ impl AppServices {
             poster_wake: Arc::new(tokio::sync::Notify::new()),
             housekeeping: Arc::new(NullHousekeepingRepository),
             pending_releases: Arc::new(NullPendingReleaseRepository),
+            title_history: Arc::new(NullTitleHistoryRepository),
+            blocklist_repo: Arc::new(NullBlocklistRepository),
             health_check_results: Arc::new(tokio::sync::RwLock::new(Vec::new())),
             rss_seen_guids: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
         }
@@ -340,10 +345,62 @@ impl AppServices {
         result_json: Option<String>,
     ) -> AppResult<()> {
         self.imports
-            .update_import_status(import_id, status, result_json)
+            .update_import_status(import_id, status, result_json.clone())
             .await?;
         let _ = self.import_history_broadcast.send(());
+
+        // Dual-write: emit title history event from import result
+        if let Some(ref json) = result_json {
+            if let Ok(result) = serde_json::from_str::<ImportResult>(json) {
+                if let Some(ref title_id) = result.title_id {
+                    let event_type = match status {
+                        "completed" => TitleHistoryEventType::Imported,
+                        "failed" => TitleHistoryEventType::ImportFailed,
+                        "skipped" => TitleHistoryEventType::ImportSkipped,
+                        _ => return Ok(()),
+                    };
+                    let mut data = std::collections::HashMap::new();
+                    data.insert("import_id".into(), serde_json::json!(import_id));
+                    data.insert("source_path".into(), serde_json::json!(result.source_path));
+                    if let Some(ref dp) = result.dest_path {
+                        data.insert("dest_path".into(), serde_json::json!(dp));
+                    }
+                    if let Some(ref msg) = result.error_message {
+                        data.insert("message".into(), serde_json::json!(msg));
+                    }
+                    if let Some(ref sr) = result.skip_reason {
+                        data.insert("skip_reason".into(), serde_json::json!(sr.as_str()));
+                    }
+                    data.insert("decision".into(), serde_json::json!(result.decision.as_str()));
+                    if let Some(sz) = result.file_size_bytes {
+                        data.insert("size_bytes".into(), serde_json::json!(sz));
+                    }
+                    let _ = self
+                        .title_history
+                        .record_event(&NewTitleHistoryEvent {
+                            title_id: title_id.clone(),
+                            episode_id: None,
+                            collection_id: None,
+                            event_type,
+                            source_title: Some(result.source_path.clone()),
+                            quality: None,
+                            download_id: None,
+                            data,
+                        })
+                        .await;
+                }
+            }
+        }
         Ok(())
+    }
+
+    pub async fn record_title_history(
+        &self,
+        event: NewTitleHistoryEvent,
+    ) -> AppResult<String> {
+        let id = self.title_history.record_event(&event).await?;
+        let _ = self.import_history_broadcast.send(());
+        Ok(id)
     }
 }
 
@@ -847,6 +904,99 @@ pub trait PendingReleaseRepository: Send + Sync {
     ) -> AppResult<()>;
     async fn delete_pending_releases_for_title(&self, title_id: &str) -> AppResult<()>;
 }
+
+// ── Title history ────────────────────────────────────────────────────────────
+
+#[derive(Clone, Debug)]
+pub struct NewTitleHistoryEvent {
+    pub title_id: String,
+    pub episode_id: Option<String>,
+    pub collection_id: Option<String>,
+    pub event_type: TitleHistoryEventType,
+    pub source_title: Option<String>,
+    pub quality: Option<String>,
+    pub download_id: Option<String>,
+    pub data: std::collections::HashMap<String, serde_json::Value>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TitleHistoryFilter {
+    pub event_types: Option<Vec<TitleHistoryEventType>>,
+    pub title_ids: Option<Vec<String>>,
+    pub download_id: Option<String>,
+    pub limit: usize,
+    pub offset: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct TitleHistoryPage {
+    pub records: Vec<TitleHistoryRecord>,
+    pub total_count: i64,
+}
+
+#[async_trait]
+pub trait TitleHistoryRepository: Send + Sync {
+    async fn record_event(&self, event: &NewTitleHistoryEvent) -> AppResult<String>;
+
+    async fn list_history(&self, filter: &TitleHistoryFilter) -> AppResult<TitleHistoryPage>;
+
+    async fn list_for_title(
+        &self,
+        title_id: &str,
+        event_types: Option<&[TitleHistoryEventType]>,
+        limit: usize,
+        offset: usize,
+    ) -> AppResult<TitleHistoryPage>;
+
+    async fn list_for_episode(
+        &self,
+        episode_id: &str,
+        limit: usize,
+    ) -> AppResult<Vec<TitleHistoryRecord>>;
+
+    async fn find_by_download_id(
+        &self,
+        download_id: &str,
+    ) -> AppResult<Vec<TitleHistoryRecord>>;
+
+    async fn delete_for_title(&self, title_id: &str) -> AppResult<()>;
+}
+
+#[derive(Clone, Debug)]
+pub struct NewBlocklistEntry {
+    pub title_id: String,
+    pub source_title: Option<String>,
+    pub source_hint: Option<String>,
+    pub quality: Option<String>,
+    pub download_id: Option<String>,
+    pub reason: Option<String>,
+    pub data: std::collections::HashMap<String, serde_json::Value>,
+}
+
+#[async_trait]
+pub trait BlocklistRepository: Send + Sync {
+    async fn add(&self, entry: &NewBlocklistEntry) -> AppResult<String>;
+
+    async fn list_for_title(
+        &self,
+        title_id: &str,
+        limit: usize,
+    ) -> AppResult<Vec<BlocklistEntry>>;
+
+    async fn list_all(&self, limit: usize, offset: usize) -> AppResult<(Vec<BlocklistEntry>, i64)>;
+
+    async fn remove(&self, id: &str) -> AppResult<()>;
+
+    async fn is_blocklisted(
+        &self,
+        title_id: &str,
+        source_title: &str,
+    ) -> AppResult<bool>;
+
+    async fn delete_for_title(&self, title_id: &str) -> AppResult<()>;
+}
+
+// ── Rule sets ────────────────────────────────────────────────────────────────
 
 #[async_trait]
 pub trait RuleSetRepository: Send + Sync {
@@ -1743,14 +1893,16 @@ mod tests {
         async fn find_episode_by_title_and_numbers(
             &self,
             title_id: &str,
-            _season_number: &str,
+            season_number: &str,
             episode_number: &str,
         ) -> AppResult<Option<Episode>> {
             let episodes = self.episodes.lock().await;
             Ok(episodes
                 .iter()
                 .find(|ep| {
-                    ep.title_id == title_id && ep.episode_number.as_deref() == Some(episode_number)
+                    ep.title_id == title_id
+                        && ep.season_number.as_deref() == Some(season_number)
+                        && ep.episode_number.as_deref() == Some(episode_number)
                 })
                 .cloned())
         }

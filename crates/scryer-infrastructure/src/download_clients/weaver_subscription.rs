@@ -455,10 +455,31 @@ async fn process_job_snapshot(
         .collect();
 
     if !newly_completed.is_empty() {
-        scryer_application::try_import_completed_downloads(app, actor, &items).await;
+        tracing::info!(
+            count = newly_completed.len(),
+            items = %newly_completed.iter().map(|i| format!(
+                "{}(id={}, origin={})", i.title_name, i.download_client_item_id, i.is_scryer_origin
+            )).collect::<Vec<_>>().join(", "),
+            "weaver: newly completed downloads detected via WS subscription"
+        );
 
-        for item in &newly_completed {
-            imported_job_ids.insert(item.download_client_item_id.clone());
+        let processed = scryer_application::try_import_completed_downloads(app, actor, &items).await;
+
+        tracing::debug!(
+            processed_count = processed.len(),
+            deferred_count = newly_completed.len() - newly_completed.iter()
+                .filter(|i| processed.contains(&i.download_client_item_id))
+                .count(),
+            "weaver: import attempt complete — deferred items will be retried on next snapshot"
+        );
+
+        // Only suppress future retries for IDs that were actually processed
+        // (imported, already-imported, or permanently non-importable).
+        // Items skipped due to transient conditions (no matching
+        // CompletedDownload yet, empty dest_dir) will be retried on the
+        // next snapshot.
+        for id in processed {
+            imported_job_ids.insert(id);
         }
     }
 }

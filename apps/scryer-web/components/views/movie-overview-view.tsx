@@ -89,13 +89,15 @@ function resolveMonitorTypeLabel(t: Translate, value: string) {
   }
 }
 
-function formatTitleTag(t: Translate, tag: string) {
+function formatTitleTag(t: Translate, tag: string, qualityProfiles?: { id: string; name: string }[]) {
   const qualityPrefix = "scryer:quality-profile:";
   const monitorPrefix = "scryer:monitor-type:";
   const seasonFolderPrefix = "scryer:season-folder:";
 
   if (tag.startsWith(qualityPrefix)) {
-    const value = prettifyTagValue(tag.slice(qualityPrefix.length));
+    const rawId = tag.slice(qualityPrefix.length).replace(/^"|"$/g, "");
+    const profile = qualityProfiles?.find((p) => p.id === rawId);
+    const value = profile ? profile.name : prettifyTagValue(rawId);
     return {
       label: `${t("settings.qualityProfileSection")}: ${value}`,
       className: "bg-indigo-500/20 text-indigo-200",
@@ -485,7 +487,7 @@ export function MovieOverviewView({
                 {title.tags
                   .filter((tag) => !tag.startsWith(MONITOR_TYPE_TAG_PREFIX))
                   .map((tag) => {
-                  const formattedTag = formatTitleTag(t, tag);
+                  const formattedTag = formatTitleTag(t, tag, qualityProfiles);
                   return (
                     <span
                       key={tag}
