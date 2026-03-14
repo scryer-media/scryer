@@ -87,57 +87,102 @@ impl ExternalArrClient {
     }
 
     /// Fetch download client configurations.
+    ///
+    /// Fetches the list first, then re-fetches each client individually because
+    /// Sonarr v4+ / Radarr v5+ mask sensitive field values (e.g. `apiKey`) in the
+    /// list endpoint response.
     pub async fn list_download_clients(&self) -> AppResult<Vec<ArrDownloadClient>> {
         let json = self.api_get("downloadclient").await?;
         let arr = json.as_array().ok_or_else(|| {
             AppError::Repository("downloadclient response was not an array".into())
         })?;
-        Ok(arr
-            .iter()
-            .filter_map(|item| {
-                let id = item.get("id")?.as_i64()?;
-                let name = item.get("name")?.as_str()?.to_string();
-                let implementation = item.get("implementation")?.as_str()?.to_string();
-                let fields = item
+
+        let mut results = Vec::new();
+        for item in arr {
+            let id = match item.get("id").and_then(Value::as_i64) {
+                Some(id) => id,
+                None => continue,
+            };
+            let name = match item.get("name").and_then(Value::as_str) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            let implementation = match item.get("implementation").and_then(Value::as_str) {
+                Some(i) => i.to_string(),
+                None => continue,
+            };
+
+            // Re-fetch individually to get unmasked sensitive fields.
+            let fields = match self.api_get(&format!("downloadclient/{id}")).await {
+                Ok(detail) => detail
                     .get("fields")
                     .and_then(Value::as_array)
                     .map(|f| flatten_arr_fields(f))
-                    .unwrap_or_default();
-                Some(ArrDownloadClient {
-                    id,
-                    name,
-                    implementation,
-                    fields,
-                })
-            })
-            .collect())
+                    .unwrap_or_default(),
+                Err(_) => item
+                    .get("fields")
+                    .and_then(Value::as_array)
+                    .map(|f| flatten_arr_fields(f))
+                    .unwrap_or_default(),
+            };
+
+            results.push(ArrDownloadClient {
+                id,
+                name,
+                implementation,
+                fields,
+            });
+        }
+        Ok(results)
     }
 
     /// Fetch indexer configurations.
+    ///
+    /// Like `list_download_clients`, re-fetches each indexer individually to get
+    /// unmasked sensitive fields (e.g. `apiKey`).
     pub async fn list_indexers(&self) -> AppResult<Vec<ArrIndexer>> {
         let json = self.api_get("indexer").await?;
         let arr = json
             .as_array()
             .ok_or_else(|| AppError::Repository("indexer response was not an array".into()))?;
-        Ok(arr
-            .iter()
-            .filter_map(|item| {
-                let id = item.get("id")?.as_i64()?;
-                let name = item.get("name")?.as_str()?.to_string();
-                let implementation = item.get("implementation")?.as_str()?.to_string();
-                let fields = item
+
+        let mut results = Vec::new();
+        for item in arr {
+            let id = match item.get("id").and_then(Value::as_i64) {
+                Some(id) => id,
+                None => continue,
+            };
+            let name = match item.get("name").and_then(Value::as_str) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            let implementation = match item.get("implementation").and_then(Value::as_str) {
+                Some(i) => i.to_string(),
+                None => continue,
+            };
+
+            // Re-fetch individually to get unmasked sensitive fields.
+            let fields = match self.api_get(&format!("indexer/{id}")).await {
+                Ok(detail) => detail
                     .get("fields")
                     .and_then(Value::as_array)
                     .map(|f| flatten_arr_fields(f))
-                    .unwrap_or_default();
-                Some(ArrIndexer {
-                    id,
-                    name,
-                    implementation,
-                    fields,
-                })
-            })
-            .collect())
+                    .unwrap_or_default(),
+                Err(_) => item
+                    .get("fields")
+                    .and_then(Value::as_array)
+                    .map(|f| flatten_arr_fields(f))
+                    .unwrap_or_default(),
+            };
+
+            results.push(ArrIndexer {
+                id,
+                name,
+                implementation,
+                fields,
+            });
+        }
+        Ok(results)
     }
 
     async fn api_get(&self, path: &str) -> AppResult<Value> {
