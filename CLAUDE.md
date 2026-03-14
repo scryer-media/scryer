@@ -79,3 +79,5 @@ cd apps/scryer-web && npm ci && npm run build
 # Dev stack
 ./scripts/stack-up.sh
 ```
+
+**NEVER run `cargo build`, `cargo check`, or `cargo test` while another Cargo process is already running against this workspace.** Concurrent Cargo invocations generate conflicting incremental cache entries and duplicate artifacts in `target/debug/deps/`, ballooning disk usage by hundreds of gigabytes. If you need to verify a build, first check `ps aux | grep cargo` and wait for any existing Cargo process to finish.

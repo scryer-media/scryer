@@ -173,7 +173,7 @@ run_rust_validation() {
 }
 
 # ── Release group database validation (AI-assisted, monthly) ─────────────────
-step "Validating release group database"
+step "Checking release group validation status"
 
 CLAUDE_VALIDATION_STAMP="$REPO_ROOT/.claude/release-validation-timestamp"
 CLAUDE_VALIDATION_INTERVAL=$((30 * 86400))  # 30 days in seconds
@@ -195,28 +195,27 @@ else
     echo "   No previous validation found — running"
 fi
 
-PROMPT_FILE="$REPO_ROOT/scripts/prompts/validate-release-data.md"
+# Build and launch the trash guide scraper in the background so it runs in
+# parallel with web/Rust validation. The scraper lives in the sibling smg repo.
+SMG_DIR="$REPO_ROOT/../smg"
+TRASH_SCRAPER_BIN=""
+TRASH_SCRAPER_OUTPUT=""
+TRASH_SCRAPER_PID=""
+
 if $CLAUDE_VALIDATION_DUE; then
-    if [[ -f "$PROMPT_FILE" ]] && command -v claude &>/dev/null; then
-        echo "   Spawning Claude to validate release group data..."
-        if CLAUDECODE= claude -p "$(cat "$PROMPT_FILE")" \
-            --model claude-opus-4-6 \
-            --max-turns 30 \
-            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(cargo nextest*),Bash(ls*),WebFetch,WebSearch" \
-            2>&1; then
-            mkdir -p "$(dirname "$CLAUDE_VALIDATION_STAMP")"
-            date -u "+%Y-%m-%dT%H:%M:%S%z" > "$CLAUDE_VALIDATION_STAMP"
-            ok "Release group validation complete"
-        else
-            warn "Release group validation encountered errors — review changes manually"
-        fi
-    else
-        if ! command -v claude &>/dev/null; then
-            warn "claude CLI not found — skipping release group validation"
-        else
-            warn "Prompt file not found at $PROMPT_FILE — skipping"
-        fi
-    fi
+    command -v claude &>/dev/null || die "claude CLI is required for release group validation"
+    [[ -d "$SMG_DIR" ]] || die "smg repo not found at $SMG_DIR — required for trash guide scraper"
+
+    step "Building trash guide scraper"
+    TRASH_SCRAPER_BIN="$(mktemp /tmp/scrape-trash-guides.XXXXXX)"
+    (cd "$SMG_DIR" && go build -o "$TRASH_SCRAPER_BIN" ./cmd/scrape-trash-guides) 2>&1 \
+        || die "Failed to build trash guide scraper"
+    ok "Trash guide scraper built"
+
+    TRASH_SCRAPER_OUTPUT="$(mktemp /tmp/trash-guides-output.XXXXXX.json)"
+    step "Starting trash guide scraper (background)"
+    "$TRASH_SCRAPER_BIN" -o "$TRASH_SCRAPER_OUTPUT" &
+    TRASH_SCRAPER_PID=$!
 fi
 
 step "Running web and Rust validation in parallel"
@@ -250,6 +249,43 @@ if [[ "$VALIDATION_FAILED" == true ]]; then
 fi
 
 ok "Parallel validation passed"
+
+# ── Release group database validation (Claude agent) ─────────────────────────
+PROMPT_FILE="$REPO_ROOT/scripts/prompts/validate-release-data.md"
+if $CLAUDE_VALIDATION_DUE; then
+    step "Waiting for trash guide scraper"
+    if ! wait "$TRASH_SCRAPER_PID"; then
+        rm -f "$TRASH_SCRAPER_BIN" "$TRASH_SCRAPER_OUTPUT" 2>/dev/null
+        die "Trash guide scraper failed"
+    fi
+    [[ -s "$TRASH_SCRAPER_OUTPUT" ]] || {
+        rm -f "$TRASH_SCRAPER_BIN" "$TRASH_SCRAPER_OUTPUT" 2>/dev/null
+        die "Trash guide scraper produced empty output"
+    }
+    ok "Trash guide scraper complete ($(wc -c < "$TRASH_SCRAPER_OUTPUT" | tr -d ' ') bytes)"
+
+    step "Spawning Claude to validate release group data"
+    COMBINED_PROMPT="$(mktemp /tmp/validate-release-prompt.XXXXXX.md)"
+    cat "$PROMPT_FILE" > "$COMBINED_PROMPT"
+    printf '\n\n<trash-guides-json>\n' >> "$COMBINED_PROMPT"
+    cat "$TRASH_SCRAPER_OUTPUT" >> "$COMBINED_PROMPT"
+    printf '\n</trash-guides-json>\n' >> "$COMBINED_PROMPT"
+
+    if CLAUDECODE= claude -p "$(cat "$COMBINED_PROMPT")" \
+        --model claude-opus-4-6 \
+        --max-turns 30 \
+        --allowedTools "Read,Edit,Write,Glob,Grep,Bash(cargo nextest*),Bash(ls*)" \
+        2>&1; then
+        mkdir -p "$(dirname "$CLAUDE_VALIDATION_STAMP")"
+        date -u "+%Y-%m-%dT%H:%M:%S%z" > "$CLAUDE_VALIDATION_STAMP"
+        ok "Release group validation complete"
+    else
+        rm -f "$TRASH_SCRAPER_BIN" "$TRASH_SCRAPER_OUTPUT" "$COMBINED_PROMPT" 2>/dev/null
+        die "Release group validation failed"
+    fi
+
+    rm -f "$TRASH_SCRAPER_BIN" "$TRASH_SCRAPER_OUTPUT" "$COMBINED_PROMPT" 2>/dev/null
+fi
 
 # ── Bump all workspace crate versions ──────────────────────────────────────────
 step "Updating all workspace crate versions to $NEXT_VERSION"

@@ -3,31 +3,40 @@
 You are validating and updating the scryer release group database before a release.
 The database is at `crates/scryer-application/src/release_group_db.rs`.
 
+## Data Source
+
+A `<trash-guides-json>` block is appended below containing all relevant TRaSH Guides
+custom format files pre-scraped from GitHub. Parse this JSON directly.
+Do NOT attempt to fetch anything from the web.
+
+The JSON structure is:
+```json
+{
+  "scraped_at": "2026-03-14T...",
+  "radarr": { "web-tier-01": { CF JSON ... }, "web-tier-02": { ... }, ... },
+  "sonarr": { "web-tier-01": { CF JSON ... }, "web-tier-02": { ... }, ... }
+}
+```
+
+Each CF JSON object has a `"specifications"` array. Entries with
+`"implementation": "ReleaseGroupSpecification"` contain group names in the `"name"` field.
+Entries with `"implementation": "ReleaseTitleSpecification"` are title-based patterns (for LQ).
+
+Group names appear in both radarr and sonarr — deduplicate across both.
+
 ## Your Task
 
-1. **Research current group tiers** from these authoritative sources:
-   - TRaSH Guides GitHub: `github.com/TRaSH-Guides/Guides` under `docs/json/radarr/cf/` and `docs/json/sonarr/cf/`
-     - Files: `web-tier-01.json`, `web-tier-02.json`, `web-tier-03.json`
-     - Files: `uhd-bluray-tier-01.json`, `uhd-bluray-tier-02.json`, `uhd-bluray-tier-03.json`
-     - Files: `hd-bluray-tier-01.json`, `hd-bluray-tier-02.json`, `hd-bluray-tier-03.json`
-     - Files: `remux-tier-01.json`, `remux-tier-02.json`, `remux-tier-03.json`
-     - Files: `lq.json`, `lq-release-title.json`, `bad-dual-groups.json`
-     - Anime: `anime-bd-tier-01.json` through `anime-bd-tier-08.json`, `anime-web-tier-01.json` through `anime-web-tier-06.json`, `anime-lq-groups.json`
-   - Each JSON file has `"conditions"` with regex patterns containing group names separated by `|`
-   - SeaDex (sneedex.moe) for anime group quality rankings
-
+1. **Extract group names** from the pre-scraped JSON for each tier/source category
 2. **Compare with current database** — identify:
    - Groups that TRaSH added since last update (add them)
    - Groups that TRaSH removed (remove them)
    - Groups that changed tiers (update them)
    - New banned/LQ groups (add them)
-
 3. **Update the database file** — edit `crates/scryer-application/src/release_group_db.rs`:
    - Add new groups using the `group!()` macro
    - Remove groups no longer in TRaSH guides
    - Update tier assignments that changed
    - Keep existing structure and comments
-
 4. **Run tests** to verify:
    ```bash
    cargo nextest run -p scryer-application release_group_db
