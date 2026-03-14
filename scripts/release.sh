@@ -181,7 +181,7 @@ CLAUDE_VALIDATION_DUE=true
 
 if [[ -f "$CLAUDE_VALIDATION_STAMP" ]]; then
     LAST_RUN="$(cat "$CLAUDE_VALIDATION_STAMP")"
-    LAST_EPOCH="$(date -j -f "%Y-%m-%dT%H:%M:%S" "${LAST_RUN%%[-+]*}" "+%s" 2>/dev/null || echo 0)"
+    LAST_EPOCH="$(date -j -f "%Y-%m-%dT%H:%M:%S" "${LAST_RUN:0:19}" "+%s" 2>/dev/null || echo 0)"
     NOW_EPOCH="$(date "+%s")"
     ELAPSED=$(( NOW_EPOCH - LAST_EPOCH ))
     DAYS_AGO=$(( ELAPSED / 86400 ))
