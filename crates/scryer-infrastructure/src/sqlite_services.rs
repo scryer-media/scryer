@@ -2,7 +2,9 @@ use scryer_application::{
     AppError, AppResult, QualityProfile, ReleaseDownloadAttemptOutcome,
     ReleaseDownloadFailureSignature, TitleReleaseBlocklistEntry,
 };
-use scryer_domain::{BlocklistEntry, DownloadClientConfig, Episode, ImportRecord, TitleHistoryRecord};
+use scryer_domain::{
+    BlocklistEntry, DownloadClientConfig, Episode, ImportRecord, TitleHistoryRecord,
+};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::commands::{spawn_db_command_worker, DbCommand};

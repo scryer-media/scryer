@@ -463,13 +463,16 @@ async fn process_job_snapshot(
             "weaver: newly completed downloads detected via WS subscription"
         );
 
-        let processed = scryer_application::try_import_completed_downloads(app, actor, &items).await;
+        let processed =
+            scryer_application::try_import_completed_downloads(app, actor, &items).await;
 
         tracing::debug!(
             processed_count = processed.len(),
-            deferred_count = newly_completed.len() - newly_completed.iter()
-                .filter(|i| processed.contains(&i.download_client_item_id))
-                .count(),
+            deferred_count = newly_completed.len()
+                - newly_completed
+                    .iter()
+                    .filter(|i| processed.contains(&i.download_client_item_id))
+                    .count(),
             "weaver: import attempt complete — deferred items will be retried on next snapshot"
         );
 

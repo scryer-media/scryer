@@ -13,14 +13,14 @@ use scryer_domain::{BlocklistEntry, TitleHistoryEventType, TitleHistoryRecord};
 
 use crate::{
     AppError, AppResult, BlocklistRepository, DownloadSubmission, DownloadSubmissionRepository,
-    FileImporter, HousekeepingRepository, ImportRepository, IndexerQueryStats,
-    IndexerStatsTracker, MediaFileRepository, NewBlocklistEntry, NewTitleHistoryEvent,
-    NotificationChannelRepository, NotificationSubscriptionRepository, PendingRelease,
-    PendingReleaseRepository, PluginInstallationRepository, ReleaseDecision, RuleSetRepository,
-    SettingsRepository, SystemInfoProvider, TitleHistoryFilter, TitleHistoryPage,
-    TitleHistoryRepository, TitleImageBlob, TitleImageKind, TitleImageProcessor,
-    TitleImageReplacement, TitleImageRepository, TitleImageSyncTask, TitleMediaFile,
-    TitleMediaSizeSummary, WantedItem, WantedItemRepository,
+    FileImporter, HousekeepingRepository, ImportRepository, IndexerQueryStats, IndexerStatsTracker,
+    MediaFileRepository, NewBlocklistEntry, NewTitleHistoryEvent, NotificationChannelRepository,
+    NotificationSubscriptionRepository, PendingRelease, PendingReleaseRepository,
+    PluginInstallationRepository, ReleaseDecision, RuleSetRepository, SettingsRepository,
+    SystemInfoProvider, TitleHistoryFilter, TitleHistoryPage, TitleHistoryRepository,
+    TitleImageBlob, TitleImageKind, TitleImageProcessor, TitleImageReplacement,
+    TitleImageRepository, TitleImageSyncTask, TitleMediaFile, TitleMediaSizeSummary, WantedItem,
+    WantedItemRepository,
 };
 
 #[derive(Default)]
@@ -588,12 +588,22 @@ impl TitleHistoryRepository for NullTitleHistoryRepository {
         Ok(String::new())
     }
     async fn list_history(&self, _: &TitleHistoryFilter) -> AppResult<TitleHistoryPage> {
-        Ok(TitleHistoryPage { records: vec![], total_count: 0 })
+        Ok(TitleHistoryPage {
+            records: vec![],
+            total_count: 0,
+        })
     }
     async fn list_for_title(
-        &self, _: &str, _: Option<&[TitleHistoryEventType]>, _: usize, _: usize,
+        &self,
+        _: &str,
+        _: Option<&[TitleHistoryEventType]>,
+        _: usize,
+        _: usize,
     ) -> AppResult<TitleHistoryPage> {
-        Ok(TitleHistoryPage { records: vec![], total_count: 0 })
+        Ok(TitleHistoryPage {
+            records: vec![],
+            total_count: 0,
+        })
     }
     async fn list_for_episode(&self, _: &str, _: usize) -> AppResult<Vec<TitleHistoryRecord>> {
         Ok(vec![])

@@ -986,10 +986,8 @@ impl AppUseCase {
                         for key in anime_movie_identity_keys(movie) {
                             if let Some(linked_episodes) = mapping_episode_links.get(&key) {
                                 for (season_num, episode_num) in linked_episodes {
-                                    interstitial_episode_lookup.insert(
-                                        (*season_num, *episode_num),
-                                        existing_id.clone(),
-                                    );
+                                    interstitial_episode_lookup
+                                        .insert((*season_num, *episode_num), existing_id.clone());
                                 }
                             }
                         }
@@ -1957,10 +1955,17 @@ impl AppUseCase {
         {
             let mut data = HashMap::new();
             data.insert("file_path".into(), serde_json::json!(&media_file.file_path));
-            data.insert("size_bytes".into(), serde_json::json!(media_file.size_bytes));
+            data.insert(
+                "size_bytes".into(),
+                serde_json::json!(media_file.size_bytes),
+            );
             data.insert(
                 "reason".into(),
-                serde_json::json!(if delete_from_disk { "manual_disk" } else { "manual_db_only" }),
+                serde_json::json!(if delete_from_disk {
+                    "manual_disk"
+                } else {
+                    "manual_db_only"
+                }),
             );
             let _ = self
                 .services

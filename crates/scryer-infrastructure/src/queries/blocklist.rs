@@ -96,10 +96,7 @@ pub(crate) async fn list_blocklist_all_query(
     Ok((rows, total))
 }
 
-pub(crate) async fn delete_blocklist_entry_query(
-    pool: &SqlitePool,
-    id: &str,
-) -> AppResult<()> {
+pub(crate) async fn delete_blocklist_entry_query(pool: &SqlitePool, id: &str) -> AppResult<()> {
     sqlx::query("DELETE FROM blocklist WHERE id = ?")
         .bind(id)
         .execute(pool)

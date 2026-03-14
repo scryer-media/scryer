@@ -371,7 +371,10 @@ impl AppServices {
                     if let Some(ref sr) = result.skip_reason {
                         data.insert("skip_reason".into(), serde_json::json!(sr.as_str()));
                     }
-                    data.insert("decision".into(), serde_json::json!(result.decision.as_str()));
+                    data.insert(
+                        "decision".into(),
+                        serde_json::json!(result.decision.as_str()),
+                    );
                     if let Some(sz) = result.file_size_bytes {
                         data.insert("size_bytes".into(), serde_json::json!(sz));
                     }
@@ -394,10 +397,7 @@ impl AppServices {
         Ok(())
     }
 
-    pub async fn record_title_history(
-        &self,
-        event: NewTitleHistoryEvent,
-    ) -> AppResult<String> {
+    pub async fn record_title_history(&self, event: NewTitleHistoryEvent) -> AppResult<String> {
         let id = self.title_history.record_event(&event).await?;
         let _ = self.import_history_broadcast.send(());
         Ok(id)
@@ -954,10 +954,7 @@ pub trait TitleHistoryRepository: Send + Sync {
         limit: usize,
     ) -> AppResult<Vec<TitleHistoryRecord>>;
 
-    async fn find_by_download_id(
-        &self,
-        download_id: &str,
-    ) -> AppResult<Vec<TitleHistoryRecord>>;
+    async fn find_by_download_id(&self, download_id: &str) -> AppResult<Vec<TitleHistoryRecord>>;
 
     async fn delete_for_title(&self, title_id: &str) -> AppResult<()>;
 }
@@ -977,21 +974,13 @@ pub struct NewBlocklistEntry {
 pub trait BlocklistRepository: Send + Sync {
     async fn add(&self, entry: &NewBlocklistEntry) -> AppResult<String>;
 
-    async fn list_for_title(
-        &self,
-        title_id: &str,
-        limit: usize,
-    ) -> AppResult<Vec<BlocklistEntry>>;
+    async fn list_for_title(&self, title_id: &str, limit: usize) -> AppResult<Vec<BlocklistEntry>>;
 
     async fn list_all(&self, limit: usize, offset: usize) -> AppResult<(Vec<BlocklistEntry>, i64)>;
 
     async fn remove(&self, id: &str) -> AppResult<()>;
 
-    async fn is_blocklisted(
-        &self,
-        title_id: &str,
-        source_title: &str,
-    ) -> AppResult<bool>;
+    async fn is_blocklisted(&self, title_id: &str, source_title: &str) -> AppResult<bool>;
 
     async fn delete_for_title(&self, title_id: &str) -> AppResult<()>;
 }

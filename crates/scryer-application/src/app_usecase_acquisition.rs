@@ -1267,8 +1267,15 @@ async fn process_single_wanted_item(
             {
                 let mut data = HashMap::new();
                 data.insert("indexer".into(), serde_json::json!(&best.source));
-                data.insert("download_client".into(), serde_json::json!(&grab.client_type));
-                if let Some(rg) = best.parsed_release_metadata.as_ref().and_then(|m| m.release_group.as_ref()) {
+                data.insert(
+                    "download_client".into(),
+                    serde_json::json!(&grab.client_type),
+                );
+                if let Some(rg) = best
+                    .parsed_release_metadata
+                    .as_ref()
+                    .and_then(|m| m.release_group.as_ref())
+                {
                     data.insert("release_group".into(), serde_json::json!(rg));
                 }
                 if let Some(sz) = best.size_bytes {
@@ -1292,7 +1299,11 @@ async fn process_single_wanted_item(
                         collection_id: None,
                         event_type: TitleHistoryEventType::Grabbed,
                         source_title: source_title.clone(),
-                        quality: best.parsed_release_metadata.as_ref().and_then(|m| m.quality.as_ref()).map(|q| q.to_string()),
+                        quality: best
+                            .parsed_release_metadata
+                            .as_ref()
+                            .and_then(|m| m.quality.as_ref())
+                            .map(|q| q.to_string()),
                         download_id: Some(grab.job_id.clone()),
                         data,
                     })

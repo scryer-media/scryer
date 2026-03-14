@@ -1980,8 +1980,9 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     offset,
                     reply,
                 } => {
-                    let type_strs: Option<Vec<&str>> =
-                        event_types.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
+                    let type_strs: Option<Vec<&str>> = event_types
+                        .as_ref()
+                        .map(|v| v.iter().map(|s| s.as_str()).collect());
                     let res = th_queries::list_title_history_query(
                         &pool,
                         type_strs.as_deref(),
@@ -2004,8 +2005,9 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     offset,
                     reply,
                 } => {
-                    let type_strs: Option<Vec<&str>> =
-                        event_types.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
+                    let type_strs: Option<Vec<&str>> = event_types
+                        .as_ref()
+                        .map(|v| v.iter().map(|s| s.as_str()).collect());
                     let res = th_queries::list_title_history_for_title_query(
                         &pool,
                         &title_id,
@@ -2025,25 +2027,17 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     limit,
                     reply,
                 } => {
-                    let res = th_queries::list_title_history_for_episode_query(
-                        &pool,
-                        &episode_id,
-                        limit,
-                    )
-                    .await
-                    .map(|rows| rows.into_iter().map(th_row_to_record).collect());
+                    let res =
+                        th_queries::list_title_history_for_episode_query(&pool, &episode_id, limit)
+                            .await
+                            .map(|rows| rows.into_iter().map(th_row_to_record).collect());
                     let _ = reply.send(res);
                 }
-                DbCommand::FindTitleHistoryByDownloadId {
-                    download_id,
-                    reply,
-                } => {
-                    let res = th_queries::find_title_history_by_download_id_query(
-                        &pool,
-                        &download_id,
-                    )
-                    .await
-                    .map(|rows| rows.into_iter().map(th_row_to_record).collect());
+                DbCommand::FindTitleHistoryByDownloadId { download_id, reply } => {
+                    let res =
+                        th_queries::find_title_history_by_download_id_query(&pool, &download_id)
+                            .await
+                            .map(|rows| rows.into_iter().map(th_row_to_record).collect());
                     let _ = reply.send(res);
                 }
                 DbCommand::DeleteTitleHistoryForTitle { title_id, reply } => {
@@ -2081,11 +2075,10 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     limit,
                     reply,
                 } => {
-                    let res = blocklist_queries::list_blocklist_for_title_query(
-                        &pool, &title_id, limit,
-                    )
-                    .await
-                    .map(|rows| rows.into_iter().map(bl_row_to_entry).collect());
+                    let res =
+                        blocklist_queries::list_blocklist_for_title_query(&pool, &title_id, limit)
+                            .await
+                            .map(|rows| rows.into_iter().map(bl_row_to_entry).collect());
                     let _ = reply.send(res);
                 }
                 DbCommand::ListBlocklistAll {
@@ -2093,13 +2086,12 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     offset,
                     reply,
                 } => {
-                    let res =
-                        blocklist_queries::list_blocklist_all_query(&pool, limit, offset)
-                            .await
-                            .map(|(rows, total)| {
-                                let entries = rows.into_iter().map(bl_row_to_entry).collect();
-                                (entries, total)
-                            });
+                    let res = blocklist_queries::list_blocklist_all_query(&pool, limit, offset)
+                        .await
+                        .map(|(rows, total)| {
+                            let entries = rows.into_iter().map(bl_row_to_entry).collect();
+                            (entries, total)
+                        });
                     let _ = reply.send(res);
                 }
                 DbCommand::DeleteBlocklistEntry { id, reply } => {
@@ -2118,8 +2110,7 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 }
                 DbCommand::DeleteBlocklistForTitle { title_id, reply } => {
                     let _ = reply.send(
-                        blocklist_queries::delete_blocklist_for_title_query(&pool, &title_id)
-                            .await,
+                        blocklist_queries::delete_blocklist_for_title_query(&pool, &title_id).await,
                     );
                 }
             }

@@ -1704,7 +1704,10 @@ impl TitleHistoryRepository for SqliteServices {
         let data_json = if event.data.is_empty() {
             None
         } else {
-            Some(serde_json::to_string(&event.data).map_err(|e| AppError::Repository(e.to_string()))?)
+            Some(
+                serde_json::to_string(&event.data)
+                    .map_err(|e| AppError::Repository(e.to_string()))?,
+            )
         };
         self.insert_title_history_event(
             event.title_id.clone(),
@@ -1721,7 +1724,10 @@ impl TitleHistoryRepository for SqliteServices {
 
     async fn list_history(&self, filter: &TitleHistoryFilter) -> AppResult<TitleHistoryPage> {
         let event_types = filter.event_types.as_ref().map(|types| {
-            types.iter().map(|t| t.as_str().to_string()).collect::<Vec<_>>()
+            types
+                .iter()
+                .map(|t| t.as_str().to_string())
+                .collect::<Vec<_>>()
         });
         let (records, total_count) = self
             .list_title_history(
@@ -1732,7 +1738,10 @@ impl TitleHistoryRepository for SqliteServices {
                 filter.offset,
             )
             .await?;
-        Ok(TitleHistoryPage { records, total_count })
+        Ok(TitleHistoryPage {
+            records,
+            total_count,
+        })
     }
 
     async fn list_for_title(
@@ -1743,12 +1752,18 @@ impl TitleHistoryRepository for SqliteServices {
         offset: usize,
     ) -> AppResult<TitleHistoryPage> {
         let type_strings = event_types.map(|types| {
-            types.iter().map(|t| t.as_str().to_string()).collect::<Vec<_>>()
+            types
+                .iter()
+                .map(|t| t.as_str().to_string())
+                .collect::<Vec<_>>()
         });
         let (records, total_count) = self
             .list_title_history_for_title(title_id, type_strings, limit, offset)
             .await?;
-        Ok(TitleHistoryPage { records, total_count })
+        Ok(TitleHistoryPage {
+            records,
+            total_count,
+        })
     }
 
     async fn list_for_episode(
@@ -1759,10 +1774,7 @@ impl TitleHistoryRepository for SqliteServices {
         self.list_title_history_for_episode(episode_id, limit).await
     }
 
-    async fn find_by_download_id(
-        &self,
-        download_id: &str,
-    ) -> AppResult<Vec<TitleHistoryRecord>> {
+    async fn find_by_download_id(&self, download_id: &str) -> AppResult<Vec<TitleHistoryRecord>> {
         self.find_title_history_by_download_id(download_id).await
     }
 
@@ -1777,7 +1789,10 @@ impl BlocklistRepository for SqliteServices {
         let data_json = if entry.data.is_empty() {
             None
         } else {
-            Some(serde_json::to_string(&entry.data).map_err(|e| AppError::Repository(e.to_string()))?)
+            Some(
+                serde_json::to_string(&entry.data)
+                    .map_err(|e| AppError::Repository(e.to_string()))?,
+            )
         };
         self.insert_blocklist_entry(
             entry.title_id.clone(),
@@ -1791,19 +1806,11 @@ impl BlocklistRepository for SqliteServices {
         .await
     }
 
-    async fn list_for_title(
-        &self,
-        title_id: &str,
-        limit: usize,
-    ) -> AppResult<Vec<BlocklistEntry>> {
+    async fn list_for_title(&self, title_id: &str, limit: usize) -> AppResult<Vec<BlocklistEntry>> {
         self.list_blocklist_for_title(title_id, limit).await
     }
 
-    async fn list_all(
-        &self,
-        limit: usize,
-        offset: usize,
-    ) -> AppResult<(Vec<BlocklistEntry>, i64)> {
+    async fn list_all(&self, limit: usize, offset: usize) -> AppResult<(Vec<BlocklistEntry>, i64)> {
         self.list_blocklist_all(limit, offset).await
     }
 
