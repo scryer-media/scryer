@@ -10,7 +10,9 @@ import { wsClient } from "@/lib/graphql/ws-client";
  */
 export function useImportHistorySubscription(onChanged: () => void) {
   const onChangedRef = useRef(onChanged);
-  onChangedRef.current = onChanged;
+  useEffect(() => {
+    onChangedRef.current = onChanged;
+  });
 
   const unsubRef = useRef<(() => void) | null>(null);
   const teardownTimer = useRef<ReturnType<typeof setTimeout> | null>(null);

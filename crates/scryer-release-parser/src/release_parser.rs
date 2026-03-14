@@ -208,8 +208,7 @@ fn parse_episode_fragment(fragment: &str) -> Vec<u32> {
             let ver_start = idx + 1;
             if ver_start < bytes.len() && bytes[ver_start].is_ascii_digit() {
                 let ver_end = ver_start + 1;
-                let at_boundary =
-                    ver_end >= bytes.len() || !bytes[ver_end].is_ascii_digit();
+                let at_boundary = ver_end >= bytes.len() || !bytes[ver_end].is_ascii_digit();
                 if at_boundary {
                     let ver = bytes[ver_start] - b'0';
                     if (2..=9).contains(&ver) {

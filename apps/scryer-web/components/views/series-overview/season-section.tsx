@@ -268,7 +268,7 @@ export function SeasonSection({
         </TabsContent>
       </Tabs>
     ),
-    [collection, onEpisodeTabChange, onQueueFromEpisodeSearch, onRunEpisodeSearch, releaseBlocklistEntries, t],
+    [collection, onDeleteFile, onEpisodeTabChange, onQueueFromEpisodeSearch, onRunEpisodeSearch, releaseBlocklistEntries, t],
   );
 
   return (

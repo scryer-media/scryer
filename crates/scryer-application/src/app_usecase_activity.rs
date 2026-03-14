@@ -67,10 +67,7 @@ impl AppUseCase {
         Ok(self.services.activity_event_broadcast.subscribe())
     }
 
-    pub fn subscribe_import_history(
-        &self,
-        actor: &User,
-    ) -> AppResult<broadcast::Receiver<()>> {
+    pub fn subscribe_import_history(&self, actor: &User) -> AppResult<broadcast::Receiver<()>> {
         require(actor, &Entitlement::ViewHistory)?;
         Ok(self.services.import_history_broadcast.subscribe())
     }

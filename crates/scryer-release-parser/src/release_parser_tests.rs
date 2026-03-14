@@ -1464,9 +1464,7 @@ fn no_anime_version_for_normal_release() {
 
 #[test]
 fn version_suffix_not_parsed_as_second_episode() {
-    let p = parse_release_metadata(
-        "Kimetsu no Yaiba S05E01v2 1080p WEBRip AAC2 0 x265-EA",
-    );
+    let p = parse_release_metadata("Kimetsu no Yaiba S05E01v2 1080p WEBRip AAC2 0 x265-EA");
     let ep = p.episode.as_ref().expect("should parse episode");
     assert_eq!(ep.season, Some(5));
     assert_eq!(ep.episode_numbers, vec![1]);
@@ -1475,9 +1473,7 @@ fn version_suffix_not_parsed_as_second_episode() {
 
 #[test]
 fn version_suffix_with_episode_range() {
-    let p = parse_release_metadata(
-        "[SubGroup] Anime Title S01E01-E03V2 [1080p]",
-    );
+    let p = parse_release_metadata("[SubGroup] Anime Title S01E01-E03V2 [1080p]");
     let ep = p.episode.as_ref().expect("should parse episode");
     assert_eq!(ep.episode_numbers, vec![1, 2, 3]);
     assert_eq!(p.anime_version, Some(2));

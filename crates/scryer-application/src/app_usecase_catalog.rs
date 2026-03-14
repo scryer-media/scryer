@@ -1813,10 +1813,7 @@ impl AppUseCase {
                 let manifest = crate::recycle_bin::RecycleManifest {
                     recycled_at: chrono::Utc::now().to_rfc3339(),
                     original_path: file_path.clone(),
-                    size_bytes: fs::metadata(&file_path)
-                        .await
-                        .map(|m| m.len())
-                        .unwrap_or(0),
+                    size_bytes: fs::metadata(&file_path).await.map(|m| m.len()).unwrap_or(0),
                     title_id: Some(media_file.title_id.clone()),
                     reason: "file_deleted".to_string(),
                 };
