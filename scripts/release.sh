@@ -17,6 +17,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRYER_CRATE_TOML="$REPO_ROOT/crates/scryer/Cargo.toml"
 WEB_DIR="$REPO_ROOT/apps/scryer-web"
+KEEP_RELEASES=4  # keep this many old releases; after new release → 5 total
 
 # ── Colors ─────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -171,26 +172,52 @@ run_rust_validation() {
     ok "Clippy passed"
 }
 
-# ── Release group database validation (AI-assisted) ──────────────────────────
+# ── Release group database validation (AI-assisted, monthly) ─────────────────
 step "Validating release group database"
 
-# PROMPT_FILE="$REPO_ROOT/scripts/prompts/validate-release-data.md"
-# if [[ -f "$PROMPT_FILE" ]] && command -v claude &>/dev/null; then
-#     echo "   Spawning Claude to validate release group data..."
-#     claude -p "$(cat "$PROMPT_FILE")" \
-#         --model claude-opus-4-6 \
-#         --max-turns 30 \
-#         --allowedTools "Read,Edit,Write,Glob,Grep,Bash(cargo nextest*),Bash(ls*),WebFetch,WebSearch" \
-#         2>&1 || warn "Release group validation encountered errors — review changes manually"
-#     ok "Release group validation complete"
-# else
-#     if ! command -v claude &>/dev/null; then
-#         warn "claude CLI not found — skipping release group validation"
-#     else
-#         warn "Prompt file not found at $PROMPT_FILE — skipping"
-#     fi
-# fi
-warn "Claude release group validation temporarily disabled — skipping"
+CLAUDE_VALIDATION_STAMP="$REPO_ROOT/.claude/release-validation-timestamp"
+CLAUDE_VALIDATION_INTERVAL=$((30 * 86400))  # 30 days in seconds
+CLAUDE_VALIDATION_DUE=true
+
+if [[ -f "$CLAUDE_VALIDATION_STAMP" ]]; then
+    LAST_RUN="$(cat "$CLAUDE_VALIDATION_STAMP")"
+    LAST_EPOCH="$(date -j -f "%Y-%m-%dT%H:%M:%S" "${LAST_RUN%%[-+]*}" "+%s" 2>/dev/null || echo 0)"
+    NOW_EPOCH="$(date "+%s")"
+    ELAPSED=$(( NOW_EPOCH - LAST_EPOCH ))
+    DAYS_AGO=$(( ELAPSED / 86400 ))
+    if [[ $ELAPSED -lt $CLAUDE_VALIDATION_INTERVAL ]]; then
+        CLAUDE_VALIDATION_DUE=false
+        ok "Last validated ${DAYS_AGO}d ago — skipping (runs monthly)"
+    else
+        echo "   Last validated ${DAYS_AGO}d ago — due for re-validation"
+    fi
+else
+    echo "   No previous validation found — running"
+fi
+
+PROMPT_FILE="$REPO_ROOT/scripts/prompts/validate-release-data.md"
+if $CLAUDE_VALIDATION_DUE; then
+    if [[ -f "$PROMPT_FILE" ]] && command -v claude &>/dev/null; then
+        echo "   Spawning Claude to validate release group data..."
+        if CLAUDECODE= claude -p "$(cat "$PROMPT_FILE")" \
+            --model claude-opus-4-6 \
+            --max-turns 30 \
+            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(cargo nextest*),Bash(ls*),WebFetch,WebSearch" \
+            2>&1; then
+            mkdir -p "$(dirname "$CLAUDE_VALIDATION_STAMP")"
+            date -u "+%Y-%m-%dT%H:%M:%S%z" > "$CLAUDE_VALIDATION_STAMP"
+            ok "Release group validation complete"
+        else
+            warn "Release group validation encountered errors — review changes manually"
+        fi
+    else
+        if ! command -v claude &>/dev/null; then
+            warn "claude CLI not found — skipping release group validation"
+        else
+            warn "Prompt file not found at $PROMPT_FILE — skipping"
+        fi
+    fi
+fi
 
 step "Running web and Rust validation in parallel"
 
@@ -288,6 +315,88 @@ if [[ ${#CHANGED_FILES[@]} -gt 0 ]]; then
     ok "Committed: ${CHANGED_FILES[*]##*/}"
 else
     ok "Nothing to commit"
+fi
+
+# ── Prune old releases and artifacts ──────────────────────────────────────────
+step "Pruning old releases and artifacts (keeping $KEEP_RELEASES most recent)"
+
+RELEASES_TO_DELETE=()
+while IFS=$'\t' read -r TAG_COL _REST; do
+    RELEASES_TO_DELETE+=("$TAG_COL")
+done < <(gh release list --limit 100 --json tagName,publishedAt --jq '
+    sort_by(.publishedAt) | reverse | .['"$KEEP_RELEASES"':] | .[] |
+    [.tagName] | @tsv
+')
+
+if [[ ${#RELEASES_TO_DELETE[@]} -gt 0 ]]; then
+    for rel_tag in "${RELEASES_TO_DELETE[@]}"; do
+        echo "   deleting release: $rel_tag"
+        gh release delete "$rel_tag" --yes 2>&1 || warn "failed to delete release $rel_tag"
+    done
+    ok "Deleted ${#RELEASES_TO_DELETE[@]} old release(s)"
+else
+    ok "No old releases to prune"
+fi
+
+KEEP_TAGS=()
+while IFS= read -r kept_tag; do
+    KEEP_TAGS+=("$kept_tag")
+done < <(gh release list --limit 100 --json tagName,publishedAt --jq '
+    sort_by(.publishedAt) | reverse | .[:'$KEEP_RELEASES'] | .[].tagName
+')
+
+ARTIFACTS_DELETED=0
+while IFS=$'\t' read -r ART_ID ART_BRANCH; do
+    KEEP=false
+    for kept_tag in "${KEEP_TAGS[@]}"; do
+        if [[ "$ART_BRANCH" == "$kept_tag" ]]; then
+            KEEP=true
+            break
+        fi
+    done
+    if ! $KEEP; then
+        gh api -X DELETE "repos/{owner}/{repo}/actions/artifacts/$ART_ID" 2>/dev/null || true
+        ARTIFACTS_DELETED=$((ARTIFACTS_DELETED + 1))
+    fi
+done < <(gh api repos/{owner}/{repo}/actions/artifacts --paginate --jq '
+    .artifacts[] | [(.id | tostring), .workflow_run.head_branch] | @tsv
+')
+
+if [[ $ARTIFACTS_DELETED -gt 0 ]]; then
+    ok "Deleted $ARTIFACTS_DELETED old artifact(s)"
+else
+    ok "No old artifacts to prune"
+fi
+
+# Prune old GHCR container images (keep versions matching kept releases)
+GHCR_PACKAGE="scryer"
+IMAGES_DELETED=0
+while IFS=$'\t' read -r VID VTAGS; do
+    KEEP=false
+    for kept_tag in "${KEEP_TAGS[@]}"; do
+        # Scryer tags are "scryer-v0.8.3" → GHCR version tag is "0.8.3"
+        STRIPPED="${kept_tag#scryer-v}"
+        if echo "$VTAGS" | grep -qF "$STRIPPED"; then
+            KEEP=true
+            break
+        fi
+        if echo "$VTAGS" | grep -qw "latest"; then
+            KEEP=true
+            break
+        fi
+    done
+    if ! $KEEP; then
+        gh api -X DELETE "/orgs/scryer-media/packages/container/$GHCR_PACKAGE/versions/$VID" 2>/dev/null || true
+        IMAGES_DELETED=$((IMAGES_DELETED + 1))
+    fi
+done < <(gh api "/orgs/scryer-media/packages/container/$GHCR_PACKAGE/versions?per_page=100" --paginate --jq '
+    .[] | [(.id | tostring), (.metadata.container.tags | join(","))] | @tsv
+' 2>/dev/null || true)
+
+if [[ $IMAGES_DELETED -gt 0 ]]; then
+    ok "Deleted $IMAGES_DELETED old container image(s) from ghcr.io/scryer-media/$GHCR_PACKAGE"
+else
+    ok "No old container images to prune"
 fi
 
 # ── Create signed tag ──────────────────────────────────────────────────────────

@@ -493,10 +493,27 @@ async fn bootstrap_application(
     );
     services.metadata_gateway = metadata_gateway.clone();
 
-    // Fire-and-forget: warm up SMG enrollment so the mTLS client is ready before
-    // the first real metadata query, rather than paying the cost at query time.
+    // Warm up SMG enrollment so the mTLS client is ready before the first real
+    // metadata query, and check for version incompatibility.
     tokio::spawn(async move {
-        metadata_gateway.warm_enrollment().await;
+        if let Some(incompat) = metadata_gateway.warm_enrollment().await {
+            let env = if std::path::Path::new("/.dockerenv").exists() {
+                "docker"
+            } else {
+                "binary"
+            };
+            tracing::error!(
+                minimum_version = %incompat.minimum_version,
+                your_version = %incompat.your_version,
+                "INCOMPATIBLE VERSION: {}",
+                incompat.message
+            );
+            if env == "docker" {
+                tracing::error!("To upgrade, pull the latest image and restart:\n  docker pull ghcr.io/scryer-media/scryer:latest\n  docker compose up -d");
+            } else {
+                tracing::error!("Download the latest release from:\n  https://github.com/scryer-media/scryer/releases/latest");
+            }
+        }
     });
 
     services.library_scanner = library_scanner;

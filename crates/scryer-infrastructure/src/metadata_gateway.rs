@@ -305,6 +305,7 @@ pub struct MetadataGatewayClient {
     db: crate::SqliteServices,
     mtls_state: tokio::sync::RwLock<MtlsState>,
     last_reenrollment: tokio::sync::Mutex<Option<Instant>>,
+    version_incompatible: tokio::sync::Mutex<Option<smg_enrollment::VersionIncompatible>>,
     search_hash: String,
     search_rich_hash: String,
     search_multi_hash: String,
@@ -362,6 +363,7 @@ impl MetadataGatewayClient {
             registration_url,
             enrollment_config,
             last_reenrollment: tokio::sync::Mutex::new(None),
+            version_incompatible: tokio::sync::Mutex::new(None),
             db,
             mtls_state: tokio::sync::RwLock::new(MtlsState::NotAttempted),
             search_hash,
@@ -457,7 +459,16 @@ impl MetadataGatewayClient {
             registration_secret,
             self.enrollment_config.ca_cert.as_deref(),
         )
-        .await?;
+        .await
+        .map_err(|e| {
+            if let smg_enrollment::EnrollmentError::VersionIncompatible(ref v) = e {
+                // Store for warm_enrollment to pick up — use try_lock to avoid blocking
+                if let Ok(mut guard) = self.version_incompatible.try_lock() {
+                    *guard = Some(v.clone());
+                }
+            }
+            format!("{e}")
+        })?;
 
         let identity = smg_enrollment::build_mtls_identity(&state)?;
         let ca_cert = smg_enrollment::build_ca_certificate(&state)?;
@@ -508,8 +519,9 @@ impl MetadataGatewayClient {
     /// Eagerly trigger enrollment in a background task so the mTLS client is ready before
     /// the first real metadata query arrives. Call this once after construction; it is
     /// safe to call concurrently with any other method.
-    pub async fn warm_enrollment(&self) {
+    pub async fn warm_enrollment(&self) -> Option<smg_enrollment::VersionIncompatible> {
         let _ = self.get_http_client().await;
+        self.version_incompatible.lock().await.clone()
     }
 
     /// Execute a GraphQL query using APQ (Automatic Persisted Queries).

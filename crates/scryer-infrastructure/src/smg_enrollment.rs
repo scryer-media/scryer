@@ -5,6 +5,34 @@ use tracing::info;
 const SETTINGS_SCOPE_SYSTEM: &str = "system";
 const RENEWAL_THRESHOLD_DAYS: i64 = 30;
 
+/// Returned when SMG rejects registration due to version incompatibility.
+#[derive(Debug, Clone)]
+pub struct VersionIncompatible {
+    pub minimum_version: String,
+    pub your_version: String,
+    pub message: String,
+}
+
+/// Errors that can occur during SMG enrollment.
+#[derive(Debug)]
+pub enum EnrollmentError {
+    VersionIncompatible(VersionIncompatible),
+    Other(String),
+}
+
+impl std::fmt::Display for EnrollmentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::VersionIncompatible(v) => write!(
+                f,
+                "version incompatible: minimum={}, yours={}, message={}",
+                v.minimum_version, v.your_version, v.message
+            ),
+            Self::Other(s) => f.write_str(s),
+        }
+    }
+}
+
 /// Cached enrollment state for the current Scryer instance.
 pub struct EnrollmentState {
     pub instance_id: String,
@@ -61,11 +89,19 @@ pub async fn ensure_enrolled(
     registration_url: &str,
     registration_secret: &str,
     ca_cert_override: Option<&str>,
-) -> Result<EnrollmentState, String> {
-    let key = load_setting(db, "smg.client_key").await?;
-    let cert = load_setting(db, "smg.client_cert").await?;
-    let expires_str = load_setting(db, "smg.cert_expires_at").await?;
-    let ca_cert = load_setting(db, "smg.ca_cert").await?;
+) -> Result<EnrollmentState, EnrollmentError> {
+    let key = load_setting(db, "smg.client_key")
+        .await
+        .map_err(EnrollmentError::Other)?;
+    let cert = load_setting(db, "smg.client_cert")
+        .await
+        .map_err(EnrollmentError::Other)?;
+    let expires_str = load_setting(db, "smg.cert_expires_at")
+        .await
+        .map_err(EnrollmentError::Other)?;
+    let ca_cert = load_setting(db, "smg.ca_cert")
+        .await
+        .map_err(EnrollmentError::Other)?;
 
     if let (Some(key), Some(cert), Some(expires_str), Some(ca_cert)) =
         (key, cert, expires_str, ca_cert)
@@ -73,7 +109,9 @@ pub async fn ensure_enrolled(
         if let Ok(expires_at) = expires_str.parse::<DateTime<Utc>>() {
             let days_remaining = (expires_at - Utc::now()).num_days();
             if days_remaining > RENEWAL_THRESHOLD_DAYS {
-                let instance_id = ensure_instance_id(db).await?;
+                let instance_id = ensure_instance_id(db)
+                    .await
+                    .map_err(EnrollmentError::Other)?;
                 let ca_cn = extract_pem_cn(&ca_cert).unwrap_or_default();
                 let cert_cn = extract_pem_cn(&cert).unwrap_or_default();
                 info!(
@@ -96,7 +134,9 @@ pub async fn ensure_enrolled(
         }
     }
 
-    let instance_id = ensure_instance_id(db).await?;
+    let instance_id = ensure_instance_id(db)
+        .await
+        .map_err(EnrollmentError::Other)?;
     enroll_with_smg(
         db,
         &instance_id,
@@ -113,10 +153,10 @@ async fn enroll_with_smg(
     registration_url: &str,
     registration_secret: &str,
     ca_cert_override: Option<&str>,
-) -> Result<EnrollmentState, String> {
+) -> Result<EnrollmentState, EnrollmentError> {
     // Generate EC P-256 keypair
     let key_pair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
-        .map_err(|e| format!("failed to generate EC P-256 keypair: {e}"))?;
+        .map_err(|e| EnrollmentError::Other(format!("failed to generate EC P-256 keypair: {e}")))?;
     let private_key_pem = key_pair.serialize_pem();
 
     // Create CSR with CN=instance_id, O="scryer"
@@ -131,21 +171,21 @@ async fn enroll_with_smg(
 
     let csr = params
         .serialize_request(&key_pair)
-        .map_err(|e| format!("failed to create CSR: {e}"))?;
+        .map_err(|e| EnrollmentError::Other(format!("failed to create CSR: {e}")))?;
     let csr_pem = csr
         .pem()
-        .map_err(|e| format!("failed to serialize CSR to PEM: {e}"))?;
+        .map_err(|e| EnrollmentError::Other(format!("failed to serialize CSR to PEM: {e}")))?;
 
     // POST to SMG registration endpoint
     let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30));
     if let Some(ca_pem) = ca_cert_override {
         let cert = reqwest::Certificate::from_pem(ca_pem.as_bytes())
-            .map_err(|e| format!("failed to parse SCRYER_SMG_CA_CERT: {e}"))?;
+            .map_err(|e| EnrollmentError::Other(format!("failed to parse SCRYER_SMG_CA_CERT: {e}")))?;
         builder = builder.add_root_certificate(cert);
     }
     let http = builder
         .build()
-        .map_err(|e| format!("failed to build HTTP client for enrollment: {e}"))?;
+        .map_err(|e| EnrollmentError::Other(format!("failed to build HTTP client for enrollment: {e}")))?;
 
     let response = http
         .post(registration_url)
@@ -156,31 +196,68 @@ async fn enroll_with_smg(
         }))
         .send()
         .await
-        .map_err(|e| format!("SMG registration request failed: {e}"))?;
+        .map_err(|e| EnrollmentError::Other(format!("SMG registration request failed: {e}")))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("SMG registration failed (HTTP {status}): {body}"));
+
+        // Check for structured version incompatibility response (HTTP 422)
+        if status.as_u16() == 422 {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
+                if parsed.get("error").and_then(|v| v.as_str()) == Some("version_incompatible") {
+                    return Err(EnrollmentError::VersionIncompatible(VersionIncompatible {
+                        minimum_version: parsed
+                            .get("minimum_version")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string(),
+                        your_version: parsed
+                            .get("your_version")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string(),
+                        message: parsed
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    }));
+                }
+            }
+        }
+
+        return Err(EnrollmentError::Other(format!(
+            "SMG registration failed (HTTP {status}): {body}"
+        )));
     }
 
     let reg: RegisterResponse = response
         .json()
         .await
-        .map_err(|e| format!("failed to parse SMG registration response: {e}"))?;
+        .map_err(|e| EnrollmentError::Other(format!("failed to parse SMG registration response: {e}")))?;
 
     let expires_at = reg
         .expires_at
         .parse::<DateTime<Utc>>()
-        .map_err(|e| format!("invalid expires_at in registration response: {e}"))?;
+        .map_err(|e| EnrollmentError::Other(format!("invalid expires_at in registration response: {e}")))?;
 
-    validate_certificate(&reg.certificate, instance_id)?;
+    validate_certificate(&reg.certificate, instance_id)
+        .map_err(EnrollmentError::Other)?;
 
     // Persist all enrollment data (smg.client_key is sensitive → auto-encrypted by DB layer)
-    persist_setting(db, "smg.client_key", &private_key_pem).await?;
-    persist_setting(db, "smg.client_cert", &reg.certificate).await?;
-    persist_setting(db, "smg.cert_expires_at", &reg.expires_at).await?;
-    persist_setting(db, "smg.ca_cert", &reg.ca_certificate).await?;
+    persist_setting(db, "smg.client_key", &private_key_pem)
+        .await
+        .map_err(EnrollmentError::Other)?;
+    persist_setting(db, "smg.client_cert", &reg.certificate)
+        .await
+        .map_err(EnrollmentError::Other)?;
+    persist_setting(db, "smg.cert_expires_at", &reg.expires_at)
+        .await
+        .map_err(EnrollmentError::Other)?;
+    persist_setting(db, "smg.ca_cert", &reg.ca_certificate)
+        .await
+        .map_err(EnrollmentError::Other)?;
 
     let ca_cn = extract_pem_cn(&reg.ca_certificate).unwrap_or_default();
     let cert_issuer = extract_pem_issuer_cn(&reg.certificate).unwrap_or_default();
