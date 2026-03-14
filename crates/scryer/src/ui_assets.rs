@@ -449,9 +449,22 @@ pub(crate) async fn serve_index_html(dist_dir: &Path, head_only: bool) -> Respon
 fn render_index_html(index_html: &[u8]) -> Vec<u8> {
     let base_path = BasePath::from_env();
     let graphql_url = base_path.join("/graphql");
+    let ui_root = base_path.ui_root();
+
+    // Inject a <base> tag so the browser resolves relative asset URLs (./assets/app.js,
+    // ./manifest.json, etc.) against the UI root rather than the current page path.
+    // Without this, deep SPA routes like /scryer/series/123 cause the browser to resolve
+    // ./assets/app.js as /scryer/series/assets/app.js → 404.
+    let base_tag = format!(r#"<base href="{ui_root}" />"#);
+
     String::from_utf8_lossy(index_html)
         .replace(BASE_PATH_PLACEHOLDER, base_path.basename())
         .replace(GRAPHQL_URL_PLACEHOLDER, &graphql_url)
+        .replacen(
+            r#"<meta charset="UTF-8" />"#,
+            &format!("<meta charset=\"UTF-8\" />\n    {base_tag}"),
+            1,
+        )
         .into_bytes()
 }
 

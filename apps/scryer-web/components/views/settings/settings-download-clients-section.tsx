@@ -174,22 +174,22 @@ export type SettingsDownloadClientsSectionProps = {
 const DOWNLOAD_CLIENT_TYPE_LOGO_OPTIONS: DownloadClientTypeLogoOption[] = [
   {
     value: "nzbget",
-    iconSrc: "/download-clients/nzbget.svg",
+    iconSrc: "download-clients/nzbget.svg",
     icon: NzbgetIcon,
   },
   {
     value: "sabnzbd",
-    iconSrc: "/download-clients/sabnzbd.svg",
+    iconSrc: "download-clients/sabnzbd.svg",
     icon: SabnzbdIcon,
   },
   {
     value: "weaver",
-    iconSrc: "/download-clients/weaver.webp",
+    iconSrc: "download-clients/weaver.webp",
     icon: WeaverIcon,
   },
   {
     value: "qbittorrent",
-    iconSrc: "/download-clients/qbittorrent.svg",
+    iconSrc: "download-clients/qbittorrent.svg",
     icon: QBitTorrentIcon,
   },
 ];

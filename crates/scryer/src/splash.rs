@@ -259,7 +259,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prefixed_splash_router_redirects_root_to_ui_prefix() {
+    async fn prefixed_splash_router_does_not_handle_root() {
         let app = ready_splash_router(Router::new().route("/", get(|| async { StatusCode::OK })));
 
         let response = app
@@ -272,14 +272,9 @@ mod tests {
             .await
             .expect("response");
 
-        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
-        assert_eq!(
-            response
-                .headers()
-                .get(header::LOCATION)
-                .and_then(|value| value.to_str().ok()),
-            Some("/scryer/")
-        );
+        // Root `/` should not be handled when a base path is configured — another
+        // service may live at `/` behind the same reverse proxy.
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

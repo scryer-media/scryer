@@ -1,7 +1,6 @@
 use axum::extract::Request;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect};
-use axum::routing::get;
 use axum::Router;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -95,13 +94,6 @@ pub(crate) fn mount_router(router: Router, base_path: &BasePath) -> Router {
     let target = ui_root.clone();
 
     Router::new()
-        .route(
-            "/",
-            get({
-                let ui_root = ui_root.clone();
-                move || async move { Redirect::temporary(&ui_root) }
-            }),
-        )
         .nest_service(&base_prefix, router)
         .layer(axum::middleware::from_fn(
             move |req: Request, next: Next| {
