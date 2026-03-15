@@ -331,7 +331,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     };
     void load();
     return () => { cancelled = true; };
-  }, [client]);
+  }, [client, title?.facet]);
 
   const handleUpdateTitleTags = React.useCallback(
     async (newTags: string[]) => {
