@@ -505,6 +505,7 @@ impl AppUseCase {
             overview: request.overview,
             poster_url: request.poster_url,
             banner_url: None,
+            background_url: None,
             sort_title: request.sort_title,
             slug: request.slug,
             imdb_id: None,

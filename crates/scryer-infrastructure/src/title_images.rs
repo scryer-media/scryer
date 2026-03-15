@@ -296,7 +296,7 @@ pub(crate) async fn apply_local_image_urls(
             match kind {
                 TitleImageKind::Poster => title.poster_url = Some(url.clone()),
                 TitleImageKind::Banner => title.banner_url = Some(url.clone()),
-                TitleImageKind::Fanart => {}
+                TitleImageKind::Fanart => title.background_url = Some(url.clone()),
             }
         }
     }
@@ -312,7 +312,7 @@ pub(crate) async fn list_titles_requiring_image_refresh_query(
     let (source_col, preferred_variant) = match kind {
         TitleImageKind::Poster => ("poster_url", "w500"),
         TitleImageKind::Banner => ("banner_url", "master"),
-        TitleImageKind::Fanart => ("fanart_url", "w1280"),
+        TitleImageKind::Fanart => ("background_url", "w1280"),
     };
 
     let sql = format!(

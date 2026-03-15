@@ -439,15 +439,15 @@ export function MovieOverviewView({
       />
 
       {/* title header with poster */}
-      <Card className="relative overflow-hidden">
-        {title.bannerUrl ? (
-          <img
-            src={title.bannerUrl}
-            alt=""
-            aria-hidden
-            className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-[0.07]"
-          />
-        ) : null}
+      <Card
+        className="relative overflow-hidden p-0"
+        style={(title.backgroundUrl ?? title.bannerUrl) ? {
+          backgroundImage: `linear-gradient(to top, var(--color-card) 0%, var(--color-card) 5%, color-mix(in srgb, var(--color-card) 80%, transparent), color-mix(in srgb, var(--color-card) 50%, transparent)), url(${title.backgroundUrl ?? title.bannerUrl})`,
+          backgroundSize: "cover",
+          backgroundPosition: "center top",
+          backgroundClip: "padding-box",
+        } : undefined}
+      >
         <CardContent className="relative p-4">
           <div className="flex flex-col gap-4 sm:flex-row sm:gap-5">
             <div className="mx-auto shrink-0 sm:mx-0">
@@ -583,7 +583,7 @@ export function MovieOverviewView({
               ) : null}
 
               {overview ? (
-                <p className="mt-4 text-sm leading-relaxed text-muted-foreground">{overview}</p>
+                <p className="mt-4 text-sm leading-relaxed text-foreground/70">{overview}</p>
               ) : null}
 
               <div className="mt-3 flex flex-wrap gap-3 text-sm">

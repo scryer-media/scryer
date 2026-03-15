@@ -3151,6 +3151,7 @@ mod tests {
                     overview: "A train mission.".into(),
                     poster_url: "https://example.com/mugen-train.jpg".into(),
                     banner_url: None,
+                    background_url: None,
                     language: "eng".into(),
                     runtime_minutes: 117,
                     sort_title: "Mugen Train".into(),

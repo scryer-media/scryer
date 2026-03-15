@@ -17,6 +17,7 @@ export type TitleRecord = {
   sizeBytes?: number | null;
   posterUrl?: string | null;
   bannerUrl?: string | null;
+  backgroundUrl?: string | null;
 };
 
 export type RootFolderOption = {

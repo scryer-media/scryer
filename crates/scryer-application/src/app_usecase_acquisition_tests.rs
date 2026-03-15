@@ -33,6 +33,7 @@ fn base_title() -> Title {
         overview: None,
         poster_url: None,
         banner_url: None,
+        background_url: None,
         sort_title: None,
         slug: None,
         imdb_id: None,

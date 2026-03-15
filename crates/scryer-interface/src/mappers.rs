@@ -284,6 +284,7 @@ pub(crate) fn from_title(title: Title) -> TitlePayload {
         overview: title.overview,
         poster_url: title.poster_url,
         banner_url: title.banner_url,
+        background_url: title.background_url,
         sort_title: title.sort_title,
         slug: title.slug,
         imdb_id: title.imdb_id,

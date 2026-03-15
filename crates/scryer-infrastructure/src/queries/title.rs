@@ -12,7 +12,7 @@ use scryer_application::TitleImageKind;
 
 const TITLE_COLUMNS: &str =
     "id, name, facet, monitored, tags, external_ids, created_by, created_at, \
-    year, overview, poster_url, banner_url, sort_title, slug, imdb_id, runtime_minutes, genres, \
+    year, overview, poster_url, banner_url, background_url, sort_title, slug, imdb_id, runtime_minutes, genres, \
     content_status, language, first_aired, network, studio, country, aliases, \
     metadata_language, metadata_fetched_at, min_availability, digital_release_date";
 
@@ -146,6 +146,7 @@ fn row_to_title(row: &sqlx::sqlite::SqliteRow) -> AppResult<Title> {
     let overview: Option<String> = row.try_get("overview").unwrap_or(None);
     let poster_url: Option<String> = row.try_get("poster_url").unwrap_or(None);
     let banner_url: Option<String> = row.try_get("banner_url").unwrap_or(None);
+    let background_url: Option<String> = row.try_get("background_url").unwrap_or(None);
     let sort_title: Option<String> = row.try_get("sort_title").unwrap_or(None);
     let slug: Option<String> = row.try_get("slug").unwrap_or(None);
     let imdb_id: Option<String> = row.try_get("imdb_id").unwrap_or(None);
@@ -186,6 +187,7 @@ fn row_to_title(row: &sqlx::sqlite::SqliteRow) -> AppResult<Title> {
         overview,
         poster_url,
         banner_url,
+        background_url,
         sort_title,
         slug,
         imdb_id,
@@ -1255,6 +1257,7 @@ pub(crate) async fn update_title_hydrated_metadata_query(
             overview = COALESCE(NULLIF(?, ''), overview),
             poster_url = COALESCE(NULLIF(?, ''), poster_url),
             banner_url = COALESCE(NULLIF(?, ''), banner_url),
+            background_url = COALESCE(NULLIF(?, ''), background_url),
             sort_title = COALESCE(NULLIF(?, ''), sort_title),
             slug = COALESCE(NULLIF(?, ''), slug),
             imdb_id = COALESCE(NULLIF(?, ''), imdb_id),
@@ -1276,6 +1279,7 @@ pub(crate) async fn update_title_hydrated_metadata_query(
     .bind(&metadata.overview)
     .bind(&metadata.poster_url)
     .bind(&metadata.banner_url)
+    .bind(&metadata.background_url)
     .bind(&metadata.sort_title)
     .bind(&metadata.slug)
     .bind(&metadata.imdb_id)

@@ -59,9 +59,6 @@ export default defineConfig({
             id.includes("/next-themes/")
           )
             return "vendor-ui";
-
-          // All first-party code → single app chunk.
-          if (!id.includes("node_modules")) return "app";
         },
       },
     },

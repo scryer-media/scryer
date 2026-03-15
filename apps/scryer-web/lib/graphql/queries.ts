@@ -13,6 +13,7 @@ export const titleDetailQuery = `query TitleDetail($id: String!) {
     overview
     posterUrl
     bannerUrl
+    backgroundUrl
     sortTitle
     slug
     imdbId
@@ -119,6 +120,7 @@ export const titleOverviewInitQuery = `query TitleOverviewInit($id: String!, $bl
     overview
     posterUrl
     bannerUrl
+    backgroundUrl
     sortTitle
     slug
     imdbId
