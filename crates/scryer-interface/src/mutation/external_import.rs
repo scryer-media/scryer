@@ -393,14 +393,15 @@ impl ExternalImportMutations {
             let mut base_url =
                 external_import::field_str(&idx.fields, "baseUrl").unwrap_or_default();
             let api_path = external_import::field_str(&idx.fields, "apiPath");
-            if let Some(path) = &api_path {
-                if !path.is_empty() && !base_url.is_empty() {
-                    base_url = format!(
-                        "{}/{}",
-                        base_url.trim_end_matches('/'),
-                        path.trim_start_matches('/')
-                    );
-                }
+            if let Some(path) = &api_path
+                && !path.is_empty()
+                && !base_url.is_empty()
+            {
+                base_url = format!(
+                    "{}/{}",
+                    base_url.trim_end_matches('/'),
+                    path.trim_start_matches('/')
+                );
             }
 
             let api_key = external_import::field_str(&idx.fields, "apiKey");

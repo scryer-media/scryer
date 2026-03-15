@@ -419,17 +419,17 @@ fn normalized_audio_codecs(release: &ParsedReleaseMetadata) -> Vec<String> {
     let mut codecs = Vec::<String>::new();
 
     for codec in &release.audio_codecs {
-        if let Some(normalized) = normalize_codec(Some(codec.as_str())) {
-            if !codecs.iter().any(|existing| existing == &normalized) {
-                codecs.push(normalized);
-            }
+        if let Some(normalized) = normalize_codec(Some(codec.as_str()))
+            && !codecs.iter().any(|existing| existing == &normalized)
+        {
+            codecs.push(normalized);
         }
     }
 
-    if codecs.is_empty() {
-        if let Some(normalized) = normalize_codec(release.audio.as_deref()) {
-            codecs.push(normalized);
-        }
+    if codecs.is_empty()
+        && let Some(normalized) = normalize_codec(release.audio.as_deref())
+    {
+        codecs.push(normalized);
     }
 
     codecs
@@ -777,20 +777,19 @@ pub fn evaluate_against_profile(
     }
 
     // ── SDR at 4K penalty ────────────────────────────────────────────────────
-    if let Some(ref quality) = release.quality {
-        if quality.to_ascii_uppercase().contains("2160")
-            && !release.detected_hdr
-            && weights.sdr_at_4k_penalty != 0
-        {
-            d.log("sdr_at_4k", weights.sdr_at_4k_penalty);
-        }
+    if let Some(ref quality) = release.quality
+        && quality.to_ascii_uppercase().contains("2160")
+        && !release.detected_hdr
+        && weights.sdr_at_4k_penalty != 0
+    {
+        d.log("sdr_at_4k", weights.sdr_at_4k_penalty);
     }
 
     // ── Anime-specific ───────────────────────────────────────────────────────
-    if let Some(ver) = release.anime_version {
-        if ver >= 2 {
-            d.log("anime_version_bonus", weights.anime_v2_bonus);
-        }
+    if let Some(ver) = release.anime_version
+        && ver >= 2
+    {
+        d.log("anime_version_bonus", weights.anime_v2_bonus);
     }
 
     // ── Release group reputation ─────────────────────────────────────────────
@@ -814,10 +813,11 @@ pub fn evaluate_against_profile(
     // Applied last so it considers all scoring factors above. Only blocks
     // releases that are otherwise allowed — already-blocked releases don't
     // need a second block entry.
-    if let Some(min_score) = c.min_score_to_grab {
-        if d.allowed && d.release_score < min_score {
-            d.log("score_below_minimum", BLOCK_SCORE);
-        }
+    if let Some(min_score) = c.min_score_to_grab
+        && d.allowed
+        && d.release_score < min_score
+    {
+        d.log("score_below_minimum", BLOCK_SCORE);
     }
 
     d
@@ -993,15 +993,15 @@ pub fn apply_size_scoring_for_category(
         expected_gib *= 0.8;
     }
 
-    if let Some(runtime) = runtime_minutes {
-        if runtime > 0 {
-            let baseline = match media_category {
-                MediaSizeCategory::Movie => 120.0,
-                MediaSizeCategory::Series => 45.0,
-                MediaSizeCategory::Anime => 24.0,
-            };
-            expected_gib *= (runtime as f64) / baseline;
-        }
+    if let Some(runtime) = runtime_minutes
+        && runtime > 0
+    {
+        let baseline = match media_category {
+            MediaSizeCategory::Movie => 120.0,
+            MediaSizeCategory::Series => 45.0,
+            MediaSizeCategory::Anime => 24.0,
+        };
+        expected_gib *= (runtime as f64) / baseline;
     }
 
     let ratio = size_gib / expected_gib.max(0.5);

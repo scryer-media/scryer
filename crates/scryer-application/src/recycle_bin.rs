@@ -48,14 +48,14 @@ pub async fn recycle_file(
 
     if !config.enabled {
         // Disabled: delete directly (current behaviour).
-        if let Err(err) = tokio::fs::remove_file(source_path).await {
-            if err.kind() != std::io::ErrorKind::NotFound {
-                return Err(AppError::Repository(format!(
-                    "failed to delete file {}: {}",
-                    source_path.display(),
-                    err
-                )));
-            }
+        if let Err(err) = tokio::fs::remove_file(source_path).await
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(AppError::Repository(format!(
+                "failed to delete file {}: {}",
+                source_path.display(),
+                err
+            )));
         }
         return Ok(None);
     }

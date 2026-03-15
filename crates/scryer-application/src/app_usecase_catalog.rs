@@ -209,10 +209,10 @@ fn anime_mapping_identity_keys(mapping: &AnimeMapping) -> Vec<String> {
     if let Some(tmdb_id) = mapping.themoviedb_id {
         keys.push(format!("tmdb:{tmdb_id}"));
     }
-    if mapping.global_media_type == "movie" {
-        if let Some(tvdb_id) = mapping.thetvdb_id {
-            keys.push(format!("tvdb:{tvdb_id}"));
-        }
+    if mapping.global_media_type == "movie"
+        && let Some(tvdb_id) = mapping.thetvdb_id
+    {
+        keys.push(format!("tvdb:{tvdb_id}"));
     }
     keys
 }
@@ -468,21 +468,19 @@ impl AppUseCase {
             .unwrap_or("/media");
 
         // Try the root_folders JSON array first.
-        if let Some(key) = root_folders_key {
-            if let Some(raw) = self
+        if let Some(key) = root_folders_key
+            && let Some(raw) = self
                 .read_setting_string_value_for_scope(super::SETTINGS_SCOPE_MEDIA, key, None)
                 .await?
+        {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty()
+                && trimmed != "[]"
+                && let Ok(entries) =
+                    serde_json::from_str::<Vec<scryer_domain::RootFolderEntry>>(trimmed)
+                && !entries.is_empty()
             {
-                let trimmed = raw.trim();
-                if !trimmed.is_empty() && trimmed != "[]" {
-                    if let Ok(entries) =
-                        serde_json::from_str::<Vec<scryer_domain::RootFolderEntry>>(trimmed)
-                    {
-                        if !entries.is_empty() {
-                            return Ok(entries);
-                        }
-                    }
-                }
+                return Ok(entries);
             }
         }
 
@@ -1141,33 +1139,30 @@ impl AppUseCase {
 
             // If this episode is routed to an interstitial collection, update the
             // collection label to the episode's name (once per collection).
-            if let Some(ref cid) = collection_id {
-                if interstitial_episode_lookup.contains_key(&(ep.season_number, ep.episode_number))
-                    && !ep.name.is_empty()
-                    && labeled_collections.insert(cid.clone())
-                {
-                    if let Err(err) = self
-                        .services
-                        .shows
-                        .update_collection(
-                            cid,
-                            None,
-                            None,
-                            Some(ep.name.clone()),
-                            None,
-                            None,
-                            None,
-                            None,
-                        )
-                        .await
-                    {
-                        warn!(
-                            collection_id = %cid,
-                            error = %err,
-                            "failed to update interstitial collection label"
-                        );
-                    }
-                }
+            if let Some(ref cid) = collection_id
+                && interstitial_episode_lookup.contains_key(&(ep.season_number, ep.episode_number))
+                && !ep.name.is_empty()
+                && labeled_collections.insert(cid.clone())
+                && let Err(err) = self
+                    .services
+                    .shows
+                    .update_collection(
+                        cid,
+                        None,
+                        None,
+                        Some(ep.name.clone()),
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+            {
+                warn!(
+                    collection_id = %cid,
+                    error = %err,
+                    "failed to update interstitial collection label"
+                );
             }
 
             let air_date = if ep.aired.is_empty() {
@@ -1832,20 +1827,19 @@ impl AppUseCase {
                             item.client_type.clone(),
                             item.download_client_item_id.clone(),
                         ));
-                    if matches_title {
-                        if let Err(err) = self
+                    if matches_title
+                        && let Err(err) = self
                             .services
                             .download_client
                             .delete_queue_item(&item.download_client_item_id, false)
                             .await
-                        {
-                            warn!(
-                                title_id = %id,
-                                download_item_id = %item.download_client_item_id,
-                                error = %err,
-                                "failed to cancel inflight download while deleting title"
-                            );
-                        }
+                    {
+                        warn!(
+                            title_id = %id,
+                            download_item_id = %item.download_client_item_id,
+                            error = %err,
+                            "failed to cancel inflight download while deleting title"
+                        );
                     }
                 }
             }
@@ -2208,20 +2202,20 @@ impl AppUseCase {
             ));
         }
 
-        if let Some(raw) = &collection_type {
-            if raw.trim().is_empty() {
-                return Err(AppError::Validation(
-                    "collection type cannot be empty".into(),
-                ));
-            }
+        if let Some(raw) = &collection_type
+            && raw.trim().is_empty()
+        {
+            return Err(AppError::Validation(
+                "collection type cannot be empty".into(),
+            ));
         }
 
-        if let Some(raw) = &collection_index {
-            if raw.trim().is_empty() {
-                return Err(AppError::Validation(
-                    "collection index cannot be empty".into(),
-                ));
-            }
+        if let Some(raw) = &collection_index
+            && raw.trim().is_empty()
+        {
+            return Err(AppError::Validation(
+                "collection index cannot be empty".into(),
+            ));
         }
 
         let collection = self
@@ -2346,10 +2340,10 @@ impl AppUseCase {
             ));
         }
 
-        if let Some(raw) = &episode_type {
-            if raw.trim().is_empty() {
-                return Err(AppError::Validation("episode type cannot be empty".into()));
-            }
+        if let Some(raw) = &episode_type
+            && raw.trim().is_empty()
+        {
+            return Err(AppError::Validation("episode type cannot be empty".into()));
         }
 
         let episode = self

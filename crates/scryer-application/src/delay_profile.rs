@@ -86,10 +86,10 @@ pub fn should_bypass_delay(profile: &DelayProfile, candidate_score: i32) -> bool
     if profile.delay_hours <= 0 {
         return true;
     }
-    if let Some(threshold) = profile.bypass_score_threshold {
-        if candidate_score >= threshold {
-            return true;
-        }
+    if let Some(threshold) = profile.bypass_score_threshold
+        && candidate_score >= threshold
+    {
+        return true;
     }
     false
 }

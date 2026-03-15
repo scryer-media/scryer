@@ -194,12 +194,12 @@ impl NzbgetDownloadClient {
         let version = version.to_string();
 
         // Validate minimum version (v12+ required for append API)
-        if let Some(major) = parse_nzbget_major_version(&version) {
-            if major < 12 {
-                return Err(AppError::Repository(format!(
-                    "nzbget {version} is not supported; version 12.0+ is required"
-                )));
-            }
+        if let Some(major) = parse_nzbget_major_version(&version)
+            && major < 12
+        {
+            return Err(AppError::Repository(format!(
+                "nzbget {version} is not supported; version 12.0+ is required"
+            )));
         }
 
         // Check KeepHistory config — if 0, completed downloads are immediately
@@ -218,17 +218,16 @@ impl NzbgetDownloadClient {
                             None
                         }
                     });
-                    if let Some(kh) = keep_history {
-                        if let Ok(kh_val) = kh.parse::<i64>() {
-                            if kh_val == 0 {
-                                return Err(AppError::Repository(
-                                    "nzbget KeepHistory is set to 0 — completed downloads are \
+                    if let Some(kh) = keep_history
+                        && let Ok(kh_val) = kh.parse::<i64>()
+                        && kh_val == 0
+                    {
+                        return Err(AppError::Repository(
+                            "nzbget KeepHistory is set to 0 — completed downloads are \
                                      immediately purged and cannot be auto-imported. Set \
                                      KeepHistory to at least 1 in NZBGet settings."
-                                        .into(),
-                                ));
-                            }
-                        }
+                                .into(),
+                        ));
                     }
                 }
             }
@@ -305,10 +304,9 @@ impl NzbgetDownloadClient {
         if let Some(params) = request_payload_for_log
             .get_mut("params")
             .and_then(Value::as_array_mut)
+            && params.len() > 1
         {
-            if params.len() > 1 {
-                params[1] = Value::String("<omitted base64 nzb content>".to_string());
-            }
+            params[1] = Value::String("<omitted base64 nzb content>".to_string());
         }
 
         let endpoint = self.endpoint();
@@ -637,21 +635,21 @@ impl NzbgetDownloadClient {
 
         // Global pause detection: when NZBGet's download queue is globally paused,
         // all non-completed items should show as Paused.
-        if !items.is_empty() {
-            if let Ok(status_result) = self.rpc_call("status", vec![]).await {
-                let download_paused = status_result
-                    .get("DownloadPaused")
-                    .or_else(|| status_result.get("downloadPaused"))
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                if download_paused {
-                    for item in &mut items {
-                        if matches!(
-                            item.state,
-                            DownloadQueueState::Queued | DownloadQueueState::Downloading
-                        ) {
-                            item.state = DownloadQueueState::Paused;
-                        }
+        if !items.is_empty()
+            && let Ok(status_result) = self.rpc_call("status", vec![]).await
+        {
+            let download_paused = status_result
+                .get("DownloadPaused")
+                .or_else(|| status_result.get("downloadPaused"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if download_paused {
+                for item in &mut items {
+                    if matches!(
+                        item.state,
+                        DownloadQueueState::Queued | DownloadQueueState::Downloading
+                    ) {
+                        item.state = DownloadQueueState::Paused;
                     }
                 }
             }
@@ -687,10 +685,10 @@ impl NzbgetDownloadClient {
                 let (state, attention_reason) = map_history_state(&status_upper, entry);
                 let history_ts =
                     extract_i64_value(entry.get("HistoryTime").or_else(|| entry.get("time")));
-                if let Some(ts) = history_ts {
-                    if ts < cutoff_ts {
-                        return None;
-                    }
+                if let Some(ts) = history_ts
+                    && ts < cutoff_ts
+                {
+                    return None;
                 }
 
                 let title_name = entry
@@ -927,10 +925,10 @@ impl DownloadClient for NzbgetDownloadClient {
 
                 let history_ts =
                     extract_i64_value(entry.get("HistoryTime").or_else(|| entry.get("time")));
-                if let Some(ts) = history_ts {
-                    if ts < cutoff_ts {
-                        return None;
-                    }
+                if let Some(ts) = history_ts
+                    && ts < cutoff_ts
+                {
+                    return None;
                 }
 
                 // FinalDir is where files end up after NZBGet's move step;
@@ -1122,10 +1120,10 @@ fn extract_postprocessing_stage_from_entry(
     ];
 
     for candidate in candidates.into_iter().flatten() {
-        if let Some(text) = candidate.as_str() {
-            if let Some(token) = find_nzbget_postprocessing_token(text) {
-                return Some(token.to_string());
-            }
+        if let Some(text) = candidate.as_str()
+            && let Some(token) = find_nzbget_postprocessing_token(text)
+        {
+            return Some(token.to_string());
         }
     }
 
@@ -1222,13 +1220,12 @@ fn extract_remaining_seconds_from_entry(entry: &serde_json::Map<String, Value>) 
             .or_else(|| entry.get("stageTimeSec")),
     );
     if let (Some(progress_permille), Some(stage_time_sec)) = (post_stage_progress, post_stage_time)
+        && progress_permille > 0.0
+        && stage_time_sec >= 0
     {
-        if progress_permille > 0.0 && stage_time_sec >= 0 {
-            let remaining = ((stage_time_sec as f64 / progress_permille)
-                * (1000.0 - progress_permille))
-                .round() as i64;
-            return Some(remaining.max(0));
-        }
+        let remaining = ((stage_time_sec as f64 / progress_permille) * (1000.0 - progress_permille))
+            .round() as i64;
+        return Some(remaining.max(0));
     }
 
     let total_seconds = extract_i64_value(
@@ -1245,10 +1242,11 @@ fn extract_remaining_seconds_from_entry(entry: &serde_json::Map<String, Value>) 
             .or_else(|| entry.get("StageTimeSec"))
             .or_else(|| entry.get("stageTimeSec")),
     );
-    if let (Some(total), Some(elapsed)) = (total_seconds, elapsed_seconds) {
-        if total > 0 && elapsed >= 0 {
-            return Some((total - elapsed).max(0));
-        }
+    if let (Some(total), Some(elapsed)) = (total_seconds, elapsed_seconds)
+        && total > 0
+        && elapsed >= 0
+    {
+        return Some((total - elapsed).max(0));
     }
 
     let progress = extract_postprocessing_progress_from_entry(entry)?;
@@ -1540,10 +1538,9 @@ fn derive_nzb_filename(
         if let Some(path_segment) = url.path_segments().and_then(|segments| {
             let mut segments = segments;
             segments.rfind(|segment| !segment.is_empty())
-        }) {
-            if path_segment.to_ascii_lowercase().ends_with(".nzb") {
-                return sanitize_nzb_name(path_segment);
-            }
+        }) && path_segment.to_ascii_lowercase().ends_with(".nzb")
+        {
+            return sanitize_nzb_name(path_segment);
         }
     }
 

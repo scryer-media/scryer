@@ -145,12 +145,12 @@ impl AppUseCase {
             .map(|value| value.trim().to_string())
             .and_then(|value| if value.is_empty() { None } else { Some(value) });
 
-        if let Some(value) = api_key_encrypted.as_deref() {
-            if value.len() < 8 {
-                return Err(AppError::Validation(
-                    "api key appears too short; provide a valid key".into(),
-                ));
-            }
+        if let Some(value) = api_key_encrypted.as_deref()
+            && value.len() < 8
+        {
+            return Err(AppError::Validation(
+                "api key appears too short; provide a valid key".into(),
+            ));
         }
 
         let config = IndexerConfig {
@@ -235,12 +235,12 @@ impl AppUseCase {
             .map(|value| value.trim().to_string())
             .and_then(|value| if value.is_empty() { None } else { Some(value) });
 
-        if let Some(value) = normalized_api_key.as_ref() {
-            if value.len() < 8 {
-                return Err(AppError::Validation(
-                    "api key appears too short; provide a valid key".into(),
-                ));
-            }
+        if let Some(value) = normalized_api_key.as_ref()
+            && value.len() < 8
+        {
+            return Err(AppError::Validation(
+                "api key appears too short; provide a valid key".into(),
+            ));
         }
 
         let updated = self
@@ -466,15 +466,13 @@ impl AppUseCase {
             {
                 item.import_status = Some(record.status);
                 // Extract error_message from result_json for visibility
-                if let Some(ref result_json) = record.result_json {
-                    if let Ok(result) =
+                if let Some(ref result_json) = record.result_json
+                    && let Ok(result) =
                         serde_json::from_str::<scryer_domain::ImportResult>(result_json)
-                    {
-                        if let Some(ref error_msg) = result.error_message {
-                            item.import_error_message = Some(error_msg.clone());
-                            item.attention_reason = Some(error_msg.clone());
-                        }
-                    }
+                    && let Some(ref error_msg) = result.error_message
+                {
+                    item.import_error_message = Some(error_msg.clone());
+                    item.attention_reason = Some(error_msg.clone());
                 }
             }
         }
@@ -565,16 +563,15 @@ impl AppUseCase {
 
         // If a title_id override is provided, inject it into the parameters
         let mut completed = completed.clone();
-        if let Some(title_id) = override_title_id {
-            if !completed
+        if let Some(title_id) = override_title_id
+            && !completed
                 .parameters
                 .iter()
                 .any(|(k, _)| k == "*scryer_title_id")
-            {
-                completed
-                    .parameters
-                    .push(("*scryer_title_id".to_string(), title_id.to_string()));
-            }
+        {
+            completed
+                .parameters
+                .push(("*scryer_title_id".to_string(), title_id.to_string()));
         }
 
         crate::app_usecase_import::import_completed_download(self, actor, &completed).await

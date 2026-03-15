@@ -53,10 +53,10 @@ struct RegisterResponse {
 pub async fn ensure_instance_id(db: &crate::SqliteServices) -> Result<String, String> {
     let existing = load_setting(db, "smg.instance_id").await?;
 
-    if let Some(id) = existing {
-        if !id.is_empty() {
-            return Ok(id);
-        }
+    if let Some(id) = existing
+        && !id.is_empty()
+    {
+        return Ok(id);
     }
 
     let instance_id = uuid::Uuid::new_v4().to_string();
@@ -105,33 +105,32 @@ pub async fn ensure_enrolled(
 
     if let (Some(key), Some(cert), Some(expires_str), Some(ca_cert)) =
         (key, cert, expires_str, ca_cert)
+        && let Ok(expires_at) = expires_str.parse::<DateTime<Utc>>()
     {
-        if let Ok(expires_at) = expires_str.parse::<DateTime<Utc>>() {
-            let days_remaining = (expires_at - Utc::now()).num_days();
-            if days_remaining > RENEWAL_THRESHOLD_DAYS {
-                let instance_id = ensure_instance_id(db)
-                    .await
-                    .map_err(EnrollmentError::Other)?;
-                let ca_cn = extract_pem_cn(&ca_cert).unwrap_or_default();
-                let cert_cn = extract_pem_cn(&cert).unwrap_or_default();
-                info!(
-                    %instance_id,
-                    days_remaining,
-                    %expires_at,
-                    cert_cn,
-                    ca_cn,
-                    "using cached SMG enrollment (skipping /api/register)"
-                );
-                return Ok(EnrollmentState {
-                    instance_id,
-                    client_key_pem: key,
-                    client_cert_pem: cert,
-                    ca_cert_pem: ca_cert,
-                    expires_at,
-                });
-            }
-            info!(days_remaining, "SMG cert expiring soon, re-enrolling");
+        let days_remaining = (expires_at - Utc::now()).num_days();
+        if days_remaining > RENEWAL_THRESHOLD_DAYS {
+            let instance_id = ensure_instance_id(db)
+                .await
+                .map_err(EnrollmentError::Other)?;
+            let ca_cn = extract_pem_cn(&ca_cert).unwrap_or_default();
+            let cert_cn = extract_pem_cn(&cert).unwrap_or_default();
+            info!(
+                %instance_id,
+                days_remaining,
+                %expires_at,
+                cert_cn,
+                ca_cn,
+                "using cached SMG enrollment (skipping /api/register)"
+            );
+            return Ok(EnrollmentState {
+                instance_id,
+                client_key_pem: key,
+                client_cert_pem: cert,
+                ca_cert_pem: ca_cert,
+                expires_at,
+            });
         }
+        info!(days_remaining, "SMG cert expiring soon, re-enrolling");
     }
 
     let instance_id = ensure_instance_id(db)
@@ -204,28 +203,27 @@ async fn enroll_with_smg(
         let body = response.text().await.unwrap_or_default();
 
         // Check for structured version incompatibility response (HTTP 422)
-        if status.as_u16() == 422 {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
-                if parsed.get("error").and_then(|v| v.as_str()) == Some("version_incompatible") {
-                    return Err(EnrollmentError::VersionIncompatible(VersionIncompatible {
-                        minimum_version: parsed
-                            .get("minimum_version")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown")
-                            .to_string(),
-                        your_version: parsed
-                            .get("your_version")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown")
-                            .to_string(),
-                        message: parsed
-                            .get("message")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                    }));
-                }
-            }
+        if status.as_u16() == 422
+            && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body)
+            && parsed.get("error").and_then(|v| v.as_str()) == Some("version_incompatible")
+        {
+            return Err(EnrollmentError::VersionIncompatible(VersionIncompatible {
+                minimum_version: parsed
+                    .get("minimum_version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string(),
+                your_version: parsed
+                    .get("your_version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string(),
+                message: parsed
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            }));
         }
 
         return Err(EnrollmentError::Other(format!(
@@ -391,24 +389,22 @@ fn parse_string_json(raw: &str) -> Option<String> {
 fn extract_pem_cn(pem_str: &str) -> Option<String> {
     let (_, pem) = x509_parser::pem::parse_x509_pem(pem_str.as_bytes()).ok()?;
     let (_, cert) = x509_parser::parse_x509_certificate(&pem.contents).ok()?;
-    let cn = cert
-        .subject()
+
+    cert.subject()
         .iter_common_name()
         .next()
         .and_then(|attr| attr.as_str().ok())
-        .map(|s| s.to_string());
-    cn
+        .map(|s| s.to_string())
 }
 
 /// Extract the Issuer CN from a PEM-encoded certificate for logging.
 fn extract_pem_issuer_cn(pem_str: &str) -> Option<String> {
     let (_, pem) = x509_parser::pem::parse_x509_pem(pem_str.as_bytes()).ok()?;
     let (_, cert) = x509_parser::parse_x509_certificate(&pem.contents).ok()?;
-    let cn = cert
-        .issuer()
+
+    cert.issuer()
         .iter_common_name()
         .next()
         .and_then(|attr| attr.as_str().ok())
-        .map(|s| s.to_string());
-    cn
+        .map(|s| s.to_string())
 }

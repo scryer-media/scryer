@@ -322,15 +322,15 @@ pub(crate) async fn apply_dev_seed(app: &AppUseCase, db: &SqliteServices) -> Res
         .map_err(|e| format!("failed to get admin user for seeding: {e}"))?;
 
     // Admin password
-    if let Some(admin) = &config.admin {
-        if !admin.password.is_empty() {
-            match app
-                .bootstrap_user_password(&actor.id, &admin.password)
-                .await
-            {
-                Ok(_) => tracing::info!("dev seed: admin password set"),
-                Err(e) => tracing::warn!(error = %e, "dev seed: failed to set admin password"),
-            }
+    if let Some(admin) = &config.admin
+        && !admin.password.is_empty()
+    {
+        match app
+            .bootstrap_user_password(&actor.id, &admin.password)
+            .await
+        {
+            Ok(_) => tracing::info!("dev seed: admin password set"),
+            Err(e) => tracing::warn!(error = %e, "dev seed: failed to set admin password"),
         }
     }
 

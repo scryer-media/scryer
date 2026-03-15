@@ -378,10 +378,10 @@ impl IndexerPluginProvider for DynamicPluginProvider {
         let cache_key = (config.id.clone(), config.updated_at.to_rfc3339());
 
         // Fast path: check cache first
-        if let Ok(cache) = self.client_cache.lock() {
-            if let Some(client) = cache.get(&cache_key) {
-                return Some(Arc::clone(client));
-            }
+        if let Ok(cache) = self.client_cache.lock()
+            && let Some(client) = cache.get(&cache_key)
+        {
+            return Some(Arc::clone(client));
         }
 
         // Slow path: compile WASM and cache the result
@@ -671,10 +671,10 @@ impl DownloadClientPluginProvider for DynamicDownloadClientPluginProvider {
     fn client_for_config(&self, config: &DownloadClientConfig) -> Option<Arc<dyn DownloadClient>> {
         let cache_key = (config.id.clone(), config.updated_at.to_rfc3339());
 
-        if let Ok(cache) = self.client_cache.lock() {
-            if let Some(client) = cache.get(&cache_key) {
-                return Some(Arc::clone(client));
-            }
+        if let Ok(cache) = self.client_cache.lock()
+            && let Some(client) = cache.get(&cache_key)
+        {
+            return Some(Arc::clone(client));
         }
 
         let guard = self
@@ -780,10 +780,10 @@ fn validate_descriptor_for_type(
         return false;
     }
 
-    if let Some(expected) = expected_type {
-        if descriptor.plugin_type != expected {
-            return false;
-        }
+    if let Some(expected) = expected_type
+        && descriptor.plugin_type != expected
+    {
+        return false;
     }
 
     true
@@ -998,19 +998,19 @@ fn apply_allowed_hosts(
     let mut hosts: Vec<String> = descriptor.allowed_hosts.clone();
 
     // Add hostname from base_url (indexer plugins)
-    if let Some(url_str) = base_url {
-        if let Some(host) = host_from_url(url_str) {
-            hosts.push(host);
-        }
+    if let Some(url_str) = base_url
+        && let Some(host) = host_from_url(url_str)
+    {
+        hosts.push(host);
     }
 
     // Add hostnames from config_json values that parse as URLs (notification plugins)
-    if let Some(json_str) = config_json {
-        if let Ok(map) = parse_config_json_entries(json_str) {
-            for value in map.values() {
-                if let Some(host) = host_from_url(value) {
-                    hosts.push(host);
-                }
+    if let Some(json_str) = config_json
+        && let Ok(map) = parse_config_json_entries(json_str)
+    {
+        for value in map.values() {
+            if let Some(host) = host_from_url(value) {
+                hosts.push(host);
             }
         }
     }
@@ -1244,10 +1244,10 @@ impl NotificationPluginProvider for DynamicNotificationPluginProvider {
     ) -> Option<Arc<dyn NotificationClient>> {
         let cache_key = (config.id.clone(), config.updated_at.to_rfc3339());
 
-        if let Ok(cache) = self.client_cache.lock() {
-            if let Some(client) = cache.get(&cache_key) {
-                return Some(Arc::clone(client));
-            }
+        if let Ok(cache) = self.client_cache.lock()
+            && let Some(client) = cache.get(&cache_key)
+        {
+            return Some(Arc::clone(client));
         }
 
         let guard = self

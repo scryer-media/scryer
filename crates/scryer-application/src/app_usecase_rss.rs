@@ -90,10 +90,10 @@ fn match_release_to_title<'a>(
     // Exact match first
     if let Some(matches) = lookup.get(&release_title) {
         // If the release has a year, prefer matching title with same year
-        if let Some(year) = parsed.year {
-            if let Some(m) = matches.iter().find(|m| m.year == Some(year as i32)) {
-                return Some(m);
-            }
+        if let Some(year) = parsed.year
+            && let Some(m) = matches.iter().find(|m| m.year == Some(year as i32))
+        {
+            return Some(m);
         }
         return matches.first();
     }
@@ -101,10 +101,10 @@ fn match_release_to_title<'a>(
     // Try with year stripped (release "Title 2024" → lookup "title")
     if let Some(year) = parsed.year {
         let year_str = format!(" {year}");
-        if let Some(without_year) = release_title.strip_suffix(&year_str) {
-            if let Some(matches) = lookup.get(without_year) {
-                return matches.first();
-            }
+        if let Some(without_year) = release_title.strip_suffix(&year_str)
+            && let Some(matches) = lookup.get(without_year)
+        {
+            return matches.first();
         }
     }
 
@@ -808,44 +808,43 @@ impl AppUseCase {
         // Check delay profile — hold release instead of grabbing immediately
         if let Some(dp) =
             crate::delay_profile::resolve_delay_profile(delay_profiles, &title.tags, &title.facet)
+            && !crate::delay_profile::should_bypass_delay(dp, candidate_score)
         {
-            if !crate::delay_profile::should_bypass_delay(dp, candidate_score) {
-                // Hold release as pending instead of grabbing
-                let scoring_json = best.quality_profile_decision.as_ref().map(|d| {
-                    serde_json::to_string(
-                        &d.scoring_log
-                            .iter()
-                            .map(|e| serde_json::json!({"code": e.code, "delta": e.delta}))
-                            .collect::<Vec<_>>(),
-                    )
-                    .unwrap_or_default()
-                });
-                self.insert_pending_release(
-                    wanted,
-                    title,
-                    &best.title,
-                    best.download_url.as_deref().or(best.link.as_deref()),
-                    best.source_kind,
-                    best.size_bytes,
-                    candidate_score,
-                    scoring_json,
-                    Some(best.source.as_str()),
-                    best.guid.as_deref(),
-                    dp.delay_hours,
+            // Hold release as pending instead of grabbing
+            let scoring_json = best.quality_profile_decision.as_ref().map(|d| {
+                serde_json::to_string(
+                    &d.scoring_log
+                        .iter()
+                        .map(|e| serde_json::json!({"code": e.code, "delta": e.delta}))
+                        .collect::<Vec<_>>(),
                 )
-                .await;
-                report.releases_held += 1;
-                return;
-            }
+                .unwrap_or_default()
+            });
+            self.insert_pending_release(
+                wanted,
+                title,
+                &best.title,
+                best.download_url.as_deref().or(best.link.as_deref()),
+                best.source_kind,
+                best.size_bytes,
+                candidate_score,
+                scoring_json,
+                Some(best.source.as_str()),
+                best.guid.as_deref(),
+                dp.delay_hours,
+            )
+            .await;
+            report.releases_held += 1;
+            return;
         }
 
         // Submit to download client
         let source_hint = best.download_url.clone().or_else(|| best.link.clone());
 
-        if let Some(url) = source_hint.as_deref() {
-            if !grabbed_urls.insert(url.to_string()) {
-                return; // Already submitted this cycle
-            }
+        if let Some(url) = source_hint.as_deref()
+            && !grabbed_urls.insert(url.to_string())
+        {
+            return; // Already submitted this cycle
         }
 
         let source_title = Some(best.title.clone());

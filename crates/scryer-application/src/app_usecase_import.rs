@@ -1755,26 +1755,26 @@ pub(crate) async fn resolve_target_episodes(
         }
     }
 
-    if episodes.is_empty() {
-        if let Some(absolute_episode) = ep_meta.absolute_episode {
-            let absolute_episode_str = absolute_episode.to_string();
-            match app
-                .services
-                .shows
-                .find_episode_by_title_and_absolute_number(&title.id, &absolute_episode_str)
-                .await
-            {
-                Ok(Some(episode)) => episodes.push(episode),
-                Ok(None) => {
-                    tracing::debug!(
-                        title_id = %title.id,
-                        absolute = absolute_episode,
-                        "no matching episode found by absolute number"
-                    );
-                }
-                Err(err) => {
-                    tracing::warn!(error = %err, "episode absolute lookup failed during import")
-                }
+    if episodes.is_empty()
+        && let Some(absolute_episode) = ep_meta.absolute_episode
+    {
+        let absolute_episode_str = absolute_episode.to_string();
+        match app
+            .services
+            .shows
+            .find_episode_by_title_and_absolute_number(&title.id, &absolute_episode_str)
+            .await
+        {
+            Ok(Some(episode)) => episodes.push(episode),
+            Ok(None) => {
+                tracing::debug!(
+                    title_id = %title.id,
+                    absolute = absolute_episode,
+                    "no matching episode found by absolute number"
+                );
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "episode absolute lookup failed during import")
             }
         }
     }
@@ -2069,27 +2069,27 @@ pub async fn preview_manual_import(
             }
 
             // Anime absolute fallback
-            if suggested_episode_id.is_none() {
-                if let Some(abs) = ep_meta.absolute_episode {
-                    let abs_str = abs.to_string();
-                    if let Ok(Some(episode)) = app
-                        .services
-                        .shows
-                        .find_episode_by_title_and_absolute_number(title_id, &abs_str)
-                        .await
-                    {
-                        let label = format!(
-                            "#{}{}",
-                            abs,
-                            episode
-                                .title
-                                .as_ref()
-                                .map(|t| format!(" - {}", t))
-                                .unwrap_or_default()
-                        );
-                        suggested_episode_id = Some(episode.id.clone());
-                        suggested_episode_label = Some(label);
-                    }
+            if suggested_episode_id.is_none()
+                && let Some(abs) = ep_meta.absolute_episode
+            {
+                let abs_str = abs.to_string();
+                if let Ok(Some(episode)) = app
+                    .services
+                    .shows
+                    .find_episode_by_title_and_absolute_number(title_id, &abs_str)
+                    .await
+                {
+                    let label = format!(
+                        "#{}{}",
+                        abs,
+                        episode
+                            .title
+                            .as_ref()
+                            .map(|t| format!(" - {}", t))
+                            .unwrap_or_default()
+                    );
+                    suggested_episode_id = Some(episode.id.clone());
+                    suggested_episode_label = Some(label);
                 }
             }
         }

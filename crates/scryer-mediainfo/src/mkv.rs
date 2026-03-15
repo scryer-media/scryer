@@ -107,10 +107,10 @@ pub(crate) fn parse_mkv(path: &Path) -> Result<RawContainer, MediaInfoError> {
     // matroska-demuxer 0.7 doesn't expose BlockAdditionMapping, so we scan
     // the raw file bytes for the BlockAddIDType element (0x41E7) with value
     // 0x6476 ("dv") and extract the adjacent BlockAddIDExtraData (0x41ED).
-    if let Some(dovi_config) = scan_mkv_dovi_config(path) {
-        if let Some(vt) = tracks.iter_mut().find(|t| t.kind == TrackKind::Video) {
-            vt.dovi_config = Some(dovi_config);
-        }
+    if let Some(dovi_config) = scan_mkv_dovi_config(path)
+        && let Some(vt) = tracks.iter_mut().find(|t| t.kind == TrackKind::Video)
+    {
+        vt.dovi_config = Some(dovi_config);
     }
 
     // -- per-track bitrate estimation ------------------------------------
@@ -187,10 +187,10 @@ fn estimate_bitrates<R: std::io::Read + std::io::Seek>(
         }
 
         // If we're past the sample window, stop.
-        if let Some(limit) = sample_limit_ts {
-            if frame.timestamp > limit {
-                break;
-            }
+        if let Some(limit) = sample_limit_ts
+            && frame.timestamp > limit
+        {
+            break;
         }
 
         if track_index.contains_key(&frame.track) {
@@ -201,16 +201,15 @@ fn estimate_bitrates<R: std::io::Read + std::io::Seek>(
         }
 
         // Check first HEVC video frame for HDR10+ SEI.
-        if !checked_hdr10plus {
-            if let (Some(hevc_num), Some(nal_len)) = (hevc_video_track_num, hevc_nal_len) {
-                if frame.track == hevc_num {
-                    checked_hdr10plus = true;
-                    if crate::codec::scan_hevc_frame_for_hdr10plus(&frame.data, nal_len) {
-                        if let Some(&idx) = track_index.get(&hevc_num) {
-                            tracks[idx].has_hdr10plus = true;
-                        }
-                    }
-                }
+        if !checked_hdr10plus
+            && let (Some(hevc_num), Some(nal_len)) = (hevc_video_track_num, hevc_nal_len)
+            && frame.track == hevc_num
+        {
+            checked_hdr10plus = true;
+            if crate::codec::scan_hevc_frame_for_hdr10plus(&frame.data, nal_len)
+                && let Some(&idx) = track_index.get(&hevc_num)
+            {
+                tracks[idx].has_hdr10plus = true;
             }
         }
     }

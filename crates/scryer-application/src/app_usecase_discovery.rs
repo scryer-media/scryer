@@ -260,14 +260,12 @@ impl AppUseCase {
                     }
                     // For absolute-numbered releases (common in anime), check
                     // against the known absolute episode number from TVDB
-                    if ep_meta.episode_numbers.is_empty() {
-                        if let (Some(parsed_abs), Some(wanted_abs)) =
+                    if ep_meta.episode_numbers.is_empty()
+                        && let (Some(parsed_abs), Some(wanted_abs)) =
                             (ep_meta.absolute_episode, absolute_episode)
-                        {
-                            if parsed_abs != wanted_abs {
-                                continue;
-                            }
-                        }
+                        && parsed_abs != wanted_abs
+                    {
+                        continue;
                     }
                 }
             }
@@ -701,22 +699,22 @@ pub(crate) fn is_release_blocklisted(
     failed_source_hints: &std::collections::HashSet<String>,
     failed_source_titles: &std::collections::HashSet<String>,
 ) -> bool {
-    if let Some(download_url) = normalize_release_attempt_hint(result.download_url.as_deref()) {
-        if failed_source_hints.contains(&download_url) {
-            return true;
-        }
+    if let Some(download_url) = normalize_release_attempt_hint(result.download_url.as_deref())
+        && failed_source_hints.contains(&download_url)
+    {
+        return true;
     }
 
-    if let Some(link) = normalize_release_attempt_hint(result.link.as_deref()) {
-        if failed_source_hints.contains(&link) {
-            return true;
-        }
+    if let Some(link) = normalize_release_attempt_hint(result.link.as_deref())
+        && failed_source_hints.contains(&link)
+    {
+        return true;
     }
 
-    if let Some(title) = normalize_release_attempt_title(Some(result.title.as_str())) {
-        if failed_source_titles.contains(&title) {
-            return true;
-        }
+    if let Some(title) = normalize_release_attempt_title(Some(result.title.as_str()))
+        && failed_source_titles.contains(&title)
+    {
+        return true;
     }
 
     false

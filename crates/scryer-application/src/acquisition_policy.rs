@@ -73,15 +73,15 @@ pub fn evaluate_upgrade(
     }
 
     // Check cooldown
-    if let Some(import_time_str) = last_import_at {
-        if let Ok(import_time) = DateTime::parse_from_rfc3339(import_time_str) {
-            let cooldown_end = import_time + Duration::hours(thresholds.upgrade_cooldown_hours);
-            if *now < cooldown_end.with_timezone(&Utc) {
-                if delta >= thresholds.forced_upgrade_delta_bypass {
-                    return UpgradeDecision::AcceptUpgrade;
-                }
-                return UpgradeDecision::RejectCooldown;
+    if let Some(import_time_str) = last_import_at
+        && let Ok(import_time) = DateTime::parse_from_rfc3339(import_time_str)
+    {
+        let cooldown_end = import_time + Duration::hours(thresholds.upgrade_cooldown_hours);
+        if *now < cooldown_end.with_timezone(&Utc) {
+            if delta >= thresholds.forced_upgrade_delta_bypass {
+                return UpgradeDecision::AcceptUpgrade;
             }
+            return UpgradeDecision::RejectCooldown;
         }
     }
 

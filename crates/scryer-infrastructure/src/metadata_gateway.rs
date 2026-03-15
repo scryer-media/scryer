@@ -43,10 +43,10 @@ impl ApqCache {
             self.map.insert(key, entry);
             return;
         }
-        if self.map.len() >= 1000 {
-            if let Some(oldest) = self.order.pop_front() {
-                self.map.remove(&oldest);
-            }
+        if self.map.len() >= 1000
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.map.remove(&oldest);
         }
         self.order.push_back(key.clone());
         self.map.insert(key, entry);
@@ -503,14 +503,14 @@ impl MetadataGatewayClient {
     /// Returns `true` if invalidation happened, `false` if still within cooldown.
     async fn invalidate_enrollment(&self) -> bool {
         let mut last = self.last_reenrollment.lock().await;
-        if let Some(prev) = *last {
-            if prev.elapsed() < REENROLLMENT_COOLDOWN {
-                debug!(
-                    cooldown_remaining_secs = (REENROLLMENT_COOLDOWN - prev.elapsed()).as_secs(),
-                    "skipping re-enrollment (cooldown active)"
-                );
-                return false;
-            }
+        if let Some(prev) = *last
+            && prev.elapsed() < REENROLLMENT_COOLDOWN
+        {
+            debug!(
+                cooldown_remaining_secs = (REENROLLMENT_COOLDOWN - prev.elapsed()).as_secs(),
+                "skipping re-enrollment (cooldown active)"
+            );
+            return false;
         }
         *last = Some(Instant::now());
         drop(last);
@@ -892,15 +892,15 @@ impl MetadataGatewayClient {
         let parsed: serde_json::Value = serde_json::from_str(body)
             .map_err(|e| AppError::Repository(format!("bulk metadata invalid JSON: {e}")))?;
 
-        if let Some(errors) = parsed.get("errors") {
-            if let Some(arr) = errors.as_array() {
-                for err in arr {
-                    let msg = err
-                        .get("message")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown");
-                    debug!("bulk metadata partial error: {msg}");
-                }
+        if let Some(errors) = parsed.get("errors")
+            && let Some(arr) = errors.as_array()
+        {
+            for err in arr {
+                let msg = err
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                debug!("bulk metadata partial error: {msg}");
             }
         }
 
@@ -1510,114 +1510,113 @@ impl MetadataGateway for MetadataGatewayClient {
                             },
                         );
                     }
-                } else if alias.starts_with('s') {
-                    if let Ok(series_result) = serde_json::from_value::<SeriesResult>(value.clone())
-                    {
-                        let s = series_result.series;
-                        series.insert(
-                            s.tvdb_id,
-                            SeriesMetadata {
-                                tvdb_id: s.tvdb_id,
-                                name: s.name,
-                                sort_name: s.sort_name,
-                                slug: s.slug,
-                                year: s.year,
-                                content_status: s.status,
-                                first_aired: s.first_aired,
-                                overview: s.overview,
-                                network: s.network,
-                                runtime_minutes: s.runtime_minutes,
-                                poster_url: s.poster_url,
-                                banner_url: pick_artwork_url(&s.artworks, "banner"),
-                                background_url: pick_artwork_url(&s.artworks, "background"),
-                                country: s.country,
-                                genres: s.genres,
-                                aliases: s.aliases,
-                                seasons: s
-                                    .seasons
-                                    .into_iter()
-                                    .map(|season| SeasonMetadata {
-                                        tvdb_id: season.tvdb_id,
-                                        number: season.number,
-                                        label: season.label,
-                                        episode_type: season.episode_type,
-                                    })
-                                    .collect(),
-                                episodes: s
-                                    .episodes
-                                    .into_iter()
-                                    .map(|ep| EpisodeMetadata {
-                                        tvdb_id: ep.tvdb_id,
-                                        episode_number: ep.episode_number,
-                                        name: ep.name,
-                                        aired: ep.aired,
-                                        runtime_minutes: ep.runtime_minutes,
-                                        is_filler: ep.is_filler,
-                                        is_recap: ep.is_recap,
-                                        overview: ep.overview,
-                                        absolute_number: ep.absolute_number,
-                                        season_number: ep.season_number,
-                                    })
-                                    .collect(),
-                                anime_mappings: s
-                                    .anime_mappings
-                                    .into_iter()
-                                    .map(|m| AnimeMapping {
-                                        mal_id: m.mal_id,
-                                        anilist_id: m.anilist_id,
-                                        anidb_id: m.anidb_id,
-                                        kitsu_id: m.kitsu_id,
-                                        thetvdb_id: m.thetvdb_id,
-                                        themoviedb_id: m.themoviedb_id,
-                                        alt_tvdb_id: m.alt_tvdb_id,
-                                        thetvdb_season: m.thetvdb_season,
-                                        score: m.score,
-                                        anime_media_type: m.anime_media_type.unwrap_or_default(),
-                                        global_media_type: m.global_media_type.unwrap_or_default(),
-                                        status: m.status.unwrap_or_default(),
-                                        episode_mappings: m
-                                            .episode_mappings
-                                            .into_iter()
-                                            .map(|e| AnimeEpisodeMapping {
-                                                tvdb_season: e.tvdb_season,
-                                                episode_start: e.episode_start,
-                                                episode_end: e.episode_end,
-                                            })
-                                            .collect(),
-                                    })
-                                    .collect(),
-                                anime_movies: s
-                                    .anime_movies
-                                    .into_iter()
-                                    .map(|movie| AnimeMovie {
-                                        movie_tvdb_id: movie.movie_tvdb_id,
-                                        movie_tmdb_id: movie.movie_tmdb_id,
-                                        movie_imdb_id: movie.movie_imdb_id,
-                                        movie_mal_id: movie.movie_mal_id,
-                                        name: movie.name,
-                                        slug: movie.slug,
-                                        year: movie.year,
-                                        content_status: movie.content_status,
-                                        overview: movie.overview,
-                                        poster_url: movie.poster_url,
-                                        language: movie.language,
-                                        runtime_minutes: movie.runtime_minutes,
-                                        sort_title: movie.sort_title,
-                                        imdb_id: movie.imdb_id,
-                                        genres: movie.genres,
-                                        studio: movie.studio,
-                                        digital_release_date: movie.digital_release_date,
-                                        association_confidence: movie.association_confidence,
-                                        continuity_status: movie.continuity_status,
-                                        movie_form: movie.movie_form,
-                                        placement: movie.placement,
-                                        confidence: movie.confidence,
-                                        signal_summary: movie.signal_summary,
-                                    })
-                                    .collect(),
-                            },
-                        );
-                    }
+                } else if alias.starts_with('s')
+                    && let Ok(series_result) = serde_json::from_value::<SeriesResult>(value.clone())
+                {
+                    let s = series_result.series;
+                    series.insert(
+                        s.tvdb_id,
+                        SeriesMetadata {
+                            tvdb_id: s.tvdb_id,
+                            name: s.name,
+                            sort_name: s.sort_name,
+                            slug: s.slug,
+                            year: s.year,
+                            content_status: s.status,
+                            first_aired: s.first_aired,
+                            overview: s.overview,
+                            network: s.network,
+                            runtime_minutes: s.runtime_minutes,
+                            poster_url: s.poster_url,
+                            banner_url: pick_artwork_url(&s.artworks, "banner"),
+                            background_url: pick_artwork_url(&s.artworks, "background"),
+                            country: s.country,
+                            genres: s.genres,
+                            aliases: s.aliases,
+                            seasons: s
+                                .seasons
+                                .into_iter()
+                                .map(|season| SeasonMetadata {
+                                    tvdb_id: season.tvdb_id,
+                                    number: season.number,
+                                    label: season.label,
+                                    episode_type: season.episode_type,
+                                })
+                                .collect(),
+                            episodes: s
+                                .episodes
+                                .into_iter()
+                                .map(|ep| EpisodeMetadata {
+                                    tvdb_id: ep.tvdb_id,
+                                    episode_number: ep.episode_number,
+                                    name: ep.name,
+                                    aired: ep.aired,
+                                    runtime_minutes: ep.runtime_minutes,
+                                    is_filler: ep.is_filler,
+                                    is_recap: ep.is_recap,
+                                    overview: ep.overview,
+                                    absolute_number: ep.absolute_number,
+                                    season_number: ep.season_number,
+                                })
+                                .collect(),
+                            anime_mappings: s
+                                .anime_mappings
+                                .into_iter()
+                                .map(|m| AnimeMapping {
+                                    mal_id: m.mal_id,
+                                    anilist_id: m.anilist_id,
+                                    anidb_id: m.anidb_id,
+                                    kitsu_id: m.kitsu_id,
+                                    thetvdb_id: m.thetvdb_id,
+                                    themoviedb_id: m.themoviedb_id,
+                                    alt_tvdb_id: m.alt_tvdb_id,
+                                    thetvdb_season: m.thetvdb_season,
+                                    score: m.score,
+                                    anime_media_type: m.anime_media_type.unwrap_or_default(),
+                                    global_media_type: m.global_media_type.unwrap_or_default(),
+                                    status: m.status.unwrap_or_default(),
+                                    episode_mappings: m
+                                        .episode_mappings
+                                        .into_iter()
+                                        .map(|e| AnimeEpisodeMapping {
+                                            tvdb_season: e.tvdb_season,
+                                            episode_start: e.episode_start,
+                                            episode_end: e.episode_end,
+                                        })
+                                        .collect(),
+                                })
+                                .collect(),
+                            anime_movies: s
+                                .anime_movies
+                                .into_iter()
+                                .map(|movie| AnimeMovie {
+                                    movie_tvdb_id: movie.movie_tvdb_id,
+                                    movie_tmdb_id: movie.movie_tmdb_id,
+                                    movie_imdb_id: movie.movie_imdb_id,
+                                    movie_mal_id: movie.movie_mal_id,
+                                    name: movie.name,
+                                    slug: movie.slug,
+                                    year: movie.year,
+                                    content_status: movie.content_status,
+                                    overview: movie.overview,
+                                    poster_url: movie.poster_url,
+                                    language: movie.language,
+                                    runtime_minutes: movie.runtime_minutes,
+                                    sort_title: movie.sort_title,
+                                    imdb_id: movie.imdb_id,
+                                    genres: movie.genres,
+                                    studio: movie.studio,
+                                    digital_release_date: movie.digital_release_date,
+                                    association_confidence: movie.association_confidence,
+                                    continuity_status: movie.continuity_status,
+                                    movie_form: movie.movie_form,
+                                    placement: movie.placement,
+                                    confidence: movie.confidence,
+                                    signal_summary: movie.signal_summary,
+                                })
+                                .collect(),
+                        },
+                    );
                 }
             }
         }

@@ -66,18 +66,18 @@ pub(crate) async fn list_title_history_query(
 ) -> AppResult<(Vec<TitleHistoryRow>, i64)> {
     let mut where_clauses = Vec::new();
 
-    if let Some(types) = event_types {
-        if !types.is_empty() {
-            let quoted: Vec<String> = types.iter().map(|t| format!("'{}'", t)).collect();
-            where_clauses.push(format!("event_type IN ({})", quoted.join(", ")));
-        }
+    if let Some(types) = event_types
+        && !types.is_empty()
+    {
+        let quoted: Vec<String> = types.iter().map(|t| format!("'{}'", t)).collect();
+        where_clauses.push(format!("event_type IN ({})", quoted.join(", ")));
     }
 
-    if let Some(ids) = title_ids {
-        if !ids.is_empty() {
-            let quoted: Vec<String> = ids.iter().map(|id| format!("'{}'", id)).collect();
-            where_clauses.push(format!("title_id IN ({})", quoted.join(", ")));
-        }
+    if let Some(ids) = title_ids
+        && !ids.is_empty()
+    {
+        let quoted: Vec<String> = ids.iter().map(|id| format!("'{}'", id)).collect();
+        where_clauses.push(format!("title_id IN ({})", quoted.join(", ")));
     }
 
     if download_id.is_some() {

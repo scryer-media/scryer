@@ -44,13 +44,13 @@ pub async fn ensure_jwt_hmac_secret(
                 .and_then(|r| r.value_json.as_deref())
                 .and_then(parse_string_json);
 
-            if let Some(secret_b64) = existing {
-                if !secret_b64.is_empty() {
-                    validate_hmac_secret(&secret_b64)
-                        .map_err(|e| format!("JWT HMAC secret in database is invalid: {e}"))?;
-                    tracing::info!("loaded JWT HMAC secret from database");
-                    return Ok(secret_b64);
-                }
+            if let Some(secret_b64) = existing
+                && !secret_b64.is_empty()
+            {
+                validate_hmac_secret(&secret_b64)
+                    .map_err(|e| format!("JWT HMAC secret in database is invalid: {e}"))?;
+                tracing::info!("loaded JWT HMAC secret from database");
+                return Ok(secret_b64);
             }
         }
         Err(e) => {

@@ -99,19 +99,20 @@ fn parse_hdrl<T: Read + Seek>(
             let list_type = child.read_type(stream).map_err(|e| {
                 MediaInfoError::Parse(format!("error reading LIST type in hdrl: {e}"))
             })?;
-            if list_type.as_str() == "strl" {
-                if let Some(track) = parse_strl(&child, stream)? {
-                    tracks.push(track);
-                }
+            if list_type.as_str() == "strl"
+                && let Some(track) = parse_strl(&child, stream)?
+            {
+                tracks.push(track);
             }
         }
     }
 
     // Compute duration from avih fields
-    if let (Some(usec), Some(frames)) = (micro_sec_per_frame, total_frames) {
-        if usec > 0 && frames > 0 {
-            *duration_seconds = Some((usec as f64 * frames as f64) / 1_000_000.0);
-        }
+    if let (Some(usec), Some(frames)) = (micro_sec_per_frame, total_frames)
+        && usec > 0
+        && frames > 0
+    {
+        *duration_seconds = Some((usec as f64 * frames as f64) / 1_000_000.0);
     }
 
     Ok(())

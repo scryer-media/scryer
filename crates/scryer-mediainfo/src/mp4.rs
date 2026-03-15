@@ -102,11 +102,10 @@ pub(crate) fn parse_mp4(path: &Path) -> Result<RawContainer, MediaInfoError> {
                 raw.codec_name = normalize_codec_name(&codec_id);
 
                 // Extract codec private data from ESDS when available.
-                if let AudioCodecSpecific::ES_Descriptor(ref esds) = audio.codec_specific {
-                    if !esds.decoder_specific_data.is_empty() {
-                        raw.codec_private =
-                            Some(esds.decoder_specific_data.iter().copied().collect());
-                    }
+                if let AudioCodecSpecific::ES_Descriptor(ref esds) = audio.codec_specific
+                    && !esds.decoder_specific_data.is_empty()
+                {
+                    raw.codec_private = Some(esds.decoder_specific_data.iter().copied().collect());
                 }
             }
             SampleEntry::Unknown => {
@@ -124,19 +123,18 @@ pub(crate) fn parse_mp4(path: &Path) -> Result<RawContainer, MediaInfoError> {
 
     // If no per-track bitrate was computed but we have a file size and
     // duration, fall back to overall bitrate for the first video track.
-    if file_len > 0 {
-        if let Some(dur) = duration_seconds {
-            if dur > 0.0 {
-                let overall_bps = (file_len as f64 * 8.0 / dur) as i64;
-                let has_any_video_bitrate = tracks
-                    .iter()
-                    .any(|t| t.kind == TrackKind::Video && t.bit_rate_bps.is_some());
-                if !has_any_video_bitrate {
-                    if let Some(vt) = tracks.iter_mut().find(|t| t.kind == TrackKind::Video) {
-                        vt.bit_rate_bps = Some(overall_bps);
-                    }
-                }
-            }
+    if file_len > 0
+        && let Some(dur) = duration_seconds
+        && dur > 0.0
+    {
+        let overall_bps = (file_len as f64 * 8.0 / dur) as i64;
+        let has_any_video_bitrate = tracks
+            .iter()
+            .any(|t| t.kind == TrackKind::Video && t.bit_rate_bps.is_some());
+        if !has_any_video_bitrate
+            && let Some(vt) = tracks.iter_mut().find(|t| t.kind == TrackKind::Video)
+        {
+            vt.bit_rate_bps = Some(overall_bps);
         }
     }
 
@@ -148,16 +146,16 @@ pub(crate) fn parse_mp4(path: &Path) -> Result<RawContainer, MediaInfoError> {
     // -- Dolby Vision detection via raw box scanning -----------------------
     // mp4parse doesn't expose dvcC/dvvC boxes. Scan the raw file bytes for
     // the FourCC and extract the DOVIDecoderConfigurationRecord.
-    if let Some(dovi_config) = scan_mp4_dovi_config(path) {
-        if let Some(vt) = tracks.iter_mut().find(|t| t.kind == TrackKind::Video) {
-            // If the track was unknown (HEVC not supported by mp4parse),
-            // mark it as HEVC since DV requires HEVC.
-            if vt.codec_name.is_none() {
-                vt.codec_id = "hvc1".into();
-                vt.codec_name = Some("hevc".into());
-            }
-            vt.dovi_config = Some(dovi_config);
+    if let Some(dovi_config) = scan_mp4_dovi_config(path)
+        && let Some(vt) = tracks.iter_mut().find(|t| t.kind == TrackKind::Video)
+    {
+        // If the track was unknown (HEVC not supported by mp4parse),
+        // mark it as HEVC since DV requires HEVC.
+        if vt.codec_name.is_none() {
+            vt.codec_id = "hvc1".into();
+            vt.codec_name = Some("hevc".into());
         }
+        vt.dovi_config = Some(dovi_config);
     }
 
     // Derive container format name from file extension.

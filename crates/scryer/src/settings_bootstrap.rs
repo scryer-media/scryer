@@ -797,22 +797,22 @@ pub(crate) async fn normalize_media_path_setting(
                 format!("failed to read legacy system {key_name} setting during bootstrap: {error}")
             })?;
 
-        if let Some(system_record) = system_record {
-            if let Some(value_json) = system_record.value_json {
-                database
-                    .upsert_setting_value(
-                        SETTINGS_SCOPE_MEDIA,
-                        key_name,
-                        None,
-                        value_json,
-                        "legacy-migration",
-                        None,
-                    )
-                    .await
-                    .map_err(|error| {
-                        format!("failed to persist migrated media {key_name} setting: {error}")
-                    })?;
-            }
+        if let Some(system_record) = system_record
+            && let Some(value_json) = system_record.value_json
+        {
+            database
+                .upsert_setting_value(
+                    SETTINGS_SCOPE_MEDIA,
+                    key_name,
+                    None,
+                    value_json,
+                    "legacy-migration",
+                    None,
+                )
+                .await
+                .map_err(|error| {
+                    format!("failed to persist migrated media {key_name} setting: {error}")
+                })?;
         }
     }
 

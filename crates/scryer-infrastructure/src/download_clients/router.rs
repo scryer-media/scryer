@@ -335,10 +335,10 @@ impl PrioritizedDownloadClientRouter {
         config: &DownloadClientConfig,
         plugin_provider: Option<&Arc<dyn DownloadClientPluginProvider>>,
     ) -> AppResult<Arc<dyn DownloadClient>> {
-        if let Some(provider) = plugin_provider {
-            if let Some(client) = provider.client_for_config(config) {
-                return Ok(client);
-            }
+        if let Some(provider) = plugin_provider
+            && let Some(client) = provider.client_for_config(config)
+        {
+            return Ok(client);
         }
 
         let client_type = config.client_type.trim().to_ascii_lowercase();

@@ -1094,18 +1094,16 @@ fn split_release_token(token: &str) -> Vec<String> {
             }
 
             // Handle "digit-GROUP" in next token: DDP5.1-GROUP → "DDP5.1" + "GROUP"
-            if is_audio_codec {
-                if let Some(hyphen_idx) = next_value.find('-') {
-                    let digit_part = &next_value[..hyphen_idx];
-                    let tail = &next_value[hyphen_idx + 1..];
-                    if !digit_part.is_empty() && is_digit_str(digit_part) {
-                        parts.push(format!("{current}.{digit_part}"));
-                        if !tail.is_empty() {
-                            parts.push(tail.to_string());
-                        }
-                        index += 2;
-                        continue;
+            if is_audio_codec && let Some(hyphen_idx) = next_value.find('-') {
+                let digit_part = &next_value[..hyphen_idx];
+                let tail = &next_value[hyphen_idx + 1..];
+                if !digit_part.is_empty() && is_digit_str(digit_part) {
+                    parts.push(format!("{current}.{digit_part}"));
+                    if !tail.is_empty() {
+                        parts.push(tail.to_string());
                     }
+                    index += 2;
+                    continue;
                 }
             }
         }
@@ -1283,10 +1281,10 @@ fn parse_fps(raw_title: &str) -> Option<f32> {
         }
 
         let chunk = chunk.trim_end_matches("FPS");
-        if let Ok(fps) = chunk.parse::<f32>() {
-            if (10.0..=300.0).contains(&fps) {
-                return Some(fps);
-            }
+        if let Ok(fps) = chunk.parse::<f32>()
+            && (10.0..=300.0).contains(&fps)
+        {
+            return Some(fps);
         }
     }
 
@@ -1295,22 +1293,21 @@ fn parse_fps(raw_title: &str) -> Option<f32> {
     for chunk in parts {
         if let Some(prefix) = chunk.strip_suffix("FPS") {
             let prefix = prefix.trim();
-            if let Ok(fps) = prefix.parse::<f32>() {
-                if (10.0..=300.0).contains(&fps) {
-                    return Some(fps);
-                }
+            if let Ok(fps) = prefix.parse::<f32>()
+                && (10.0..=300.0).contains(&fps)
+            {
+                return Some(fps);
             }
         }
     }
 
     // Dot-separated titles: split on dots and hyphens to find "60FPS" or "60fps" tokens
     for chunk in upper.split(['.', '-', '_']) {
-        if let Some(prefix) = chunk.strip_suffix("FPS") {
-            if let Ok(fps) = prefix.parse::<f32>() {
-                if (10.0..=300.0).contains(&fps) {
-                    return Some(fps);
-                }
-            }
+        if let Some(prefix) = chunk.strip_suffix("FPS")
+            && let Ok(fps) = prefix.parse::<f32>()
+            && (10.0..=300.0).contains(&fps)
+        {
+            return Some(fps);
         }
     }
 
@@ -1408,10 +1405,10 @@ fn normalize_title_tokens(tokens: &[String], episode: &Option<ParsedEpisodeMetad
             continue;
         }
 
-        if let Some(raw) = &episode_raw {
-            if raw == token {
-                continue;
-            }
+        if let Some(raw) = &episode_raw
+            && raw == token
+        {
+            continue;
         }
 
         if token.chars().all(|c| c.is_ascii_alphabetic())
@@ -1453,13 +1450,13 @@ fn parse_episode_token(token: &str) -> Option<(Option<u32>, Vec<u32>, Option<u32
         }
     }
 
-    if let Some((left, right)) = token.split_once('X') {
-        if let Ok(season) = left.parse::<u32>() {
-            let episodes = parse_episode_fragment(right);
-            if !episodes.is_empty() {
-                let version = extract_trailing_version(right);
-                return Some((Some(season), episodes, version));
-            }
+    if let Some((left, right)) = token.split_once('X')
+        && let Ok(season) = left.parse::<u32>()
+    {
+        let episodes = parse_episode_fragment(right);
+        if !episodes.is_empty() {
+            let version = extract_trailing_version(right);
+            return Some((Some(season), episodes, version));
         }
     }
 
@@ -1494,28 +1491,27 @@ pub fn parse_series_episode(raw_title: &str) -> Option<ParsedEpisodeMetadata> {
     for (idx, token) in tokens.iter().enumerate() {
         let next = tokens.get(idx + 1).map(|value| value.as_str());
 
-        if let Some((season, episodes, _)) = parse_episode_token(token) {
-            if episodes
+        if let Some((season, episodes, _)) = parse_episode_token(token)
+            && episodes
                 .iter()
                 .all(|value| is_reasonable_episode_number(*value))
+        {
+            let raw = if token.starts_with('S') && token.contains('-') && !token.contains('E') {
+                token.replace('-', " ")
+            } else if token.contains('X')
+                && token.chars().any(|character| character.is_ascii_digit())
             {
-                let raw = if token.starts_with('S') && token.contains('-') && !token.contains('E') {
-                    token.replace('-', " ")
-                } else if token.contains('X')
-                    && token.chars().any(|character| character.is_ascii_digit())
-                {
-                    token.replace('X', "x")
-                } else {
-                    token.clone()
-                };
+                token.replace('X', "x")
+            } else {
+                token.clone()
+            };
 
-                return Some(ParsedEpisodeMetadata {
-                    season,
-                    episode_numbers: episodes,
-                    absolute_episode: None,
-                    raw: Some(raw),
-                });
-            }
+            return Some(ParsedEpisodeMetadata {
+                season,
+                episode_numbers: episodes,
+                absolute_episode: None,
+                raw: Some(raw),
+            });
         }
 
         if skip_next_as_season_value {
@@ -1623,12 +1619,12 @@ pub fn parse_series_episode(raw_title: &str) -> Option<ParsedEpisodeMetadata> {
         }
 
         if token == "SEASON" || token == "S" {
-            if let Some(next) = next {
-                if let Some(season) = parse_numeric_token(next) {
-                    pending_season = Some(season);
-                    pending_season_raw = Some(format!("{token} {next}"));
-                    skip_next_as_season_value = true;
-                }
+            if let Some(next) = next
+                && let Some(season) = parse_numeric_token(next)
+            {
+                pending_season = Some(season);
+                pending_season_raw = Some(format!("{token} {next}"));
+                skip_next_as_season_value = true;
             }
 
             continue;
@@ -1696,10 +1692,9 @@ pub fn parse_series_episode(raw_title: &str) -> Option<ParsedEpisodeMetadata> {
             && parse_quality(token).is_none()
             && is_reasonable_episode_number(token.parse::<u32>().ok()?)
             && (token.len() <= 3 || (token.len() == 4 && parse_year(token).is_none()))
+            && let Ok(episode) = token.parse::<u32>()
         {
-            if let Ok(episode) = token.parse::<u32>() {
-                pending_absolute = Some((episode, token.to_string()));
-            }
+            pending_absolute = Some((episode, token.to_string()));
         }
     }
 
@@ -1717,22 +1712,21 @@ pub fn parse_series_episode(raw_title: &str) -> Option<ParsedEpisodeMetadata> {
 /// Returns the version number if found (2-9).
 fn parse_anime_version(token: &str) -> Option<u32> {
     // Pure "V2", "V3" etc.
-    if token.len() >= 2 && token.starts_with('V') {
-        if let Ok(ver) = token[1..].parse::<u32>() {
-            if (2..=9).contains(&ver) {
-                return Some(ver);
-            }
-        }
+    if token.len() >= 2
+        && token.starts_with('V')
+        && let Ok(ver) = token[1..].parse::<u32>()
+        && (2..=9).contains(&ver)
+    {
+        return Some(ver);
     }
     // "01V2", "05V3" — digits followed by V and a single digit
-    if let Some(pos) = token.find('V') {
-        if pos > 0 && token[..pos].chars().all(|c| c.is_ascii_digit()) {
-            if let Ok(ver) = token[pos + 1..].parse::<u32>() {
-                if (2..=9).contains(&ver) {
-                    return Some(ver);
-                }
-            }
-        }
+    if let Some(pos) = token.find('V')
+        && pos > 0
+        && token[..pos].chars().all(|c| c.is_ascii_digit())
+        && let Ok(ver) = token[pos + 1..].parse::<u32>()
+        && (2..=9).contains(&ver)
+    {
+        return Some(ver);
     }
     None
 }
@@ -1972,18 +1966,18 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
             parsed.year = Some(year);
         }
 
-        if parsed.quality.is_none() {
-            if let Some(quality) = parse_quality(token) {
-                parsed.quality = Some(quality.to_string());
-            }
+        if parsed.quality.is_none()
+            && let Some(quality) = parse_quality(token)
+        {
+            parsed.quality = Some(quality.to_string());
         }
 
-        if parsed.source.is_none() {
-            if let Some(result) = parse_source(token, next) {
-                parsed.source = Some(result.source.to_string());
-                if let Some(service) = result.service {
-                    parsed.streaming_service = Some(service.to_string());
-                }
+        if parsed.source.is_none()
+            && let Some(result) = parse_source(token, next)
+        {
+            parsed.source = Some(result.source.to_string());
+            if let Some(service) = result.service {
+                parsed.streaming_service = Some(service.to_string());
             }
         }
 
@@ -2009,10 +2003,10 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
             }
             parsed.audio_codecs.push(codec_value);
 
-            if parsed.audio_channels.is_none() {
-                if let Some(channels) = audio.channels.as_ref() {
-                    parsed.audio_channels = Some(channels.to_string());
-                }
+            if parsed.audio_channels.is_none()
+                && let Some(channels) = audio.channels.as_ref()
+            {
+                parsed.audio_channels = Some(channels.to_string());
             }
             if audio.channels.is_none()
                 && matches!(
@@ -2060,13 +2054,13 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
     parsed.episode = parse_series_episode(raw_title);
 
     // Detect anime version embedded in the episode token (e.g. S05E01V2).
-    if parsed.anime_version.is_none() {
-        if let Some(ref raw) = parsed.episode.as_ref().and_then(|ep| ep.raw.clone()) {
-            let upper = raw.to_ascii_uppercase();
-            if let Some(ver) = extract_trailing_version(&upper) {
-                parsed.anime_version = Some(ver);
-                parsed.is_proper_upload = true;
-            }
+    if parsed.anime_version.is_none()
+        && let Some(ref raw) = parsed.episode.as_ref().and_then(|ep| ep.raw.clone())
+    {
+        let upper = raw.to_ascii_uppercase();
+        if let Some(ver) = extract_trailing_version(&upper) {
+            parsed.anime_version = Some(ver);
+            parsed.is_proper_upload = true;
         }
     }
     parsed.normalized_title = normalize_title_tokens(&tokens, &parsed.episode);
@@ -2126,10 +2120,10 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
     }
 
     // FPS above 60 is almost certainly AI frame interpolation (RIFE etc.)
-    if let Some(fps) = parsed.fps {
-        if fps > 60.0 {
-            parsed.is_ai_enhanced = true;
-        }
+    if let Some(fps) = parsed.fps
+        && fps > 60.0
+    {
+        parsed.is_ai_enhanced = true;
     }
 
     if parsed.is_ai_enhanced {

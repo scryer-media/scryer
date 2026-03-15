@@ -443,10 +443,10 @@ impl DownloadClient for SabnzbdDownloadClient {
                 let nzo_id = slot.get("nzo_id").and_then(Value::as_str)?.to_string();
 
                 let completed_ts = extract_i64_value(slot.get("completed"));
-                if let Some(ts) = completed_ts {
-                    if ts < cutoff_ts {
-                        return None;
-                    }
+                if let Some(ts) = completed_ts
+                    && ts < cutoff_ts
+                {
+                    return None;
                 }
 
                 let title_name = slot
@@ -518,10 +518,10 @@ impl DownloadClient for SabnzbdDownloadClient {
                 let nzo_id = slot.get("nzo_id").and_then(Value::as_str)?.to_string();
 
                 let completed_ts = extract_i64_value(slot.get("completed"));
-                if let Some(ts) = completed_ts {
-                    if ts < cutoff_ts {
-                        return None;
-                    }
+                if let Some(ts) = completed_ts
+                    && ts < cutoff_ts
+                {
+                    return None;
                 }
 
                 let dest_dir = slot

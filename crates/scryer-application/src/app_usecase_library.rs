@@ -34,13 +34,13 @@ fn extract_library_query(path: &str, library_root: &str) -> (String, Option<u32>
         let parent_str = parent.to_string_lossy();
         // Only use parent folder when it is NOT the library root itself
         // (i.e. the file is inside a sub-folder).
-        if parent_str.trim_end_matches('/') != root {
-            if let Some(folder_name) = parent.file_name().and_then(|n| n.to_str()) {
-                let clean = normalize_folder_name(folder_name);
-                let (title, year) = strip_year_suffix(&clean);
-                if !title.trim().is_empty() {
-                    return (title.trim().to_string(), year);
-                }
+        if parent_str.trim_end_matches('/') != root
+            && let Some(folder_name) = parent.file_name().and_then(|n| n.to_str())
+        {
+            let clean = normalize_folder_name(folder_name);
+            let (title, year) = strip_year_suffix(&clean);
+            if !title.trim().is_empty() {
+                return (title.trim().to_string(), year);
             }
         }
     }
@@ -281,8 +281,7 @@ impl AppUseCase {
                 RenameApplyStatus::Applied => {
                     if let (Some(collection_id), Some(final_path)) =
                         (item.collection_id.as_deref(), item.final_path.clone())
-                    {
-                        if let Err(err) = self
+                        && let Err(err) = self
                             .services
                             .shows
                             .update_collection(
@@ -296,13 +295,12 @@ impl AppUseCase {
                                 None,
                             )
                             .await
-                        {
-                            item.status = RenameApplyStatus::Failed;
-                            item.reason_code = "db_update_failed".into();
-                            item.error_message = Some(err.to_string());
-                            failed += 1;
-                            continue;
-                        }
+                    {
+                        item.status = RenameApplyStatus::Failed;
+                        item.reason_code = "db_update_failed".into();
+                        item.error_message = Some(err.to_string());
+                        failed += 1;
+                        continue;
                     }
                     applied += 1;
                 }
@@ -731,21 +729,20 @@ impl AppUseCase {
             };
 
             for episode in &target_episodes {
-                if episode_links.insert((file_id.clone(), episode.id.clone())) {
-                    if let Err(error) = self
+                if episode_links.insert((file_id.clone(), episode.id.clone()))
+                    && let Err(error) = self
                         .services
                         .media_files
                         .link_file_to_episode(&file_id, &episode.id)
                         .await
-                    {
-                        warn!(
-                            error = %error,
-                            title_id = %title.id,
-                            episode_id = %episode.id,
-                            file_id = %file_id,
-                            "failed to link scanned file to episode"
-                        );
-                    }
+                {
+                    warn!(
+                        error = %error,
+                        title_id = %title.id,
+                        episode_id = %episode.id,
+                        file_id = %file_id,
+                        "failed to link scanned file to episode"
+                    );
                 }
                 crate::app_usecase_import::mark_wanted_completed(
                     self,
@@ -973,28 +970,28 @@ impl AppUseCase {
                 Some(handler.rename_scope_id()),
             )
             .await?;
-        if let Some(value) = scoped {
-            if let Some(policy) = parse_missing_metadata_policy(&value) {
-                return Ok(policy);
-            }
+        if let Some(value) = scoped
+            && let Some(policy) = parse_missing_metadata_policy(&value)
+        {
+            return Ok(policy);
         }
 
         let global = self
             .read_setting_string_value(RENAME_MISSING_METADATA_POLICY_GLOBAL_KEY, None)
             .await?;
-        if let Some(value) = global {
-            if let Some(policy) = parse_missing_metadata_policy(&value) {
-                return Ok(policy);
-            }
+        if let Some(value) = global
+            && let Some(policy) = parse_missing_metadata_policy(&value)
+        {
+            return Ok(policy);
         }
 
         let global = self
             .read_setting_string_value(handler.missing_metadata_policy_key(), None)
             .await?;
-        if let Some(value) = global {
-            if let Some(policy) = parse_missing_metadata_policy(&value) {
-                return Ok(policy);
-            }
+        if let Some(value) = global
+            && let Some(policy) = parse_missing_metadata_policy(&value)
+        {
+            return Ok(policy);
         }
 
         Ok(DEFAULT_MISSING_METADATA_POLICY)
@@ -1575,14 +1572,14 @@ pub(crate) fn build_series_rename_plan_item(
 fn split_title_and_year_hint(raw_title: &str) -> (String, Option<String>) {
     let trimmed = raw_title.trim();
     for (open, close) in [('(', ')'), ('[', ']')] {
-        if let Some(close_pos) = trimmed.rfind(close) {
-            if let Some(open_pos) = trimmed[..close_pos].rfind(open) {
-                let candidate = trimmed[open_pos + 1..close_pos].trim();
-                if candidate.len() == 4 && candidate.chars().all(|value| value.is_ascii_digit()) {
-                    let title = trimmed[..open_pos].trim().to_string();
-                    if !title.is_empty() {
-                        return (title, Some(candidate.to_string()));
-                    }
+        if let Some(close_pos) = trimmed.rfind(close)
+            && let Some(open_pos) = trimmed[..close_pos].rfind(open)
+        {
+            let candidate = trimmed[open_pos + 1..close_pos].trim();
+            if candidate.len() == 4 && candidate.chars().all(|value| value.is_ascii_digit()) {
+                let title = trimmed[..open_pos].trim().to_string();
+                if !title.is_empty() {
+                    return (title, Some(candidate.to_string()));
                 }
             }
         }

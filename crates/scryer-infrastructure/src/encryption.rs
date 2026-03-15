@@ -158,13 +158,13 @@ pub async fn ensure_encryption_key(db: &crate::SqliteServices) -> Result<Encrypt
         .and_then(|r| r.value_json.as_deref())
         .and_then(parse_string_json);
 
-    if let Some(key_b64) = existing {
-        if !key_b64.is_empty() {
-            let key = EncryptionKey::from_base64(&key_b64)
-                .map_err(|e| format!("invalid encryption key in database: {e}"))?;
-            tracing::info!("loaded encryption master key from database");
-            return Ok(key);
-        }
+    if let Some(key_b64) = existing
+        && !key_b64.is_empty()
+    {
+        let key = EncryptionKey::from_base64(&key_b64)
+            .map_err(|e| format!("invalid encryption key in database: {e}"))?;
+        tracing::info!("loaded encryption master key from database");
+        return Ok(key);
     }
 
     // Generate new key

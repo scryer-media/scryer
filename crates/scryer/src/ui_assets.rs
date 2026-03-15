@@ -59,10 +59,10 @@ pub(crate) fn resolve_ui_asset_mode() -> UiAssetMode {
         return UiAssetMode::Fallback;
     }
 
-    if let Ok(path) = std::env::var("SCRYER_WEB_DIST_DIR") {
-        if !path.trim().is_empty() {
-            return UiAssetMode::Filesystem(PathBuf::from(path));
-        }
+    if let Ok(path) = std::env::var("SCRYER_WEB_DIST_DIR")
+        && !path.trim().is_empty()
+    {
+        return UiAssetMode::Filesystem(PathBuf::from(path));
     }
 
     if embedded_ui_assets::HAS_EMBEDDED_WEB_UI {
@@ -253,15 +253,12 @@ pub(crate) async fn serve_ui_path(
             // Try pre-compressed variant for filesystem mode too.
             if accept_gzip {
                 let gz_candidate = dist_dir.join(format!("{relative_path}.gz"));
-                if let Ok(gz_canonical) = gz_candidate.canonicalize() {
-                    if gz_canonical.starts_with(&canonical_root) {
-                        if let Ok(gz_meta) = fs::metadata(&gz_canonical).await {
-                            if gz_meta.is_file() {
-                                return serve_file_gzipped(gz_canonical, &canonical, head_only)
-                                    .await;
-                            }
-                        }
-                    }
+                if let Ok(gz_canonical) = gz_candidate.canonicalize()
+                    && gz_canonical.starts_with(&canonical_root)
+                    && let Ok(gz_meta) = fs::metadata(&gz_canonical).await
+                    && gz_meta.is_file()
+                {
+                    return serve_file_gzipped(gz_canonical, &canonical, head_only).await;
                 }
             }
             serve_file(canonical, head_only).await

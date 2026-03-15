@@ -226,15 +226,14 @@ async fn restore_old_file(
     recycle_result: &Option<recycle_bin::RecycleResult>,
     old_path: &std::path::Path,
 ) {
-    if let Some(ref recycle_result) = *recycle_result {
-        if let Err(restore_err) =
+    if let Some(ref recycle_result) = *recycle_result
+        && let Err(restore_err) =
             recycle_bin::restore_from_recycle(&recycle_result.recycled_path, old_path).await
-        {
-            tracing::error!(
-                error = %restore_err,
-                recycled = %recycle_result.recycled_path.display(),
-                "CRITICAL: failed to restore recycled file after upgrade failure"
-            );
-        }
+    {
+        tracing::error!(
+            error = %restore_err,
+            recycled = %recycle_result.recycled_path.display(),
+            "CRITICAL: failed to restore recycled file after upgrade failure"
+        );
     }
 }

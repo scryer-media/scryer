@@ -102,16 +102,16 @@ impl WeaverDownloadClient {
             AppError::Repository(format!("weaver returned non-json response: {err}"))
         })?;
 
-        if let Some(errors) = json.get("errors").and_then(Value::as_array) {
-            if let Some(first) = errors.first() {
-                let message = first
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown error");
-                return Err(AppError::Repository(format!(
-                    "weaver GraphQL error: {message}"
-                )));
-            }
+        if let Some(errors) = json.get("errors").and_then(Value::as_array)
+            && let Some(first) = errors.first()
+        {
+            let message = first
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error");
+            return Err(AppError::Repository(format!(
+                "weaver GraphQL error: {message}"
+            )));
         }
 
         json.get("data")
@@ -359,14 +359,14 @@ pub(crate) fn weaver_job_to_queue_item(job: &Value) -> Option<DownloadQueueItem>
 }
 
 fn derive_nzb_filename(source_title: Option<&str>, source_hint: &str, title_name: &str) -> String {
-    if let Some(name) = source_title {
-        if !name.is_empty() {
-            return if name.ends_with(".nzb") {
-                name.to_string()
-            } else {
-                format!("{name}.nzb")
-            };
-        }
+    if let Some(name) = source_title
+        && !name.is_empty()
+    {
+        return if name.ends_with(".nzb") {
+            name.to_string()
+        } else {
+            format!("{name}.nzb")
+        };
     }
 
     let url_filename = source_hint

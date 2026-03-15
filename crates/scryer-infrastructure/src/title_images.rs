@@ -91,25 +91,23 @@ impl SqliteTitleImageProcessor {
             .get(CONTENT_LENGTH)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.parse::<usize>().ok())
+            && length > self.max_source_bytes
         {
-            if length > self.max_source_bytes {
-                return Err(AppError::Validation(format!(
-                    "title image exceeds max size of {} bytes",
-                    self.max_source_bytes
-                )));
-            }
+            return Err(AppError::Validation(format!(
+                "title image exceeds max size of {} bytes",
+                self.max_source_bytes
+            )));
         }
 
         if let Some(content_type) = response
             .headers()
             .get(CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
+            && !content_type.starts_with("image/")
         {
-            if !content_type.starts_with("image/") {
-                return Err(AppError::Validation(format!(
-                    "unsupported title image content type: {content_type}"
-                )));
-            }
+            return Err(AppError::Validation(format!(
+                "unsupported title image content type: {content_type}"
+            )));
         }
 
         let etag = response

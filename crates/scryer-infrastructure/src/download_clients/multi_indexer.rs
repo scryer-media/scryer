@@ -230,15 +230,15 @@ impl IndexerClient for MultiIndexerSearchClient {
                 continue;
             }
             // Check persistent disabled_until from config
-            if let Some(until) = c.disabled_until {
-                if until > now {
-                    info!(
-                        indexer = c.name.as_str(),
-                        disabled_until = %until,
-                        "skipping indexer: temporarily disabled (config)"
-                    );
-                    continue;
-                }
+            if let Some(until) = c.disabled_until
+                && until > now
+            {
+                info!(
+                    indexer = c.name.as_str(),
+                    disabled_until = %until,
+                    "skipping indexer: temporarily disabled (config)"
+                );
+                continue;
             }
             // Check in-memory backoff escalation
             if let Some(until) = self.backoff_tracker.is_disabled(&c.id).await {
@@ -285,14 +285,14 @@ impl IndexerClient for MultiIndexerSearchClient {
                 .as_ref()
                 .and_then(|plan| plan.entries.get(&config.id));
 
-            if let Some(entry) = routing_entry {
-                if !entry.enabled {
-                    info!(
-                        indexer = config.name.as_str(),
-                        "skipping indexer: disabled for scope via routing config"
-                    );
-                    continue;
-                }
+            if let Some(entry) = routing_entry
+                && !entry.enabled
+            {
+                info!(
+                    indexer = config.name.as_str(),
+                    "skipping indexer: disabled for scope via routing config"
+                );
+                continue;
             }
 
             // Use per-indexer categories from routing if available, otherwise fall

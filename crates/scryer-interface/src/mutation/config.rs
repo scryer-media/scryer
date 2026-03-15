@@ -74,12 +74,12 @@ async fn load_download_client_routing_payload(
         .await
         .map_err(to_gql_error)?;
 
-    if let Some(record) = current.as_ref() {
-        if record.value_json.is_some() {
-            return Ok(parse_download_client_routing_object(
-                &record.effective_value_json,
-            ));
-        }
+    if let Some(record) = current.as_ref()
+        && record.value_json.is_some()
+    {
+        return Ok(parse_download_client_routing_object(
+            &record.effective_value_json,
+        ));
     }
 
     let legacy = db
@@ -91,12 +91,12 @@ async fn load_download_client_routing_payload(
         .await
         .map_err(to_gql_error)?;
 
-    if let Some(record) = legacy.as_ref() {
-        if record.value_json.is_some() {
-            return Ok(parse_download_client_routing_object(
-                &record.effective_value_json,
-            ));
-        }
+    if let Some(record) = legacy.as_ref()
+        && record.value_json.is_some()
+    {
+        return Ok(parse_download_client_routing_object(
+            &record.effective_value_json,
+        ));
     }
 
     Ok(current

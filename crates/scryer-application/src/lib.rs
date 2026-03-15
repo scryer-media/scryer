@@ -359,49 +359,48 @@ impl AppServices {
         let _ = self.import_history_broadcast.send(());
 
         // Dual-write: emit title history event from import result
-        if let Some(ref json) = result_json {
-            if let Ok(result) = serde_json::from_str::<ImportResult>(json) {
-                if let Some(ref title_id) = result.title_id {
-                    let event_type = match status {
-                        "completed" => TitleHistoryEventType::Imported,
-                        "failed" => TitleHistoryEventType::ImportFailed,
-                        "skipped" => TitleHistoryEventType::ImportSkipped,
-                        _ => return Ok(()),
-                    };
-                    let mut data = std::collections::HashMap::new();
-                    data.insert("import_id".into(), serde_json::json!(import_id));
-                    data.insert("source_path".into(), serde_json::json!(result.source_path));
-                    if let Some(ref dp) = result.dest_path {
-                        data.insert("dest_path".into(), serde_json::json!(dp));
-                    }
-                    if let Some(ref msg) = result.error_message {
-                        data.insert("message".into(), serde_json::json!(msg));
-                    }
-                    if let Some(ref sr) = result.skip_reason {
-                        data.insert("skip_reason".into(), serde_json::json!(sr.as_str()));
-                    }
-                    data.insert(
-                        "decision".into(),
-                        serde_json::json!(result.decision.as_str()),
-                    );
-                    if let Some(sz) = result.file_size_bytes {
-                        data.insert("size_bytes".into(), serde_json::json!(sz));
-                    }
-                    let _ = self
-                        .title_history
-                        .record_event(&NewTitleHistoryEvent {
-                            title_id: title_id.clone(),
-                            episode_id: None,
-                            collection_id: None,
-                            event_type,
-                            source_title: Some(result.source_path.clone()),
-                            quality: None,
-                            download_id: None,
-                            data,
-                        })
-                        .await;
-                }
+        if let Some(ref json) = result_json
+            && let Ok(result) = serde_json::from_str::<ImportResult>(json)
+            && let Some(ref title_id) = result.title_id
+        {
+            let event_type = match status {
+                "completed" => TitleHistoryEventType::Imported,
+                "failed" => TitleHistoryEventType::ImportFailed,
+                "skipped" => TitleHistoryEventType::ImportSkipped,
+                _ => return Ok(()),
+            };
+            let mut data = std::collections::HashMap::new();
+            data.insert("import_id".into(), serde_json::json!(import_id));
+            data.insert("source_path".into(), serde_json::json!(result.source_path));
+            if let Some(ref dp) = result.dest_path {
+                data.insert("dest_path".into(), serde_json::json!(dp));
             }
+            if let Some(ref msg) = result.error_message {
+                data.insert("message".into(), serde_json::json!(msg));
+            }
+            if let Some(ref sr) = result.skip_reason {
+                data.insert("skip_reason".into(), serde_json::json!(sr.as_str()));
+            }
+            data.insert(
+                "decision".into(),
+                serde_json::json!(result.decision.as_str()),
+            );
+            if let Some(sz) = result.file_size_bytes {
+                data.insert("size_bytes".into(), serde_json::json!(sz));
+            }
+            let _ = self
+                .title_history
+                .record_event(&NewTitleHistoryEvent {
+                    title_id: title_id.clone(),
+                    episode_id: None,
+                    collection_id: None,
+                    event_type,
+                    source_title: Some(result.source_path.clone()),
+                    quality: None,
+                    download_id: None,
+                    data,
+                })
+                .await;
         }
         Ok(())
     }

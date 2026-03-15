@@ -55,14 +55,15 @@ pub(crate) fn parse_nfo(content: &str) -> NfoMetadata {
         }
 
         // Legacy <id> tag — IMDb if starts with "tt", TVDB if pure numeric
-        if meta.tvdb_id.is_none() && meta.imdb_id.is_none() {
-            if let Some(id_val) = extract_element(content, "id") {
-                let id_trimmed = id_val.trim();
-                if id_trimmed.starts_with("tt") {
-                    meta.imdb_id = normalize_imdb(id_trimmed);
-                } else if looks_like_numeric_id(id_trimmed) {
-                    meta.tvdb_id = Some(id_trimmed.to_string());
-                }
+        if meta.tvdb_id.is_none()
+            && meta.imdb_id.is_none()
+            && let Some(id_val) = extract_element(content, "id")
+        {
+            let id_trimmed = id_val.trim();
+            if id_trimmed.starts_with("tt") {
+                meta.imdb_id = normalize_imdb(id_trimmed);
+            } else if looks_like_numeric_id(id_trimmed) {
+                meta.tvdb_id = Some(id_trimmed.to_string());
             }
         }
 
@@ -101,25 +102,25 @@ pub(crate) fn render_movie_nfo(title: &Title) -> String {
     if let Some(year) = title.year {
         push_element(&mut out, "year", &year.to_string());
     }
-    if let Some(ref overview) = title.overview {
-        if !overview.is_empty() {
-            push_element(&mut out, "plot", overview);
-        }
+    if let Some(ref overview) = title.overview
+        && !overview.is_empty()
+    {
+        push_element(&mut out, "plot", overview);
     }
-    if let Some(runtime) = title.runtime_minutes {
-        if runtime > 0 {
-            push_element(&mut out, "runtime", &runtime.to_string());
-        }
+    if let Some(runtime) = title.runtime_minutes
+        && runtime > 0
+    {
+        push_element(&mut out, "runtime", &runtime.to_string());
     }
     for genre in &title.genres {
         if !genre.is_empty() {
             push_element(&mut out, "genre", genre);
         }
     }
-    if let Some(ref studio) = title.studio {
-        if !studio.is_empty() {
-            push_element(&mut out, "studio", studio);
-        }
+    if let Some(ref studio) = title.studio
+        && !studio.is_empty()
+    {
+        push_element(&mut out, "studio", studio);
     }
 
     push_uniqueids(&mut out, title);
@@ -138,20 +139,20 @@ pub(crate) fn render_tvshow_nfo(title: &Title) -> String {
     if let Some(year) = title.year {
         push_element(&mut out, "year", &year.to_string());
     }
-    if let Some(ref overview) = title.overview {
-        if !overview.is_empty() {
-            push_element(&mut out, "plot", overview);
-        }
+    if let Some(ref overview) = title.overview
+        && !overview.is_empty()
+    {
+        push_element(&mut out, "plot", overview);
     }
     for genre in &title.genres {
         if !genre.is_empty() {
             push_element(&mut out, "genre", genre);
         }
     }
-    if let Some(ref network) = title.network {
-        if !network.is_empty() {
-            push_element(&mut out, "studio", network);
-        }
+    if let Some(ref network) = title.network
+        && !network.is_empty()
+    {
+        push_element(&mut out, "studio", network);
     }
 
     push_uniqueids(&mut out, title);
@@ -166,10 +167,10 @@ pub(crate) fn render_episode_nfo(title: &Title, episode: &Episode) -> String {
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>\n<episodedetails>\n",
     );
 
-    if let Some(ref ep_title) = episode.title {
-        if !ep_title.is_empty() {
-            push_element(&mut out, "title", ep_title);
-        }
+    if let Some(ref ep_title) = episode.title
+        && !ep_title.is_empty()
+    {
+        push_element(&mut out, "title", ep_title);
     }
     if let Some(ref season) = episode.season_number {
         push_element(&mut out, "season", season);
@@ -177,15 +178,15 @@ pub(crate) fn render_episode_nfo(title: &Title, episode: &Episode) -> String {
     if let Some(ref ep_num) = episode.episode_number {
         push_element(&mut out, "episode", ep_num);
     }
-    if let Some(ref overview) = episode.overview {
-        if !overview.is_empty() {
-            push_element(&mut out, "plot", overview);
-        }
+    if let Some(ref overview) = episode.overview
+        && !overview.is_empty()
+    {
+        push_element(&mut out, "plot", overview);
     }
-    if let Some(ref air_date) = episode.air_date {
-        if !air_date.is_empty() {
-            push_element(&mut out, "aired", air_date);
-        }
+    if let Some(ref air_date) = episode.air_date
+        && !air_date.is_empty()
+    {
+        push_element(&mut out, "aired", air_date);
     }
     if let Some(duration_secs) = episode.duration_seconds {
         let minutes = duration_secs / 60;
@@ -199,13 +200,12 @@ pub(crate) fn render_episode_nfo(title: &Title, episode: &Episode) -> String {
         .external_ids
         .iter()
         .find(|e| e.source.eq_ignore_ascii_case("tvdb"))
+        && !eid.value.is_empty()
     {
-        if !eid.value.is_empty() {
-            out.push_str(&format!(
-                "  <uniqueid type=\"tvdb\" default=\"true\">{}</uniqueid>\n",
-                xml_escape(&eid.value)
-            ));
-        }
+        out.push_str(&format!(
+            "  <uniqueid type=\"tvdb\" default=\"true\">{}</uniqueid>\n",
+            xml_escape(&eid.value)
+        ));
     }
 
     out.push_str("</episodedetails>\n");
@@ -227,26 +227,24 @@ pub(crate) fn render_plexmatch(title: &Title) -> String {
         .external_ids
         .iter()
         .find(|e| e.source.eq_ignore_ascii_case("tvdb"))
+        && !eid.value.is_empty()
     {
-        if !eid.value.is_empty() {
-            out.push_str(&format!("tvdbid: {}\n", eid.value));
-        }
+        out.push_str(&format!("tvdbid: {}\n", eid.value));
     }
 
-    if let Some(ref imdb_id) = title.imdb_id {
-        if !imdb_id.is_empty() {
-            out.push_str(&format!("imdbid: {imdb_id}\n"));
-        }
+    if let Some(ref imdb_id) = title.imdb_id
+        && !imdb_id.is_empty()
+    {
+        out.push_str(&format!("imdbid: {imdb_id}\n"));
     }
 
     if let Some(eid) = title
         .external_ids
         .iter()
         .find(|e| e.source.eq_ignore_ascii_case("tmdb"))
+        && !eid.value.is_empty()
     {
-        if !eid.value.is_empty() {
-            out.push_str(&format!("tmdbid: {}\n", eid.value));
-        }
+        out.push_str(&format!("tmdbid: {}\n", eid.value));
     }
 
     out
@@ -389,33 +387,31 @@ fn push_uniqueids(out: &mut String, title: &Title) {
         .external_ids
         .iter()
         .find(|e| e.source.eq_ignore_ascii_case("tvdb"))
+        && !eid.value.is_empty()
     {
-        if !eid.value.is_empty() {
-            out.push_str(&format!(
-                "  <uniqueid type=\"tvdb\" default=\"true\">{}</uniqueid>\n",
-                xml_escape(&eid.value)
-            ));
-        }
+        out.push_str(&format!(
+            "  <uniqueid type=\"tvdb\" default=\"true\">{}</uniqueid>\n",
+            xml_escape(&eid.value)
+        ));
     }
-    if let Some(ref imdb) = title.imdb_id {
-        if !imdb.is_empty() {
-            out.push_str(&format!(
-                "  <uniqueid type=\"imdb\">{}</uniqueid>\n",
-                xml_escape(imdb)
-            ));
-        }
+    if let Some(ref imdb) = title.imdb_id
+        && !imdb.is_empty()
+    {
+        out.push_str(&format!(
+            "  <uniqueid type=\"imdb\">{}</uniqueid>\n",
+            xml_escape(imdb)
+        ));
     }
     if let Some(eid) = title
         .external_ids
         .iter()
         .find(|e| e.source.eq_ignore_ascii_case("tmdb"))
+        && !eid.value.is_empty()
     {
-        if !eid.value.is_empty() {
-            out.push_str(&format!(
-                "  <uniqueid type=\"tmdb\">{}</uniqueid>\n",
-                xml_escape(&eid.value)
-            ));
-        }
+        out.push_str(&format!(
+            "  <uniqueid type=\"tmdb\">{}</uniqueid>\n",
+            xml_escape(&eid.value)
+        ));
     }
 }
 

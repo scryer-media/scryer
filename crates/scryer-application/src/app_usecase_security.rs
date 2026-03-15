@@ -158,18 +158,18 @@ impl AppUseCase {
         }
 
         // Online migration: re-hash v1 passwords with Argon2id on successful login
-        if password_hash.starts_with("v1$") {
-            if let Ok(new_hash) = self.hash_password(password) {
-                if let Err(err) = self
-                    .services
-                    .users
-                    .update_password_hash(&user.id, new_hash)
-                    .await
-                {
-                    tracing::warn!(user_id = %user.id, error = %err, "failed to migrate password hash from v1 to v2");
-                } else {
-                    tracing::info!(user_id = %user.id, "migrated password hash from v1 to v2");
-                }
+        if password_hash.starts_with("v1$")
+            && let Ok(new_hash) = self.hash_password(password)
+        {
+            if let Err(err) = self
+                .services
+                .users
+                .update_password_hash(&user.id, new_hash)
+                .await
+            {
+                tracing::warn!(user_id = %user.id, error = %err, "failed to migrate password hash from v1 to v2");
+            } else {
+                tracing::info!(user_id = %user.id, "migrated password hash from v1 to v2");
             }
         }
 

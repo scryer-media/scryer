@@ -58,11 +58,11 @@ fn default_cors_allowed_origins() -> Vec<String> {
         "http://nodejs:3000".to_string(),
     ];
 
-    if let Ok(web_ui_url) = std::env::var("SCRYER_WEB_UI_URL") {
-        if let Some(web_ui_origin) = canonical_origin(&web_ui_url) {
-            push_origin_if_missing(&mut origins, web_ui_origin.clone());
-            add_docker_loopback_aliases(&web_ui_origin, &mut origins);
-        }
+    if let Ok(web_ui_url) = std::env::var("SCRYER_WEB_UI_URL")
+        && let Some(web_ui_origin) = canonical_origin(&web_ui_url)
+    {
+        push_origin_if_missing(&mut origins, web_ui_origin.clone());
+        add_docker_loopback_aliases(&web_ui_origin, &mut origins);
     }
 
     origins
@@ -156,14 +156,14 @@ pub(crate) async fn cors_handler(
     }
 
     let mut response = next.run(request).await;
-    if let Some(origin) = origin {
-        if policy.is_allowed(&origin) {
-            apply_cors_headers(
-                response.headers_mut(),
-                &origin,
-                requested_headers.as_deref(),
-            );
-        }
+    if let Some(origin) = origin
+        && policy.is_allowed(&origin)
+    {
+        apply_cors_headers(
+            response.headers_mut(),
+            &origin,
+            requested_headers.as_deref(),
+        );
     }
 
     response
@@ -277,10 +277,8 @@ pub(crate) async fn graphql_ws_handler(
     let auth_enabled = state.auth_enabled;
 
     let mut initial_data = Data::default();
-    if !auth_enabled {
-        if let Ok(user) = app.find_or_create_default_user().await {
-            initial_data.insert(user);
-        }
+    if !auth_enabled && let Ok(user) = app.find_or_create_default_user().await {
+        initial_data.insert(user);
     }
 
     ws.protocols(ALL_WEBSOCKET_PROTOCOLS)

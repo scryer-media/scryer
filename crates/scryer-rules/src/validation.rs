@@ -74,10 +74,10 @@ pub fn validate_user_rule(
                 .and_then(|r| r.expressions.first())
                 .map(|e| &e.value);
 
-            if let Some(v) = value {
-                if let Err(e) = validate_score_entry_shape(v) {
-                    return Ok(ValidationResult::invalid(format!("output error: {e}")));
-                }
+            if let Some(v) = value
+                && let Err(e) = validate_score_entry_shape(v)
+            {
+                return Ok(ValidationResult::invalid(format!("output error: {e}")));
             }
             Ok(ValidationResult::valid())
         }
