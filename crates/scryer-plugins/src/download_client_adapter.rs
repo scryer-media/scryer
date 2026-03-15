@@ -1,13 +1,13 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chrono::{DateTime, Utc};
 use scryer_application::{
     AppError, AppResult, DownloadClient, DownloadClientAddRequest,
     DownloadClientMarkImportedRequest, DownloadClientStatus, DownloadGrabResult,
     DownloadSourceKind,
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use scryer_domain::{CompletedDownload, DownloadQueueItem, DownloadQueueState};
 use tracing::{debug, warn};
 
@@ -158,17 +158,19 @@ impl DownloadClient for WasmDownloadClient {
                     && !url.starts_with("magnet:")
                 {
                     match self.http.get(url).send().await {
-                        Ok(resp) if resp.status().is_success() => {
-                            match resp.bytes().await {
-                                Ok(bytes) if !bytes.is_empty() => {
-                                    debug!(url = %url, bytes = bytes.len(), "pre-fetched torrent file for hash derivation");
-                                    torrent_bytes_base64 = Some(BASE64.encode(&bytes));
-                                }
-                                Ok(_) => debug!(url = %url, "torrent file fetch returned empty body"),
-                                Err(e) => debug!(url = %url, error = %e, "torrent file body read failed"),
+                        Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+                            Ok(bytes) if !bytes.is_empty() => {
+                                debug!(url = %url, bytes = bytes.len(), "pre-fetched torrent file for hash derivation");
+                                torrent_bytes_base64 = Some(BASE64.encode(&bytes));
                             }
+                            Ok(_) => debug!(url = %url, "torrent file fetch returned empty body"),
+                            Err(e) => {
+                                debug!(url = %url, error = %e, "torrent file body read failed")
+                            }
+                        },
+                        Ok(resp) => {
+                            debug!(url = %url, status = %resp.status(), "torrent file fetch returned non-success")
                         }
-                        Ok(resp) => debug!(url = %url, status = %resp.status(), "torrent file fetch returned non-success"),
                         Err(e) => debug!(url = %url, error = %e, "torrent file fetch failed"),
                     }
                 }
