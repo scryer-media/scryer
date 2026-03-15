@@ -3,3 +3,15 @@
 # Debug symbols stay in object files; `lldb` and `rust-lldb` still work.
 [profile.dev]
 split-debuginfo = "unpacked"
+
+# ── ARM hardware crypto ──────────────────────────────────────────────────────
+# RustCrypto crates (aes, chacha20) need compile-time cfg flags on aarch64
+# to use hardware instructions. On x86_64 they auto-detect at runtime.
+[target.aarch64-apple-darwin]
+rustflags = ["--cfg", "aes_armv8", "--cfg", "chacha20_force_neon"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["--cfg", "aes_armv8", "--cfg", "chacha20_force_neon"]
+
+[target.aarch64-unknown-linux-musl]
+rustflags = ["--cfg", "aes_armv8", "--cfg", "chacha20_force_neon"]
