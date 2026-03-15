@@ -10,8 +10,8 @@ fi
 PUID=${PUID:-1000}
 PGID=${PGID:-1000}
 
-# Ensure data directory ownership matches the requested user
-chown "$PUID":"$PGID" /data
+# Ensure data directory and existing files are owned by the requested user
+chown -R "$PUID":"$PGID" /data
 
 echo "
 ───────────────────────────────────
