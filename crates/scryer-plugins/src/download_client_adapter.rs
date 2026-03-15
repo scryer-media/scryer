@@ -176,15 +176,13 @@ impl DownloadClient for WasmDownloadClient {
                             resolved_magnet_uri = Some(location.to_string());
                         } else {
                             // Follow the redirect with the normal client
-                            if let Ok(resp) = self.http.get(location).send().await {
-                                if resp.status().is_success() {
-                                    if let Ok(bytes) = resp.bytes().await {
-                                        if !bytes.is_empty() {
-                                            debug!(url = %url, bytes = bytes.len(), "pre-fetched torrent file (via redirect)");
-                                            torrent_bytes_base64 = Some(BASE64.encode(&bytes));
-                                        }
-                                    }
-                                }
+                            if let Ok(resp) = self.http.get(location).send().await
+                                && resp.status().is_success()
+                                && let Ok(bytes) = resp.bytes().await
+                                && !bytes.is_empty()
+                            {
+                                debug!(url = %url, bytes = bytes.len(), "pre-fetched torrent file (via redirect)");
+                                torrent_bytes_base64 = Some(BASE64.encode(&bytes));
                             }
                         }
                     }
