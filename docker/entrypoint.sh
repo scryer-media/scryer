@@ -10,8 +10,18 @@ fi
 PUID=${PUID:-1000}
 PGID=${PGID:-1000}
 
-# Ensure data directory and existing files are owned by the requested user
-chown -R "$PUID":"$PGID" /data
+# Derive the database directory from SCRYER_DB_PATH so we chown the right
+# location regardless of whether the user overrides the default /data path.
+DB_PATH="${SCRYER_DB_PATH:-/data/scryer.db}"
+DB_PATH="${DB_PATH#sqlite://}"   # strip scheme prefix
+DB_PATH="${DB_PATH%%\?*}"        # strip query params
+DB_DIR="$(dirname "$DB_PATH")"
+
+# Ensure the database directory (and any existing files) are owned by the
+# requested user.  Covers upgrades from older images that used a different uid.
+if [ -d "$DB_DIR" ]; then
+    chown -R "$PUID":"$PGID" "$DB_DIR"
+fi
 
 echo "
 ───────────────────────────────────
