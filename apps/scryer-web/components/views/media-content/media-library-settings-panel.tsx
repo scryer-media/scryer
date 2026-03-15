@@ -28,6 +28,12 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
 }: MediaLibrarySettingsPanelProps) {
   const t = useTranslate();
   const [browserOpen, setBrowserOpen] = React.useState(false);
+  const sortedFolders = React.useMemo(
+    () => rootFolders
+      .map((rf, i) => ({ rf, originalIndex: i }))
+      .sort((a, b) => (a.rf.isDefault === b.rf.isDefault ? 0 : a.rf.isDefault ? -1 : 1)),
+    [rootFolders],
+  );
 
   const handleAddPath = (path: string) => {
     const trimmed = path.trim();
@@ -62,7 +68,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
             <p className="text-xs text-muted-foreground">{t("settings.rootFoldersEmpty")}</p>
           ) : null}
           <ul className="space-y-2">
-            {rootFolders.map((rf, index) => (
+            {sortedFolders.map(({ rf, originalIndex: index }) => (
               <li key={rf.path} className="flex items-center gap-2">
                 <code className="flex-1 truncate rounded-md border border-border bg-muted/50 px-3 py-1.5 font-mono text-sm">
                   {rf.path}

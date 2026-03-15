@@ -1,6 +1,4 @@
-import * as React from "react";
 import { useTranslate } from "@/lib/context/translate-context";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -19,7 +17,6 @@ const RECAP_POLICY_OPTIONS = [
 export function GeneralSettingsPanel({
   activeQualityScopeId,
   mediaSettingsLoading,
-  mediaSettingsSaving,
   categoryFillerPolicies,
   handleFillerPolicyChange,
   categoryRecapPolicies,
@@ -32,11 +29,9 @@ export function GeneralSettingsPanel({
   handleNfoWriteChange,
   plexmatchWriteOnImport,
   handlePlexmatchWriteChange,
-  updateCategoryMediaProfileSettings,
 }: {
   activeQualityScopeId: ViewCategoryId;
   mediaSettingsLoading: boolean;
-  mediaSettingsSaving: boolean;
   categoryFillerPolicies: Record<ViewCategoryId, string>;
   handleFillerPolicyChange: (value: string) => void;
   categoryRecapPolicies: Record<ViewCategoryId, string>;
@@ -49,12 +44,11 @@ export function GeneralSettingsPanel({
   handleNfoWriteChange: (checked: boolean) => void;
   plexmatchWriteOnImport: Record<ViewCategoryId, string>;
   handlePlexmatchWriteChange: (checked: boolean) => void;
-  updateCategoryMediaProfileSettings: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
 }) {
   const t = useTranslate();
 
   return (
-    <form onSubmit={updateCategoryMediaProfileSettings} className="space-y-4">
+    <div className="space-y-4">
       {activeQualityScopeId === "anime" && (
         <Card>
           <CardHeader>
@@ -191,11 +185,6 @@ export function GeneralSettingsPanel({
         </CardContent>
       </Card>
 
-      <div className="flex justify-end">
-        <Button type="submit" disabled={mediaSettingsSaving}>
-          {mediaSettingsSaving ? t("label.saving") : t("label.save")}
-        </Button>
-      </div>
-    </form>
+    </div>
   );
 }

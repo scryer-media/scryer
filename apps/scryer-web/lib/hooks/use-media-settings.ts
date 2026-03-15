@@ -105,6 +105,7 @@ export type UseMediaSettingsResult = {
   setPlexmatchWriteOnImport: React.Dispatch<
     React.SetStateAction<Record<ViewCategoryId, string>>
   >;
+  saveSetting: (scope: string, scopeId: string | undefined, keyName: string, value: string) => void;
   updateCategoryMediaProfileSettings: (
     event: React.FormEvent<HTMLFormElement>,
   ) => Promise<void> | void;
@@ -319,6 +320,24 @@ export function useMediaSettings({
         });
     },
     [client, setGlobalStatus, view],
+  );
+
+  const saveSetting = React.useCallback(
+    (scope: string, scopeId: string | undefined, keyName: string, value: string) => {
+      client
+        .mutation(saveAdminSettingsMutation, {
+          input: {
+            scope,
+            ...(scopeId ? { scopeId } : {}),
+            items: [{ keyName, value }],
+          },
+        })
+        .toPromise()
+        .then(({ error }) => {
+          if (error) setGlobalStatus(error.message);
+        });
+    },
+    [client, setGlobalStatus],
   );
 
   const normalizeQualityProfiles = React.useCallback(
@@ -1123,6 +1142,7 @@ export function useMediaSettings({
     setNfoWriteOnImport,
     plexmatchWriteOnImport,
     setPlexmatchWriteOnImport,
+    saveSetting,
     updateCategoryMediaProfileSettings,
     refreshMediaSettings,
     refreshCategoryValidation,

@@ -126,6 +126,7 @@ export function MediaContentView({
     qualityProfileInheritValue: string;
     toProfileOptions: (profiles: ParsedQualityProfile[]) => QualityProfileOption[];
     handleFacetPersonaSave: (persona: ScoringPersonaId | null) => Promise<void>;
+    saveSetting: (scope: string, scopeId: string | undefined, keyName: string, value: string) => void;
     updateCategoryMediaProfileSettings: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
     mediaSettingsSaving: boolean;
     titleNameForQueue: string;
@@ -233,6 +234,7 @@ export function MediaContentView({
     qualityProfileInheritValue,
     toProfileOptions,
     handleFacetPersonaSave,
+    saveSetting,
     updateCategoryMediaProfileSettings,
     mediaSettingsSaving,
     titleNameForQueue,
@@ -357,62 +359,58 @@ export function MediaContentView({
 
   const handleFillerPolicyChange = React.useCallback(
     (value: string) => {
-      setCategoryFillerPolicies((previous) => ({
-        ...previous,
-        [activeQualityScopeId]: value,
-      }));
+      setCategoryFillerPolicies((previous) => ({ ...previous, [activeQualityScopeId]: value }));
+      saveSetting("system", activeQualityScopeId, "anime.filler_policy", value);
     },
-    [activeQualityScopeId, setCategoryFillerPolicies],
+    [activeQualityScopeId, setCategoryFillerPolicies, saveSetting],
   );
 
   const handleRecapPolicyChange = React.useCallback(
     (value: string) => {
-      setCategoryRecapPolicies((previous) => ({
-        ...previous,
-        [activeQualityScopeId]: value,
-      }));
+      setCategoryRecapPolicies((previous) => ({ ...previous, [activeQualityScopeId]: value }));
+      saveSetting("system", activeQualityScopeId, "anime.recap_policy", value);
     },
-    [activeQualityScopeId, setCategoryRecapPolicies],
+    [activeQualityScopeId, setCategoryRecapPolicies, saveSetting],
   );
 
   const handleMonitorSpecialsChange = React.useCallback(
     (checked: boolean) => {
-      setCategoryMonitorSpecials((previous) => ({
-        ...previous,
-        [activeQualityScopeId]: checked ? "true" : "false",
-      }));
+      const value = checked ? "true" : "false";
+      setCategoryMonitorSpecials((previous) => ({ ...previous, [activeQualityScopeId]: value }));
+      saveSetting("system", activeQualityScopeId, "anime.monitor_specials", value);
     },
-    [activeQualityScopeId, setCategoryMonitorSpecials],
+    [activeQualityScopeId, setCategoryMonitorSpecials, saveSetting],
   );
 
   const handleInterSeasonMoviesChange = React.useCallback(
     (checked: boolean) => {
-      setCategoryInterSeasonMovies((previous) => ({
-        ...previous,
-        [activeQualityScopeId]: checked ? "true" : "false",
-      }));
+      const value = checked ? "true" : "false";
+      setCategoryInterSeasonMovies((previous) => ({ ...previous, [activeQualityScopeId]: value }));
+      saveSetting("system", activeQualityScopeId, "anime.inter_season_movies", value);
     },
-    [activeQualityScopeId, setCategoryInterSeasonMovies],
+    [activeQualityScopeId, setCategoryInterSeasonMovies, saveSetting],
   );
 
   const handleNfoWriteChange = React.useCallback(
     (checked: boolean) => {
-      setNfoWriteOnImport((previous) => ({
-        ...previous,
-        [activeQualityScopeId]: checked ? "true" : "false",
-      }));
+      const value = checked ? "true" : "false";
+      const key = activeQualityScopeId === "movie" ? "nfo.write_on_import.movie"
+        : activeQualityScopeId === "anime" ? "nfo.write_on_import.anime"
+        : "nfo.write_on_import.series";
+      setNfoWriteOnImport((previous) => ({ ...previous, [activeQualityScopeId]: value }));
+      saveSetting("system", undefined, key, value);
     },
-    [activeQualityScopeId, setNfoWriteOnImport],
+    [activeQualityScopeId, setNfoWriteOnImport, saveSetting],
   );
 
   const handlePlexmatchWriteChange = React.useCallback(
     (checked: boolean) => {
-      setPlexmatchWriteOnImport((previous) => ({
-        ...previous,
-        [activeQualityScopeId]: checked ? "true" : "false",
-      }));
+      const value = checked ? "true" : "false";
+      const key = activeQualityScopeId === "anime" ? "plexmatch.write_on_import.anime" : "plexmatch.write_on_import.series";
+      setPlexmatchWriteOnImport((previous) => ({ ...previous, [activeQualityScopeId]: value }));
+      saveSetting("system", undefined, key, value);
     },
-    [activeQualityScopeId, setPlexmatchWriteOnImport],
+    [activeQualityScopeId, setPlexmatchWriteOnImport, saveSetting],
   );
 
   const handleIndexerCategoriesChange = React.useCallback(
@@ -541,7 +539,6 @@ export function MediaContentView({
           <GeneralSettingsPanel
             activeQualityScopeId={activeQualityScopeId}
             mediaSettingsLoading={mediaSettingsLoading}
-            mediaSettingsSaving={mediaSettingsSaving}
             categoryFillerPolicies={categoryFillerPolicies}
             handleFillerPolicyChange={handleFillerPolicyChange}
             categoryRecapPolicies={categoryRecapPolicies}
@@ -554,7 +551,6 @@ export function MediaContentView({
             handleNfoWriteChange={handleNfoWriteChange}
             plexmatchWriteOnImport={plexmatchWriteOnImport}
             handlePlexmatchWriteChange={handlePlexmatchWriteChange}
-            updateCategoryMediaProfileSettings={updateCategoryMediaProfileSettings}
           />
         </div>
       ) : (
