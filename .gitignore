@@ -7,6 +7,8 @@
 /.DS_Store
 apps/scryer-web/dist
 apps/scryer-web/node_modules
+apps/scryer-web/package
+/package-lock.json
 crates/scryer/ui
 tmp
 .claude
