@@ -48,6 +48,7 @@ export type TitleDetail = {
   year: number | null;
   overview: string | null;
   posterUrl: string | null;
+  bannerUrl: string | null;
   sortTitle: string | null;
   slug: string | null;
   imdbId: string | null;

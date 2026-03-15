@@ -19,7 +19,7 @@ import {
   triggerTitleWantedSearchMutation,
   updateTitleMutation,
 } from "@/lib/graphql/mutations";
-import { downloadQueueQuery, searchSeasonQuery } from "@/lib/graphql/queries";
+import { downloadQueueQuery, rootFoldersQuery, searchSeasonQuery } from "@/lib/graphql/queries";
 import type { DownloadQueueItem } from "@/lib/types/download-queue";
 import type { AdminSetting } from "@/lib/types/admin-settings";
 import type { Release } from "@/lib/types";
@@ -49,6 +49,7 @@ export type TitleDetail = {
   year: number | null;
   overview: string | null;
   posterUrl: string | null;
+  bannerUrl: string | null;
   sortTitle: string | null;
   slug: string | null;
   imdbId: string | null;
@@ -215,6 +216,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   >({});
   const [qualityProfiles, setQualityProfiles] = React.useState<{ id: string; name: string }[]>([]);
   const [defaultRootFolder, setDefaultRootFolder] = React.useState(DEFAULT_SERIES_LIBRARY_PATH);
+  const [rootFolders, setRootFolders] = React.useState<{ path: string; isDefault: boolean }[]>([]);
   const [mediaFilesByEpisode, setMediaFilesByEpisode] = React.useState<
     Record<string, EpisodeMediaFile[]>
   >({});
@@ -317,6 +319,12 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         );
         const folder = getSettingDisplayValue(folderRecord).trim();
         if (folder) setDefaultRootFolder(folder);
+
+        const facet = title?.facet === "anime" ? "anime" : "tv";
+        const rfResult = await client.query(rootFoldersQuery, { facet }).toPromise();
+        if (!cancelled && Array.isArray(rfResult.data?.rootFolders)) {
+          setRootFolders(rfResult.data.rootFolders);
+        }
       } catch {
         // Settings fetch is best-effort
       }
@@ -862,6 +870,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         onAutoSearchEpisode={handleAutoSearchEpisode}
         qualityProfiles={qualityProfiles}
         defaultRootFolder={defaultRootFolder}
+        rootFolders={rootFolders}
         onUpdateTitleTags={handleUpdateTitleTags}
         completedDownloads={completedDownloads}
         onOpenManualImport={handleOpenManualImport}

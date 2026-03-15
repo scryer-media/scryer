@@ -6,13 +6,13 @@ use fast_image_resize as fir;
 use image::codecs::avif::AvifEncoder;
 use image::{DynamicImage, ImageEncoder, ImageFormat, RgbaImage};
 use reqwest::header::{CONTENT_LENGTH, CONTENT_TYPE, ETAG, LAST_MODIFIED};
+use ring::digest;
 use scryer_application::{
     AppError, AppResult, TitleImageBlob, TitleImageKind, TitleImageProcessor,
     TitleImageReplacement, TitleImageRepository, TitleImageStorageMode, TitleImageSyncTask,
     TitleImageVariantRecord,
 };
 use scryer_domain::Title;
-use sha2::{Digest, Sha256};
 use sqlx::{Row, SqlitePool};
 use tracing::warn;
 use uuid::Uuid;
@@ -21,38 +21,19 @@ const MAX_SOURCE_BYTES: usize = 20 * 1024 * 1024;
 const POSTER_VARIANT_WIDTHS: [u32; 3] = [500, 250, 70];
 const TITLE_IMAGE_CONNECT_TIMEOUT_SECS: u64 = 5;
 const TITLE_IMAGE_REQUEST_TIMEOUT_SECS: u64 = 20;
-const AVIF_SPEED_DEFAULT_RELEASE: u8 = 6;
-const AVIF_SPEED_DEFAULT_DEBUG: u8 = 10;
-const AVIF_QUALITY_DEFAULT_RELEASE: u8 = 85;
-const AVIF_QUALITY_DEFAULT_DEBUG: u8 = 60;
+const AVIF_SPEED: u8 = if cfg!(debug_assertions) { 10 } else { 6 };
+const AVIF_VARIANT_SPEED: u8 = 9;
+const AVIF_QUALITY: u8 = if cfg!(debug_assertions) { 60 } else { 85 };
 
 #[derive(Clone)]
 pub struct SqliteTitleImageProcessor {
     client: reqwest::Client,
     max_source_bytes: usize,
     avif_enabled: bool,
-    avif_speed: u8,
-    avif_quality: u8,
 }
 
 impl SqliteTitleImageProcessor {
     pub fn new() -> Self {
-        let avif_speed = parse_env_u8(
-            "SCRYER_TITLE_IMAGE_AVIF_SPEED",
-            if cfg!(debug_assertions) {
-                AVIF_SPEED_DEFAULT_DEBUG
-            } else {
-                AVIF_SPEED_DEFAULT_RELEASE
-            },
-        );
-        let avif_quality = parse_env_u8(
-            "SCRYER_TITLE_IMAGE_AVIF_QUALITY",
-            if cfg!(debug_assertions) {
-                AVIF_QUALITY_DEFAULT_DEBUG
-            } else {
-                AVIF_QUALITY_DEFAULT_RELEASE
-            },
-        );
         let client = reqwest::Client::builder()
             .user_agent(format!("scryer/{}", env!("CARGO_PKG_VERSION")))
             .connect_timeout(std::time::Duration::from_secs(
@@ -67,8 +48,6 @@ impl SqliteTitleImageProcessor {
             client,
             max_source_bytes: MAX_SOURCE_BYTES,
             avif_enabled: true,
-            avif_speed,
-            avif_quality,
         }
     }
 
@@ -88,8 +67,6 @@ impl SqliteTitleImageProcessor {
             client,
             max_source_bytes: MAX_SOURCE_BYTES,
             avif_enabled,
-            avif_speed: AVIF_SPEED_DEFAULT_DEBUG,
-            avif_quality: AVIF_QUALITY_DEFAULT_DEBUG,
         }
     }
 
@@ -184,16 +161,10 @@ impl SqliteTitleImageProcessor {
         }
 
         if self.avif_enabled {
-            match encode_avif(&rgba, self.avif_speed, self.avif_quality) {
+            match encode_avif(&rgba, AVIF_SPEED, AVIF_QUALITY) {
                 Ok(master_bytes) => {
                     let master_sha256 = sha256_hex(&master_bytes);
-                    let variants = build_poster_variants(
-                        kind,
-                        &rgba,
-                        &master_bytes,
-                        self.avif_speed,
-                        self.avif_quality,
-                    )?;
+                    let variants = build_image_variants(kind, &rgba, &master_bytes)?;
                     return Ok(TitleImageReplacement {
                         kind,
                         source_url: source_url.to_string(),
@@ -260,7 +231,13 @@ impl TitleImageProcessor for SqliteTitleImageProcessor {
         source_url: &str,
     ) -> AppResult<TitleImageReplacement> {
         let (bytes, etag, last_modified) = self.fetch_source(source_url).await?;
-        self.process_bytes(kind, source_url, &bytes, etag, last_modified)
+        let this = self.clone();
+        let source_url = source_url.to_string();
+        tokio::task::spawn_blocking(move || {
+            this.process_bytes(kind, &source_url, &bytes, etag, last_modified)
+        })
+        .await
+        .map_err(|err| AppError::Repository(format!("image encode task failed: {err}")))?
     }
 }
 
@@ -296,6 +273,15 @@ pub(crate) async fn apply_local_poster_urls(
     pool: &SqlitePool,
     titles: &mut [Title],
 ) -> AppResult<()> {
+    apply_local_image_urls(pool, TitleImageKind::Poster, "w500", titles).await
+}
+
+pub(crate) async fn apply_local_image_urls(
+    pool: &SqlitePool,
+    kind: TitleImageKind,
+    preferred_variant: &str,
+    titles: &mut [Title],
+) -> AppResult<()> {
     if titles.is_empty() {
         return Ok(());
     }
@@ -304,10 +290,14 @@ pub(crate) async fn apply_local_poster_urls(
         .iter()
         .map(|title| title.id.clone())
         .collect::<Vec<_>>();
-    let local_urls = load_local_poster_url_map(pool, &title_ids).await?;
+    let local_urls = load_local_image_url_map(pool, kind, preferred_variant, &title_ids).await?;
     for title in titles {
         if let Some(url) = local_urls.get(&title.id) {
-            title.poster_url = Some(url.clone());
+            match kind {
+                TitleImageKind::Poster => title.poster_url = Some(url.clone()),
+                TitleImageKind::Banner => title.banner_url = Some(url.clone()),
+                TitleImageKind::Fanart => {}
+            }
         }
     }
 
@@ -319,33 +309,41 @@ pub(crate) async fn list_titles_requiring_image_refresh_query(
     kind: TitleImageKind,
     limit: usize,
 ) -> AppResult<Vec<TitleImageSyncTask>> {
-    let rows = sqlx::query(
-        "SELECT t.id AS title_id, t.poster_url AS source_url, ti.source_url AS cached_source_url
+    let (source_col, preferred_variant) = match kind {
+        TitleImageKind::Poster => ("poster_url", "w500"),
+        TitleImageKind::Banner => ("banner_url", "master"),
+        TitleImageKind::Fanart => ("fanart_url", "w1280"),
+    };
+
+    let sql = format!(
+        "SELECT t.id AS title_id, t.{source_col} AS source_url, ti.source_url AS cached_source_url
          FROM titles t
          LEFT JOIN title_images ti
            ON ti.title_id = t.id
           AND ti.kind = ?
-         LEFT JOIN title_image_variants w500
-           ON w500.title_image_id = ti.id
-          AND w500.variant_key = 'w500'
-         WHERE NULLIF(TRIM(t.poster_url), '') IS NOT NULL
+         LEFT JOIN title_image_variants pv
+           ON pv.title_image_id = ti.id
+          AND pv.variant_key = '{preferred_variant}'
+         WHERE NULLIF(TRIM(t.{source_col}), '') IS NOT NULL
            AND (
                 ti.id IS NULL
-                OR ti.source_url <> t.poster_url
+                OR ti.source_url <> t.{source_col}
                 OR (
                     ti.storage_mode = ?
-                    AND w500.id IS NULL
+                    AND pv.id IS NULL
                 )
            )
          ORDER BY t.created_at ASC
          LIMIT ?",
-    )
-    .bind(kind.as_str())
-    .bind(TitleImageStorageMode::AvifMaster.as_str())
-    .bind(limit as i64)
-    .fetch_all(pool)
-    .await
-    .map_err(|err| AppError::Repository(err.to_string()))?;
+    );
+
+    let rows = sqlx::query(&sql)
+        .bind(kind.as_str())
+        .bind(TitleImageStorageMode::AvifMaster.as_str())
+        .bind(limit as i64)
+        .fetch_all(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
 
     Ok(rows
         .into_iter()
@@ -534,8 +532,10 @@ pub(crate) async fn get_title_image_blob_query(
     }))
 }
 
-async fn load_local_poster_url_map(
+async fn load_local_image_url_map(
     pool: &SqlitePool,
+    kind: TitleImageKind,
+    preferred_variant: &str,
     title_ids: &[String],
 ) -> AppResult<HashMap<String, String>> {
     if title_ids.is_empty() {
@@ -544,12 +544,13 @@ async fn load_local_poster_url_map(
 
     let placeholders = title_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     let sql = format!(
-        "SELECT ti.title_id, ti.storage_mode, ti.master_sha256, w500.sha256 AS w500_sha256
+        "SELECT ti.title_id, ti.storage_mode, ti.master_sha256, pv.sha256 AS pv_sha256
          FROM title_images ti
-         LEFT JOIN title_image_variants w500
-           ON w500.title_image_id = ti.id
-          AND w500.variant_key = 'w500'
-         WHERE ti.kind = 'poster' AND ti.title_id IN ({placeholders})"
+         LEFT JOIN title_image_variants pv
+           ON pv.title_image_id = ti.id
+          AND pv.variant_key = '{preferred_variant}'
+         WHERE ti.kind = '{kind_str}' AND ti.title_id IN ({placeholders})",
+        kind_str = kind.as_str(),
     );
 
     let mut query = sqlx::query(&sql);
@@ -568,67 +569,78 @@ async fn load_local_poster_url_map(
         let title_id: String = row.get("title_id");
         let storage_mode = row.get::<String, _>("storage_mode");
         let master_sha256: String = row.get("master_sha256");
-        let w500_sha256: Option<String> = row.try_get("w500_sha256").unwrap_or(None);
+        let pv_sha256: Option<String> = row.try_get("pv_sha256").unwrap_or(None);
         let (variant, version_hash) = if storage_mode == TitleImageStorageMode::Original.as_str() {
             ("original", master_sha256)
-        } else if let Some(w500_sha256) = w500_sha256 {
-            ("w500", w500_sha256)
+        } else if let Some(pv_sha256) = pv_sha256 {
+            (preferred_variant, pv_sha256)
         } else {
             warn!(
                 title_id = %title_id,
+                kind = kind.as_str(),
                 storage_mode,
-                "poster cache missing w500 variant; serving original master until refresh repairs it"
+                "image cache missing preferred variant; serving original master until refresh repairs it"
             );
             ("original", master_sha256)
         };
         out.insert(
             title_id.clone(),
-            synthesize_local_title_image_url(
-                &base_path,
-                &title_id,
-                TitleImageKind::Poster,
-                variant,
-                &version_hash,
-            ),
+            synthesize_local_title_image_url(&base_path, &title_id, kind, variant, &version_hash),
         );
     }
 
     Ok(out)
 }
 
-fn build_poster_variants(
+fn build_image_variants(
     kind: TitleImageKind,
     rgba: &RgbaImage,
     master_bytes: &[u8],
-    avif_speed: u8,
-    avif_quality: u8,
 ) -> AppResult<Vec<TitleImageVariantRecord>> {
-    if kind != TitleImageKind::Poster {
-        return Ok(Vec::new());
+    match kind {
+        TitleImageKind::Poster => {
+            let (source_width, source_height) = rgba.dimensions();
+            let mut variants = Vec::with_capacity(POSTER_VARIANT_WIDTHS.len());
+            for target_width in POSTER_VARIANT_WIDTHS {
+                let actual_width = source_width.min(target_width);
+                let actual_height = scaled_height(source_width, source_height, actual_width);
+                let bytes = if actual_width == source_width {
+                    master_bytes.to_vec()
+                } else {
+                    let speed = if target_width >= 500 {
+                        AVIF_SPEED
+                    } else {
+                        AVIF_VARIANT_SPEED
+                    };
+                    let resized = resize_rgba(rgba, actual_width, actual_height)?;
+                    encode_avif(&resized, speed, AVIF_QUALITY)?
+                };
+                variants.push(TitleImageVariantRecord {
+                    variant_key: format!("w{target_width}"),
+                    format: SupportedImageFormat::Avif.as_str().to_string(),
+                    width: actual_width as i32,
+                    height: actual_height as i32,
+                    sha256: sha256_hex(&bytes),
+                    bytes,
+                });
+            }
+            Ok(variants)
+        }
+        TitleImageKind::Banner => {
+            // Full-resolution AVIF — single "master" variant, no resizing
+            let bytes = encode_avif(rgba, AVIF_SPEED, AVIF_QUALITY)?;
+            let (width, height) = rgba.dimensions();
+            Ok(vec![TitleImageVariantRecord {
+                variant_key: "master".to_string(),
+                format: SupportedImageFormat::Avif.as_str().to_string(),
+                width: width as i32,
+                height: height as i32,
+                sha256: sha256_hex(&bytes),
+                bytes,
+            }])
+        }
+        TitleImageKind::Fanart => Ok(Vec::new()),
     }
-
-    let (source_width, source_height) = rgba.dimensions();
-    let mut variants = Vec::with_capacity(POSTER_VARIANT_WIDTHS.len());
-    for target_width in POSTER_VARIANT_WIDTHS {
-        let actual_width = source_width.min(target_width);
-        let actual_height = scaled_height(source_width, source_height, actual_width);
-        let bytes = if actual_width == source_width {
-            master_bytes.to_vec()
-        } else {
-            let resized = resize_rgba(rgba, actual_width, actual_height)?;
-            encode_avif(&resized, avif_speed, avif_quality)?
-        };
-        variants.push(TitleImageVariantRecord {
-            variant_key: format!("w{target_width}"),
-            format: SupportedImageFormat::Avif.as_str().to_string(),
-            width: actual_width as i32,
-            height: actual_height as i32,
-            sha256: sha256_hex(&bytes),
-            bytes,
-        });
-    }
-
-    Ok(variants)
 }
 
 fn resize_rgba(image: &RgbaImage, width: u32, height: u32) -> AppResult<RgbaImage> {
@@ -701,15 +713,8 @@ fn apply_orientation(image: DynamicImage, orientation: u16) -> DynamicImage {
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    format!("{digest:x}")
-}
-
-fn parse_env_u8(name: &str, default: u8) -> u8 {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.trim().parse::<u8>().ok())
-        .unwrap_or(default)
+    let hash = digest::digest(&digest::SHA256, bytes);
+    hash.as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn normalized_base_path_from_env() -> String {

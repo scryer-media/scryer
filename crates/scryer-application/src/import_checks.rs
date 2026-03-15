@@ -4,8 +4,6 @@
 //! `run_import_checks` executes them in order and short-circuits on the first
 //! `Reject`.
 
-#[cfg(unix)]
-use nix::libc;
 use std::path::Path;
 
 use crate::release_parser::ParsedReleaseMetadata;

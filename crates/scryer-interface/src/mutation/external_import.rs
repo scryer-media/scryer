@@ -136,6 +136,11 @@ impl ExternalImportMutations {
             .collect();
         let selected_idx_keys: HashSet<String> =
             input.selected_indexer_dedup_keys.into_iter().collect();
+        let dc_api_key_overrides: std::collections::HashMap<String, String> = input
+            .download_client_api_key_overrides
+            .into_iter()
+            .map(|o| (o.dedup_key, o.api_key))
+            .collect();
 
         let mut result = ExternalImportResultPayload {
             media_paths_saved: false,
@@ -272,8 +277,8 @@ impl ExternalImportMutations {
             let base_url = format!("{protocol}://{host}{port_part}{path_part}");
 
             let mut config_obj = serde_json::Map::new();
-            config_obj.insert("host".into(), serde_json::Value::String(host));
-            config_obj.insert("port".into(), serde_json::Value::String(port));
+            config_obj.insert("host".into(), serde_json::Value::String(host.clone()));
+            config_obj.insert("port".into(), serde_json::Value::String(port.clone()));
             config_obj.insert("use_ssl".into(), serde_json::Value::Bool(use_ssl));
             config_obj.insert("url_base".into(), serde_json::Value::String(url_base));
             config_obj.insert(
@@ -282,7 +287,14 @@ impl ExternalImportMutations {
             );
 
             if scryer_type == "sabnzbd" || scryer_type == "weaver" {
-                if let Some(api_key) = external_import::field_str(&dc.fields, "apiKey") {
+                // Prefer a user-supplied override (needed when Sonarr/Radarr masked
+                // the key), then fall back to the value fetched from the arr API.
+                let dedup_key = format!("{}:{}:{}", scryer_type, host, port);
+                let api_key = dc_api_key_overrides
+                    .get(&dedup_key)
+                    .cloned()
+                    .or_else(|| external_import::field_str_sensitive(&dc.fields, "apiKey"));
+                if let Some(api_key) = api_key {
                     config_obj.insert("api_key".into(), serde_json::Value::String(api_key));
                 }
             } else {
@@ -469,7 +481,9 @@ fn map_download_client(
     let use_ssl = external_import::field_bool(&dc.fields, "useSsl").unwrap_or(false);
     let url_base = external_import::field_str(&dc.fields, "urlBase");
     let username = external_import::field_str(&dc.fields, "username");
-    let api_key = external_import::field_str(&dc.fields, "apiKey");
+    // Use field_str_sensitive so that Sonarr/Radarr's "********" mask becomes
+    // None — callers can then detect that the key must be entered manually.
+    let api_key = external_import::field_str_sensitive(&dc.fields, "apiKey");
 
     let dedup_key = format!(
         "{}:{}:{}",
@@ -497,7 +511,7 @@ fn map_download_client(
 fn map_indexer(idx: &ArrIndexer, source: &str) -> ExternalImportIndexerPayload {
     let scryer_type = external_import::map_indexer_provider_type(&idx.implementation, &idx.fields);
     let base_url = external_import::field_str(&idx.fields, "baseUrl");
-    let api_key = external_import::field_str(&idx.fields, "apiKey");
+    let api_key = external_import::field_str_sensitive(&idx.fields, "apiKey");
 
     let dedup_key = format!(
         "{}:{}",

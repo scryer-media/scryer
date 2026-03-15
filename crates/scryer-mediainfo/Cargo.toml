@@ -7,16 +7,13 @@ edition = "2021"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
 
 # Container parsers
 matroska-demuxer = "0.7"
 mp4parse = "0.17"
 riff = "2"
-mpeg2ts-reader = "0.18"
 
 # Codec bitstream parsers
 scuffle-h264 = "0.2"
 scuffle-h265 = "0.2"
-dolby_vision = "3"
 bytes = "1"

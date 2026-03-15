@@ -1225,34 +1225,31 @@ async fn import_single_episode_file(
         .collect();
     let is_filler = target_episodes.iter().any(|episode| episode.is_filler);
 
-    // Build rename tokens
-    let mut tokens = build_rename_tokens(title, &parsed, &ext);
-    tokens.insert("season".to_string(), season_str.clone());
-    tokens.insert("season_order".to_string(), season_str.clone());
-    if let Some(ep_num) = ep_meta.episode_numbers.first() {
-        tokens.insert("episode".to_string(), ep_num.to_string());
-    }
-    if let Some(abs) = ep_meta.absolute_episode {
-        tokens.insert("absolute_episode".to_string(), abs.to_string());
-    } else if let Some(abs) = target_episodes
+    // Build rename tokens and destination path
+    let ep_num_str = ep_meta
+        .episode_numbers
         .first()
-        .and_then(|ep| ep.absolute_number.as_deref())
-    {
-        tokens.insert("absolute_episode".to_string(), abs.to_string());
-    }
-
-    let rendered_filename = render_rename_template(rename_template, &tokens);
-    let dest_path = if use_season_folders(title) {
-        let season_folder = format!("Season {:02}", season);
-        PathBuf::from(media_root)
-            .join(title_folder)
-            .join(&season_folder)
-            .join(&rendered_filename)
-    } else {
-        PathBuf::from(media_root)
-            .join(title_folder)
-            .join(&rendered_filename)
-    };
+        .map(|n| n.to_string())
+        .unwrap_or_default();
+    let abs_str = ep_meta.absolute_episode.map(|n| n.to_string()).or_else(|| {
+        target_episodes
+            .first()
+            .and_then(|ep| ep.absolute_number.clone())
+    });
+    let episode_title = target_episodes.first().and_then(|ep| ep.title.as_deref());
+    let dest_path = episode_import_dest_path(
+        title,
+        &parsed,
+        &ext,
+        media_root,
+        title_folder,
+        rename_template,
+        season as u32,
+        &ep_num_str,
+        abs_str.as_deref(),
+        episode_title,
+        None,
+    );
 
     // Pre-import checks
     let existing_files = app
@@ -1517,6 +1514,54 @@ pub(crate) async fn resolve_import_paths(
         .unwrap_or_else(|| rename_template_default.to_string());
 
     Ok((media_root, rename_template))
+}
+
+/// Compute the destination path for an episode import using the canonical
+/// token set: base tokens from parsed release metadata, overridden by the
+/// explicit episode values supplied by the caller.
+///
+/// `ep_num_str` may be empty to leave `{episode}` blank (anime absolute-only
+/// files where no per-season episode number is known).
+/// `quality_override` replaces the filename-parsed quality token when the
+/// caller supplies an explicit label (e.g. manual import).
+pub(crate) fn episode_import_dest_path(
+    title: &scryer_domain::Title,
+    parsed: &crate::ParsedReleaseMetadata,
+    ext: &str,
+    media_root: &str,
+    title_folder: &str,
+    rename_template: &str,
+    season_num: u32,
+    ep_num_str: &str,
+    absolute_number: Option<&str>,
+    episode_title: Option<&str>,
+    quality_override: Option<&str>,
+) -> PathBuf {
+    let mut tokens = build_rename_tokens(title, parsed, ext);
+    tokens.insert("season".to_string(), season_num.to_string());
+    tokens.insert("season_order".to_string(), season_num.to_string());
+    tokens.insert("episode".to_string(), ep_num_str.to_string());
+    tokens.insert(
+        "absolute_episode".to_string(),
+        absolute_number.unwrap_or("").to_string(),
+    );
+    tokens.insert(
+        "episode_title".to_string(),
+        episode_title.unwrap_or("").to_string(),
+    );
+    if let Some(q) = quality_override {
+        tokens.insert("quality".to_string(), q.to_string());
+    }
+    let rendered = render_rename_template(rename_template, &tokens);
+    if use_season_folders(title) {
+        let season_folder = format!("Season {:02}", season_num);
+        PathBuf::from(media_root)
+            .join(title_folder)
+            .join(&season_folder)
+            .join(&rendered)
+    } else {
+        PathBuf::from(media_root).join(title_folder).join(&rendered)
+    }
 }
 
 /// Check whether the title's tags request season-folder organisation.
@@ -2158,37 +2203,21 @@ pub async fn execute_manual_import(
             .as_ref()
             .and_then(|s| s.parse().ok())
             .unwrap_or(1);
-        let ep_num: u32 = episode
-            .episode_number
-            .as_ref()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
+        let ep_num_str = episode.episode_number.clone().unwrap_or_default();
 
-        // Build rename tokens using episode metadata (not filename parsing)
-        let mut tokens = build_rename_tokens(&title, &parsed, ext);
-        tokens.insert("season".to_string(), season_num.to_string());
-        tokens.insert("episode".to_string(), ep_num.to_string());
-        tokens.insert(
-            "episode_title".to_string(),
-            episode.title.clone().unwrap_or_default(),
+        let dest_path = episode_import_dest_path(
+            &title,
+            &parsed,
+            ext,
+            &media_root,
+            &title_folder,
+            &rename_template,
+            season_num,
+            &ep_num_str,
+            episode.absolute_number.as_deref(),
+            episode.title.as_deref(),
+            mapping.quality.as_deref(),
         );
-        // Override quality if user specified one
-        if let Some(ref q) = mapping.quality {
-            tokens.insert("quality".to_string(), q.clone());
-        }
-
-        let rendered = render_rename_template(&rename_template, &tokens);
-        let dest_path = if use_season_folders(&title) {
-            let season_folder = format!("Season {:02}", season_num);
-            PathBuf::from(&media_root)
-                .join(&title_folder)
-                .join(&season_folder)
-                .join(&rendered)
-        } else {
-            PathBuf::from(&media_root)
-                .join(&title_folder)
-                .join(&rendered)
-        };
 
         // Import file
         match app

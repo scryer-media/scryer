@@ -10,11 +10,13 @@ interface SetupImportReviewViewProps {
   selectedAnimePath: string | null;
   selectedDcKeys: Set<string>;
   selectedIdxKeys: Set<string>;
+  dcApiKeyOverrides: Map<string, string>;
   onSelectMoviesPath: (path: string | null) => void;
   onSelectSeriesPath: (path: string | null) => void;
   onSelectAnimePath: (path: string | null) => void;
   onToggleDc: (dedupKey: string) => void;
   onToggleIdx: (dedupKey: string) => void;
+  onSetDcApiKey: (dedupKey: string, apiKey: string) => void;
   onImport: () => void;
   onBack: () => void;
   importing: boolean;
@@ -29,11 +31,13 @@ export function SetupImportReviewView({
   selectedAnimePath,
   selectedDcKeys,
   selectedIdxKeys,
+  dcApiKeyOverrides,
   onSelectMoviesPath,
   onSelectSeriesPath,
   onSelectAnimePath,
   onToggleDc,
   onToggleIdx,
+  onSetDcApiKey,
   onImport,
   onBack,
   importing,
@@ -157,35 +161,68 @@ export function SetupImportReviewView({
       {/* Download Clients */}
       {preview.downloadClients.length > 0 ? (
         <Section title={t("setup.downloadClientsSection")}>
-          {preview.downloadClients.map((dc) => (
-            <label
-              key={dc.dedupKey}
-              className={`flex items-center gap-3 rounded px-2 py-2 text-sm ${
-                dc.supported ? "cursor-pointer hover:bg-muted" : "cursor-not-allowed opacity-50"
-              }`}
-            >
-              <input
-                type="checkbox"
-                checked={selectedDcKeys.has(dc.dedupKey)}
-                onChange={() => onToggleDc(dc.dedupKey)}
-                disabled={!dc.supported}
-                className="accent-primary"
-              />
-              <div className="flex-1">
-                <span className="font-medium">{dc.name}</span>
-                <span className="ml-2 text-xs text-muted-foreground">
-                  {dc.implementation}
-                  {dc.host ? ` @ ${dc.host}${dc.port ? `:${dc.port}` : ""}` : ""}
-                </span>
+          {preview.downloadClients.map((dc) => {
+            const needsApiKey =
+              dc.supported &&
+              dc.apiKey === null &&
+              (dc.scryerClientType === "sabnzbd" || dc.scryerClientType === "weaver");
+            const isSelected = selectedDcKeys.has(dc.dedupKey);
+            const sabUrl = dc.host
+              ? `${dc.useSsl ? "https" : "http"}://${dc.host}${dc.port ? `:${dc.port}` : ""}${dc.urlBase ? `/${dc.urlBase.replace(/^\//, "")}` : ""}/config/general/`
+              : null;
+            return (
+              <div key={dc.dedupKey}>
+                <label
+                  className={`flex items-center gap-3 rounded px-2 py-2 text-sm ${
+                    dc.supported ? "cursor-pointer hover:bg-muted" : "cursor-not-allowed opacity-50"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => onToggleDc(dc.dedupKey)}
+                    disabled={!dc.supported}
+                    className="accent-primary"
+                  />
+                  <div className="flex-1">
+                    <span className="font-medium">{dc.name}</span>
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      {dc.implementation}
+                      {dc.host ? ` @ ${dc.host}${dc.port ? `:${dc.port}` : ""}` : ""}
+                    </span>
+                  </div>
+                  <SourceBadges sources={dc.sources} t={t} />
+                  {!dc.supported ? (
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                      {t("setup.notSupported")}
+                    </span>
+                  ) : null}
+                </label>
+                {needsApiKey && isSelected ? (
+                  <div className="ml-8 mb-1 space-y-1">
+                    <p className="text-xs text-muted-foreground">{t("setup.apiKeyMasked")}</p>
+                    <input
+                      type="text"
+                      value={dcApiKeyOverrides.get(dc.dedupKey) ?? ""}
+                      onChange={(e) => onSetDcApiKey(dc.dedupKey, e.target.value)}
+                      placeholder={t("setup.apiKeyPlaceholder")}
+                      className="w-full rounded border border-border bg-background px-2 py-1 font-mono text-xs outline-none focus:ring-1 focus:ring-primary"
+                    />
+                    {sabUrl ? (
+                      <a
+                        href={sabUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-block text-xs text-primary underline underline-offset-2"
+                      >
+                        {t("setup.apiKeyHelpLink")}
+                      </a>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
-              <SourceBadges sources={dc.sources} t={t} />
-              {!dc.supported ? (
-                <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                  {t("setup.notSupported")}
-                </span>
-              ) : null}
-            </label>
-          ))}
+            );
+          })}
         </Section>
       ) : null}
 

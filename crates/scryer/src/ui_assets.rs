@@ -100,37 +100,59 @@ pub(crate) async fn serve_embedded_ui(
         return StatusCode::NOT_FOUND.into_response();
     }
 
+    let content_type = infer_content_type(Path::new(relative_path));
+    let cache_control = cache_control_for_asset(relative_path);
+    let gz_path = format!("{relative_path}.gz");
+
+    // Try pre-compressed .gz variant first (only version stored for JS/CSS/SVG/JSON).
+    if let Some(gz_bytes) = embedded_ui_asset(&gz_path) {
+        if accept_gzip {
+            // Client accepts gzip — serve compressed bytes directly.
+            let content_len = gz_bytes.len().to_string();
+            let response = Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, content_type)
+                .header(header::CONTENT_ENCODING, "gzip")
+                .header(header::CONTENT_LENGTH, &content_len)
+                .header(header::CACHE_CONTROL, cache_control)
+                .body(if head_only {
+                    Body::empty()
+                } else {
+                    Body::from(gz_bytes)
+                });
+            return response.unwrap_or_else(|error| {
+                tracing::warn!(error = %error, path = relative_path, "failed to build compressed asset response");
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            });
+        }
+
+        // Client doesn't accept gzip — decompress on the fly.
+        use flate2::read::GzDecoder;
+        use std::io::Read;
+        let mut decoder = GzDecoder::new(gz_bytes);
+        let mut decompressed = Vec::new();
+        if decoder.read_to_end(&mut decompressed).is_ok() {
+            let content_len = decompressed.len().to_string();
+            let response = Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, content_type)
+                .header(header::CONTENT_LENGTH, &content_len)
+                .header(header::CACHE_CONTROL, cache_control)
+                .body(if head_only {
+                    Body::empty()
+                } else {
+                    Body::from(decompressed)
+                });
+            return response.unwrap_or_else(|error| {
+                tracing::warn!(error = %error, path = relative_path, "failed to build decompressed asset response");
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            });
+        }
+    }
+
+    // Fallback: serve uncompressed asset directly (images, fonts, etc.).
     match embedded_ui_asset(relative_path) {
         Some(bytes) => {
-            let content_type = infer_content_type(Path::new(relative_path));
-            let cache_control = cache_control_for_asset(relative_path);
-
-            // Serve pre-compressed .gz variant if client accepts gzip.
-            if accept_gzip {
-                let gz_path = format!("{relative_path}.gz");
-                if let Some(gz_bytes) = embedded_ui_asset(&gz_path) {
-                    let content_len = gz_bytes.len().to_string();
-                    let response = Response::builder()
-                        .status(StatusCode::OK)
-                        .header(header::CONTENT_TYPE, content_type)
-                        .header(header::CONTENT_ENCODING, "gzip")
-                        .header(header::CONTENT_LENGTH, &content_len)
-                        .header(header::CACHE_CONTROL, cache_control)
-                        .body(if head_only {
-                            Body::empty()
-                        } else {
-                            Body::from(gz_bytes)
-                        });
-                    return response.unwrap_or_else(|error| {
-                        tracing::warn!(error = %error, path = relative_path, "failed to build compressed asset response");
-                        Response::builder()
-                            .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .body(Body::empty())
-                            .expect("response build")
-                    });
-                }
-            }
-
             let content_len = bytes.len().to_string();
             let response = Response::builder()
                 .status(StatusCode::OK)
@@ -144,10 +166,7 @@ pub(crate) async fn serve_embedded_ui(
                 });
             response.unwrap_or_else(|error| {
                 tracing::warn!(error = %error, path = relative_path, "failed to build embedded asset response");
-                Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::empty())
-                    .expect("response build")
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
             })
         }
         None => StatusCode::NOT_FOUND.into_response(),

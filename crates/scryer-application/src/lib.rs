@@ -47,6 +47,7 @@ use crate::activity::ActivityStream;
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use rand_core::OsRng;
+use ring::digest as ring_digest;
 use scryer_domain::{
     BlocklistEntry, CalendarEpisode, Collection, CompletedDownload, DownloadClientConfig,
     DownloadQueueItem, DownloadQueueState, Entitlement, Episode, EventType, ExternalId,
@@ -54,7 +55,6 @@ use scryer_domain::{
     NewDownloadClientConfig, NewIndexerConfig, NewTitle, PluginInstallation, PolicyInput,
     PolicyOutput, RuleSet, Title, TitleHistoryEventType, TitleHistoryRecord, User,
 };
-use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
@@ -79,6 +79,7 @@ pub use app_usecase_integration::start_download_queue_poller;
 pub use app_usecase_plugins::RegistryPlugin;
 pub use app_usecase_post_processing::{run_post_processing, PostProcessingContext};
 pub use app_usecase_rss::RssSyncReport;
+pub use app_usecase_title_images::start_background_banner_loop;
 pub use app_usecase_title_images::start_background_poster_loop;
 pub use delay_profile::{
     parse_delay_profile_catalog, resolve_delay_profile, should_bypass_delay, DelayProfile,
@@ -193,6 +194,7 @@ pub struct AppServices {
     pub acquisition_wake: Arc<tokio::sync::Notify>,
     pub hydration_wake: Arc<tokio::sync::Notify>,
     pub poster_wake: Arc<tokio::sync::Notify>,
+    pub banner_wake: Arc<tokio::sync::Notify>,
     pub housekeeping: Arc<dyn HousekeepingRepository>,
     pub health_check_results: Arc<tokio::sync::RwLock<Vec<HealthCheckResult>>>,
     pub pending_releases: Arc<dyn PendingReleaseRepository>,
@@ -263,6 +265,7 @@ impl AppServices {
             acquisition_wake: Arc::new(tokio::sync::Notify::new()),
             hydration_wake: Arc::new(tokio::sync::Notify::new()),
             poster_wake: Arc::new(tokio::sync::Notify::new()),
+            banner_wake: Arc::new(tokio::sync::Notify::new()),
             housekeeping: Arc::new(NullHousekeepingRepository),
             pending_releases: Arc::new(NullPendingReleaseRepository),
             title_history: Arc::new(NullTitleHistoryRepository),
@@ -1423,18 +1426,30 @@ pub(crate) fn require(actor: &User, entitlement: &Entitlement) -> AppResult<()> 
 }
 
 fn sha256_hex(input: impl AsRef<str>) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(input.as_ref().as_bytes());
-    let digest = hasher.finalize();
-    to_hex(&digest)
+    let hash = ring_digest::digest(&ring_digest::SHA256, input.as_ref().as_bytes());
+    to_hex(hash.as_ref())
 }
 
-fn to_hex(value: &[u8]) -> String {
+pub(crate) fn to_hex(value: &[u8]) -> String {
     let mut output = String::with_capacity(value.len() * 2);
     for byte in value {
         output.push_str(&format!("{byte:02x}"));
     }
     output
+}
+
+#[cfg(unix)]
+fn statvfs_path(path: &str) -> Option<libc::statvfs> {
+    use std::ffi::CString;
+    let c_path = CString::new(path).ok()?;
+    unsafe {
+        let mut buf: libc::statvfs = std::mem::zeroed();
+        if libc::statvfs(c_path.as_ptr(), &mut buf) == 0 {
+            Some(buf)
+        } else {
+            None
+        }
+    }
 }
 
 fn normalize_tag(raw: String) -> String {
@@ -3135,6 +3150,7 @@ mod tests {
                     content_status: "Released".into(),
                     overview: "A train mission.".into(),
                     poster_url: "https://example.com/mugen-train.jpg".into(),
+                    banner_url: None,
                     language: "eng".into(),
                     runtime_minutes: 117,
                     sort_title: "Mugen Train".into(),

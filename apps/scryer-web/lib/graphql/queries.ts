@@ -12,6 +12,7 @@ export const titleDetailQuery = `query TitleDetail($id: String!) {
     year
     overview
     posterUrl
+    bannerUrl
     sortTitle
     slug
     imdbId
@@ -117,6 +118,7 @@ export const titleOverviewInitQuery = `query TitleOverviewInit($id: String!, $bl
     year
     overview
     posterUrl
+    bannerUrl
     sortTitle
     slug
     imdbId
@@ -806,9 +808,14 @@ export const qualityProfilesInitQuery = `query QualityProfilesInit {
   }
 }`;
 
+export const rootFoldersQuery = `query RootFolders($facet: String!) {
+  rootFolders(facet: $facet) { path isDefault }
+}`;
+
 // Batched query for media settings with current-scope key filtering.
 export const mediaSettingsInitQuery = `query MediaSettingsInit(
   $scopeId: String!
+  $facet: String!
   $mediaKeyNames: [String!]
   $systemKeyNames: [String!]
   $categoryKeyNames: [String!]
@@ -819,6 +826,7 @@ export const mediaSettingsInitQuery = `query MediaSettingsInit(
   }
   categorySettings: adminSettings(scope: "system", scopeId: $scopeId, category: "media", keyNames: $categoryKeyNames) {${adminSettingsFieldSelection}
   }
+  rootFolders(facet: $facet) { path isDefault }
 }`;
 
 export const globalSearchInitQuery = `query GlobalSearchInit(

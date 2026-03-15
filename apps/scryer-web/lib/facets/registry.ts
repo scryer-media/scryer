@@ -20,6 +20,7 @@ export type FacetDefinition = {
   overviewLabelKey: string;
 
   folderSettingKey: string;
+  rootFoldersKey: string;
   defaultLibraryPath: string;
   renameTemplateKey: string;
 
@@ -42,6 +43,7 @@ export const FACET_REGISTRY: FacetDefinition[] = [
     settingsLabelKey: "settings.moviesSettings",
     overviewLabelKey: "title.manageMovies",
     folderSettingKey: "movies.path",
+    rootFoldersKey: "movies.root_folders",
     defaultLibraryPath: "/media/movies",
     renameTemplateKey: "rename.template.movie.global",
     hasEpisodes: false,
@@ -59,6 +61,7 @@ export const FACET_REGISTRY: FacetDefinition[] = [
     settingsLabelKey: "settings.seriesSettings",
     overviewLabelKey: "title.manageSeries",
     folderSettingKey: "series.path",
+    rootFoldersKey: "series.root_folders",
     defaultLibraryPath: "/media/series",
     renameTemplateKey: "rename.template.series.global",
     hasEpisodes: true,
@@ -76,6 +79,7 @@ export const FACET_REGISTRY: FacetDefinition[] = [
     settingsLabelKey: "settings.animeSettings",
     overviewLabelKey: "title.manageAnime",
     folderSettingKey: "anime.path",
+    rootFoldersKey: "anime.root_folders",
     defaultLibraryPath: "/media/anime",
     renameTemplateKey: "rename.template.anime.global",
     hasEpisodes: true,

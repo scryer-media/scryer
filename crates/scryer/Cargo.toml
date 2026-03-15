@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 scryer-application = { path = "../scryer-application" }
 scryer-domain = { path = "../scryer-domain" }
-scryer-rules = { path = "../scryer-rules" }
 scryer-interface = { path = "../scryer-interface" }
 scryer-infrastructure = { path = "../scryer-infrastructure" }
 scryer-plugins = { path = "../scryer-plugins" }
@@ -26,13 +25,14 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-chrono = { workspace = true }
+flate2 = "1"
 percent-encoding = "2"
 toml = { workspace = true }
-metrics = { workspace = true }
 metrics-exporter-prometheus = "0.16"
 
 [dev-dependencies]
+scryer-rules = { path = "../scryer-rules" }
+chrono = { workspace = true }
 wiremock = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "brotli", "zstd", "deflate"] }
 tempfile = "3"

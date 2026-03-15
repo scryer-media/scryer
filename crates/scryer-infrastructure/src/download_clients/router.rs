@@ -847,6 +847,7 @@ mod tests {
             year: None,
             overview: None,
             poster_url: None,
+            banner_url: None,
             sort_title: None,
             slug: None,
             imdb_id: None,

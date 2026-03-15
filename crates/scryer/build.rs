@@ -38,6 +38,20 @@ fn main() {
                 embed_dir.display()
             )
         });
+
+        // Skip uncompressed files when a .gz pre-compressed variant exists.
+        // The .gz version is smaller in the binary; the server decompresses
+        // on the fly for the rare client that doesn't accept gzip.
+        let gz_paths: std::collections::HashSet<String> = entries
+            .iter()
+            .map(|(p, _)| p.clone())
+            .filter(|p| p.ends_with(".gz"))
+            .collect();
+        entries.retain(|(path, _)| {
+            let gz_variant = format!("{path}.gz");
+            !gz_paths.contains(&gz_variant)
+        });
+
         entries.sort_by(|(a, _), (b, _)| a.cmp(b));
 
         output.push_str("pub const HAS_EMBEDDED_WEB_UI: bool = true;\n");

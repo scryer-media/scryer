@@ -74,6 +74,8 @@ export function MediaContentView({
     setMoviesPath: (value: string) => void;
     seriesPath: string;
     setSeriesPath: (value: string) => void;
+    rootFolders: import("@/lib/types/titles").RootFolderOption[];
+    saveRootFolders: (folders: import("@/lib/types/titles").RootFolderOption[]) => void;
     mediaSettingsLoading: boolean;
     qualityProfiles: ParsedQualityProfile[];
     qualityProfileEntries: ParsedQualityProfileEntry[];
@@ -200,10 +202,8 @@ export function MediaContentView({
     view,
     contentSettingsSection,
     contentSettingsLabel,
-    moviesPath,
-    setMoviesPath,
-    seriesPath,
-    setSeriesPath,
+    rootFolders,
+    saveRootFolders,
     mediaSettingsLoading,
     qualityProfiles,
     qualityProfileEntries,
@@ -312,29 +312,6 @@ export function MediaContentView({
   }, [viewMode]);
   const effectiveViewMode: ContentViewMode = isMobile ? "poster" : viewMode;
 
-  const handleMoviesPathChange = React.useCallback(
-    (event: React.ChangeEvent<HTMLInputElement>) => {
-      setMoviesPath(event.target.value);
-    },
-    [setMoviesPath],
-  );
-
-  const handleSeriesPathChange = React.useCallback(
-    (event: React.ChangeEvent<HTMLInputElement>) => {
-      setSeriesPath(event.target.value);
-    },
-    [setSeriesPath],
-  );
-
-  const mediaLibraryPathValue = view === "series" ? seriesPath : moviesPath;
-  const mediaLibraryPathLabel =
-    view === "series" ? t("settings.seriesPathLabel") : t("settings.moviesPathLabel");
-  const mediaLibraryPathPlaceholder =
-    view === "series" ? t("settings.seriesPathPlaceholder") : t("settings.moviesPathPlaceholder");
-  const mediaLibraryPathHelp =
-    view === "series" ? t("settings.seriesPathHelp") : t("settings.moviesPathHelp");
-  const mediaLibraryPathChangeHandler =
-    view === "series" ? handleSeriesPathChange : handleMoviesPathChange;
   const mediaLibrarySettingsTitle =
     view === "series" ? t("settings.seriesLibrarySettings") : t("settings.moviesLibrarySettings");
 
@@ -553,12 +530,8 @@ export function MediaContentView({
           {view === "movies" || view === "series" ? (
             <MediaLibrarySettingsPanel
               settingsTitle={mediaLibrarySettingsTitle}
-              pathLabel={mediaLibraryPathLabel}
-              pathValue={mediaLibraryPathValue}
-              pathPlaceholder={mediaLibraryPathPlaceholder}
-              pathHelp={mediaLibraryPathHelp}
-              pathRequired={view === "movies" || view === "series"}
-              onPathChange={mediaLibraryPathChangeHandler}
+              rootFolders={rootFolders}
+              onSaveRootFolders={saveRootFolders}
               loading={mediaSettingsLoading}
               scanLoading={libraryScanLoading}
               scanSummary={libraryScanSummary}

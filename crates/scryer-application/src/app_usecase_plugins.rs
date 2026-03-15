@@ -1,7 +1,7 @@
 use super::*;
 use chrono::Utc;
+use ring::digest as ring_digest;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::sync::OnceLock;
 use tracing::warn;
 
@@ -561,7 +561,8 @@ impl AppUseCase {
 
         // Verify SHA256 if provided
         if let Some(ref expected_sha) = entry.wasm_sha256 {
-            let actual_sha = format!("{:x}", Sha256::digest(&wasm_bytes));
+            let actual_sha =
+                crate::to_hex(ring_digest::digest(&ring_digest::SHA256, &wasm_bytes).as_ref());
             if actual_sha != *expected_sha {
                 return Err(AppError::Validation(format!(
                     "WASM SHA256 mismatch: expected {expected_sha}, got {actual_sha}"
@@ -787,7 +788,8 @@ impl AppUseCase {
 
         // Verify SHA256 if provided
         if let Some(ref expected_sha) = entry.wasm_sha256 {
-            let actual_sha = format!("{:x}", Sha256::digest(&wasm_bytes));
+            let actual_sha =
+                crate::to_hex(ring_digest::digest(&ring_digest::SHA256, &wasm_bytes).as_ref());
             if actual_sha != *expected_sha {
                 return Err(AppError::Validation(format!(
                     "WASM SHA256 mismatch: expected {expected_sha}, got {actual_sha}"

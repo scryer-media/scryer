@@ -253,10 +253,24 @@ pub fn map_indexer_provider_type(
     }
 }
 
+/// Sonarr v4+ / Radarr v5+ replace sensitive field values with this placeholder
+/// in all API responses (both list and individual GET endpoints).
+const ARR_MASKED_VALUE: &str = "********";
+
 /// Extract a string value from the flattened fields map.
 pub fn field_str(fields: &HashMap<String, Value>, key: &str) -> Option<String> {
     fields.get(key).and_then(|v| match v {
         Value::String(s) if !s.is_empty() => Some(s.clone()),
+        _ => None,
+    })
+}
+
+/// Like `field_str`, but returns `None` for values masked by Sonarr/Radarr
+/// (`"********"`). Use this for sensitive fields such as `apiKey` and
+/// `password` so that callers can detect when a real value was not returned.
+pub fn field_str_sensitive(fields: &HashMap<String, Value>, key: &str) -> Option<String> {
+    fields.get(key).and_then(|v| match v {
+        Value::String(s) if !s.is_empty() && s != ARR_MASKED_VALUE => Some(s.clone()),
         _ => None,
     })
 }

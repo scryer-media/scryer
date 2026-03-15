@@ -126,6 +126,10 @@ const GET_MOVIE_QUERY: &str = r#"
         genres
         studio
         tmdb_release_date
+        artworks {
+          kind
+          url
+        }
       }
     }
   }
@@ -149,6 +153,10 @@ const GET_SERIES_QUERY: &str = r#"
         country
         genres
         aliases
+        artworks {
+          kind
+          url
+        }
         seasons {
           tvdb_id
           number
@@ -909,11 +917,12 @@ impl MetadataGatewayClient {
 
 const MOVIE_FIELD_SELECTION: &str = "\
     tvdb_id name slug year status overview poster_url language \
-    runtime_minutes sort_title imdb_id genres studio tmdb_release_date";
+    runtime_minutes sort_title imdb_id genres studio tmdb_release_date \
+    artworks { kind url }";
 
 const SERIES_FIELD_SELECTION: &str = "\
     tvdb_id name sort_name slug status year first_aired overview network \
-    runtime_minutes poster_url country genres aliases \
+    runtime_minutes poster_url country genres aliases artworks { kind url } \
     seasons { tvdb_id number label episode_type } \
     episodes { tvdb_id episode_number season_number name aired runtime_minutes \
                is_filler is_recap overview absolute_number } \
@@ -1047,6 +1056,23 @@ struct MovieItem {
     genres: Vec<String>,
     studio: String,
     tmdb_release_date: Option<String>,
+    #[serde(default)]
+    artworks: Vec<ArtworkItem>,
+}
+
+// --- Artwork helper ---
+
+#[derive(Deserialize)]
+struct ArtworkItem {
+    kind: String,
+    url: String,
+}
+
+fn pick_artwork_url(artworks: &[ArtworkItem], kind: &str) -> Option<String> {
+    artworks
+        .iter()
+        .find(|a| a.kind == kind)
+        .map(|a| a.url.clone())
 }
 
 // --- Series types ---
@@ -1077,6 +1103,8 @@ struct SeriesItem {
     country: String,
     genres: Vec<String>,
     aliases: Vec<String>,
+    #[serde(default)]
+    artworks: Vec<ArtworkItem>,
     seasons: Vec<SeriesSeasonItem>,
     episodes: Vec<SeriesEpisodeItem>,
     #[serde(default)]
@@ -1291,6 +1319,7 @@ impl MetadataGateway for MetadataGatewayClient {
             content_status: m.status,
             overview: m.overview,
             poster_url: m.poster_url,
+            banner_url: pick_artwork_url(&m.artworks, "banner"),
             language: m.language,
             runtime_minutes: m.runtime_minutes,
             sort_title: m.sort_title,
@@ -1325,6 +1354,7 @@ impl MetadataGateway for MetadataGatewayClient {
             network: s.network,
             runtime_minutes: s.runtime_minutes,
             poster_url: s.poster_url,
+            banner_url: pick_artwork_url(&s.artworks, "banner"),
             country: s.country,
             genres: s.genres,
             aliases: s.aliases,
@@ -1466,6 +1496,7 @@ impl MetadataGateway for MetadataGatewayClient {
                                 content_status: m.status,
                                 overview: m.overview,
                                 poster_url: m.poster_url,
+                                banner_url: pick_artwork_url(&m.artworks, "banner"),
                                 language: m.language,
                                 runtime_minutes: m.runtime_minutes,
                                 sort_title: m.sort_title,
@@ -1494,6 +1525,7 @@ impl MetadataGateway for MetadataGatewayClient {
                                 network: s.network,
                                 runtime_minutes: s.runtime_minutes,
                                 poster_url: s.poster_url,
+                                banner_url: pick_artwork_url(&s.artworks, "banner"),
                                 country: s.country,
                                 genres: s.genres,
                                 aliases: s.aliases,

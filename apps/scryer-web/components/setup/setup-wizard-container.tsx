@@ -143,6 +143,8 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
   const [selectedSeriesPath, setSelectedSeriesPath] = useState<string | null>(null);
   const [selectedDcKeys, setSelectedDcKeys] = useState<Set<string>>(new Set());
   const [selectedIdxKeys, setSelectedIdxKeys] = useState<Set<string>>(new Set());
+  // User-supplied API keys for clients whose keys were masked by Sonarr/Radarr.
+  const [dcApiKeyOverrides, setDcApiKeyOverrides] = useState<Map<string, string>>(new Map());
   const [selectedAnimePath, setSelectedAnimePath] = useState<string | null>(null);
   const [importExecuting, setImportExecuting] = useState(false);
   const [importExecuteError, setImportExecuteError] = useState<string | null>(null);
@@ -682,6 +684,9 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
             selectedAnimePath: selectedAnimePath ?? null,
             selectedDownloadClientDedupKeys: [...selectedDcKeys],
             selectedIndexerDedupKeys: [...selectedIdxKeys],
+            downloadClientApiKeyOverrides: [...dcApiKeyOverrides.entries()].map(
+              ([dedupKey, apiKey]) => ({ dedupKey, apiKey }),
+            ),
           },
         })
         .toPromise();
@@ -715,6 +720,7 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
     selectedAnimePath,
     selectedDcKeys,
     selectedIdxKeys,
+    dcApiKeyOverrides,
     goToStep,
   ]);
 
@@ -744,6 +750,15 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const setDcApiKey = useCallback((dedupKey: string, apiKey: string) => {
+    setDcApiKeyOverrides((prev) => {
+      const next = new Map(prev);
+      if (apiKey) next.set(dedupKey, apiKey);
+      else next.delete(dedupKey);
       return next;
     });
   }, []);
@@ -913,11 +928,13 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
           selectedAnimePath={selectedAnimePath}
           selectedDcKeys={selectedDcKeys}
           selectedIdxKeys={selectedIdxKeys}
+          dcApiKeyOverrides={dcApiKeyOverrides}
           onSelectMoviesPath={setSelectedMoviesPath}
           onSelectSeriesPath={setSelectedSeriesPath}
           onSelectAnimePath={setSelectedAnimePath}
           onToggleDc={toggleDcKey}
           onToggleIdx={toggleIdxKey}
+          onSetDcApiKey={setDcApiKey}
           onImport={handleImportExecute}
           onBack={() => goToStep(1)}
           importing={importExecuting}

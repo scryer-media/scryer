@@ -1,5 +1,6 @@
 
 import { useEffect, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 
 type ConfirmDialogProps = {
@@ -46,7 +47,7 @@ export function ConfirmDialog({
     return null;
   }
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
       <section
         role="dialog"
@@ -68,6 +69,7 @@ export function ConfirmDialog({
           </Button>
         </div>
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }

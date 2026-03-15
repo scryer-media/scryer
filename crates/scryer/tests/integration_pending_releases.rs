@@ -35,6 +35,7 @@ async fn seed_title(ctx: &TestContext, id: &str) {
         year: Some(2024),
         overview: None,
         poster_url: None,
+        banner_url: None,
         sort_title: None,
         slug: None,
         imdb_id: None,

@@ -17,6 +17,7 @@ fn test_title(facet: MediaFacet) -> Title {
         year: Some(2024),
         overview: None,
         poster_url: None,
+        banner_url: None,
         sort_title: None,
         slug: None,
         imdb_id: None,

@@ -1,21 +1,16 @@
 
 import * as React from "react";
-import { Eye, EyeOff, Loader2, Plus, Search, X } from "lucide-react";
+import { Loader2, Plus, Search, X } from "lucide-react";
 import { useTheme } from "next-themes";
 import ScryerLogo from "@/components/scryer-logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RouteCommandPalette } from "@/components/common/route-command-palette";
 import type { ViewId } from "@/components/root/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import type { Facet } from "@/lib/types";
-import type {
-  CatalogQualityProfileOption,
-  MetadataCatalogAddOptions,
-  MetadataCatalogMonitorType,
-} from "@/lib/hooks/use-global-search";
+import type { MetadataCatalogAddOptions } from "@/lib/hooks/use-global-search";
 import type { RouteCommandPaletteConfig } from "@/components/common/route-command-palette";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
 import { MobileSearchOverlay } from "@/components/root/mobile-search-overlay";
@@ -23,11 +18,11 @@ import { FACET_REGISTRY } from "@/lib/facets/registry";
 import {
   sectionLabelForFacet,
   viewFromFacet,
-  defaultMonitorTypeForFacet,
 } from "@/lib/facets/helpers";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 import { useSearchContext } from "@/lib/context/search-context";
 import { cn } from "@/lib/utils";
+import { AddToCatalogDialog, EMPTY_SEARCH_RESULT } from "@/components/root/add-to-catalog-dialog";
 
 
 type RootHeaderProps = {
@@ -37,10 +32,6 @@ type RootHeaderProps = {
 
 function catalogFacetFromString(facet: string): Facet {
   return facet === "movie" ? "movie" : facet === "anime" ? "anime" : "tv";
-}
-
-function renderMetadataResultKey(section: string, tvdbId: string, name: string, year?: number | null) {
-  return `${section}-${tvdbId}-${name}-${year ?? ""}`;
 }
 
 function SearchSectionLoading({ label }: { label: string }) {
@@ -68,6 +59,13 @@ export const RootHeader = React.memo(function RootHeader({
     isMetadataSearchResultInCatalog,
     catalogQualityProfileOptions,
     rootFoldersByFacet,
+    catalogSearchResults,
+    catalogSearchLoading,
+    metadataSearchResults,
+    metadataSearchLoading,
+    isGlobalSearchPanelOpen,
+    globalSearch,
+    searching,
   } = searchState;
   const t = useTranslate();
   const isMobile = useIsMobile();
@@ -75,135 +73,35 @@ export const RootHeader = React.memo(function RootHeader({
   const searchShellRef = React.useRef<HTMLDivElement>(null);
   const searchPanelRef = React.useRef<HTMLDivElement>(null);
   const hasAnyMatches =
-    searchState.catalogSearchResults.length > 0 ||
-    FACET_REGISTRY.some((f) => (searchState.metadataSearchResults[f.metadataKey] ?? []).length > 0);
+    catalogSearchResults.length > 0 ||
+    FACET_REGISTRY.some((f) => (metadataSearchResults[f.metadataKey] ?? []).length > 0);
   const showSectionResults =
-    searchState.catalogSearchLoading || searchState.metadataSearchLoading || hasAnyMatches;
+    catalogSearchLoading || metadataSearchLoading || hasAnyMatches;
 
   const catalogSearchSections = React.useMemo(
     () => Object.fromEntries(
       FACET_REGISTRY.map((f) => [
         f.id,
-        searchState.catalogSearchResults.filter((title) => catalogFacetFromString(title.facet) === f.id),
+        catalogSearchResults.filter((title) => catalogFacetFromString(title.facet) === f.id),
       ]),
     ) as Record<Facet, import("@/lib/types").TitleRecord[]>,
-    [searchState.catalogSearchResults],
+    [catalogSearchResults],
   );
-  const [expandedMetadataCardKey, setExpandedMetadataCardKey] = React.useState<string | null>(null);
-  const [metadataAddDrafts, setMetadataAddDrafts] = React.useState<
-    Record<string, MetadataCatalogAddOptions>
-  >({});
-  const [metadataAddInFlightKeys, setMetadataAddInFlightKeys] = React.useState<
-    Record<string, boolean>
-  >({});
-  const [metadataAddedKeys, setMetadataAddedKeys] = React.useState<
-    Record<string, boolean>
-  >({});
+  const [addDialogTarget, setAddDialogTarget] = React.useState<{
+    result: MetadataTvdbSearchItem;
+    facet: Facet;
+  } | null>(null);
 
-  const defaultAddOptionsForFacet = React.useCallback(
-    (facet: Facet): MetadataCatalogAddOptions => ({
-      qualityProfileId: resolveDefaultQualityProfileIdForFacet(facet),
-      seasonFolder: facet !== "movie",
-      monitorType: defaultMonitorTypeForFacet(facet),
-      ...(facet === "movie" ? { minAvailability: "announced" } : {}),
-      ...(facet === "anime"
-        ? {
-            monitorSpecials: animeCatalogDefaults.monitorSpecials,
-            interSeasonMovies: animeCatalogDefaults.interSeasonMovies,
-          }
-        : {}),
-    }),
-    [animeCatalogDefaults, resolveDefaultQualityProfileIdForFacet],
-  );
-
-  const toggleMetadataAddOptionsCard = React.useCallback(
-    (cardKey: string, facet: Facet) => {
-      setExpandedMetadataCardKey((current) => (current === cardKey ? null : cardKey));
-      setMetadataAddDrafts((previous) => {
-        if (previous[cardKey]) {
-          return previous;
-        }
-        return {
-          ...previous,
-          [cardKey]: defaultAddOptionsForFacet(facet),
-        };
-      });
-    },
-    [defaultAddOptionsForFacet],
-  );
-
-  const updateMetadataAddDraft = React.useCallback(
-    (cardKey: string, facet: Facet, patch: Partial<MetadataCatalogAddOptions>) => {
-      setMetadataAddDrafts((previous) => {
-        const current = previous[cardKey] ?? defaultAddOptionsForFacet(facet);
-        const next: MetadataCatalogAddOptions = {
-          ...current,
-          ...patch,
-        };
-        if (
-          current.qualityProfileId === next.qualityProfileId &&
-          current.seasonFolder === next.seasonFolder &&
-          current.monitorType === next.monitorType &&
-          current.minAvailability === next.minAvailability &&
-          current.monitorSpecials === next.monitorSpecials &&
-          current.interSeasonMovies === next.interSeasonMovies &&
-          current.rootFolder === next.rootFolder
-        ) {
-          return previous;
-        }
-        return {
-          ...previous,
-          [cardKey]: next,
-        };
-      });
-    },
-    [defaultAddOptionsForFacet],
-  );
-
-  const submitMetadataAddFromCard = React.useCallback(
-    async (result: MetadataTvdbSearchItem, facet: Facet, cardKey: string) => {
-      const draft = metadataAddDrafts[cardKey] ?? defaultAddOptionsForFacet(facet);
-      const qualityProfileId = (draft.qualityProfileId || resolveDefaultQualityProfileIdForFacet(facet)).trim();
-      if (!qualityProfileId) {
-        return;
-      }
-
-      setMetadataAddInFlightKeys((previous) => ({
-        ...previous,
-        [cardKey]: true,
-      }));
-      try {
-        const titleId = await addMetadataSearchResultToCatalog(result, facet, {
-          ...draft,
-          qualityProfileId,
-        });
-        if (!titleId) {
-          return;
-        }
-
-        setMetadataAddedKeys((previous) => ({ ...previous, [cardKey]: true }));
-        setExpandedMetadataCardKey((current) => (current === cardKey ? null : current));
+  const handleAddDialogSubmit = React.useCallback(
+    async (result: MetadataTvdbSearchItem, facet: Facet, options: MetadataCatalogAddOptions) => {
+      const titleId = await addMetadataSearchResultToCatalog(result, facet, options);
+      if (titleId) {
         onOpenOverview?.(viewFromFacet(facet), titleId);
         closeGlobalSearchPanel();
-      } finally {
-        setMetadataAddInFlightKeys((previous) => {
-          if (!previous[cardKey]) {
-            return previous;
-          }
-          const next = { ...previous };
-          delete next[cardKey];
-          return next;
-        });
       }
+      return titleId;
     },
-    [
-      defaultAddOptionsForFacet,
-      metadataAddDrafts,
-      addMetadataSearchResultToCatalog,
-      closeGlobalSearchPanel,
-      onOpenOverview,
-      resolveDefaultQualityProfileIdForFacet,
-    ],
+    [addMetadataSearchResultToCatalog, closeGlobalSearchPanel, onOpenOverview],
   );
 
   const handleSearchSubmit = React.useCallback(
@@ -296,7 +194,7 @@ export const RootHeader = React.memo(function RootHeader({
   }, [globalSearchInputRef, closeGlobalSearchPanel]);
 
   React.useEffect(() => {
-    if (!searchState.isGlobalSearchPanelOpen || isMobile) {
+    if (!isGlobalSearchPanelOpen || isMobile) {
       return;
     }
 
@@ -309,6 +207,9 @@ export const RootHeader = React.memo(function RootHeader({
       if (targetElement?.closest("[data-slot='select-content']")) {
         return;
       }
+      if (targetElement?.closest("[data-slot='dialog-overlay'], [data-slot='dialog-content']")) {
+        return;
+      }
       closeGlobalSearchPanel();
       globalSearchInputRef.current?.blur();
     };
@@ -319,16 +220,19 @@ export const RootHeader = React.memo(function RootHeader({
     closeGlobalSearchPanel,
     globalSearchInputRef,
     isMobile,
-    searchState.isGlobalSearchPanelOpen,
+    isGlobalSearchPanelOpen,
   ]);
 
   React.useEffect(() => {
-    if (!searchState.isGlobalSearchPanelOpen || isMobile) {
+    if (!isGlobalSearchPanelOpen || isMobile) {
       return;
     }
 
     const handleGlobalSearchPanelEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") {
+        return;
+      }
+      if (addDialogTarget !== null) {
         return;
       }
       closeGlobalSearchPanel();
@@ -338,52 +242,24 @@ export const RootHeader = React.memo(function RootHeader({
     window.addEventListener("keydown", handleGlobalSearchPanelEscape);
     return () => window.removeEventListener("keydown", handleGlobalSearchPanelEscape);
   }, [
+    addDialogTarget,
     closeGlobalSearchPanel,
     globalSearchInputRef,
     isMobile,
-    searchState.isGlobalSearchPanelOpen,
+    isGlobalSearchPanelOpen,
   ]);
 
-  React.useEffect(() => {
-    if (!searchState.isGlobalSearchPanelOpen) {
-      setExpandedMetadataCardKey(null);
-    }
-  }, [searchState.isGlobalSearchPanelOpen]);
-
   const renderMetadataSection = React.useCallback(
-    (items: MetadataTvdbSearchItem[], facet: Facet, section: string) => {
+    (items: MetadataTvdbSearchItem[], facet: Facet, _section: string) => {
       return items.map((result) => {
-        const tvdbId = String(result.tvdbId).trim();
         const isInCatalog = isMetadataSearchResultInCatalog(facet, result);
-        const cardKey = renderMetadataResultKey(section, tvdbId, result.name, result.year);
-        const draft = metadataAddDrafts[cardKey] ?? defaultAddOptionsForFacet(facet);
-        const qualityProfileValue =
-          draft.qualityProfileId || resolveDefaultQualityProfileIdForFacet(facet);
-        const isExpanded = expandedMetadataCardKey === cardKey && !isInCatalog;
-        const isAdding = Boolean(metadataAddInFlightKeys[cardKey]);
-        const isAdded = Boolean(metadataAddedKeys[cardKey]);
-        const monitorOptions: Array<{ value: MetadataCatalogMonitorType; label: string }> =
-          facet === "movie"
-            ? [
-                { value: "monitored", label: t("search.monitorType.monitored") },
-                { value: "unmonitored", label: t("search.monitorType.unmonitored") },
-              ]
-            : [
-                { value: "futureEpisodes", label: t("search.monitorType.futureEpisodes") },
-                {
-                  value: "missingAndFutureEpisodes",
-                  label: t("search.monitorType.missingAndFutureEpisodes"),
-                },
-                { value: "allEpisodes", label: t("search.monitorType.allEpisodes") },
-                { value: "none", label: t("search.monitorType.none") },
-              ];
         const posterUrl = selectPosterVariantUrl(result.posterUrl, "w70");
         return (
           <div
-            key={cardKey}
+            key={`${facet}-${result.tvdbId}-${result.name}`}
             className="rounded-lg border border-border bg-card/60 p-3"
           >
-            <div className="mb-2 flex items-start justify-between gap-3">
+            <div className="flex items-start justify-between gap-3">
               <div className="flex min-h-20 gap-3">
                 <div className="h-20 w-14 flex-none overflow-hidden rounded-md border border-border bg-muted">
                   {posterUrl ? (
@@ -414,241 +290,26 @@ export const RootHeader = React.memo(function RootHeader({
               <div className="flex items-center self-center">
                 <Button
                   type="button"
-                  variant={isInCatalog || isAdded ? "secondary" : "default"}
+                  variant={isInCatalog ? "secondary" : "default"}
                   className={
-                    isInCatalog || isAdded
+                    isInCatalog
                       ? "h-10 w-10 bg-accent text-card-foreground px-0"
                       : "h-10 w-10 bg-emerald-500 text-foreground hover:bg-emerald-600 px-0"
                   }
-                  onClick={() => toggleMetadataAddOptionsCard(cardKey, facet)}
-                  disabled={isInCatalog || isAdding || isAdded || isExpanded}
-                  aria-label={isInCatalog || isAdded ? t("search.alreadyCataloged") : t("search.configureAdd")}
-                  title={isInCatalog || isAdded ? t("search.alreadyCataloged") : t("search.configureAdd")}
+                  onClick={() => setAddDialogTarget({ result, facet })}
+                  disabled={isInCatalog}
+                  aria-label={isInCatalog ? t("search.alreadyCataloged") : t("search.configureAdd")}
+                  title={isInCatalog ? t("search.alreadyCataloged") : t("search.configureAdd")}
                 >
                   <Plus className="h-4 w-4" />
                 </Button>
-              </div>
-            </div>
-            <div
-              className={`overflow-hidden transition-[max-height,opacity,transform,margin] duration-300 ease-out ${
-                isExpanded
-                  ? "mt-3 max-h-[640px] translate-y-0 opacity-100"
-                  : "mt-0 max-h-0 -translate-y-1 opacity-0 pointer-events-none"
-              }`}
-            >
-              <div className="grid gap-3 rounded-xl border border-border bg-card p-3 md:grid-cols-3">
-                <label className="space-y-1">
-                  <span className="block text-xs font-medium text-card-foreground">
-                    {t("search.addConfigQualityProfile")}
-                  </span>
-                  <Select
-                    value={catalogQualityProfileOptions.length > 0 ? qualityProfileValue : ""}
-                    onValueChange={(v) =>
-                      updateMetadataAddDraft(cardKey, facet, {
-                        qualityProfileId: v,
-                      })
-                    }
-                    disabled={isAdding || catalogQualityProfileOptions.length === 0}
-                  >
-                    <SelectTrigger className="h-9 w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {catalogQualityProfileOptions.length === 0 ? (
-                        <SelectItem value="__none" disabled>{t("search.addConfigNoQualityProfiles")}</SelectItem>
-                      ) : (
-                        catalogQualityProfileOptions.map((profile: CatalogQualityProfileOption) => (
-                          <SelectItem key={profile.id} value={profile.id}>
-                            {profile.name}
-                          </SelectItem>
-                        ))
-                      )}
-                    </SelectContent>
-                  </Select>
-                </label>
-                {rootFoldersByFacet[facet].length >= 2 ? (
-                  <label className="space-y-1">
-                    <span className="block text-xs font-medium text-card-foreground">
-                      {t("search.addConfigRootFolder")}
-                    </span>
-                    <Select
-                      value={draft.rootFolder || rootFoldersByFacet[facet].find((rf) => rf.isDefault)?.path || rootFoldersByFacet[facet][0]?.path || ""}
-                      onValueChange={(v) =>
-                        updateMetadataAddDraft(cardKey, facet, { rootFolder: v })
-                      }
-                      disabled={isAdding}
-                    >
-                      <SelectTrigger className="h-9 w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {rootFoldersByFacet[facet].map((rf) => (
-                          <SelectItem key={rf.path} value={rf.path}>
-                            {rf.path.split("/").filter(Boolean).pop() || rf.path}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </label>
-                ) : null}
-                {facet !== "movie" ? (
-                  <label className="space-y-1">
-                    <span className="block text-xs font-medium text-card-foreground">
-                      {t("search.addConfigSeasonFolder")}
-                    </span>
-                    <Select
-                      value={draft.seasonFolder ? "enabled" : "disabled"}
-                      onValueChange={(v) =>
-                        updateMetadataAddDraft(cardKey, facet, {
-                          seasonFolder: v === "enabled",
-                        })
-                      }
-                      disabled={isAdding}
-                    >
-                      <SelectTrigger className="h-9 w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="enabled">{t("search.seasonFolder.enabled")}</SelectItem>
-                        <SelectItem value="disabled">{t("search.seasonFolder.disabled")}</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </label>
-                ) : null}
-                {facet === "anime" ? (
-                  <>
-                    <label className="space-y-1">
-                      <span className="block text-xs font-medium text-card-foreground">
-                        {t("settings.monitorSpecialsLabel")}
-                      </span>
-                      <div className="flex min-h-9 w-full items-center">
-                        <button
-                          type="button"
-                          className="inline-flex items-center justify-center disabled:opacity-50"
-                          onClick={() =>
-                            updateMetadataAddDraft(cardKey, facet, {
-                              monitorSpecials: draft.monitorSpecials === false,
-                            })
-                          }
-                          disabled={isAdding}
-                        >
-                          {draft.monitorSpecials !== false ? (
-                            <Eye className="h-5 w-5 text-emerald-600 dark:text-emerald-300" />
-                          ) : (
-                            <EyeOff className="h-5 w-5 text-rose-600 dark:text-rose-300" />
-                          )}
-                        </button>
-                      </div>
-                    </label>
-                    <label className="space-y-1">
-                      <span className="block text-xs font-medium text-card-foreground">
-                        {t("settings.interSeasonMoviesLabel")}
-                      </span>
-                      <div className="flex min-h-9 w-full items-center">
-                        <button
-                          type="button"
-                          className="inline-flex items-center justify-center disabled:opacity-50"
-                          onClick={() =>
-                            updateMetadataAddDraft(cardKey, facet, {
-                              interSeasonMovies: draft.interSeasonMovies === false,
-                            })
-                          }
-                          disabled={isAdding}
-                        >
-                          {draft.interSeasonMovies !== false ? (
-                            <Eye className="h-5 w-5 text-emerald-600 dark:text-emerald-300" />
-                          ) : (
-                            <EyeOff className="h-5 w-5 text-rose-600 dark:text-rose-300" />
-                          )}
-                        </button>
-                      </div>
-                    </label>
-                  </>
-                ) : null}
-                {facet === "movie" ? (
-                  <>
-                    <label className="space-y-1">
-                      <span className="block text-xs font-medium text-card-foreground">
-                        {t("title.monitored")}
-                      </span>
-                      <div className="flex min-h-9 w-full items-center">
-                        <button
-                          type="button"
-                          className="inline-flex items-center justify-center disabled:opacity-50"
-                          onClick={() =>
-                            updateMetadataAddDraft(cardKey, facet, {
-                              monitorType: draft.monitorType === "monitored" ? "unmonitored" : "monitored",
-                            })
-                          }
-                          disabled={isAdding}
-                        >
-                          {draft.monitorType === "monitored" ? (
-                            <Eye className="h-5 w-5 text-emerald-600 dark:text-emerald-300" />
-                          ) : (
-                            <EyeOff className="h-5 w-5 text-rose-600 dark:text-rose-300" />
-                          )}
-                        </button>
-                      </div>
-                    </label>
-                  </>
-                ) : (
-                  <label className="space-y-1">
-                    <span className="block text-xs font-medium text-card-foreground">
-                      {t("search.addConfigMonitorType")}
-                    </span>
-                    <Select
-                      value={draft.monitorType}
-                      onValueChange={(v) =>
-                        updateMetadataAddDraft(cardKey, facet, {
-                          monitorType: v as MetadataCatalogMonitorType,
-                        })
-                      }
-                      disabled={isAdding}
-                    >
-                      <SelectTrigger className="h-9 w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {monitorOptions.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </label>
-                )}
-                <div className="flex items-end md:col-span-3">
-                  <Button
-                    type="button"
-                    onClick={() => void submitMetadataAddFromCard(result, facet, cardKey)}
-                    disabled={isAdding || !qualityProfileValue}
-                    className="h-9 w-full bg-emerald-600 text-foreground hover:bg-emerald-500"
-                  >
-                    {isAdding ? t("search.adding") : t("title.addToCatalog")}
-                  </Button>
-                </div>
               </div>
             </div>
           </div>
         );
       });
     },
-    [
-      catalogQualityProfileOptions,
-      defaultAddOptionsForFacet,
-      expandedMetadataCardKey,
-      isMetadataSearchResultInCatalog,
-      metadataAddDrafts,
-      metadataAddedKeys,
-      metadataAddInFlightKeys,
-      resolveDefaultQualityProfileIdForFacet,
-      rootFoldersByFacet,
-      submitMetadataAddFromCard,
-      t,
-      toggleMetadataAddOptionsCard,
-      updateMetadataAddDraft,
-    ],
+    [isMetadataSearchResultInCatalog, t],
   );
 
   return (
@@ -675,8 +336,8 @@ export const RootHeader = React.memo(function RootHeader({
             <div ref={searchShellRef} className="relative flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground sm:h-7 sm:w-7" />
               <Input
-                ref={searchState.globalSearchInputRef}
-                value={searchState.globalSearch}
+                ref={globalSearchInputRef}
+                value={globalSearch}
                 onChange={handleSearchChange}
                 onFocus={handleSearchFocus}
                 onKeyDown={handleSearchEscape}
@@ -688,7 +349,7 @@ export const RootHeader = React.memo(function RootHeader({
                 placeholder={t("search.globalPlaceholder")}
                 aria-label={t("search.globalPlaceholder")}
               />
-              {searchState.globalSearch && !isMobile ? (
+              {globalSearch && !isMobile ? (
                 <button
                   type="button"
                   className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition hover:text-foreground"
@@ -698,7 +359,7 @@ export const RootHeader = React.memo(function RootHeader({
                   <X className="h-6 w-6" />
                 </button>
               ) : null}
-              {searchState.isGlobalSearchPanelOpen && !isMobile ? (
+              {isGlobalSearchPanelOpen && !isMobile ? (
                 <div
                   ref={searchPanelRef}
                   data-slot="global-search-panel"
@@ -716,7 +377,7 @@ export const RootHeader = React.memo(function RootHeader({
                               <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                                 {sectionLabelForFacet(t, f.id)}
                               </h4>
-                              {searchState.catalogSearchLoading ? (
+                              {catalogSearchLoading ? (
                                 <SearchSectionLoading label={t("label.loading")} />
                               ) : items.length === 0 ? (
                                 <p className="text-sm text-muted-foreground">
@@ -732,13 +393,13 @@ export const RootHeader = React.memo(function RootHeader({
                     </section>
                       <div className={`grid gap-4 md:grid-cols-${FACET_REGISTRY.length}`}>
                         {FACET_REGISTRY.map((f) => {
-                          const items = searchState.metadataSearchResults[f.metadataKey] ?? [];
+                          const items = metadataSearchResults[f.metadataKey] ?? [];
                           return (
                             <section key={f.id} className="space-y-2">
                               <h3 className="text-sm font-semibold text-foreground">
                                 {sectionLabelForFacet(t, f.id)}
                               </h3>
-                              {searchState.metadataSearchLoading ? (
+                              {metadataSearchLoading ? (
                                 <SearchSectionLoading label={t("label.loading")} />
                               ) : items.length === 0 ? (
                                 <p className="text-sm text-muted-foreground">
@@ -752,7 +413,7 @@ export const RootHeader = React.memo(function RootHeader({
                         })}
                       </div>
                     </div>
-                  ) : searchState.searching ? (
+                  ) : searching ? (
                     <div className="flex items-center gap-3 py-3">
                       <Loader2 className="h-5 w-5 animate-spin text-emerald-500" />
                       <p className="text-sm text-muted-foreground">{t("label.searching")}</p>
@@ -766,19 +427,30 @@ export const RootHeader = React.memo(function RootHeader({
           </form>
         </div>
       </header>
-      {searchState.isGlobalSearchPanelOpen && !isMobile ? (
+      {isGlobalSearchPanelOpen && !isMobile ? (
         <div
           className="fixed inset-0 z-40 bg-background/80 backdrop-blur-sm"
           onMouseDown={handleSearchPanelBackdropMouseDown}
           aria-hidden="true"
         />
       ) : null}
-      {searchState.isGlobalSearchPanelOpen && isMobile ? (
+      {isGlobalSearchPanelOpen && isMobile ? (
         <MobileSearchOverlay
-          onClose={searchState.closeGlobalSearchPanel}
+          onClose={closeGlobalSearchPanel}
           onOpenOverview={onOpenOverview}
         />
       ) : null}
+      <AddToCatalogDialog
+        open={addDialogTarget !== null}
+        onOpenChange={(open) => { if (!open) setAddDialogTarget(null); }}
+        result={addDialogTarget?.result ?? EMPTY_SEARCH_RESULT}
+        facet={addDialogTarget?.facet ?? "tv"}
+        catalogQualityProfileOptions={catalogQualityProfileOptions}
+        defaultQualityProfileId={resolveDefaultQualityProfileIdForFacet(addDialogTarget?.facet ?? "tv")}
+        rootFolders={rootFoldersByFacet[addDialogTarget?.facet ?? "tv"]}
+        animeCatalogDefaults={animeCatalogDefaults}
+        onSubmit={handleAddDialogSubmit}
+      />
     </>
   );
 });

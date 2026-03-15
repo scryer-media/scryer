@@ -283,6 +283,7 @@ pub(crate) fn from_title(title: Title) -> TitlePayload {
         year: title.year,
         overview: title.overview,
         poster_url: title.poster_url,
+        banner_url: title.banner_url,
         sort_title: title.sort_title,
         slug: title.slug,
         imdb_id: title.imdb_id,

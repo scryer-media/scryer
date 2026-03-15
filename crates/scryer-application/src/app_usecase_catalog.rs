@@ -504,6 +504,7 @@ impl AppUseCase {
             year: request.year,
             overview: request.overview,
             poster_url: request.poster_url,
+            banner_url: None,
             sort_title: request.sort_title,
             slug: request.slug,
             imdb_id: None,
@@ -578,6 +579,13 @@ impl AppUseCase {
             .is_some_and(|value| !value.trim().is_empty())
         {
             self.services.poster_wake.notify_one();
+        }
+        if title
+            .banner_url
+            .as_ref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            self.services.banner_wake.notify_one();
         }
 
         Ok(title)
@@ -735,6 +743,13 @@ impl AppUseCase {
             .is_some_and(|value| !value.trim().is_empty())
         {
             self.services.poster_wake.notify_one();
+        }
+        if title
+            .banner_url
+            .as_ref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            self.services.banner_wake.notify_one();
         }
 
         title

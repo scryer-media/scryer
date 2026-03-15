@@ -53,6 +53,7 @@ type Props = {
   onAutoSearchEpisode?: (episode: CollectionEpisode) => Promise<void> | void;
   qualityProfiles?: { id: string; name: string }[];
   defaultRootFolder?: string;
+  rootFolders?: { path: string; isDefault: boolean }[];
   onUpdateTitleTags?: (newTags: string[]) => Promise<void>;
   completedDownloads?: DownloadQueueItem[];
   onOpenManualImport?: (item: DownloadQueueItem) => void;
@@ -88,6 +89,7 @@ export function SeriesOverviewView({
   onAutoSearchEpisode,
   qualityProfiles,
   defaultRootFolder,
+  rootFolders,
   onUpdateTitleTags,
   completedDownloads,
   onOpenManualImport,
@@ -341,8 +343,16 @@ export function SeriesOverviewView({
         onClick={() => onBackToList?.()}
       />
 
-      <Card>
-        <CardContent className="p-4">
+      <Card className="relative overflow-hidden">
+        {title.bannerUrl ? (
+          <img
+            src={title.bannerUrl}
+            alt=""
+            aria-hidden
+            className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-[0.07]"
+          />
+        ) : null}
+        <CardContent className="relative p-4">
           <div className="flex flex-col gap-4 sm:flex-row sm:gap-5">
             <div className="mx-auto shrink-0 sm:mx-0">
               {title.posterUrl ? (
@@ -459,6 +469,7 @@ export function SeriesOverviewView({
               title={title}
               qualityProfiles={qualityProfiles}
               defaultRootFolder={defaultRootFolder}
+              rootFolders={rootFolders ?? []}
               onUpdateTitleTags={onUpdateTitleTags}
             />
           ) : undefined

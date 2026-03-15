@@ -600,3 +600,9 @@ export const executeExternalImportMutation = `mutation ExecuteExternalImport($in
     errors
   }
 }`;
+
+// Input type companion — keep in sync with ExecuteExternalImportInput on the backend.
+export type DownloadClientApiKeyOverride = {
+  dedupKey: string;
+  apiKey: string;
+};

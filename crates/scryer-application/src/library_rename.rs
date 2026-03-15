@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
+use ring::digest as ring_digest;
 use scryer_domain::MediaFacet;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::{AppError, AppResult};
 
@@ -212,8 +212,8 @@ pub fn build_rename_plan_fingerprint(
         items,
     ))
     .unwrap_or_default();
-    let digest = Sha256::digest(bytes);
-    format!("{digest:x}")
+    let hash = ring_digest::digest(&ring_digest::SHA256, &bytes);
+    crate::to_hex(hash.as_ref())
 }
 
 fn resolve_template_token(tokens: &BTreeMap<String, String>, token_spec: &str) -> String {

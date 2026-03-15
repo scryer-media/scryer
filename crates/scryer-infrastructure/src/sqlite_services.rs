@@ -29,6 +29,42 @@ impl SqliteServices {
         let db_url = crate::sqlite_url_with_create(path.as_ref());
         let is_memory = db_url.contains(":memory:");
 
+        // Ensure the parent directory exists for file-based databases.
+        if !is_memory {
+            if let Some(file_path) = path
+                .as_ref()
+                .strip_prefix("sqlite://")
+                .or(Some(path.as_ref()))
+            {
+                let file_path = file_path.split('?').next().unwrap_or(file_path);
+                let db_file = std::path::Path::new(file_path);
+                if let Some(parent) = db_file.parent() {
+                    if !parent.as_os_str().is_empty() && !parent.exists() {
+                        tracing::info!(path = %parent.display(), "creating database directory");
+                        std::fs::create_dir_all(parent).map_err(|err| {
+                            AppError::Repository(format!(
+                                "cannot create database directory {}: {err}",
+                                parent.display(),
+                            ))
+                        })?;
+                    }
+                    // Log diagnostic info for troubleshooting permission issues.
+                    if parent.exists() {
+                        let meta = std::fs::metadata(parent);
+                        let probe = parent.join(".scryer-probe");
+                        let writable = std::fs::File::create(&probe).is_ok();
+                        let _ = std::fs::remove_file(&probe);
+                        tracing::debug!(
+                            path = %parent.display(),
+                            writable,
+                            permissions = ?meta.as_ref().map(|m| m.permissions()),
+                            "database directory check",
+                        );
+                    }
+                }
+            }
+        }
+
         let pool_opts = if is_memory {
             // For in-memory databases the data only lives as long as at least one
             // connection is open.  Prevent the pool from recycling/dropping the
@@ -54,10 +90,9 @@ impl SqliteServices {
                 .busy_timeout(std::time::Duration::from_millis(5000));
         }
 
-        let pool = pool_opts
-            .connect_with(connect_opts)
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
+        let pool = pool_opts.connect_with(connect_opts).await.map_err(|err| {
+            AppError::Repository(format!("cannot open database at {}: {err}", path.as_ref(),))
+        })?;
 
         crate::migrations::run_migrations(&pool, migration_mode)
             .await

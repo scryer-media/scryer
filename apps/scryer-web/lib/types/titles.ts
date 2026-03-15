@@ -16,6 +16,12 @@ export type TitleRecord = {
   qualityTier?: string | null;
   sizeBytes?: number | null;
   posterUrl?: string | null;
+  bannerUrl?: string | null;
+};
+
+export type RootFolderOption = {
+  path: string;
+  isDefault: boolean;
 };
 
 export type LibraryScanSummary = {

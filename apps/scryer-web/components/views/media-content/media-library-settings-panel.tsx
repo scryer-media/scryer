@@ -1,19 +1,16 @@
 import * as React from "react";
+import { FolderOpen, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { LibraryScanSummary } from "@/lib/types";
+import { FolderBrowserDialog } from "@/components/setup/folder-browser-dialog";
+import type { LibraryScanSummary, RootFolderOption } from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
 
 type MediaLibrarySettingsPanelProps = {
   settingsTitle: string;
-  pathLabel: string;
-  pathValue: string;
-  pathPlaceholder: string;
-  pathHelp: string;
-  pathRequired: boolean;
-  onPathChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  rootFolders: RootFolderOption[];
+  onSaveRootFolders: (folders: RootFolderOption[]) => void;
   loading: boolean;
   scanLoading: boolean;
   scanSummary: LibraryScanSummary | null;
@@ -22,38 +19,94 @@ type MediaLibrarySettingsPanelProps = {
 
 export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySettingsPanel({
   settingsTitle,
-  pathLabel,
-  pathValue,
-  pathPlaceholder,
-  pathHelp,
-  pathRequired,
-  onPathChange,
+  rootFolders,
+  onSaveRootFolders,
   loading,
   scanLoading,
   scanSummary,
   onScan,
 }: MediaLibrarySettingsPanelProps) {
   const t = useTranslate();
+  const [browserOpen, setBrowserOpen] = React.useState(false);
+
+  const handleAddPath = (path: string) => {
+    const trimmed = path.trim();
+    if (!trimmed) return;
+    if (rootFolders.some((rf) => rf.path === trimmed)) return;
+    const isFirst = rootFolders.length === 0;
+    onSaveRootFolders([...rootFolders, { path: trimmed, isDefault: isFirst }]);
+  };
+
+  const handleRemovePath = (index: number) => {
+    const next = rootFolders.filter((_, i) => i !== index);
+    if (next.length > 0 && !next.some((rf) => rf.isDefault)) {
+      next[0].isDefault = true;
+    }
+    onSaveRootFolders(next);
+  };
+
+  const handleSetDefault = (index: number) => {
+    const next = rootFolders.map((rf, i) => ({ ...rf, isDefault: i === index }));
+    onSaveRootFolders(next);
+  };
+
   return (
     <>
       <Card>
         <CardHeader>
           <CardTitle>{settingsTitle}</CardTitle>
         </CardHeader>
-        <CardContent>
-          <label>
-            <Label className="mb-2 block">{pathLabel}</Label>
-            <Input
-              value={pathValue}
-              onChange={onPathChange}
-              placeholder={pathPlaceholder}
-              required={pathRequired}
-              disabled={loading}
-            />
-            <p className="mt-1 text-xs text-muted-foreground">
-              {loading ? t("label.loading") : pathHelp}
-            </p>
-          </label>
+        <CardContent className="space-y-3">
+          <Label className="block">{t("settings.rootFoldersLabel")}</Label>
+          {rootFolders.length === 0 && !loading ? (
+            <p className="text-xs text-muted-foreground">{t("settings.rootFoldersEmpty")}</p>
+          ) : null}
+          <ul className="space-y-2">
+            {rootFolders.map((rf, index) => (
+              <li key={rf.path} className="flex items-center gap-2">
+                <code className="flex-1 truncate rounded-md border border-border bg-muted/50 px-3 py-1.5 font-mono text-sm">
+                  {rf.path}
+                </code>
+                {rf.isDefault ? (
+                  <span className="shrink-0 rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
+                    {t("label.default")}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="shrink-0 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:underline"
+                    onClick={() => handleSetDefault(index)}
+                    disabled={loading}
+                  >
+                    {t("settings.rootFolderSetDefault")}
+                  </button>
+                )}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
+                  onClick={() => handleRemovePath(index)}
+                  disabled={loading}
+                  aria-label={t("label.delete")}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </li>
+            ))}
+          </ul>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setBrowserOpen(true)}
+            disabled={loading}
+          >
+            <FolderOpen className="mr-1.5 h-4 w-4" />
+            {t("settings.rootFolderAdd")}
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            {loading ? t("label.loading") : t("settings.rootFoldersHelp")}
+          </p>
         </CardContent>
       </Card>
       <Card>
@@ -84,6 +137,12 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
           </div>
         </CardContent>
       </Card>
+      <FolderBrowserDialog
+        open={browserOpen}
+        onOpenChange={setBrowserOpen}
+        onSelect={handleAddPath}
+        title={t("settings.rootFolderAdd")}
+      />
     </>
   );
 });

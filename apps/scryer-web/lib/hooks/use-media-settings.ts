@@ -40,7 +40,10 @@ import {
 } from "@/lib/utils/quality-profiles";
 import { getSettingDisplayValue } from "@/lib/utils/settings";
 import type { AdminSetting, AdminSettingsResponse } from "@/lib/types";
+import type { RootFolderOption } from "@/lib/types/titles";
 import type { ViewCategoryId } from "@/lib/types/quality-profiles";
+import { viewToFacet } from "@/lib/constants/settings";
+import { FACETS_BY_VIEW } from "@/lib/facets/registry";
 
 type UseMediaSettingsArgs = {
   activeQualityScopeId: ViewCategoryId;
@@ -53,6 +56,8 @@ export type UseMediaSettingsResult = {
   setMoviesPath: (value: string) => void;
   seriesPath: string;
   setSeriesPath: (value: string) => void;
+  rootFolders: RootFolderOption[];
+  saveRootFolders: (folders: RootFolderOption[]) => void;
   mediaSettingsLoading: boolean;
   mediaSettingsSaving: boolean;
   qualityProfiles: SearchableQualityProfileBody[];
@@ -181,8 +186,11 @@ function buildMediaSettingsInitVariables(
     }
   }
 
+  const facet = viewToFacet[view] ?? "movie";
+
   return {
     scopeId: activeQualityScopeId,
+    facet,
     mediaKeyNames,
     systemKeyNames,
     categoryKeyNames,
@@ -203,6 +211,7 @@ export function useMediaSettings({
   const [seriesPath, setSeriesPath] = React.useState(
     DEFAULT_SERIES_LIBRARY_PATH,
   );
+  const [rootFolders, setRootFolders] = React.useState<RootFolderOption[]>([]);
   const [mediaSettingsLoading, setMediaSettingsLoading] = React.useState(false);
   const [mediaSettingsSaving, setMediaSettingsSaving] = React.useState(false);
   const [qualityProfiles, setQualityProfiles] = React.useState<
@@ -284,6 +293,33 @@ export function useMediaSettings({
     series: "false",
     anime: "false",
   });
+
+  const saveRootFolders = React.useCallback(
+    (folders: RootFolderOption[]) => {
+      setRootFolders(folders);
+      const facetDef = FACETS_BY_VIEW.get(view);
+      if (!facetDef) return;
+      const defaultFolder = folders.find((rf) => rf.isDefault);
+      const legacyPath = defaultFolder?.path ?? facetDef.defaultLibraryPath;
+      client
+        .mutation(saveAdminSettingsMutation, {
+          input: {
+            scope: "media",
+            items: [
+              { keyName: facetDef.folderSettingKey, value: legacyPath },
+              { keyName: facetDef.rootFoldersKey, value: JSON.stringify(folders) },
+            ],
+          },
+        })
+        .toPromise()
+        .then(({ error }) => {
+          if (error) {
+            setGlobalStatus(error.message);
+          }
+        });
+    },
+    [client, setGlobalStatus, view],
+  );
 
   const normalizeQualityProfiles = React.useCallback(
     (rawValue: string) => {
@@ -662,6 +698,10 @@ export function useMediaSettings({
         data.mediaSettings,
         data.categorySettings ? [data.categorySettings] : [],
       );
+
+      if (Array.isArray(data.rootFolders)) {
+        setRootFolders(data.rootFolders);
+      }
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToLoad"),
@@ -741,9 +781,20 @@ export function useMediaSettings({
         } | null = null;
 
         if (view === "movies" || view === "series") {
+          const facetDef = FACETS_BY_VIEW.get(view);
           const pathKey =
             view === "movies" ? MOVIE_FOLDER_KEY : SERIES_FOLDER_KEY;
-          globalSaveItems.push({ keyName: pathKey, value: path });
+          // Save default root folder to legacy path key for backwards compat
+          const defaultFolder = rootFolders.find((rf) => rf.isDefault);
+          const legacyPath = defaultFolder?.path || path;
+          globalSaveItems.push({ keyName: pathKey, value: legacyPath });
+          // Save root folders JSON array
+          if (facetDef) {
+            globalSaveItems.push({
+              keyName: facetDef.rootFoldersKey,
+              value: JSON.stringify(rootFolders),
+            });
+          }
           const { data: globalData, error: globalError } = await client
             .mutation(saveAdminSettingsMutation, {
               input: {
@@ -989,6 +1040,7 @@ export function useMediaSettings({
       view,
       moviesPath,
       seriesPath,
+      rootFolders,
     ],
   );
 
@@ -1042,6 +1094,8 @@ export function useMediaSettings({
     setMoviesPath,
     seriesPath,
     setSeriesPath,
+    rootFolders,
+    saveRootFolders,
     mediaSettingsLoading,
     mediaSettingsSaving,
     qualityProfiles,

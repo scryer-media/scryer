@@ -53,10 +53,8 @@ export type MetadataCatalogMonitorType =
   | "allEpisodes"
   | "none";
 
-export type RootFolderOption = {
-  path: string;
-  isDefault: boolean;
-};
+export type { RootFolderOption } from "@/lib/types/titles";
+import type { RootFolderOption } from "@/lib/types/titles";
 
 export type MetadataCatalogAddOptions = {
   qualityProfileId: string;

@@ -339,6 +339,7 @@ async fn graphql_scan_title_library() {
         year: Some(2024),
         overview: None,
         poster_url: None,
+        banner_url: None,
         sort_title: None,
         slug: None,
         imdb_id: None,

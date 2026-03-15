@@ -171,9 +171,8 @@ impl AppUseCase {
                 continue;
             }
 
-            if let Ok(stat) = nix::sys::statvfs::statvfs(path.as_str()) {
-                let block_size = stat.block_size();
-                let free = to_u64(stat.blocks_available()) * block_size;
+            if let Some(stat) = statvfs_path(&path) {
+                let free = to_u64(stat.f_bavail) * to_u64(stat.f_frsize);
                 let mb_100 = 100 * 1024 * 1024;
                 let mb_500 = 500 * 1024 * 1024;
 

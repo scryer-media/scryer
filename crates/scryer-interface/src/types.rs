@@ -32,6 +32,7 @@ pub struct TitlePayload {
     pub year: Option<i32>,
     pub overview: Option<String>,
     pub poster_url: Option<String>,
+    pub banner_url: Option<String>,
     pub sort_title: Option<String>,
     pub slug: Option<String>,
     pub imdb_id: Option<String>,
@@ -1363,6 +1364,14 @@ pub struct PreviewExternalImportInput {
     pub radarr: Option<ExternalImportConnectionInput>,
 }
 
+/// API key supplied by the user for a download client whose key was masked by
+/// Sonarr/Radarr and could not be retrieved automatically.
+#[derive(InputObject)]
+pub struct DownloadClientApiKeyOverrideInput {
+    pub dedup_key: String,
+    pub api_key: String,
+}
+
 #[derive(InputObject)]
 pub struct ExecuteExternalImportInput {
     pub sonarr: Option<ExternalImportConnectionInput>,
@@ -1372,6 +1381,9 @@ pub struct ExecuteExternalImportInput {
     pub selected_anime_path: Option<String>,
     pub selected_download_client_dedup_keys: Vec<String>,
     pub selected_indexer_dedup_keys: Vec<String>,
+    /// User-supplied API keys for download clients whose keys were masked by
+    /// Sonarr/Radarr.  Keyed by the client's `dedup_key`.
+    pub download_client_api_key_overrides: Vec<DownloadClientApiKeyOverrideInput>,
 }
 
 #[derive(SimpleObject, Clone)]

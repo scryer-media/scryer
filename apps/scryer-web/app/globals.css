@@ -186,7 +186,6 @@
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(circle at top left, rgba(91, 100, 255, 0.05), transparent 24%),
     radial-gradient(circle at 78% 12%, rgba(56, 189, 248, 0.03), transparent 22%);
   pointer-events: none;
   z-index: 0;

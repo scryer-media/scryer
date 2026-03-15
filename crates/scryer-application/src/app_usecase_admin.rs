@@ -109,23 +109,19 @@ impl AppUseCase {
                 continue; // skip duplicate mount points
             }
 
-            match nix::sys::statvfs::statvfs(path.as_str()) {
-                Ok(stat) => {
-                    let block_size = stat.block_size();
-                    let total = to_u64(stat.blocks()) * block_size;
-                    let free = to_u64(stat.blocks_available()) * block_size;
-                    let used = total.saturating_sub(free);
-                    results.push(DiskSpaceInfo {
-                        path,
-                        label: label.to_string(),
-                        total_bytes: total,
-                        free_bytes: free,
-                        used_bytes: used,
-                    });
-                }
-                Err(err) => {
-                    tracing::warn!(path = path.as_str(), error = %err, "failed to query disk space");
-                }
+            if let Some(stat) = statvfs_path(&path) {
+                let total = to_u64(stat.f_blocks) * to_u64(stat.f_frsize);
+                let free = to_u64(stat.f_bavail) * to_u64(stat.f_frsize);
+                let used = total.saturating_sub(free);
+                results.push(DiskSpaceInfo {
+                    path,
+                    label: label.to_string(),
+                    total_bytes: total,
+                    free_bytes: free,
+                    used_bytes: used,
+                });
+            } else {
+                tracing::warn!(path = path.as_str(), "failed to query disk space");
             }
         }
 

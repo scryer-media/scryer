@@ -134,6 +134,12 @@ const en: LocaleDictionary = {
     "HDR: Dolby Vision penalized (compatibility risk)",
   "settings.moviesLibrarySettings": "Movie media settings",
   "settings.seriesLibrarySettings": "Series media settings",
+  "settings.rootFoldersLabel": "Root folders",
+  "settings.rootFoldersEmpty": "No root folders configured. Add at least one path.",
+  "settings.rootFoldersHelp": "Root folders are the top-level directories where media is stored. The starred folder is the default for new titles.",
+  "settings.rootFolderAdd": "Add root folder",
+  "settings.rootFolderAddPlaceholder": "/media/movies",
+  "settings.rootFolderSetDefault": "Set as default",
   "settings.libraryScanTitle": "Library scan",
   "settings.libraryScanHelp":
     "Scan the movies folder and import any missing titles.",
@@ -405,6 +411,7 @@ const en: LocaleDictionary = {
   "title.settings": "Title Settings",
   "title.qualityProfile": "Quality Profile",
   "title.rootFolder": "Root Folder",
+  "title.defaultRootFolder": "Default ({{path}})",
   "title.inheritDefault": "Inherit Default",
   "title.monitoredSection": "Monitored {{facet}}",
   "title.noWantedItem": "No active wanted item.",
@@ -1407,6 +1414,10 @@ const en: LocaleDictionary = {
     "Do you use custom formats? Many of those features are covered in the Persona section. More customization is available after setup.",
   "setup.summaryImportedClients": "Download clients imported",
   "setup.summaryImportedIndexers": "Indexers imported",
+  "setup.apiKeyMasked":
+    "Sonarr/Radarr hides this API key. Enter it manually to import this client:",
+  "setup.apiKeyPlaceholder": "Paste API key…",
+  "setup.apiKeyHelpLink": "Find it in SABnzbd → Config → General",
 
   "settings.runSetupWizard": "Run setup wizard",
 };

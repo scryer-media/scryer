@@ -1,6 +1,4 @@
 import * as React from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -22,16 +20,19 @@ import { useTranslate } from "@/lib/context/translate-context";
 import type { TitleDetail } from "@/components/containers/series-overview-container";
 
 const INHERIT_VALUE = "__inherit__";
+const DEFAULT_MARKER = "__default__";
 
 export function TitleSettingsPanel({
   title,
   qualityProfiles,
   defaultRootFolder,
+  rootFolders,
   onUpdateTitleTags,
 }: {
   title: TitleDetail;
   qualityProfiles: { id: string; name: string }[];
   defaultRootFolder: string;
+  rootFolders: { path: string; isDefault: boolean }[];
   onUpdateTitleTags: (newTags: string[]) => Promise<void>;
 }) {
   const t = useTranslate();
@@ -40,12 +41,9 @@ export function TitleSettingsPanel({
   const currentSeasonFolder = getTagValue(title.tags, SEASON_FOLDER_PREFIX) ?? "enabled";
   const currentFillerPolicy = getTagValue(title.tags, FILLER_POLICY_PREFIX) ?? INHERIT_VALUE;
   const currentRecapPolicy = getTagValue(title.tags, RECAP_POLICY_PREFIX) ?? INHERIT_VALUE;
-  const [rootFolderDraft, setRootFolderDraft] = React.useState(currentRootFolder || defaultRootFolder);
   const [saving, setSaving] = React.useState(false);
 
-  React.useEffect(() => {
-    setRootFolderDraft(currentRootFolder || defaultRootFolder);
-  }, [currentRootFolder, defaultRootFolder]);
+  const rootFolderSelectValue = currentRootFolder || DEFAULT_MARKER;
 
   const handleProfileChange = async (value: string) => {
     setSaving(true);
@@ -60,20 +58,14 @@ export function TitleSettingsPanel({
     }
   };
 
-  const handleRootFolderSave = async () => {
-    const trimmed = rootFolderDraft.trim();
-    if (!trimmed || trimmed === defaultRootFolder) {
-      setSaving(true);
-      try {
-        await onUpdateTitleTags(removeTagByPrefix(title.tags, ROOT_FOLDER_PREFIX));
-      } finally {
-        setSaving(false);
-      }
-      return;
-    }
+  const handleRootFolderChange = async (value: string) => {
     setSaving(true);
     try {
-      await onUpdateTitleTags(setTagValue(title.tags, ROOT_FOLDER_PREFIX, trimmed));
+      if (value === DEFAULT_MARKER) {
+        await onUpdateTitleTags(removeTagByPrefix(title.tags, ROOT_FOLDER_PREFIX));
+      } else {
+        await onUpdateTitleTags(setTagValue(title.tags, ROOT_FOLDER_PREFIX, value));
+      }
     } finally {
       setSaving(false);
     }
@@ -114,6 +106,9 @@ export function TitleSettingsPanel({
     }
   };
 
+  const folderLabel = (path: string) =>
+    path.split("/").filter(Boolean).pop() ?? path;
+
   return (
     <div className="p-4">
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -142,31 +137,31 @@ export function TitleSettingsPanel({
           </Select>
         </div>
 
-        <div className="min-w-0 xl:col-span-2">
+        <div className="min-w-0">
           <label className="mb-1 block text-xs font-medium text-muted-foreground">
             {t("title.rootFolder")}
           </label>
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <Input
-              className="h-9 font-mono text-sm"
-              value={rootFolderDraft}
-              onChange={(e) => setRootFolderDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void handleRootFolderSave();
-              }}
-              disabled={saving}
-            />
-            {rootFolderDraft.trim() !== (currentRootFolder || defaultRootFolder) && (
-              <Button
-                size="sm"
-                className="h-9 sm:self-auto"
-                onClick={() => void handleRootFolderSave()}
-                disabled={saving}
-              >
-                {t("settings.saveButton")}
-              </Button>
-            )}
-          </div>
+          <Select
+            value={rootFolderSelectValue}
+            onValueChange={(v) => void handleRootFolderChange(v)}
+            disabled={saving}
+          >
+            <SelectTrigger className="h-9 w-full font-mono text-sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={DEFAULT_MARKER}>
+                {t("title.defaultRootFolder", { path: folderLabel(defaultRootFolder) })}
+              </SelectItem>
+              {rootFolders
+                .filter((rf) => !rf.isDefault)
+                .map((rf) => (
+                  <SelectItem key={rf.path} value={rf.path}>
+                    {folderLabel(rf.path)}
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
         </div>
 
         <div className="min-w-0">
