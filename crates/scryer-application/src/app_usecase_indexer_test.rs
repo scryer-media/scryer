@@ -26,6 +26,17 @@ impl AppUseCase {
         let now = Utc::now();
 
         // Build a temporary IndexerConfig to get a client from the plugin
+        // Reject obviously invalid API keys (e.g. masked placeholders from
+        // Sonarr/Radarr import that were stored before the masking fix).
+        if let Some(key) = api_key {
+            let trimmed = key.trim();
+            if trimmed.chars().all(|c| c == '*') && !trimmed.is_empty() {
+                return Err(AppError::Validation(
+                    "API key appears to be a masked placeholder — enter the real key".into(),
+                ));
+            }
+        }
+
         let temp_config = IndexerConfig {
             id: "test-connection".to_string(),
             name: "Test Connection".to_string(),

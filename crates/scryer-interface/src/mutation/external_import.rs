@@ -404,7 +404,7 @@ impl ExternalImportMutations {
                 );
             }
 
-            let api_key = external_import::field_str(&idx.fields, "apiKey");
+            let api_key = external_import::field_str_sensitive(&idx.fields, "apiKey");
 
             // If the plugin was just auto-installed, it may have auto-created a
             // default IndexerConfig. Update that config instead of creating a

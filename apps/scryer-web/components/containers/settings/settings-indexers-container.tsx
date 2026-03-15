@@ -294,6 +294,10 @@ export function SettingsIndexersContainer() {
       setGlobalStatus(t("form.indexerValidation"));
       return;
     }
+    if (shouldIncludeApiKey && !payload.apiKey) {
+      setGlobalStatus(t("form.indexerApiKeyRequired"));
+      return;
+    }
 
     setIsTestingConnection(true);
     try {

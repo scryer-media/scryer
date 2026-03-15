@@ -872,6 +872,7 @@ const en: LocaleDictionary = {
   "form.passwordPlaceholder": "password",
   "form.newPasswordPlaceholder": "new password",
   "form.indexerValidation": "Name, provider type, and base URL are required.",
+  "form.indexerApiKeyRequired": "An API key is required for this indexer.",
   "form.indexerRateLimitValidation": "Rate limit values must be numeric.",
   "form.rateLimitPlaceholder": "Default from service",
   "form.enabled": "Enabled",
