@@ -546,7 +546,7 @@ export function SettingsIndexersSection({
                         apiKey: event.target.value,
                       }))
                     }
-                    placeholder={t("form.apiKeyInputPlaceholder")}
+                    placeholder={editingIndexerId ? t("form.apiKeyStoredPlaceholder") : t("form.apiKeyInputPlaceholder")}
                     type="password"
                   />
                 </label>

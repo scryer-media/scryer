@@ -865,6 +865,7 @@ const en: LocaleDictionary = {
   "form.baseUrlPlaceholderValue": "https://api.nzbgeek.info/api",
   "form.apiKeyPlaceholder": "API Key",
   "form.apiKeyInputPlaceholder": "api key",
+  "form.apiKeyStoredPlaceholder": "stored (leave blank to keep)",
   "form.rateLimitSeconds": "Rate Limit (seconds)",
   "form.rateLimitBurst": "Rate Limit Burst",
   "form.defaultPlaceholder": "Default from service",

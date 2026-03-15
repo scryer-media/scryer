@@ -431,11 +431,28 @@ impl ConfigMutations {
     ) -> GqlResult<bool> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
+
+        // If no API key provided but an existing indexer ID is given,
+        // look up the stored key so "Test Connection" works without
+        // re-entering the key.
+        let mut api_key = input.api_key;
+        if api_key.as_ref().is_none_or(|k| k.trim().is_empty()) {
+            if let Some(ref indexer_id) = input.indexer_id {
+                if let Ok(Some(config)) = app.services.indexer_configs.get_by_id(indexer_id).await {
+                    if let Some(ref stored_key) = config.api_key_encrypted {
+                        if !stored_key.is_empty() {
+                            api_key = Some(stored_key.clone());
+                        }
+                    }
+                }
+            }
+        }
+
         app.test_indexer_connection(
             &actor,
             &input.provider_type,
             &input.base_url,
-            input.api_key.as_deref(),
+            api_key.as_deref(),
             input.config_json.as_deref(),
         )
         .await

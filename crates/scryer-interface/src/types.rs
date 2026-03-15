@@ -736,6 +736,7 @@ pub struct TestIndexerConnectionInput {
     pub base_url: String,
     pub api_key: Option<String>,
     pub config_json: Option<String>,
+    pub indexer_id: Option<String>,
 }
 
 #[derive(InputObject)]

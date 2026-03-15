@@ -281,20 +281,20 @@ export function SettingsIndexersContainer() {
       indexerDraft.configValues,
     );
     const shouldIncludeApiKey = showIndexerApiKeyField(selectedProvider);
+    const draftApiKey = indexerDraft.apiKey.trim();
     const payload = {
       providerType: indexerDraft.providerType.trim(),
       baseUrl: effectiveBaseUrl,
-      apiKey: shouldIncludeApiKey
-        ? indexerDraft.apiKey.trim() || undefined
-        : undefined,
+      apiKey: shouldIncludeApiKey && draftApiKey ? draftApiKey : undefined,
       configJson: serializeConfigJson(indexerDraft.configValues),
+      indexerId: editingIndexerId ?? undefined,
     };
 
     if (!payload.providerType || !payload.baseUrl) {
       setGlobalStatus(t("form.indexerValidation"));
       return;
     }
-    if (shouldIncludeApiKey && !payload.apiKey) {
+    if (shouldIncludeApiKey && !draftApiKey && !editingIndexerId) {
       setGlobalStatus(t("form.indexerApiKeyRequired"));
       return;
     }

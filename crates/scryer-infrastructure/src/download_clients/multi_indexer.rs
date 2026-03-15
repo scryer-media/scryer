@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -10,6 +10,16 @@ use scryer_application::{
 use scryer_domain::IndexerConfig;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
+
+/// A single search strategy dispatched as an independent parallel task.
+#[derive(Clone, Debug)]
+struct SearchStrategy {
+    query: String,
+    imdb_id: Option<String>,
+    tvdb_id: Option<String>,
+    anidb_id: Option<String>,
+    label: &'static str,
+}
 
 /// Per-indexer rate limiter tracking the last request time.
 #[derive(Clone)]
@@ -352,57 +362,69 @@ impl IndexerClient for MultiIndexerSearchClient {
                     continue;
                 }
             };
-            let query = query.clone();
-            let imdb_id = imdb_id.clone();
-            let tvdb_id = tvdb_id.clone();
-            let anidb_id = anidb_id.clone();
-            let category = category.clone();
-            let indexer_id = config.id.clone();
-            let indexer_name = config.name.clone();
-            let rate_limiter = self.rate_limiter.clone();
-            let rate_limit_seconds = config.rate_limit_seconds;
 
-            set.spawn(async move {
-                // Enforce per-indexer rate limiting before dispatching
-                rate_limiter
-                    .acquire(&indexer_id, rate_limit_seconds, mode)
+            // For Interactive mode, fan out separate strategy tasks per ID type
+            // so all HTTP calls happen in parallel. For Auto mode, send everything
+            // in a single call (current behavior — no extra API pressure).
+            let strategies: Vec<SearchStrategy> = if mode == SearchMode::Interactive {
+                build_strategies(&query, &imdb_id, &tvdb_id, &anidb_id, &caps)
+            } else {
+                vec![SearchStrategy {
+                    query: query.clone(),
+                    imdb_id: imdb_id.clone(),
+                    tvdb_id: tvdb_id.clone(),
+                    anidb_id: anidb_id.clone(),
+                    label: "auto",
+                }]
+            };
+
+            for strategy in strategies {
+                let client = client.clone();
+                let category = category.clone();
+                let per_indexer_categories = per_indexer_categories.clone();
+                let indexer_id = config.id.clone();
+                let indexer_name = config.name.clone();
+                let rate_limiter = self.rate_limiter.clone();
+                let rate_limit_seconds = config.rate_limit_seconds;
+                let strategy_label = strategy.label;
+
+                set.spawn(async move {
+                    rate_limiter
+                        .acquire(&indexer_id, rate_limit_seconds, mode)
+                        .await;
+
+                    let start = std::time::Instant::now();
+                    let result = tokio::time::timeout(
+                        std::time::Duration::from_secs(30),
+                        client.search(
+                            strategy.query,
+                            strategy.imdb_id,
+                            strategy.tvdb_id,
+                            strategy.anidb_id,
+                            category,
+                            per_indexer_categories,
+                            None,
+                            limit,
+                            mode,
+                            season,
+                            episode,
+                        ),
+                    )
                     .await;
 
-                let start = std::time::Instant::now();
-                let result = tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    client.search(
-                        query,
-                        imdb_id,
-                        tvdb_id,
-                        anidb_id,
-                        category,
-                        per_indexer_categories,
-                        None,
-                        limit,
-                        mode,
-                        season,
-                        episode,
-                    ),
-                )
-                .await;
-
-                let elapsed = start.elapsed();
-                let mode_label = match mode {
-                    SearchMode::Interactive => "interactive",
-                    SearchMode::Auto => "auto",
-                };
-                match result {
-                    Ok(inner) => (indexer_id, indexer_name, inner, elapsed, mode_label),
-                    Err(_) => (
-                        indexer_id,
-                        indexer_name,
-                        Err(AppError::Repository("indexer search timed out".into())),
-                        elapsed,
-                        mode_label,
-                    ),
-                }
-            });
+                    let elapsed = start.elapsed();
+                    match result {
+                        Ok(inner) => (indexer_id, indexer_name, inner, elapsed, strategy_label),
+                        Err(_) => (
+                            indexer_id,
+                            indexer_name,
+                            Err(AppError::Repository("indexer search timed out".into())),
+                            elapsed,
+                            strategy_label,
+                        ),
+                    }
+                });
+            }
         }
 
         let mut all_results: Vec<IndexerSearchResult> = Vec::new();
@@ -451,6 +473,24 @@ impl IndexerClient for MultiIndexerSearchClient {
             }
         }
 
+        // Interactive mode fans out multiple strategies per indexer, so dedup
+        // results by download_url to remove duplicates across strategies.
+        if mode == SearchMode::Interactive {
+            let before = all_results.len();
+            let mut seen: HashSet<String> = HashSet::new();
+            all_results.retain(|r| {
+                if let Some(ref url) = r.download_url {
+                    seen.insert(url.to_ascii_lowercase())
+                } else {
+                    true
+                }
+            });
+            let deduped = before - all_results.len();
+            if deduped > 0 {
+                info!(before, after = all_results.len(), deduped, "deduplicated interactive search results");
+            }
+        }
+
         Ok(IndexerSearchResponse {
             results: all_results,
             api_current: None,
@@ -459,6 +499,79 @@ impl IndexerClient for MultiIndexerSearchClient {
             grab_max: None,
         })
     }
+}
+
+/// Build parallel search strategies for interactive mode.
+/// Each strategy targets one ID type so the host can dispatch them
+/// all in parallel instead of the plugin calling endpoints sequentially.
+fn build_strategies(
+    query: &str,
+    imdb_id: &Option<String>,
+    tvdb_id: &Option<String>,
+    anidb_id: &Option<String>,
+    caps: &scryer_domain::IndexerProviderCapabilities,
+) -> Vec<SearchStrategy> {
+    let mut strategies = Vec::with_capacity(4);
+
+    // Strategy per ID type (only if indexer supports it)
+    if let Some(id) = anidb_id {
+        if caps.anidb_search {
+            strategies.push(SearchStrategy {
+                query: String::new(),
+                imdb_id: None,
+                tvdb_id: None,
+                anidb_id: Some(id.clone()),
+                label: "anidb_id",
+            });
+        }
+    }
+    if let Some(id) = tvdb_id {
+        if caps.tvdb_search {
+            strategies.push(SearchStrategy {
+                query: String::new(),
+                imdb_id: None,
+                tvdb_id: Some(id.clone()),
+                anidb_id: None,
+                label: "tvdb_id",
+            });
+        }
+    }
+    if let Some(id) = imdb_id {
+        if caps.imdb_search {
+            strategies.push(SearchStrategy {
+                query: String::new(),
+                imdb_id: Some(id.clone()),
+                tvdb_id: None,
+                anidb_id: None,
+                label: "imdb_id",
+            });
+        }
+    }
+
+    // Freetext strategy (always, if query is non-empty and indexer supports search)
+    if !query.is_empty() && caps.search {
+        strategies.push(SearchStrategy {
+            query: query.to_string(),
+            imdb_id: None,
+            tvdb_id: None,
+            anidb_id: None,
+            label: "freetext",
+        });
+    }
+
+    // If no strategies were generated (no IDs, no query), fall back to
+    // a single combined call so the indexer can at least try RSS/empty search.
+    if strategies.is_empty() {
+        strategies.push(SearchStrategy {
+            query: query.to_string(),
+            imdb_id: imdb_id.clone(),
+            tvdb_id: tvdb_id.clone(),
+            anidb_id: anidb_id.clone(),
+            label: "fallback",
+        });
+    }
+
+    strategies
 }
 
 #[cfg(test)]
