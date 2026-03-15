@@ -27,9 +27,9 @@ pub struct ImportCheckContext<'a> {
     pub source_path: &'a Path,
     pub dest_path: &'a Path,
     pub source_size: u64,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub parsed: &'a ParsedReleaseMetadata,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub existing_files: &'a [TitleMediaFile],
 }
 
@@ -107,16 +107,16 @@ pub fn check_not_unpacking(ctx: &ImportCheckContext<'_>) -> ImportVerdict {
     }
 
     // Check for sibling marker files (e.g. foo.mkv.!qB alongside foo.mkv)
-    if let Some(file_name) = ctx.source_path.file_name().and_then(|n| n.to_str()) {
-        if let Some(parent) = ctx.source_path.parent() {
-            for marker in &[".!qB", ".part", "._unpack"] {
-                let marker_path = parent.join(format!("{file_name}{marker}"));
-                if marker_path.exists() {
-                    return ImportVerdict::Reject {
-                        reason: format!("sibling marker file exists: {}", marker_path.display()),
-                        code: "still_unpacking",
-                    };
-                }
+    if let Some(file_name) = ctx.source_path.file_name().and_then(|n| n.to_str())
+        && let Some(parent) = ctx.source_path.parent()
+    {
+        for marker in &[".!qB", ".part", "._unpack"] {
+            let marker_path = parent.join(format!("{file_name}{marker}"));
+            if marker_path.exists() {
+                return ImportVerdict::Reject {
+                    reason: format!("sibling marker file exists: {}", marker_path.display()),
+                    code: "still_unpacking",
+                };
             }
         }
     }

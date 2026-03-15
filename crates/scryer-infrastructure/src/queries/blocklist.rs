@@ -16,7 +16,7 @@ pub(crate) struct BlocklistRow {
     pub created_at: String,
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(crate) async fn insert_blocklist_entry_query(
     pool: &SqlitePool,
     title_id: &str,

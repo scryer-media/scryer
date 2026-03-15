@@ -3,14 +3,15 @@ use chrono::Utc;
 use scryer_application::RenameApplyResult;
 use serde_json::json;
 use std::collections::HashSet;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{LazyLock, Mutex};
 
 use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_error};
 use crate::mappers::{from_library_scan_summary, from_media_rename_apply};
 use crate::types::*;
 use crate::utils::parse_facet;
 
-static RENAME_IDEMPOTENCY_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static RENAME_IDEMPOTENCY_KEYS: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
 fn claim_rename_idempotency_key(scope: &str, key: Option<String>) -> GqlResult<Option<String>> {
     let Some(raw_key) = key else {
@@ -23,7 +24,7 @@ fn claim_rename_idempotency_key(scope: &str, key: Option<String>) -> GqlResult<O
     }
 
     let composite = format!("{scope}:{normalized}");
-    let store = RENAME_IDEMPOTENCY_KEYS.get_or_init(|| Mutex::new(HashSet::new()));
+    let store = &*RENAME_IDEMPOTENCY_KEYS;
     let mut guard = store
         .lock()
         .map_err(|_| Error::new("failed to lock rename idempotency key store"))?;

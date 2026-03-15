@@ -1,7 +1,7 @@
 [package]
 name = "scryer-mock-apis"
 version = "0.8.8"
-edition = "2021"
+edition.workspace = true
 
 [[bin]]
 name = "scryer-mock-apis"

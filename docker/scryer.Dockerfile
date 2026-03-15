@@ -12,15 +12,15 @@ RUN chmod +x /entrypoint.sh
 
 EXPOSE 8080
 
-# Persist the SQLite database across container upgrades.
-RUN mkdir -p /data
-VOLUME /data
+# /config holds app state: database, WASM cache, logs.
+# /data is conventionally where users mount their media library.
+RUN mkdir -p /config /data
+VOLUME /config
 
 ENV PUID=1000
 ENV PGID=1000
 ENV SCRYER_BIND=0.0.0.0:8080
-ENV SCRYER_DB_PATH=/data/scryer.db
-ENV WASMTIME_CACHE_ENABLED=0
+ENV SCRYER_DB_PATH=/config/scryer.db
 
 # Graceful shutdown: let in-flight requests and background tasks finish
 STOPSIGNAL SIGTERM

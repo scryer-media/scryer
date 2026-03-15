@@ -6,7 +6,11 @@ import path from "path";
 export default defineConfig({
   base: "./",
   plugins: [
-    react(),
+    react({
+      babel: {
+        plugins: ["babel-plugin-react-compiler"],
+      },
+    }),
     compression({
       include: /\.(js|css|svg|webmanifest|json)$/i,
       exclude: /service-worker\.js$/,
@@ -22,7 +26,7 @@ export default defineConfig({
   build: {
     outDir: "dist",
     sourcemap: false,
-    rollupOptions: {
+    rolldownOptions: {
       output: {
         manualChunks(id) {
           // Heavy lazy-loaded libraries — keep isolated behind their lazy() boundary.

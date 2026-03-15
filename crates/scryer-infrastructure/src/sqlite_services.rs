@@ -390,7 +390,7 @@ impl SqliteServices {
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub async fn ensure_setting_definition(
         &self,
         category: impl Into<String>,
@@ -568,7 +568,7 @@ impl SqliteServices {
         scope: impl Into<String>,
         scope_id: Option<String>,
     ) -> AppResult<Vec<QualityProfile>> {
-        #[allow(clippy::type_complexity)]
+        #[expect(clippy::type_complexity)]
         let (reply_tx, reply_rx): (
             oneshot::Sender<AppResult<Vec<QualityProfile>>>,
             oneshot::Receiver<AppResult<Vec<QualityProfile>>>,
@@ -949,7 +949,7 @@ impl SqliteServices {
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub async fn update_wanted_item_status(
         &self,
         id: &str,
@@ -1396,7 +1396,7 @@ impl SqliteServices {
 
     // ── Title History ─────────────────────────────────────────────────────────
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub async fn insert_title_history_event(
         &self,
         title_id: String,
@@ -1528,7 +1528,7 @@ impl SqliteServices {
 
     // ── Blocklist ─────────────────────────────────────────────────────────────
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub async fn insert_blocklist_entry(
         &self,
         title_id: String,

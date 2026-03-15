@@ -20,7 +20,7 @@ use crate::utils::parse_facet;
 #[derive(Copy, Clone)]
 pub struct QueryRoot;
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 #[Object]
 impl QueryRoot {
     async fn titles(

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 
 use axum::body::Body;
 use axum::http::{header, HeaderMap, Method, StatusCode, Uri};
@@ -174,15 +174,14 @@ pub(crate) async fn serve_embedded_ui(
 }
 
 pub(crate) fn embedded_ui_asset(path: &str) -> Option<&'static [u8]> {
-    static INDEX: OnceLock<HashMap<&'static str, &'static [u8]>> = OnceLock::new();
-    let map = INDEX.get_or_init(|| {
+    static INDEX: LazyLock<HashMap<&'static str, &'static [u8]>> = LazyLock::new(|| {
         embedded_ui_assets::EMBEDDED_WEB_FILES
             .iter()
             .copied()
             .collect()
     });
     let normalized_path = path.trim_start_matches('/');
-    map.get(normalized_path).copied()
+    INDEX.get(normalized_path).copied()
 }
 
 pub(crate) async fn serve_embedded_index(head_only: bool) -> Response {

@@ -137,6 +137,11 @@ impl SettingsMutations {
             )
             .await;
 
+        let _ = app
+            .services
+            .settings_changed_broadcast
+            .send(updated_keys.clone());
+
         let scope_name = scope.to_string();
         let keys = updated_keys
             .iter()
@@ -259,6 +264,11 @@ impl SettingsMutations {
                 ],
             )
             .await;
+
+        let _ = app
+            .services
+            .settings_changed_broadcast
+            .send(vec!["quality.profiles".to_string()]);
 
         // Return refreshed system settings.
         let items = db

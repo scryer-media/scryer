@@ -1976,16 +1976,16 @@ pub async fn start_background_acquisition_poller(
         });
     }
 
-    let mut poll_interval = tokio::time::interval(std::time::Duration::from_secs(60));
-    let mut sync_interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+    let mut poll_interval = tokio::time::interval(std::time::Duration::from_mins(1));
+    let mut sync_interval = tokio::time::interval(std::time::Duration::from_hours(1));
     let mut metadata_refresh_interval =
-        tokio::time::interval(std::time::Duration::from_secs(43200)); // 12h
+        tokio::time::interval(std::time::Duration::from_hours(12));
     let mut registry_refresh_interval =
-        tokio::time::interval(std::time::Duration::from_secs(86400)); // 24h
-    let mut health_check_interval = tokio::time::interval(std::time::Duration::from_secs(21600)); // 6h
-    let mut housekeeping_interval = tokio::time::interval(std::time::Duration::from_secs(86400)); // 24h
-    let mut rss_sync_interval = tokio::time::interval(std::time::Duration::from_secs(900)); // 15min
-    let mut pending_release_interval = tokio::time::interval(std::time::Duration::from_secs(60)); // 1min
+        tokio::time::interval(std::time::Duration::from_hours(24));
+    let mut health_check_interval = tokio::time::interval(std::time::Duration::from_hours(6));
+    let mut housekeeping_interval = tokio::time::interval(std::time::Duration::from_hours(24));
+    let mut rss_sync_interval = tokio::time::interval(std::time::Duration::from_mins(15));
+    let mut pending_release_interval = tokio::time::interval(std::time::Duration::from_mins(1));
 
     // Consume the first tick immediately
     poll_interval.tick().await;

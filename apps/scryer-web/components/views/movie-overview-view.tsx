@@ -1,6 +1,6 @@
 
 import * as React from "react";
-import { FolderOpen, Loader2, Pause, Play, RotateCcw } from "lucide-react";
+import { FolderOpen, Loader2, Pause, Play, RotateCcw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -321,6 +321,7 @@ type Props = {
   onRequestDeleteTitle?: () => void;
   blocklistEntries: TitleReleaseBlocklistEntry[];
   mediaFiles: TitleMediaFile[];
+  onDeleteFile?: (fileId: string) => void;
 };
 
 export function MovieOverviewView({
@@ -357,6 +358,7 @@ export function MovieOverviewView({
   onRequestDeleteTitle,
   blocklistEntries,
   mediaFiles,
+  onDeleteFile,
 }: Props) {
   const t = useTranslate();
   if (loading) {
@@ -698,6 +700,16 @@ export function MovieOverviewView({
                         </div>
                         {mediaFile ? <MediaInfoBadges file={mediaFile} /> : null}
                       </div>
+                      {onDeleteFile && mediaFile ? (
+                        <button
+                          type="button"
+                          onClick={() => onDeleteFile(mediaFile.id)}
+                          className="ml-auto shrink-0 rounded p-1 text-muted-foreground/40 transition-colors hover:bg-destructive/10 hover:text-destructive"
+                          title={t("mediaFile.delete")}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 );

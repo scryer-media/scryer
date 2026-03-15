@@ -245,12 +245,11 @@ impl AppUseCase {
             // Post-filter: skip results whose parsed season/episode doesn't match
             // the requested values. Indexers don't always respect API params.
             if let Some(ref ep_meta) = parsed_release_metadata.episode {
-                if let Some(wanted_season) = season {
-                    if let Some(parsed_season) = ep_meta.season {
-                        if parsed_season != wanted_season {
-                            continue;
-                        }
-                    }
+                if let Some(wanted_season) = season
+                    && let Some(parsed_season) = ep_meta.season
+                    && parsed_season != wanted_season
+                {
+                    continue;
                 }
                 if let Some(wanted_episode) = episode {
                     // For SxxExx-style releases, check episode_numbers
@@ -786,10 +785,10 @@ impl AppUseCase {
             category_profile_id.as_deref(),
             global_profile_id.as_deref(),
         );
-        if let Some(profile_id) = active_profile_id.as_deref() {
-            if let Some(profile) = catalog.iter().find(|profile| profile.id == profile_id) {
-                return Ok(profile.clone());
-            }
+        if let Some(profile_id) = active_profile_id.as_deref()
+            && let Some(profile) = catalog.iter().find(|profile| profile.id == profile_id)
+        {
+            return Ok(profile.clone());
         }
 
         warn!(

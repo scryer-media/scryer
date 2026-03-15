@@ -26,10 +26,10 @@ fn derive_indexer_base_url_from_config_json(config_json: Option<&str>) -> Option
     let object = parsed.as_object()?;
 
     for key in ["feed_url", "feedUrl", "rss_url", "rssUrl"] {
-        if let Some(value) = object.get(key).and_then(|value| value.as_str()) {
-            if let Some(origin) = extract_url_origin(value) {
-                return Some(origin);
-            }
+        if let Some(value) = object.get(key).and_then(|value| value.as_str())
+            && let Some(origin) = extract_url_origin(value)
+        {
+            return Some(origin);
         }
     }
 

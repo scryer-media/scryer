@@ -31,6 +31,7 @@ import {
 } from "@/lib/utils/quality-profiles";
 import { getSettingDisplayValue } from "@/lib/utils/settings";
 import { FACET_REGISTRY, facetById } from "@/lib/facets/registry";
+import { useSettingsSubscription } from "@/lib/hooks/use-settings-subscription";
 
 export type MetadataSearchResults = Record<string, MetadataTvdbSearchItem[]>;
 
@@ -387,6 +388,31 @@ export function useGlobalSearch({
   useEffect(() => {
     void refreshCatalogQualityProfileState();
   }, [refreshCatalogQualityProfileState]);
+
+  // Re-fetch search config when settings change (cross-client via WebSocket).
+  const searchSettingsKeys = useMemo(
+    () =>
+      new Set([
+        QUALITY_PROFILE_CATALOG_KEY,
+        QUALITY_PROFILE_ID_KEY,
+        ...FACET_REGISTRY.map((f) => f.rootFoldersKey),
+        ...FACET_REGISTRY.map((f) => f.folderSettingKey),
+        ANIME_MONITOR_SPECIALS_KEY,
+        ANIME_INTER_SEASON_MOVIES_KEY,
+      ]),
+    [],
+  );
+
+  useSettingsSubscription(
+    useCallback(
+      (keys: string[]) => {
+        if (keys.some((k) => searchSettingsKeys.has(k))) {
+          void refreshCatalogQualityProfileState();
+        }
+      },
+      [searchSettingsKeys, refreshCatalogQualityProfileState],
+    ),
+  );
 
   const isMetadataSearchResultInAnyCatalog = useCallback(
     (result: MetadataTvdbSearchItem) => {

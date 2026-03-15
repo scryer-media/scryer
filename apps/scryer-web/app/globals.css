@@ -172,20 +172,17 @@
 }
 
 .dark [data-slot="sidebar-inset"] {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.006), rgba(255, 255, 255, 0) 18%),
-    linear-gradient(135deg, rgba(91, 100, 255, 0.04), transparent 42%, rgba(56, 189, 248, 0.022) 78%, rgba(16, 185, 129, 0.016) 100%),
-    rgba(5, 9, 19, 0.975);
-  box-shadow:
-    0 22px 44px rgba(2, 6, 23, 0.24),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  background: rgba(5, 9, 19, 0.975);
+  box-shadow: 0 22px 44px rgba(2, 6, 23, 0.24);
 }
 
 .dark [data-slot="sidebar-inset"]::before {
   content: "";
   position: absolute;
-  inset: 0;
+  inset: 3rem 0 0 0;
   background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.006), rgba(255, 255, 255, 0) 18%),
+    linear-gradient(135deg, rgba(91, 100, 255, 0.04), transparent 42%, rgba(56, 189, 248, 0.022) 78%, rgba(16, 185, 129, 0.016) 100%),
     radial-gradient(circle at 78% 12%, rgba(56, 189, 248, 0.03), transparent 22%);
   pointer-events: none;
   z-index: 0;

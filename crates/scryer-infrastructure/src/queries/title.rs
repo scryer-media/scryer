@@ -66,6 +66,7 @@ pub(crate) async fn list_titles_query(
     }
     apply_local_poster_urls(pool, &mut out).await?;
     apply_local_image_urls(pool, TitleImageKind::Banner, "master", &mut out).await?;
+    apply_local_image_urls(pool, TitleImageKind::Fanart, "master", &mut out).await?;
     Ok(out)
 }
 
@@ -103,6 +104,7 @@ pub(crate) async fn get_title_by_id_query(pool: &SqlitePool, id: &str) -> AppRes
             let mut titles = vec![row_to_title(&row)?];
             apply_local_poster_urls(pool, &mut titles).await?;
             apply_local_image_urls(pool, TitleImageKind::Banner, "master", &mut titles).await?;
+            apply_local_image_urls(pool, TitleImageKind::Fanart, "master", &mut titles).await?;
             Ok(titles.into_iter().next())
         }
         None => Ok(None),
@@ -504,7 +506,7 @@ pub(crate) async fn create_collection_query(
     Ok(collection.clone())
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(crate) async fn update_collection_query(
     pool: &SqlitePool,
     collection_id: &str,
@@ -630,7 +632,7 @@ pub(crate) async fn get_episode_by_id_query(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(crate) async fn update_episode_query(
     pool: &SqlitePool,
     episode_id: &str,

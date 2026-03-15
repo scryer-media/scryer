@@ -1,7 +1,7 @@
 [package]
 name = "scryer-rules"
 version = "0.8.8"
-edition = "2021"
+edition.workspace = true
 
 [dependencies]
 regorus = { version = "0.9", default-features = false, features = ["arc", "std", "rego-extensions", "regex"] }

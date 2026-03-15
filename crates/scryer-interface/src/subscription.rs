@@ -249,6 +249,59 @@ impl SubscriptionRoot {
 
         Box::pin(stream)
     }
+
+    async fn settings_changed(&self, ctx: &Context<'_>) -> BoxStream<'static, Vec<String>> {
+        let empty_stream = || -> BoxStream<'static, Vec<String>> { Box::pin(stream::empty()) };
+
+        let app = match app_from_ctx(ctx) {
+            Ok(app) => app,
+            Err(e) => {
+                tracing::warn!("settings_changed: app_from_ctx failed: {e:?}");
+                return empty_stream();
+            }
+        };
+
+        let actor = match actor_from_ctx(ctx) {
+            Ok(actor) => actor,
+            Err(e) => {
+                tracing::warn!("settings_changed: actor_from_ctx failed: {e:?}");
+                return empty_stream();
+            }
+        };
+
+        let receiver = match app.subscribe_settings_changed(&actor) {
+            Ok(receiver) => receiver,
+            Err(e) => {
+                tracing::warn!("settings_changed: subscribe failed: {e}");
+                return empty_stream();
+            }
+        };
+
+        tracing::debug!(
+            "settings_changed: subscription started for user {}",
+            actor.id
+        );
+
+        let stream = unfold(receiver, move |mut receiver| async move {
+            loop {
+                match receiver.recv().await {
+                    Ok(keys) => return Some((keys, receiver)),
+                    Err(RecvError::Lagged(n)) => {
+                        tracing::debug!(
+                            "settings_changed: receiver lagged, skipped {n} messages"
+                        );
+                        continue;
+                    }
+                    Err(RecvError::Closed) => {
+                        tracing::debug!("settings_changed: broadcast channel closed");
+                        return None;
+                    }
+                }
+            }
+        });
+
+        Box::pin(stream)
+    }
 }
 
 fn parse_sort_value_desc(left: Option<&str>, right: Option<&str>) -> std::cmp::Ordering {

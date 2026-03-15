@@ -1,11 +1,11 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
   "compilerOptions": {
-    "target": "ES2022",
+    "target": "ES2024",
     "lib": [
       "DOM",
       "DOM.Iterable",
-      "ES2022"
+      "ES2024"
     ],
     "strict": true,
     "skipLibCheck": true,

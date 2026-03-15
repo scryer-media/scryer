@@ -70,6 +70,7 @@ services:
       - scryer-rust-target:/workspace/target
       - scryer-cargo-registry:/usr/local/cargo/registry
       - scryer-cargo-git:/usr/local/cargo/git
+      - ./tmp/scryer-config:/config
       - ./tmp/scryer-data:/data
       - ./tmp/scryer-media:/media
       - ./tmp/nzbget-downloads:/nzbget-downloads

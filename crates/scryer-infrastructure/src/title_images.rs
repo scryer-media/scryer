@@ -312,7 +312,7 @@ pub(crate) async fn list_titles_requiring_image_refresh_query(
     let (source_col, preferred_variant) = match kind {
         TitleImageKind::Poster => ("poster_url", "w500"),
         TitleImageKind::Banner => ("banner_url", "master"),
-        TitleImageKind::Fanart => ("background_url", "w1280"),
+        TitleImageKind::Fanart => ("background_url", "master"),
     };
 
     let sql = format!(
@@ -639,7 +639,19 @@ fn build_image_variants(
                 bytes,
             }])
         }
-        TitleImageKind::Fanart => Ok(Vec::new()),
+        TitleImageKind::Fanart => {
+            // Full-resolution AVIF — single "master" variant, no resizing
+            let bytes = encode_avif(rgba, AVIF_SPEED, AVIF_QUALITY)?;
+            let (width, height) = rgba.dimensions();
+            Ok(vec![TitleImageVariantRecord {
+                variant_key: "master".to_string(),
+                format: SupportedImageFormat::Avif.as_str().to_string(),
+                width: width as i32,
+                height: height as i32,
+                sha256: sha256_hex(&bytes),
+                bytes,
+            }])
+        }
     }
 }
 

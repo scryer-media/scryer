@@ -221,20 +221,36 @@ fn anime_movie_after_season(
     movie: &AnimeMovie,
     season_last_aired: &std::collections::BTreeMap<i32, String>,
 ) -> i32 {
-    let Some(release_date) = movie
+    // Prefer digital_release_date for precise placement.
+    if let Some(release_date) = movie
         .digital_release_date
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-    else {
-        return 0;
-    };
+    {
+        return season_last_aired
+            .iter()
+            .filter(|(_, last)| last.as_str() <= release_date)
+            .max_by_key(|(season, _)| *season)
+            .map(|(season, _)| *season)
+            .unwrap_or(0);
+    }
 
-    season_last_aired
-        .iter()
-        .filter(|(_, last)| last.as_str() <= release_date)
-        .max_by_key(|(season, _)| *season)
-        .map(|(season, _)| *season)
-        .unwrap_or(0)
+    // Fall back to movie year — place after the last season whose final episode
+    // aired in a year <= the movie's release year.
+    if let Some(year) = movie.year {
+        return season_last_aired
+            .iter()
+            .filter(|(_, last)| {
+                last.get(..4)
+                    .and_then(|y| y.parse::<i32>().ok())
+                    .is_some_and(|aired_year| aired_year <= year)
+            })
+            .max_by_key(|(season, _)| *season)
+            .map(|(season, _)| *season)
+            .unwrap_or(0);
+    }
+
+    0
 }
 
 fn anime_movie_release_sort_key(movie: &AnimeMovie) -> (&str, &str) {

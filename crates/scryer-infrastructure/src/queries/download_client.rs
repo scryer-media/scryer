@@ -176,7 +176,7 @@ pub(crate) async fn create_download_client_config_query(
     Ok(config.clone())
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(crate) async fn update_download_client_config_query(
     pool: &SqlitePool,
     id: &str,

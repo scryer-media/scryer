@@ -389,10 +389,10 @@ impl UserRulesEvaluator {
 
             match self.engine.eval_query(query, false) {
                 Ok(results) => {
-                    if let Some(r) = results.result.first() {
-                        if let Some(expr) = r.expressions.first() {
-                            Self::extract_entries(&expr.value, rule_id, &mut result.entries);
-                        }
+                    if let Some(r) = results.result.first()
+                        && let Some(expr) = r.expressions.first()
+                    {
+                        Self::extract_entries(&expr.value, rule_id, &mut result.entries);
                     }
                 }
                 Err(e) => {

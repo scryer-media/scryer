@@ -72,6 +72,14 @@ impl AppUseCase {
         Ok(self.services.import_history_broadcast.subscribe())
     }
 
+    pub fn subscribe_settings_changed(
+        &self,
+        actor: &User,
+    ) -> AppResult<broadcast::Receiver<Vec<String>>> {
+        require(actor, &Entitlement::ViewCatalog)?;
+        Ok(self.services.settings_changed_broadcast.subscribe())
+    }
+
     pub async fn record_activity_event(
         &self,
         actor: &User,

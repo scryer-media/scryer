@@ -2,7 +2,7 @@ use super::*;
 use chrono::Utc;
 use ring::digest as ring_digest;
 use serde::{Deserialize, Serialize};
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 use tracing::warn;
 
 /// Registry plugin entry merged with local installation state.
@@ -34,7 +34,7 @@ pub struct RegistryPlugin {
 /// Raw registry JSON format (matches scryer-plugins/registry.json).
 #[derive(Clone, Debug, Deserialize)]
 struct RegistryManifest {
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     schema_version: u32,
     plugins: Vec<RegistryEntry>,
 }
@@ -72,11 +72,11 @@ const TORRENT_INDEXER_PLUGIN_TYPE: &str = "torrent_indexer";
 const CURRENT_SCRYER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn current_scryer_version() -> &'static semver::Version {
-    static VERSION: OnceLock<semver::Version> = OnceLock::new();
-    VERSION.get_or_init(|| {
+    static VERSION: LazyLock<semver::Version> = LazyLock::new(|| {
         semver::Version::parse(CURRENT_SCRYER_VERSION)
             .expect("CARGO_PKG_VERSION must be a valid semver version")
-    })
+    });
+    &VERSION
 }
 
 fn is_indexer_plugin_type(plugin_type: &str) -> bool {

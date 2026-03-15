@@ -117,8 +117,12 @@ export function seasonHeading(collection: TitleCollection) {
       ? "Specials"
       : `Season ${indexValue}`
     : indexValue;
-  if (collection.label && collection.label.trim().length > 0) {
-    return collection.label;
+  const label = collection.label?.trim();
+  if (label && normalizedIndex && normalizedIndex !== "Specials") {
+    return `${normalizedIndex}: ${label}`;
+  }
+  if (label) {
+    return label;
   }
   return normalizedIndex.length > 0 ? normalizedIndex : "Season";
 }

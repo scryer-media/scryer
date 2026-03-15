@@ -78,17 +78,14 @@ fn normalize_folder_name(name: &str) -> String {
 fn strip_year_suffix(folder: &str) -> (String, Option<u32>) {
     // Match trailing " (YYYY)" or " [YYYY]"
     for (open, close) in [('(', ')'), ('[', ']')] {
-        if let Some(close_pos) = folder.rfind(close) {
-            if let Some(open_pos) = folder[..close_pos].rfind(open) {
-                let candidate = &folder[open_pos + 1..close_pos];
-                if let Ok(year) = candidate.trim().parse::<u32>() {
-                    if (1888..=2100).contains(&year) {
-                        let title = folder[..open_pos].trim_end().to_string();
-                        if !title.is_empty() {
-                            return (title, Some(year));
-                        }
-                    }
-                }
+        if let Some(close_pos) = folder.rfind(close)
+            && let Some(open_pos) = folder[..close_pos].rfind(open)
+            && let Ok(year) = folder[open_pos + 1..close_pos].trim().parse::<u32>()
+            && (1888..=2100).contains(&year)
+        {
+            let title = folder[..open_pos].trim_end().to_string();
+            if !title.is_empty() {
+                return (title, Some(year));
             }
         }
     }
@@ -939,28 +936,28 @@ impl AppUseCase {
         let scoped = self
             .read_setting_string_value(RENAME_COLLISION_POLICY_KEY, Some(handler.rename_scope_id()))
             .await?;
-        if let Some(value) = scoped {
-            if let Some(policy) = parse_collision_policy(&value) {
-                return Ok(policy);
-            }
+        if let Some(value) = scoped
+            && let Some(policy) = parse_collision_policy(&value)
+        {
+            return Ok(policy);
         }
 
         let global = self
             .read_setting_string_value(RENAME_COLLISION_POLICY_GLOBAL_KEY, None)
             .await?;
-        if let Some(value) = global {
-            if let Some(policy) = parse_collision_policy(&value) {
-                return Ok(policy);
-            }
+        if let Some(value) = global
+            && let Some(policy) = parse_collision_policy(&value)
+        {
+            return Ok(policy);
         }
 
         let global = self
             .read_setting_string_value(handler.collision_policy_key(), None)
             .await?;
-        if let Some(value) = global {
-            if let Some(policy) = parse_collision_policy(&value) {
-                return Ok(policy);
-            }
+        if let Some(value) = global
+            && let Some(policy) = parse_collision_policy(&value)
+        {
+            return Ok(policy);
         }
 
         Ok(DEFAULT_COLLISION_POLICY)
@@ -1012,10 +1009,10 @@ fn select_best_match(
         return None;
     }
 
-    if let Some(year) = year.map(|value| value as i32) {
-        if let Some(match_item) = results.iter().find(|item| item.year == Some(year)) {
-            return Some(match_item.clone());
-        }
+    if let Some(year) = year.map(|value| value as i32)
+        && let Some(match_item) = results.iter().find(|item| item.year == Some(year))
+    {
+        return Some(match_item.clone());
     }
 
     Some(results[0].clone())

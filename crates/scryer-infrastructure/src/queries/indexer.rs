@@ -240,7 +240,7 @@ pub(crate) async fn create_indexer_config_query(
     Ok(config.clone())
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(crate) async fn update_indexer_config_query(
     pool: &SqlitePool,
     id: &str,

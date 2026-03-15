@@ -192,6 +192,7 @@ pub struct AppServices {
     pub activity_event_broadcast: broadcast::Sender<ActivityEvent>,
     pub download_queue_broadcast: broadcast::Sender<Vec<DownloadQueueItem>>,
     pub import_history_broadcast: broadcast::Sender<()>,
+    pub settings_changed_broadcast: broadcast::Sender<Vec<String>>,
     pub acquisition_wake: Arc<tokio::sync::Notify>,
     pub hydration_wake: Arc<tokio::sync::Notify>,
     pub poster_wake: Arc<tokio::sync::Notify>,
@@ -224,6 +225,7 @@ impl AppServices {
         let (activity_tx, _activity_rx) = broadcast::channel(256);
         let (queue_tx, _queue_rx) = broadcast::channel(16);
         let (import_history_tx, _) = broadcast::channel::<()>(16);
+        let (settings_changed_tx, _) = broadcast::channel::<Vec<String>>(16);
         Self {
             titles,
             shows,
@@ -264,6 +266,7 @@ impl AppServices {
             activity_event_broadcast: activity_tx,
             download_queue_broadcast: queue_tx,
             import_history_broadcast: import_history_tx,
+            settings_changed_broadcast: settings_changed_tx,
             acquisition_wake: Arc::new(tokio::sync::Notify::new()),
             hydration_wake: Arc::new(tokio::sync::Notify::new()),
             poster_wake: Arc::new(tokio::sync::Notify::new()),

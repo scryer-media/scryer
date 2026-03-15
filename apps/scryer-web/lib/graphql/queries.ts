@@ -925,6 +925,10 @@ export const importHistoryChangedSubscription = `subscription ImportHistoryChang
   importHistoryChanged
 }`;
 
+export const settingsChangedSubscription = `subscription SettingsChanged {
+  settingsChanged
+}`;
+
 export const systemHealthQuery = `query SystemHealth {
   systemHealth {
     serviceReady

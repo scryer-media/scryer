@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 const IMAGE_COLLECT_WINDOW: Duration = Duration::from_millis(50);
 const IMAGE_MAX_BATCH: usize = 256;
@@ -109,12 +109,11 @@ async fn start_background_image_loop(
                 join_set.spawn(async move {
                     let _permit = sem.acquire().await.expect("semaphore should not be closed");
                     let started_at = std::time::Instant::now();
-                    info!(
+                    debug!(
                         title_id = %task.title_id,
                         source_url = %task.source_url,
-                        cached_source_url = ?task.cached_source_url,
                         kind = label,
-                        "image loop: refreshing image"
+                        "image loop: refreshing"
                     );
                     match app
                         .services
@@ -123,8 +122,6 @@ async fn start_background_image_loop(
                         .await
                     {
                         Ok(replacement) => {
-                            let storage_mode = replacement.storage_mode.as_str();
-                            let variant_count = replacement.variants.len();
                             if let Err(error) = app
                                 .services
                                 .title_images
@@ -141,26 +138,21 @@ async fn start_background_image_loop(
                                 );
                                 return false;
                             }
-                            info!(
+                            debug!(
                                 elapsed_ms = started_at.elapsed().as_millis(),
                                 title_id = %task.title_id,
-                                source_url = %task.source_url,
-                                storage_mode,
-                                variant_count,
                                 kind = label,
-                                "image loop: cached image"
+                                "image loop: cached"
                             );
                             true
                         }
                         Err(error) => {
                             warn!(
                                 error = %error,
-                                elapsed_ms = started_at.elapsed().as_millis(),
                                 title_id = %task.title_id,
                                 source_url = %task.source_url,
-                                cached_source_url = ?task.cached_source_url,
                                 kind = label,
-                                "image loop: failed to fetch/process image"
+                                "image loop: fetch/process failed"
                             );
                             false
                         }

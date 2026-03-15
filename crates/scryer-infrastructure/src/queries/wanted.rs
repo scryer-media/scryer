@@ -92,7 +92,7 @@ pub(crate) async fn list_due_wanted_items_query(
     Ok(out)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(crate) async fn update_wanted_item_status_query(
     pool: &SqlitePool,
     id: &str,

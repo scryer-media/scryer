@@ -11,6 +11,7 @@ import {
 } from "@/lib/graphql/queries";
 import {
   applyMediaRenameMutation,
+  deleteMediaFileMutation,
   deleteTitleMutation,
   queueExistingMutation,
   scanTitleLibraryMutation,
@@ -343,6 +344,28 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
     },
     [titleId, client, refreshTitleDetail],
   );
+
+  const refreshMediaFiles = React.useCallback(async () => {
+    if (!titleId) return;
+    try {
+      const { data } = await client.query(titleMediaFilesQuery, { titleId }).toPromise();
+      setMediaFiles(data?.titleMediaFiles ?? []);
+    } catch {
+      // best-effort
+    }
+  }, [titleId, client]);
+
+  const handleDeleteMediaFile = React.useCallback(async (fileId: string) => {
+    try {
+      const { error } = await client.mutation(deleteMediaFileMutation, {
+        input: { fileId, deleteFromDisk: true },
+      }).toPromise();
+      if (error) throw error;
+      await refreshMediaFiles();
+    } catch (error: unknown) {
+      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+    }
+  }, [client, refreshMediaFiles, setGlobalStatus, t]);
 
   const handleSetTitleMonitored = React.useCallback(
     async (monitored: boolean) => {
@@ -725,6 +748,7 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
         onRequestDeleteTitle={handleRequestDeleteTitle}
         blocklistEntries={blocklistEntries}
         mediaFiles={mediaFiles}
+        onDeleteFile={handleDeleteMediaFile}
       />
       <ConfirmDialog
         open={deleteDialogOpen && title !== null}

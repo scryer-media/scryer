@@ -66,7 +66,7 @@ async fn add_test_title(ctx: &TestContext, name: &str, facet: &str) -> String {
         .to_string()
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 async fn mount_smg_mocks(ctx: &TestContext, fixture_path: &str) {
     let fixture = load_fixture(fixture_path);
     Mock::given(method("GET"))

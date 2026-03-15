@@ -9,7 +9,7 @@ use crate::encryption::EncryptionKey;
 use crate::types::SettingDefinitionSeed;
 use crate::{SettingsDefinitionRecord, SettingsValueRecord};
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(crate) async fn ensure_setting_definition_query(
     pool: &SqlitePool,
     category: &str,
@@ -306,7 +306,7 @@ pub(crate) async fn get_setting_with_defaults_query(
     Ok(result)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(crate) async fn upsert_setting_value_query(
     pool: &SqlitePool,
     scope: &str,

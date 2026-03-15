@@ -143,6 +143,7 @@ export function TitleTable({
   isDeletingById,
   isTogglingMonitoredById,
 }: TitleTableProps) {
+  "use no memo";
   const t = useTranslate();
   const isMovieView = view === "movies";
   const overviewTargetView: ViewId = isMovieView ? "movies" : view === "anime" ? "anime" : "series";
@@ -171,9 +172,8 @@ export function TitleTable({
   const titleVirtualizer = useVirtualizer({
     count: titles.length,
     getScrollElement: () => titleTableScrollRef.current,
-    estimateSize: () => 64,
+    estimateSize: () => 96,
     overscan: 5,
-    measureElement: (element) => element.getBoundingClientRect().height,
   });
 
   const handleQueueExisting = React.useCallback(
@@ -246,7 +246,7 @@ export function TitleTable({
 
     return (
       <React.Fragment key={item.id}>
-        <TableRow data-ui="title-table-row" className="h-24 cv-auto-row">
+        <TableRow data-ui="title-table-row" className="h-24">
           <TableCell className="align-middle">
             <button
               type="button"
@@ -430,6 +430,7 @@ export function TitleTable({
   );
 
   const virtualItems = titleVirtualizer.getVirtualItems();
+
 
   return (
     <div

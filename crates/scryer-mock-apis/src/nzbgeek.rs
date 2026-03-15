@@ -19,10 +19,10 @@ pub fn router() -> Router<Arc<ScenarioState>> {
 #[derive(Debug, Deserialize)]
 struct NewznabQuery {
     t: Option<String>,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     q: Option<String>,
     apikey: Option<String>,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     o: Option<String>,
 }
 
