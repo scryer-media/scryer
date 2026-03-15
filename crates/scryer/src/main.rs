@@ -19,7 +19,8 @@ use axum::routing::{get, post};
 use axum::Router;
 use scryer_application::{
     start_background_acquisition_poller, start_background_banner_loop,
-    start_background_hydration_loop, start_background_poster_loop, start_download_queue_poller,
+    start_background_fanart_loop, start_background_hydration_loop, start_background_poster_loop,
+    start_download_queue_poller,
     start_notification_dispatcher, AppServices, AppUseCase, DownloadClientPluginProvider,
     FacetRegistry, IndexerPluginProvider, MovieFacetHandler, SeriesFacetHandler, TitleImageKind,
     TitleImageRepository,
@@ -620,12 +621,17 @@ async fn bootstrap_application(
         app_use_case.clone(),
         shutdown_token.child_token(),
     ));
+    tokio::spawn(start_background_fanart_loop(
+        app_use_case.clone(),
+        shutdown_token.child_token(),
+    ));
     tokio::spawn(start_notification_dispatcher(
         app_use_case.clone(),
         shutdown_token.child_token(),
     ));
     app_use_case.services.poster_wake.notify_one();
     app_use_case.services.banner_wake.notify_one();
+    app_use_case.services.fanart_wake.notify_one();
 
     if let Err(error) = seed_indexer_configs_from_env(&app_use_case).await {
         tracing::warn!(error = %error, "failed to seed indexer configs from environment");

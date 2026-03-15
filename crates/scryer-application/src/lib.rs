@@ -80,6 +80,7 @@ pub use app_usecase_plugins::RegistryPlugin;
 pub use app_usecase_post_processing::{run_post_processing, PostProcessingContext};
 pub use app_usecase_rss::RssSyncReport;
 pub use app_usecase_title_images::start_background_banner_loop;
+pub use app_usecase_title_images::start_background_fanart_loop;
 pub use app_usecase_title_images::start_background_poster_loop;
 pub use delay_profile::{
     parse_delay_profile_catalog, resolve_delay_profile, should_bypass_delay, DelayProfile,
@@ -195,6 +196,7 @@ pub struct AppServices {
     pub hydration_wake: Arc<tokio::sync::Notify>,
     pub poster_wake: Arc<tokio::sync::Notify>,
     pub banner_wake: Arc<tokio::sync::Notify>,
+    pub fanart_wake: Arc<tokio::sync::Notify>,
     pub housekeeping: Arc<dyn HousekeepingRepository>,
     pub health_check_results: Arc<tokio::sync::RwLock<Vec<HealthCheckResult>>>,
     pub pending_releases: Arc<dyn PendingReleaseRepository>,
@@ -266,6 +268,7 @@ impl AppServices {
             hydration_wake: Arc::new(tokio::sync::Notify::new()),
             poster_wake: Arc::new(tokio::sync::Notify::new()),
             banner_wake: Arc::new(tokio::sync::Notify::new()),
+            fanart_wake: Arc::new(tokio::sync::Notify::new()),
             housekeeping: Arc::new(NullHousekeepingRepository),
             pending_releases: Arc::new(NullPendingReleaseRepository),
             title_history: Arc::new(NullTitleHistoryRepository),

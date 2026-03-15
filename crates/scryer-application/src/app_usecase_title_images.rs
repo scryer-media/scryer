@@ -25,6 +25,13 @@ pub async fn start_background_banner_loop(
     start_background_image_loop(app, token, TitleImageKind::Banner, "banner").await
 }
 
+pub async fn start_background_fanart_loop(
+    app: AppUseCase,
+    token: tokio_util::sync::CancellationToken,
+) {
+    start_background_image_loop(app, token, TitleImageKind::Fanart, "fanart").await
+}
+
 async fn start_background_image_loop(
     app: AppUseCase,
     token: tokio_util::sync::CancellationToken,
@@ -34,10 +41,7 @@ async fn start_background_image_loop(
     let wake: Arc<Notify> = match kind {
         TitleImageKind::Poster => app.services.poster_wake.clone(),
         TitleImageKind::Banner => app.services.banner_wake.clone(),
-        TitleImageKind::Fanart => {
-            warn!("{label} loop: no wake signal configured for this kind");
-            return;
-        }
+        TitleImageKind::Fanart => app.services.fanart_wake.clone(),
     };
 
     info!(

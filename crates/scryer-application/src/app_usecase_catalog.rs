@@ -588,6 +588,13 @@ impl AppUseCase {
         {
             self.services.banner_wake.notify_one();
         }
+        if title
+            .background_url
+            .as_ref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            self.services.fanart_wake.notify_one();
+        }
 
         Ok(title)
     }
@@ -751,6 +758,13 @@ impl AppUseCase {
             .is_some_and(|value| !value.trim().is_empty())
         {
             self.services.banner_wake.notify_one();
+        }
+        if title
+            .background_url
+            .as_ref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            self.services.fanart_wake.notify_one();
         }
 
         title
