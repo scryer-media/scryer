@@ -1,5 +1,5 @@
 use super::*;
-use crate::scoring_weights::{build_weights, ScoringOverrides, ScoringPersona};
+use crate::scoring_weights::{ScoringOverrides, ScoringPersona, build_weights};
 
 fn balanced_weights() -> ScoringWeights {
     build_weights(&ScoringPersona::Balanced, &ScoringOverrides::default())

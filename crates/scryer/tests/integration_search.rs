@@ -7,7 +7,7 @@ use std::sync::Arc;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, ResponseTemplate};
 
-use common::{load_fixture, TestContext};
+use common::{TestContext, load_fixture};
 use scryer_application::{IndexerClient, IndexerPluginProvider, SearchMode};
 
 /// Create an IndexerClient backed by the built-in nzbgeek WASM plugin,

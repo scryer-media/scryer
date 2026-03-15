@@ -1,7 +1,7 @@
 use async_graphql::{Context, Error, Object, Result as GqlResult};
 
 use chrono::Utc;
-use scryer_application::{parse_release_metadata, RenamePlan};
+use scryer_application::{RenamePlan, parse_release_metadata};
 use scryer_domain::{MediaFacet, PolicyInput};
 use serde_json::json;
 

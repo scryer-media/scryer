@@ -10,8 +10,7 @@ use super::common::parse_utc_datetime;
 use crate::title_images::{apply_local_image_urls, apply_local_poster_urls};
 use scryer_application::TitleImageKind;
 
-const TITLE_COLUMNS: &str =
-    "id, name, facet, monitored, tags, external_ids, created_by, created_at, \
+const TITLE_COLUMNS: &str = "id, name, facet, monitored, tags, external_ids, created_by, created_at, \
     year, overview, poster_url, banner_url, background_url, sort_title, slug, imdb_id, runtime_minutes, genres, \
     content_status, language, first_aired, network, studio, country, aliases, \
     metadata_language, metadata_fetched_at, min_availability, digital_release_date";
@@ -1389,7 +1388,7 @@ pub(crate) async fn delete_title_query(pool: &SqlitePool, id: &str) -> AppResult
 
 #[cfg(test)]
 mod tests {
-    use super::{summary_candidate_sort_key, SummaryCandidate};
+    use super::{SummaryCandidate, summary_candidate_sort_key};
 
     #[test]
     fn movie_collection_wins_over_index_zero_fallback() {

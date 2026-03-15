@@ -1,8 +1,8 @@
 use scryer_application::{
-    default_quality_profile_1080p_for_search, default_quality_profile_for_search, QualityProfile,
+    QualityProfile, default_quality_profile_1080p_for_search, default_quality_profile_for_search,
 };
 use scryer_infrastructure::{SettingsValueRecord, SqliteServices};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::{normalize_env_option, normalize_env_option_with_legacy};
 
@@ -163,8 +163,7 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             scope: SETTINGS_SCOPE_SYSTEM,
             key_name: RENAME_TEMPLATE_ANIME_GLOBAL_KEY,
             data_type: "string",
-            default_value_json:
-                "\"{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}\"",
+            default_value_json: "\"{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}\"",
             is_sensitive: false,
         },
         ServiceSettingSeed {

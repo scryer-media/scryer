@@ -398,7 +398,7 @@ impl MetadataGatewayClient {
             let guard = self.mtls_state.read().await;
             match &*guard {
                 MtlsState::Enrolled { client, auth } => {
-                    return Ok((client.clone(), Some(auth.clone())))
+                    return Ok((client.clone(), Some(auth.clone())));
                 }
                 MtlsState::Failed { retry_after, .. } if Instant::now() < *retry_after => {
                     return Err(AppError::Repository(
@@ -414,7 +414,7 @@ impl MetadataGatewayClient {
         // Double-check after acquiring write lock
         match &*guard {
             MtlsState::Enrolled { client, auth } => {
-                return Ok((client.clone(), Some(auth.clone())))
+                return Ok((client.clone(), Some(auth.clone())));
             }
             MtlsState::Failed { retry_after, .. } if Instant::now() < *retry_after => {
                 return Err(AppError::Repository(

@@ -1036,11 +1036,7 @@ fn host_from_url(url: &str) -> Option<String> {
     } else {
         host.split(':').next().unwrap_or(host).to_string()
     };
-    if host.is_empty() {
-        None
-    } else {
-        Some(host)
-    }
+    if host.is_empty() { None } else { Some(host) }
 }
 
 fn build_plugin(manifest: Manifest) -> Result<extism::Plugin, extism::Error> {

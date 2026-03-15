@@ -21,11 +21,7 @@ pub struct HydrationResult {
 }
 
 fn non_empty(s: String) -> Option<String> {
-    if s.trim().is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+    if s.trim().is_empty() { None } else { Some(s) }
 }
 
 /// Build a [`HydrationResult`] from an already-fetched [`MovieMetadata`].

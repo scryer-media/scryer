@@ -1,5 +1,5 @@
 use super::*;
-use crate::acquisition_policy::{evaluate_upgrade, AcquisitionThresholds};
+use crate::acquisition_policy::{AcquisitionThresholds, evaluate_upgrade};
 use crate::delay_profile::DelayProfile;
 use chrono::{DateTime, Utc};
 use scryer_domain::NotificationEventType;

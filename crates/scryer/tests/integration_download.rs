@@ -8,7 +8,7 @@ use serde_json::json;
 use wiremock::matchers::{body_json_string, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use common::{load_fixture, TestContext};
+use common::{TestContext, load_fixture};
 use scryer_application::{DownloadClient, DownloadClientConfigRepository, NullSettingsRepository};
 use scryer_domain::DownloadClientConfig;
 use scryer_infrastructure::{
@@ -932,12 +932,13 @@ async fn router_disabled_clients_are_not_used() {
 
     assert_eq!(items.len(), 2);
     // Disabled client's server received no requests.
-    assert!(ctx
-        .nzbget_server
-        .received_requests()
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        ctx.nzbget_server
+            .received_requests()
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 // ===========================================================================

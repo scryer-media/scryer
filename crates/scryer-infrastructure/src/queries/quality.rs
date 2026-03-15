@@ -20,11 +20,7 @@ pub(crate) async fn list_quality_profiles_query(
 
     let normalized_scope_id = scope_id.and_then(|value| {
         let value = value.trim().to_string();
-        if value.is_empty() {
-            None
-        } else {
-            Some(value)
-        }
+        if value.is_empty() { None } else { Some(value) }
     });
 
     let statement = if normalized_scope_id.is_some() {
@@ -120,11 +116,7 @@ pub(crate) async fn list_quality_profiles_query(
                 quality_tiers,
                 archival_quality: archival_quality.and_then(|value| {
                     let value = value.trim().to_string();
-                    if value.is_empty() {
-                        None
-                    } else {
-                        Some(value)
-                    }
+                    if value.is_empty() { None } else { Some(value) }
                 }),
                 allow_unknown_quality: allow_unknown_quality != 0,
                 source_allowlist,
@@ -198,11 +190,7 @@ pub(crate) async fn replace_quality_profiles_query(
 
     let normalized_scope_id = scope_id.and_then(|value| {
         let value = value.trim().to_string();
-        if value.is_empty() {
-            None
-        } else {
-            Some(value)
-        }
+        if value.is_empty() { None } else { Some(value) }
     });
 
     let now = Utc::now().to_rfc3339();
@@ -257,11 +245,7 @@ pub(crate) async fn upsert_quality_profiles_query(
 
     let normalized_scope_id = scope_id.and_then(|value| {
         let value = value.trim().to_string();
-        if value.is_empty() {
-            None
-        } else {
-            Some(value)
-        }
+        if value.is_empty() { None } else { Some(value) }
     });
 
     let now = Utc::now().to_rfc3339();

@@ -4,11 +4,11 @@ mod common;
 
 use scryer_application::{PendingRelease, ShowRepository, TitleRepository, WantedItem};
 use scryer_domain::{Collection, Episode, Id, MediaFacet, Title};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
-use common::{load_fixture, TestContext};
+use common::{TestContext, load_fixture};
 
 /// Execute a GraphQL operation directly against the schema, without going
 /// through the HTTP test server.  This gives full control over what data
@@ -548,25 +548,28 @@ async fn graphql_delete_title_cleans_title_workflow_state() {
     assert_no_errors(&body);
     assert_eq!(body["data"]["deleteTitle"], true);
 
-    assert!(ctx
-        .db
-        .list_wanted_items(None, None, Some(&id), 10, 0)
-        .await
-        .expect("wanted items")
-        .is_empty());
-    assert!(ctx
-        .db
-        .list_waiting_pending_releases()
-        .await
-        .expect("pending releases")
-        .iter()
-        .all(|entry| entry.title_id != id));
-    assert!(ctx
-        .db
-        .list_download_submissions_for_title(&id)
-        .await
-        .expect("download submissions")
-        .is_empty());
+    assert!(
+        ctx.db
+            .list_wanted_items(None, None, Some(&id), 10, 0)
+            .await
+            .expect("wanted items")
+            .is_empty()
+    );
+    assert!(
+        ctx.db
+            .list_waiting_pending_releases()
+            .await
+            .expect("pending releases")
+            .iter()
+            .all(|entry| entry.title_id != id)
+    );
+    assert!(
+        ctx.db
+            .list_download_submissions_for_title(&id)
+            .await
+            .expect("download submissions")
+            .is_empty()
+    );
 }
 
 #[tokio::test]

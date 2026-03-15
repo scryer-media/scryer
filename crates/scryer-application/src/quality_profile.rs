@@ -1,7 +1,7 @@
 use crate::release_group_db::apply_release_group_scoring;
 use crate::release_parser::ParsedReleaseMetadata;
 use crate::scoring_weights::{
-    audio_weight_for_codec, ScoringOverrides, ScoringPersona, ScoringWeights,
+    ScoringOverrides, ScoringPersona, ScoringWeights, audio_weight_for_codec,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -1084,10 +1084,12 @@ mod tests {
         let release = parse_release_metadata("Some.Movie.WEB-DL.H.265.DDP2.0");
         let result = evaluate_against_profile(&profile, &release, false, &w);
         assert!(!result.allowed);
-        assert!(result
-            .block_codes
-            .iter()
-            .any(|code| code == "quality_missing_and_profile_disallows_unknown"));
+        assert!(
+            result
+                .block_codes
+                .iter()
+                .any(|code| code == "quality_missing_and_profile_disallows_unknown")
+        );
     }
 
     #[test]
@@ -1186,9 +1188,11 @@ mod tests {
         let release = parse_release_metadata("Movie.2021.1080p.WEB-DL.H.264.DDP2.0");
         let result = evaluate_against_profile(&profile, &release, false, &w);
         assert!(!result.allowed);
-        assert!(result
-            .block_codes
-            .contains(&"video_codec_not_in_profile_allowlist".to_string()));
+        assert!(
+            result
+                .block_codes
+                .contains(&"video_codec_not_in_profile_allowlist".to_string())
+        );
     }
 
     #[test]
@@ -1214,10 +1218,12 @@ mod tests {
         let regular_result = evaluate_against_profile(&profile, &regular_release, false, &w);
 
         assert!(!hdr_result.allowed);
-        assert!(hdr_result
-            .block_codes
-            .iter()
-            .any(|code| code == "hdr_not_allowed"));
+        assert!(
+            hdr_result
+                .block_codes
+                .iter()
+                .any(|code| code == "hdr_not_allowed")
+        );
         assert!(regular_result.allowed);
     }
 
@@ -1262,9 +1268,11 @@ mod tests {
         let release = parse_release_metadata("Movie.2024.2160p.BluRay.DTS-HD.TrueHD.7.1.H.265");
         let result = evaluate_against_profile(&profile, &release, false, &w);
         assert!(!result.allowed);
-        assert!(result
-            .block_codes
-            .contains(&"audio_codec_in_profile_blocklist".to_string()));
+        assert!(
+            result
+                .block_codes
+                .contains(&"audio_codec_in_profile_blocklist".to_string())
+        );
     }
 
     #[test]

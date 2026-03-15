@@ -1,12 +1,12 @@
-use async_graphql::http::{GraphiQLSource, ALL_WEBSOCKET_PROTOCOLS};
 use async_graphql::Data;
+use async_graphql::http::{ALL_WEBSOCKET_PROTOCOLS, GraphiQLSource};
 use async_graphql_axum::{GraphQLProtocol, GraphQLWebSocket};
+use axum::Json;
 use axum::body::Body;
 use axum::extract::{State, WebSocketUpgrade};
-use axum::http::{header, HeaderMap, Method, Request, StatusCode, Uri};
+use axum::http::{HeaderMap, Method, Request, StatusCode, Uri, header};
 use axum::middleware::Next;
 use axum::response::{Html, IntoResponse, Response};
-use axum::Json;
 use scryer_application::{AppError, AppUseCase};
 use scryer_domain::Entitlement;
 

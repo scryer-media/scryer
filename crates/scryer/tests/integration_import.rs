@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use common::TestContext;
 use scryer_application::{
-    import_completed_download, ReleaseAttemptRepository, ShowRepository, TitleRepository,
+    ReleaseAttemptRepository, ShowRepository, TitleRepository, import_completed_download,
 };
 use scryer_domain::{
     Collection, CompletedDownload, Episode, Id, ImportDecision, ImportSkipReason, MediaFacet, Title,

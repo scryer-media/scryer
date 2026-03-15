@@ -5,9 +5,9 @@ use mp4parse::{
     VideoCodecSpecific,
 };
 
+use crate::MediaInfoError;
 use crate::codec::normalize_codec_name;
 use crate::types::{RawContainer, RawTrack, TrackKind};
-use crate::MediaInfoError;
 
 /// Parse an MP4/MOV/M4V file into a [`RawContainer`].
 pub(crate) fn parse_mp4(path: &Path) -> Result<RawContainer, MediaInfoError> {

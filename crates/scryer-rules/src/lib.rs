@@ -440,11 +440,7 @@ impl UserRulesEvaluator {
                             value = n,
                             "score delta out of i32 range, clamping"
                         );
-                        if n > 0 {
-                            i32::MAX
-                        } else {
-                            i32::MIN
-                        }
+                        if n > 0 { i32::MAX } else { i32::MIN }
                     }
                 }
             } else if let Ok(f) = val.as_f64() {
@@ -573,14 +569,18 @@ mod tests {
 
         let result = evaluator.evaluate(&input, "movie").unwrap();
         assert_eq!(result.entries.len(), 2);
-        assert!(result
-            .entries
-            .iter()
-            .any(|e| e.code == "bonus_a" && e.delta == 100));
-        assert!(result
-            .entries
-            .iter()
-            .any(|e| e.code == "bonus_b" && e.delta == 200));
+        assert!(
+            result
+                .entries
+                .iter()
+                .any(|e| e.code == "bonus_a" && e.delta == 100)
+        );
+        assert!(
+            result
+                .entries
+                .iter()
+                .any(|e| e.code == "bonus_b" && e.delta == 200)
+        );
     }
 
     #[test]

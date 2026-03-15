@@ -7,7 +7,7 @@ use scryer_domain::{
 };
 use tokio::sync::{mpsc, oneshot};
 
-use crate::commands::{spawn_db_command_worker, DbCommand};
+use crate::commands::{DbCommand, spawn_db_command_worker};
 use crate::types::{MigrationMode, MigrationStatus, SettingsDefinitionRecord, SettingsValueRecord};
 
 #[derive(Clone)]

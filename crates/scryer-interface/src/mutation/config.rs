@@ -1,6 +1,6 @@
 use async_graphql::{Context, Error, Object, Result as GqlResult};
 use scryer_domain::{Entitlement, NewDownloadClientConfig, NewIndexerConfig};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_error};
 use crate::mappers::{

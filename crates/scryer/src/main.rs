@@ -12,48 +12,48 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 
+use axum::Router;
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::Router;
 use scryer_application::{
+    AppServices, AppUseCase, DownloadClientPluginProvider, FacetRegistry, IndexerPluginProvider,
+    MovieFacetHandler, SeriesFacetHandler, TitleImageKind, TitleImageRepository,
     start_background_acquisition_poller, start_background_banner_loop,
     start_background_fanart_loop, start_background_hydration_loop, start_background_poster_loop,
-    start_download_queue_poller, start_notification_dispatcher, AppServices, AppUseCase,
-    DownloadClientPluginProvider, FacetRegistry, IndexerPluginProvider, MovieFacetHandler,
-    SeriesFacetHandler, TitleImageKind, TitleImageRepository,
+    start_download_queue_poller, start_notification_dispatcher,
 };
 use scryer_infrastructure::{
-    start_weaver_subscription_bridge, FileSystemLibraryRenamer, FileSystemLibraryScanner,
-    MetadataGatewayClient, MigrationMode, MultiIndexerSearchClient, NzbgetDownloadClient,
-    PrioritizedDownloadClientRouter, SmgEnrollmentConfig, SqliteServices,
-    SqliteTitleImageProcessor, WeaverDownloadClient,
+    FileSystemLibraryRenamer, FileSystemLibraryScanner, MetadataGatewayClient, MigrationMode,
+    MultiIndexerSearchClient, NzbgetDownloadClient, PrioritizedDownloadClientRouter,
+    SmgEnrollmentConfig, SqliteServices, SqliteTitleImageProcessor, WeaverDownloadClient,
+    start_weaver_subscription_bridge,
 };
-use scryer_interface::{build_schema_with_log_buffer, LogBuffer};
+use scryer_interface::{LogBuffer, build_schema_with_log_buffer};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tower_http::compression::CompressionLayer;
 
 use admin_routes::{
-    admin_migrations_handler, admin_settings_list, bootstrap_admin_password,
-    seed_indexer_configs_from_env, AdminSettingsQuery,
+    AdminSettingsQuery, admin_migrations_handler, admin_settings_list, bootstrap_admin_password,
+    seed_indexer_configs_from_env,
 };
 use base_path::BasePath;
 use middleware::{
-    cors_handler, graphiql_handler, graphql_handler, graphql_ws_handler, health_handler, AuthState,
-    CorsConfig,
+    AuthState, CorsConfig, cors_handler, graphiql_handler, graphql_handler, graphql_ws_handler,
+    health_handler,
 };
 use settings_bootstrap::{
-    extract_pending_migration_ids, load_service_runtime_settings,
+    MOVIES_PATH_KEY, SERIES_PATH_KEY, extract_pending_migration_ids, load_service_runtime_settings,
     migrate_legacy_download_client_default_category_settings,
     migrate_legacy_download_client_routing_settings, normalize_media_path_setting,
     normalize_quality_profile_settings, parse_migration_mode, seed_service_setting_definitions,
-    seed_service_settings_from_environment, MOVIES_PATH_KEY, SERIES_PATH_KEY,
+    seed_service_settings_from_environment,
 };
-use splash::{build_splash_router, BootstrapStatus, SplashState};
-use ui_assets::{ui_asset_mode, ui_fallback, UiAssetMode};
+use splash::{BootstrapStatus, SplashState, build_splash_router};
+use ui_assets::{UiAssetMode, ui_asset_mode, ui_fallback};
 
 include!(concat!(env!("OUT_DIR"), "/smg_build_assets.rs"));
 
@@ -510,9 +510,13 @@ async fn bootstrap_application(
                 incompat.message
             );
             if env == "docker" {
-                tracing::error!("To upgrade, pull the latest image and restart:\n  docker pull ghcr.io/scryer-media/scryer:latest\n  docker compose up -d");
+                tracing::error!(
+                    "To upgrade, pull the latest image and restart:\n  docker pull ghcr.io/scryer-media/scryer:latest\n  docker compose up -d"
+                );
             } else {
-                tracing::error!("Download the latest release from:\n  https://github.com/scryer-media/scryer/releases/latest");
+                tracing::error!(
+                    "Download the latest release from:\n  https://github.com/scryer-media/scryer/releases/latest"
+                );
             }
         }
     });
@@ -980,14 +984,14 @@ async fn check_version_upgrade(db: &SqliteServices) {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_auth_mode, title_image_handler, AuthModeConfig};
+    use super::{AuthModeConfig, resolve_auth_mode, title_image_handler};
     use std::sync::Arc;
 
-    use crate::base_path::{mount_router, BasePath};
-    use axum::body::Body;
-    use axum::http::{header, Request, StatusCode};
-    use axum::routing::get;
+    use crate::base_path::{BasePath, mount_router};
     use axum::Router;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use axum::routing::get;
     use scryer_application::{
         AppResult, TitleImageBlob, TitleImageKind, TitleImageReplacement, TitleImageRepository,
         TitleImageSyncTask,

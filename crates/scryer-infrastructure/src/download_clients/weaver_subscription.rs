@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use futures_util::{SinkExt, StreamExt};
 use scryer_application::AppUseCase;
 use scryer_domain::DownloadQueueState;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::{ClientRequestBuilder, Message};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -210,7 +210,7 @@ async fn run_subscription(
     let (ws_stream, _response) = match tokio_tungstenite::connect_async(request).await {
         Ok(pair) => pair,
         Err(e) => {
-            return SubscriptionOutcome::ConnectError(format!("WebSocket connect failed: {e}"))
+            return SubscriptionOutcome::ConnectError(format!("WebSocket connect failed: {e}"));
         }
     };
 
@@ -245,15 +245,15 @@ async fn run_subscription(
         Ok(Some(Err(e))) => {
             return SubscriptionOutcome::ConnectError(format!(
                 "WebSocket error waiting for ack: {e}"
-            ))
+            ));
         }
         Ok(None) => {
             return SubscriptionOutcome::ConnectError(
                 "WebSocket closed before connection_ack".into(),
-            )
+            );
         }
         Err(_) => {
-            return SubscriptionOutcome::ConnectError("timeout waiting for connection_ack".into())
+            return SubscriptionOutcome::ConnectError("timeout waiting for connection_ack".into());
         }
     };
 
@@ -262,7 +262,7 @@ async fn run_subscription(
         _ => {
             return SubscriptionOutcome::ConnectError(
                 "expected text message for connection_ack".into(),
-            )
+            );
         }
     };
     let ack_json: Value = match serde_json::from_str(ack_text) {

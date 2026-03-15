@@ -5,8 +5,8 @@ use chrono::Utc;
 
 use crate::activity::{ActivityChannel, ActivityKind, ActivitySeverity};
 use crate::{
-    normalize_release_attempt_hint, normalize_release_attempt_title, AppUseCase,
-    ReleaseDownloadAttemptOutcome,
+    AppUseCase, ReleaseDownloadAttemptOutcome, normalize_release_attempt_hint,
+    normalize_release_attempt_title,
 };
 use scryer_domain::{ImportSkipReason, MediaFacet, Title};
 use tracing::warn;

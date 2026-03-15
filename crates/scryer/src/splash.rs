@@ -7,8 +7,8 @@ use tokio::sync::watch;
 use tower::ServiceExt;
 use tower_http::compression::CompressionLayer;
 
-use crate::base_path::{mount_router, BasePath};
-use crate::middleware::{cors_handler, CorsConfig};
+use crate::base_path::{BasePath, mount_router};
+use crate::middleware::{CorsConfig, cors_handler};
 
 #[derive(Clone)]
 pub(crate) enum BootstrapStatus {
@@ -201,13 +201,13 @@ h1 {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_splash_router, BootstrapStatus, SplashState};
+    use super::{BootstrapStatus, SplashState, build_splash_router};
     use crate::base_path::BasePath;
     use crate::middleware::CorsConfig;
+    use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::routing::get;
-    use axum::Router;
     use tokio::sync::watch;
     use tower::ServiceExt;
 

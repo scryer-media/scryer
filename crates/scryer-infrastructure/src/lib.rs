@@ -20,8 +20,8 @@ mod types;
 mod tests;
 
 pub use download_clients::{
-    start_weaver_subscription_bridge, MultiIndexerSearchClient, NzbgetDownloadClient,
-    PrioritizedDownloadClientRouter, SabnzbdDownloadClient, WeaverDownloadClient,
+    MultiIndexerSearchClient, NzbgetDownloadClient, PrioritizedDownloadClientRouter,
+    SabnzbdDownloadClient, WeaverDownloadClient, start_weaver_subscription_bridge,
 };
 pub use encryption::EncryptionKey;
 pub use file_importer::FsFileImporter;

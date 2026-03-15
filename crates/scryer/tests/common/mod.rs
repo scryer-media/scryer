@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use async_graphql_axum::GraphQLRequest;
+use axum::Router;
 use axum::extract::State;
 use axum::routing::post;
-use axum::Router;
 use tokio::net::TcpListener;
 use wiremock::MockServer;
 
@@ -17,7 +17,7 @@ use scryer_infrastructure::{
     FileSystemLibraryScanner, MetadataGatewayClient, MultiIndexerSearchClient,
     NzbgetDownloadClient, SmgEnrollmentConfig, SqliteServices,
 };
-use scryer_interface::{build_schema, ApiSchema};
+use scryer_interface::{ApiSchema, build_schema};
 
 /// Shared integration-test context.
 ///

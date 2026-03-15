@@ -1,11 +1,11 @@
+use axum::Router;
 use axum::extract::{Query, State};
 use axum::routing::get;
-use axum::Router;
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::fixtures::load_fixture;
 use crate::ScenarioState;
+use crate::fixtures::load_fixture;
 
 /// Build the NZBGeek/Newznab mock router.
 ///

@@ -3,9 +3,9 @@ use std::path::Path;
 
 use matroska_demuxer::{Frame, MatroskaFile, TrackType, TransferCharacteristics};
 
+use crate::MediaInfoError;
 use crate::codec::normalize_codec_name;
 use crate::types::{RawContainer, RawTrack, TrackKind};
-use crate::MediaInfoError;
 
 /// Maximum number of seconds of frame data to sample when estimating per-track
 /// bitrates. For files shorter than this, all frames are counted.

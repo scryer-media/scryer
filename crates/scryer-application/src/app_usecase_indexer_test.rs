@@ -75,12 +75,12 @@ impl AppUseCase {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::NullSettingsRepository;
     use crate::null_repositories::test_nulls::{
         NullDownloadClient, NullDownloadClientConfigRepository, NullEventRepository,
         NullIndexerClient, NullQualityProfileRepository, NullReleaseAttemptRepository,
         NullShowRepository, NullTitleRepository, NullUserRepository,
     };
-    use crate::NullSettingsRepository;
     use async_trait::async_trait;
     use std::sync::Arc;
     use tokio::sync::Mutex;

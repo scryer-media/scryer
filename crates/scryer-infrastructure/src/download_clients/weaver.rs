@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
 use chrono::{DateTime, Utc};
 use reqwest::Client;
 use scryer_application::{
@@ -8,7 +8,7 @@ use scryer_application::{
 use scryer_domain::{
     CompletedDownload, DownloadClientConfig, DownloadQueueItem, DownloadQueueState,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::debug;
 
 use super::{
@@ -196,7 +196,7 @@ mod tests {
     use chrono::Utc;
     use serde_json::json;
 
-    use super::{weaver_job_to_queue_item, WeaverDownloadClient};
+    use super::{WeaverDownloadClient, weaver_job_to_queue_item};
     use scryer_domain::{DownloadClientConfig, DownloadQueueState};
 
     fn test_config(config_json: &str, base_url: Option<&str>) -> DownloadClientConfig {

@@ -1,12 +1,12 @@
-use axum::extract::State;
-use axum::routing::post;
 use axum::Json;
 use axum::Router;
+use axum::extract::State;
+use axum::routing::post;
 use serde_json::Value;
 use std::sync::Arc;
 
-use crate::fixtures::load_fixture;
 use crate::ScenarioState;
+use crate::fixtures::load_fixture;
 
 /// Build the NZBGet JSON-RPC mock router.
 ///

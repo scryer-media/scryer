@@ -52,9 +52,11 @@ fn unknown_provider_returns_none() {
     let fixtures_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
     let provider = scryer_plugins::load_indexer_plugins(&fixtures_dir).unwrap();
 
-    assert!(provider
-        .client_for_provider(&test_config("nonexistent"))
-        .is_none());
+    assert!(
+        provider
+            .client_for_provider(&test_config("nonexistent"))
+            .is_none()
+    );
 }
 
 #[tokio::test]

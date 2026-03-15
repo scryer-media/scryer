@@ -71,31 +71,31 @@ pub use app_usecase_acquisition::start_background_acquisition_poller;
 pub use app_usecase_backup::BackupService;
 pub use app_usecase_catalog::start_background_hydration_loop;
 pub use app_usecase_import::{
+    ManualImportFileMapping, ManualImportFilePreview, ManualImportFileResult, ManualImportPreview,
     execute_manual_import, import_completed_download, preview_manual_import,
-    try_import_completed_downloads, ManualImportFileMapping, ManualImportFilePreview,
-    ManualImportFileResult, ManualImportPreview,
+    try_import_completed_downloads,
 };
 pub use app_usecase_integration::start_download_queue_poller;
 pub use app_usecase_plugins::RegistryPlugin;
-pub use app_usecase_post_processing::{run_post_processing, PostProcessingContext};
+pub use app_usecase_post_processing::{PostProcessingContext, run_post_processing};
 pub use app_usecase_rss::RssSyncReport;
 pub use app_usecase_title_images::start_background_banner_loop;
 pub use app_usecase_title_images::start_background_fanart_loop;
 pub use app_usecase_title_images::start_background_poster_loop;
 pub use delay_profile::{
-    parse_delay_profile_catalog, resolve_delay_profile, should_bypass_delay, DelayProfile,
-    DELAY_PROFILE_CATALOG_KEY,
+    DELAY_PROFILE_CATALOG_KEY, DelayProfile, parse_delay_profile_catalog, resolve_delay_profile,
+    should_bypass_delay,
 };
 pub use facet_handler::{
-    movie_to_hydration_result, series_to_hydration_result, FacetHandler, HydrationResult,
+    FacetHandler, HydrationResult, movie_to_hydration_result, series_to_hydration_result,
 };
 pub use facet_movie::MovieFacetHandler;
 pub use facet_registry::FacetRegistry;
 pub use facet_series::SeriesFacetHandler;
 pub use library_rename::{
-    build_rename_plan_fingerprint, render_rename_template, LibraryRenamer, NullLibraryRenamer,
-    RenameApplyItemResult, RenameApplyResult, RenameApplyStatus, RenameCollisionPolicy,
-    RenameMissingMetadataPolicy, RenamePlan, RenamePlanItem, RenameWriteAction,
+    LibraryRenamer, NullLibraryRenamer, RenameApplyItemResult, RenameApplyResult,
+    RenameApplyStatus, RenameCollisionPolicy, RenameMissingMetadataPolicy, RenamePlan,
+    RenamePlanItem, RenameWriteAction, build_rename_plan_fingerprint, render_rename_template,
 };
 pub use library_scan::{
     AnimeEpisodeMapping, AnimeMapping, AnimeMovie, BulkMetadataResult, EpisodeMetadata,
@@ -114,13 +114,13 @@ pub use null_repositories::{
     NullTitleImageRepository, NullWantedItemRepository,
 };
 pub use quality_profile::{
+    BLOCK_SCORE, QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY, QualityProfile,
+    QualityProfileCriteria, QualityProfileDecision, ScoringConfig, ScoringEntry, ScoringSource,
     apply_age_scoring, apply_size_scoring_for_category, default_quality_profile_1080p_for_search,
     default_quality_profile_for_search, evaluate_against_profile, parse_profile_catalog_from_json,
-    QualityProfile, QualityProfileCriteria, QualityProfileDecision, ScoringConfig, ScoringEntry,
-    ScoringSource, BLOCK_SCORE, QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY,
 };
-pub use release_parser::{parse_release_metadata, ParsedEpisodeMetadata, ParsedReleaseMetadata};
-pub use scoring_weights::{build_weights, ScoringOverrides, ScoringPersona, ScoringWeights};
+pub use release_parser::{ParsedEpisodeMetadata, ParsedReleaseMetadata, parse_release_metadata};
+pub use scoring_weights::{ScoringOverrides, ScoringPersona, ScoringWeights, build_weights};
 pub(crate) use types::JwtClaims;
 pub use types::{
     BackupInfo, DiskSpaceInfo, DownloadGrabResult, DownloadSourceKind, HealthCheckResult,
@@ -416,7 +416,7 @@ impl AppServices {
 #[async_trait]
 pub trait TitleRepository: Send + Sync {
     async fn list(&self, facet: Option<MediaFacet>, query: Option<String>)
-        -> AppResult<Vec<Title>>;
+    -> AppResult<Vec<Title>>;
     async fn get_by_id(&self, id: &str) -> AppResult<Option<Title>>;
     async fn create(&self, title: Title) -> AppResult<Title>;
     async fn update_monitored(&self, id: &str, monitored: bool) -> AppResult<Title>;
@@ -1261,7 +1261,7 @@ pub trait NotificationPluginProvider: Send + Sync {
     ) -> Option<Arc<dyn NotificationClient>>;
     fn available_provider_types(&self) -> Vec<String>;
     fn config_fields_for_provider(&self, provider_type: &str)
-        -> Vec<scryer_domain::ConfigFieldDef>;
+    -> Vec<scryer_domain::ConfigFieldDef>;
     fn plugin_name_for_provider(&self, provider_type: &str) -> Option<String>;
     fn reload_plugins(
         &self,
@@ -1464,11 +1464,7 @@ fn normalize_tag(raw: String) -> String {
 
 fn normalize_show_text(raw: String) -> Option<String> {
     let value = raw.trim().to_string();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
+    if value.is_empty() { None } else { Some(value) }
 }
 
 fn normalize_show_text_opt(raw: Option<String>) -> Option<String> {
@@ -2954,12 +2950,14 @@ mod tests {
             download_submissions.deleted_title_ids.lock().await.clone(),
             vec![created.id.clone()]
         );
-        assert!(download_submissions
-            .store
-            .lock()
-            .await
-            .iter()
-            .all(|entry| entry.title_id != created.id));
+        assert!(
+            download_submissions
+                .store
+                .lock()
+                .await
+                .iter()
+                .all(|entry| entry.title_id != created.id)
+        );
     }
 
     #[tokio::test]
@@ -3930,12 +3928,14 @@ mod tests {
         let hashed = app
             .hash_password("P@ssw0rd")
             .expect("hash should be generated");
-        assert!(app
-            .validate_password("P@ssw0rd", &hashed)
-            .expect("hash should be valid"));
-        assert!(!app
-            .validate_password("wrong", &hashed)
-            .expect("hash should validate"));
+        assert!(
+            app.validate_password("P@ssw0rd", &hashed)
+                .expect("hash should be valid")
+        );
+        assert!(
+            !app.validate_password("wrong", &hashed)
+                .expect("hash should validate")
+        );
     }
 
     #[test]
@@ -3952,12 +3952,14 @@ mod tests {
         let salt = "abcdef0123456789abcdef0123456789";
         let digest = sha256_hex(format!("{salt}legacy-pass"));
         let v1_hash = format!("v1${salt}${digest}");
-        assert!(app
-            .validate_password("legacy-pass", &v1_hash)
-            .expect("v1 should validate"));
-        assert!(!app
-            .validate_password("wrong", &v1_hash)
-            .expect("v1 should reject wrong password"));
+        assert!(
+            app.validate_password("legacy-pass", &v1_hash)
+                .expect("v1 should validate")
+        );
+        assert!(
+            !app.validate_password("wrong", &v1_hash)
+                .expect("v1 should reject wrong password")
+        );
     }
 
     // ── password edge cases ───────────────────────────────────────────────────

@@ -167,8 +167,8 @@ fn parse_series_dual_default_fallback() {
 #[test]
 fn parse_language_subtitle_marker() {
     let parsed = parse_release_metadata(
-            "Starfall-Beyond.Distant.Skies.S02E03.Somewhere.Shed.Like.1080p.WEB-DL.MULTISUBS.ITA.AAC2.0.H.265",
-        );
+        "Starfall-Beyond.Distant.Skies.S02E03.Somewhere.Shed.Like.1080p.WEB-DL.MULTISUBS.ITA.AAC2.0.H.265",
+    );
 
     assert_eq!(parsed.languages_subtitles, vec!["ita".to_string()]);
     assert!(parsed.languages_audio.is_empty());

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use common::TestContext;
 use scryer_application::recycle_bin::RecycleBinConfig;
-use scryer_application::upgrade::{execute_upgrade, UpgradeResult};
+use scryer_application::upgrade::{UpgradeResult, execute_upgrade};
 use scryer_application::{
     ActivityKind, ActivitySeverity, InsertMediaFileInput, QualityProfile, TitleRepository,
 };

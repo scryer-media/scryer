@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use common::TestContext;
 use scryer_application::{
-    run_post_processing, ActivityKind, ActivitySeverity, PostProcessingContext,
+    ActivityKind, ActivitySeverity, PostProcessingContext, run_post_processing,
 };
 use scryer_domain::MediaFacet;
 

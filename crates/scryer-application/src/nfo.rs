@@ -330,11 +330,7 @@ fn extract_imdb_url_id(content: &str) -> Option<String> {
         .chars()
         .take_while(|c| c.is_ascii_alphanumeric())
         .collect();
-    if id.len() > 2 {
-        Some(id)
-    } else {
-        None
-    }
+    if id.len() > 2 { Some(id) } else { None }
 }
 
 /// Extract TVDB ID from URL pattern: `thetvdb.com/...id=(\d+)` or `thetvdb.com/?tab=...&id=(\d+)`

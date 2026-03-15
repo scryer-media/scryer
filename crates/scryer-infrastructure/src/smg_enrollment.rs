@@ -326,7 +326,7 @@ pub fn sign_request(
     body_hash: &str,
 ) -> Result<String, String> {
     use base64::Engine as _;
-    use p256::ecdsa::{signature::Signer, DerSignature, SigningKey};
+    use p256::ecdsa::{DerSignature, SigningKey, signature::Signer};
     use p256::pkcs8::DecodePrivateKey;
 
     let signing_key = SigningKey::from_pkcs8_pem(private_key_pem)

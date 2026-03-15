@@ -4,8 +4,8 @@ use axum::{Json, Router};
 use serde_json::Value;
 use std::sync::Arc;
 
-use crate::fixtures::load_fixture;
 use crate::ScenarioState;
+use crate::fixtures::load_fixture;
 
 /// Build the SMG (Scryer Metadata Gateway) GraphQL mock router.
 ///

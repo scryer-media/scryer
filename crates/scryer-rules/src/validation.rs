@@ -1,6 +1,6 @@
 use crate::{
-    builtins, AudioStreamDoc, BuiltinScoreDoc, ContextDoc, FileDoc, ProfileDoc, ReleaseDoc,
-    RulesError, SubtitleStreamDoc, UserRuleInput,
+    AudioStreamDoc, BuiltinScoreDoc, ContextDoc, FileDoc, ProfileDoc, ReleaseDoc, RulesError,
+    SubtitleStreamDoc, UserRuleInput, builtins,
 };
 use regorus::{Engine, Value};
 

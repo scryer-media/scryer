@@ -1,5 +1,5 @@
-use crate::types::{RawContainer, RawTrack, TrackKind};
 use crate::MediaInfoError;
+use crate::types::{RawContainer, RawTrack, TrackKind};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 

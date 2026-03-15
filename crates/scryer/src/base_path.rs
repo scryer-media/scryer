@@ -1,7 +1,7 @@
+use axum::Router;
 use axum::extract::Request;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect};
-use axum::Router;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BasePath {
@@ -42,11 +42,7 @@ impl BasePath {
     }
 
     pub(crate) fn basename(&self) -> &str {
-        if self.is_root() {
-            "/"
-        } else {
-            &self.prefix
-        }
+        if self.is_root() { "/" } else { &self.prefix }
     }
 
     pub(crate) fn ui_root(&self) -> String {
@@ -112,12 +108,12 @@ pub(crate) fn mount_router(router: Router, base_path: &BasePath) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use super::mount_router;
     use super::BasePath;
+    use super::mount_router;
+    use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::routing::get;
-    use axum::Router;
     use tower::ServiceExt;
 
     #[test]

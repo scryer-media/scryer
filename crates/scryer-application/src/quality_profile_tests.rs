@@ -165,10 +165,11 @@ fn tier_0_gets_3200_bonus() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.2160p.WEB-DL.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "quality_tier_0" && e.delta == 3200));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "quality_tier_0" && e.delta == 3200)
+    );
 }
 
 #[test]
@@ -179,10 +180,11 @@ fn tier_1_gets_900_bonus() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "quality_tier_1" && e.delta == 900));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "quality_tier_1" && e.delta == 900)
+    );
 }
 
 #[test]
@@ -194,9 +196,10 @@ fn quality_not_in_tiers_is_blocked() {
     let release = parse_release_metadata("Movie.2024.480p.WEB-DL.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
     assert!(!d.allowed);
-    assert!(d
-        .block_codes
-        .contains(&"quality_not_in_profile_tiers".to_string()));
+    assert!(
+        d.block_codes
+            .contains(&"quality_not_in_profile_tiers".to_string())
+    );
 }
 
 // ── evaluate_against_profile: source scoring ──────────────────────────────
@@ -207,10 +210,11 @@ fn bluray_source_gets_150() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.2160p.BluRay.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "source_bluray" && e.delta == 150));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "source_bluray" && e.delta == 150)
+    );
 }
 
 #[test]
@@ -219,10 +223,11 @@ fn webdl_source_gets_120() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.2160p.WEB-DL.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "source_webdl" && e.delta == 120));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "source_webdl" && e.delta == 120)
+    );
 }
 
 #[test]
@@ -234,9 +239,10 @@ fn source_blocklist_blocks() {
     let release = parse_release_metadata("Movie.2024.1080p.HDTV.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
     assert!(!d.allowed);
-    assert!(d
-        .block_codes
-        .contains(&"source_in_profile_blocklist".to_string()));
+    assert!(
+        d.block_codes
+            .contains(&"source_in_profile_blocklist".to_string())
+    );
 }
 
 // ── evaluate_against_profile: DV/HDR ─────────────────────────────────────
@@ -249,10 +255,11 @@ fn dolby_vision_bonus_when_allowed() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.2160p.WEB-DL.DV.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "dolby_vision_bonus" && e.delta == 50));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "dolby_vision_bonus" && e.delta == 50)
+    );
 }
 
 #[test]
@@ -264,9 +271,10 @@ fn dolby_vision_blocks_when_not_allowed() {
     let release = parse_release_metadata("Movie.2024.2160p.WEB-DL.DV.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
     assert!(!d.allowed);
-    assert!(d
-        .block_codes
-        .contains(&"dolby_vision_not_allowed".to_string()));
+    assert!(
+        d.block_codes
+            .contains(&"dolby_vision_not_allowed".to_string())
+    );
 }
 
 #[test]
@@ -305,10 +313,11 @@ fn audiophile_profile_scores_remux_preference() {
     );
     let release = parse_release_metadata("Movie.2024.1080p.BluRay.REMUX.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "prefer_remux_match" && e.delta == 400));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "prefer_remux_match" && e.delta == 400)
+    );
 }
 
 #[test]
@@ -322,10 +331,11 @@ fn audiophile_profile_penalizes_missing_remux() {
     );
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "prefer_remux_missing" && e.delta == -80));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "prefer_remux_missing" && e.delta == -80)
+    );
 }
 
 #[test]
@@ -336,10 +346,11 @@ fn atmos_preference_bonus() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.DDP.Atmos.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "atmos_preferred_match" && e.delta == 100));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "atmos_preferred_match" && e.delta == 100)
+    );
 }
 
 #[test]
@@ -350,10 +361,11 @@ fn dual_audio_preferred_bonus() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.DUAL.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "dual_audio_preferred_match" && e.delta == 150));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "dual_audio_preferred_match" && e.delta == 150)
+    );
 }
 
 #[test]
@@ -364,10 +376,11 @@ fn dual_audio_bonus_when_not_preferred() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.DUAL.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "dual_audio" && e.delta == 40));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "dual_audio" && e.delta == 40)
+    );
 }
 
 // ── evaluate_against_profile: required audio languages ────────────────────
@@ -381,10 +394,11 @@ fn required_audio_language_match() {
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.English.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
     assert!(d.allowed);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "required_audio_languages_match"));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "required_audio_languages_match")
+    );
 }
 
 #[test]
@@ -396,9 +410,10 @@ fn required_audio_language_missing_blocks() {
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.English.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
     assert!(!d.allowed);
-    assert!(d
-        .block_codes
-        .contains(&"required_audio_language_missing".to_string()));
+    assert!(
+        d.block_codes
+            .contains(&"required_audio_language_missing".to_string())
+    );
 }
 
 // ── evaluate_against_profile: upgrade guard ───────────────────────────────
@@ -413,9 +428,10 @@ fn upgrade_blocked_when_has_existing_file_and_upgrades_disabled() {
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.H.265");
     let d = evaluate_against_profile(&profile, &release, true, &w);
     assert!(!d.allowed);
-    assert!(d
-        .block_codes
-        .contains(&"upgrade_blocked_by_profile".to_string()));
+    assert!(
+        d.block_codes
+            .contains(&"upgrade_blocked_by_profile".to_string())
+    );
 }
 
 #[test]
@@ -441,10 +457,11 @@ fn proper_upload_bonus() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.PROPER.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "proper_upload" && e.delta == 30));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "proper_upload" && e.delta == 30)
+    );
 }
 
 // ── resolve_profile_id_for_title ──────────────────────────────────────────
@@ -601,9 +618,10 @@ fn size_implausible_blocks_wildly_oversized() {
     let mut d = QualityProfileDecision::new();
     apply_size_scoring_for_category(&mut d, &release, Some(size_300gb), Some("anime"), None, &w);
     assert!(!d.allowed);
-    assert!(d
-        .block_codes
-        .contains(&"size_implausible_for_quality".to_string()));
+    assert!(
+        d.block_codes
+            .contains(&"size_implausible_for_quality".to_string())
+    );
 }
 
 #[test]
@@ -616,10 +634,11 @@ fn size_excessive_penalizes_oversized_anime() {
     let mut d = QualityProfileDecision::new();
     apply_size_scoring_for_category(&mut d, &release, Some(size_5gb), Some("anime"), None, &w);
     assert!(d.allowed);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "size_excessive_for_quality" && e.delta == w.size_excessive));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "size_excessive_for_quality" && e.delta == w.size_excessive)
+    );
 }
 
 #[test]
@@ -642,10 +661,11 @@ fn large_balanced_anime_remux_gets_size_penalty_without_remux_bonus() {
     );
 
     assert!(!d.scoring_log.iter().any(|e| e.code == "prefer_remux_match"));
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "size_excessive_for_quality" && e.delta == w.size_excessive));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "size_excessive_for_quality" && e.delta == w.size_excessive)
+    );
 }
 
 #[test]
@@ -691,10 +711,11 @@ fn channel_71_gets_bonus() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.2160p.BluRay.TrueHD.7.1.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "audio_channels" && e.delta == 30));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "audio_channels" && e.delta == 30)
+    );
 }
 
 #[test]
@@ -703,10 +724,11 @@ fn channel_51_gets_bonus() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.2160p.BluRay.TrueHD.5.1.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "audio_channels" && e.delta == 15));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "audio_channels" && e.delta == 15)
+    );
 }
 
 #[test]
@@ -776,10 +798,11 @@ fn dtsx_scores_as_lossless() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.2160p.BluRay.DTS-X.7.1.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "audio_codec_lossless" && e.delta == 60));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "audio_codec_lossless" && e.delta == 60)
+    );
 }
 
 // ── Phase E: repack bonus ────────────────────────────────────────────────
@@ -790,10 +813,11 @@ fn repack_gets_bonus() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.REPACK.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "repack_upload" && e.delta == 30));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "repack_upload" && e.delta == 30)
+    );
 }
 
 #[test]
@@ -814,10 +838,11 @@ fn hardcoded_subs_penalty() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.HC.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "hardcoded_subs" && e.delta == -300));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "hardcoded_subs" && e.delta == -300)
+    );
 }
 
 #[test]
@@ -837,10 +862,11 @@ fn edition_imax_gets_bonus() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.IMAX.2160p.WEB-DL.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "edition_bonus" && e.delta == 80));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "edition_bonus" && e.delta == 80)
+    );
 }
 
 #[test]
@@ -849,10 +875,11 @@ fn edition_extended_gets_bonus() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.EXTENDED.1080p.WEB-DL.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "edition_bonus" && e.delta == 40));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "edition_bonus" && e.delta == 40)
+    );
 }
 
 #[test]
@@ -861,10 +888,11 @@ fn edition_criterion_gets_bonus() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.Criterion.1080p.BluRay.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "edition_bonus" && e.delta == 20));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "edition_bonus" && e.delta == 20)
+    );
 }
 
 #[test]
@@ -884,10 +912,11 @@ fn streaming_tier1_gets_bonus() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.1080p.AMZN.WEB-DL.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "streaming_service" && e.delta == 30));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "streaming_service" && e.delta == 30)
+    );
 }
 
 #[test]
@@ -896,10 +925,11 @@ fn streaming_tier2_gets_smaller_bonus() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.1080p.HMAX.WEB-DL.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "streaming_service" && e.delta == 20));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "streaming_service" && e.delta == 20)
+    );
 }
 
 #[test]
@@ -908,10 +938,11 @@ fn streaming_anime_tier_for_crunchyroll() {
     let w = balanced_weights();
     let release = parse_release_metadata("Anime.S01E01.1080p.CR.WEB-DL.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "streaming_service" && e.delta == 20));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "streaming_service" && e.delta == 20)
+    );
 }
 
 #[test]
@@ -931,10 +962,11 @@ fn sdr_at_4k_penalty() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.2160p.WEB-DL.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "sdr_at_4k" && e.delta == -150));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "sdr_at_4k" && e.delta == -150)
+    );
 }
 
 #[test]
@@ -963,10 +995,11 @@ fn anime_v2_gets_bonus() {
     let w = balanced_weights();
     let release = parse_release_metadata("[Group] Anime Title - 01v2 [1080p] [HEVC]");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "anime_version_bonus" && e.delta == 20));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "anime_version_bonus" && e.delta == 20)
+    );
 }
 
 #[test]
@@ -975,10 +1008,11 @@ fn no_anime_version_no_entry() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(!d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "anime_version_bonus"));
+    assert!(
+        !d.scoring_log
+            .iter()
+            .any(|e| e.code == "anime_version_bonus")
+    );
 }
 
 // ── Phase E: AI enhanced penalty ─────────────────────────────────────────
@@ -989,10 +1023,11 @@ fn ai_enhanced_gets_block_score() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.AI.Enhanced.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "ai_enhanced_upscaled" && e.delta == BLOCK_SCORE));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "ai_enhanced_upscaled" && e.delta == BLOCK_SCORE)
+    );
     assert!(!d.allowed);
 }
 
@@ -1005,10 +1040,11 @@ fn known_gold_web_group_gets_bonus() {
     // NTb is a Gold-tier WEB group in the release group database
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.H.265-NTb");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "group_gold" && e.delta == 300));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "group_gold" && e.delta == 300)
+    );
 }
 
 #[test]
@@ -1017,10 +1053,11 @@ fn unknown_group_gets_minor_penalty() {
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.H.265-XYZNOGROUP");
     let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "group_unknown" && e.delta == -30));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "group_unknown" && e.delta == -30)
+    );
 }
 
 // ── Phase E: persona affects scoring ─────────────────────────────────────
@@ -1035,10 +1072,11 @@ fn audiophile_persona_boosts_truehd_atmos_heavily() {
     let release = parse_release_metadata("Movie.2024.2160p.BluRay.TrueHD.Atmos.7.1.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &aud);
     // Audiophile TrueHD Atmos = 400
-    assert!(d
-        .scoring_log
-        .iter()
-        .any(|e| e.code == "audio_codec_lossless" && e.delta == 400));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "audio_codec_lossless" && e.delta == 400)
+    );
 }
 
 #[test]

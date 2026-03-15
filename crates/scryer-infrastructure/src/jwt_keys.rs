@@ -1,4 +1,4 @@
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use ring::rand::{SecureRandom, SystemRandom};
 
 const JWT_HMAC_SECRET_SETTING: &str = "jwt.hmac_secret";

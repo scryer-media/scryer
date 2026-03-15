@@ -13,4 +13,4 @@ pub mod subscription;
 pub mod types;
 pub mod utils;
 
-pub use context::{build_schema, build_schema_with_log_buffer, ApiContext, ApiSchema, LogBuffer};
+pub use context::{ApiContext, ApiSchema, LogBuffer, build_schema, build_schema_with_log_buffer};

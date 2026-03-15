@@ -1,5 +1,5 @@
 use super::*;
-use crate::acquisition_policy::{compute_search_schedule, evaluate_upgrade, AcquisitionThresholds};
+use crate::acquisition_policy::{AcquisitionThresholds, compute_search_schedule, evaluate_upgrade};
 use chrono::{DateTime, Utc};
 use scryer_domain::NotificationEventType;
 use std::collections::HashMap;
@@ -1978,10 +1978,8 @@ pub async fn start_background_acquisition_poller(
 
     let mut poll_interval = tokio::time::interval(std::time::Duration::from_mins(1));
     let mut sync_interval = tokio::time::interval(std::time::Duration::from_hours(1));
-    let mut metadata_refresh_interval =
-        tokio::time::interval(std::time::Duration::from_hours(12));
-    let mut registry_refresh_interval =
-        tokio::time::interval(std::time::Duration::from_hours(24));
+    let mut metadata_refresh_interval = tokio::time::interval(std::time::Duration::from_hours(12));
+    let mut registry_refresh_interval = tokio::time::interval(std::time::Duration::from_hours(24));
     let mut health_check_interval = tokio::time::interval(std::time::Duration::from_hours(6));
     let mut housekeeping_interval = tokio::time::interval(std::time::Duration::from_hours(24));
     let mut rss_sync_interval = tokio::time::interval(std::time::Duration::from_mins(15));

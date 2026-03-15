@@ -1,6 +1,6 @@
 use super::*;
 use scryer_domain::RuleSet;
-use scryer_rules::validation::{validate_user_rule, ValidationResult};
+use scryer_rules::validation::{ValidationResult, validate_user_rule};
 
 impl AppUseCase {
     pub async fn list_rule_sets(&self, actor: &User) -> AppResult<Vec<RuleSet>> {

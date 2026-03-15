@@ -2,7 +2,7 @@
 
 mod common;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use common::TestContext;
 
@@ -360,10 +360,12 @@ async fn rego_get_by_id() {
     .await;
     assert_no_errors(&body);
     assert_eq!(body["data"]["ruleSet"]["name"], "Fetch Me");
-    assert!(body["data"]["ruleSet"]["regoSource"]
-        .as_str()
-        .unwrap()
-        .contains("score_entry"));
+    assert!(
+        body["data"]["ruleSet"]["regoSource"]
+            .as_str()
+            .unwrap()
+            .contains("score_entry")
+    );
 }
 
 #[tokio::test]
@@ -395,10 +397,12 @@ async fn rego_update_name() {
     assert_no_errors(&body);
     assert_eq!(body["data"]["updateRuleSet"]["name"], "New Name");
     // regoSource should be unchanged
-    assert!(body["data"]["updateRuleSet"]["regoSource"]
-        .as_str()
-        .unwrap()
-        .contains("score_entry"));
+    assert!(
+        body["data"]["updateRuleSet"]["regoSource"]
+            .as_str()
+            .unwrap()
+            .contains("score_entry")
+    );
 }
 
 #[tokio::test]
@@ -415,10 +419,12 @@ async fn rego_update_rego_source() {
     )
     .await;
     assert_no_errors(&body);
-    assert!(body["data"]["updateRuleSet"]["regoSource"]
-        .as_str()
-        .unwrap()
-        .contains("dual_audio_bonus"));
+    assert!(
+        body["data"]["updateRuleSet"]["regoSource"]
+            .as_str()
+            .unwrap()
+            .contains("dual_audio_bonus")
+    );
 }
 
 #[tokio::test]

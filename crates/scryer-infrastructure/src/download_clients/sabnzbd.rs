@@ -2,10 +2,10 @@ use std::io::Write;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use flate2::write::GzEncoder;
 use flate2::Compression;
-use reqwest::multipart;
+use flate2::write::GzEncoder;
 use reqwest::Client;
+use reqwest::multipart;
 use scryer_application::{
     AppError, AppResult, DownloadClient, DownloadClientAddRequest, DownloadGrabResult,
 };

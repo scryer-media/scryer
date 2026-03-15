@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
+use axum::Json;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use scryer_application::AppUseCase;
 use scryer_domain::{Entitlement, NewIndexerConfig};
 use scryer_infrastructure::SqliteServices;

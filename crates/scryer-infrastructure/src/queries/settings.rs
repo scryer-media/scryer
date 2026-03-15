@@ -354,11 +354,7 @@ pub(crate) async fn upsert_setting_value_query(
     let now = Utc::now().to_rfc3339();
     let normalized_scope_id = scope_id.and_then(|value| {
         let value = value.trim().to_string();
-        if value.is_empty() {
-            None
-        } else {
-            Some(value)
-        }
+        if value.is_empty() { None } else { Some(value) }
     });
 
     sqlx::query(

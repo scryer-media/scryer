@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use async_trait::async_trait;
 use scryer_domain::{Collection, MediaFacet, Title};
 
-use crate::facet_handler::{series_to_hydration_result, FacetHandler, HydrationResult};
+use crate::facet_handler::{FacetHandler, HydrationResult, series_to_hydration_result};
 use crate::{
     ActivityKind, AppResult, MetadataGateway, RenameCollisionPolicy, RenameMissingMetadataPolicy,
     RenamePlanItem,

@@ -1,6 +1,6 @@
 use async_graphql::{
-    futures_util::stream::{self, unfold, BoxStream},
     Context, Subscription,
+    futures_util::stream::{self, BoxStream, unfold},
 };
 use scryer_domain::DownloadQueueState;
 use std::collections::HashSet;
@@ -287,9 +287,7 @@ impl SubscriptionRoot {
                 match receiver.recv().await {
                     Ok(keys) => return Some((keys, receiver)),
                     Err(RecvError::Lagged(n)) => {
-                        tracing::debug!(
-                            "settings_changed: receiver lagged, skipped {n} messages"
-                        );
+                        tracing::debug!("settings_changed: receiver lagged, skipped {n} messages");
                         continue;
                     }
                     Err(RecvError::Closed) => {

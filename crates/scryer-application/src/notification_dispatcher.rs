@@ -1,4 +1,4 @@
-use crate::{activity::NotificationEnvelope, ActivityEvent, AppUseCase};
+use crate::{ActivityEvent, AppUseCase, activity::NotificationEnvelope};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
