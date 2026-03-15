@@ -14,6 +14,7 @@ import {
 import { getSettingStringFromItems } from "@/lib/utils/settings";
 import type { AdminSetting } from "@/lib/types";
 import type { DelayProfileDraft, ParsedDelayProfile } from "@/lib/types/delay-profiles";
+import { useSettingsSubscription } from "@/lib/hooks/use-settings-subscription";
 
 export function useDelayProfilesManager() {
   const client = useClient();
@@ -55,6 +56,17 @@ export function useDelayProfilesManager() {
   React.useEffect(() => {
     loadProfiles();
   }, [loadProfiles]);
+
+  useSettingsSubscription(
+    React.useCallback(
+      (keys: string[]) => {
+        if (keys.includes(DELAY_PROFILE_CATALOG_KEY)) {
+          loadProfiles();
+        }
+      },
+      [loadProfiles],
+    ),
+  );
 
   const saveProfiles = React.useCallback(
     async (nextProfiles: ParsedDelayProfile[]) => {

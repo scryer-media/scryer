@@ -273,12 +273,14 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
                 search: loaded.descriptor.capabilities.search,
                 imdb_search: loaded.descriptor.capabilities.imdb_search,
                 tvdb_search: loaded.descriptor.capabilities.tvdb_search,
+                anidb_search: loaded.descriptor.capabilities.anidb_search,
             })
             .unwrap_or(scryer_domain::IndexerProviderCapabilities {
                 rss: true,
                 search: true,
                 imdb_search: true,
                 tvdb_search: true,
+                anidb_search: false,
             })
     }
 

@@ -82,6 +82,7 @@ impl AppUseCase {
         queries: Vec<String>,
         imdb_id: Option<String>,
         tvdb_id: Option<String>,
+        anidb_id: Option<String>,
         category: Option<String>,
         title_tags: &[String],
         limit: usize,
@@ -134,6 +135,7 @@ impl AppUseCase {
             let indexer_client = self.services.indexer_client.clone();
             let imdb_id = imdb_id.clone();
             let tvdb_id = tvdb_id.clone();
+            let anidb_id = anidb_id.clone();
             let category = category.clone();
             let indexer_routing = indexer_routing.clone();
 
@@ -143,6 +145,7 @@ impl AppUseCase {
                         query,
                         imdb_id,
                         tvdb_id,
+                        anidb_id,
                         category,
                         None,
                         indexer_routing,
@@ -392,6 +395,7 @@ impl AppUseCase {
             queries,
             imdb_id,
             tvdb_id,
+            None, // anidb_id — not available in interactive search path
             category,
             &[],
             limit,

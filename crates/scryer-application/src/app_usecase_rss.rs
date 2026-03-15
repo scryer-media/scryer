@@ -148,6 +148,7 @@ impl AppUseCase {
                 String::new(), // empty query = RSS feed
                 None,
                 None,
+                None,
                 None, // no category filter
                 None,
                 None, // no routing filter

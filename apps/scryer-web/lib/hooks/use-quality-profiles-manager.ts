@@ -34,6 +34,7 @@ import {
   QUALITY_PROFILE_INHERIT_VALUE,
   QUALITY_PROFILE_SCOPE_IDS,
 } from "@/lib/constants/settings";
+import { useSettingsSubscription } from "@/lib/hooks/use-settings-subscription";
 import { getSettingDisplayValue } from "@/lib/utils/settings";
 import type {
   AdminSetting,
@@ -378,6 +379,17 @@ export function useQualityProfilesManager(
   React.useEffect(() => {
     void refreshQualityProfiles();
   }, [refreshQualityProfiles]);
+
+  useSettingsSubscription(
+    React.useCallback(
+      (keys: string[]) => {
+        if (keys.includes(QUALITY_PROFILE_CATALOG_KEY) || keys.includes(QUALITY_PROFILE_ID_KEY)) {
+          void refreshQualityProfiles();
+        }
+      },
+      [refreshQualityProfiles],
+    ),
+  );
 
   const loadQualityProfileById = React.useCallback(
     (profileId: string) => {

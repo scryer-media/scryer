@@ -26,6 +26,7 @@ import type {
 import { type ViewCategoryId } from "@/lib/types/quality-profiles";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { useSettingsSubscription } from "@/lib/hooks/use-settings-subscription";
 
 const DEFAULT_SCOPE_ROUTING_ORDER = getDefaultRoutingOrder();
 const LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY = "nzbget.client_routing";
@@ -404,6 +405,20 @@ export function useDownloadClientRouting({
       saveDownloadClientRoutingForScope,
       t,
     ],
+  );
+
+  useSettingsSubscription(
+    React.useCallback(
+      (keys: string[]) => {
+        if (
+          keys.includes(DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY) ||
+          keys.includes(LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY)
+        ) {
+          void refreshDownloadClientRouting();
+        }
+      },
+      [refreshDownloadClientRouting],
+    ),
   );
 
   return {

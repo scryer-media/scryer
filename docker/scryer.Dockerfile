@@ -21,6 +21,7 @@ ENV PUID=1000
 ENV PGID=1000
 ENV SCRYER_BIND=0.0.0.0:8080
 ENV SCRYER_DB_PATH=/config/scryer.db
+ENV EXTISM_CACHE_CONFIG=
 
 # Graceful shutdown: let in-flight requests and background tasks finish
 STOPSIGNAL SIGTERM

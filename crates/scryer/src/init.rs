@@ -116,10 +116,15 @@ fn generate_compose(movies_path: &str, series_path: &str) -> String {
     ports:
       - "8080:8080"
     volumes:
-      - scryer-data:/data
+      - scryer-config:/config
       - {movies_path}:/media/movies
       - {series_path}:/media/series
     environment:
+      # ── User/group identity ─────────────────────────────────────
+      # Set to match your host user so file permissions are correct.
+      PUID: "1000"
+      PGID: "1000"
+
       # ── Authentication ────────────────────────────────────────────
       # Beta default: authentication is disabled and all requests act
       # as the built-in admin user. Set this to "true" to require login.
@@ -139,11 +144,11 @@ fn generate_compose(movies_path: &str, series_path: &str) -> String {
     # 1. docker compose pull
     # 2. docker compose up -d
     #
-    # Migrations run automatically. The scryer-data volume preserves
+    # Migrations run automatically. The scryer-config volume preserves
     # your database and all settings across upgrades.
 
 volumes:
-  scryer-data:
+  scryer-config:
 "#
     )
 }

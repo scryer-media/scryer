@@ -453,7 +453,10 @@ async fn bootstrap_application(
     let title_image_processor = Arc::new(SqliteTitleImageProcessor::new());
     let title_images_for_route: Arc<dyn TitleImageRepository> = Arc::new(db.clone());
     let metadata_gateway_url = std::env::var("SCRYER_METADATA_GATEWAY_GRAPHQL_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:8090/graphql".to_string());
+        .ok()
+        .filter(|v| !v.is_empty())
+        .or_else(|| SMG_GRAPHQL_URL.map(String::from))
+        .unwrap_or_else(|| "http://127.0.0.1:8090/graphql".to_string());
     // TODO: Remove SCRYER_METADATA_GATEWAY_INSECURE once the gateway has proper TLS certificates.
     let metadata_gateway_insecure = std::env::var("SCRYER_METADATA_GATEWAY_INSECURE")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))

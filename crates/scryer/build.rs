@@ -84,9 +84,10 @@ fn main() {
         .expect("write embedded asset index");
     println!("cargo:rerun-if-env-changed=SCRYER_EMBED_UI_DIR");
 
-    // SMG build-time secrets (registration secret + CA cert)
+    // SMG build-time assets (registration secret, CA cert, gateway URL)
     let smg_secret = env::var("SCRYER_SMG_REGISTRATION_SECRET").unwrap_or_default();
     let smg_ca = env::var("SCRYER_SMG_CA_CERT").unwrap_or_default();
+    let smg_url = env::var("SCRYER_SMG_GRAPHQL_URL").unwrap_or_default();
 
     let smg_path = Path::new(&out_dir).join("smg_build_assets.rs");
     let smg_secret_val = if smg_secret.is_empty() {
@@ -99,14 +100,21 @@ fn main() {
     } else {
         format!("Some({:?})", smg_ca)
     };
+    let smg_url_val = if smg_url.is_empty() {
+        "None".to_string()
+    } else {
+        format!("Some({:?})", smg_url)
+    };
     let smg_code = format!(
         "#[allow(dead_code)]\npub const SMG_REGISTRATION_SECRET: Option<&str> = {};\n\
-         #[allow(dead_code)]\npub const SMG_CA_CERT: Option<&str> = {};\n",
-        smg_secret_val, smg_ca_val
+         #[allow(dead_code)]\npub const SMG_CA_CERT: Option<&str> = {};\n\
+         #[allow(dead_code)]\npub const SMG_GRAPHQL_URL: Option<&str> = {};\n",
+        smg_secret_val, smg_ca_val, smg_url_val
     );
     fs::write(&smg_path, smg_code).expect("write smg_build_assets.rs");
     println!("cargo:rerun-if-env-changed=SCRYER_SMG_REGISTRATION_SECRET");
     println!("cargo:rerun-if-env-changed=SCRYER_SMG_CA_CERT");
+    println!("cargo:rerun-if-env-changed=SCRYER_SMG_GRAPHQL_URL");
 }
 
 fn collect_files(root: &Path) -> Result<Vec<(String, PathBuf)>, io::Error> {

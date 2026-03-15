@@ -328,6 +328,8 @@ pub struct PluginSearchRequest {
     pub imdb_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tvdb_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anidb_id: Option<String>,
     /// Semantic category hint from the caller (e.g. "movie", "tv", "anime").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
@@ -477,6 +479,7 @@ mod tests {
             query: "Dune".to_string(),
             imdb_id: Some("tt15239678".to_string()),
             tvdb_id: None,
+            anidb_id: None,
             category: Some("movie".to_string()),
             categories: vec!["2000".to_string()],
             limit: 50,

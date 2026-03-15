@@ -59,6 +59,7 @@ async fn nzbgeek_search_movie_by_category() {
             "Test Movie".to_string(),
             Some("tt1234567".to_string()),
             None,
+            None,
             Some("movie".to_string()),
             None,
             None,
@@ -117,6 +118,7 @@ async fn nzbgeek_search_movie_extracts_size() {
             "Test".to_string(),
             None,
             None,
+            None,
             Some("movie".to_string()),
             None,
             None,
@@ -150,6 +152,7 @@ async fn nzbgeek_search_movie_extracts_download_url() {
     let results = new_nzbgeek_client(&ctx.nzbgeek_server.uri())
         .search(
             "Test".to_string(),
+            None,
             None,
             None,
             Some("movie".to_string()),
@@ -200,6 +203,7 @@ async fn nzbgeek_search_tv_by_category() {
             "Test Show".to_string(),
             None,
             Some("345678".to_string()),
+            None,
             Some("tv".to_string()),
             None,
             None,
@@ -233,6 +237,7 @@ async fn nzbgeek_search_tv_by_anime_category() {
             "Anime Title".to_string(),
             None,
             Some("999".to_string()),
+            None,
             Some("anime".to_string()),
             None,
             None,
@@ -267,6 +272,7 @@ async fn nzbgeek_search_tv_by_series_category() {
             "Series Title".to_string(),
             None,
             Some("123".to_string()),
+            None,
             Some("series".to_string()),
             None,
             None,
@@ -302,6 +308,7 @@ async fn nzbgeek_search_infers_movie_from_imdb_id() {
             "Test".to_string(),
             Some("tt1234567".to_string()),
             None,
+            None,
             None, // no category
             None,
             None,
@@ -336,6 +343,7 @@ async fn nzbgeek_search_infers_tvsearch_from_tvdb_id() {
             "Test".to_string(),
             None,
             Some("345678".to_string()),
+            None,
             None, // no category
             None,
             None,
@@ -369,6 +377,7 @@ async fn nzbgeek_search_generic_without_ids() {
     let results = new_nzbgeek_client(&ctx.nzbgeek_server.uri())
         .search(
             "Test".to_string(),
+            None,
             None,
             None,
             None,
@@ -408,6 +417,7 @@ async fn nzbgeek_search_empty_results() {
             "Nonexistent".to_string(),
             None,
             None,
+            None,
             Some("movie".to_string()),
             None,
             None,
@@ -439,6 +449,7 @@ async fn nzbgeek_search_single_item_response() {
     let results = new_nzbgeek_client(&ctx.nzbgeek_server.uri())
         .search(
             "Test".to_string(),
+            None,
             None,
             None,
             Some("movie".to_string()),
@@ -496,6 +507,7 @@ async fn nzbgeek_search_no_api_key_fails() {
             None,
             None,
             None,
+            None,
             100,
             SearchMode::Interactive,
             None,
@@ -518,6 +530,7 @@ async fn nzbgeek_search_http_error() {
     let results = new_nzbgeek_client(&ctx.nzbgeek_server.uri())
         .search(
             "Test".to_string(),
+            None,
             None,
             None,
             Some("movie".to_string()),
@@ -549,6 +562,7 @@ async fn nzbgeek_search_rate_limited() {
     let results = new_nzbgeek_client(&ctx.nzbgeek_server.uri())
         .search(
             "Test".to_string(),
+            None,
             None,
             None,
             Some("movie".to_string()),
@@ -592,6 +606,7 @@ async fn nzbgeek_search_server_error_fallback() {
             "Test Movie".to_string(),
             Some("tt1234567".to_string()),
             None,
+            None,
             Some("movie".to_string()),
             None,
             None,
@@ -618,6 +633,7 @@ async fn nzbgeek_search_empty_query_and_no_ids_fails() {
     let results = client
         .search(
             "".to_string(), // empty query
+            None,
             None,
             None,
             None,
@@ -656,6 +672,7 @@ async fn nzbgeek_search_extracts_metadata_attributes() {
     let results = new_nzbgeek_client(&ctx.nzbgeek_server.uri())
         .search(
             "Test".to_string(),
+            None,
             None,
             None,
             Some("movie".to_string()),

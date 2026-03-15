@@ -1075,6 +1075,7 @@ pub trait IndexerClient: Send + Sync {
         query: String,
         imdb_id: Option<String>,
         tvdb_id: Option<String>,
+        anidb_id: Option<String>,
         category: Option<String>,
         newznab_categories: Option<Vec<String>>,
         indexer_routing: Option<IndexerRoutingPlan>,
@@ -1139,6 +1140,7 @@ pub trait IndexerPluginProvider: Send + Sync {
             search: true,
             imdb_search: true,
             tvdb_search: true,
+            anidb_search: false,
         }
     }
 }
@@ -1990,6 +1992,7 @@ mod tests {
             query: String,
             imdb_id: Option<String>,
             tvdb_id: Option<String>,
+            _anidb_id: Option<String>,
             category: Option<String>,
             _newznab_categories: Option<Vec<String>>,
             _indexer_routing: Option<IndexerRoutingPlan>,

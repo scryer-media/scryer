@@ -587,7 +587,8 @@ async fn process_single_wanted_item(
 
     // Build search queries based on media type
     let sq = build_search_queries(&title, item, episode.as_ref(), &app.facet_registry);
-    let (queries, imdb_id, tvdb_id, category) = (sq.queries, sq.imdb_id, sq.tvdb_id, sq.category);
+    let (queries, imdb_id, tvdb_id, anidb_id, category) =
+        (sq.queries, sq.imdb_id, sq.tvdb_id, sq.anidb_id, sq.category);
     let (search_season, search_episode) = (sq.season, sq.episode);
 
     // Derive the download client category separately — search_category ("series")
@@ -619,6 +620,7 @@ async fn process_single_wanted_item(
                     pack_queries,
                     imdb_id.clone(),
                     tvdb_id.clone(),
+                    anidb_id.clone(),
                     Some(category.clone()),
                     &title.tags,
                     50,
@@ -839,6 +841,7 @@ async fn process_single_wanted_item(
             queries,
             imdb_id,
             tvdb_id,
+            anidb_id,
             Some(category.clone()),
             &title.tags,
             200,
@@ -1422,6 +1425,7 @@ struct SearchQueryResult {
     queries: Vec<String>,
     imdb_id: Option<String>,
     tvdb_id: Option<String>,
+    anidb_id: Option<String>,
     category: String,
     season: Option<u32>,
     episode: Option<u32>,
@@ -1435,6 +1439,7 @@ fn build_search_queries(
 ) -> SearchQueryResult {
     let imdb_id = title.imdb_id.clone();
     let tvdb_id = tvdb_id_from_external_ids(&title.external_ids);
+    let anidb_id = anidb_id_from_external_ids(&title.external_ids);
 
     let category = facet_registry
         .get(&title.facet)
@@ -1473,6 +1478,7 @@ fn build_search_queries(
                 queries,
                 imdb_id,
                 tvdb_id,
+                anidb_id,
                 category,
                 season: None,
                 episode: None,
@@ -1542,19 +1548,18 @@ fn build_search_queries(
                 }
             }
 
-            // Fallback: if we couldn't build S##E## queries, use tvdb_id or title
+            // Fallback: if we couldn't build S##E## queries, use title name.
+            // Always include the title name so indexers that only support freetext
+            // search (e.g. AnimeTosho) have something to query with.
             if queries.is_empty() {
-                if tvdb_id.is_some() || imdb_id.is_some() {
-                    queries.push(String::new());
-                } else if !title.name.is_empty() {
-                    queries.push(title.name.clone());
-                }
+                queries.push(title.name.clone());
             }
 
             SearchQueryResult {
                 queries,
                 imdb_id,
                 tvdb_id,
+                anidb_id,
                 category,
                 season: season_param,
                 episode: episode_param,
@@ -1564,6 +1569,7 @@ fn build_search_queries(
             queries: vec![],
             imdb_id: None,
             tvdb_id: None,
+            anidb_id: None,
             category,
             season: None,
             episode: None,
@@ -1575,6 +1581,13 @@ fn tvdb_id_from_external_ids(external_ids: &[ExternalId]) -> Option<String> {
     external_ids
         .iter()
         .find(|id| id.source == "tvdb")
+        .map(|id| id.value.clone())
+}
+
+fn anidb_id_from_external_ids(external_ids: &[ExternalId]) -> Option<String> {
+    external_ids
+        .iter()
+        .find(|id| id.source == "anidb")
         .map(|id| id.value.clone())
 }
 

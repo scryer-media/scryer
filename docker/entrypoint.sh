@@ -49,5 +49,4 @@ echo "
 ───────────────────────────────────
 "
 
-export HOME=/config
 exec su-exec "$PUID":"$PGID" /usr/local/bin/scryer "$@"

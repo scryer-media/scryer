@@ -7,8 +7,9 @@ use scryer_application::{
     DownloadClientMarkImportedRequest, DownloadClientStatus, DownloadGrabResult,
     DownloadSourceKind,
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use scryer_domain::{CompletedDownload, DownloadQueueItem, DownloadQueueState};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::types::{
     PluginCompletedDownload, PluginDescriptor, PluginDownloadClientAddRequest,
@@ -22,6 +23,7 @@ pub struct WasmDownloadClient {
     descriptor: PluginDescriptor,
     client_name: String,
     client_id: String,
+    http: reqwest::Client,
 }
 
 impl WasmDownloadClient {
@@ -36,6 +38,10 @@ impl WasmDownloadClient {
             descriptor,
             client_name,
             client_id,
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_default(),
         }
     }
 }
@@ -143,6 +149,32 @@ impl DownloadClient for WasmDownloadClient {
             .as_str()
             .to_string();
 
+        // When the source is a .torrent HTTP URL and we have no info_hash_hint,
+        // pre-fetch the torrent file so the plugin can compute the hash directly.
+        let mut torrent_bytes_base64 = None;
+        if request.info_hash_hint.is_none() {
+            if let Some(url) = source_hint.as_ref() {
+                if (url.starts_with("http://") || url.starts_with("https://"))
+                    && !url.starts_with("magnet:")
+                {
+                    match self.http.get(url).send().await {
+                        Ok(resp) if resp.status().is_success() => {
+                            match resp.bytes().await {
+                                Ok(bytes) if !bytes.is_empty() => {
+                                    debug!(url = %url, bytes = bytes.len(), "pre-fetched torrent file for hash derivation");
+                                    torrent_bytes_base64 = Some(BASE64.encode(&bytes));
+                                }
+                                Ok(_) => debug!(url = %url, "torrent file fetch returned empty body"),
+                                Err(e) => debug!(url = %url, error = %e, "torrent file body read failed"),
+                            }
+                        }
+                        Ok(resp) => debug!(url = %url, status = %resp.status(), "torrent file fetch returned non-success"),
+                        Err(e) => debug!(url = %url, error = %e, "torrent file fetch failed"),
+                    }
+                }
+            }
+        }
+
         let plugin_request = PluginDownloadClientAddRequest {
             source: PluginDownloadSource {
                 kind: source_kind,
@@ -151,7 +183,7 @@ impl DownloadClient for WasmDownloadClient {
                     .as_ref()
                     .filter(|value| value.starts_with("magnet:"))
                     .cloned(),
-                torrent_bytes_base64: None,
+                torrent_bytes_base64,
                 source_title: request.source_title.clone(),
                 source_password: request.source_password.clone(),
             },

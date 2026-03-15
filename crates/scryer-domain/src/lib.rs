@@ -741,6 +741,8 @@ pub struct IndexerProviderCapabilities {
     pub imdb_search: bool,
     #[serde(default)]
     pub tvdb_search: bool,
+    #[serde(default)]
+    pub anidb_search: bool,
 }
 
 /// Describes a single configuration field a plugin expects.

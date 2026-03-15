@@ -27,6 +27,7 @@ import type {
 import type { ViewCategoryId } from "@/lib/types/quality-profiles";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { useSettingsSubscription } from "@/lib/hooks/use-settings-subscription";
 
 const DEFAULT_SCOPE_ROUTING_ORDER = getDefaultRoutingOrder();
 
@@ -381,6 +382,17 @@ export function useIndexerRouting({
       indexerRoutingOrderByScope,
       saveIndexerRoutingForScope,
     ],
+  );
+
+  useSettingsSubscription(
+    React.useCallback(
+      (keys: string[]) => {
+        if (keys.includes(INDEXER_ROUTING_SETTINGS_KEY)) {
+          void refreshIndexerRouting();
+        }
+      },
+      [refreshIndexerRouting],
+    ),
   );
 
   return {

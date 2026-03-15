@@ -4096,8 +4096,10 @@ name = "scryer-plugins"
 version = "0.8.9"
 dependencies = [
  "async-trait",
+ "base64",
  "chrono",
  "extism",
+ "reqwest",
  "scryer-application",
  "scryer-domain",
  "scryer-rules",

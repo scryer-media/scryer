@@ -194,6 +194,7 @@ impl IndexerClient for MultiIndexerSearchClient {
         query: String,
         imdb_id: Option<String>,
         tvdb_id: Option<String>,
+        anidb_id: Option<String>,
         category: Option<String>,
         newznab_categories: Option<Vec<String>>,
         indexer_routing: Option<IndexerRoutingPlan>,
@@ -204,7 +205,7 @@ impl IndexerClient for MultiIndexerSearchClient {
     ) -> AppResult<IndexerSearchResponse> {
         let is_rss_request = Self::is_rss_sync_request(
             &query,
-            imdb_id.is_some() || tvdb_id.is_some(),
+            imdb_id.is_some() || tvdb_id.is_some() || anidb_id.is_some(),
             category
                 .as_ref()
                 .is_some_and(|value| !value.trim().is_empty())
@@ -311,17 +312,24 @@ impl IndexerClient for MultiIndexerSearchClient {
             let caps = self
                 .plugin_provider
                 .capabilities_for_provider(&config.provider_type);
-            if imdb_id.is_some() && !caps.imdb_search {
+            if imdb_id.is_some() && !caps.imdb_search && !caps.search {
                 info!(
                     indexer = config.name.as_str(),
-                    "skipping indexer: does not support IMDB search"
+                    "skipping indexer: does not support IMDB or freetext search"
                 );
                 continue;
             }
-            if tvdb_id.is_some() && !caps.tvdb_search {
+            if tvdb_id.is_some() && !caps.tvdb_search && !caps.search {
                 info!(
                     indexer = config.name.as_str(),
-                    "skipping indexer: does not support TVDB search"
+                    "skipping indexer: does not support TVDB or freetext search"
+                );
+                continue;
+            }
+            if anidb_id.is_some() && !caps.anidb_search && !caps.search {
+                info!(
+                    indexer = config.name.as_str(),
+                    "skipping indexer: does not support AniDB or freetext search"
                 );
                 continue;
             }
@@ -347,6 +355,7 @@ impl IndexerClient for MultiIndexerSearchClient {
             let query = query.clone();
             let imdb_id = imdb_id.clone();
             let tvdb_id = tvdb_id.clone();
+            let anidb_id = anidb_id.clone();
             let category = category.clone();
             let indexer_id = config.id.clone();
             let indexer_name = config.name.clone();
@@ -366,6 +375,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                         query,
                         imdb_id,
                         tvdb_id,
+                        anidb_id,
                         category,
                         per_indexer_categories,
                         None,
@@ -537,6 +547,7 @@ mod tests {
             _query: String,
             _imdb_id: Option<String>,
             _tvdb_id: Option<String>,
+            _anidb_id: Option<String>,
             _category: Option<String>,
             _newznab_categories: Option<Vec<String>>,
             _indexer_routing: Option<IndexerRoutingPlan>,
@@ -582,6 +593,7 @@ mod tests {
                 search: true,
                 imdb_search: true,
                 tvdb_search: true,
+                anidb_search: false,
             }
         }
     }
@@ -624,6 +636,7 @@ mod tests {
         let response = client
             .search(
                 String::new(),
+                None,
                 None,
                 None,
                 None,

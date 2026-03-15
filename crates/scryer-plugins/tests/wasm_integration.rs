@@ -75,6 +75,7 @@ async fn test_indexer_search() {
             None,
             None,
             None,
+            None,
             100,
             SearchMode::Auto,
             None,

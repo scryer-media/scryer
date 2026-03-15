@@ -43,7 +43,8 @@ import type { AdminSetting, AdminSettingsResponse } from "@/lib/types";
 import type { RootFolderOption } from "@/lib/types/titles";
 import type { ViewCategoryId } from "@/lib/types/quality-profiles";
 import { viewToFacet } from "@/lib/constants/settings";
-import { FACETS_BY_VIEW } from "@/lib/facets/registry";
+import { FACETS_BY_VIEW, FACET_REGISTRY } from "@/lib/facets/registry";
+import { useSettingsSubscription } from "@/lib/hooks/use-settings-subscription";
 
 type UseMediaSettingsArgs = {
   activeQualityScopeId: ViewCategoryId;
@@ -1107,6 +1108,45 @@ export function useMediaSettings({
   React.useEffect(() => {
     refreshCategoryValidation();
   }, [refreshCategoryValidation]);
+
+  const mediaSettingsKeys = React.useMemo(
+    () =>
+      new Set([
+        QUALITY_PROFILE_CATALOG_KEY,
+        QUALITY_PROFILE_ID_KEY,
+        MOVIE_FOLDER_KEY,
+        SERIES_FOLDER_KEY,
+        RENAME_TEMPLATE_KEY,
+        RENAME_COLLISION_POLICY_KEY,
+        RENAME_COLLISION_POLICY_GLOBAL_KEY,
+        RENAME_MISSING_METADATA_POLICY_KEY,
+        RENAME_MISSING_METADATA_POLICY_GLOBAL_KEY,
+        ANIME_FILLER_POLICY_KEY,
+        ANIME_RECAP_POLICY_KEY,
+        ANIME_MONITOR_SPECIALS_KEY,
+        ANIME_INTER_SEASON_MOVIES_KEY,
+        NFO_WRITE_ON_IMPORT_MOVIE_KEY,
+        NFO_WRITE_ON_IMPORT_SERIES_KEY,
+        NFO_WRITE_ON_IMPORT_ANIME_KEY,
+        PLEXMATCH_WRITE_ON_IMPORT_SERIES_KEY,
+        PLEXMATCH_WRITE_ON_IMPORT_ANIME_KEY,
+        ...FACET_REGISTRY.map((f) => f.rootFoldersKey),
+        ...FACET_REGISTRY.map((f) => f.folderSettingKey),
+        ...Object.values(RENAME_TEMPLATE_GLOBAL_KEYS),
+      ]),
+    [],
+  );
+
+  useSettingsSubscription(
+    React.useCallback(
+      (keys: string[]) => {
+        if (keys.some((k) => mediaSettingsKeys.has(k))) {
+          void refreshMediaSettings();
+        }
+      },
+      [mediaSettingsKeys, refreshMediaSettings],
+    ),
+  );
 
   return {
     moviesPath,

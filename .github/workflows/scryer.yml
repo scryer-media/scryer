@@ -144,6 +144,7 @@ jobs:
         env:
           SCRYER_EMBED_UI_DIR: ${{ github.workspace }}/scryer-web-out
           SCRYER_SMG_REGISTRATION_SECRET: ${{ secrets.SMG_REGISTRATION_SECRET }}
+          SCRYER_SMG_GRAPHQL_URL: https://smg.scryer.media/graphql
         run: |
           if [[ "${{ matrix.target }}" == *"-musl" ]]; then
             mold -run cargo build -p scryer --release --locked --target ${{ matrix.target }}
