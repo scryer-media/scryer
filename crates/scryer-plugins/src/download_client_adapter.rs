@@ -151,40 +151,75 @@ impl DownloadClient for WasmDownloadClient {
 
         // When the source is a .torrent HTTP URL and we have no info_hash_hint,
         // pre-fetch the torrent file so the plugin can compute the hash directly.
+        // Some trackers redirect .torrent URLs to magnet URIs — detect that and
+        // switch to the magnet path.
         let mut torrent_bytes_base64 = None;
-        if request.info_hash_hint.is_none() {
-            if let Some(url) = source_hint.as_ref() {
-                if (url.starts_with("http://") || url.starts_with("https://"))
-                    && !url.starts_with("magnet:")
-                {
-                    match self.http.get(url).send().await {
-                        Ok(resp) if resp.status().is_success() => match resp.bytes().await {
-                            Ok(bytes) if !bytes.is_empty() => {
-                                debug!(url = %url, bytes = bytes.len(), "pre-fetched torrent file for hash derivation");
-                                torrent_bytes_base64 = Some(BASE64.encode(&bytes));
+        let mut resolved_magnet_uri: Option<String> = None;
+        if request.info_hash_hint.is_none()
+            && let Some(url) = source_hint.as_ref()
+            && (url.starts_with("http://") || url.starts_with("https://"))
+            && !url.starts_with("magnet:")
+        {
+            let no_redirect = reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_default();
+
+            match no_redirect.get(url).send().await {
+                Ok(resp) if resp.status().is_redirection() => {
+                    if let Some(location) =
+                        resp.headers().get("location").and_then(|v| v.to_str().ok())
+                    {
+                        if location.starts_with("magnet:") {
+                            debug!(url = %url, magnet = %location, "torrent URL redirected to magnet");
+                            resolved_magnet_uri = Some(location.to_string());
+                        } else {
+                            // Follow the redirect with the normal client
+                            if let Ok(resp) = self.http.get(location).send().await {
+                                if resp.status().is_success() {
+                                    if let Ok(bytes) = resp.bytes().await {
+                                        if !bytes.is_empty() {
+                                            debug!(url = %url, bytes = bytes.len(), "pre-fetched torrent file (via redirect)");
+                                            torrent_bytes_base64 = Some(BASE64.encode(&bytes));
+                                        }
+                                    }
+                                }
                             }
-                            Ok(_) => debug!(url = %url, "torrent file fetch returned empty body"),
-                            Err(e) => {
-                                debug!(url = %url, error = %e, "torrent file body read failed")
-                            }
-                        },
-                        Ok(resp) => {
-                            debug!(url = %url, status = %resp.status(), "torrent file fetch returned non-success")
                         }
-                        Err(e) => debug!(url = %url, error = %e, "torrent file fetch failed"),
                     }
                 }
+                Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+                    Ok(bytes) if !bytes.is_empty() => {
+                        debug!(url = %url, bytes = bytes.len(), "pre-fetched torrent file for hash derivation");
+                        torrent_bytes_base64 = Some(BASE64.encode(&bytes));
+                    }
+                    Ok(_) => {
+                        debug!(url = %url, "torrent file fetch returned empty body")
+                    }
+                    Err(e) => {
+                        debug!(url = %url, error = %e, "torrent file body read failed")
+                    }
+                },
+                Ok(resp) => {
+                    debug!(url = %url, status = %resp.status(), "torrent file fetch returned non-success")
+                }
+                Err(e) => debug!(url = %url, error = %e, "torrent file fetch failed"),
             }
         }
+
+        let magnet_uri = resolved_magnet_uri.or_else(|| {
+            source_hint
+                .as_ref()
+                .filter(|v| v.starts_with("magnet:"))
+                .cloned()
+        });
 
         let plugin_request = PluginDownloadClientAddRequest {
             source: PluginDownloadSource {
                 kind: source_kind,
                 download_url: source_hint.clone(),
-                magnet_uri: source_hint
-                    .as_ref()
-                    .filter(|value| value.starts_with("magnet:"))
-                    .cloned(),
+                magnet_uri,
                 torrent_bytes_base64,
                 source_title: request.source_title.clone(),
                 source_password: request.source_password.clone(),
