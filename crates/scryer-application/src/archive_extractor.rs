@@ -136,10 +136,8 @@ fn find_primary_archive(dir: &Path) -> Option<(PathBuf, ArchiveType)> {
         Some((p, ArchiveType::Rar))
     } else if let Some(p) = sevenz {
         Some((p, ArchiveType::SevenZip))
-    } else if let Some(p) = zip {
-        Some((p, ArchiveType::Zip))
     } else {
-        None
+        zip.map(|p| (p, ArchiveType::Zip))
     }
 }
 
