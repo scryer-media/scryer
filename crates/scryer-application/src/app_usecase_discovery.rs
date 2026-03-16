@@ -1026,10 +1026,14 @@ fn extract_title_hint(queries: &[String]) -> Option<String> {
             .split_whitespace()
             .filter(|word| {
                 let w = word.to_ascii_lowercase();
-                // Skip pure season/episode tokens
-                !(w.starts_with('s') && w[1..].chars().all(|c| c.is_ascii_digit() || c == 'e'))
-                    && !w.contains("x") // skip 1x05 format
-                    && !w.chars().all(|c| c.is_ascii_digit()) // skip bare numbers
+                // Skip pure season/episode tokens (S01E05, S01, 1x05, bare numbers)
+                if w.starts_with('s') && w[1..].chars().all(|c| c.is_ascii_digit() || c == 'e') {
+                    return false;
+                }
+                if w.contains('x') {
+                    return false;
+                }
+                !w.chars().all(|c| c.is_ascii_digit())
             })
             .collect::<Vec<_>>()
             .join(" ");

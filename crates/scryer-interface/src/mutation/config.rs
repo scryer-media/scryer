@@ -436,16 +436,13 @@ impl ConfigMutations {
         // look up the stored key so "Test Connection" works without
         // re-entering the key.
         let mut api_key = input.api_key;
-        if api_key.as_ref().is_none_or(|k| k.trim().is_empty()) {
-            if let Some(ref indexer_id) = input.indexer_id {
-                if let Ok(Some(config)) = app.services.indexer_configs.get_by_id(indexer_id).await {
-                    if let Some(ref stored_key) = config.api_key_encrypted {
-                        if !stored_key.is_empty() {
-                            api_key = Some(stored_key.clone());
-                        }
-                    }
-                }
-            }
+        if api_key.as_ref().is_none_or(|k| k.trim().is_empty())
+            && let Some(ref indexer_id) = input.indexer_id
+            && let Ok(Some(config)) = app.services.indexer_configs.get_by_id(indexer_id).await
+            && let Some(ref stored_key) = config.api_key_encrypted
+            && !stored_key.is_empty()
+        {
+            api_key = Some(stored_key.clone());
         }
 
         app.test_indexer_connection(

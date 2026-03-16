@@ -595,38 +595,38 @@ fn build_strategies(
     let mut strategies = Vec::with_capacity(4);
 
     // Strategy per ID type (only if indexer supports it)
-    if let Some(id) = anidb_id {
-        if caps.anidb_search {
-            strategies.push(SearchStrategy {
-                query: String::new(),
-                imdb_id: None,
-                tvdb_id: None,
-                anidb_id: Some(id.clone()),
-                label: "anidb_id",
-            });
-        }
+    if let Some(id) = anidb_id
+        && caps.anidb_search
+    {
+        strategies.push(SearchStrategy {
+            query: String::new(),
+            imdb_id: None,
+            tvdb_id: None,
+            anidb_id: Some(id.clone()),
+            label: "anidb_id",
+        });
     }
-    if let Some(id) = tvdb_id {
-        if caps.tvdb_search {
-            strategies.push(SearchStrategy {
-                query: String::new(),
-                imdb_id: None,
-                tvdb_id: Some(id.clone()),
-                anidb_id: None,
-                label: "tvdb_id",
-            });
-        }
+    if let Some(id) = tvdb_id
+        && caps.tvdb_search
+    {
+        strategies.push(SearchStrategy {
+            query: String::new(),
+            imdb_id: None,
+            tvdb_id: Some(id.clone()),
+            anidb_id: None,
+            label: "tvdb_id",
+        });
     }
-    if let Some(id) = imdb_id {
-        if caps.imdb_search {
-            strategies.push(SearchStrategy {
-                query: String::new(),
-                imdb_id: Some(id.clone()),
-                tvdb_id: None,
-                anidb_id: None,
-                label: "imdb_id",
-            });
-        }
+    if let Some(id) = imdb_id
+        && caps.imdb_search
+    {
+        strategies.push(SearchStrategy {
+            query: String::new(),
+            imdb_id: Some(id.clone()),
+            tvdb_id: None,
+            anidb_id: None,
+            label: "imdb_id",
+        });
     }
 
     // Freetext strategy (always, if query is non-empty and indexer supports search)
