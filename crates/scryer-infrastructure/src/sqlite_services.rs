@@ -18,6 +18,11 @@ pub struct SqliteServices {
 }
 
 impl SqliteServices {
+    /// Public pool accessor for cross-crate query access.
+    pub fn pool(&self) -> &sqlx::SqlitePool {
+        &self.pool
+    }
+
     pub async fn new(path: impl AsRef<str>) -> Result<Self, AppError> {
         Self::new_with_mode(path, MigrationMode::Apply).await
     }

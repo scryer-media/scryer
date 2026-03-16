@@ -171,6 +171,14 @@ async fn execute_script(
     let mut cmd = {
         let mut c = tokio::process::Command::new("sh");
         c.args(["-c", &command]);
+        // Create a new process group so we can kill the entire tree on timeout,
+        // not just the shell wrapper (which would orphan child processes).
+        unsafe {
+            c.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
         c
     };
 
@@ -304,6 +312,13 @@ async fn execute_script(
                 }
             }
             Err(_elapsed) => {
+                // Kill the entire process group (shell + children), not just the shell.
+                #[cfg(unix)]
+                if let Some(pid) = child.id() {
+                    unsafe {
+                        libc::kill(-(pid as i32), libc::SIGKILL);
+                    }
+                }
                 let _ = child.kill().await;
                 let duration_ms = start_instant.elapsed().as_millis() as i64;
                 let completed_at = Utc::now().to_rfc3339();
@@ -378,6 +393,12 @@ async fn execute_script(
                 }
             }
             Err(_elapsed) => {
+                #[cfg(unix)]
+                if let Some(pid) = child.id() {
+                    unsafe {
+                        libc::kill(-(pid as i32), libc::SIGKILL);
+                    }
+                }
                 let _ = child.kill().await;
                 let duration_ms = start_instant.elapsed().as_millis() as i64;
                 let completed_at = Utc::now().to_rfc3339();

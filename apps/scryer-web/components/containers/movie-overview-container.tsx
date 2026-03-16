@@ -7,6 +7,7 @@ import {
   searchQuery,
   titleMediaFilesQuery,
   titleOverviewInitQuery,
+  subtitleDownloadsQuery,
   wantedItemsQuery,
 } from "@/lib/graphql/queries";
 import {
@@ -92,6 +93,23 @@ export type TitleReleaseBlocklistEntry = {
   sourceTitle: string | null;
   errorMessage: string | null;
   attemptedAt: string;
+};
+
+export type SubtitleDownloadRecord = {
+  id: string;
+  mediaFileId: string;
+  language: string;
+  provider: string;
+  filePath: string;
+  score: number | null;
+  hearingImpaired: boolean;
+  forced: boolean;
+  aiTranslated: boolean;
+  machineTranslated: boolean;
+  uploader: string | null;
+  releaseInfo: string | null;
+  synced: boolean;
+  downloadedAt: string;
 };
 
 export type TitleMediaFile = {
@@ -206,6 +224,7 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
   const [qualityProfiles, setQualityProfiles] = React.useState<{ id: string; name: string }[]>([]);
   const [defaultRootFolder, setDefaultRootFolder] = React.useState(DEFAULT_MOVIE_LIBRARY_PATH);
   const [mediaFiles, setMediaFiles] = React.useState<TitleMediaFile[]>([]);
+  const [subtitleDownloads, setSubtitleDownloads] = React.useState<SubtitleDownloadRecord[]>([]);
   const [wantedItem, setWantedItem] = React.useState<WantedItem | null>(null);
   const [monitoredUpdating, setMonitoredUpdating] = React.useState(false);
   const [searchMonitoredLoading, setSearchMonitoredLoading] = React.useState(false);
@@ -233,6 +252,11 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
     setMediaFiles(mediaResult.data?.titleMediaFiles ?? []);
     setWantedItem(wantedResult.data?.wantedItems?.items?.[0] ?? null);
     setRenamePlan(null);
+
+    // Fetch subtitle downloads (best-effort)
+    client.query(subtitleDownloadsQuery, { titleId }).toPromise().then((subResult) => {
+      setSubtitleDownloads(subResult.data?.subtitleDownloads ?? []);
+    }).catch(() => {});
   }, [titleId, client]);
 
   // Load title detail on mount
@@ -663,7 +687,7 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
   // Subscribe to activity events via WebSocket — refresh title detail (including
   // collection quality labels) when an import or upgrade completes for this movie.
   const IMPORT_KINDS = React.useMemo(
-    () => new Set(["movie_downloaded", "series_episode_imported", "file_upgraded"]),
+    () => new Set(["movie_downloaded", "series_episode_imported", "file_upgraded", "subtitle_downloaded"]),
     [],
   );
   const HYDRATION_COMPLETED_KIND = "metadata_hydration_completed";
@@ -748,6 +772,7 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
         onRequestDeleteTitle={handleRequestDeleteTitle}
         blocklistEntries={blocklistEntries}
         mediaFiles={mediaFiles}
+        subtitleDownloads={subtitleDownloads}
         onDeleteFile={handleDeleteMediaFile}
       />
       <ConfirmDialog

@@ -1976,3 +1976,31 @@ impl PostProcessingScriptRepository for SqliteServices {
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
 }
+
+// ── SubtitleDownloadRepository ──────────────────────────────────────────────
+
+#[async_trait]
+impl scryer_application::SubtitleDownloadRepository for SqliteServices {
+    async fn list_for_title(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Vec<scryer_domain::SubtitleDownload>> {
+        crate::queries::subtitle::list_subtitle_downloads_for_title(&self.pool, title_id).await
+    }
+
+    async fn list_for_media_file(
+        &self,
+        media_file_id: &str,
+    ) -> AppResult<Vec<scryer_domain::SubtitleDownload>> {
+        crate::queries::subtitle::list_subtitle_downloads_for_media_file(&self.pool, media_file_id)
+            .await
+    }
+
+    async fn insert(&self, download: &scryer_domain::SubtitleDownload) -> AppResult<()> {
+        crate::queries::subtitle::insert_subtitle_download(&self.pool, download).await
+    }
+
+    async fn delete(&self, id: &str) -> AppResult<Option<scryer_domain::SubtitleDownload>> {
+        crate::queries::subtitle::delete_subtitle_download(&self.pool, id).await
+    }
+}

@@ -1203,6 +1203,44 @@ impl QueryRoot {
             count,
         })
     }
+
+    /// List downloaded subtitles for a title.
+    async fn subtitle_downloads(
+        &self,
+        ctx: &Context<'_>,
+        title_id: String,
+    ) -> GqlResult<Vec<SubtitleDownloadPayload>> {
+        let _actor = actor_from_ctx(ctx)?;
+        let db = settings_db_from_ctx(ctx)?;
+        let downloads =
+            scryer_infrastructure::queries::subtitle::list_subtitle_downloads_for_title(
+                db.pool(),
+                &title_id,
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(downloads
+            .into_iter()
+            .map(|d| SubtitleDownloadPayload {
+                id: d.id,
+                media_file_id: d.media_file_id,
+                title_id: d.title_id,
+                episode_id: d.episode_id,
+                language: d.language,
+                provider: d.provider,
+                file_path: d.file_path,
+                score: d.score,
+                hearing_impaired: d.hearing_impaired,
+                forced: d.forced,
+                ai_translated: d.ai_translated,
+                machine_translated: d.machine_translated,
+                uploader: d.uploader,
+                release_info: d.release_info,
+                synced: d.synced,
+                downloaded_at: d.downloaded_at,
+            })
+            .collect())
+    }
 }
 
 async fn record_rename_preview_audit(

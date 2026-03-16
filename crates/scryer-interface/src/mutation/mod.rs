@@ -9,6 +9,7 @@ mod plugins;
 mod post_processing;
 mod rules;
 mod settings;
+mod subtitle;
 mod titles;
 mod users;
 mod wanted;
@@ -31,4 +32,5 @@ pub struct MutationRoot(
     backup::BackupMutations,
     external_import::ExternalImportMutations,
     post_processing::PostProcessingMutations,
+    subtitle::SubtitleMutations,
 );

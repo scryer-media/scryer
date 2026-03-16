@@ -21,6 +21,7 @@ pub mod app_usecase_post_processing;
 pub(crate) mod app_usecase_rss;
 mod app_usecase_rules;
 mod app_usecase_security;
+mod app_usecase_subtitles;
 mod app_usecase_title_images;
 pub(crate) mod archive_extractor;
 mod delay_profile;
@@ -40,6 +41,7 @@ pub mod recycle_bin;
 mod release_group_db;
 mod release_parser;
 mod scoring_weights;
+pub mod subtitles;
 mod types;
 pub mod upgrade;
 mod user_rule_input;
@@ -80,6 +82,7 @@ pub use app_usecase_integration::start_download_queue_poller;
 pub use app_usecase_plugins::RegistryPlugin;
 pub use app_usecase_post_processing::{PostProcessingContext, run_post_processing};
 pub use app_usecase_rss::RssSyncReport;
+pub use app_usecase_subtitles::start_background_subtitle_poller;
 pub use app_usecase_title_images::start_background_banner_loop;
 pub use app_usecase_title_images::start_background_fanart_loop;
 pub use app_usecase_title_images::start_background_poster_loop;
@@ -206,6 +209,7 @@ pub struct AppServices {
     pub title_history: Arc<dyn TitleHistoryRepository>,
     pub blocklist_repo: Arc<dyn BlocklistRepository>,
     pub rss_seen_guids: Arc<tokio::sync::RwLock<HashSet<String>>>,
+    pub subtitle_downloads: Arc<dyn SubtitleDownloadRepository>,
 }
 
 impl AppServices {
@@ -279,6 +283,7 @@ impl AppServices {
             pending_releases: Arc::new(NullPendingReleaseRepository),
             title_history: Arc::new(NullTitleHistoryRepository),
             blocklist_repo: Arc::new(NullBlocklistRepository),
+            subtitle_downloads: Arc::new(null_repositories::NullSubtitleDownloadRepository),
             health_check_results: Arc::new(tokio::sync::RwLock::new(Vec::new())),
             rss_seen_guids: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
         }
@@ -1537,6 +1542,22 @@ fn sanitize_ids(ids: Vec<ExternalId>) -> Vec<ExternalId> {
             }
         })
         .collect()
+}
+
+// ── Subtitle download repository ─────────────────────────────────────────
+
+#[async_trait]
+pub trait SubtitleDownloadRepository: Send + Sync {
+    async fn list_for_title(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Vec<scryer_domain::SubtitleDownload>>;
+    async fn list_for_media_file(
+        &self,
+        media_file_id: &str,
+    ) -> AppResult<Vec<scryer_domain::SubtitleDownload>>;
+    async fn insert(&self, download: &scryer_domain::SubtitleDownload) -> AppResult<()>;
+    async fn delete(&self, id: &str) -> AppResult<Option<scryer_domain::SubtitleDownload>>;
 }
 
 #[cfg(test)]

@@ -1507,3 +1507,25 @@ pub struct UpdatePostProcessingScriptInput {
     pub enabled: Option<bool>,
     pub debug: Option<bool>,
 }
+
+// ── Subtitle downloads ──────────────────────────────────────────────────────
+
+#[derive(async_graphql::SimpleObject)]
+pub struct SubtitleDownloadPayload {
+    pub id: String,
+    pub media_file_id: String,
+    pub title_id: String,
+    pub episode_id: Option<String>,
+    pub language: String,
+    pub provider: String,
+    pub file_path: String,
+    pub score: Option<i32>,
+    pub hearing_impaired: bool,
+    pub forced: bool,
+    pub ai_translated: bool,
+    pub machine_translated: bool,
+    pub uploader: Option<String>,
+    pub release_info: Option<String>,
+    pub synced: bool,
+    pub downloaded_at: String,
+}

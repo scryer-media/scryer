@@ -9,7 +9,7 @@ mod library_renamer;
 mod library_scanner;
 mod metadata_gateway;
 mod migrations;
-mod queries;
+pub mod queries;
 mod repositories;
 pub mod smg_enrollment;
 mod sqlite_services;

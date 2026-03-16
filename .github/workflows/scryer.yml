@@ -32,10 +32,10 @@ jobs:
         working-directory: apps/scryer-web
         run: npm run lint
 
-  rust-validate:
-    name: rust-validate
+  rust-build:
+    name: rust-build
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
@@ -47,11 +47,52 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y nasm
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: true
+      - name: Build workspace (populate cache)
+        run: cargo test --workspace --locked --no-run
+
+  rust-clippy:
+    name: rust-clippy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    needs: [rust-build]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.94"
+          components: clippy
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y nasm
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+      - name: Run clippy
+        run: cargo clippy --workspace -- -D warnings
+
+  rust-test:
+    name: rust-test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs: [rust-build]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.94"
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y nasm
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest
-      - name: Run clippy
-        run: cargo clippy --workspace -- -D warnings
       - name: Run workspace tests
         run: cargo nextest run --workspace --locked
 
@@ -94,7 +135,7 @@ jobs:
     name: rust-package-${{ matrix.platform }}
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 45
-    needs: [web-build, rust-validate]
+    needs: [web-build, rust-clippy, rust-test]
     strategy:
       fail-fast: false
       matrix:

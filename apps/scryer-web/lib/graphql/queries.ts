@@ -1290,3 +1290,22 @@ export const postProcessingScriptRunsQuery = `query PostProcessingScriptRuns($sc
     completedAt
   }
 }`;
+
+export const subtitleDownloadsQuery = `query SubtitleDownloads($titleId: String!) {
+  subtitleDownloads(titleId: $titleId) {
+    id
+    mediaFileId
+    language
+    provider
+    filePath
+    score
+    hearingImpaired
+    forced
+    aiTranslated
+    machineTranslated
+    uploader
+    releaseInfo
+    synced
+    downloadedAt
+  }
+}`;

@@ -1,6 +1,6 @@
 
 import * as React from "react";
-import { FolderOpen, Loader2, Pause, Play, RotateCcw, Trash2 } from "lucide-react";
+import { FolderOpen, Loader2, Pause, Play, RotateCcw, Subtitles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -29,6 +29,7 @@ import type {
   TitleCollection,
   TitleEvent,
   TitleMediaFile,
+  SubtitleDownloadRecord,
 } from "@/components/containers/movie-overview-container";
 import { MediaInfoBadges } from "@/components/common/media-info-badges";
 import { OverviewControlPanel } from "@/components/views/overview-control-panel";
@@ -321,6 +322,7 @@ type Props = {
   onRequestDeleteTitle?: () => void;
   blocklistEntries: TitleReleaseBlocklistEntry[];
   mediaFiles: TitleMediaFile[];
+  subtitleDownloads: SubtitleDownloadRecord[];
   onDeleteFile?: (fileId: string) => void;
 };
 
@@ -358,6 +360,7 @@ export function MovieOverviewView({
   onRequestDeleteTitle,
   blocklistEntries,
   mediaFiles,
+  subtitleDownloads,
   onDeleteFile,
 }: Props) {
   const t = useTranslate();
@@ -768,6 +771,65 @@ export function MovieOverviewView({
                   {renameApplying ? t("rename.applying") : t("rename.applyButton")}
                 </Button>
               </div>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      {/* Subtitles */}
+      <Card>
+        <CardContent className="pt-4">
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Subtitles className="h-4 w-4" />
+              {t("subtitle.subtitles")}
+            </CardTitle>
+          </div>
+          {mediaFiles.length > 0 ? (
+            <div className="mt-3 space-y-2">
+              {mediaFiles.map((mf) => {
+                const embeddedLangs = mf.subtitleLanguages ?? [];
+                const downloads = subtitleDownloads.filter((d) => d.mediaFileId === mf.id);
+                const hasAny = embeddedLangs.length > 0 || downloads.length > 0;
+                return (
+                  <div key={`sub-${mf.id}`} className="rounded-lg border border-border p-3">
+                    <p className="truncate font-mono text-xs text-muted-foreground">{mf.filePath}</p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {embeddedLangs.map((lang: string) => (
+                        <span
+                          key={`emb-${lang}`}
+                          className="inline-flex items-center gap-1 rounded bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-700 dark:text-emerald-300"
+                        >
+                          {lang}
+                          <span className="text-emerald-500/60">{t("subtitle.embedded")}</span>
+                        </span>
+                      ))}
+                      {downloads.map((dl) => (
+                        <span
+                          key={dl.id}
+                          className="inline-flex items-center gap-1 rounded bg-blue-500/15 px-2 py-0.5 text-xs text-blue-700 dark:text-blue-300"
+                          title={[
+                            dl.provider,
+                            dl.uploader ? `by ${dl.uploader}` : null,
+                            dl.score != null ? `score: ${dl.score}` : null,
+                            dl.releaseInfo,
+                          ].filter(Boolean).join(" \u2022 ")}
+                        >
+                          {dl.language}
+                          <span className="text-blue-500/60">
+                            {dl.provider}
+                            {dl.hearingImpaired ? " HI" : ""}
+                            {dl.forced ? " F" : ""}
+                          </span>
+                        </span>
+                      ))}
+                      {!hasAny ? (
+                        <span className="text-xs text-muted-foreground">{t("subtitle.noResults")}</span>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           ) : null}
         </CardContent>

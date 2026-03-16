@@ -541,6 +541,7 @@ async fn bootstrap_application(
     services.title_images = Arc::new(db.clone());
     services.title_image_processor = title_image_processor;
     services.housekeeping = Arc::new(db.clone());
+    services.subtitle_downloads = Arc::new(db.clone());
     services.indexer_stats = indexer_stats;
     services.plugin_provider = Some(plugin_provider);
     services.download_client_plugin_provider = Some(download_client_plugin_provider.clone());

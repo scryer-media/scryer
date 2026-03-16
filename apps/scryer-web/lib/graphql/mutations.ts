@@ -631,3 +631,41 @@ export type DownloadClientApiKeyOverride = {
   dedupKey: string;
   apiKey: string;
 };
+
+// ── Subtitle mutations ──────────────────────────────────────────────────────
+
+export const searchSubtitlesMutation = `mutation SearchSubtitles($input: SearchSubtitlesInput!) {
+  searchSubtitles(input: $input) {
+    provider
+    providerFileId
+    language
+    releaseInfo
+    score
+    hearingImpaired
+    forced
+    aiTranslated
+    machineTranslated
+    uploader
+    downloadCount
+    hashMatched
+  }
+}`;
+
+export const downloadSubtitleMutation = `mutation DownloadSubtitle($input: DownloadSubtitleInput!) {
+  downloadSubtitle(input: $input)
+}`;
+
+export type SubtitleSearchResult = {
+  provider: string;
+  providerFileId: string;
+  language: string;
+  releaseInfo: string | null;
+  score: number;
+  hearingImpaired: boolean;
+  forced: boolean;
+  aiTranslated: boolean;
+  machineTranslated: boolean;
+  uploader: string | null;
+  downloadCount: number | null;
+  hashMatched: boolean;
+};

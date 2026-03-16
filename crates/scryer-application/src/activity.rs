@@ -25,6 +25,8 @@ pub enum ActivityKind {
     PostProcessingCompleted,
     FileUpgraded,
     ImportRejected,
+    SubtitleDownloaded,
+    SubtitleSearchFailed,
     #[default]
     SystemNotice,
 }
@@ -82,6 +84,8 @@ impl ActivityKind {
             Self::PostProcessingCompleted => "post_processing_completed",
             Self::FileUpgraded => "file_upgraded",
             Self::ImportRejected => "import_rejected",
+            Self::SubtitleDownloaded => "subtitle_downloaded",
+            Self::SubtitleSearchFailed => "subtitle_search_failed",
             Self::SystemNotice => "system_notice",
         }
     }

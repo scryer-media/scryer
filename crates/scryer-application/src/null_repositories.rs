@@ -1024,3 +1024,27 @@ pub mod test_nulls {
         }
     }
 }
+
+pub struct NullSubtitleDownloadRepository;
+
+#[async_trait]
+impl crate::SubtitleDownloadRepository for NullSubtitleDownloadRepository {
+    async fn list_for_title(
+        &self,
+        _title_id: &str,
+    ) -> AppResult<Vec<scryer_domain::SubtitleDownload>> {
+        Ok(Vec::new())
+    }
+    async fn list_for_media_file(
+        &self,
+        _media_file_id: &str,
+    ) -> AppResult<Vec<scryer_domain::SubtitleDownload>> {
+        Ok(Vec::new())
+    }
+    async fn insert(&self, _download: &scryer_domain::SubtitleDownload) -> AppResult<()> {
+        Ok(())
+    }
+    async fn delete(&self, _id: &str) -> AppResult<Option<scryer_domain::SubtitleDownload>> {
+        Ok(None)
+    }
+}
