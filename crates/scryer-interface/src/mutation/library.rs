@@ -228,11 +228,7 @@ impl LibraryMutations {
         Ok(from_media_rename_apply(result))
     }
 
-    async fn rehydrate_all_metadata(
-        &self,
-        ctx: &Context<'_>,
-        language: String,
-    ) -> GqlResult<bool> {
+    async fn rehydrate_all_metadata(&self, ctx: &Context<'_>, language: String) -> GqlResult<bool> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {

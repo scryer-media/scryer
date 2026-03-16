@@ -176,9 +176,7 @@ impl TitleRepository for SqliteServices {
     async fn clear_metadata_language_for_all(&self) -> AppResult<u64> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
-            .send(crate::commands::DbCommand::ClearMetadataLanguageForAll {
-                reply: reply_tx,
-            })
+            .send(crate::commands::DbCommand::ClearMetadataLanguageForAll { reply: reply_tx })
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
 

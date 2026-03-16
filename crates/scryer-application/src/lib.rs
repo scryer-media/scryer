@@ -2,7 +2,6 @@
 
 mod acquisition_policy;
 mod activity;
-pub(crate) mod archive_extractor;
 mod app_usecase_acquisition;
 mod app_usecase_activity;
 mod app_usecase_admin;
@@ -23,6 +22,7 @@ pub(crate) mod app_usecase_rss;
 mod app_usecase_rules;
 mod app_usecase_security;
 mod app_usecase_title_images;
+pub(crate) mod archive_extractor;
 mod delay_profile;
 pub(crate) mod facet_handler;
 mod facet_movie;

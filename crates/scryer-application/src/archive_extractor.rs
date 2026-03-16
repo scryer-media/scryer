@@ -301,8 +301,8 @@ mod tests {
 
     #[test]
     fn extract_rar4_store_archive() {
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/archives/rar4_store.rar");
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/archives/rar4_store.rar");
         if !fixture.exists() {
             return; // Skip if fixture not available
         }

@@ -143,7 +143,8 @@ impl IndexerBackoffTracker {
 
 /// Short-lived cache for RSS feed results. Multiple concurrent callers
 /// awaiting the same indexer's feed will share a single HTTP fetch.
-type RssFeedCache = Arc<Mutex<HashMap<String, Arc<tokio::sync::OnceCell<Vec<IndexerSearchResult>>>>>>;
+type RssFeedCache =
+    Arc<Mutex<HashMap<String, Arc<tokio::sync::OnceCell<Vec<IndexerSearchResult>>>>>>;
 
 #[derive(Clone)]
 pub struct MultiIndexerSearchClient {
@@ -562,7 +563,12 @@ impl IndexerClient for MultiIndexerSearchClient {
             });
             let deduped = before - all_results.len();
             if deduped > 0 {
-                info!(before, after = all_results.len(), deduped, "deduplicated interactive search results");
+                info!(
+                    before,
+                    after = all_results.len(),
+                    deduped,
+                    "deduplicated interactive search results"
+                );
             }
         }
 

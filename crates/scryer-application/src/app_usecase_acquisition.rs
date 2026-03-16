@@ -927,9 +927,7 @@ async fn process_single_wanted_item(
 
         // Reject releases whose title doesn't contain the target title name.
         // Prevents false matches from RSS feeds returning unrelated releases.
-        if !crate::app_usecase_rss::normalize_for_matching(&candidate.title)
-            .contains(&title_norm)
-        {
+        if !crate::app_usecase_rss::normalize_for_matching(&candidate.title).contains(&title_norm) {
             continue;
         }
 
