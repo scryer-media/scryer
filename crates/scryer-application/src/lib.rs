@@ -110,9 +110,9 @@ pub use null_repositories::{
     NullHousekeepingRepository, NullImportRepository, NullIndexerStatsTracker,
     NullMediaFileRepository, NullNotificationChannelRepository,
     NullNotificationSubscriptionRepository, NullPendingReleaseRepository,
-    NullPluginInstallationRepository, NullRuleSetRepository, NullSettingsRepository,
-    NullSystemInfoProvider, NullTitleHistoryRepository, NullTitleImageProcessor,
-    NullTitleImageRepository, NullWantedItemRepository,
+    NullPluginInstallationRepository, NullPostProcessingScriptRepository, NullRuleSetRepository,
+    NullSettingsRepository, NullSystemInfoProvider, NullTitleHistoryRepository,
+    NullTitleImageProcessor, NullTitleImageRepository, NullWantedItemRepository,
 };
 pub use quality_profile::{
     BLOCK_SCORE, QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY, QualityProfile,
@@ -176,6 +176,7 @@ pub struct AppServices {
     pub quality_profiles: Arc<dyn QualityProfileRepository>,
     pub wanted_items: Arc<dyn WantedItemRepository>,
     pub rule_sets: Arc<dyn RuleSetRepository>,
+    pub pp_scripts: Arc<dyn PostProcessingScriptRepository>,
     pub plugin_installations: Arc<dyn PluginInstallationRepository>,
     pub system_info: Arc<dyn SystemInfoProvider>,
     pub title_images: Arc<dyn TitleImageRepository>,
@@ -248,6 +249,7 @@ impl AppServices {
             quality_profiles,
             wanted_items: Arc::new(NullWantedItemRepository),
             rule_sets: Arc::new(NullRuleSetRepository),
+            pp_scripts: Arc::new(NullPostProcessingScriptRepository),
             plugin_installations: Arc::new(NullPluginInstallationRepository),
             system_info: Arc::new(NullSystemInfoProvider),
             title_images: Arc::new(NullTitleImageRepository),
@@ -1016,6 +1018,36 @@ pub trait RuleSetRepository: Send + Sync {
         rego_source: Option<&str>,
         actor_id: Option<&str>,
     ) -> AppResult<()>;
+}
+
+#[async_trait]
+pub trait PostProcessingScriptRepository: Send + Sync {
+    async fn list_scripts(&self) -> AppResult<Vec<scryer_domain::PostProcessingScript>>;
+    async fn get_script(&self, id: &str) -> AppResult<Option<scryer_domain::PostProcessingScript>>;
+    async fn create_script(
+        &self,
+        script: scryer_domain::PostProcessingScript,
+    ) -> AppResult<scryer_domain::PostProcessingScript>;
+    async fn update_script(
+        &self,
+        script: scryer_domain::PostProcessingScript,
+    ) -> AppResult<scryer_domain::PostProcessingScript>;
+    async fn delete_script(&self, id: &str) -> AppResult<()>;
+    async fn list_enabled_for_facet(
+        &self,
+        facet: &str,
+    ) -> AppResult<Vec<scryer_domain::PostProcessingScript>>;
+    async fn record_run(&self, run: scryer_domain::PostProcessingScriptRun) -> AppResult<()>;
+    async fn list_runs_for_script(
+        &self,
+        script_id: &str,
+        limit: usize,
+    ) -> AppResult<Vec<scryer_domain::PostProcessingScriptRun>>;
+    async fn list_runs_for_title(
+        &self,
+        title_id: &str,
+        limit: usize,
+    ) -> AppResult<Vec<scryer_domain::PostProcessingScriptRun>>;
 }
 
 #[async_trait]

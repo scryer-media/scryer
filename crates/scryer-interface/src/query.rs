@@ -743,6 +743,47 @@ impl QueryRoot {
         Ok(rule_set.map(crate::mappers::from_rule_set))
     }
 
+    // ── Post-Processing Scripts ──────────────────────────────────────────
+
+    async fn post_processing_scripts(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<PostProcessingScriptPayload>> {
+        let app = app_from_ctx(ctx)?;
+
+        let scripts = app
+            .services
+            .pp_scripts
+            .list_scripts()
+            .await
+            .map_err(to_gql_error)?;
+        Ok(scripts
+            .into_iter()
+            .map(crate::mappers::from_pp_script)
+            .collect())
+    }
+
+    async fn post_processing_script_runs(
+        &self,
+        ctx: &Context<'_>,
+        script_id: String,
+        limit: Option<i32>,
+    ) -> GqlResult<Vec<PostProcessingScriptRunPayload>> {
+        let app = app_from_ctx(ctx)?;
+
+        let limit = limit.unwrap_or(50).clamp(1, 500) as usize;
+        let runs = app
+            .services
+            .pp_scripts
+            .list_runs_for_script(&script_id, limit)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(runs
+            .into_iter()
+            .map(crate::mappers::from_pp_script_run)
+            .collect())
+    }
+
     // ── Plugins ──────────────────────────────────────────────────────────
 
     async fn plugins(&self, ctx: &Context<'_>) -> GqlResult<Vec<RegistryPluginPayload>> {

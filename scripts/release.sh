@@ -154,6 +154,12 @@ run_rust_validation() {
     cargo audit "${CARGO_AUDIT_ARGS[@]}" 2>&1 || die "cargo audit found vulnerabilities — fix before releasing"
     ok "cargo audit passed"
 
+    step "Running cargo clippy"
+
+    cargo clippy --workspace -- -D warnings 2>&1 || die "Clippy errors — fix before releasing"
+
+    ok "Clippy passed"
+
     step "Running Rust tests (cargo nextest run --workspace --locked)"
 
     if ! command -v cargo-nextest &>/dev/null; then
@@ -164,12 +170,6 @@ run_rust_validation() {
     cargo nextest run --workspace --locked 2>&1 || die "Rust tests failed — fix before releasing"
 
     ok "Rust tests passed"
-
-    step "Running cargo clippy (linux ci target)"
-
-    "$REPO_ROOT/scripts/clippy-ci.sh" --linux-only 2>&1 || die "Clippy errors — fix before releasing"
-
-    ok "Clippy passed"
 }
 
 # ── Release group database validation (AI-assisted, monthly) ─────────────────

@@ -1253,3 +1253,40 @@ export const browsePathQuery = `query BrowsePath($path: String!) {
     path
   }
 }`;
+
+export const postProcessingScriptsQuery = `query PostProcessingScripts {
+  postProcessingScripts {
+    id
+    name
+    description
+    scriptType
+    scriptContent
+    appliedFacets
+    executionMode
+    timeoutSecs
+    priority
+    enabled
+    debug
+    createdAt
+    updatedAt
+  }
+}`;
+
+export const postProcessingScriptRunsQuery = `query PostProcessingScriptRuns($scriptId: String!, $limit: Int) {
+  postProcessingScriptRuns(scriptId: $scriptId, limit: $limit) {
+    id
+    scriptId
+    scriptName
+    titleId
+    titleName
+    facet
+    filePath
+    status
+    exitCode
+    stdoutTail
+    stderrTail
+    durationMs
+    startedAt
+    completedAt
+  }
+}`;

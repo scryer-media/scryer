@@ -9,6 +9,7 @@ pub mod notification_channel;
 pub mod notification_subscription;
 pub mod pending_releases;
 pub mod plugin_installation;
+pub mod post_processing_script;
 pub mod quality;
 pub mod rule_set;
 pub mod settings;

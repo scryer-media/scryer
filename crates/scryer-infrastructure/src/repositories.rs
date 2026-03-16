@@ -5,18 +5,19 @@ use scryer_application::{
     IndexerConfigRepository, InsertMediaFileInput, MediaFileRepository, NewBlocklistEntry,
     NewTitleHistoryEvent, NotificationChannelRepository, NotificationSubscriptionRepository,
     PendingRelease, PendingReleaseRepository, PluginInstallationRepository,
-    PrimaryCollectionSummary, QualityProfile as ApplicationQualityProfile,
-    QualityProfileRepository, ReleaseAttemptRepository, ReleaseDecision,
-    ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature, RuleSetRepository,
-    SettingsRepository, ShowRepository, SystemInfoProvider, TitleHistoryFilter, TitleHistoryPage,
-    TitleHistoryRepository, TitleMediaFile, TitleMediaSizeSummary, TitleMetadataUpdate,
-    TitleReleaseBlocklistEntry, TitleRepository, UserRepository, WantedItem, WantedItemRepository,
+    PostProcessingScriptRepository, PrimaryCollectionSummary,
+    QualityProfile as ApplicationQualityProfile, QualityProfileRepository,
+    ReleaseAttemptRepository, ReleaseDecision, ReleaseDownloadAttemptOutcome,
+    ReleaseDownloadFailureSignature, RuleSetRepository, SettingsRepository, ShowRepository,
+    SystemInfoProvider, TitleHistoryFilter, TitleHistoryPage, TitleHistoryRepository,
+    TitleMediaFile, TitleMediaSizeSummary, TitleMetadataUpdate, TitleReleaseBlocklistEntry,
+    TitleRepository, UserRepository, WantedItem, WantedItemRepository,
 };
 use scryer_domain::{
     BlocklistEntry, CalendarEpisode, Collection, DownloadClientConfig, Entitlement, Episode,
     HistoryEvent, ImportRecord, IndexerConfig, MediaFacet, NotificationChannelConfig,
-    NotificationSubscription, PluginInstallation, RuleSet, Title, TitleHistoryEventType,
-    TitleHistoryRecord, User,
+    NotificationSubscription, PluginInstallation, PostProcessingScript, PostProcessingScriptRun,
+    RuleSet, Title, TitleHistoryEventType, TitleHistoryRecord, User,
 };
 use tokio::sync::oneshot;
 
@@ -1837,5 +1838,141 @@ impl BlocklistRepository for SqliteServices {
 
     async fn delete_for_title(&self, title_id: &str) -> AppResult<()> {
         self.delete_blocklist_for_title(title_id).await
+    }
+}
+
+#[async_trait]
+impl PostProcessingScriptRepository for SqliteServices {
+    async fn list_scripts(&self) -> AppResult<Vec<PostProcessingScript>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::ListPPScripts { reply: reply_tx })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn get_script(&self, id: &str) -> AppResult<Option<PostProcessingScript>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::GetPPScript {
+                id: id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn create_script(&self, script: PostProcessingScript) -> AppResult<PostProcessingScript> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::CreatePPScript {
+                script,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn update_script(&self, script: PostProcessingScript) -> AppResult<PostProcessingScript> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::UpdatePPScript {
+                script,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn delete_script(&self, id: &str) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::DeletePPScript {
+                id: id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn list_enabled_for_facet(&self, facet: &str) -> AppResult<Vec<PostProcessingScript>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::ListEnabledPPScriptsForFacet {
+                facet: facet.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn record_run(&self, run: PostProcessingScriptRun) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::RecordPPScriptRun {
+                run,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn list_runs_for_script(
+        &self,
+        script_id: &str,
+        limit: usize,
+    ) -> AppResult<Vec<PostProcessingScriptRun>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::ListPPScriptRunsForScript {
+                script_id: script_id.to_string(),
+                limit,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn list_runs_for_title(
+        &self,
+        title_id: &str,
+        limit: usize,
+    ) -> AppResult<Vec<PostProcessingScriptRun>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::ListPPScriptRunsForTitle {
+                title_id: title_id.to_string(),
+                limit,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 }

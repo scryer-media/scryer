@@ -924,6 +924,44 @@ impl std::str::FromStr for NotificationEventType {
     }
 }
 
+// ── Post-Processing Scripts ──────────────────────────────────────────────────
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PostProcessingScript {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub script_type: String,         // "inline" | "file"
+    pub script_content: String,      // shell command or file path
+    pub applied_facets: Vec<String>, // ["movie", "tv", "anime"]
+    pub execution_mode: String,      // "blocking" | "fire_and_forget"
+    pub timeout_secs: i64,
+    pub priority: i32,
+    pub enabled: bool,
+    pub debug: bool, // capture stdout/stderr when true
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PostProcessingScriptRun {
+    pub id: String,
+    pub script_id: String,
+    pub script_name: String,
+    pub title_id: Option<String>,
+    pub title_name: Option<String>,
+    pub facet: Option<String>,
+    pub file_path: Option<String>,
+    pub status: String,
+    pub exit_code: Option<i32>,
+    pub stdout_tail: Option<String>,
+    pub stderr_tail: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub env_payload_json: Option<String>,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+}
+
 pub fn parse_query(value: &str) -> String {
     value.trim().to_lowercase()
 }

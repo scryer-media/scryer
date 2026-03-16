@@ -6,6 +6,7 @@ mod external_import;
 mod library;
 mod notifications;
 mod plugins;
+mod post_processing;
 mod rules;
 mod settings;
 mod titles;
@@ -29,4 +30,5 @@ pub struct MutationRoot(
     notifications::NotificationMutations,
     backup::BackupMutations,
     external_import::ExternalImportMutations,
+    post_processing::PostProcessingMutations,
 );

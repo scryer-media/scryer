@@ -16,11 +16,11 @@ use crate::{
     FileImporter, HousekeepingRepository, ImportRepository, IndexerQueryStats, IndexerStatsTracker,
     MediaFileRepository, NewBlocklistEntry, NewTitleHistoryEvent, NotificationChannelRepository,
     NotificationSubscriptionRepository, PendingRelease, PendingReleaseRepository,
-    PluginInstallationRepository, ReleaseDecision, RuleSetRepository, SettingsRepository,
-    SystemInfoProvider, TitleHistoryFilter, TitleHistoryPage, TitleHistoryRepository,
-    TitleImageBlob, TitleImageKind, TitleImageProcessor, TitleImageReplacement,
-    TitleImageRepository, TitleImageSyncTask, TitleMediaFile, TitleMediaSizeSummary, WantedItem,
-    WantedItemRepository,
+    PluginInstallationRepository, PostProcessingScriptRepository, ReleaseDecision,
+    RuleSetRepository, SettingsRepository, SystemInfoProvider, TitleHistoryFilter,
+    TitleHistoryPage, TitleHistoryRepository, TitleImageBlob, TitleImageKind, TitleImageProcessor,
+    TitleImageReplacement, TitleImageRepository, TitleImageSyncTask, TitleMediaFile,
+    TitleMediaSizeSummary, WantedItem, WantedItemRepository,
 };
 
 #[derive(Default)]
@@ -297,6 +297,66 @@ impl RuleSetRepository for NullRuleSetRepository {
         _actor_id: Option<&str>,
     ) -> AppResult<()> {
         Ok(())
+    }
+}
+
+#[derive(Default)]
+pub struct NullPostProcessingScriptRepository;
+
+#[async_trait]
+impl PostProcessingScriptRepository for NullPostProcessingScriptRepository {
+    async fn list_scripts(&self) -> AppResult<Vec<scryer_domain::PostProcessingScript>> {
+        Ok(vec![])
+    }
+    async fn get_script(
+        &self,
+        _id: &str,
+    ) -> AppResult<Option<scryer_domain::PostProcessingScript>> {
+        Ok(None)
+    }
+    async fn create_script(
+        &self,
+        _script: scryer_domain::PostProcessingScript,
+    ) -> AppResult<scryer_domain::PostProcessingScript> {
+        Err(AppError::Repository(
+            "post-processing script repository is not configured".to_string(),
+        ))
+    }
+    async fn update_script(
+        &self,
+        _script: scryer_domain::PostProcessingScript,
+    ) -> AppResult<scryer_domain::PostProcessingScript> {
+        Err(AppError::Repository(
+            "post-processing script repository is not configured".to_string(),
+        ))
+    }
+    async fn delete_script(&self, _id: &str) -> AppResult<()> {
+        Err(AppError::Repository(
+            "post-processing script repository is not configured".to_string(),
+        ))
+    }
+    async fn list_enabled_for_facet(
+        &self,
+        _facet: &str,
+    ) -> AppResult<Vec<scryer_domain::PostProcessingScript>> {
+        Ok(vec![])
+    }
+    async fn record_run(&self, _run: scryer_domain::PostProcessingScriptRun) -> AppResult<()> {
+        Ok(())
+    }
+    async fn list_runs_for_script(
+        &self,
+        _script_id: &str,
+        _limit: usize,
+    ) -> AppResult<Vec<scryer_domain::PostProcessingScriptRun>> {
+        Ok(vec![])
+    }
+    async fn list_runs_for_title(
+        &self,
+        _title_id: &str,
+        _limit: usize,
+    ) -> AppResult<Vec<scryer_domain::PostProcessingScriptRun>> {
+        Ok(vec![])
     }
 }
 

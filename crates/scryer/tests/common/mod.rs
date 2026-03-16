@@ -138,6 +138,7 @@ impl TestContext {
         services.wanted_items = Arc::new(db.clone());
         services.download_submissions = Arc::new(db.clone());
         services.pending_releases = Arc::new(db.clone());
+        services.pp_scripts = Arc::new(db.clone());
 
         // Facet registry with all built-in facets
         let mut registry = FacetRegistry::new();

@@ -862,6 +862,48 @@ pub(crate) fn from_pending_release(pr: PendingRelease) -> PendingReleasePayload 
     }
 }
 
+pub(crate) fn from_pp_script(
+    s: scryer_domain::PostProcessingScript,
+) -> PostProcessingScriptPayload {
+    PostProcessingScriptPayload {
+        id: s.id,
+        name: s.name,
+        description: s.description,
+        script_type: s.script_type,
+        script_content: s.script_content,
+        applied_facets: s.applied_facets,
+        execution_mode: s.execution_mode,
+        timeout_secs: s.timeout_secs as i32,
+        priority: s.priority,
+        enabled: s.enabled,
+        debug: s.debug,
+        created_at: s.created_at.to_rfc3339(),
+        updated_at: s.updated_at.to_rfc3339(),
+    }
+}
+
+pub(crate) fn from_pp_script_run(
+    r: scryer_domain::PostProcessingScriptRun,
+) -> PostProcessingScriptRunPayload {
+    PostProcessingScriptRunPayload {
+        id: r.id,
+        script_id: r.script_id,
+        script_name: r.script_name,
+        title_id: r.title_id,
+        title_name: r.title_name,
+        facet: r.facet,
+        file_path: r.file_path,
+        status: r.status,
+        exit_code: r.exit_code,
+        stdout_tail: r.stdout_tail,
+        stderr_tail: r.stderr_tail,
+        duration_ms: r.duration_ms.map(|v| v as i32),
+        env_payload_json: r.env_payload_json,
+        started_at: r.started_at,
+        completed_at: r.completed_at,
+    }
+}
+
 pub(crate) fn from_housekeeping_report(report: HousekeepingReport) -> HousekeepingReportPayload {
     HousekeepingReportPayload {
         orphaned_media_files: report.orphaned_media_files as i32,

@@ -125,6 +125,8 @@
 .dark body {
   background-color: var(--background);
   background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.006), rgba(255, 255, 255, 0) 18%),
+    linear-gradient(135deg, rgba(91, 100, 255, 0.04), transparent 42%, rgba(56, 189, 248, 0.022) 78%, rgba(16, 185, 129, 0.016) 100%),
     radial-gradient(circle at 14% 12%, var(--dark-atmo-indigo), transparent 22%),
     radial-gradient(circle at 84% 18%, var(--dark-atmo-cyan), transparent 26%),
     radial-gradient(circle at 62% 82%, var(--dark-atmo-emerald), transparent 30%),
@@ -157,40 +159,16 @@
 .dark [data-slot="dialog-content"],
 .dark [data-slot="sheet-content"],
 .dark [data-slot="select-content"],
-.dark [data-slot="sidebar-inner"],
-.dark [data-slot="sidebar-inset"] {
+.dark [data-slot="sidebar-inner"] {
   border-color: rgba(123, 140, 255, 0.12);
   backdrop-filter: blur(18px) saturate(125%);
 }
 
 .dark [data-slot="card"],
-.dark [data-slot="sidebar-inner"],
-.dark [data-slot="sidebar-inset"] {
+.dark [data-slot="sidebar-inner"] {
   position: relative;
   isolation: isolate;
   overflow: hidden;
-}
-
-.dark [data-slot="sidebar-inset"] {
-  background: rgba(5, 9, 19, 0.975);
-  box-shadow: 0 22px 44px rgba(2, 6, 23, 0.24);
-}
-
-.dark [data-slot="sidebar-inset"]::before {
-  content: "";
-  position: absolute;
-  inset: 3rem 0 0 0;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.006), rgba(255, 255, 255, 0) 18%),
-    linear-gradient(135deg, rgba(91, 100, 255, 0.04), transparent 42%, rgba(56, 189, 248, 0.022) 78%, rgba(16, 185, 129, 0.016) 100%),
-    radial-gradient(circle at 78% 12%, rgba(56, 189, 248, 0.03), transparent 22%);
-  pointer-events: none;
-  z-index: 0;
-}
-
-.dark [data-slot="sidebar-inset"] > * {
-  position: relative;
-  z-index: 1;
 }
 
 .dark [data-slot="card"] {

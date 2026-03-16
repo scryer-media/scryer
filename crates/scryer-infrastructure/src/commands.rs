@@ -7,8 +7,9 @@ use crate::{
     migrations,
     queries::{
         blocklist as blocklist_queries, download_client::*, event::*, housekeeping, indexer::*,
-        notification_channel, notification_subscription, plugin_installation::*, quality::*,
-        rule_set::*, settings::*, title::*, title_history as th_queries, user::*, workflow::*,
+        notification_channel, notification_subscription, plugin_installation::*,
+        post_processing_script as pp_queries, quality::*, rule_set::*, settings::*, title::*,
+        title_history as th_queries, user::*, workflow::*,
     },
 };
 use scryer_application::QualityProfile;
@@ -580,6 +581,44 @@ pub(crate) enum DbCommand {
         rego_source: Option<String>,
         actor_id: Option<String>,
         reply: Sender<AppResult<()>>,
+    },
+    // ── Post-Processing Scripts ──────────────────────────────────
+    ListPPScripts {
+        reply: Sender<AppResult<Vec<scryer_domain::PostProcessingScript>>>,
+    },
+    GetPPScript {
+        id: String,
+        reply: Sender<AppResult<Option<scryer_domain::PostProcessingScript>>>,
+    },
+    CreatePPScript {
+        script: scryer_domain::PostProcessingScript,
+        reply: Sender<AppResult<scryer_domain::PostProcessingScript>>,
+    },
+    UpdatePPScript {
+        script: scryer_domain::PostProcessingScript,
+        reply: Sender<AppResult<scryer_domain::PostProcessingScript>>,
+    },
+    DeletePPScript {
+        id: String,
+        reply: Sender<AppResult<()>>,
+    },
+    ListEnabledPPScriptsForFacet {
+        facet: String,
+        reply: Sender<AppResult<Vec<scryer_domain::PostProcessingScript>>>,
+    },
+    RecordPPScriptRun {
+        run: scryer_domain::PostProcessingScriptRun,
+        reply: Sender<AppResult<()>>,
+    },
+    ListPPScriptRunsForScript {
+        script_id: String,
+        limit: usize,
+        reply: Sender<AppResult<Vec<scryer_domain::PostProcessingScriptRun>>>,
+    },
+    ListPPScriptRunsForTitle {
+        title_id: String,
+        limit: usize,
+        reply: Sender<AppResult<Vec<scryer_domain::PostProcessingScriptRun>>>,
     },
     // ── Plugin Installations ─────────────────────────────────────
     ListPluginInstallations {
@@ -1767,6 +1806,46 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                         )
                         .await,
                     );
+                }
+                // ── Post-Processing Scripts ──────────────────────────────
+                DbCommand::ListPPScripts { reply } => {
+                    let _ = reply.send(pp_queries::list_scripts_query(&pool).await);
+                }
+                DbCommand::GetPPScript { id, reply } => {
+                    let _ = reply.send(pp_queries::get_script_by_id_query(&pool, &id).await);
+                }
+                DbCommand::CreatePPScript { script, reply } => {
+                    let _ = reply.send(pp_queries::insert_script_query(&pool, &script).await);
+                }
+                DbCommand::UpdatePPScript { script, reply } => {
+                    let _ = reply.send(pp_queries::update_script_query(&pool, &script).await);
+                }
+                DbCommand::DeletePPScript { id, reply } => {
+                    let _ = reply.send(pp_queries::delete_script_query(&pool, &id).await);
+                }
+                DbCommand::ListEnabledPPScriptsForFacet { facet, reply } => {
+                    let _ =
+                        reply.send(pp_queries::list_enabled_for_facet_query(&pool, &facet).await);
+                }
+                DbCommand::RecordPPScriptRun { run, reply } => {
+                    let _ = reply.send(pp_queries::record_run_query(&pool, &run).await);
+                }
+                DbCommand::ListPPScriptRunsForScript {
+                    script_id,
+                    limit,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        pp_queries::list_runs_for_script_query(&pool, &script_id, limit).await,
+                    );
+                }
+                DbCommand::ListPPScriptRunsForTitle {
+                    title_id,
+                    limit,
+                    reply,
+                } => {
+                    let _ = reply
+                        .send(pp_queries::list_runs_for_title_query(&pool, &title_id, limit).await);
                 }
                 // ── Plugin Installations ─────────────────────────────────
                 DbCommand::ListPluginInstallations { reply } => {

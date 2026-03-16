@@ -605,6 +605,27 @@ export const rehydrateAllMetadataMutation = `mutation RehydrateAllMetadata($lang
   rehydrateAllMetadata(language: $language)
 }`;
 
+const ppScriptFields = `
+    id name description scriptType scriptContent appliedFacets
+    executionMode timeoutSecs priority enabled debug createdAt updatedAt
+`;
+
+export const createPostProcessingScriptMutation = `mutation CreatePostProcessingScript($input: CreatePostProcessingScriptInput!) {
+  createPostProcessingScript(input: $input) {${ppScriptFields}}
+}`;
+
+export const updatePostProcessingScriptMutation = `mutation UpdatePostProcessingScript($input: UpdatePostProcessingScriptInput!) {
+  updatePostProcessingScript(input: $input) {${ppScriptFields}}
+}`;
+
+export const deletePostProcessingScriptMutation = `mutation DeletePostProcessingScript($id: String!) {
+  deletePostProcessingScript(id: $id)
+}`;
+
+export const togglePostProcessingScriptMutation = `mutation TogglePostProcessingScript($id: String!) {
+  togglePostProcessingScript(id: $id) {${ppScriptFields}}
+}`;
+
 // Input type companion — keep in sync with ExecuteExternalImportInput on the backend.
 export type DownloadClientApiKeyOverride = {
   dedupKey: string;
