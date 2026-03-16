@@ -123,6 +123,7 @@ impl AppUseCase {
         }
 
         let limit = limit.max(1);
+        let title_hint = extract_title_hint(&queries);
 
         // Auto mode: conserve API calls by using only the first (canonical) query variant
         let effective_queries: Vec<String> = match mode {
@@ -184,6 +185,30 @@ impl AppUseCase {
                         caller = caller_label,
                         error = %error,
                         "indexer search task panicked"
+                    );
+                }
+            }
+        }
+
+        // Filter out results whose title doesn't match any of the search queries.
+        // This prevents RSS feeds (which return their entire recent feed) from
+        // polluting results with unrelated releases.
+        if let Some(ref hint) = title_hint {
+            let hint_normalized = crate::app_usecase_rss::normalize_for_matching(hint);
+            if !hint_normalized.is_empty() {
+                let before = raw_results.len();
+                raw_results.retain(|r| {
+                    crate::app_usecase_rss::normalize_for_matching(&r.title)
+                        .contains(&hint_normalized)
+                });
+                let filtered = before - raw_results.len();
+                if filtered > 0 {
+                    info!(
+                        before,
+                        after = raw_results.len(),
+                        filtered,
+                        title_hint = hint.as_str(),
+                        "filtered non-matching releases from search results"
                     );
                 }
             }
@@ -986,6 +1011,33 @@ pub(crate) fn build_user_rule_input(
         title_tags,
         runtime_minutes,
     )
+}
+
+/// Extract a title name hint from search queries by stripping S##E## patterns.
+/// Returns None if no meaningful title text can be extracted.
+fn extract_title_hint(queries: &[String]) -> Option<String> {
+    for query in queries {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // Strip season/episode patterns: S01E05, S01, 1x05, etc.
+        let cleaned = trimmed
+            .split_whitespace()
+            .filter(|word| {
+                let w = word.to_ascii_lowercase();
+                // Skip pure season/episode tokens
+                !(w.starts_with('s') && w[1..].chars().all(|c| c.is_ascii_digit() || c == 'e'))
+                    && !w.contains("x") // skip 1x05 format
+                    && !w.chars().all(|c| c.is_ascii_digit()) // skip bare numbers
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !cleaned.is_empty() {
+            return Some(cleaned);
+        }
+    }
+    None
 }
 
 #[cfg(test)]

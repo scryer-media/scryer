@@ -695,8 +695,11 @@ pub mod test_nulls {
         async fn delete(&self, _: &str) -> AppResult<()> {
             Ok(())
         }
-        async fn list_unhydrated(&self, _: usize) -> AppResult<Vec<Title>> {
+        async fn list_unhydrated(&self, _: usize, _: &str) -> AppResult<Vec<Title>> {
             Ok(vec![])
+        }
+        async fn clear_metadata_language_for_all(&self) -> AppResult<u64> {
+            Ok(0)
         }
     }
 

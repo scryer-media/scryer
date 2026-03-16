@@ -343,6 +343,12 @@ const en: LocaleDictionary = {
   "settings.tlsKeyPathPlaceholder": "/etc/scryer/key.pem",
   "settings.tlsSaved":
     "TLS settings saved. Restart the service for changes to take effect.",
+  "settings.languageChangeTitle": "Change Language",
+  "settings.languageChangeWarning":
+    "Changing to {{language}} will re-download metadata for all titles in your library (names, descriptions, sort titles) in the new language. This may take several minutes depending on your library size. The interface will change immediately.",
+  "settings.languageChangeConfirm": "Change Language",
+  "settings.metadataRehydrationStarted":
+    "Metadata rehydration started. Titles will update in the background.",
   "settings.tlsRestartNote":
     "Changes to TLS settings require a service restart.",
 

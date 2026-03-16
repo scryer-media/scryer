@@ -138,7 +138,11 @@ pub(crate) enum DbCommand {
     },
     ListUnhydratedTitles {
         limit: usize,
+        language: String,
         reply: Sender<AppResult<Vec<Title>>>,
+    },
+    ClearMetadataLanguageForAll {
+        reply: Sender<AppResult<u64>>,
     },
     ListEvents {
         title_id: Option<String>,
@@ -921,8 +925,11 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 DbCommand::DeleteTitle { id, reply } => {
                     let _ = reply.send(delete_title_query(&pool, &id).await);
                 }
-                DbCommand::ListUnhydratedTitles { limit, reply } => {
-                    let _ = reply.send(list_unhydrated_titles_query(&pool, limit).await);
+                DbCommand::ListUnhydratedTitles { limit, language, reply } => {
+                    let _ = reply.send(list_unhydrated_titles_query(&pool, limit, &language).await);
+                }
+                DbCommand::ClearMetadataLanguageForAll { reply } => {
+                    let _ = reply.send(clear_metadata_language_for_all_query(&pool).await);
                 }
                 DbCommand::ListEvents {
                     title_id,

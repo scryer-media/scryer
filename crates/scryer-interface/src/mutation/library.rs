@@ -227,4 +227,49 @@ impl LibraryMutations {
 
         Ok(from_media_rename_apply(result))
     }
+
+    async fn rehydrate_all_metadata(
+        &self,
+        ctx: &Context<'_>,
+        language: String,
+    ) -> GqlResult<bool> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let db = settings_db_from_ctx(ctx)?;
+
+        let language = language.trim().to_ascii_lowercase();
+        if language.is_empty() {
+            return Err(Error::new("language is required"));
+        }
+
+        // Save language preference
+        db.upsert_setting_value(
+            "system",
+            "metadata_language",
+            None,
+            &language,
+            "rehydrate_metadata",
+            Some(actor.id),
+        )
+        .await
+        .map_err(to_gql_error)?;
+
+        // Clear metadata_language on all titles to mark them stale
+        let cleared = app
+            .services
+            .titles
+            .clear_metadata_language_for_all()
+            .await
+            .map_err(to_gql_error)?;
+
+        tracing::info!(language = %language, titles_cleared = cleared, "metadata rehydration queued");
+
+        // Wake the metadata hydration loop
+        app.services.hydration_wake.notify_one();
+
+        Ok(true)
+    }
 }

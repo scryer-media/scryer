@@ -10,7 +10,7 @@ const RSS_SYNC_MAX_GUIDS: usize = 2000;
 
 /// Normalize a title string for fuzzy matching: lowercase, strip non-alphanumeric,
 /// collapse whitespace.
-fn normalize_for_matching(title: &str) -> String {
+pub(crate) fn normalize_for_matching(title: &str) -> String {
     title
         .chars()
         .filter_map(|c| {

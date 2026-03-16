@@ -272,6 +272,25 @@ pub fn is_video_file(path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
+pub const ARCHIVE_EXTENSIONS: &[&str] = &["rar", "7z", "zip"];
+
+/// Check if a path is a RAR volume file (.rar, .r00, .r01, etc.)
+pub fn is_rar_volume(path: &std::path::Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    let lower = ext.to_ascii_lowercase();
+    lower == "rar" || (lower.starts_with('r') && lower.len() >= 2 && lower[1..].chars().all(|c| c.is_ascii_digit()))
+}
+
+pub fn is_archive_file(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ARCHIVE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompletedDownload {
     pub client_type: String,

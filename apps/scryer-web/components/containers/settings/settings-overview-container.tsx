@@ -1,8 +1,9 @@
 
 import * as React from "react";
 import { SettingsOverviewSection } from "@/components/views/settings/settings-overview-section";
+import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { tlsSettingsQuery } from "@/lib/graphql/queries";
-import { saveAdminSettingsMutation } from "@/lib/graphql/mutations";
+import { rehydrateAllMetadataMutation, saveAdminSettingsMutation } from "@/lib/graphql/mutations";
 import type { AdminSetting } from "@/lib/types/admin-settings";
 import { TLS_CERT_PATH_KEY, TLS_KEY_PATH_KEY } from "@/lib/constants/settings";
 import { getSettingDisplayValue } from "@/lib/utils/settings";
@@ -30,6 +31,8 @@ export function SettingsOverviewContainer({
   const [tlsCertPath, setTlsCertPath] = React.useState("");
   const [tlsKeyPath, setTlsKeyPath] = React.useState("");
   const [tlsSaving, setTlsSaving] = React.useState(false);
+  const [pendingLanguage, setPendingLanguage] = React.useState<string | null>(null);
+  const [rehydrating, setRehydrating] = React.useState(false);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -79,18 +82,67 @@ export function SettingsOverviewContainer({
     }
   }, [client, setGlobalStatus, t, tlsCertPath, tlsKeyPath]);
 
+  const handleLanguageSelect = React.useCallback((code: string) => {
+    if (code === uiLanguage) return;
+    setPendingLanguage(code);
+  }, [uiLanguage]);
+
+  const handleConfirmLanguageChange = React.useCallback(async () => {
+    if (!pendingLanguage) return;
+    setRehydrating(true);
+    try {
+      // Change UI language immediately
+      onSelectLanguage(pendingLanguage);
+
+      // Trigger backend metadata rehydration
+      const { error } = await client.mutation(
+        rehydrateAllMetadataMutation,
+        { language: pendingLanguage },
+      ).toPromise();
+
+      if (error) {
+        setGlobalStatus(error.message);
+      } else {
+        setGlobalStatus(t("settings.metadataRehydrationStarted"));
+      }
+    } catch (error) {
+      setGlobalStatus(
+        error instanceof Error ? error.message : t("status.failedToUpdate"),
+      );
+    } finally {
+      setRehydrating(false);
+      setPendingLanguage(null);
+    }
+  }, [client, onSelectLanguage, pendingLanguage, setGlobalStatus, t]);
+
+  const pendingLanguageLabel = pendingLanguage
+    ? availableLanguages.find((l) => l.code === pendingLanguage)?.label ?? pendingLanguage
+    : "";
+
   return (
-    <SettingsOverviewSection
-      availableLanguages={availableLanguages}
-      selectedLanguage={selectedLanguage}
-      uiLanguage={uiLanguage}
-      onSelectLanguage={onSelectLanguage}
-      tlsCertPath={tlsCertPath}
-      setTlsCertPath={setTlsCertPath}
-      tlsKeyPath={tlsKeyPath}
-      setTlsKeyPath={setTlsKeyPath}
-      tlsSaving={tlsSaving}
-      onTlsSave={handleTlsSave}
-    />
+    <>
+      <SettingsOverviewSection
+        availableLanguages={availableLanguages}
+        selectedLanguage={selectedLanguage}
+        uiLanguage={uiLanguage}
+        onSelectLanguage={handleLanguageSelect}
+        tlsCertPath={tlsCertPath}
+        setTlsCertPath={setTlsCertPath}
+        tlsKeyPath={tlsKeyPath}
+        setTlsKeyPath={setTlsKeyPath}
+        tlsSaving={tlsSaving}
+        onTlsSave={handleTlsSave}
+      />
+      <ConfirmDialog
+        open={pendingLanguage !== null}
+        title={t("settings.languageChangeTitle")}
+        description={t("settings.languageChangeWarning", { language: pendingLanguageLabel })}
+        confirmLabel={t("settings.languageChangeConfirm")}
+        cancelLabel={t("label.cancel")}
+        isBusy={rehydrating}
+        onConfirm={handleConfirmLanguageChange}
+        onCancel={() => setPendingLanguage(null)}
+      />
+    </>
   );
 }

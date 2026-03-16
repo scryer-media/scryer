@@ -601,6 +601,10 @@ export const executeExternalImportMutation = `mutation ExecuteExternalImport($in
   }
 }`;
 
+export const rehydrateAllMetadataMutation = `mutation RehydrateAllMetadata($language: String!) {
+  rehydrateAllMetadata(language: $language)
+}`;
+
 // Input type companion — keep in sync with ExecuteExternalImportInput on the backend.
 export type DownloadClientApiKeyOverride = {
   dedupKey: string;

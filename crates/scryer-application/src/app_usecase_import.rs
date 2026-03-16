@@ -518,10 +518,12 @@ async fn run_import(
         return Ok(result);
     }
 
-    // 3. FIND VIDEO FILES
+    // 3. FIND VIDEO FILES (extract archives first if needed)
     let dest_dir = Path::new(&completed.dest_dir);
     let is_series = matches!(title.facet, MediaFacet::Tv | MediaFacet::Anime);
-    let video_files = find_video_files(dest_dir, is_series)?;
+    let extracted_dir = crate::archive_extractor::extract_archives_if_needed(dest_dir).await?;
+    let effective_dir = extracted_dir.as_deref().unwrap_or(dest_dir);
+    let video_files = find_video_files(effective_dir, is_series)?;
 
     if video_files.is_empty() {
         let result = ImportResult {
@@ -545,7 +547,7 @@ async fn run_import(
     }
 
     // Branch on facet: movies import the single largest file, series import all episode files
-    if is_series {
+    let result = if is_series {
         import_series_download(
             app,
             actor,
@@ -567,7 +569,14 @@ async fn run_import(
             started_at,
         )
         .await
+    };
+
+    // Clean up extracted archive directory if we created one
+    if let Some(ref dir) = extracted_dir {
+        crate::archive_extractor::cleanup_extracted_dir(dir).await;
     }
+
+    result
 }
 
 // ---------------------------------------------------------------------------

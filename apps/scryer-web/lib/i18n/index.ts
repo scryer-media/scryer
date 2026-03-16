@@ -1,11 +1,17 @@
 import type { LocaleDictionary } from "./types";
 import { DEFAULT_LANGUAGE, interpolate } from "./types";
 import en from "./locales/en";
+import es from "./locales/es";
+import fr from "./locales/fr";
+import de from "./locales/de";
+import it from "./locales/it";
+import pt_BR from "./locales/pt_BR";
+import ko from "./locales/ko";
+import zh_CN from "./locales/zh_CN";
+import ja from "./locales/ja";
 export { DEFAULT_LANGUAGE } from "./types";
 
-// Interface copy is maintained in English only for now.
-
-export type LocaleCode = "eng";
+export type LocaleCode = "eng" | "spa" | "fra" | "deu" | "ita" | "por" | "kor" | "zho" | "jpn";
 
 export type LanguageOption = {
   code: LocaleCode;
@@ -16,14 +22,40 @@ type LocaleMap = Record<LocaleCode, LocaleDictionary>;
 
 const LOCALE_ALIASES: Record<string, LocaleCode> = {
   en: "eng",
+  es: "spa",
+  fr: "fra",
+  de: "deu",
+  it: "ita",
+  pt: "por",
+  "pt-br": "por",
+  ko: "kor",
+  zh: "zho",
+  "zh-cn": "zho",
+  ja: "jpn",
 };
 
 const locales: LocaleMap = {
   eng: en,
+  spa: es,
+  fra: fr,
+  deu: de,
+  ita: it,
+  por: pt_BR,
+  kor: ko,
+  zho: zh_CN,
+  jpn: ja,
 };
 
 export const AVAILABLE_LANGUAGES: LanguageOption[] = [
   { code: "eng", label: "English" },
+  { code: "fra", label: "Fran\u00e7ais" },
+  { code: "deu", label: "Deutsch" },
+  { code: "spa", label: "Español" },
+  { code: "ita", label: "Italiano" },
+  { code: "por", label: "Português (Brasil)" },
+  { code: "kor", label: "한국어" },
+  { code: "zho", label: "简体中文" },
+  { code: "jpn", label: "日本語" },
 ];
 
 export function getLanguageLabel(code: string): string {

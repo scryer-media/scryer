@@ -2,6 +2,7 @@
 
 mod acquisition_policy;
 mod activity;
+pub(crate) mod archive_extractor;
 mod app_usecase_acquisition;
 mod app_usecase_activity;
 mod app_usecase_admin;
@@ -432,9 +433,14 @@ pub trait TitleRepository: Send + Sync {
         metadata: TitleMetadataUpdate,
     ) -> AppResult<Title>;
     async fn delete(&self, id: &str) -> AppResult<()>;
-    /// Return titles that have never been hydrated (metadata_fetched_at IS NULL),
-    /// ordered by creation time, up to `limit`.
-    async fn list_unhydrated(&self, limit: usize) -> AppResult<Vec<Title>>;
+    /// Return titles that need hydration: either never hydrated
+    /// (`metadata_fetched_at IS NULL`) or hydrated in a different language
+    /// (`metadata_language IS NULL OR metadata_language != language`).
+    /// Ordered by creation time, up to `limit`.
+    async fn list_unhydrated(&self, limit: usize, language: &str) -> AppResult<Vec<Title>>;
+    /// Clear `metadata_language` on all titles that have one set, marking them
+    /// for re-hydration in the next background loop pass.
+    async fn clear_metadata_language_for_all(&self) -> AppResult<u64>;
 }
 
 #[async_trait]
@@ -1627,14 +1633,29 @@ mod tests {
             Ok(())
         }
 
-        async fn list_unhydrated(&self, limit: usize) -> AppResult<Vec<Title>> {
+        async fn list_unhydrated(&self, limit: usize, language: &str) -> AppResult<Vec<Title>> {
             let list = self.store.lock().await;
             Ok(list
                 .iter()
-                .filter(|t| t.metadata_fetched_at.is_none())
+                .filter(|t| {
+                    t.metadata_fetched_at.is_none()
+                        || t.metadata_language.as_deref() != Some(language)
+                })
                 .take(limit)
                 .cloned()
                 .collect())
+        }
+
+        async fn clear_metadata_language_for_all(&self) -> AppResult<u64> {
+            let mut list = self.store.lock().await;
+            let mut count = 0u64;
+            for title in list.iter_mut() {
+                if title.metadata_language.is_some() {
+                    title.metadata_language = None;
+                    count += 1;
+                }
+            }
+            Ok(count)
         }
     }
 

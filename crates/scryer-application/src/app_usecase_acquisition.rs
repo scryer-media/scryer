@@ -634,11 +634,14 @@ async fn process_single_wanted_item(
                 .await
                 .unwrap_or_default();
 
+            let title_normalized = crate::app_usecase_rss::normalize_for_matching(&title.name);
             if let Some(best_pack) = pack_results.iter().find(|r| {
                 r.quality_profile_decision
                     .as_ref()
                     .map(|d| d.allowed)
                     .unwrap_or(false)
+                    && crate::app_usecase_rss::normalize_for_matching(&r.title)
+                        .contains(&title_normalized)
             }) {
                 let pack_url = best_pack
                     .download_url
@@ -911,6 +914,7 @@ async fn process_single_wanted_item(
     let mut had_allowed_candidate = false;
     let mut skipped_for_failed = false;
 
+    let title_norm = crate::app_usecase_rss::normalize_for_matching(&title.name);
     for candidate in &results {
         let is_allowed = candidate
             .quality_profile_decision
@@ -918,6 +922,14 @@ async fn process_single_wanted_item(
             .map(|d| d.allowed)
             .unwrap_or(false);
         if !is_allowed {
+            continue;
+        }
+
+        // Reject releases whose title doesn't contain the target title name.
+        // Prevents false matches from RSS feeds returning unrelated releases.
+        if !crate::app_usecase_rss::normalize_for_matching(&candidate.title)
+            .contains(&title_norm)
+        {
             continue;
         }
 

@@ -43,7 +43,7 @@ pub(crate) async fn list_titles_query(
         sql.push_str(" WHERE ");
         sql.push_str(&where_clauses.join(" AND "));
     }
-    sql.push_str(" ORDER BY LOWER(name) ASC, name ASC, id ASC");
+    sql.push_str(" ORDER BY LOWER(COALESCE(NULLIF(sort_title, ''), name)) ASC, name ASC, id ASC");
 
     let mut statement = sqlx::query(&sql);
 
@@ -72,12 +72,14 @@ pub(crate) async fn list_titles_query(
 pub(crate) async fn list_unhydrated_titles_query(
     pool: &SqlitePool,
     limit: usize,
+    language: &str,
 ) -> AppResult<Vec<Title>> {
     let sql = format!(
-        "SELECT {} FROM titles WHERE metadata_fetched_at IS NULL ORDER BY created_at ASC LIMIT ?",
+        "SELECT {} FROM titles WHERE metadata_fetched_at IS NULL OR metadata_language IS NULL OR metadata_language != ? ORDER BY created_at ASC LIMIT ?",
         TITLE_COLUMNS
     );
     let rows = sqlx::query(&sql)
+        .bind(language)
         .bind(limit as i64)
         .fetch_all(pool)
         .await
@@ -88,6 +90,16 @@ pub(crate) async fn list_unhydrated_titles_query(
         out.push(row_to_title(&row)?);
     }
     Ok(out)
+}
+
+pub(crate) async fn clear_metadata_language_for_all_query(pool: &SqlitePool) -> AppResult<u64> {
+    let result = sqlx::query(
+        "UPDATE titles SET metadata_language = NULL WHERE metadata_language IS NOT NULL",
+    )
+    .execute(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+    Ok(result.rows_affected())
 }
 
 pub(crate) async fn get_title_by_id_query(pool: &SqlitePool, id: &str) -> AppResult<Option<Title>> {

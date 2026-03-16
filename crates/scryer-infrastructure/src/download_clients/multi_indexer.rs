@@ -141,6 +141,10 @@ impl IndexerBackoffTracker {
     }
 }
 
+/// Short-lived cache for RSS feed results. Multiple concurrent callers
+/// awaiting the same indexer's feed will share a single HTTP fetch.
+type RssFeedCache = Arc<Mutex<HashMap<String, Arc<tokio::sync::OnceCell<Vec<IndexerSearchResult>>>>>>;
+
 #[derive(Clone)]
 pub struct MultiIndexerSearchClient {
     indexer_configs: Arc<dyn IndexerConfigRepository>,
@@ -148,6 +152,7 @@ pub struct MultiIndexerSearchClient {
     plugin_provider: Arc<dyn IndexerPluginProvider>,
     rate_limiter: IndexerRateLimiter,
     backoff_tracker: IndexerBackoffTracker,
+    rss_feed_cache: RssFeedCache,
 }
 
 impl MultiIndexerSearchClient {
@@ -162,6 +167,7 @@ impl MultiIndexerSearchClient {
             plugin_provider,
             rate_limiter: IndexerRateLimiter::new(),
             backoff_tracker: IndexerBackoffTracker::new(),
+            rss_feed_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -363,6 +369,71 @@ impl IndexerClient for MultiIndexerSearchClient {
                 }
             };
 
+            // RSS-only indexers: fetch the feed once, cache it, return cached
+            // results for all concurrent callers. The feed content is the same
+            // regardless of query — the caller matches results downstream.
+            let is_rss_only = !caps.search && caps.rss;
+            if is_rss_only {
+                let cell = {
+                    let mut cache = self.rss_feed_cache.lock().await;
+                    cache
+                        .entry(config.id.clone())
+                        .or_insert_with(|| Arc::new(tokio::sync::OnceCell::new()))
+                        .clone()
+                };
+                let client = client.clone();
+                let query = query.clone();
+                let category = category.clone();
+                let per_indexer_categories = per_indexer_categories.clone();
+                let indexer_id = config.id.clone();
+                let indexer_name = config.name.clone();
+                let rate_limiter = self.rate_limiter.clone();
+                let rate_limit_seconds = config.rate_limit_seconds;
+                let stats_tracker = self.stats_tracker.clone();
+                let backoff_tracker = self.backoff_tracker.clone();
+
+                set.spawn(async move {
+                    let results = cell
+                        .get_or_init(|| async {
+                            rate_limiter
+                                .acquire(&indexer_id, rate_limit_seconds, mode)
+                                .await;
+                            let start = std::time::Instant::now();
+                            match tokio::time::timeout(
+                                std::time::Duration::from_secs(30),
+                                client.search(query, None, None, None, category, per_indexer_categories, None, limit, mode, season, episode),
+                            ).await {
+                                Ok(Ok(response)) => {
+                                    info!(indexer = indexer_name.as_str(), count = response.results.len(), "RSS feed cached");
+                                    stats_tracker.record_query(&indexer_id, &indexer_name, true);
+                                    backoff_tracker.record_success(&indexer_id).await;
+                                    metrics::counter!("scryer_indexer_queries_total", "indexer" => indexer_name.clone(), "status" => "success", "mode" => "rss_cached").increment(1);
+                                    metrics::histogram!("scryer_indexer_query_duration_seconds", "indexer" => indexer_name.clone(), "mode" => "rss_cached").record(start.elapsed().as_secs_f64());
+                                    response.results
+                                }
+                                Ok(Err(err)) => {
+                                    warn!(indexer = indexer_name.as_str(), error = %err, "RSS feed fetch failed");
+                                    stats_tracker.record_query(&indexer_id, &indexer_name, false);
+                                    vec![]
+                                }
+                                Err(_) => {
+                                    warn!(indexer = indexer_name.as_str(), "RSS feed fetch timed out");
+                                    stats_tracker.record_query(&indexer_id, &indexer_name, false);
+                                    vec![]
+                                }
+                            }
+                        })
+                        .await;
+
+                    let response = IndexerSearchResponse {
+                        results: results.clone(),
+                        api_current: None, api_max: None, grab_current: None, grab_max: None,
+                    };
+                    (indexer_id, indexer_name, Ok(response), std::time::Duration::ZERO, "rss_cached")
+                });
+                continue;
+            }
+
             // For Interactive mode, fan out separate strategy tasks per ID type
             // so all HTTP calls happen in parallel. For Auto mode, send everything
             // in a single call (current behavior — no extra API pressure).
@@ -472,6 +543,10 @@ impl IndexerClient for MultiIndexerSearchClient {
                 }
             }
         }
+
+        // Clear the RSS feed cache after all tasks complete so the next
+        // search session gets fresh feeds.
+        self.rss_feed_cache.lock().await.clear();
 
         // Interactive mode fans out multiple strategies per indexer, so dedup
         // results by download_url to remove duplicates across strategies.

@@ -427,6 +427,15 @@ impl AppUseCase {
         baseline_date.map(|_| release_is_recent_for_queue_priority(baseline_date))
     }
 
+    pub(crate) async fn metadata_language(&self) -> String {
+        self.read_setting_string_value_for_scope("system", "metadata_language", None)
+            .await
+            .ok()
+            .flatten()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| "eng".to_string())
+    }
+
     pub async fn list_titles(
         &self,
         actor: &User,
@@ -630,7 +639,7 @@ impl AppUseCase {
             }
         };
 
-        let language = "eng";
+        let language = self.metadata_language().await;
 
         let Some(handler) = self.facet_registry.get(&title.facet) else {
             return title;
@@ -639,7 +648,7 @@ impl AppUseCase {
         self.emit_hydration_started(&title).await;
 
         match handler
-            .hydrate_metadata(self.services.metadata_gateway.as_ref(), tvdb_id, language)
+            .hydrate_metadata(self.services.metadata_gateway.as_ref(), tvdb_id, &language)
             .await
         {
             Ok(result) => {
@@ -2654,10 +2663,12 @@ pub async fn start_background_hydration_loop(
                 return;
             }
 
+            let language = app.metadata_language().await;
+
             let batch = match app
                 .services
                 .titles
-                .list_unhydrated(HYDRATION_MAX_BATCH)
+                .list_unhydrated(HYDRATION_MAX_BATCH, &language)
                 .await
             {
                 Ok(titles) => titles,
@@ -2688,7 +2699,6 @@ pub async fn start_background_hydration_loop(
             }
 
             let mut had_failures = false;
-            let language = "eng";
 
             // ---- Single bulk fetch for all movies + series ----
             let movie_ids: Vec<i64> = movie_titles.iter().filter_map(extract_tvdb_id).collect();
@@ -2697,14 +2707,14 @@ pub async fn start_background_hydration_loop(
             match app
                 .services
                 .metadata_gateway
-                .get_metadata_bulk(&movie_ids, &series_ids, language)
+                .get_metadata_bulk(&movie_ids, &series_ids, &language)
                 .await
             {
                 Ok(bulk) => {
                     for title in movie_titles {
                         let tvdb_id = extract_tvdb_id(&title);
                         if let Some(movie) = tvdb_id.and_then(|id| bulk.movies.get(&id)) {
-                            let result = super::movie_to_hydration_result(movie.clone(), language);
+                            let result = super::movie_to_hydration_result(movie.clone(), &language);
                             let hydrated = app.apply_hydration_result(title, result).await;
                             if hydrated.metadata_fetched_at.is_some() {
                                 app.emit_hydration_completed(&hydrated).await;
@@ -2718,7 +2728,7 @@ pub async fn start_background_hydration_loop(
                         let tvdb_id = extract_tvdb_id(&title);
                         if let Some(series) = tvdb_id.and_then(|id| bulk.series.get(&id)) {
                             let result =
-                                super::series_to_hydration_result(series.clone(), language);
+                                super::series_to_hydration_result(series.clone(), &language);
                             let hydrated = app.apply_hydration_result(title, result).await;
                             if hydrated.metadata_fetched_at.is_some() {
                                 app.emit_hydration_completed(&hydrated).await;

@@ -24,6 +24,8 @@ chrono = { workspace = true }
 semver = { workspace = true }
 metrics = { workspace = true }
 libc = "0.2"
+weaver-rar = { git = "https://github.com/scryer-media/weaver.git", tag = "weaver-v0.1.15" }
+sevenz-rust2 = { version = "0.20", features = ["aes256", "bzip2", "deflate", "zstd"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -157,11 +157,26 @@ impl TitleRepository for SqliteServices {
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
-    async fn list_unhydrated(&self, limit: usize) -> AppResult<Vec<Title>> {
+    async fn list_unhydrated(&self, limit: usize, language: &str) -> AppResult<Vec<Title>> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
             .send(crate::commands::DbCommand::ListUnhydratedTitles {
                 limit,
+                language: language.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn clear_metadata_language_for_all(&self) -> AppResult<u64> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::ClearMetadataLanguageForAll {
                 reply: reply_tx,
             })
             .await
