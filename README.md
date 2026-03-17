@@ -16,13 +16,13 @@
 
 ---
 
-Scryer monitors your media library, automatically downloads movies and TV shows you want, upgrades them when better quality becomes available, renames and organizes files, and fetches subtitles — all from a single lightweight application.
+Scryer monitors your media library, tracks wanted movies and TV shows, manages quality upgrades, renames and organizes files, and fetches subtitles — all from a single lightweight application.
 
 ## Features
 
 - **Movies, TV, and anime in one place** — no need to run separate apps for each media type
-- **Automatic downloads** — searches your indexers, grabs the best available release, and imports it into your library
-- **Quality upgrades** — configurable quality profiles with scoring rules; scryer automatically replaces files when a better version appears
+- **Automated acquisition** — searches your indexers, selects the best available release, and imports it into your library
+- **Quality upgrades** — configurable quality profiles with scoring rules; automatically replaces files when a better version appears
 - **Subtitles** — finds and downloads matching subtitles from OpenSubtitles, with automatic timing correction
 - **Anime franchise movies** — tracks movies that belong between anime seasons and places them in the right watch order for Plex and Jellyfin
 - **Metadata** — artwork, episode data, and cross-referenced anime IDs (TVDB, TMDB, MAL, AniList, AniDB) fetched automatically
