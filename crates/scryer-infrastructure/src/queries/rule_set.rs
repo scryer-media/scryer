@@ -5,7 +5,7 @@ use sqlx::{Row, SqlitePool};
 pub(crate) async fn list_rule_sets_query(pool: &SqlitePool) -> AppResult<Vec<RuleSet>> {
     let rows = sqlx::query(
         "SELECT id, name, description, rego_source, enabled, priority, applied_facets,
-                created_at, updated_at
+                created_at, updated_at, is_managed, managed_key
            FROM rule_sets
           ORDER BY priority DESC, name",
     )
@@ -19,7 +19,7 @@ pub(crate) async fn list_rule_sets_query(pool: &SqlitePool) -> AppResult<Vec<Rul
 pub(crate) async fn list_enabled_rule_sets_query(pool: &SqlitePool) -> AppResult<Vec<RuleSet>> {
     let rows = sqlx::query(
         "SELECT id, name, description, rego_source, enabled, priority, applied_facets,
-                created_at, updated_at
+                created_at, updated_at, is_managed, managed_key
            FROM rule_sets
           WHERE enabled = 1
           ORDER BY priority DESC, name",
@@ -37,7 +37,7 @@ pub(crate) async fn get_rule_set_by_id_query(
 ) -> AppResult<Option<RuleSet>> {
     let row = sqlx::query(
         "SELECT id, name, description, rego_source, enabled, priority, applied_facets,
-                created_at, updated_at
+                created_at, updated_at, is_managed, managed_key
            FROM rule_sets
           WHERE id = ?",
     )
@@ -58,8 +58,8 @@ pub(crate) async fn insert_rule_set_query(pool: &SqlitePool, rule_set: &RuleSet)
 
     sqlx::query(
         "INSERT INTO rule_sets (id, name, description, rego_source, enabled, priority,
-                                applied_facets, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                applied_facets, created_at, updated_at, is_managed, managed_key)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&rule_set.id)
     .bind(&rule_set.name)
@@ -70,6 +70,8 @@ pub(crate) async fn insert_rule_set_query(pool: &SqlitePool, rule_set: &RuleSet)
     .bind(&facets_json)
     .bind(rule_set.created_at.to_rfc3339())
     .bind(rule_set.updated_at.to_rfc3339())
+    .bind(rule_set.is_managed as i32)
+    .bind(&rule_set.managed_key)
     .execute(pool)
     .await
     .map_err(|e| AppError::Repository(e.to_string()))?;
@@ -84,7 +86,7 @@ pub(crate) async fn update_rule_set_query(pool: &SqlitePool, rule_set: &RuleSet)
     sqlx::query(
         "UPDATE rule_sets
             SET name = ?, description = ?, rego_source = ?, enabled = ?, priority = ?,
-                applied_facets = ?, updated_at = ?
+                applied_facets = ?, updated_at = ?, is_managed = ?, managed_key = ?
           WHERE id = ?",
     )
     .bind(&rule_set.name)
@@ -94,6 +96,8 @@ pub(crate) async fn update_rule_set_query(pool: &SqlitePool, rule_set: &RuleSet)
     .bind(rule_set.priority)
     .bind(&facets_json)
     .bind(rule_set.updated_at.to_rfc3339())
+    .bind(rule_set.is_managed as i32)
+    .bind(&rule_set.managed_key)
     .bind(&rule_set.id)
     .execute(pool)
     .await
@@ -109,6 +113,59 @@ pub(crate) async fn delete_rule_set_query(pool: &SqlitePool, id: &str) -> AppRes
         .await
         .map_err(|e| AppError::Repository(e.to_string()))?;
     Ok(())
+}
+
+pub(crate) async fn get_rule_set_by_managed_key_query(
+    pool: &SqlitePool,
+    key: &str,
+) -> AppResult<Option<RuleSet>> {
+    let row = sqlx::query(
+        "SELECT id, name, description, rego_source, enabled, priority, applied_facets,
+                created_at, updated_at, is_managed, managed_key
+           FROM rule_sets
+          WHERE managed_key = ?",
+    )
+    .bind(key)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| AppError::Repository(e.to_string()))?;
+
+    match row {
+        Some(row) => Ok(Some(row_to_rule_set(&row)?)),
+        None => Ok(None),
+    }
+}
+
+pub(crate) async fn delete_rule_set_by_managed_key_query(
+    pool: &SqlitePool,
+    key: &str,
+) -> AppResult<()> {
+    sqlx::query("DELETE FROM rule_sets WHERE managed_key = ?")
+        .bind(key)
+        .execute(pool)
+        .await
+        .map_err(|e| AppError::Repository(e.to_string()))?;
+    Ok(())
+}
+
+pub(crate) async fn list_rule_sets_by_managed_key_prefix_query(
+    pool: &SqlitePool,
+    prefix: &str,
+) -> AppResult<Vec<RuleSet>> {
+    let pattern = format!("{}%", prefix);
+    let rows = sqlx::query(
+        "SELECT id, name, description, rego_source, enabled, priority, applied_facets,
+                created_at, updated_at, is_managed, managed_key
+           FROM rule_sets
+          WHERE managed_key LIKE ?
+          ORDER BY managed_key",
+    )
+    .bind(&pattern)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::Repository(e.to_string()))?;
+
+    rows.into_iter().map(|row| row_to_rule_set(&row)).collect()
 }
 
 pub(crate) async fn insert_rule_set_history_query(
@@ -161,6 +218,13 @@ fn row_to_rule_set(row: &sqlx::sqlite::SqliteRow) -> AppResult<RuleSet> {
         .try_get("enabled")
         .map_err(|e| AppError::Repository(e.to_string()))?;
 
+    let is_managed_int: i32 = row
+        .try_get("is_managed")
+        .map_err(|e| AppError::Repository(e.to_string()))?;
+    let managed_key: Option<String> = row
+        .try_get("managed_key")
+        .map_err(|e| AppError::Repository(e.to_string()))?;
+
     Ok(RuleSet {
         id: row
             .try_get("id")
@@ -181,5 +245,7 @@ fn row_to_rule_set(row: &sqlx::sqlite::SqliteRow) -> AppResult<RuleSet> {
         applied_facets,
         created_at,
         updated_at,
+        is_managed: is_managed_int != 0,
+        managed_key,
     })
 }

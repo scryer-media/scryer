@@ -369,6 +369,7 @@ pub enum ImportSkipReason {
     NoVideoFiles,
     DiskFull,
     PermissionDenied,
+    PasswordRequired,
 }
 
 impl ImportSkipReason {
@@ -382,6 +383,7 @@ impl ImportSkipReason {
             Self::NoVideoFiles => "no_video_files",
             Self::DiskFull => "disk_full",
             Self::PermissionDenied => "permission_denied",
+            Self::PasswordRequired => "password_required",
         }
     }
 }
@@ -663,6 +665,8 @@ pub struct RuleSet {
     pub applied_facets: Vec<MediaFacet>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub is_managed: bool,
+    pub managed_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]

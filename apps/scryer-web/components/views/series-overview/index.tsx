@@ -14,10 +14,11 @@ import type {
   EpisodeMediaFile,
   TitleCollection,
   TitleDetail,
-  TitleEvent,
+  TitleHistoryEvent,
   TitleReleaseBlocklistEntry,
 } from "@/components/containers/series-overview-container";
 import type { DownloadQueueItem } from "@/lib/types/download-queue";
+import { TitleHistoryModal } from "@/components/common/title-history-modal";
 import {
   episodePanelReducer,
   initialEpisodePanelState,
@@ -40,7 +41,7 @@ type Props = {
   hydrating: boolean;
   title: TitleDetail | null;
   collections: TitleCollection[];
-  events: TitleEvent[];
+  events: TitleHistoryEvent[];
   episodesByCollection: Record<string, CollectionEpisode[]>;
   mediaFilesByEpisode: Record<string, EpisodeMediaFile[]>;
   subtitleDownloads?: { id: string; mediaFileId: string; language: string; provider: string; hearingImpaired: boolean; forced: boolean }[];
@@ -125,6 +126,7 @@ export function SeriesOverviewView({
   );
 
   const [expandedKeys, setExpandedKeys] = React.useState<Set<string>>(new Set());
+  const [historyOpen, setHistoryOpen] = React.useState(false);
   const [episodePanel, dispatchEpisodePanel] = React.useReducer(episodePanelReducer, initialEpisodePanelState);
 
   // Initialize expanded state when data arrives
@@ -487,6 +489,7 @@ export function SeriesOverviewView({
         onSearchMonitored={onSearchMonitored ? () => void onSearchMonitored() : undefined}
         onRefreshAndScan={onRefreshAndScan ? () => void onRefreshAndScan() : undefined}
         onRequestDelete={onRequestDeleteTitle}
+        onHistory={() => setHistoryOpen(true)}
         settingsPanel={
           onUpdateTitleTags && qualityProfiles && defaultRootFolder ? (
             <TitleSettingsPanel
@@ -585,29 +588,13 @@ export function SeriesOverviewView({
         </Card>
       </div>
 
-      {events.length > 0 ? (
-        <div>
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Recent Activity</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-2">
-                {events.map((event) => (
-                  <div key={event.id} className="flex items-start gap-3 text-sm">
-                    <span className="shrink-0 text-xs text-muted-foreground/60">
-                      {formatDate(event.occurredAt)}
-                    </span>
-                    <span className="capitalize text-muted-foreground">
-                      {event.eventType.replace(/_/g, " ")}
-                    </span>
-                    <span className="text-muted-foreground">{event.message}</span>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+      {title ? (
+        <TitleHistoryModal
+          open={historyOpen}
+          onOpenChange={setHistoryOpen}
+          titleId={title.id}
+          titleName={title.name}
+        />
       ) : null}
     </div>
   );

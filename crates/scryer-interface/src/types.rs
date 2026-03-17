@@ -297,6 +297,12 @@ pub struct IndexerSearchResultPayload {
     pub thumbs_down: Option<i32>,
     pub parsed_release: Option<ParsedReleasePayload>,
     pub quality_profile_decision: Option<QualityProfileDecisionPayload>,
+    // Torrent-specific fields
+    pub seeders: Option<i32>,
+    pub peers: Option<i32>,
+    pub info_hash: Option<String>,
+    pub freeleech: Option<bool>,
+    pub download_volume_factor: Option<f64>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -455,6 +461,12 @@ pub struct ImportRecordPayload {
 pub struct TriggerImportInput {
     pub download_client_item_id: String,
     pub title_id: Option<String>,
+}
+
+#[derive(InputObject)]
+pub struct RetryImportInput {
+    pub import_id: String,
+    pub password: Option<String>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -993,6 +1005,8 @@ pub struct RuleSetPayload {
     pub enabled: bool,
     pub priority: i32,
     pub applied_facets: Vec<String>,
+    pub is_managed: bool,
+    pub managed_key: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -1031,6 +1045,52 @@ pub struct ToggleRuleSetInput {
 #[derive(InputObject)]
 pub struct ValidateRuleSetInput {
     pub rego_source: String,
+    pub rule_set_id: Option<String>,
+}
+
+// ── Convenience Settings ──────────────────────────────────────────────────
+
+#[derive(InputObject)]
+pub struct SetConvenienceRequiredAudioInput {
+    /// "global", "movie", "series", or "anime"
+    pub scope: String,
+    /// ISO 639-2/3 language codes. Empty = remove the rule.
+    pub languages: Vec<String>,
+}
+
+#[derive(InputObject)]
+pub struct SetTitleRequiredAudioInput {
+    pub title_id: String,
+    /// The facet of the title: "movie", "series", "anime"
+    pub facet: String,
+    /// Language codes for this title. Empty or null = remove override (inherit from facet).
+    pub languages: Option<Vec<String>>,
+}
+
+#[derive(InputObject)]
+pub struct SetConveniencePreferDualAudioInput {
+    /// "global", "movie", "series", or "anime"
+    pub scope: String,
+    pub enabled: bool,
+}
+
+#[derive(SimpleObject)]
+pub struct ConvenienceSettingsPayload {
+    pub required_audio: Vec<ConvenienceAudioSettingPayload>,
+    pub prefer_dual_audio: Vec<ConvenienceBoolSettingPayload>,
+}
+
+#[derive(SimpleObject)]
+pub struct ConvenienceAudioSettingPayload {
+    pub scope: String,
+    pub languages: Vec<String>,
+    pub rule_set_id: Option<String>,
+}
+
+#[derive(SimpleObject)]
+pub struct ConvenienceBoolSettingPayload {
+    pub scope: String,
+    pub enabled: bool,
     pub rule_set_id: Option<String>,
 }
 
@@ -1157,6 +1217,27 @@ pub struct RegistryPluginPayload {
     pub installed_version: Option<String>,
     pub update_available: bool,
     pub default_base_url: Option<String>,
+}
+
+// ── Rule Packs ────────────────────────────────────────────────────────────
+
+#[derive(SimpleObject, Clone)]
+pub struct RulePackRegistryEntryPayload {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub author: String,
+    pub version: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct RulePackTemplatePayload {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub category: String,
+    pub rego_source: String,
+    pub applied_facets: Vec<String>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -1533,4 +1614,38 @@ pub struct SubtitleDownloadPayload {
     pub release_info: Option<String>,
     pub synced: bool,
     pub downloaded_at: String,
+}
+
+// ---------------------------------------------------------------------------
+// Title History
+// ---------------------------------------------------------------------------
+
+#[derive(SimpleObject, Clone)]
+pub struct TitleHistoryEventPayload {
+    pub id: String,
+    pub title_id: String,
+    pub episode_id: Option<String>,
+    pub collection_id: Option<String>,
+    pub event_type: String,
+    pub source_title: Option<String>,
+    pub quality: Option<String>,
+    pub download_id: Option<String>,
+    pub data_json: Option<String>,
+    pub occurred_at: String,
+    pub created_at: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct TitleHistoryPagePayload {
+    pub records: Vec<TitleHistoryEventPayload>,
+    pub total_count: i64,
+}
+
+#[derive(InputObject)]
+pub struct TitleHistoryFilterInput {
+    pub event_types: Option<Vec<String>>,
+    pub title_ids: Option<Vec<String>>,
+    pub download_id: Option<String>,
+    pub limit: Option<i32>,
+    pub offset: Option<i32>,
 }

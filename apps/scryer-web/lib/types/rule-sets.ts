@@ -6,6 +6,8 @@ export type RuleSetRecord = {
   enabled: boolean;
   priority: number;
   appliedFacets: string[];
+  isManaged: boolean;
+  managedKey: string | null;
   createdAt: string;
   updatedAt: string;
 };

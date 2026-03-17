@@ -79,14 +79,8 @@ export type TitleCollection = {
   createdAt: string;
 };
 
-export type TitleEvent = {
-  id: string;
-  eventType: string;
-  actorUserId: string | null;
-  titleId: string | null;
-  message: string;
-  occurredAt: string;
-};
+import type { TitleHistoryEvent } from "@/lib/types";
+export type { TitleHistoryEvent };
 
 export type TitleReleaseBlocklistEntry = {
   sourceHint: string | null;
@@ -207,7 +201,7 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
   const client = useClient();
   const [title, setTitle] = React.useState<TitleDetail | null>(null);
   const [collections, setCollections] = React.useState<TitleCollection[]>([]);
-  const [events, setEvents] = React.useState<TitleEvent[]>([]);
+  const [events, setEvents] = React.useState<TitleHistoryEvent[]>([]);
   const [blocklistEntries, setBlocklistEntries] = React.useState<
     TitleReleaseBlocklistEntry[]
   >([]);

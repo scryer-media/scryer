@@ -33,14 +33,24 @@ impl ArchiveType {
 /// If the download directory contains no video files but has archive files,
 /// extract them to a subdirectory and return the extraction path.
 /// Returns `None` if no extraction was needed (video files exist directly).
-pub async fn extract_archives_if_needed(dir: &Path) -> AppResult<Option<PathBuf>> {
+pub async fn extract_archives_if_needed(
+    dir: &Path,
+    password: Option<&str>,
+) -> AppResult<Option<PathBuf>> {
     let dir = dir.to_path_buf();
-    tokio::task::spawn_blocking(move || extract_archives_sync(&dir))
+    let password = password.map(|s| s.to_string());
+    tokio::task::spawn_blocking(move || extract_archives_sync(&dir, password.as_deref()))
         .await
         .map_err(|e| AppError::Repository(format!("archive extraction task failed: {e}")))?
 }
 
-fn extract_archives_sync(dir: &Path) -> AppResult<Option<PathBuf>> {
+/// Check if an extraction error indicates a password-protected archive.
+pub fn is_password_required_error(error: &AppError) -> bool {
+    let msg = error.to_string().to_ascii_lowercase();
+    msg.contains("password") || msg.contains("encrypted") || msg.contains("wrong password")
+}
+
+fn extract_archives_sync(dir: &Path, password: Option<&str>) -> AppResult<Option<PathBuf>> {
     // If video files already exist, no extraction needed.
     if has_video_files(dir) {
         return Ok(None);
@@ -64,8 +74,10 @@ fn extract_archives_sync(dir: &Path) -> AppResult<Option<PathBuf>> {
     );
 
     match archive_type {
-        ArchiveType::Rar => extract_rar(&archive_path, dir, &output_dir)?,
-        ArchiveType::SevenZip | ArchiveType::Zip => extract_sevenz(&archive_path, &output_dir)?,
+        ArchiveType::Rar => extract_rar(&archive_path, dir, &output_dir, password)?,
+        ArchiveType::SevenZip | ArchiveType::Zip => {
+            extract_sevenz(&archive_path, &output_dir, password)?
+        }
     }
 
     // Verify we got something useful out.
@@ -141,7 +153,12 @@ fn find_primary_archive(dir: &Path) -> Option<(PathBuf, ArchiveType)> {
     }
 }
 
-fn extract_rar(rar_path: &Path, source_dir: &Path, output_dir: &Path) -> AppResult<()> {
+fn extract_rar(
+    rar_path: &Path,
+    source_dir: &Path,
+    output_dir: &Path,
+    password: Option<&str>,
+) -> AppResult<()> {
     let file = File::open(rar_path)
         .map_err(|e| AppError::Repository(format!("failed to open RAR archive: {e}")))?;
 
@@ -179,7 +196,10 @@ fn extract_rar(rar_path: &Path, source_dir: &Path, output_dir: &Path) -> AppResu
     }
 
     let metadata = archive.metadata();
-    let options = weaver_rar::ExtractOptions::default();
+    let options = weaver_rar::ExtractOptions {
+        password: password.map(|s| s.to_string()),
+        ..Default::default()
+    };
 
     for (idx, member) in metadata.members.iter().enumerate() {
         if member.is_directory {
@@ -209,11 +229,15 @@ fn extract_rar(rar_path: &Path, source_dir: &Path, output_dir: &Path) -> AppResu
     Ok(())
 }
 
-fn extract_sevenz(archive_path: &Path, output_dir: &Path) -> AppResult<()> {
+fn extract_sevenz(archive_path: &Path, output_dir: &Path, password: Option<&str>) -> AppResult<()> {
     let file = File::open(archive_path)
         .map_err(|e| AppError::Repository(format!("failed to open archive: {e}")))?;
 
-    sevenz_rust2::decompress_with_password(file, output_dir, sevenz_rust2::Password::empty())
+    let pw = match password {
+        Some(s) => sevenz_rust2::Password::from(s),
+        None => sevenz_rust2::Password::empty(),
+    };
+    sevenz_rust2::decompress_with_password(file, output_dir, pw)
         .map_err(|e| AppError::Repository(format!("archive extraction failed: {e}")))?;
 
     Ok(())
@@ -293,7 +317,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("movie.mkv"), b"video").unwrap();
         fs::write(dir.path().join("archive.rar"), b"rar").unwrap();
-        let result = extract_archives_sync(dir.path()).unwrap();
+        let result = extract_archives_sync(dir.path(), None).unwrap();
         assert!(result.is_none());
     }
 
@@ -308,7 +332,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::copy(&fixture, dir.path().join("archive.rar")).unwrap();
 
-        let result = extract_archives_sync(dir.path()).unwrap();
+        let result = extract_archives_sync(dir.path(), None).unwrap();
         // The RAR4 store fixture contains a small text file, not a video.
         // Extraction should succeed but return None (no video files found).
         // The key test is that extraction doesn't panic or error.

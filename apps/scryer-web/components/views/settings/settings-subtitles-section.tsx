@@ -1,8 +1,9 @@
-import { Button } from "@/components/ui/button";
+import * as React from "react";
 import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2, Subtitles } from "lucide-react";
 import { useTranslate } from "@/lib/context/translate-context";
+import { SubtitleLanguagePicker } from "@/components/common/subtitle-language-picker";
 import type { SubtitleSettings } from "@/components/containers/settings/settings-subtitles-container";
 
 type Props = {
@@ -10,19 +11,19 @@ type Props = {
   setSettings: (s: SubtitleSettings) => void;
   saving: boolean;
   loading: boolean;
-  onSave: () => void;
 };
 
-function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
+function Toggle({ checked, onChange, label, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
   return (
     <div className="flex items-center gap-3">
-      <Label>{label}</Label>
+      <Label className={disabled ? "text-muted-foreground" : ""}>{label}</Label>
       <button
         type="button"
         role="switch"
         aria-checked={checked}
-        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${checked ? "bg-primary" : "bg-muted"}`}
-        onClick={() => onChange(!checked)}
+        disabled={disabled}
+        className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors ${disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"} ${checked ? "bg-primary" : "bg-muted"}`}
+        onClick={() => !disabled && onChange(!checked)}
       >
         <span
           className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-background shadow-lg transition-transform ${checked ? "translate-x-5" : "translate-x-0"}`}
@@ -32,20 +33,49 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: 
   );
 }
 
+/** Text input that holds local state and only commits on blur. */
+function BlurInput({ value, onCommit, ...rest }: { value: string; onCommit: (v: string) => void } & Omit<React.ComponentProps<typeof Input>, "onChange" | "onBlur" | "value">) {
+  const [local, setLocal] = React.useState(value);
+  React.useEffect(() => { setLocal(value); }, [value]);
+  return (
+    <Input
+      {...rest}
+      value={local}
+      onChange={(e) => setLocal(e.target.value)}
+      onBlur={() => { if (local !== value) onCommit(local); }}
+    />
+  );
+}
+
+/** Integer input that holds local state and only commits on blur. */
+function BlurIntegerInput({ value, onCommit, disabled }: { value: number; onCommit: (v: number) => void; disabled?: boolean }) {
+  const [local, setLocal] = React.useState(String(value));
+  React.useEffect(() => { setLocal(String(value)); }, [value]);
+  return (
+    <Input
+      {...integerInputProps}
+      value={local}
+      onChange={(e) => setLocal(sanitizeDigits(e.target.value))}
+      onBlur={() => {
+        const parsed = local === "" ? 0 : Number(local);
+        if (parsed !== value) onCommit(parsed);
+      }}
+      disabled={disabled}
+    />
+  );
+}
+
 export function SettingsSubtitlesSection({
   settings,
   setSettings,
   saving,
   loading,
-  onSave,
 }: Props) {
   const t = useTranslate();
   const update = (patch: Partial<SubtitleSettings>) =>
     setSettings({ ...settings, ...patch });
-  const parseIntegerInput = (raw: string) => {
-    const nextValue = sanitizeDigits(raw);
-    return nextValue === "" ? 0 : Number(nextValue);
-  };
+
+  const disabled = !settings.enabled;
 
   if (loading) {
     return (
@@ -61,123 +91,90 @@ export function SettingsSubtitlesSection({
       <div className="flex items-center gap-2 text-base font-semibold">
         <Subtitles className="h-4 w-4" />
         {t("settings.subtitles")}
+        {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" /> : null}
       </div>
 
       <Toggle checked={settings.enabled} onChange={(v) => update({ enabled: v })} label={t("settings.sub.enabled")} />
 
-      {/* OpenSubtitles Credentials */}
-      <div className="space-y-1">
-        <Label className="text-sm font-medium">{t("settings.sub.credentials")}</Label>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div className="space-y-1">
-            <Label>{t("settings.sub.apiKey")}</Label>
-            <Input
-              type="password"
-              value={settings.opensubtitlesApiKey}
-              onChange={(e) => update({ opensubtitlesApiKey: e.target.value })}
-              placeholder="s38zmz..."
-            />
-          </div>
-          <div />
-          <div className="space-y-1">
-            <Label>{t("settings.sub.username")}</Label>
-            <Input
-              value={settings.opensubtitlesUsername}
-              onChange={(e) => update({ opensubtitlesUsername: e.target.value })}
-            />
-          </div>
-          <div className="space-y-1">
-            <Label>{t("settings.sub.password")}</Label>
-            <Input
-              type="password"
-              value={settings.opensubtitlesPassword}
-              onChange={(e) => update({ opensubtitlesPassword: e.target.value })}
-            />
+      <div className={`space-y-6 ${disabled ? "pointer-events-none select-none opacity-40" : ""}`}>
+        {/* OpenSubtitles Credentials */}
+        <div className="space-y-1">
+          <Label className="text-sm font-medium">{t("settings.sub.credentials")}</Label>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <Label>{t("settings.sub.username")}</Label>
+              <BlurInput
+                value={settings.opensubtitlesUsername}
+                onCommit={(v) => update({ opensubtitlesUsername: v })}
+                disabled={disabled}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>{t("settings.sub.password")}</Label>
+              <BlurInput
+                type="password"
+                value={settings.opensubtitlesPassword}
+                onCommit={(v) => update({ opensubtitlesPassword: v })}
+                disabled={disabled}
+                placeholder="••••••••"
+              />
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* Languages */}
-      <div className="space-y-1">
-        <Label>{t("settings.sub.languages")}</Label>
-        <Input
-          value={settings.languages}
-          onChange={(e) => update({ languages: e.target.value })}
-          placeholder="eng, spa, fre"
-        />
-        <p className="text-xs text-muted-foreground">{t("settings.sub.languagesHelp")}</p>
-      </div>
-
-      {/* Score Thresholds & Search */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        {/* Languages */}
         <div className="space-y-1">
-          <Label>{t("settings.sub.minScoreSeries")}</Label>
-          <Input
-            {...integerInputProps}
-            value={settings.minimumScoreSeries}
-            onChange={(e) => update({ minimumScoreSeries: parseIntegerInput(e.target.value) })}
+          <Label>{t("settings.sub.languages")}</Label>
+          <SubtitleLanguagePicker
+            value={settings.languages}
+            onChange={(codes) => update({ languages: codes })}
           />
         </div>
-        <div className="space-y-1">
-          <Label>{t("settings.sub.minScoreMovie")}</Label>
-          <Input
-            {...integerInputProps}
-            value={settings.minimumScoreMovie}
-            onChange={(e) => update({ minimumScoreMovie: parseIntegerInput(e.target.value) })}
-          />
-        </div>
-        <div className="space-y-1">
-          <Label>{t("settings.sub.searchInterval")}</Label>
-          <Input
-            {...integerInputProps}
-            value={settings.searchIntervalHours}
-            onChange={(e) => update({ searchIntervalHours: parseIntegerInput(e.target.value) })}
-          />
-        </div>
-      </div>
 
-      {/* Toggles */}
-      <div className="space-y-3">
-        <Toggle checked={settings.autoDownloadOnImport} onChange={(v) => update({ autoDownloadOnImport: v })} label={t("settings.sub.autoDownload")} />
-        <Toggle checked={!settings.includeAiTranslated} onChange={(v) => update({ includeAiTranslated: !v })} label={t("settings.sub.excludeAi")} />
-        <Toggle checked={!settings.includeMachineTranslated} onChange={(v) => update({ includeMachineTranslated: !v })} label={t("settings.sub.excludeMachine")} />
-      </div>
-
-      {/* Sync */}
-      <div className="space-y-3">
-        <Toggle checked={settings.syncEnabled} onChange={(v) => update({ syncEnabled: v })} label={t("settings.sub.syncEnabled")} />
-        {settings.syncEnabled ? (
+        {/* Score Thresholds & Search */}
+        <div className="space-y-3">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1">
-              <Label>{t("settings.sub.syncThresholdSeries")}</Label>
-              <Input
-                {...integerInputProps}
-                value={settings.syncThresholdSeries}
-                onChange={(e) => update({ syncThresholdSeries: parseIntegerInput(e.target.value) })}
+              <Label>{t("settings.sub.minScoreSeries")}</Label>
+              <BlurIntegerInput
+                value={settings.minimumScoreSeries}
+                onCommit={(v) => update({ minimumScoreSeries: v })}
+                disabled={disabled}
               />
             </div>
             <div className="space-y-1">
-              <Label>{t("settings.sub.syncThresholdMovie")}</Label>
-              <Input
-                {...integerInputProps}
-                value={settings.syncThresholdMovie}
-                onChange={(e) => update({ syncThresholdMovie: parseIntegerInput(e.target.value) })}
+              <Label>{t("settings.sub.minScoreMovie")}</Label>
+              <BlurIntegerInput
+                value={settings.minimumScoreMovie}
+                onCommit={(v) => update({ minimumScoreMovie: v })}
+                disabled={disabled}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>{t("settings.sub.searchInterval")}</Label>
+              <BlurIntegerInput
+                value={settings.searchIntervalHours}
+                onCommit={(v) => update({ searchIntervalHours: v })}
+                disabled={disabled}
               />
             </div>
           </div>
-        ) : null}
-      </div>
+          <p className="text-xs text-muted-foreground">{t("settings.sub.minScoreHelp")}</p>
+        </div>
 
-      <Button onClick={onSave} disabled={saving}>
-        {saving ? (
-          <>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            {t("label.saving")}
-          </>
-        ) : (
-          t("settings.save")
-        )}
-      </Button>
+        {/* Toggles */}
+        <div className="space-y-3">
+          <Toggle checked={settings.autoDownloadOnImport} onChange={(v) => update({ autoDownloadOnImport: v })} label={t("settings.sub.autoDownload")} disabled={disabled} />
+          <Toggle checked={!settings.includeAiTranslated} onChange={(v) => update({ includeAiTranslated: !v })} label={t("settings.sub.excludeAi")} disabled={disabled} />
+          <Toggle checked={!settings.includeMachineTranslated} onChange={(v) => update({ includeMachineTranslated: !v })} label={t("settings.sub.excludeMachine")} disabled={disabled} />
+        </div>
+
+        {/* Sync */}
+        <div className="space-y-3">
+          <Toggle checked={settings.syncEnabled} onChange={(v) => update({ syncEnabled: v })} label={t("settings.sub.syncEnabled")} disabled={disabled} />
+          <p className="text-xs text-muted-foreground">{t("settings.sub.syncEnabledHelp")}</p>
+        </div>
+      </div>
     </div>
   );
 }

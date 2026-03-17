@@ -416,6 +416,9 @@ const ja: LocaleDictionary = {
   "title.monitoredSection": "モニタリング中の{{facet}}",
   "title.noWantedItem": "アクティブなウォンテッドアイテムはありません。",
   "title.queueLatest": "最新をキューに追加",
+  "title.requiredAudioLanguages": "必須オーディオ言語",
+  "title.requiredAudioInherited": "{{facet}}設定から継承",
+  "title.requiredAudioResetInherit": "継承にリセット",
 
   "tvdb.searchResults": "TVDB検索結果",
   "tvdb.searchPrompt": "上にタイトルを入力してTVDBを検索してください。",
@@ -505,6 +508,12 @@ const ja: LocaleDictionary = {
   "importHistory.decision": "判定",
   "importHistory.error": "エラー",
   "importHistory.createdAt": "日付",
+  "importHistory.retry": "再試行",
+  "importHistory.retrying": "再試行中...",
+  "importHistory.retryWithPassword": "パスワード付きで再試行",
+  "importHistory.passwordRequired": "パスワードが必要です",
+  "importHistory.passwordPlaceholder": "アーカイブのパスワード",
+  "importHistory.retrySuccess": "インポートの再試行を開始しました",
 
   "system.title": "システムヘルス",
   "system.notLoaded": "システムヘルスが読み込まれていません。",
@@ -605,6 +614,10 @@ const ja: LocaleDictionary = {
   "settings.ruleValidating": "検証中…",
   "settings.ruleValid": "ルールは有効です。",
   "settings.ruleValidationRequired": "名前とRegoソースは必須です。",
+  "settings.ruleLibrary": "ルールライブラリ",
+  "settings.ruleLibraryDescription":
+    "ワンクリックで追加できるビルトインルール。テンプレートを選択してエディターに反映します。",
+  "settings.ruleLibraryAll": "すべて",
   "settings.rulesFacetSection": "{{facet}}のカスタムルール",
   "settings.ruleGlobal": "グローバル",
   "settings.ruleNoFacetRules":
@@ -1252,6 +1265,42 @@ const ja: LocaleDictionary = {
   "setup.apiKeyPlaceholder": "APIキーを貼り付け…",
   "setup.apiKeyHelpLink": "SABnzbd > Config > General で確認",
   "settings.runSetupWizard": "セットアップウィザードを実行",
+
+  "settings.sub.minScoreSeries": "シリーズの最低マッチスコア",
+  "settings.sub.minScoreMovie": "映画の最低マッチスコア",
+  "settings.sub.minScoreHelp":
+    "このスコア未満の字幕はスキップされます。シリーズはエピソード単位の一致が正確である必要があるため、より高いしきい値が必要です。",
+  "settings.sub.syncEnabled": "字幕タイミングを自動補正",
+  "settings.sub.syncEnabledHelp":
+    "音声解析を使用して、ダウンロードした字幕のタイミングのずれを修正します。",
+
+  "history.title": "履歴",
+  "history.empty": "履歴イベントはありません",
+  "history.event": "イベント",
+  "history.titleColumn": "タイトル",
+  "history.sourceTitle": "ソースタイトル",
+  "history.quality": "品質",
+  "history.date": "日付",
+  "history.filterByEventType": "イベントタイプで絞り込み",
+  "history.allEvents": "すべてのイベント",
+  "history.grabbed": "取得済み",
+  "history.imported": "インポート済み",
+  "history.importFailed": "インポート失敗",
+  "history.importSkipped": "インポートスキップ",
+  "history.downloadCompleted": "ダウンロード完了",
+  "history.fileDeleted": "削除済み",
+  "history.fileRenamed": "名前変更済み",
+  "history.downloadIgnored": "無視",
+  "history.noMore": "これ以上のイベントはありません",
+  "history.loadMore": "もっと読み込む",
+
+  "convenience.title": "簡易ルール",
+  "convenience.requiredAudioLabel": "必須オーディオ言語",
+  "convenience.requiredAudioHelp":
+    "これらのオーディオ言語を含まないリリースはブロックされます。設定 > ルールに表示される管理ルールを作成します。",
+  "convenience.preferDualAudioLabel": "デュアルオーディオを優先",
+  "convenience.preferDualAudioHelp":
+    "複数のオーディオトラックを含むリリースを優先します。設定 > ルールに表示される管理ルールを作成します。",
 };
 
 export default ja;

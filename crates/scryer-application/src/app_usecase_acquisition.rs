@@ -1648,9 +1648,11 @@ fn build_search_queries(
                 }
 
                 if season_num > 0 && episode_num > 0 {
-                    queries.push(format!("S{:0>2}E{:0>2}", season_num, episode_num));
-                    queries.push(format!("S{}E{}", season_num, episode_num));
-                    queries.push(format!("{}x{}", season_num, episode_num));
+                    // Include title name so freetext-only indexers get usable queries
+                    queries.push(format!(
+                        "{} S{:0>2}E{:0>2}",
+                        title.name, season_num, episode_num
+                    ));
                 }
 
                 // For anime season 0 (specials/OVAs): use title-based search
@@ -1668,16 +1670,27 @@ fn build_search_queries(
                     }
                 }
 
-                // For anime: add absolute number as fallback query
-                // (long-running series like Naruto/One Piece use absolute numbering on indexers)
+                // For anime: add absolute number query as a fallback.
+                // Long-running series (One Piece, Naruto) use absolute numbering
+                // on indexers, not TVDB season numbering. For modern seasonal anime
+                // (Demon Slayer, Jujutsu Kaisen) S##E## is the primary format.
+                // Insert absolute first only if it diverges from the episode number
+                // (indicating a long-running show where S##E## won't match).
+                // For anime: add absolute number query only when it differs from
+                // the episode number (long-running series like One Piece where
+                // TVDB S22E01 doesn't match release titles using absolute 1146).
+                // When abs == ep (seasonal anime like Demon Slayer), the S##E##
+                // query already covers it and the TVDB structured search handles
+                // Newznab/Torznab.
                 if title.facet == scryer_domain::MediaFacet::Anime
                     && let Some(abs) = ep
                         .absolute_number
                         .as_deref()
                         .and_then(|a| a.parse::<usize>().ok())
-                        .filter(|&a| a > 0)
+                        .filter(|&a| a > 0 && a != episode_num)
                 {
-                    queries.push(format!("{:0>3}", abs));
+                    // Long-running: absolute is primary (auto mode uses first query)
+                    queries.insert(0, format!("{} {:0>3}", title.name, abs));
                 }
 
                 if !queries.is_empty() {

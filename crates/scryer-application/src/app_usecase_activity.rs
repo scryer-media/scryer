@@ -100,4 +100,41 @@ impl AppUseCase {
             )
             .await
     }
+
+    pub async fn list_title_history(
+        &self,
+        actor: &User,
+        filter: &TitleHistoryFilter,
+    ) -> AppResult<TitleHistoryPage> {
+        require(actor, &Entitlement::ViewHistory)?;
+        self.services.title_history.list_history(filter).await
+    }
+
+    pub async fn list_title_history_for_title(
+        &self,
+        actor: &User,
+        title_id: &str,
+        event_types: Option<&[TitleHistoryEventType]>,
+        limit: usize,
+        offset: usize,
+    ) -> AppResult<TitleHistoryPage> {
+        require(actor, &Entitlement::ViewHistory)?;
+        self.services
+            .title_history
+            .list_for_title(title_id, event_types, limit, offset)
+            .await
+    }
+
+    pub async fn list_title_history_for_episode(
+        &self,
+        actor: &User,
+        episode_id: &str,
+        limit: usize,
+    ) -> AppResult<Vec<TitleHistoryRecord>> {
+        require(actor, &Entitlement::ViewHistory)?;
+        self.services
+            .title_history
+            .list_for_episode(episode_id, limit)
+            .await
+    }
 }

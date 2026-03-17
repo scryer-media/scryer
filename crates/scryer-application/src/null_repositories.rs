@@ -39,6 +39,9 @@ impl ImportRepository for NullImportRepository {
             "import repository is not configured".to_string(),
         ))
     }
+    async fn get_import_by_id(&self, _: &str) -> AppResult<Option<ImportRecord>> {
+        Ok(None)
+    }
     async fn get_import_by_source_ref(&self, _: &str, _: &str) -> AppResult<Option<ImportRecord>> {
         Ok(None)
     }
@@ -297,6 +300,15 @@ impl RuleSetRepository for NullRuleSetRepository {
         _actor_id: Option<&str>,
     ) -> AppResult<()> {
         Ok(())
+    }
+    async fn get_rule_set_by_managed_key(&self, _key: &str) -> AppResult<Option<RuleSet>> {
+        Ok(None)
+    }
+    async fn delete_rule_set_by_managed_key(&self, _key: &str) -> AppResult<()> {
+        Ok(())
+    }
+    async fn list_rule_sets_by_managed_key_prefix(&self, _prefix: &str) -> AppResult<Vec<RuleSet>> {
+        Ok(vec![])
     }
 }
 

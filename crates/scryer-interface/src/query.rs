@@ -1,18 +1,19 @@
 use async_graphql::{Context, Error, Object, Result as GqlResult};
 
 use chrono::Utc;
+use scryer_application::TitleHistoryFilter;
 use scryer_application::{RenamePlan, parse_release_metadata};
-use scryer_domain::{MediaFacet, PolicyInput};
+use scryer_domain::{MediaFacet, PolicyInput, TitleHistoryEventType};
 use serde_json::json;
 
 use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_error};
 use crate::mappers::{
     from_activity_event, from_backup_info, from_calendar_episode, from_collection, from_disk_space,
-    from_download_client_config, from_download_queue_item, from_episode, from_event,
-    from_health_check_result, from_indexer_config, from_media_rename_plan, from_pending_release,
-    from_provider_type, from_release_decision, from_system_health, from_title,
-    from_title_media_file, from_title_release_blocklist_entry, from_user, from_wanted_item,
-    map_admin_setting,
+    from_download_client_config, from_download_queue_item, from_episode, from_health_check_result,
+    from_indexer_config, from_media_rename_plan, from_pending_release, from_provider_type,
+    from_release_decision, from_system_health, from_title, from_title_history_page,
+    from_title_history_record, from_title_media_file, from_title_release_blocklist_entry,
+    from_user, from_wanted_item, map_admin_setting,
 };
 use crate::types::*;
 use crate::utils::parse_facet;
@@ -333,21 +334,103 @@ impl QueryRoot {
         &self,
         ctx: &Context<'_>,
         title_id: Option<String>,
+        event_types: Option<Vec<String>>,
         limit: Option<i32>,
         offset: Option<i32>,
-    ) -> GqlResult<Vec<EventPayload>> {
+    ) -> GqlResult<Vec<TitleHistoryEventPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let events = app
-            .recent_events(
+
+        let parsed_types: Option<Vec<TitleHistoryEventType>> = event_types.map(|types| {
+            types
+                .iter()
+                .filter_map(|s| TitleHistoryEventType::parse(s))
+                .collect()
+        });
+
+        if let Some(ref tid) = title_id {
+            let page = app
+                .list_title_history_for_title(
+                    &actor,
+                    tid,
+                    parsed_types.as_deref(),
+                    limit.unwrap_or(100).max(1) as usize,
+                    offset.unwrap_or(0).max(0) as usize,
+                )
+                .await
+                .map_err(to_gql_error)?;
+            Ok(page
+                .records
+                .into_iter()
+                .map(from_title_history_record)
+                .collect())
+        } else {
+            let filter = TitleHistoryFilter {
+                event_types: parsed_types,
+                title_ids: None,
+                download_id: None,
+                limit: limit.unwrap_or(100).max(1) as usize,
+                offset: offset.unwrap_or(0).max(0) as usize,
+            };
+            let page = app
+                .list_title_history(&actor, &filter)
+                .await
+                .map_err(to_gql_error)?;
+            Ok(page
+                .records
+                .into_iter()
+                .map(from_title_history_record)
+                .collect())
+        }
+    }
+
+    async fn title_history(
+        &self,
+        ctx: &Context<'_>,
+        filter: TitleHistoryFilterInput,
+    ) -> GqlResult<TitleHistoryPagePayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let parsed_types = filter.event_types.map(|types| {
+            types
+                .iter()
+                .filter_map(|s| TitleHistoryEventType::parse(s))
+                .collect()
+        });
+
+        let f = TitleHistoryFilter {
+            event_types: parsed_types,
+            title_ids: filter.title_ids,
+            download_id: filter.download_id,
+            limit: filter.limit.unwrap_or(50).max(1) as usize,
+            offset: filter.offset.unwrap_or(0).max(0) as usize,
+        };
+
+        let page = app
+            .list_title_history(&actor, &f)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_title_history_page(page))
+    }
+
+    async fn episode_history(
+        &self,
+        ctx: &Context<'_>,
+        episode_id: String,
+        limit: Option<i32>,
+    ) -> GqlResult<Vec<TitleHistoryEventPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let records = app
+            .list_title_history_for_episode(
                 &actor,
-                title_id,
-                limit.unwrap_or(100) as i64,
-                offset.unwrap_or(0) as i64,
+                &episode_id,
+                limit.unwrap_or(50).max(1) as usize,
             )
             .await
             .map_err(to_gql_error)?;
-        Ok(events.into_iter().map(from_event).collect())
+        Ok(records.into_iter().map(from_title_history_record).collect())
     }
 
     async fn title_release_blocklist(
@@ -745,6 +828,40 @@ impl QueryRoot {
         Ok(rule_set.map(crate::mappers::from_rule_set))
     }
 
+    async fn convenience_settings(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<ConvenienceSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let settings = app
+            .get_convenience_settings(&actor)
+            .await
+            .map_err(to_gql_error)?;
+
+        Ok(ConvenienceSettingsPayload {
+            required_audio: settings
+                .required_audio
+                .into_iter()
+                .map(|s| ConvenienceAudioSettingPayload {
+                    scope: s.scope,
+                    languages: s.languages,
+                    rule_set_id: s.rule_set_id,
+                })
+                .collect(),
+            prefer_dual_audio: settings
+                .prefer_dual_audio
+                .into_iter()
+                .map(|s| ConvenienceBoolSettingPayload {
+                    scope: s.scope,
+                    enabled: s.enabled,
+                    rule_set_id: s.rule_set_id,
+                })
+                .collect(),
+        })
+    }
+
     // ── Post-Processing Scripts ──────────────────────────────────────────
 
     async fn post_processing_scripts(
@@ -798,6 +915,54 @@ impl QueryRoot {
         Ok(plugins
             .into_iter()
             .map(crate::mappers::from_registry_plugin)
+            .collect())
+    }
+
+    /// List community rule packs from the plugin registry.
+    async fn rule_pack_registry(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<RulePackRegistryEntryPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let packs = app
+            .list_rule_pack_registry(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(packs
+            .into_iter()
+            .map(|p| RulePackRegistryEntryPayload {
+                id: p.id,
+                name: p.name,
+                description: p.description,
+                author: p.author,
+                version: p.version,
+            })
+            .collect())
+    }
+
+    /// Fetch templates from a community rule pack by its registry ID.
+    async fn rule_pack_templates(
+        &self,
+        ctx: &Context<'_>,
+        pack_id: String,
+    ) -> GqlResult<Vec<RulePackTemplatePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let templates = app
+            .fetch_rule_pack_templates(&actor, &pack_id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(templates
+            .into_iter()
+            .map(|t| RulePackTemplatePayload {
+                id: t.id,
+                title: t.title,
+                description: t.description,
+                category: t.category,
+                rego_source: t.rego_source,
+                applied_facets: t.applied_facets,
+            })
             .collect())
     }
 

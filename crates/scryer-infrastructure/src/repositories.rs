@@ -959,6 +959,10 @@ impl ImportRepository for SqliteServices {
             .await
     }
 
+    async fn get_import_by_id(&self, id: &str) -> AppResult<Option<ImportRecord>> {
+        self.get_import_by_id(id).await
+    }
+
     async fn get_import_by_source_ref(
         &self,
         source_system: &str,
@@ -1259,6 +1263,48 @@ impl RuleSetRepository for SqliteServices {
                 action: action.to_string(),
                 rego_source: rego_source.map(|s| s.to_string()),
                 actor_id: actor_id.map(|s| s.to_string()),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn get_rule_set_by_managed_key(&self, key: &str) -> AppResult<Option<RuleSet>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::GetRuleSetByManagedKey {
+                key: key.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn delete_rule_set_by_managed_key(&self, key: &str) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::DeleteRuleSetByManagedKey {
+                key: key.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    async fn list_rule_sets_by_managed_key_prefix(&self, prefix: &str) -> AppResult<Vec<RuleSet>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::ListRuleSetsByManagedKeyPrefix {
+                prefix: prefix.to_string(),
                 reply: reply_tx,
             })
             .await

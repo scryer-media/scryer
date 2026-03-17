@@ -354,24 +354,12 @@ fn atmos_preference_bonus() {
 }
 
 #[test]
-fn dual_audio_preferred_bonus() {
+fn dual_audio_baseline_bonus() {
+    // prefer_dual_audio no longer triggers built-in scoring — that's now
+    // handled by managed convenience rules. Dual audio always gets a
+    // neutral baseline bonus regardless of the profile setting.
     let profile = QualityProfile::parse(
         r#"{"id":"t","name":"T","criteria":{"prefer_dual_audio":true,"allow_unknown_quality":true,"allow_upgrades":true}}"#,
-    ).unwrap();
-    let w = balanced_weights();
-    let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.DUAL.H.265");
-    let d = evaluate_against_profile(&profile, &release, false, &w);
-    assert!(
-        d.scoring_log
-            .iter()
-            .any(|e| e.code == "dual_audio_preferred_match" && e.delta == 150)
-    );
-}
-
-#[test]
-fn dual_audio_bonus_when_not_preferred() {
-    let profile = QualityProfile::parse(
-        r#"{"id":"t","name":"T","criteria":{"prefer_dual_audio":false,"allow_unknown_quality":true,"allow_upgrades":true}}"#,
     ).unwrap();
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.DUAL.H.265");

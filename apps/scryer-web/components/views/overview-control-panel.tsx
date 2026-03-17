@@ -1,5 +1,6 @@
 import * as React from "react";
 import {
+  ClipboardList,
   Eye,
   EyeOff,
   Edit,
@@ -36,6 +37,7 @@ type Props = {
   onInteractiveSearch?: () => void;
   onRefreshAndScan?: () => void;
   onRequestDelete?: () => void;
+  onHistory?: () => void;
   settingsPanel?: React.ReactNode;
   interactiveSearchPanel?: React.ReactNode;
 };
@@ -87,6 +89,7 @@ export function OverviewControlPanel({
   onInteractiveSearch,
   onRefreshAndScan,
   onRequestDelete,
+  onHistory,
   settingsPanel,
   interactiveSearchPanel,
 }: Props) {
@@ -113,7 +116,7 @@ export function OverviewControlPanel({
         <div
           className={cn(
             "grid grid-cols-2 gap-px bg-border/70 sm:grid-cols-3",
-            hasInteractiveSearch ? "lg:grid-cols-6" : "lg:grid-cols-5",
+            hasInteractiveSearch ? "lg:grid-cols-7" : "lg:grid-cols-6",
           )}
         >
           <ActionButton
@@ -148,6 +151,12 @@ export function OverviewControlPanel({
             loading={refreshAndScanLoading}
             disabled={!onRefreshAndScan}
             onClick={onRefreshAndScan}
+          />
+          <ActionButton
+            label="History"
+            icon={ClipboardList}
+            disabled={!onHistory}
+            onClick={onHistory}
           />
           <ActionButton
             label="Edit"

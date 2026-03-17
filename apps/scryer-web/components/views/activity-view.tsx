@@ -6,7 +6,6 @@ import {
   Loader2,
   Pause,
   Play,
-  RefreshCw,
   Trash2,
 } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
@@ -30,6 +29,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { DownloadQueueItem, ImportRecord } from "@/lib/types";
+import { ImportHistoryView } from "@/components/views/import-history-view";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
 
@@ -49,6 +49,7 @@ type ActivityViewState = {
   importHistory: ImportRecord[];
   importHistoryLoading: boolean;
   refreshImportHistory: () => Promise<void>;
+  retryImport?: (importId: string, password?: string) => Promise<void>;
 };
 
 const queueStateClasses: Record<string, string> = {
@@ -76,14 +77,6 @@ const queueStateAttention: Record<string, boolean> = {
   failed: true,
   import_pending: true,
   importpending: true,
-};
-
-const importStatusClasses: Record<string, string> = {
-  completed: "border-emerald-500/40 bg-emerald-500/15 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-200",
-  failed: "border-rose-500/40 bg-rose-500/10 text-rose-200",
-  skipped: "border-amber-500/40 bg-amber-500/10 text-amber-200",
-  processing: "border-sky-500/40 bg-sky-500/10 text-sky-200",
-  queued: "border-border/40 bg-muted-foreground/10 text-card-foreground",
 };
 
 function normalizeQueueState(state: string): string {
@@ -188,17 +181,6 @@ function getProgressBarColor(stateKey: string): string {
   }
 }
 
-function formatTimestamp(ts: string | null): string {
-  if (!ts) return "\u2014";
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      dateStyle: "short",
-      timeStyle: "short",
-    }).format(new Date(ts));
-  } catch {
-    return ts;
-  }
-}
 
 export function ActivityView({ state }: { state: ActivityViewState }) {
   const t = useTranslate();
@@ -746,152 +728,31 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
       </Card>
 
       {/* Import History Section */}
-      <Card className="mt-6">
-        <CardHeader>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <button
-              type="button"
-              className="flex items-center gap-2 text-left"
-              onClick={() => setImportHistoryExpanded((prev) => !prev)}
-            >
-              {importHistoryExpanded ? (
-                <ChevronDown className="h-4 w-4 text-muted-foreground" />
-              ) : (
-                <ChevronRight className="h-4 w-4 text-muted-foreground" />
-              )}
-              <CardTitle>{t("importHistory.title")}</CardTitle>
-              <span className="text-xs text-muted-foreground">({importHistory.length})</span>
-            </button>
-            {importHistoryExpanded && (
-              <Button
-                type="button"
-                className="w-full sm:w-auto"
-                size="sm"
-                variant="secondary"
-                disabled={importHistoryLoading}
-                onClick={() => {
-                  void refreshImportHistory();
-                }}
-              >
-                <RefreshCw className="mr-2 h-4 w-4" />
-                {importHistoryLoading ? t("label.refreshing") : t("label.refresh")}
-              </Button>
-            )}
-          </div>
-        </CardHeader>
-        {importHistoryExpanded && (
-          <CardContent>
-            {importHistoryLoading && importHistory.length === 0 ? (
-              <p className="text-sm text-muted-foreground">{t("label.loading")}</p>
-            ) : importHistory.length === 0 ? (
-              <p className="text-sm text-muted-foreground">{t("importHistory.empty")}</p>
-            ) : (
-              isMobile ? (
-                <div className="space-y-2">
-                  {importHistory.map((record) => (
-                    <div key={record.id} className="rounded-lg border border-border bg-card/30 p-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="break-words text-sm font-medium text-foreground" title={record.sourceTitle ?? record.sourceRef}>
-                            {record.sourceTitle ?? record.sourceRef}
-                          </p>
-                          {record.sourceTitle ? (
-                            <p className="text-xs text-muted-foreground" title={record.sourceRef}>
-                              {record.sourceRef}
-                            </p>
-                          ) : null}
-                          <p className="text-xs text-muted-foreground">{record.importType}</p>
-                        </div>
-                        <span
-                          className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${importStatusClasses[record.status] ?? "border-border bg-muted text-card-foreground"}`}
-                        >
-                          {record.status}
-                        </span>
-                      </div>
-                      {(record.decision || record.skipReason) ? (
-                        <div className="mt-2 text-xs">
-                          {record.decision ? <span>{record.decision}</span> : null}
-                          {record.skipReason ? <p className="text-muted-foreground">{record.skipReason}</p> : null}
-                        </div>
-                      ) : null}
-                      {record.errorMessage ? (
-                        <p className="mt-2 break-words text-xs text-rose-400">{record.errorMessage}</p>
-                      ) : null}
-                      <p className="mt-2 text-xs text-muted-foreground">{formatTimestamp(record.createdAt)}</p>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <Table className="min-w-[720px]">
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>{t("importHistory.status")}</TableHead>
-                        <TableHead>{t("importHistory.sourceRef")}</TableHead>
-                        <TableHead>{t("importHistory.decision")}</TableHead>
-                        <TableHead>{t("importHistory.error")}</TableHead>
-                        <TableHead>{t("importHistory.createdAt")}</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {importHistory.map((record) => (
-                        <TableRow key={record.id}>
-                          <TableCell>
-                            <span
-                              className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${importStatusClasses[record.status] ?? "border-border bg-muted text-card-foreground"}`}
-                            >
-                              {record.status}
-                            </span>
-                          </TableCell>
-                          <TableCell>
-                            <p
-                              className="max-w-xs whitespace-normal break-words text-sm"
-                              title={record.sourceTitle ?? record.sourceRef}
-                            >
-                              {record.sourceTitle ?? record.sourceRef}
-                            </p>
-                            {record.sourceTitle ? (
-                              <p className="text-xs text-muted-foreground" title={record.sourceRef}>
-                                {record.sourceRef}
-                              </p>
-                            ) : null}
-                            <p className="text-xs text-muted-foreground">{record.importType}</p>
-                          </TableCell>
-                          <TableCell>
-                            {record.decision && (
-                              <span className="text-xs">{record.decision}</span>
-                            )}
-                            {record.skipReason && (
-                              <p className="text-xs text-muted-foreground">{record.skipReason}</p>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            {record.errorMessage ? (
-                              <p
-                                className="max-w-xs whitespace-normal break-words text-xs text-rose-400"
-                                title={record.errorMessage}
-                              >
-                                {record.errorMessage}
-                              </p>
-                            ) : (
-                              <span className="text-xs text-muted-foreground/60">{"\u2014"}</span>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            <p className="text-xs text-muted-foreground">
-                              {formatTimestamp(record.createdAt)}
-                            </p>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )
-            )}
-          </CardContent>
-        )}
-      </Card>
+      <div className="mt-6">
+        <button
+          type="button"
+          className="mb-2 flex items-center gap-2 text-left"
+          onClick={() => setImportHistoryExpanded((prev) => !prev)}
+        >
+          {importHistoryExpanded ? (
+            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+          )}
+          <span className="text-sm font-semibold">{t("importHistory.title")}</span>
+          <span className="text-xs text-muted-foreground">({importHistory.length})</span>
+        </button>
+        {importHistoryExpanded ? (
+          <ImportHistoryView
+            compact
+            records={importHistory}
+            loading={importHistoryLoading}
+            error={null}
+            onRefresh={() => void refreshImportHistory()}
+            onRetry={state.retryImport}
+          />
+        ) : null}
+      </div>
     </>
   );
 }

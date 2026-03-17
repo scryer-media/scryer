@@ -520,6 +520,8 @@ export const createRuleSetMutation = `mutation CreateRuleSet($input: CreateRuleS
     enabled
     priority
     appliedFacets
+    isManaged
+    managedKey
     createdAt
     updatedAt
   }
@@ -534,6 +536,8 @@ export const updateRuleSetMutation = `mutation UpdateRuleSet($input: UpdateRuleS
     enabled
     priority
     appliedFacets
+    isManaged
+    managedKey
     createdAt
     updatedAt
   }
@@ -552,6 +556,8 @@ export const toggleRuleSetMutation = `mutation ToggleRuleSet($input: ToggleRuleS
     enabled
     priority
     appliedFacets
+    isManaged
+    managedKey
     createdAt
     updatedAt
   }
@@ -562,6 +568,20 @@ export const validateRuleSetMutation = `mutation ValidateRuleSet($input: Validat
     valid
     errors
   }
+}`;
+
+// ── Convenience Rules ──────────────────────────────────────────────────
+
+export const setConvenienceRequiredAudioMutation = `mutation SetConvenienceRequiredAudio($input: SetConvenienceRequiredAudioInput!) {
+  setConvenienceRequiredAudio(input: $input)
+}`;
+
+export const setTitleRequiredAudioMutation = `mutation SetTitleRequiredAudio($input: SetTitleRequiredAudioInput!) {
+  setTitleRequiredAudio(input: $input)
+}`;
+
+export const setConveniencePreferDualAudioMutation = `mutation SetConveniencePreferDualAudio($input: SetConveniencePreferDualAudioInput!) {
+  setConveniencePreferDualAudio(input: $input)
 }`;
 
 // ── Setup Wizard ──────────────────────────────────────────────────────
@@ -657,6 +677,20 @@ export const downloadSubtitleMutation = `mutation DownloadSubtitle($input: Downl
 
 export const blacklistSubtitleMutation = `mutation BlacklistSubtitle($input: BlacklistSubtitleInput!) {
   blacklistSubtitle(input: $input)
+}`;
+
+// ── Import retry mutations ────────────────────────────────────────────────
+
+export const retryImportMutation = `mutation RetryImport($input: RetryImportInput!) {
+  retryImport(input: $input) {
+    importId
+    decision
+    skipReason
+    titleId
+    sourcePath
+    destPath
+    errorMessage
+  }
 }`;
 
 export type SubtitleSearchResult = {

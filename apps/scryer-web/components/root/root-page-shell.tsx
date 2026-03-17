@@ -64,8 +64,8 @@ const WantedContainer = lazy(() =>
   import("@/components/containers/wanted-container").then((m) => ({ default: m.WantedContainer })),
 );
 
-const ImportHistoryContainer = lazy(() =>
-  import("@/components/containers/import-history-container").then((m) => ({ default: m.ImportHistoryContainer })),
+const TitleHistoryContainer = lazy(() =>
+  import("@/components/containers/title-history-container").then((m) => ({ default: m.TitleHistoryContainer })),
 );
 
 const GlobalSearchProvider = lazy(() =>
@@ -121,7 +121,7 @@ function MainContent({
     return <WantedContainer key="wanted" onOpenOverview={handleOpenOverview} />;
   }
   if (view === "history") {
-    return <ImportHistoryContainer key="history" />;
+    return <TitleHistoryContainer key="history" />;
   }
   if (view === "system") {
     return <SystemContainer key="system" />;

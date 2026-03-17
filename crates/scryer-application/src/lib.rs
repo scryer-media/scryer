@@ -32,12 +32,14 @@ mod facet_series;
 pub(crate) mod import_checks;
 mod library_rename;
 mod library_scan;
+pub mod managed_rules;
 pub(crate) mod nfo;
 mod notification_dispatcher;
 mod null_repositories;
 mod post_download_gate;
 mod quality_profile;
 pub mod recycle_bin;
+pub mod release_dedup;
 mod release_group_db;
 mod release_parser;
 mod scoring_weights;
@@ -75,13 +77,14 @@ pub use app_usecase_backup::BackupService;
 pub use app_usecase_catalog::start_background_hydration_loop;
 pub use app_usecase_import::{
     ManualImportFileMapping, ManualImportFilePreview, ManualImportFileResult, ManualImportPreview,
-    execute_manual_import, import_completed_download, preview_manual_import,
+    execute_manual_import, import_completed_download, preview_manual_import, retry_failed_import,
     try_import_completed_downloads,
 };
 pub use app_usecase_integration::start_download_queue_poller;
-pub use app_usecase_plugins::RegistryPlugin;
+pub use app_usecase_plugins::{RegistryPlugin, RulePackRegistryEntry, RulePackTemplate};
 pub use app_usecase_post_processing::{PostProcessingContext, run_post_processing};
 pub use app_usecase_rss::RssSyncReport;
+pub use app_usecase_rules::{ConvenienceAudioSetting, ConvenienceBoolSetting, ConvenienceSettings};
 pub use app_usecase_subtitles::{spawn_subtitle_search_for_file, start_background_subtitle_poller};
 pub use app_usecase_title_images::start_background_banner_loop;
 pub use app_usecase_title_images::start_background_fanart_loop;
@@ -658,6 +661,18 @@ pub trait IndexerStatsTracker: Send + Sync {
         grab_max: Option<u32>,
     );
     fn all_stats(&self) -> Vec<IndexerQueryStats>;
+
+    /// Returns true if the indexer is at or near its API quota (>= 95%).
+    fn is_at_quota(&self, indexer_id: &str) -> bool {
+        self.all_stats()
+            .iter()
+            .find(|s| s.indexer_id == indexer_id)
+            .map(|s| match (s.api_current, s.api_max) {
+                (Some(c), Some(m)) if m > 0 => c >= m * 95 / 100,
+                _ => false,
+            })
+            .unwrap_or(false)
+    }
 }
 
 #[async_trait]
@@ -734,6 +749,8 @@ pub trait ImportRepository: Send + Sync {
         import_type: String,
         payload_json: String,
     ) -> AppResult<String>;
+
+    async fn get_import_by_id(&self, id: &str) -> AppResult<Option<ImportRecord>>;
 
     async fn get_import_by_source_ref(
         &self,
@@ -1030,6 +1047,9 @@ pub trait RuleSetRepository: Send + Sync {
         rego_source: Option<&str>,
         actor_id: Option<&str>,
     ) -> AppResult<()>;
+    async fn get_rule_set_by_managed_key(&self, key: &str) -> AppResult<Option<RuleSet>>;
+    async fn delete_rule_set_by_managed_key(&self, key: &str) -> AppResult<()>;
+    async fn list_rule_sets_by_managed_key_prefix(&self, prefix: &str) -> AppResult<Vec<RuleSet>>;
 }
 
 #[async_trait]
@@ -1108,6 +1128,7 @@ pub enum SearchMode {
 pub struct IndexerRoutingEntry {
     pub enabled: bool,
     pub categories: Vec<String>,
+    pub priority: i64,
 }
 
 /// Per-indexer routing plan for a given facet scope.

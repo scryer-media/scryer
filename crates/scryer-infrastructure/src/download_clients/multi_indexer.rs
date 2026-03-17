@@ -325,6 +325,15 @@ impl IndexerClient for MultiIndexerSearchClient {
                 })
                 .unwrap_or_else(|| newznab_categories.clone());
 
+            // Skip indexers at or near their API quota for auto searches.
+            if mode == SearchMode::Auto && self.stats_tracker.is_at_quota(&config.id) {
+                info!(
+                    indexer = config.name.as_str(),
+                    "skipping indexer: at API quota limit"
+                );
+                continue;
+            }
+
             // Skip indexers that don't support the requested search type
             let caps = self
                 .plugin_provider
@@ -438,7 +447,15 @@ impl IndexerClient for MultiIndexerSearchClient {
             // For Interactive mode, fan out separate strategy tasks per ID type
             // so all HTTP calls happen in parallel. For Auto mode, send everything
             // in a single call (current behavior — no extra API pressure).
-            let strategies: Vec<SearchStrategy> = if mode == SearchMode::Interactive {
+            let has_api_limit = self
+                .stats_tracker
+                .all_stats()
+                .iter()
+                .find(|s| s.indexer_id == config.id)
+                .and_then(|s| s.api_max)
+                .is_some_and(|max| max > 0);
+
+            let mut strategies: Vec<SearchStrategy> = if mode == SearchMode::Interactive {
                 build_strategies(&query, &imdb_id, &tvdb_id, &anidb_id, &caps)
             } else {
                 vec![SearchStrategy {
@@ -449,6 +466,17 @@ impl IndexerClient for MultiIndexerSearchClient {
                     label: "auto",
                 }]
             };
+
+            // If the indexer has API call limits, skip freetext strategies when
+            // ID-based strategies are available (conserves quota).
+            if has_api_limit && strategies.len() > 1 {
+                let has_id_strategy = strategies
+                    .iter()
+                    .any(|s| s.label != "freetext" && s.label != "fallback");
+                if has_id_strategy {
+                    strategies.retain(|s| s.label != "freetext");
+                }
+            }
 
             for strategy in strategies {
                 let client = client.clone();
@@ -549,14 +577,15 @@ impl IndexerClient for MultiIndexerSearchClient {
         // search session gets fresh feeds.
         self.rss_feed_cache.lock().await.clear();
 
-        // Interactive mode fans out multiple strategies per indexer, so dedup
-        // results by download_url to remove duplicates across strategies.
-        if mode == SearchMode::Interactive {
+        // Dedup by download_url (exact duplicates from parallel strategies).
+        // Cross-indexer release-identity dedup happens in the discovery layer
+        // where download client preferences are available.
+        {
             let before = all_results.len();
-            let mut seen: HashSet<String> = HashSet::new();
+            let mut seen_urls: HashSet<String> = HashSet::new();
             all_results.retain(|r| {
                 if let Some(ref url) = r.download_url {
-                    seen.insert(url.to_ascii_lowercase())
+                    seen_urls.insert(url.to_ascii_lowercase())
                 } else {
                     true
                 }
@@ -567,7 +596,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                     before,
                     after = all_results.len(),
                     deduped,
-                    "deduplicated interactive search results"
+                    "deduplicated search results by URL"
                 );
             }
         }
@@ -595,11 +624,12 @@ fn build_strategies(
     let mut strategies = Vec::with_capacity(4);
 
     // Strategy per ID type (only if indexer supports it)
+    // For AniDB, also pass the query so the plugin can filter by episode.
     if let Some(id) = anidb_id
         && caps.anidb_search
     {
         strategies.push(SearchStrategy {
-            query: String::new(),
+            query: query.to_string(),
             imdb_id: None,
             tvdb_id: None,
             anidb_id: Some(id.clone()),

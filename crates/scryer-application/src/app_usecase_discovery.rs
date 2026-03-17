@@ -4,6 +4,16 @@ use serde_json::Value;
 use tokio::task::JoinSet;
 use tracing::{info, warn};
 
+fn source_kind_matches_preference(result: &IndexerSearchResult, preferred: &str) -> bool {
+    match result.source_kind {
+        Some(DownloadSourceKind::NzbUrl) => preferred == "nzb",
+        Some(DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri) => {
+            preferred == "torrent"
+        }
+        None => false,
+    }
+}
+
 const INDEXER_ROUTING_KEY: &str = "indexer.routing";
 
 pub(crate) fn extract_http_status_from_message(message: &str) -> Option<u16> {
@@ -246,6 +256,49 @@ impl AppUseCase {
             })
             .collect();
 
+        // Determine which source kinds (NZB, torrent) the user can actually use
+        // based on their enabled download clients, and which kind is preferred
+        // (lowest client_priority wins). Done early so we can filter before parsing.
+        let (has_usenet_client, has_torrent_client, preferred_source_kind) = {
+            let clients = self
+                .services
+                .download_client_configs
+                .list(None)
+                .await
+                .unwrap_or_default();
+            let enabled: Vec<_> = clients.iter().filter(|c| c.is_enabled).collect();
+            let has_usenet = enabled
+                .iter()
+                .any(|c| matches!(c.client_type.as_str(), "nzbget" | "sabnzbd"));
+            let has_torrent = enabled.iter().any(|c| {
+                matches!(
+                    c.client_type.as_str(),
+                    "qbittorrent" | "transmission" | "deluge" | "rtorrent"
+                )
+            });
+            let preferred = enabled
+                .iter()
+                .min_by_key(|c| c.client_priority)
+                .map(|c| {
+                    if matches!(c.client_type.as_str(), "nzbget" | "sabnzbd") {
+                        "nzb"
+                    } else {
+                        "torrent"
+                    }
+                })
+                .unwrap_or("nzb");
+            (has_usenet, has_torrent, preferred)
+        };
+
+        // Filter out results with no compatible download client before expensive parsing/scoring.
+        raw_results.retain(|r| match r.source_kind {
+            Some(DownloadSourceKind::NzbUrl) => has_usenet_client,
+            Some(DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri) => {
+                has_torrent_client
+            }
+            None => true,
+        });
+
         // Clone the user rules engine for this batch (cheap Arc clone).
         let user_rules_engine = self
             .services
@@ -363,6 +416,98 @@ impl AppUseCase {
                 quality_profile_decision: Some(decision),
                 ..result
             });
+        }
+
+        // Cross-indexer dedup: same release from multiple indexers.
+        // Prefer: (1) higher-priority indexer for this facet, (2) source kind
+        // matching the user's highest-priority download client.
+        {
+            // Build indexer name → priority lookup from the routing plan.
+            // Indexers not in the routing plan get MAX priority (lowest preference).
+            let indexer_priority_by_name: std::collections::HashMap<String, i64> =
+                if let Some(ref plan) = indexer_routing {
+                    let configs = self
+                        .services
+                        .indexer_configs
+                        .list(None)
+                        .await
+                        .unwrap_or_default();
+                    let id_to_name: std::collections::HashMap<&str, &str> = configs
+                        .iter()
+                        .map(|c| (c.id.as_str(), c.name.as_str()))
+                        .collect();
+                    plan.entries
+                        .iter()
+                        .filter_map(|(id, entry)| {
+                            id_to_name
+                                .get(id.as_str())
+                                .map(|name| (name.to_string(), entry.priority))
+                        })
+                        .collect()
+                } else {
+                    std::collections::HashMap::new()
+                };
+
+            let mut best_by_key: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            let mut remove_indices: std::collections::HashSet<usize> =
+                std::collections::HashSet::new();
+
+            for (idx, result) in deduped.iter().enumerate() {
+                let key = result
+                    .parsed_release_metadata
+                    .as_ref()
+                    .map(crate::release_dedup::build_release_dedup_key)
+                    .unwrap_or_default();
+                if key.is_empty() {
+                    continue;
+                }
+
+                if let Some(&existing_idx) = best_by_key.get(&key) {
+                    let existing = &deduped[existing_idx];
+
+                    // Compare indexer priority first (lower = better)
+                    let existing_prio = indexer_priority_by_name
+                        .get(&existing.source)
+                        .copied()
+                        .unwrap_or(i64::MAX);
+                    let new_prio = indexer_priority_by_name
+                        .get(&result.source)
+                        .copied()
+                        .unwrap_or(i64::MAX);
+
+                    let new_wins = if new_prio != existing_prio {
+                        new_prio < existing_prio
+                    } else {
+                        // Same indexer priority — break tie by download client preference
+                        let existing_preferred =
+                            source_kind_matches_preference(existing, preferred_source_kind);
+                        let new_preferred =
+                            source_kind_matches_preference(result, preferred_source_kind);
+                        new_preferred && !existing_preferred
+                    };
+
+                    if new_wins {
+                        remove_indices.insert(existing_idx);
+                        best_by_key.insert(key, idx);
+                    } else {
+                        remove_indices.insert(idx);
+                    }
+                } else {
+                    best_by_key.insert(key, idx);
+                }
+            }
+
+            if !remove_indices.is_empty() {
+                let before = deduped.len();
+                let mut idx = 0usize;
+                deduped.retain(|_| {
+                    let keep = !remove_indices.contains(&idx);
+                    idx += 1;
+                    keep
+                });
+                info!(before, after = deduped.len(), "cross-indexer release dedup");
+            }
         }
 
         deduped.sort_by(|left, right| {
@@ -983,11 +1128,17 @@ impl AppUseCase {
                 }
             }
 
+            let priority = config
+                .get("priority")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(i64::MAX);
+
             entries.insert(
                 indexer_id.clone(),
                 IndexerRoutingEntry {
                     enabled,
                     categories,
+                    priority,
                 },
             );
         }

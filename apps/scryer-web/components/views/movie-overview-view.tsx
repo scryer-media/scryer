@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SearchResultBuckets } from "@/components/common/release-search-results";
+import { TitleHistoryModal } from "@/components/common/title-history-modal";
 import {
   QUALITY_PROFILE_PREFIX,
   ROOT_FOLDER_PREFIX,
@@ -28,7 +29,7 @@ import type {
   TitleReleaseBlocklistEntry,
   TitleDetail,
   TitleCollection,
-  TitleEvent,
+  TitleHistoryEvent,
   TitleMediaFile,
   SubtitleDownloadRecord,
 } from "@/components/containers/movie-overview-container";
@@ -296,7 +297,7 @@ type Props = {
   loading: boolean;
   title: TitleDetail | null;
   collections: TitleCollection[];
-  events: TitleEvent[];
+  events: TitleHistoryEvent[];
   searchResults: Release[];
   searching: boolean;
   renamePlan: MediaRenamePlan | null;
@@ -372,6 +373,7 @@ export function MovieOverviewView({
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
   const client = useClient();
+  const [historyOpen, setHistoryOpen] = React.useState(false);
   const [subtitleSearchTarget, setSubtitleSearchTarget] = React.useState<{
     mediaFileId: string;
     filePath: string;
@@ -666,6 +668,7 @@ export function MovieOverviewView({
         onInteractiveSearch={() => void onSearch()}
         onRefreshAndScan={() => void onRefreshAndScan()}
         onRequestDelete={onRequestDeleteTitle}
+        onHistory={() => setHistoryOpen(true)}
         settingsPanel={(
           <TitleSettingsPanel
             title={title}
@@ -937,24 +940,13 @@ export function MovieOverviewView({
         </div>
       </details>
 
-      {/* recent activity */}
-      {events.length > 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Recent Activity</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {events.map((ev) => (
-                <div key={ev.id} className="flex items-start gap-3 text-sm">
-                  <span className="shrink-0 text-xs text-muted-foreground/60">{formatDate(ev.occurredAt)}</span>
-                  <span className="capitalize text-muted-foreground">{ev.eventType.replace(/_/g, " ")}</span>
-                  <span className="text-muted-foreground">{ev.message}</span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+      {title ? (
+        <TitleHistoryModal
+          open={historyOpen}
+          onOpenChange={setHistoryOpen}
+          titleId={title.id}
+          titleName={title.name}
+        />
       ) : null}
     </div>
   );

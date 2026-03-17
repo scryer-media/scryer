@@ -698,17 +698,11 @@ pub fn evaluate_against_profile(
         }
     }
 
-    // ── Dual audio / language preference ─────────────────────────────────────
-    if c.prefer_dual_audio {
-        if release.is_dual_audio {
-            d.log("dual_audio_preferred_match", weights.dual_audio_bonus);
-        } else {
-            d.log(
-                "dual_audio_preferred_missing",
-                weights.dual_audio_missing_penalty,
-            );
-        }
-    } else if release.is_dual_audio {
+    // ── Dual audio (neutral bonus when detected) ──────────────────────────────
+    // The "prefer dual audio" scoring preference is now handled by managed
+    // convenience rules, not the quality profile. This baseline bonus rewards
+    // dual audio releases regardless of user preference.
+    if release.is_dual_audio {
         d.log("dual_audio", weights.dual_audio_present);
     }
 

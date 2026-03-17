@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
 use scryer_application::{IndexerQueryStats, IndexerStatsTracker};
+use sqlx::SqlitePool;
 
 struct IndexerEntry {
     indexer_name: String,
@@ -13,23 +14,25 @@ struct IndexerEntry {
     grab_max: Option<u32>,
 }
 
-/// Thread-safe in-memory tracker for per-indexer query counts and API quotas.
-/// Data is kept for a rolling 24-hour window and lost on restart.
+/// Thread-safe indexer stats tracker with in-memory 24-hour rolling window
+/// and optional SQLite persistence for API quota enforcement.
 #[derive(Clone)]
 pub struct InMemoryIndexerStatsTracker {
     entries: std::sync::Arc<Mutex<HashMap<String, IndexerEntry>>>,
+    pool: Option<SqlitePool>,
 }
 
 impl Default for InMemoryIndexerStatsTracker {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 
 impl InMemoryIndexerStatsTracker {
-    pub fn new() -> Self {
+    pub fn new(pool: Option<SqlitePool>) -> Self {
         Self {
             entries: std::sync::Arc::new(Mutex::new(HashMap::new())),
+            pool,
         }
     }
 
@@ -75,6 +78,23 @@ impl IndexerStatsTracker for InMemoryIndexerStatsTracker {
                 entry.grab_current = grab_current;
                 entry.grab_max = grab_max;
             }
+        }
+
+        // Persist to DB (fire-and-forget)
+        if let Some(pool) = &self.pool {
+            let pool = pool.clone();
+            let indexer_id = indexer_id.to_string();
+            tokio::spawn(async move {
+                let _ = crate::queries::indexer::upsert_indexer_quota(
+                    &pool,
+                    &indexer_id,
+                    api_current,
+                    api_max,
+                    grab_current,
+                    grab_max,
+                )
+                .await;
+            });
         }
     }
 

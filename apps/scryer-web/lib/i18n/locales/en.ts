@@ -422,6 +422,9 @@ const en: LocaleDictionary = {
   "title.monitoredSection": "Monitored {{facet}}",
   "title.noWantedItem": "No active wanted item.",
   "title.queueLatest": "Queue Latest",
+  "title.requiredAudioLanguages": "Required Audio Languages",
+  "title.requiredAudioInherited": "Inherited from {{facet}} settings",
+  "title.requiredAudioResetInherit": "Reset to inherit",
 
   "tvdb.searchResults": "TVDB Search Results",
   "tvdb.searchPrompt": "Search TVDB by entering a title above.",
@@ -511,6 +514,12 @@ const en: LocaleDictionary = {
   "importHistory.decision": "Decision",
   "importHistory.error": "Error",
   "importHistory.createdAt": "Date",
+  "importHistory.retry": "Retry",
+  "importHistory.retrying": "Retrying...",
+  "importHistory.retryWithPassword": "Retry with Password",
+  "importHistory.passwordRequired": "Password Required",
+  "importHistory.passwordPlaceholder": "Archive password",
+  "importHistory.retrySuccess": "Import retry started",
 
   "system.title": "System Health",
   "system.notLoaded": "System health not loaded.",
@@ -613,6 +622,12 @@ const en: LocaleDictionary = {
   "settings.ruleValidating": "Validating…",
   "settings.ruleValid": "Rule is valid.",
   "settings.ruleValidationRequired": "Name and Rego source are required.",
+  "settings.ruleLibrary": "Rule Library",
+  "settings.ruleLibraryDescription":
+    "Pre-built rules you can add with one click. Select a template to populate the editor.",
+  "settings.ruleLibraryAll": "All",
+  "settings.ruleLibraryCommunityEmpty":
+    "No community rule packs available. Refresh the plugin registry to check for new packs.",
   "settings.rulesFacetSection": "Custom rules for {{facet}}",
   "settings.ruleGlobal": "Global",
   "settings.ruleNoFacetRules":
@@ -826,15 +841,18 @@ const en: LocaleDictionary = {
   "settings.sub.languagesHelp": "ISO 639-2 codes, comma-separated (e.g. eng, spa, fre, deu, jpn)",
   "settings.sub.hiPreference": "Hearing Impaired",
   "settings.sub.forcedOnly": "Forced subtitles only",
-  "settings.sub.minScoreSeries": "Minimum score (series)",
-  "settings.sub.minScoreMovie": "Minimum score (movie)",
+  "settings.sub.minScoreSeries": "Minimum match score for series",
+  "settings.sub.minScoreMovie": "Minimum match score for movies",
+  "settings.sub.minScoreHelp": "Subtitles scoring below this are skipped. Series needs a higher threshold because episode-level matching must be exact.",
   "settings.sub.searchInterval": "Search interval (hours)",
   "settings.sub.autoDownload": "Auto-download on import",
   "settings.sub.excludeAi": "Exclude AI-translated subtitles",
   "settings.sub.excludeMachine": "Exclude machine-translated subtitles",
-  "settings.sub.syncEnabled": "Enable subtitle sync (timing correction)",
-  "settings.sub.syncThresholdSeries": "Sync threshold (series)",
-  "settings.sub.syncThresholdMovie": "Sync threshold (movie)",
+  "settings.sub.syncEnabled": "Auto-correct subtitle timing",
+  "settings.sub.syncEnabledHelp": "Uses audio analysis to fix timing drift in downloaded subtitles.",
+  "settings.sub.syncThresholdSeries": "Auto-correct below this score (series)",
+  "settings.sub.syncThresholdMovie": "Auto-correct below this score (movies)",
+  "settings.sub.syncThresholdHelp": "Low-scoring subtitles are more likely to have timing issues. Subtitles above this score are assumed to be well-timed.",
   "settings.postProcessing": "Post-Processing",
   "settings.postProcessingSaved": "Post-processing script saved.",
   "settings.pp.title": "Post-Processing Scripts",
@@ -1503,6 +1521,35 @@ const en: LocaleDictionary = {
   "setup.apiKeyHelpLink": "Find it in SABnzbd → Config → General",
 
   "settings.runSetupWizard": "Run setup wizard",
+
+  "history.title": "History",
+  "history.empty": "No history events",
+  "history.event": "Event",
+  "history.titleColumn": "Title",
+  "history.sourceTitle": "Source Title",
+  "history.quality": "Quality",
+  "history.date": "Date",
+  "history.filterByEventType": "Filter by event type",
+  "history.allEvents": "All Events",
+  "history.grabbed": "Grabbed",
+  "history.imported": "Imported",
+  "history.importFailed": "Import Failed",
+  "history.importSkipped": "Import Skipped",
+  "history.downloadCompleted": "Downloaded",
+  "history.fileDeleted": "Deleted",
+  "history.fileRenamed": "Renamed",
+  "history.downloadIgnored": "Ignored",
+  "history.noMore": "No more events",
+  "history.loadMore": "Load more",
+
+  // ── Convenience Rules ─────────────────────────────────────────────────
+  "convenience.title": "Convenience Rules",
+  "convenience.requiredAudioLabel": "Required Audio Languages",
+  "convenience.requiredAudioHelp":
+    "Releases without these audio languages will be blocked. Creates a managed rule visible in Settings > Rules.",
+  "convenience.preferDualAudioLabel": "Prefer dual audio",
+  "convenience.preferDualAudioHelp":
+    "Boost releases that contain multiple audio tracks. Creates a managed rule visible in Settings > Rules.",
 };
 
 export default en;

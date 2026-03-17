@@ -81,8 +81,9 @@ impl TestContext {
                     .with_builtin(scryer_plugins::builtins::NZBGEEK_WASM)
                     .with_builtin(scryer_plugins::builtins::NEWZNAB_WASM),
             ));
-        let indexer_stats: Arc<dyn scryer_application::IndexerStatsTracker> =
-            Arc::new(scryer_infrastructure::InMemoryIndexerStatsTracker::new());
+        let indexer_stats: Arc<dyn scryer_application::IndexerStatsTracker> = Arc::new(
+            scryer_infrastructure::InMemoryIndexerStatsTracker::new(None),
+        );
         let indexer_client = MultiIndexerSearchClient::new(
             Arc::new(db.clone()),
             indexer_stats.clone(),

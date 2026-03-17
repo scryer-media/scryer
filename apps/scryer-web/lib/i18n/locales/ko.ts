@@ -416,6 +416,9 @@ const ko: LocaleDictionary = {
   "title.monitoredSection": "모니터링 중인 {{facet}}",
   "title.noWantedItem": "활성 원하는 항목이 없습니다.",
   "title.queueLatest": "최신 대기열",
+  "title.requiredAudioLanguages": "필수 오디오 언어",
+  "title.requiredAudioInherited": "{{facet}} 설정에서 상속됨",
+  "title.requiredAudioResetInherit": "상속으로 초기화",
 
   "tvdb.searchResults": "TVDB 검색 결과",
   "tvdb.searchPrompt": "위에 제목을 입력하여 TVDB를 검색하세요.",
@@ -505,6 +508,12 @@ const ko: LocaleDictionary = {
   "importHistory.decision": "결정",
   "importHistory.error": "오류",
   "importHistory.createdAt": "날짜",
+  "importHistory.retry": "재시도",
+  "importHistory.retrying": "재시도 중...",
+  "importHistory.retryWithPassword": "비밀번호로 재시도",
+  "importHistory.passwordRequired": "비밀번호 필요",
+  "importHistory.passwordPlaceholder": "아카이브 비밀번호",
+  "importHistory.retrySuccess": "가져오기 재시도가 시작되었습니다",
 
   "system.title": "시스템 상태",
   "system.notLoaded": "시스템 상태가 로드되지 않았습니다.",
@@ -608,6 +617,10 @@ const ko: LocaleDictionary = {
   "settings.ruleValidating": "검증 중…",
   "settings.ruleValid": "규칙이 유효합니다.",
   "settings.ruleValidationRequired": "이름과 Rego 소스는 필수입니다.",
+  "settings.ruleLibrary": "규칙 라이브러리",
+  "settings.ruleLibraryDescription":
+    "클릭 한 번으로 추가할 수 있는 기본 제공 규칙입니다. 템플릿을 선택하여 편집기에 반영하세요.",
+  "settings.ruleLibraryAll": "전체",
   "settings.rulesFacetSection": "{{facet}}에 대한 커스텀 규칙",
   "settings.ruleGlobal": "글로벌",
   "settings.ruleNoFacetRules":
@@ -1424,6 +1437,42 @@ const ko: LocaleDictionary = {
   "setup.apiKeyPlaceholder": "API 키 붙여넣기…",
   "setup.apiKeyHelpLink": "SABnzbd > Config > General에서 찾기",
   "settings.runSetupWizard": "설정 마법사 실행",
+
+  "settings.sub.minScoreSeries": "시리즈 최소 매칭 점수",
+  "settings.sub.minScoreMovie": "영화 최소 매칭 점수",
+  "settings.sub.minScoreHelp":
+    "이 점수 미만의 자막은 건너뜁니다. 시리즈는 에피소드 단위 매칭이 정확해야 하므로 더 높은 임계값이 필요합니다.",
+  "settings.sub.syncEnabled": "자막 타이밍 자동 보정",
+  "settings.sub.syncEnabledHelp":
+    "오디오 분석을 사용하여 다운로드한 자막의 타이밍 오차를 보정합니다.",
+
+  "history.title": "기록",
+  "history.empty": "기록 이벤트가 없습니다",
+  "history.event": "이벤트",
+  "history.titleColumn": "제목",
+  "history.sourceTitle": "소스 제목",
+  "history.quality": "품질",
+  "history.date": "날짜",
+  "history.filterByEventType": "이벤트 유형별 필터",
+  "history.allEvents": "모든 이벤트",
+  "history.grabbed": "가져옴",
+  "history.imported": "가져오기 완료",
+  "history.importFailed": "가져오기 실패",
+  "history.importSkipped": "가져오기 건너뜀",
+  "history.downloadCompleted": "다운로드 완료",
+  "history.fileDeleted": "삭제됨",
+  "history.fileRenamed": "이름 변경됨",
+  "history.downloadIgnored": "무시됨",
+  "history.noMore": "더 이상 이벤트가 없습니다",
+  "history.loadMore": "더 보기",
+
+  "convenience.title": "편의 규칙",
+  "convenience.requiredAudioLabel": "필수 오디오 언어",
+  "convenience.requiredAudioHelp":
+    "이 오디오 언어가 없는 릴리스는 차단됩니다. 설정 > 규칙에 표시되는 관리 규칙을 생성합니다.",
+  "convenience.preferDualAudioLabel": "듀얼 오디오 선호",
+  "convenience.preferDualAudioHelp":
+    "여러 오디오 트랙이 포함된 릴리스를 우선합니다. 설정 > 규칙에 표시되는 관리 규칙을 생성합니다.",
 };
 
 export default ko;

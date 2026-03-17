@@ -4230,6 +4230,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "ureq",
 ]
 
 [[package]]
@@ -5583,6 +5584,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fdc97a28575b85cfedf2a7e7d3cc64b3e11bd8ac766666318003abbacc7a21fc"
 dependencies = [
  "base64",
+ "brotli-decompressor",
  "flate2",
  "log",
  "percent-encoding",

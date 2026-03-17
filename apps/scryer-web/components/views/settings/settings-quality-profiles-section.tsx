@@ -889,23 +889,6 @@ export function SettingsQualityProfilesSection({
                 </label>
                 <label className="mb-2 flex items-center gap-3">
                   <Checkbox
-                    checked={qualityProfileDraft.prefer_dual_audio}
-                    onCheckedChange={(checked) =>
-                      updateQualityProfileDraft({
-                        prefer_dual_audio: checked === true,
-                      })
-                    }
-                  />
-                  <span className="inline-flex items-center gap-2 text-sm">
-                    {t("qualityProfile.preferDualAudio")}
-                    <InfoHelp
-                      ariaLabel={t("qualityProfile.preferDualAudio")}
-                      text={t("qualityProfile.preferDualAudioInfo")}
-                    />
-                  </span>
-                </label>
-                <label className="mb-2 flex items-center gap-3">
-                  <Checkbox
                     checked={qualityProfileDraft.allow_bd_disk}
                     onCheckedChange={(checked) =>
                       updateQualityProfileDraft({

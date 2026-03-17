@@ -4,9 +4,13 @@ import {
   ChevronDown,
   Edit,
   FileCode2,
+  Library,
   Power,
   Trash2,
 } from "lucide-react";
+import { useClient } from "urql";
+import { RULE_TEMPLATES, RULE_TEMPLATE_CATEGORIES, type RuleTemplate } from "@/lib/constants/rule-templates";
+import { rulePackRegistryQuery, rulePackTemplatesQuery } from "@/lib/graphql/queries";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -734,6 +738,30 @@ score_entry["japanese_audio_bonus"] := 300 if {
   );
 }
 
+/**
+ * Parse a managed-rule key like "convenience:required-audio:anime"
+ * into a human-readable label like "Required Audio · Anime".
+ */
+function managedRuleLabel(key: string): string {
+  const parts = key.split(":");
+  // Skip the first segment ("convenience") — it's the namespace, not useful to show.
+  const labelParts = parts.slice(1).map((segment) =>
+    segment
+      .split("-")
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" "),
+  );
+  return labelParts.join(" \u00B7 ");
+}
+
+function ManagedBadge({ managedKey }: { managedKey: string }) {
+  return (
+    <span className="ml-2 inline-flex items-center rounded-full bg-teal-900/40 px-2 py-0.5 text-[10px] font-medium text-teal-300">
+      {managedRuleLabel(managedKey)}
+    </span>
+  );
+}
+
 function FacetBadges({ facets }: { facets: string[] }) {
   if (facets.length === 0) {
     return (
@@ -751,6 +779,226 @@ function FacetBadges({ facets }: { facets: string[] }) {
         >
           {f}
         </span>
+      ))}
+    </div>
+  );
+}
+
+type CommunityPack = { id: string; name: string; description: string; author: string; version: string };
+type CommunityTemplate = { id: string; title: string; description: string; category: string; regoSource: string; appliedFacets: string[] };
+
+function RuleLibrary({ onApply, defaultOpen }: { onApply: (template: RuleTemplate) => void; defaultOpen?: boolean }) {
+  const t = useTranslate();
+  const client = useClient();
+  const [open, setOpen] = React.useState(defaultOpen ?? false);
+  const [tab, setTab] = React.useState<"builtin" | "community">("builtin");
+  const [categoryFilter, setCategoryFilter] = React.useState<string>("All");
+
+  // Community state
+  const [communityPacks, setCommunityPacks] = React.useState<CommunityPack[]>([]);
+  const [communityPacksLoaded, setCommunityPacksLoaded] = React.useState(false);
+  const [selectedPack, setSelectedPack] = React.useState<CommunityPack | null>(null);
+  const [packTemplates, setPackTemplates] = React.useState<CommunityTemplate[]>([]);
+  const [packLoading, setPackLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    if (tab === "community" && !communityPacksLoaded) {
+      client.query(rulePackRegistryQuery, {}).toPromise().then(({ data }) => {
+        setCommunityPacks(data?.rulePackRegistry ?? []);
+        setCommunityPacksLoaded(true);
+      }).catch(() => {
+        setCommunityPacksLoaded(true);
+      });
+    }
+  }, [tab, communityPacksLoaded, client]);
+
+  const loadPack = React.useCallback(async (pack: CommunityPack) => {
+    setSelectedPack(pack);
+    setPackLoading(true);
+    try {
+      const { data } = await client.query(rulePackTemplatesQuery, { packId: pack.id }).toPromise();
+      setPackTemplates(data?.rulePackTemplates ?? []);
+    } catch {
+      setPackTemplates([]);
+    } finally {
+      setPackLoading(false);
+    }
+  }, [client]);
+
+  const filtered = categoryFilter === "All"
+    ? RULE_TEMPLATES
+    : RULE_TEMPLATES.filter((tpl) => tpl.category === categoryFilter);
+
+  return (
+    <Card>
+      <CardHeader
+        className="cursor-pointer select-none"
+        onClick={() => setOpen((prev) => !prev)}
+      >
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Library className="h-4 w-4" />
+          {t("settings.ruleLibrary")}
+          <ChevronDown
+            className={`ml-auto h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`}
+          />
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">{t("settings.ruleLibraryDescription")}</p>
+      </CardHeader>
+      {open ? (
+        <CardContent>
+          {/* Tab selector */}
+          <div className="mb-3 flex gap-2 border-b border-border pb-2">
+            <button
+              type="button"
+              className={cn(
+                "px-3 py-1.5 text-sm font-medium transition-colors rounded-t",
+                tab === "builtin" ? "text-primary border-b-2 border-primary" : "text-muted-foreground hover:text-foreground",
+              )}
+              onClick={() => setTab("builtin")}
+            >
+              Built-in
+            </button>
+            <button
+              type="button"
+              className={cn(
+                "px-3 py-1.5 text-sm font-medium transition-colors rounded-t",
+                tab === "community" ? "text-primary border-b-2 border-primary" : "text-muted-foreground hover:text-foreground",
+              )}
+              onClick={() => setTab("community")}
+            >
+              Community
+            </button>
+          </div>
+
+          {tab === "builtin" ? (
+            <>
+              <div className="mb-3 flex flex-wrap gap-1">
+                {[t("settings.ruleLibraryAll"), ...RULE_TEMPLATE_CATEGORIES].map((cat) => {
+                  const isAll = cat === t("settings.ruleLibraryAll");
+                  const active = isAll ? categoryFilter === "All" : categoryFilter === cat;
+                  return (
+                    <button
+                      key={cat}
+                      type="button"
+                      className={cn(
+                        "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                        active
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground hover:bg-muted/80",
+                      )}
+                      onClick={() => setCategoryFilter(isAll ? "All" : cat)}
+                    >
+                      {cat}
+                    </button>
+                  );
+                })}
+              </div>
+              <TemplateGrid
+                templates={filtered}
+                onApply={(tpl) => { onApply(tpl); setOpen(false); }}
+              />
+            </>
+          ) : (
+            /* Community tab */
+            selectedPack ? (
+              <div>
+                <button
+                  type="button"
+                  className="mb-3 text-xs text-muted-foreground hover:text-foreground"
+                  onClick={() => { setSelectedPack(null); setPackTemplates([]); }}
+                >
+                  &larr; Back to packs
+                </button>
+                <p className="mb-1 text-sm font-medium">{selectedPack.name}</p>
+                <p className="mb-3 text-xs text-muted-foreground">{selectedPack.description}</p>
+                {packLoading ? (
+                  <p className="text-sm text-muted-foreground">{t("label.loading")}</p>
+                ) : (
+                  <TemplateGrid
+                    templates={packTemplates.map((t) => ({
+                      id: t.id,
+                      title: t.title,
+                      description: t.description,
+                      category: t.category,
+                      regoSource: t.regoSource,
+                      appliedFacets: t.appliedFacets,
+                    }))}
+                    onApply={(tpl) => { onApply(tpl); setOpen(false); }}
+                  />
+                )}
+              </div>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {communityPacks.length === 0 && communityPacksLoaded ? (
+                  <p className="col-span-full text-sm text-muted-foreground">
+                    {t("settings.ruleLibraryCommunityEmpty")}
+                  </p>
+                ) : null}
+                {communityPacks.map((pack) => (
+                  <button
+                    key={pack.id}
+                    type="button"
+                    className="group rounded-lg border border-border bg-card/50 p-3 text-left transition-colors hover:border-primary/40 hover:bg-card"
+                    onClick={() => void loadPack(pack)}
+                  >
+                    <p className="text-sm font-medium text-foreground group-hover:text-primary">
+                      {pack.name}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground line-clamp-2">
+                      {pack.description}
+                    </p>
+                    <div className="mt-2 flex items-center gap-2">
+                      <span className="rounded bg-teal-500/15 px-1.5 py-0.5 text-[10px] text-teal-700 dark:text-teal-300">
+                        {pack.author}
+                      </span>
+                      <span className="text-[10px] text-muted-foreground">v{pack.version}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )
+          )}
+        </CardContent>
+      ) : null}
+    </Card>
+  );
+}
+
+function TemplateGrid({
+  templates,
+  onApply,
+}: {
+  templates: RuleTemplate[];
+  onApply: (template: RuleTemplate) => void;
+}) {
+  return (
+    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      {templates.map((tpl) => (
+        <button
+          key={tpl.id}
+          type="button"
+          className="group rounded-lg border border-border bg-card/50 p-3 text-left transition-colors hover:border-primary/40 hover:bg-card"
+          onClick={() => onApply(tpl)}
+        >
+          <p className="text-sm font-medium text-foreground group-hover:text-primary">
+            {tpl.title}
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground line-clamp-2">
+            {tpl.description}
+          </p>
+          <div className="mt-2 flex items-center gap-2">
+            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              {tpl.category}
+            </span>
+            {tpl.appliedFacets
+              ?.filter((f) => f.toLowerCase() !== tpl.category.toLowerCase())
+              .map((f) => (
+                <span key={f} className="rounded bg-blue-500/15 px-1.5 py-0.5 text-[10px] text-blue-700 dark:text-blue-300">
+                  {f}
+                </span>
+              ))}
+          </div>
+        </button>
       ))}
     </div>
   );
@@ -806,7 +1054,12 @@ export function SettingsRulesSection({
             <TableBody>
               {ruleSetRecords.map((record) => (
                 <TableRow key={record.id}>
-                  <TableCell className="font-medium">{record.name}</TableCell>
+                  <TableCell className="font-medium">
+                    {record.name}
+                    {record.isManaged && record.managedKey ? (
+                      <ManagedBadge managedKey={record.managedKey} />
+                    ) : null}
+                  </TableCell>
                   <TableCell className="max-w-[200px] truncate text-muted-foreground">
                     {record.description || "—"}
                   </TableCell>
@@ -839,35 +1092,39 @@ export function SettingsRulesSection({
                       >
                         <Power className="h-4 w-4" />
                       </Button>
-                      <Button
-                        type="button"
-                        size="icon-sm"
-                        variant="secondary"
-                        title={t("label.edit")}
-                        aria-label={t("label.edit")}
-                        onClick={() => editRuleSet(record)}
-                        className={cn(
-                          boxedActionButtonBaseClass,
-                          boxedActionButtonToneClass.edit,
-                        )}
-                      >
-                        <Edit className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        type="button"
-                        size="icon-sm"
-                        variant="secondary"
-                        title={t("label.delete")}
-                        aria-label={t("label.delete")}
-                        onClick={() => void deleteRuleSet(record)}
-                        disabled={mutatingRuleSetId === record.id}
-                        className={cn(
-                          boxedActionButtonBaseClass,
-                          boxedActionButtonToneClass.delete,
-                        )}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      {!record.isManaged ? (
+                        <>
+                          <Button
+                            type="button"
+                            size="icon-sm"
+                            variant="secondary"
+                            title={t("label.edit")}
+                            aria-label={t("label.edit")}
+                            onClick={() => editRuleSet(record)}
+                            className={cn(
+                              boxedActionButtonBaseClass,
+                              boxedActionButtonToneClass.edit,
+                            )}
+                          >
+                            <Edit className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            type="button"
+                            size="icon-sm"
+                            variant="secondary"
+                            title={t("label.delete")}
+                            aria-label={t("label.delete")}
+                            onClick={() => void deleteRuleSet(record)}
+                            disabled={mutatingRuleSetId === record.id}
+                            className={cn(
+                              boxedActionButtonBaseClass,
+                              boxedActionButtonToneClass.delete,
+                            )}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </>
+                      ) : null}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -883,6 +1140,19 @@ export function SettingsRulesSection({
           </Table>
         </div>
       </div>
+
+      <RuleLibrary
+        defaultOpen={ruleSetRecords.length === 0}
+        onApply={(template) => {
+          setRuleSetDraft((prev) => ({
+            ...prev,
+            name: template.title.toLowerCase().replace(/[^a-z0-9]+/g, "_"),
+            description: template.description,
+            regoSource: template.regoSource,
+            appliedFacets: template.appliedFacets ?? [],
+          }));
+        }}
+      />
 
       <Card>
         <CardHeader>

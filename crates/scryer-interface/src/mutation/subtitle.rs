@@ -247,41 +247,12 @@ impl SubtitleMutations {
             .await
             .as_deref()
             != Some("false");
-        if sync_enabled && !forced {
-            let is_series = {
-                let title = app
-                    .services
-                    .titles
-                    .get_by_id(&mf.title_id)
-                    .await
-                    .ok()
-                    .flatten();
-                title
-                    .as_ref()
-                    .map(|t| {
-                        t.facet == scryer_domain::MediaFacet::Tv
-                            || t.facet == scryer_domain::MediaFacet::Anime
-                    })
-                    .unwrap_or(false)
-            };
-            let threshold_key = if is_series {
-                "subtitles.sync_threshold_series"
-            } else {
-                "subtitles.sync_threshold_movie"
-            };
-            let threshold: i32 = read_subtitle_setting(&db, threshold_key)
-                .await
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(if is_series { 90 } else { 70 });
-
-            let score = record.score.unwrap_or(0);
-            if score < threshold
-                && let Err(err) =
-                    scryer_application::subtitles::sync::sync_subtitle(file_path, &dest_path, 60)
-                        .await
-            {
-                tracing::warn!(error = %err, "subtitle sync failed (non-fatal)");
-            }
+        if sync_enabled
+            && !forced
+            && let Err(err) =
+                scryer_application::subtitles::sync::sync_subtitle(file_path, &dest_path, 60).await
+        {
+            tracing::warn!(error = %err, "subtitle sync failed (non-fatal)");
         }
 
         Ok(true)

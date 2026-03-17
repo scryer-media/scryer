@@ -20,6 +20,7 @@ import type { ViewCategoryId } from "./media-content/indexer-category-picker";
 import { MediaLibrarySettingsPanel } from "./media-content/media-library-settings-panel";
 import { IndexerRoutingPanel } from "./media-content/indexer-routing-panel";
 import { DownloadClientRoutingPanel } from "./media-content/download-client-routing-panel";
+import { ConvenienceRulesPanel } from "./media-content/convenience-rules-panel";
 import { GeneralSettingsPanel } from "./media-content/general-settings-panel";
 import { QualitySettingsPanel } from "./media-content/quality-settings-panel";
 import { RenameSettingsPanel } from "./media-content/rename-settings-panel";
@@ -569,6 +570,9 @@ export function MediaContentView({
             plexmatchWriteOnImport={plexmatchWriteOnImport}
             handlePlexmatchWriteChange={handlePlexmatchWriteChange}
           />
+          {(view === "movies" || view === "series" || view === "anime") ? (
+            <ConvenienceRulesPanel view={view} />
+          ) : null}
         </div>
       ) : (
         view === "movies" || view === "series" || view === "anime" ? (

@@ -960,6 +960,25 @@ fn looks_like_episode_hyphen_token(token: &str) -> bool {
             && right.chars().any(|character| character.is_ascii_digit());
     }
 
+    // Preserve bare digit ranges like "1122-1133", "0001-0782", "01-07"
+    // These are episode ranges common in fansub/AnimeTosho titles.
+    if let Some((left, right)) = token.split_once('-')
+        && !left.is_empty()
+        && !right.is_empty()
+        && left.chars().all(|c| c.is_ascii_digit())
+        && right.chars().all(|c| c.is_ascii_digit())
+    {
+        return true;
+    }
+
+    // Preserve "E795-E940" style ranges
+    if token.starts_with('E')
+        && token.chars().nth(1).is_some_and(|c| c.is_ascii_digit())
+        && token.contains('-')
+    {
+        return true;
+    }
+
     false
 }
 
@@ -1687,14 +1706,82 @@ pub fn parse_series_episode(raw_title: &str) -> Option<ParsedEpisodeMetadata> {
             continue;
         }
 
-        if is_digit_str(token)
-            && idx > 0
-            && parse_quality(token).is_none()
-            && is_reasonable_episode_number(token.parse::<u32>().ok()?)
-            && (token.len() <= 3 || (token.len() == 4 && parse_year(token).is_none()))
-            && let Ok(episode) = token.parse::<u32>()
+        // Bare digit-range tokens like "1122-1133", "0001-0782" (fansub episode ranges)
+        if idx > 0
+            && token.contains('-')
+            && let Some((left_str, right_str)) = token.split_once('-')
+            && !left_str.is_empty()
+            && !right_str.is_empty()
+            && left_str.chars().all(|c| c.is_ascii_digit())
+            && right_str.chars().all(|c| c.is_ascii_digit())
+            && let Ok(left_val) = left_str.parse::<u32>()
+            && let Ok(right_val) = right_str.parse::<u32>()
+            && left_val <= right_val
+            && is_reasonable_episode_number(left_val)
+            && is_reasonable_episode_number(right_val)
         {
-            pending_absolute = Some((episode, token.to_string()));
+            let episodes: Vec<u32> = (left_val..=right_val).collect();
+            return Some(ParsedEpisodeMetadata {
+                season: None,
+                episode_numbers: episodes,
+                absolute_episode: Some(left_val),
+                raw: Some(token.to_string()),
+            });
+        }
+
+        // "E795-E940" style ranges
+        if idx > 0 && token.starts_with('E') && token.contains('-') {
+            let frag = &token[1..]; // strip leading E
+            let episodes = parse_episode_fragment(frag);
+            if !episodes.is_empty()
+                && episodes
+                    .iter()
+                    .all(|value| is_reasonable_episode_number(*value))
+            {
+                return Some(ParsedEpisodeMetadata {
+                    season: None,
+                    episode_numbers: episodes.clone(),
+                    absolute_episode: episodes.first().copied(),
+                    raw: Some(token.to_string()),
+                });
+            }
+        }
+
+        // Bare single absolute episode number, optionally with anime version suffix (e.g. "1155V2")
+        {
+            let (digit_part, _version) = if let Some(ver) = parse_anime_version(token) {
+                (&token[..token.len() - 2], Some(ver))
+            } else {
+                (token.as_str(), None)
+            };
+            if is_digit_str(digit_part)
+                && idx > 0
+                && parse_quality(digit_part).is_none()
+                && is_reasonable_episode_number(digit_part.parse::<u32>().ok()?)
+                && (digit_part.len() <= 3
+                    || (digit_part.len() == 4 && parse_year(digit_part).is_none()))
+                && let Ok(episode) = digit_part.parse::<u32>()
+            {
+                pending_absolute = Some((episode, token.to_string()));
+            }
+        }
+
+        // Tilde range: "01 ~ 07" → tokens are ["01", "~", "07"]
+        if (token == "~" || token == "—")
+            && let Some(prev_abs) = pending_absolute.take()
+            && let Some(next_token) = next
+            && is_digit_str(next_token)
+            && let Ok(right_val) = next_token.parse::<u32>()
+            && prev_abs.0 <= right_val
+            && is_reasonable_episode_number(right_val)
+        {
+            let episodes: Vec<u32> = (prev_abs.0..=right_val).collect();
+            return Some(ParsedEpisodeMetadata {
+                season: None,
+                episode_numbers: episodes,
+                absolute_episode: Some(prev_abs.0),
+                raw: Some(format!("{} ~ {}", prev_abs.1, next_token)),
+            });
         }
     }
 
@@ -1863,7 +1950,7 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
             continue;
         }
 
-        if token == "DUAL" || token == "DUALAUDIO" {
+        if token == "DUAL" || token == "DUALAUDIO" || token == "DUAL-AUDIO" {
             parsed.is_dual_audio = true;
             language_context = LanguageScope::Audio;
             if parsed.languages_audio.is_empty() && !explicit_language_seen {

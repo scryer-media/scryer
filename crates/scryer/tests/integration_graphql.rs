@@ -699,9 +699,28 @@ async fn graphql_activity_events_empty() {
 #[tokio::test]
 async fn graphql_title_events_empty() {
     let ctx = TestContext::new().await;
-    let body = gql(&ctx, r#"{ titleEvents { id eventType } }"#, json!({})).await;
+    let body = gql(
+        &ctx,
+        r#"{ titleEvents { id eventType sourceTitle quality occurredAt } }"#,
+        json!({}),
+    )
+    .await;
     assert_no_errors(&body);
     assert!(body["data"]["titleEvents"].is_array());
+}
+
+#[tokio::test]
+async fn graphql_title_history_empty() {
+    let ctx = TestContext::new().await;
+    let body = gql(
+        &ctx,
+        r#"{ titleHistory(filter: { limit: 10 }) { records { id eventType sourceTitle } totalCount } }"#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["titleHistory"]["totalCount"], 0);
+    assert!(body["data"]["titleHistory"]["records"].is_array());
 }
 
 // ---------------------------------------------------------------------------

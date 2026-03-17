@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useClient } from "urql";
 import {
   Select,
   SelectContent,
@@ -6,6 +7,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { SubtitleLanguagePicker } from "@/components/common/subtitle-language-picker";
 import {
   QUALITY_PROFILE_PREFIX,
   ROOT_FOLDER_PREFIX,
@@ -16,7 +18,10 @@ import {
   setTagValue,
   removeTagByPrefix,
 } from "@/lib/utils/title-tags";
+import { convenienceSettingsQuery } from "@/lib/graphql/queries";
+import { setTitleRequiredAudioMutation } from "@/lib/graphql/mutations";
 import { useTranslate } from "@/lib/context/translate-context";
+import { getSubtitleLanguage } from "@/lib/constants/subtitle-languages";
 import type { TitleDetail } from "@/components/containers/series-overview-container";
 
 const INHERIT_VALUE = "__inherit__";
@@ -36,6 +41,77 @@ export function TitleSettingsPanel({
   onUpdateTitleTags: (newTags: string[]) => Promise<void>;
 }) {
   const t = useTranslate();
+  const client = useClient();
+
+  const [requiredAudioLanguages, setRequiredAudioLanguages] = React.useState<string[]>([]);
+  const [inheritedAudioLanguages, setInheritedAudioLanguages] = React.useState<string[]>([]);
+  const [hasAudioOverride, setHasAudioOverride] = React.useState(false);
+  const [audioLoaded, setAudioLoaded] = React.useState(false);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await client.query(convenienceSettingsQuery, {}).toPromise();
+        if (cancelled || !data?.convenienceSettings) return;
+        const settings = data.convenienceSettings.requiredAudio as {
+          scope: string;
+          languages: string[];
+        }[];
+        const titleScope = `title:${title.id}`;
+        const titleMatch = settings.find((r) => r.scope === titleScope);
+        const facetMatch = settings.find((r) => r.scope === title.facet);
+        setInheritedAudioLanguages(facetMatch?.languages ?? []);
+        if (titleMatch) {
+          setRequiredAudioLanguages(titleMatch.languages);
+          setHasAudioOverride(true);
+        } else {
+          setRequiredAudioLanguages(facetMatch?.languages ?? []);
+          setHasAudioOverride(false);
+        }
+        setAudioLoaded(true);
+      } catch {
+        // silently ignore — non-critical
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, title.id, title.facet]);
+
+  const handleRequiredAudioChange = async (languages: string[]) => {
+    setRequiredAudioLanguages(languages);
+    setHasAudioOverride(true);
+    try {
+      await client
+        .mutation(setTitleRequiredAudioMutation, {
+          input: { titleId: title.id, facet: title.facet, languages },
+        })
+        .toPromise();
+    } catch {
+      // silently ignore
+    }
+  };
+
+  const handleResetAudioOverride = async () => {
+    setRequiredAudioLanguages(inheritedAudioLanguages);
+    setHasAudioOverride(false);
+    try {
+      await client
+        .mutation(setTitleRequiredAudioMutation, {
+          input: { titleId: title.id, facet: title.facet, languages: [] },
+        })
+        .toPromise();
+    } catch {
+      // silently ignore
+    }
+  };
+
+  const formatLanguageList = (codes: string[]) =>
+    codes.length === 0
+      ? "None"
+      : codes.map((c) => getSubtitleLanguage(c)?.name ?? c).join(", ");
+
   const currentProfileId = getTagValue(title.tags, QUALITY_PROFILE_PREFIX) ?? INHERIT_VALUE;
   const currentRootFolder = getTagValue(title.tags, ROOT_FOLDER_PREFIX) ?? "";
   const currentSeasonFolder = getTagValue(title.tags, SEASON_FOLDER_PREFIX) ?? "enabled";
@@ -227,6 +303,34 @@ export function TitleSettingsPanel({
           </>
         ) : null}
       </div>
+
+      {audioLoaded ? (
+        <div className="mt-4 space-y-2">
+          <label className="block text-xs font-medium text-muted-foreground">
+            {t("title.requiredAudioLanguages")}
+          </label>
+          <SubtitleLanguagePicker
+            value={requiredAudioLanguages}
+            onChange={(codes) => void handleRequiredAudioChange(codes)}
+          />
+          {hasAudioOverride ? (
+            <button
+              type="button"
+              className="text-xs text-primary hover:underline"
+              onClick={() => void handleResetAudioOverride()}
+            >
+              {t("title.requiredAudioResetInherit")}
+            </button>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              {t("title.requiredAudioInherited", { facet: title.facet })}
+              {inheritedAudioLanguages.length > 0
+                ? `: ${formatLanguageList(inheritedAudioLanguages)}`
+                : null}
+            </p>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }

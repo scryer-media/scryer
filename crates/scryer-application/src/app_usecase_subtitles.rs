@@ -316,16 +316,6 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
         .await?
         .as_deref()
         != Some("false");
-    let sync_threshold_series: i32 = app
-        .read_setting_string_value("subtitles.sync_threshold_series", None)
-        .await?
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(90);
-    let sync_threshold_movie: i32 = app
-        .read_setting_string_value("subtitles.sync_threshold_movie", None)
-        .await?
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(70);
 
     // Initialize provider
     let provider = OpenSubtitlesProvider::new(api_key);
@@ -512,28 +502,21 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
                             warn!(error = %err, "failed to persist subtitle download record");
                         }
 
-                        // Sync subtitle timing if enabled and score is below threshold
+                        // Sync subtitle timing if enabled
                         if sync_enabled && !best.forced {
-                            let sync_threshold = if is_series {
-                                sync_threshold_series
-                            } else {
-                                sync_threshold_movie
-                            };
-                            if best.score < sync_threshold {
-                                match sync::sync_subtitle(file_path, &dest_path, 60).await {
-                                    Ok(result) if result.applied => {
-                                        info!(
-                                            offset_ms = result.offset_ms,
-                                            path = %dest_path.display(),
-                                            "subtitle timing synced"
-                                        );
-                                    }
-                                    Ok(_) => {
-                                        debug!(path = %dest_path.display(), "subtitle sync: no offset applied");
-                                    }
-                                    Err(err) => {
-                                        warn!(error = %err, "subtitle sync failed (non-fatal)");
-                                    }
+                            match sync::sync_subtitle(file_path, &dest_path, 60).await {
+                                Ok(result) if result.applied => {
+                                    info!(
+                                        offset_ms = result.offset_ms,
+                                        path = %dest_path.display(),
+                                        "subtitle timing synced"
+                                    );
+                                }
+                                Ok(_) => {
+                                    debug!(path = %dest_path.display(), "subtitle sync: no offset applied");
+                                }
+                                Err(err) => {
+                                    warn!(error = %err, "subtitle sync failed (non-fatal)");
                                 }
                             }
                         }

@@ -416,6 +416,9 @@ const zh_CN: LocaleDictionary = {
   "title.monitoredSection": "监控中的 {{facet}}",
   "title.noWantedItem": "没有活动的想要项目。",
   "title.queueLatest": "加入最新队列",
+  "title.requiredAudioLanguages": "必需音频语言",
+  "title.requiredAudioInherited": "继承自 {{facet}} 设置",
+  "title.requiredAudioResetInherit": "重置为继承",
 
   "tvdb.searchResults": "TVDB 搜索结果",
   "tvdb.searchPrompt": "在上方输入标题以搜索 TVDB。",
@@ -505,6 +508,12 @@ const zh_CN: LocaleDictionary = {
   "importHistory.decision": "决定",
   "importHistory.error": "错误",
   "importHistory.createdAt": "日期",
+  "importHistory.retry": "重试",
+  "importHistory.retrying": "重试中...",
+  "importHistory.retryWithPassword": "使用密码重试",
+  "importHistory.passwordRequired": "需要密码",
+  "importHistory.passwordPlaceholder": "压缩包密码",
+  "importHistory.retrySuccess": "已开始重新导入",
 
   "system.title": "系统健康",
   "system.notLoaded": "系统健康状态未加载。",
@@ -608,6 +617,10 @@ const zh_CN: LocaleDictionary = {
   "settings.ruleValidating": "验证中…",
   "settings.ruleValid": "规则有效。",
   "settings.ruleValidationRequired": "名称和 Rego 源码为必填项。",
+  "settings.ruleLibrary": "规则库",
+  "settings.ruleLibraryDescription":
+    "预置规则，一键即可添加。选择模板以填充编辑器。",
+  "settings.ruleLibraryAll": "全部",
   "settings.rulesFacetSection": "{{facet}} 的自定义规则",
   "settings.ruleGlobal": "全局",
   "settings.ruleNoFacetRules":
@@ -1420,6 +1433,42 @@ const zh_CN: LocaleDictionary = {
   "setup.apiKeyPlaceholder": "粘贴 API 密钥…",
   "setup.apiKeyHelpLink": "在 SABnzbd > 配置 > 通用 中查找",
   "settings.runSetupWizard": "运行设置向导",
+
+  "settings.sub.minScoreSeries": "剧集最低匹配分数",
+  "settings.sub.minScoreMovie": "电影最低匹配分数",
+  "settings.sub.minScoreHelp":
+    "低于此分数的字幕将被跳过。剧集需要更高的阈值，因为剧集级别的匹配必须精确。",
+  "settings.sub.syncEnabled": "自动校正字幕时间轴",
+  "settings.sub.syncEnabledHelp":
+    "使用音频分析来修正已下载字幕的时间偏移。",
+
+  "history.title": "历史记录",
+  "history.empty": "暂无历史事件",
+  "history.event": "事件",
+  "history.titleColumn": "标题",
+  "history.sourceTitle": "来源标题",
+  "history.quality": "质量",
+  "history.date": "日期",
+  "history.filterByEventType": "按事件类型筛选",
+  "history.allEvents": "所有事件",
+  "history.grabbed": "已抓取",
+  "history.imported": "已导入",
+  "history.importFailed": "导入失败",
+  "history.importSkipped": "导入已跳过",
+  "history.downloadCompleted": "已下载",
+  "history.fileDeleted": "已删除",
+  "history.fileRenamed": "已重命名",
+  "history.downloadIgnored": "已忽略",
+  "history.noMore": "没有更多事件",
+  "history.loadMore": "加载更多",
+
+  "convenience.title": "便捷规则",
+  "convenience.requiredAudioLabel": "必需音频语言",
+  "convenience.requiredAudioHelp":
+    "不包含这些音频语言的发布将被屏蔽。会创建一条托管规则，可在设置 > 规则中查看。",
+  "convenience.preferDualAudioLabel": "偏好双音轨",
+  "convenience.preferDualAudioHelp":
+    "优先选择包含多条音轨的发布。会创建一条托管规则，可在设置 > 规则中查看。",
 };
 
 export default zh_CN;

@@ -389,6 +389,10 @@ pub(crate) enum DbCommand {
         title_id: String,
         reply: Sender<AppResult<()>>,
     },
+    GetImportById {
+        id: String,
+        reply: Sender<AppResult<Option<ImportRecord>>>,
+    },
     GetImportBySourceRef {
         source_system: String,
         source_ref: String,
@@ -579,6 +583,18 @@ pub(crate) enum DbCommand {
     DeleteRuleSet {
         id: String,
         reply: Sender<AppResult<()>>,
+    },
+    GetRuleSetByManagedKey {
+        key: String,
+        reply: Sender<AppResult<Option<RuleSet>>>,
+    },
+    DeleteRuleSetByManagedKey {
+        key: String,
+        reply: Sender<AppResult<()>>,
+    },
+    ListRuleSetsByManagedKeyPrefix {
+        prefix: String,
+        reply: Sender<AppResult<Vec<RuleSet>>>,
     },
     RecordRuleSetHistory {
         id: String,
@@ -1438,6 +1454,9 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                         .await,
                     );
                 }
+                DbCommand::GetImportById { id, reply } => {
+                    let _ = reply.send(get_import_by_id_query(&pool, &id).await);
+                }
                 DbCommand::GetImportBySourceRef {
                     source_system,
                     source_ref,
@@ -1808,6 +1827,16 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 }
                 DbCommand::DeleteRuleSet { id, reply } => {
                     let _ = reply.send(delete_rule_set_query(&pool, &id).await);
+                }
+                DbCommand::GetRuleSetByManagedKey { key, reply } => {
+                    let _ = reply.send(get_rule_set_by_managed_key_query(&pool, &key).await);
+                }
+                DbCommand::DeleteRuleSetByManagedKey { key, reply } => {
+                    let _ = reply.send(delete_rule_set_by_managed_key_query(&pool, &key).await);
+                }
+                DbCommand::ListRuleSetsByManagedKeyPrefix { prefix, reply } => {
+                    let _ = reply
+                        .send(list_rule_sets_by_managed_key_prefix_query(&pool, &prefix).await);
                 }
                 DbCommand::RecordRuleSetHistory {
                     id,

@@ -113,14 +113,8 @@ export type InterstitialMovieMetadata = {
   movieMalId: string | null;
 };
 
-export type TitleEvent = {
-  id: string;
-  eventType: string;
-  actorUserId: string | null;
-  titleId: string | null;
-  message: string;
-  occurredAt: string;
-};
+import type { TitleHistoryEvent } from "@/lib/types";
+export type { TitleHistoryEvent };
 
 export type TitleReleaseBlocklistEntry = {
   sourceHint: string | null;
@@ -213,7 +207,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   const client = useClient();
   const [title, setTitle] = React.useState<TitleDetail | null>(null);
   const [collections, setCollections] = React.useState<TitleCollection[]>([]);
-  const [events, setEvents] = React.useState<TitleEvent[]>([]);
+  const [events, setEvents] = React.useState<TitleHistoryEvent[]>([]);
   const [releaseBlocklistEntries, setReleaseBlocklistEntries] = React.useState<
     TitleReleaseBlocklistEntry[]
   >([]);

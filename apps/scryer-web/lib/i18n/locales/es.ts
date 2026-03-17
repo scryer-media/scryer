@@ -404,6 +404,9 @@ const es: LocaleDictionary = {
   "title.monitoredSection": "{{facet}} monitorizados",
   "title.noWantedItem": "Sin elemento buscado activo.",
   "title.queueLatest": "Descargar último",
+  "title.requiredAudioLanguages": "Idiomas de audio requeridos",
+  "title.requiredAudioInherited": "Heredado de la configuración de {{facet}}",
+  "title.requiredAudioResetInherit": "Restablecer para heredar",
 
   "tvdb.searchResults": "Resultados de búsqueda en TVDB",
   "tvdb.searchPrompt": "Busca en TVDB introduciendo un título arriba.",
@@ -493,6 +496,12 @@ const es: LocaleDictionary = {
   "importHistory.decision": "Decisión",
   "importHistory.error": "Error",
   "importHistory.createdAt": "Fecha",
+  "importHistory.retry": "Reintentar",
+  "importHistory.retrying": "Reintentando...",
+  "importHistory.retryWithPassword": "Reintentar con contraseña",
+  "importHistory.passwordRequired": "Contraseña requerida",
+  "importHistory.passwordPlaceholder": "Contraseña del archivo",
+  "importHistory.retrySuccess": "Reintento de importación iniciado",
 
   "system.title": "Estado del sistema",
   "system.notLoaded": "Estado del sistema no cargado.",
@@ -592,6 +601,10 @@ const es: LocaleDictionary = {
   "settings.ruleValidating": "Validando…",
   "settings.ruleValid": "La regla es válida.",
   "settings.ruleValidationRequired": "El nombre y el código Rego son obligatorios.",
+  "settings.ruleLibrary": "Biblioteca de reglas",
+  "settings.ruleLibraryDescription":
+    "Reglas predefinidas que puedes añadir con un clic. Selecciona una plantilla para rellenar el editor.",
+  "settings.ruleLibraryAll": "Todas",
   "settings.rulesFacetSection": "Reglas personalizadas para {{facet}}",
   "settings.ruleGlobal": "Global",
   "settings.ruleNoFacetRules":
@@ -1277,6 +1290,42 @@ const es: LocaleDictionary = {
   "setup.apiKeyPlaceholder": "Pegar clave API…",
   "setup.apiKeyHelpLink": "Encuéntrala en SABnzbd → Config → General",
   "settings.runSetupWizard": "Ejecutar asistente de configuración",
+
+  "settings.sub.minScoreSeries": "Puntuación mínima para series",
+  "settings.sub.minScoreMovie": "Puntuación mínima para películas",
+  "settings.sub.minScoreHelp":
+    "Los subtítulos con puntuación inferior se omiten. Las series necesitan un umbral más alto porque la coincidencia a nivel de episodio debe ser exacta.",
+  "settings.sub.syncEnabled": "Corregir automáticamente el sincronismo de subtítulos",
+  "settings.sub.syncEnabledHelp":
+    "Usa análisis de audio para corregir desfases de sincronismo en subtítulos descargados.",
+
+  "history.title": "Historial",
+  "history.empty": "Sin eventos en el historial",
+  "history.event": "Evento",
+  "history.titleColumn": "Título",
+  "history.sourceTitle": "Título de origen",
+  "history.quality": "Calidad",
+  "history.date": "Fecha",
+  "history.filterByEventType": "Filtrar por tipo de evento",
+  "history.allEvents": "Todos los eventos",
+  "history.grabbed": "Capturado",
+  "history.imported": "Importado",
+  "history.importFailed": "Importación fallida",
+  "history.importSkipped": "Importación omitida",
+  "history.downloadCompleted": "Descargado",
+  "history.fileDeleted": "Eliminado",
+  "history.fileRenamed": "Renombrado",
+  "history.downloadIgnored": "Ignorado",
+  "history.noMore": "No hay más eventos",
+  "history.loadMore": "Cargar más",
+
+  "convenience.title": "Reglas de conveniencia",
+  "convenience.requiredAudioLabel": "Idiomas de audio requeridos",
+  "convenience.requiredAudioHelp":
+    "Las releases sin estos idiomas de audio serán bloqueadas. Crea una regla gestionada visible en Ajustes > Reglas.",
+  "convenience.preferDualAudioLabel": "Preferir audio dual",
+  "convenience.preferDualAudioHelp":
+    "Priorizar releases con múltiples pistas de audio. Crea una regla gestionada visible en Ajustes > Reglas.",
 };
 
 export default es;

@@ -10,10 +10,9 @@ import { useGlobalStatus } from "@/lib/context/global-status-context";
 
 export type SubtitleSettings = {
   enabled: boolean;
-  opensubtitlesApiKey: string;
   opensubtitlesUsername: string;
   opensubtitlesPassword: string;
-  languages: string;
+  languages: string[];
   autoDownloadOnImport: boolean;
   minimumScoreSeries: number;
   minimumScoreMovie: number;
@@ -21,16 +20,13 @@ export type SubtitleSettings = {
   includeAiTranslated: boolean;
   includeMachineTranslated: boolean;
   syncEnabled: boolean;
-  syncThresholdSeries: number;
-  syncThresholdMovie: number;
 };
 
 const DEFAULTS: SubtitleSettings = {
   enabled: false,
-  opensubtitlesApiKey: "",
   opensubtitlesUsername: "",
   opensubtitlesPassword: "",
-  languages: "",
+  languages: [],
   autoDownloadOnImport: false,
   minimumScoreSeries: 240,
   minimumScoreMovie: 70,
@@ -38,8 +34,6 @@ const DEFAULTS: SubtitleSettings = {
   includeAiTranslated: false,
   includeMachineTranslated: false,
   syncEnabled: true,
-  syncThresholdSeries: 90,
-  syncThresholdMovie: 70,
 };
 
 function parseSetting(items: AdminSetting[], key: string, fallback: string): string {
@@ -48,22 +42,34 @@ function parseSetting(items: AdminSetting[], key: string, fallback: string): str
   return raw.length > 0 ? raw : fallback;
 }
 
-function parseLanguagesFromJson(json: string): string {
+function parseLanguagesFromJson(json: string): string[] {
   try {
     const arr = JSON.parse(json);
-    if (!Array.isArray(arr)) return "";
-    return arr.map((l: { code?: string }) => l.code ?? "").filter(Boolean).join(", ");
+    if (!Array.isArray(arr)) return [];
+    return arr.map((l: { code?: string }) => l.code ?? "").filter(Boolean);
   } catch {
-    return "";
+    return [];
   }
 }
 
-function languagesToJson(input: string): string {
-  const codes = input
-    .split(/[,\s]+/)
-    .map((s) => s.trim().toLowerCase())
-    .filter((s) => s.length >= 2 && s.length <= 3);
+function languagesToJson(codes: string[]): string {
   return JSON.stringify(codes.map((code) => ({ code, hearing_impaired: false, forced: false })));
+}
+
+function buildSaveItems(settings: SubtitleSettings) {
+  return [
+    { keyName: "subtitles.enabled", value: String(settings.enabled) },
+    ...(settings.opensubtitlesUsername ? [{ keyName: "subtitles.opensubtitles_username", value: settings.opensubtitlesUsername }] : []),
+    ...(settings.opensubtitlesPassword ? [{ keyName: "subtitles.opensubtitles_password", value: settings.opensubtitlesPassword }] : []),
+    { keyName: "subtitles.languages", value: languagesToJson(settings.languages) },
+    { keyName: "subtitles.auto_download_on_import", value: String(settings.autoDownloadOnImport) },
+    { keyName: "subtitles.minimum_score_series", value: String(settings.minimumScoreSeries) },
+    { keyName: "subtitles.minimum_score_movie", value: String(settings.minimumScoreMovie) },
+    { keyName: "subtitles.search_interval_hours", value: String(settings.searchIntervalHours) },
+    { keyName: "subtitles.include_ai_translated", value: String(settings.includeAiTranslated) },
+    { keyName: "subtitles.include_machine_translated", value: String(settings.includeMachineTranslated) },
+    { keyName: "subtitles.sync_enabled", value: String(settings.syncEnabled) },
+  ];
 }
 
 export function SettingsSubtitlesContainer() {
@@ -73,6 +79,7 @@ export function SettingsSubtitlesContainer() {
   const [settings, setSettings] = React.useState<SubtitleSettings>(DEFAULTS);
   const [saving, setSaving] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
+  const loadedRef = React.useRef(false);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -84,9 +91,8 @@ export function SettingsSubtitlesContainer() {
         const items: AdminSetting[] = data?.subtitleSettings?.items ?? [];
         setSettings({
           enabled: parseSetting(items, "subtitles.enabled", "false") === "true",
-          opensubtitlesApiKey: parseSetting(items, "subtitles.opensubtitles_api_key", ""),
           opensubtitlesUsername: parseSetting(items, "subtitles.opensubtitles_username", ""),
-          opensubtitlesPassword: parseSetting(items, "subtitles.opensubtitles_password", ""),
+          opensubtitlesPassword: "",
           languages: parseLanguagesFromJson(parseSetting(items, "subtitles.languages", "[]")),
           autoDownloadOnImport: parseSetting(items, "subtitles.auto_download_on_import", "false") === "true",
           minimumScoreSeries: Number(parseSetting(items, "subtitles.minimum_score_series", "240")),
@@ -95,9 +101,8 @@ export function SettingsSubtitlesContainer() {
           includeAiTranslated: parseSetting(items, "subtitles.include_ai_translated", "false") === "true",
           includeMachineTranslated: parseSetting(items, "subtitles.include_machine_translated", "false") === "true",
           syncEnabled: parseSetting(items, "subtitles.sync_enabled", "true") === "true",
-          syncThresholdSeries: Number(parseSetting(items, "subtitles.sync_threshold_series", "90")),
-          syncThresholdMovie: Number(parseSetting(items, "subtitles.sync_threshold_movie", "70")),
         });
+        loadedRef.current = true;
       } catch {
         // Use defaults on failure
       } finally {
@@ -107,37 +112,24 @@ export function SettingsSubtitlesContainer() {
     return () => { cancelled = true; };
   }, [client]);
 
-  const handleSave = React.useCallback(async () => {
+  // Auto-save on change (skip initial load)
+  React.useEffect(() => {
+    if (!loadedRef.current) return;
     setSaving(true);
-    try {
-      const { error } = await client.mutation(saveAdminSettingsMutation, {
-        input: {
-          scope: "system",
-          items: [
-            { keyName: "subtitles.enabled", value: String(settings.enabled) },
-            { keyName: "subtitles.opensubtitles_api_key", value: settings.opensubtitlesApiKey },
-            { keyName: "subtitles.opensubtitles_username", value: settings.opensubtitlesUsername },
-            { keyName: "subtitles.opensubtitles_password", value: settings.opensubtitlesPassword },
-            { keyName: "subtitles.languages", value: languagesToJson(settings.languages) },
-            { keyName: "subtitles.auto_download_on_import", value: String(settings.autoDownloadOnImport) },
-            { keyName: "subtitles.minimum_score_series", value: String(settings.minimumScoreSeries) },
-            { keyName: "subtitles.minimum_score_movie", value: String(settings.minimumScoreMovie) },
-            { keyName: "subtitles.search_interval_hours", value: String(settings.searchIntervalHours) },
-            { keyName: "subtitles.include_ai_translated", value: String(settings.includeAiTranslated) },
-            { keyName: "subtitles.include_machine_translated", value: String(settings.includeMachineTranslated) },
-            { keyName: "subtitles.sync_enabled", value: String(settings.syncEnabled) },
-            { keyName: "subtitles.sync_threshold_series", value: String(settings.syncThresholdSeries) },
-            { keyName: "subtitles.sync_threshold_movie", value: String(settings.syncThresholdMovie) },
-          ],
-        },
-      }).toPromise();
-      if (error) throw error;
-      setGlobalStatus(t("settings.subtitlesSaved"));
-    } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
-    } finally {
-      setSaving(false);
-    }
+    client
+      .mutation(saveAdminSettingsMutation, {
+        input: { scope: "system", items: buildSaveItems(settings) },
+      })
+      .toPromise()
+      .then(({ error }) => {
+        if (error) {
+          setGlobalStatus(error.message || t("status.failedToUpdate"));
+        }
+      })
+      .catch((error: unknown) => {
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      })
+      .finally(() => setSaving(false));
   }, [client, setGlobalStatus, settings, t]);
 
   return (
@@ -146,7 +138,6 @@ export function SettingsSubtitlesContainer() {
       setSettings={setSettings}
       saving={saving}
       loading={loading}
-      onSave={handleSave}
     />
   );
 }

@@ -31,12 +31,61 @@ pub struct RegistryPlugin {
     pub default_base_url: Option<String>,
 }
 
+/// Community rule pack entry from the registry.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RulePackRegistryEntry {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub author: String,
+    pub version: String,
+    pub url: String,
+    #[serde(default)]
+    pub min_scryer_version: Option<String>,
+}
+
+/// A single rule template within a community rule pack.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RulePackTemplate {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub category: String,
+    pub rego_source: String,
+    #[serde(default)]
+    pub applied_facets: Vec<String>,
+}
+
+/// Full rule pack JSON fetched from a URL.
+#[derive(Clone, Debug, Deserialize)]
+struct RulePackManifest {
+    #[expect(dead_code)]
+    schema_version: u32,
+    #[expect(dead_code)]
+    id: String,
+    rules: Vec<RulePackRule>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct RulePackRule {
+    id: String,
+    title: String,
+    description: String,
+    category: String,
+    #[serde(alias = "regoSource")]
+    rego_source: String,
+    #[serde(default, alias = "appliedFacets")]
+    applied_facets: Vec<String>,
+}
+
 /// Raw registry JSON format (matches scryer-plugins/registry.json).
 #[derive(Clone, Debug, Deserialize)]
 struct RegistryManifest {
     #[expect(dead_code)]
     schema_version: u32,
     plugins: Vec<RegistryEntry>,
+    #[serde(default)]
+    rule_packs: Vec<RulePackRegistryEntry>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -812,6 +861,94 @@ impl AppUseCase {
 
         self.rebuild_plugin_provider().await?;
         Ok(result)
+    }
+
+    /// List available community rule packs from the cached registry.
+    pub async fn list_rule_pack_registry(
+        &self,
+        actor: &User,
+    ) -> AppResult<Vec<RulePackRegistryEntry>> {
+        require(actor, &Entitlement::ManageConfig)?;
+
+        let registry_json = self
+            .services
+            .plugin_installations
+            .get_registry_cache()
+            .await?;
+
+        let Some(json) = registry_json else {
+            return Ok(Vec::new());
+        };
+
+        let manifest: RegistryManifest = serde_json::from_str(&json)
+            .map_err(|e| AppError::Repository(format!("failed to parse registry cache: {e}")))?;
+
+        // Filter by min_scryer_version compatibility
+        let current = current_scryer_version();
+        Ok(manifest
+            .rule_packs
+            .into_iter()
+            .filter(|pack| {
+                pack.min_scryer_version
+                    .as_ref()
+                    .and_then(|v| semver::Version::parse(v).ok())
+                    .is_none_or(|min| current >= &min)
+            })
+            .collect())
+    }
+
+    /// Fetch a community rule pack by its registry ID.
+    pub async fn fetch_rule_pack_templates(
+        &self,
+        actor: &User,
+        pack_id: &str,
+    ) -> AppResult<Vec<RulePackTemplate>> {
+        require(actor, &Entitlement::ManageConfig)?;
+
+        // Find the pack URL from registry
+        let packs = self.list_rule_pack_registry(actor).await?;
+        let pack = packs
+            .iter()
+            .find(|p| p.id == pack_id)
+            .ok_or_else(|| AppError::NotFound(format!("rule pack {pack_id}")))?;
+
+        // Fetch the JSON
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .map_err(|e| AppError::Repository(format!("failed to build HTTP client: {e}")))?;
+
+        let response = http
+            .get(&pack.url)
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .map_err(|e| AppError::Repository(format!("failed to fetch rule pack: {e}")))?;
+
+        if !response.status().is_success() {
+            return Err(AppError::Repository(format!(
+                "rule pack fetch failed (HTTP {})",
+                response.status()
+            )));
+        }
+
+        let manifest: RulePackManifest = response
+            .json()
+            .await
+            .map_err(|e| AppError::Repository(format!("invalid rule pack JSON: {e}")))?;
+
+        Ok(manifest
+            .rules
+            .into_iter()
+            .map(|r| RulePackTemplate {
+                id: r.id,
+                title: r.title,
+                description: r.description,
+                category: r.category,
+                rego_source: r.rego_source,
+                applied_facets: r.applied_facets,
+            })
+            .collect())
     }
 }
 

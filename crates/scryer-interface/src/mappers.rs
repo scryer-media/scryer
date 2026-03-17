@@ -3,11 +3,11 @@ use scryer_application::{
     HousekeepingReport, IndexerSearchResult, LibraryScanSummary, ParsedEpisodeMetadata,
     ParsedReleaseMetadata, PendingRelease, QualityProfileDecision, RegistryPlugin,
     RenameApplyItemResult, RenameApplyResult, RenamePlan, RenamePlanItem, RssSyncReport,
-    ScoringEntry, ScoringSource, SystemHealth, TitleReleaseBlocklistEntry,
+    ScoringEntry, ScoringSource, SystemHealth, TitleHistoryPage, TitleReleaseBlocklistEntry,
 };
 use scryer_domain::{
-    CalendarEpisode, Collection, DownloadClientConfig, DownloadQueueItem, Episode, HistoryEvent,
-    IndexerConfig, PluginInstallation, PolicyOutput, RuleSet, Title, User,
+    CalendarEpisode, Collection, DownloadClientConfig, DownloadQueueItem, Episode, IndexerConfig,
+    PluginInstallation, PolicyOutput, RuleSet, Title, TitleHistoryRecord, User,
 };
 use scryer_infrastructure::{SettingsValueRecord, WorkflowOperationRecord};
 use scryer_rules;
@@ -66,6 +66,27 @@ pub(crate) fn from_tvdb_scan_operation(
 }
 
 pub(crate) fn from_search_result(result: IndexerSearchResult) -> IndexerSearchResultPayload {
+    let seeders = result
+        .extra
+        .get("seeders")
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i32);
+    let peers = result
+        .extra
+        .get("peers")
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i32);
+    let info_hash = result
+        .extra
+        .get("info_hash")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string());
+    let freeleech = result.extra.get("freeleech").and_then(|v| v.as_bool());
+    let download_volume_factor = result
+        .extra
+        .get("downloadvolumefactor")
+        .and_then(|v| v.as_f64());
+
     IndexerSearchResultPayload {
         source: result.source,
         title: result.title,
@@ -80,6 +101,11 @@ pub(crate) fn from_search_result(result: IndexerSearchResult) -> IndexerSearchRe
         quality_profile_decision: result
             .quality_profile_decision
             .map(from_quality_profile_decision),
+        seeders,
+        peers,
+        info_hash,
+        freeleech,
+        download_volume_factor,
     }
 }
 
@@ -558,17 +584,6 @@ pub(crate) fn from_user(user: User) -> UserPayload {
     }
 }
 
-pub(crate) fn from_event(event: HistoryEvent) -> EventPayload {
-    EventPayload {
-        id: event.id,
-        event_type: format!("{:?}", event.event_type).to_lowercase(),
-        actor_user_id: event.actor_user_id,
-        title_id: event.title_id,
-        message: event.message,
-        occurred_at: event.occurred_at.to_rfc3339(),
-    }
-}
-
 pub(crate) fn from_activity_event(event: ActivityEvent) -> ActivityEventPayload {
     ActivityEventPayload {
         id: event.id,
@@ -754,6 +769,8 @@ pub(crate) fn from_rule_set(rs: RuleSet) -> RuleSetPayload {
             .iter()
             .map(|f| format!("{:?}", f).to_lowercase())
             .collect(),
+        is_managed: rs.is_managed,
+        managed_key: rs.managed_key,
         created_at: rs.created_at.to_rfc3339(),
         updated_at: rs.updated_at.to_rfc3339(),
     }
@@ -918,5 +935,32 @@ pub(crate) fn from_housekeeping_report(report: HousekeepingReport) -> Housekeepi
         stale_history_events: report.stale_history_events as i32,
         recycled_purged: report.recycled_purged as i32,
         ran_at: report.ran_at,
+    }
+}
+
+pub(crate) fn from_title_history_record(record: TitleHistoryRecord) -> TitleHistoryEventPayload {
+    TitleHistoryEventPayload {
+        id: record.id,
+        title_id: record.title_id,
+        episode_id: record.episode_id,
+        collection_id: record.collection_id,
+        event_type: record.event_type,
+        source_title: record.source_title,
+        quality: record.quality,
+        download_id: record.download_id,
+        data_json: record.data_json,
+        occurred_at: record.occurred_at,
+        created_at: record.created_at,
+    }
+}
+
+pub(crate) fn from_title_history_page(page: TitleHistoryPage) -> TitleHistoryPagePayload {
+    TitleHistoryPagePayload {
+        records: page
+            .records
+            .into_iter()
+            .map(from_title_history_record)
+            .collect(),
+        total_count: page.total_count,
     }
 }

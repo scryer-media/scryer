@@ -87,6 +87,37 @@ impl DownloadMutations {
         })
     }
 
+    /// Retry a previously failed import, optionally with an archive password.
+    async fn retry_import(
+        &self,
+        ctx: &Context<'_>,
+        input: RetryImportInput,
+    ) -> GqlResult<ImportResultPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let result = scryer_application::retry_failed_import(
+            &app,
+            &actor,
+            &input.import_id,
+            input.password.as_deref(),
+        )
+        .await
+        .map_err(to_gql_error)?;
+
+        Ok(ImportResultPayload {
+            import_id: result.import_id,
+            decision: result.decision.as_str().to_string(),
+            skip_reason: result.skip_reason.map(|r| r.as_str().to_string()),
+            title_id: result.title_id,
+            source_path: result.source_path,
+            dest_path: result.dest_path,
+            file_size_bytes: result.file_size_bytes.map(|v| v.to_string()),
+            link_type: result.link_type.map(|s| s.as_str().to_string()),
+            error_message: result.error_message,
+        })
+    }
+
     async fn execute_manual_import(
         &self,
         ctx: &Context<'_>,

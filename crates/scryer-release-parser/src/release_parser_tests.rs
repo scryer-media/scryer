@@ -1560,3 +1560,187 @@ fn verify_dd_channels_with_hyphen_group() {
     assert_eq!(p.audio.as_deref(), Some("DD"));
     assert_eq!(p.audio_channels.as_deref(), Some("5.1"));
 }
+
+// ── AnimeTosho fansub-style titles ────────────────────────────────────
+// Real titles sourced from AnimeTosho JSON API searches for One Piece,
+// Demon Slayer, Jujutsu Kaisen, Spy x Family, and Frieren.
+
+#[test]
+fn tosho_absolute_single_episode() {
+    let p = parse_release_metadata("[SubsPlease] One Piece - 1146 (480p) [7994C15E].mkv");
+    assert_eq!(p.quality.as_deref(), Some("480p"));
+    assert_eq!(p.release_group.as_deref(), Some("SubsPlease"));
+    let ep = p.episode.unwrap();
+    assert_eq!(ep.absolute_episode, Some(1146));
+}
+
+#[test]
+fn tosho_standard_sxxexx() {
+    let p = parse_release_metadata(
+        "[EMBER] Kimetsu no Yaiba S04E01 [1080p] [HEVC WEBRip DDP] (Kimetsu no Yaiba: Hashira Geiko-hen)",
+    );
+    assert_eq!(p.quality.as_deref(), Some("1080p"));
+    assert_eq!(p.source.as_deref(), Some("WEB-DL"));
+    assert_eq!(p.video_codec.as_deref(), Some("H.265"));
+    assert_eq!(p.audio.as_deref(), Some("DDP"));
+    assert_eq!(p.release_group.as_deref(), Some("EMBER"));
+    let ep = p.episode.unwrap();
+    assert_eq!(ep.season, Some(4));
+    assert_eq!(ep.episode_numbers, vec![1]);
+}
+
+#[test]
+fn tosho_hyphen_episode_range() {
+    let p = parse_release_metadata("[HatSubs] One Piece 1122-1133 (WEB 1080p)");
+    assert_eq!(p.quality.as_deref(), Some("1080p"));
+    assert_eq!(p.source.as_deref(), Some("WEB-DL"));
+    assert_eq!(p.release_group.as_deref(), Some("HatSubs"));
+    let ep = p.episode.unwrap();
+    assert_eq!(ep.absolute_episode, Some(1122));
+    assert_eq!(ep.episode_numbers.len(), 12); // 1122..=1133
+    assert_eq!(ep.episode_numbers[0], 1122);
+    assert_eq!(*ep.episode_numbers.last().unwrap(), 1133);
+}
+
+#[test]
+fn tosho_tilde_episode_range() {
+    let p = parse_release_metadata(
+        "[Erai-raws] Kimetsu no Yaiba - Mugen Ressha Hen (TV) - 01 ~ 07 [1080p][HEVC][BATCH]",
+    );
+    assert_eq!(p.quality.as_deref(), Some("1080p"));
+    assert_eq!(p.video_codec.as_deref(), Some("H.265"));
+    assert_eq!(p.release_group.as_deref(), Some("Erai-raws"));
+    let ep = p.episode.unwrap();
+    assert_eq!(ep.absolute_episode, Some(1));
+    assert_eq!(ep.episode_numbers, vec![1, 2, 3, 4, 5, 6, 7]);
+}
+
+#[test]
+fn tosho_zero_padded_range() {
+    let p = parse_release_metadata("[F-R] One Piece 0001-0782 (Batch)");
+    assert_eq!(p.release_group.as_deref(), Some("F-R"));
+    let ep = p.episode.unwrap();
+    assert_eq!(ep.absolute_episode, Some(1));
+    assert_eq!(ep.episode_numbers[0], 1);
+    assert_eq!(*ep.episode_numbers.last().unwrap(), 782);
+}
+
+#[test]
+fn tosho_bd_movie_no_episode() {
+    let p =
+        parse_release_metadata("[DB] Kimetsu no Yaiba Movie - Mugen Ressha-hen [BD][1080p][HEVC]");
+    assert_eq!(p.quality.as_deref(), Some("1080p"));
+    assert_eq!(p.source.as_deref(), Some("BluRay"));
+    assert_eq!(p.video_codec.as_deref(), Some("H.265"));
+    assert_eq!(p.release_group.as_deref(), Some("DB"));
+    assert!(p.episode.is_none());
+}
+
+#[test]
+fn tosho_dual_audio_movie() {
+    let p = parse_release_metadata(
+        "[Salieri] Demon Slayer - Kimetsu No Yaiba- Mugen Train BD (1080P) (HDR) [Dual-Audio]",
+    );
+    assert_eq!(p.quality.as_deref(), Some("1080p"));
+    assert_eq!(p.source.as_deref(), Some("BluRay"));
+    assert_eq!(p.release_group.as_deref(), Some("Salieri"));
+    // Dual-Audio in brackets is detected
+    assert!(
+        p.is_dual_audio,
+        "expected dual audio detection from [Dual-Audio]"
+    );
+}
+
+#[test]
+fn tosho_webdl_2160p() {
+    let p = parse_release_metadata(
+        "[ToonsHub] Demon Slayer- Kimetsu no Yaiba S04E01 2160p B-Global WEB-DL AAC2.0 x264",
+    );
+    assert_eq!(p.quality.as_deref(), Some("2160p"));
+    assert_eq!(p.source.as_deref(), Some("WEB-DL"));
+    assert_eq!(p.video_codec.as_deref(), Some("H.264"));
+    assert_eq!(p.audio.as_deref(), Some("AAC"));
+    assert_eq!(p.release_group.as_deref(), Some("ToonsHub"));
+    let ep = p.episode.unwrap();
+    assert_eq!(ep.season, Some(4));
+    assert_eq!(ep.episode_numbers, vec![1]);
+}
+
+#[test]
+fn tosho_scene_style_absolute_in_sxxexx() {
+    let p = parse_release_metadata("One.Piece.S01E1122.1080p.CR.WEB-DL.AAC2.0.H.264-VARYG");
+    assert_eq!(p.quality.as_deref(), Some("1080p"));
+    assert_eq!(p.source.as_deref(), Some("WEB-DL"));
+    assert_eq!(p.video_codec.as_deref(), Some("H.264"));
+    assert_eq!(p.release_group.as_deref(), Some("VARYG"));
+    let ep = p.episode.unwrap();
+    assert_eq!(ep.season, Some(1));
+    assert_eq!(ep.episode_numbers, vec![1122]);
+}
+
+#[test]
+fn tosho_judas_version_suffix() {
+    let p = parse_release_metadata(
+        "[Judas] One Piece - 1155v2 [1080p][HEVC x265 10bit][Multi-Subs] (Weekly)",
+    );
+    assert_eq!(p.quality.as_deref(), Some("1080p"));
+    assert_eq!(p.video_codec.as_deref(), Some("H.265"));
+    assert_eq!(p.release_group.as_deref(), Some("Judas"));
+    let ep = p.episode.unwrap();
+    assert_eq!(ep.absolute_episode, Some(1155));
+}
+
+#[test]
+fn tosho_erai_raws_weekly() {
+    let p = parse_release_metadata(
+        "[Erai-raws] One Piece - 1155 [1080p CR WEBRip HEVC AAC][MultiSub][F186289F]",
+    );
+    assert_eq!(p.quality.as_deref(), Some("1080p"));
+    assert_eq!(p.release_group.as_deref(), Some("Erai-raws"));
+    let ep = p.episode.unwrap();
+    assert_eq!(ep.absolute_episode, Some(1155));
+}
+
+#[test]
+fn tosho_jujutsu_kaisen_multi_season_range() {
+    let p = parse_release_metadata(
+        "[Anime Time] Jujutsu Kaisen (Season 01+02) [1080p][HEVC 10bit x265][AAC][Eng Sub] [Batch]",
+    );
+    assert_eq!(p.quality.as_deref(), Some("1080p"));
+    assert_eq!(p.video_codec.as_deref(), Some("H.265"));
+    assert_eq!(p.release_group.as_deref(), Some("Anime Time"));
+}
+
+#[test]
+fn tosho_spy_family_standard() {
+    let p = parse_release_metadata("[SubsPlease] Spy x Family - 37 (1080p) [76577F42].mkv");
+    assert_eq!(p.quality.as_deref(), Some("1080p"));
+    assert_eq!(p.release_group.as_deref(), Some("SubsPlease"));
+    let ep = p.episode.unwrap();
+    assert_eq!(ep.absolute_episode, Some(37));
+}
+
+#[test]
+fn tosho_frieren_with_ep_prefix() {
+    let p = parse_release_metadata("Sousou no Frieren S01E01 1080p WEB H.264 -SubsPlease");
+    assert_eq!(p.quality.as_deref(), Some("1080p"));
+    assert_eq!(p.source.as_deref(), Some("WEB-DL"));
+    assert_eq!(p.video_codec.as_deref(), Some("H.264"));
+    let ep = p.episode.unwrap();
+    assert_eq!(ep.season, Some(1));
+    assert_eq!(ep.episode_numbers, vec![1]);
+}
+
+#[test]
+fn tosho_galactic_e_range() {
+    let p = parse_release_metadata(
+        "[Galactic] One Piece - E795-E940 [USBD Remux 1080p AVC Dual-Audio TrueHD 2.0 + DD 2.0]",
+    );
+    assert_eq!(p.quality.as_deref(), Some("1080p"));
+    assert_eq!(p.release_group.as_deref(), Some("Galactic"));
+    assert!(p.is_dual_audio);
+    let ep = p.episode.unwrap();
+    assert_eq!(ep.absolute_episode, Some(795));
+    assert_eq!(ep.episode_numbers[0], 795);
+    assert_eq!(*ep.episode_numbers.last().unwrap(), 940);
+}

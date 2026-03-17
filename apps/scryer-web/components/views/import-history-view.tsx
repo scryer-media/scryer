@@ -1,6 +1,6 @@
 
-import { useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { useState, useCallback } from "react";
+import { KeyRound, Loader2, RefreshCw, RotateCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,6 +9,7 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from "@/components/ui/hover-card";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -24,17 +25,24 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
+import {
+  boxedActionButtonBaseClass,
+  boxedActionButtonToneClass,
+} from "@/lib/utils/action-button-styles";
 import type { ImportRecord } from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
 
-type ImportHistoryViewProps = {
+export type ImportHistoryViewProps = {
   records: ImportRecord[];
   loading: boolean;
   error: string | null;
-  limit: number;
-  onLimitChange: (limit: number) => void;
+  limit?: number;
+  onLimitChange?: (limit: number) => void;
   onRefresh: () => void;
+  onRetry?: (importId: string, password?: string) => Promise<void>;
+  compact?: boolean;
 };
 
 const statusClasses: Record<string, string> = {
@@ -60,6 +68,91 @@ function formatTimestamp(ts: string | null): string {
   }
 }
 
+function RetryButton({
+  record,
+  onRetry,
+}: {
+  record: ImportRecord;
+  onRetry: (importId: string, password?: string) => Promise<void>;
+}) {
+  const t = useTranslate();
+  const isPasswordRequired = record.skipReason === "password_required";
+  const [retrying, setRetrying] = useState(false);
+  const [password, setPassword] = useState("");
+  const [showPasswordInput, setShowPasswordInput] = useState(false);
+
+  const handleRetry = useCallback(async () => {
+    setRetrying(true);
+    try {
+      await onRetry(record.id, isPasswordRequired ? password : undefined);
+    } finally {
+      setRetrying(false);
+      setPassword("");
+      setShowPasswordInput(false);
+    }
+  }, [record.id, onRetry, isPasswordRequired, password]);
+
+  if (isPasswordRequired && showPasswordInput) {
+    return (
+      <div className="flex items-center gap-1">
+        <Input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder={t("importHistory.passwordPlaceholder")}
+          className="h-8 w-32 text-xs"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && password) void handleRetry();
+          }}
+        />
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="secondary"
+          title={t("importHistory.retryWithPassword")}
+          aria-label={t("importHistory.retryWithPassword")}
+          disabled={retrying || !password}
+          onClick={() => void handleRetry()}
+          className={cn(boxedActionButtonBaseClass, boxedActionButtonToneClass.auto)}
+        >
+          {retrying ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+        </Button>
+      </div>
+    );
+  }
+
+  if (isPasswordRequired) {
+    return (
+      <Button
+        type="button"
+        size="icon-sm"
+        variant="secondary"
+        title={t("importHistory.retryWithPassword")}
+        aria-label={t("importHistory.retryWithPassword")}
+        onClick={() => setShowPasswordInput(true)}
+        className={cn(boxedActionButtonBaseClass, boxedActionButtonToneClass.edit)}
+      >
+        <KeyRound className="h-4 w-4" />
+      </Button>
+    );
+  }
+
+  return (
+    <Button
+      type="button"
+      size="icon-sm"
+      variant="secondary"
+      title={t("importHistory.retry")}
+      aria-label={t("importHistory.retry")}
+      disabled={retrying}
+      onClick={() => void handleRetry()}
+      className={cn(boxedActionButtonBaseClass, boxedActionButtonToneClass.auto)}
+    >
+      {retrying ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+    </Button>
+  );
+}
+
 export function ImportHistoryView({
   records,
   loading,
@@ -67,6 +160,8 @@ export function ImportHistoryView({
   limit,
   onLimitChange,
   onRefresh,
+  onRetry,
+  compact = false,
 }: ImportHistoryViewProps) {
   const t = useTranslate();
   const isMobile = useIsMobile();
@@ -88,34 +183,40 @@ export function ImportHistoryView({
             </span>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <Select
-              value={statusFilter}
-              onValueChange={(v) => setStatusFilter(v as StatusFilter)}
-            >
-              <SelectTrigger className="h-9 w-full sm:w-36">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All statuses</SelectItem>
-                <SelectItem value="completed">Completed</SelectItem>
-                <SelectItem value="failed">Failed</SelectItem>
-                <SelectItem value="skipped">Skipped</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select
-              value={String(limit)}
-              onValueChange={(v) => onLimitChange(Number(v))}
-            >
-              <SelectTrigger className="h-9 w-full sm:w-28">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="50">50 records</SelectItem>
-                <SelectItem value="100">100 records</SelectItem>
-                <SelectItem value="250">250 records</SelectItem>
-                <SelectItem value="500">500 records</SelectItem>
-              </SelectContent>
-            </Select>
+            {!compact ? (
+              <>
+                <Select
+                  value={statusFilter}
+                  onValueChange={(v) => setStatusFilter(v as StatusFilter)}
+                >
+                  <SelectTrigger className="h-9 w-full sm:w-36">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All statuses</SelectItem>
+                    <SelectItem value="completed">Completed</SelectItem>
+                    <SelectItem value="failed">Failed</SelectItem>
+                    <SelectItem value="skipped">Skipped</SelectItem>
+                  </SelectContent>
+                </Select>
+                {limit != null && onLimitChange ? (
+                  <Select
+                    value={String(limit)}
+                    onValueChange={(v) => onLimitChange(Number(v))}
+                  >
+                    <SelectTrigger className="h-9 w-full sm:w-28">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="50">50 records</SelectItem>
+                      <SelectItem value="100">100 records</SelectItem>
+                      <SelectItem value="250">250 records</SelectItem>
+                      <SelectItem value="500">500 records</SelectItem>
+                    </SelectContent>
+                  </Select>
+                ) : null}
+              </>
+            ) : null}
             <Button
               type="button"
               size="sm"
@@ -162,11 +263,16 @@ export function ImportHistoryView({
                         </p>
                       ) : null}
                     </div>
-                    <span
-                      className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${statusClasses[record.status] ?? "border-border bg-muted text-card-foreground"}`}
-                    >
-                      {record.status}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      {record.status === "failed" && onRetry ? (
+                        <RetryButton record={record} onRetry={onRetry} />
+                      ) : null}
+                      <span
+                        className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${statusClasses[record.status] ?? "border-border bg-muted text-card-foreground"}`}
+                      >
+                        {record.status}
+                      </span>
+                    </div>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
                     <span>{record.importType}</span>
@@ -180,7 +286,9 @@ export function ImportHistoryView({
                   ) : null}
                   {record.skipReason ? (
                     <p className="mt-1 break-words text-xs text-muted-foreground">
-                      {record.skipReason}
+                      {record.skipReason === "password_required"
+                        ? t("importHistory.passwordRequired")
+                        : record.skipReason}
                     </p>
                   ) : null}
                   {record.errorMessage ? (
@@ -208,15 +316,16 @@ export function ImportHistoryView({
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <Table className="table-fixed min-w-[860px]">
+            <Table className="table-fixed min-w-[900px]">
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-28 min-w-28">{t("importHistory.status")}</TableHead>
-                  <TableHead className="w-[30%] min-w-0">{t("importHistory.sourceRef")}</TableHead>
-                  <TableHead className="w-28 min-w-0">Type</TableHead>
-                  <TableHead className="w-[18%] min-w-0">{t("importHistory.decision")}</TableHead>
-                  <TableHead className="w-[20%] min-w-0">{t("importHistory.error")}</TableHead>
+                  <TableHead className="w-[28%] min-w-0">{t("importHistory.sourceRef")}</TableHead>
+                  <TableHead className="w-24 min-w-0">Type</TableHead>
+                  <TableHead className="w-[16%] min-w-0">{t("importHistory.decision")}</TableHead>
+                  <TableHead className="w-[18%] min-w-0">{t("importHistory.error")}</TableHead>
                   <TableHead className="w-36 min-w-36">{t("importHistory.createdAt")}</TableHead>
+                  {onRetry ? <TableHead className="w-16 min-w-16" /> : null}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -291,7 +400,9 @@ export function ImportHistoryView({
                         ) : null}
                         {record.skipReason ? (
                           <p className="text-xs text-muted-foreground break-words whitespace-normal">
-                            {record.skipReason}
+                            {record.skipReason === "password_required"
+                              ? t("importHistory.passwordRequired")
+                              : record.skipReason}
                           </p>
                         ) : null}
                         {!record.decision && !record.skipReason ? (
@@ -330,6 +441,15 @@ export function ImportHistoryView({
                           </p>
                         ) : null}
                       </TableCell>
+
+                      {/* Retry */}
+                      {onRetry ? (
+                        <TableCell className="align-middle">
+                          {record.status === "failed" ? (
+                            <RetryButton record={record} onRetry={onRetry} />
+                          ) : null}
+                        </TableCell>
+                      ) : null}
                     </TableRow>
                   );
                 })}

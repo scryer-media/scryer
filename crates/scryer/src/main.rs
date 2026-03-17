@@ -398,8 +398,9 @@ async fn bootstrap_application(
         fallback_download_client,
         Some(download_client_plugin_provider.clone()),
     ));
-    let indexer_stats: Arc<dyn scryer_application::IndexerStatsTracker> =
-        Arc::new(scryer_infrastructure::InMemoryIndexerStatsTracker::new());
+    let indexer_stats: Arc<dyn scryer_application::IndexerStatsTracker> = Arc::new(
+        scryer_infrastructure::InMemoryIndexerStatsTracker::new(Some(db.pool().clone())),
+    );
 
     // Load WASM indexer plugins: external plugins dir first, then built-in plugins.
     // Built-in plugins (nzbgeek, newznab) are always available; external plugins

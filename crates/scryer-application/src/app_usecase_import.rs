@@ -34,6 +34,69 @@ fn maybe_trigger_subtitle_search(app: &AppUseCase, title_id: &str, media_file_id
     });
 }
 
+/// Retry a previously failed import, optionally with an archive password.
+pub async fn retry_failed_import(
+    app: &AppUseCase,
+    actor: &User,
+    import_id: &str,
+    password: Option<&str>,
+) -> AppResult<ImportResult> {
+    crate::require(actor, &Entitlement::ManageTitle)?;
+
+    let record = app
+        .services
+        .imports
+        .get_import_by_id(import_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("import {import_id}")))?;
+
+    if record.status != "failed" {
+        return Err(AppError::Validation(format!(
+            "import {} has status '{}', only failed imports can be retried",
+            import_id, record.status
+        )));
+    }
+
+    let completed: CompletedDownload = serde_json::from_str(&record.payload_json)
+        .map_err(|e| AppError::Repository(format!("failed to deserialize import payload: {e}")))?;
+
+    // Reset to processing
+    app.services
+        .update_import_status_and_notify(import_id, "processing", None)
+        .await?;
+
+    let started_at = Utc::now();
+    match run_import(app, actor, import_id, &completed, started_at, password).await {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            let skip_reason = if crate::archive_extractor::is_password_required_error(&error) {
+                Some(ImportSkipReason::PasswordRequired)
+            } else {
+                None
+            };
+            let result = ImportResult {
+                import_id: import_id.to_string(),
+                decision: ImportDecision::Failed,
+                skip_reason,
+                title_id: None,
+                source_path: completed.dest_dir.clone(),
+                dest_path: None,
+                file_size_bytes: None,
+                link_type: None,
+                error_message: Some(error.to_string()),
+                started_at,
+                completed_at: Utc::now(),
+            };
+            let result_json = serde_json::to_string(&result).ok();
+            let _ = app
+                .services
+                .update_import_status_and_notify(import_id, "failed", result_json)
+                .await;
+            Ok(result)
+        }
+    }
+}
+
 const SERIES_PATH_KEY: &str = "series.path";
 const RENAME_TEMPLATE_SERIES_GLOBAL_KEY: &str = "rename.template.series.global";
 
@@ -403,13 +466,18 @@ pub async fn import_completed_download(
 
     // From here on, any error must update the import record to "failed" rather than
     // propagating via `?`. Otherwise the record stays "processing" indefinitely.
-    match run_import(app, actor, &import_id, completed, started_at).await {
+    match run_import(app, actor, &import_id, completed, started_at, None).await {
         Ok(result) => Ok(result),
         Err(error) => {
+            let skip_reason = if crate::archive_extractor::is_password_required_error(&error) {
+                Some(ImportSkipReason::PasswordRequired)
+            } else {
+                None
+            };
             let result = ImportResult {
                 import_id: import_id.to_string(),
                 decision: ImportDecision::Failed,
-                skip_reason: None,
+                skip_reason,
                 title_id: None,
                 source_path: completed.dest_dir.clone(),
                 dest_path: None,
@@ -435,6 +503,7 @@ async fn run_import(
     import_id: &str,
     completed: &CompletedDownload,
     started_at: chrono::DateTime<Utc>,
+    archive_password: Option<&str>,
 ) -> AppResult<ImportResult> {
     // 2. TITLE MATCHING
     let mut title = None;
@@ -559,7 +628,8 @@ async fn run_import(
     // 3. FIND VIDEO FILES (extract archives first if needed)
     let dest_dir = Path::new(&completed.dest_dir);
     let is_series = matches!(title.facet, MediaFacet::Tv | MediaFacet::Anime);
-    let extracted_dir = crate::archive_extractor::extract_archives_if_needed(dest_dir).await?;
+    let extracted_dir =
+        crate::archive_extractor::extract_archives_if_needed(dest_dir, archive_password).await?;
     let effective_dir = extracted_dir.as_deref().unwrap_or(dest_dir);
     let video_files = find_video_files(effective_dir, is_series)?;
 

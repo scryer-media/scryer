@@ -93,13 +93,18 @@ export const titleDetailQuery = `query TitleDetail($id: String!) {
     monitored
     createdAt
   }
-  titleEvents(titleId: $id, limit: 10, offset: 0) {
+  titleEvents(titleId: $id, limit: 50, offset: 0) {
     id
-    eventType
-    actorUserId
     titleId
-    message
+    episodeId
+    collectionId
+    eventType
+    sourceTitle
+    quality
+    downloadId
+    dataJson
     occurredAt
+    createdAt
   }
 }`;
 
@@ -207,13 +212,18 @@ export const titleOverviewInitQuery = `query TitleOverviewInit($id: String!, $bl
     monitored
     createdAt
   }
-  titleEvents(titleId: $id, limit: 10, offset: 0) {
+  titleEvents(titleId: $id, limit: 50, offset: 0) {
     id
-    eventType
-    actorUserId
     titleId
-    message
+    episodeId
+    collectionId
+    eventType
+    sourceTitle
+    quality
+    downloadId
+    dataJson
     occurredAt
+    createdAt
   }
   titleReleaseBlocklist(titleId: $id, limit: $blocklistLimit) {
     sourceHint
@@ -306,6 +316,11 @@ export const searchQuery = `query SearchIndexers($query: String!, $imdbId: Strin
         source
       }
     }
+    seeders
+    peers
+    infoHash
+    freeleech
+    downloadVolumeFactor
   }
 }`;
 
@@ -350,6 +365,11 @@ export const searchSeriesEpisodeQuery = `query SearchIndexersEpisode($title: Str
         source
       }
     }
+    seeders
+    peers
+    infoHash
+    freeleech
+    downloadVolumeFactor
   }
 }`;
 
@@ -394,6 +414,11 @@ export const searchSeasonQuery = `query SearchIndexersSeason($title: String!, $s
         source
       }
     }
+    seeders
+    peers
+    infoHash
+    freeleech
+    downloadVolumeFactor
   }
 }`;
 
@@ -1086,8 +1111,40 @@ export const ruleSetsQuery = `query RuleSets {
     enabled
     priority
     appliedFacets
+    isManaged
+    managedKey
     createdAt
     updatedAt
+  }
+}`;
+
+export const convenienceSettingsQuery = `query ConvenienceSettings {
+  convenienceSettings {
+    requiredAudio { scope languages ruleSetId }
+    preferDualAudio { scope enabled ruleSetId }
+  }
+}`;
+
+// ── Community Rule Packs ──────────────────────────────────────────────
+
+export const rulePackRegistryQuery = `query RulePackRegistry {
+  rulePackRegistry {
+    id
+    name
+    description
+    author
+    version
+  }
+}`;
+
+export const rulePackTemplatesQuery = `query RulePackTemplates($packId: String!) {
+  rulePackTemplates(packId: $packId) {
+    id
+    title
+    description
+    category
+    regoSource
+    appliedFacets
   }
 }`;
 
@@ -1326,5 +1383,40 @@ export const subtitleDownloadsQuery = `query SubtitleDownloads($titleId: String!
     releaseInfo
     synced
     downloadedAt
+  }
+}`;
+
+export const titleHistoryQuery = `query TitleHistory($filter: TitleHistoryFilterInput!) {
+  titleHistory(filter: $filter) {
+    records {
+      id
+      titleId
+      episodeId
+      collectionId
+      eventType
+      sourceTitle
+      quality
+      downloadId
+      dataJson
+      occurredAt
+      createdAt
+    }
+    totalCount
+  }
+}`;
+
+export const episodeHistoryQuery = `query EpisodeHistory($episodeId: String!, $limit: Int) {
+  episodeHistory(episodeId: $episodeId, limit: $limit) {
+    id
+    titleId
+    episodeId
+    collectionId
+    eventType
+    sourceTitle
+    quality
+    downloadId
+    dataJson
+    occurredAt
+    createdAt
   }
 }`;

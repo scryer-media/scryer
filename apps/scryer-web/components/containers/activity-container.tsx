@@ -7,6 +7,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import {
   triggerImportMutation,
+  retryImportMutation,
   pauseDownloadMutation,
   resumeDownloadMutation,
   deleteDownloadMutation,
@@ -144,6 +145,20 @@ export const ActivityContainer = memo(function ActivityContainer() {
         importHistory,
         importHistoryLoading,
         refreshImportHistory,
+        retryImport: async (importId: string, password?: string) => {
+          try {
+            const { error } = await client
+              .mutation(retryImportMutation, {
+                input: { importId, password: password || null },
+              })
+              .toPromise();
+            if (error) throw error;
+            setGlobalStatus(t("importHistory.retrySuccess"));
+            void refreshImportHistory();
+          } catch (err) {
+            setGlobalStatus(err instanceof Error ? err.message : t("status.apiError"));
+          }
+        },
       }}
     />
   );
