@@ -153,6 +153,63 @@ The encryption key protects passwords and API keys at rest in the database. Ther
 
 If you used the `init` wizard, the key is already in your compose file. If you see a warning on startup about a generated key, copy it into your `docker-compose.yml` `SCRYER_ENCRYPTION_KEY` variable.
 
+## Resource Requirements
+
+Scryer is lightweight and primarily I/O-bound (network requests to indexers, file imports). CPU usage is low outside of media analysis and subtitle timing sync.
+
+### Baseline
+
+| Resource | Idle / Monitoring | Active (imports, searches) |
+|---|---|---|
+| **Memory** | 60-80 MB | Up to ~150 MB |
+| **CPU** | Negligible | Brief spikes during media analysis |
+| **Disk** | ~5-20 MB (SQLite database) | 500 MB free required per import operation |
+
+### Container Orchestration
+
+For Kubernetes, Nomad, ECS, or similar schedulers:
+
+| | Request (guaranteed minimum) | Limit (burst ceiling) |
+|---|---|---|
+| **Memory** | 128 Mi | 256 Mi |
+| **CPU (Kubernetes)** | 100m (0.1 cores) | 500m (0.5 cores) |
+| **CPU (Nomad)** | 100 MHz | 500 MHz |
+
+These are conservative starting points. Scryer will run at lower CPU allocations — background tasks will just take longer. If you're managing a large library (1000+ titles) or running frequent searches, consider increasing the CPU limit.
+
+There is no hard CPU floor. Scryer does not pin threads or require specific core counts. Constrained environments like Raspberry Pi (1 GHz ARM, 512 MB RAM) work fine.
+
+### Example: Kubernetes
+
+```yaml
+resources:
+  requests:
+    memory: "128Mi"
+    cpu: "100m"
+  limits:
+    memory: "256Mi"
+    cpu: "500m"
+```
+
+### Example: Nomad
+
+```hcl
+resources {
+  memory = 128
+  cpu    = 100
+}
+```
+
+### Example: ECS
+
+```json
+{
+  "cpu": 256,
+  "memory": 256,
+  "memoryReservation": 128
+}
+```
+
 ## Upgrading
 
 Pull the latest image and recreate the container:
