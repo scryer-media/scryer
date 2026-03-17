@@ -23,7 +23,7 @@ Scryer organizes movies, TV series, and anime in a single application. It monito
 - **Unified library** — movies, TV series, and anime managed together with per-facet settings for quality profiles, naming conventions, and root folders
 - **Subtitle management** — searches OpenSubtitles for missing subtitles, scores matches using release metadata and file hashing, and synchronizes timing using built-in audio analysis (no external tools required)
 - **Quality-driven upgrades** — configurable quality profiles with scoring rules, delay profiles, and automatic upgrade tracking
-- **Metadata integration** — centralized metadata from TVDB and TMDB via the Scryer Metadata Gateway, with anime ID cross-referencing (MAL, AniList, AniDB, Kitsu)
+- **Metadata integration** — centralized metadata from TVDB and TMDB with anime ID cross-referencing (MAL, AniList, AniDB, Kitsu)
 - **Background image management** — automatically fetches and caches posters, banners, and fanart with responsive image variants
 - **Post-processing** — configurable per-facet scripts that run after media is organized, with full metadata passed via environment variables
 - **Plugin framework** — WASM-based plugins for indexers, notification services, and acquisition clients
@@ -51,7 +51,7 @@ Scryer occupies the same space as Sonarr, Radarr, and Bazarr. Each tool makes di
 | **Runtime** | Rust binary (~30 MB), ~60-70 MB RAM | .NET + Python, ~500+ MB RAM combined | Python, ~150-200 MB RAM |
 | **UI** | Embedded React app, no separate process | Embedded frontend per app | Web UI |
 | **Anime** | First-class facet with cross-database ID mapping | Community-supported via Sonarr | Built-in |
-| **Metadata** | Centrally cached via metadata gateway | Direct API calls per instance | Direct API calls |
+| **Metadata** | Centrally cached, shared across instances | Direct API calls per instance | Direct API calls |
 | **Indexers** | Plugin-based (Newznab-compatible) | Broad Newznab/Torznab support, Prowlarr integration | Built-in |
 | **Maturity** | Active development | Mature, large ecosystem | Mature, smaller community |
 
@@ -80,8 +80,8 @@ Scryer occupies the same space as Sonarr, Radarr, and Bazarr. Each tool makes di
          │                    │
     ┌────┴────┐        ┌─────┴──────┐
     │ Metadata│        │ Indexers & │
-    │ Gateway │        │ Clients    │
-    │  (SMG)  │        │ (plugins)  │
+    │  API    │        │ Clients    │
+    │         │        │ (plugins)  │
     └─────────┘        └────────────┘
 ```
 

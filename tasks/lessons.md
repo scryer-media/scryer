@@ -31,5 +31,5 @@
 - **Validate persona promises against real release examples before shipping scoring tweaks.** If the UI says remux is an Audiophile concern, Balanced/Efficient/Compatible should not still reward remux-heavy anime releases through hidden defaults or oversized file bonuses.
 
 ## urql / Frontend Caching
-- `cacheExchange` was removed from both `backendClient` and `smgClient` — the network layer handles caching naturally.
+- `cacheExchange` was removed from all urql clients — the network layer handles caching naturally.
 - Don't add per-query `requestPolicy` overrides; the exchange-level removal is the correct fix.

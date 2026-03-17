@@ -63,7 +63,7 @@
 
 ## Related Repos
 
-- **Metadata gateway (smg)**: `github.com/scryer-media/smg` (private) — Go service, PostgreSQL
+- **Metadata API**: private service — Go, PostgreSQL
 - **Documentation**: `github.com/scryer-media/scryer-docs` — architecture, specs, plans, ADRs, intentions
 
 ## Build & Test

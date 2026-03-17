@@ -94,9 +94,9 @@ docker compose up -d
 
 Infrastructure settings are configured via environment variables in your `docker-compose.yml`. Application settings like download clients and indexers are configured through the web UI after startup.
 
-### Metadata Gateway
+### Metadata API
 
-Scryer uses a metadata gateway (SMG) for title search, artwork, and metadata. The `init` wizard configures this automatically. For manual setup, point to the hosted instance:
+Scryer uses a hosted metadata service for title search, artwork, and metadata. The `init` wizard configures this automatically. For manual setup, point to the hosted instance:
 
 ```yaml
 environment:
@@ -127,7 +127,7 @@ Download clients (NZBGet, SABnzbd) and indexers are configured in **Settings** t
 | `SCRYER_ENCRYPTION_KEY` | Recommended | Auto-generated | Encryption key for sensitive settings |
 | `SCRYER_MOVIES_PATH` | Yes | — | Movies directory inside the container |
 | `SCRYER_SERIES_PATH` | Yes | — | Series directory inside the container |
-| `SCRYER_METADATA_GATEWAY_GRAPHQL_URL` | Yes | — | SMG endpoint URL |
+| `SCRYER_METADATA_GATEWAY_GRAPHQL_URL` | Yes | — | Metadata API endpoint URL |
 | `SCRYER_BIND` | No | `0.0.0.0:8080` | Listen address and port |
 | `SCRYER_BASE_PATH` | No | `/` | Optional reverse-proxy path prefix, for example `/scryer` |
 | `SCRYER_TLS_CERT` | No | — | Path to TLS certificate (PEM) |
