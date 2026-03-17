@@ -291,11 +291,13 @@ impl ShowRepository for SqliteServices {
     ) -> AppResult<()> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
-            .send(crate::commands::DbCommand::UpdateInterstitialSeasonEpisode {
-                collection_id: collection_id.to_string(),
-                season_episode,
-                reply: reply_tx,
-            })
+            .send(
+                crate::commands::DbCommand::UpdateInterstitialSeasonEpisode {
+                    collection_id: collection_id.to_string(),
+                    season_episode,
+                    reply: reply_tx,
+                },
+            )
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?;
 
@@ -985,10 +987,7 @@ impl ImportRepository for SqliteServices {
             .get_import_by_source_ref(source_system, source_ref)
             .await?
         {
-            Some(record) => Ok(matches!(
-                record.status.as_str(),
-                "completed" | "skipped"
-            )),
+            Some(record) => Ok(matches!(record.status.as_str(), "completed" | "skipped")),
             None => Ok(false),
         }
     }
@@ -2031,8 +2030,13 @@ impl scryer_application::SubtitleDownloadRepository for SqliteServices {
         provider: &str,
         provider_file_id: &str,
     ) -> AppResult<bool> {
-        crate::queries::subtitle::is_blacklisted(&self.pool, media_file_id, provider, provider_file_id)
-            .await
+        crate::queries::subtitle::is_blacklisted(
+            &self.pool,
+            media_file_id,
+            provider,
+            provider_file_id,
+        )
+        .await
     }
 
     async fn blacklist(

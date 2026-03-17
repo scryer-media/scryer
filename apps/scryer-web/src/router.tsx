@@ -74,6 +74,7 @@ export const router = createBrowserRouter(
         { path: "/settings/rules", element: <ShellRoute /> },
         { path: "/settings/plugins", element: <ShellRoute /> },
         { path: "/settings/notifications", element: <ShellRoute /> },
+        { path: "/settings/subtitles", element: <ShellRoute /> },
         { path: "/system", element: <ShellRoute /> },
         { path: "*", element: <ShellRoute /> },
       ],

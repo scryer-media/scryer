@@ -1,6 +1,7 @@
 
 import * as React from "react";
-import { FolderOpen, Loader2, Pause, Play, RotateCcw, Subtitles, Trash2 } from "lucide-react";
+import { useClient } from "urql";
+import { Ban, FolderOpen, Loader2, Pause, Play, RotateCcw, Search, Subtitles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -34,6 +35,9 @@ import type {
 import { MediaInfoBadges } from "@/components/common/media-info-badges";
 import { OverviewControlPanel } from "@/components/views/overview-control-panel";
 import { OverviewBackLink } from "@/components/views/overview-back-link";
+import { SubtitleSearchModal } from "@/components/views/subtitle-search-modal";
+import { blacklistSubtitleMutation } from "@/lib/graphql/mutations";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 
 const imdbLogoUrl = `${import.meta.env.BASE_URL}media-sites/imdb.svg`;
 
@@ -324,6 +328,7 @@ type Props = {
   mediaFiles: TitleMediaFile[];
   subtitleDownloads: SubtitleDownloadRecord[];
   onDeleteFile?: (fileId: string) => void;
+  onRefreshSubtitles?: () => void;
 };
 
 export function MovieOverviewView({
@@ -362,8 +367,32 @@ export function MovieOverviewView({
   mediaFiles,
   subtitleDownloads,
   onDeleteFile,
+  onRefreshSubtitles,
 }: Props) {
   const t = useTranslate();
+  const setGlobalStatus = useGlobalStatus();
+  const client = useClient();
+  const [subtitleSearchTarget, setSubtitleSearchTarget] = React.useState<{
+    mediaFileId: string;
+    filePath: string;
+  } | null>(null);
+  const [blacklistingId, setBlacklistingId] = React.useState<string | null>(null);
+
+  const handleBlacklistSubtitle = React.useCallback(async (downloadId: string) => {
+    setBlacklistingId(downloadId);
+    try {
+      const { error } = await client
+        .mutation(blacklistSubtitleMutation, { input: { subtitleDownloadId: downloadId } })
+        .toPromise();
+      if (error) throw error;
+      setGlobalStatus(t("subtitle.blacklisted"));
+      onRefreshSubtitles?.();
+    } catch (error) {
+      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+    } finally {
+      setBlacklistingId(null);
+    }
+  }, [client, setGlobalStatus, t, onRefreshSubtitles]);
   if (loading) {
     return (
       <div className="space-y-4">
@@ -793,7 +822,18 @@ export function MovieOverviewView({
                 const hasAny = embeddedLangs.length > 0 || downloads.length > 0;
                 return (
                   <div key={`sub-${mf.id}`} className="rounded-lg border border-border p-3">
-                    <p className="truncate font-mono text-xs text-muted-foreground">{mf.filePath}</p>
+                    <div className="flex items-center justify-between">
+                      <p className="truncate font-mono text-xs text-muted-foreground">{mf.filePath}</p>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2"
+                        onClick={() => setSubtitleSearchTarget({ mediaFileId: mf.id, filePath: mf.filePath })}
+                      >
+                        <Search className="mr-1 h-3 w-3" />
+                        {t("subtitle.search")}
+                      </Button>
+                    </div>
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       {embeddedLangs.map((lang: string) => (
                         <span
@@ -807,7 +847,7 @@ export function MovieOverviewView({
                       {downloads.map((dl) => (
                         <span
                           key={dl.id}
-                          className="inline-flex items-center gap-1 rounded bg-blue-500/15 px-2 py-0.5 text-xs text-blue-700 dark:text-blue-300"
+                          className="group inline-flex items-center gap-1 rounded bg-blue-500/15 px-2 py-0.5 text-xs text-blue-700 dark:text-blue-300"
                           title={[
                             dl.provider,
                             dl.uploader ? `by ${dl.uploader}` : null,
@@ -821,6 +861,15 @@ export function MovieOverviewView({
                             {dl.hearingImpaired ? " HI" : ""}
                             {dl.forced ? " F" : ""}
                           </span>
+                          <button
+                            type="button"
+                            className="ml-0.5 hidden rounded p-0.5 text-blue-500/60 hover:bg-red-500/20 hover:text-red-400 group-hover:inline-flex"
+                            title={t("subtitle.blacklist")}
+                            disabled={blacklistingId === dl.id}
+                            onClick={() => void handleBlacklistSubtitle(dl.id)}
+                          >
+                            <Ban className="h-3 w-3" />
+                          </button>
                         </span>
                       ))}
                       {!hasAny ? (
@@ -834,6 +883,15 @@ export function MovieOverviewView({
           ) : null}
         </CardContent>
       </Card>
+      {subtitleSearchTarget ? (
+        <SubtitleSearchModal
+          open={true}
+          onOpenChange={(open) => { if (!open) setSubtitleSearchTarget(null); }}
+          mediaFileId={subtitleSearchTarget.mediaFileId}
+          filePath={subtitleSearchTarget.filePath}
+          onDownloaded={() => { onRefreshSubtitles?.(); }}
+        />
+      ) : null}
 
       <details className="rounded-xl border border-border bg-card text-card-foreground overflow-hidden">
         <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-card-foreground">

@@ -259,6 +259,13 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
     }).catch(() => {});
   }, [titleId, client]);
 
+  const refreshSubtitleDownloads = React.useCallback(() => {
+    if (!titleId) return;
+    client.query(subtitleDownloadsQuery, { titleId }).toPromise().then((subResult) => {
+      setSubtitleDownloads(subResult.data?.subtitleDownloads ?? []);
+    }).catch(() => {});
+  }, [titleId, client]);
+
   // Load title detail on mount
   React.useEffect(() => {
     let cancelled = false;
@@ -774,6 +781,7 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
         mediaFiles={mediaFiles}
         subtitleDownloads={subtitleDownloads}
         onDeleteFile={handleDeleteMediaFile}
+        onRefreshSubtitles={refreshSubtitleDownloads}
       />
       <ConfirmDialog
         open={deleteDialogOpen && title !== null}

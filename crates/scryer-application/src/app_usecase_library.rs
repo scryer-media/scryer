@@ -1400,46 +1400,46 @@ pub(crate) fn build_series_rename_plan_item(
 
     // For interstitial collections (anime franchise movies in Season 00),
     // use the stored season/episode from interstitial_season_episode and the movie name.
-    let (season, episode, episode_title_override) =
-        if collection.collection_type == "interstitial" {
-            if let Some(ref se) = collection.interstitial_season_episode {
-                // Parse "S00E03" → season "0", episode "3"
-                let (s, e) = se
-                    .strip_prefix('S')
-                    .and_then(|rest| rest.split_once('E'))
-                    .map(|(s, e)| {
-                        (
-                            s.trim_start_matches('0').to_string(),
-                            e.trim_start_matches('0').to_string(),
-                        )
-                    })
-                    .unwrap_or_else(|| ("0".to_string(), "1".to_string()));
-                let movie_name = collection
-                    .interstitial_movie
-                    .as_ref()
-                    .map(|m| m.name.clone())
-                    .unwrap_or_default();
-                (s, e, Some(movie_name))
-            } else {
-                ("0".to_string(), "1".to_string(), None)
-            }
-        } else {
-            // Season from collection_index, episode from collection's first_episode_number,
-            // falling back to parsed release metadata.
-            let season = collection.collection_index.clone();
-            let episode = collection
-                .first_episode_number
-                .clone()
-                .or_else(|| {
-                    parsed
-                        .episode
-                        .as_ref()
-                        .and_then(|ep| ep.episode_numbers.first())
-                        .map(|n| n.to_string())
+    let (season, episode, episode_title_override) = if collection.collection_type == "interstitial"
+    {
+        if let Some(ref se) = collection.interstitial_season_episode {
+            // Parse "S00E03" → season "0", episode "3"
+            let (s, e) = se
+                .strip_prefix('S')
+                .and_then(|rest| rest.split_once('E'))
+                .map(|(s, e)| {
+                    (
+                        s.trim_start_matches('0').to_string(),
+                        e.trim_start_matches('0').to_string(),
+                    )
                 })
+                .unwrap_or_else(|| ("0".to_string(), "1".to_string()));
+            let movie_name = collection
+                .interstitial_movie
+                .as_ref()
+                .map(|m| m.name.clone())
                 .unwrap_or_default();
-            (season, episode, None)
-        };
+            (s, e, Some(movie_name))
+        } else {
+            ("0".to_string(), "1".to_string(), None)
+        }
+    } else {
+        // Season from collection_index, episode from collection's first_episode_number,
+        // falling back to parsed release metadata.
+        let season = collection.collection_index.clone();
+        let episode = collection
+            .first_episode_number
+            .clone()
+            .or_else(|| {
+                parsed
+                    .episode
+                    .as_ref()
+                    .and_then(|ep| ep.episode_numbers.first())
+                    .map(|n| n.to_string())
+            })
+            .unwrap_or_default();
+        (season, episode, None)
+    };
 
     let mut tokens = BTreeMap::new();
     tokens.insert("title".to_string(), title_token.clone());

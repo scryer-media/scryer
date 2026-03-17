@@ -260,16 +260,16 @@ impl AppUseCase {
                 if (!movie.imdb_id.is_empty() || movie.movie_tmdb_id.is_some())
                     && let Ok(all_titles) = self.services.titles.list(None, None).await
                 {
-                        let already_exists = all_titles.iter().any(|t| {
-                            t.facet == scryer_domain::MediaFacet::Movie
-                                && ((!movie.imdb_id.is_empty()
-                                    && t.imdb_id.as_deref() == Some(&movie.imdb_id))
-                                    || movie.movie_tmdb_id.as_deref().is_some_and(|tmdb| {
-                                        t.external_ids.iter().any(|eid| {
-                                            eid.source == "tmdb" && eid.value == tmdb
-                                        })
-                                    }))
-                        });
+                    let already_exists = all_titles.iter().any(|t| {
+                        t.facet == scryer_domain::MediaFacet::Movie
+                            && ((!movie.imdb_id.is_empty()
+                                && t.imdb_id.as_deref() == Some(&movie.imdb_id))
+                                || movie.movie_tmdb_id.as_deref().is_some_and(|tmdb| {
+                                    t.external_ids
+                                        .iter()
+                                        .any(|eid| eid.source == "tmdb" && eid.value == tmdb)
+                                }))
+                    });
                     if already_exists {
                         trace!(
                             movie_name = movie.name.as_str(),
@@ -280,12 +280,8 @@ impl AppUseCase {
                 }
 
                 let baseline_date = movie.digital_release_date.clone();
-                let schedule = compute_search_schedule(
-                    "movie",
-                    baseline_date.as_deref(),
-                    "primary",
-                    now,
-                );
+                let schedule =
+                    compute_search_schedule("movie", baseline_date.as_deref(), "primary", now);
 
                 let next_search_at = if immediate {
                     now.to_rfc3339()
@@ -688,8 +684,7 @@ async fn process_single_wanted_item(
     // so the search uses the movie's name/year/IMDB ID instead of the parent series'
     let search_title = if item.media_type == "interstitial_movie" {
         if let Some(ref coll_id) = item.collection_id
-            && let Ok(Some(collection)) =
-                app.services.shows.get_collection_by_id(coll_id).await
+            && let Ok(Some(collection)) = app.services.shows.get_collection_by_id(coll_id).await
             && let Some(ref movie) = collection.interstitial_movie
         {
             let mut t = title.clone();

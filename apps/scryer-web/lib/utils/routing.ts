@@ -19,6 +19,7 @@ export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
   plugins: "plugins",
   notifications: "notifications",
   "post-processing": "post-processing",
+  subtitles: "subtitles",
 };
 
 export const CONTENT_SECTION_PATH: Record<ContentSettingsSection, string> = {

@@ -16,7 +16,20 @@
 
 ---
 
-Scryer manages movies, TV series, and anime in one place. It monitors your library, searches indexers for releases, sends downloads to your Usenet client, and organizes the results into your media directories. The backend is written in Rust and the UI is a Vite + React static app embedded directly into the binary — no runtime dependencies at deploy time.
+Scryer organizes movies, TV series, and anime in a single application. It monitors your library, tracks wanted media, manages quality upgrades, and handles file renaming and organization across your media directories. The backend is written in Rust with a React frontend embedded directly into the binary — no runtime dependencies, no external services, one process.
+
+## Features
+
+- **Unified library** — movies, TV series, and anime managed together with per-facet settings for quality profiles, naming conventions, and root folders
+- **Subtitle management** — searches OpenSubtitles for missing subtitles, scores matches using release metadata and file hashing, and synchronizes timing using built-in audio analysis (no external tools required)
+- **Quality-driven upgrades** — configurable quality profiles with scoring rules, delay profiles, and automatic upgrade tracking
+- **Metadata integration** — centralized metadata from TVDB and TMDB via the Scryer Metadata Gateway, with anime ID cross-referencing (MAL, AniList, AniDB, Kitsu)
+- **Background image management** — automatically fetches and caches posters, banners, and fanart with responsive image variants
+- **Post-processing** — configurable per-facet scripts that run after media is organized, with full metadata passed via environment variables
+- **Plugin framework** — WASM-based plugins for indexers, notification services, and acquisition clients
+- **Custom rules engine** — Rego-based policy rules for release filtering, scoring adjustments, and automated decisions
+- **Single binary** — Rust backend + embedded React UI, ~30 MB, ~60-70 MB RAM typical, no .NET/Python/Java runtime
+- **PWA support** — installable progressive web app with mobile-optimized controls
 
 ## Getting Started
 
@@ -24,45 +37,61 @@ See the **[Getting Started guide](docs/getting-started.md)** for setup instructi
 
 - One-command setup with `scryer init`
 - Default credentials and encryption key management
-- Download client configuration
+- Client configuration
 - Upgrading and backup/restore
 
 ## Comparison with Other Tools
 
-Scryer occupies the same space as Sonarr, Radarr, and SickChill. Each tool makes different trade-offs:
+Scryer occupies the same space as Sonarr, Radarr, and Bazarr. Each tool makes different trade-offs:
 
-| | Scryer | Sonarr / Radarr | SickChill |
+| | Scryer | Sonarr + Radarr + Bazarr | SickChill |
 |---|---|---|---|
-| **Media types** | Movies, series, anime in one binary | Separate app per media type (Radarr for movies, Sonarr for series) | Series and anime only |
-| **Runtime** | Rust binary (~30 MB), <100 MB RAM typical | .NET, ~200-300 MB RAM each | Python, ~150-200 MB RAM |
-| **UI** | Embedded static React app, no separate runtime | Embedded frontend | Web UI |
-| **Anime support** | First-class facet with anime-specific metadata mapping | Community-supported via Sonarr | Built-in |
-| **Metadata** | Centrally cached (TVDB, TMDB) | Direct API calls per instance | Direct API calls (TVDB) |
-| **Download clients** | NZBGet, SABnzbd | NZBGet, SABnzbd, qBittorrent, Deluge, and others | NZBGet, SABnzbd, and torrent clients |
-| **Indexer support** | Plugin-based (NZBGeek, Newznab-compatible) | Broad Newznab/Torznab support, Prowlarr integration | Built-in indexer support |
-| **Maturity** | Early, active development | Mature, large community and ecosystem | Mature, smaller community |
-| **Configuration** | Docker Compose, single binary | Docker or native install, per-app config | Docker or native install |
+| **Media types** | Movies, series, anime in one binary | Separate app per media type, plus Bazarr for subtitles | Series and anime only |
+| **Subtitles** | Built-in (OpenSubtitles, timing sync) | Requires Bazarr as a separate service | Not included |
+| **Runtime** | Rust binary (~30 MB), ~60-70 MB RAM | .NET + Python, ~500+ MB RAM combined | Python, ~150-200 MB RAM |
+| **UI** | Embedded React app, no separate process | Embedded frontend per app | Web UI |
+| **Anime** | First-class facet with cross-database ID mapping | Community-supported via Sonarr | Built-in |
+| **Metadata** | Centrally cached via metadata gateway | Direct API calls per instance | Direct API calls |
+| **Indexers** | Plugin-based (Newznab-compatible) | Broad Newznab/Torznab support, Prowlarr integration | Built-in |
+| **Maturity** | Active development | Mature, large ecosystem | Mature, smaller community |
 
-**When Scryer may be a good fit:** You want a single lightweight process for all media types, you're running on a NAS or low-power hardware, or you want unified anime management without separate tools.
+**When Scryer may fit:** You want one lightweight process for all media types including subtitles, you run on constrained hardware, or you want unified anime management without coordinating multiple services.
 
-**When Sonarr/Radarr may be a better fit:** You need broad torrent client support, you rely on the Prowlarr/Lidarr/*arr ecosystem, or you need the stability of a mature project with a large community.
+**When Sonarr/Radarr may fit better:** You need broad torrent client support, you rely on the Prowlarr/Lidarr/*arr ecosystem, or you need the stability of a mature project with a large community.
 
-**When SickChill may be a better fit:** You only manage series/anime and prefer a Python-based tool with a different approach to show management.
+## Architecture
+
+```
+┌─────────────────────────────────────────┐
+│  scryer binary                          │
+│  ┌───────────┐  ┌────────────────────┐  │
+│  │ React UI  │  │ GraphQL API        │  │
+│  │ (embedded)│  │ (async-graphql)    │  │
+│  └───────────┘  └────────────────────┘  │
+│  ┌────────────────────────────────────┐  │
+│  │ Application layer                  │  │
+│  │ acquisition · import · subtitles   │  │
+│  │ rename · post-processing · rules   │  │
+│  └────────────────────────────────────┘  │
+│  ┌────────────────────────────────────┐  │
+│  │ Infrastructure (SQLite + plugins)  │  │
+│  └────────────────────────────────────┘  │
+└─────────────────────────────────────────┘
+         │                    │
+    ┌────┴────┐        ┌─────┴──────┐
+    │ Metadata│        │ Indexers & │
+    │ Gateway │        │ Clients    │
+    │  (SMG)  │        │ (plugins)  │
+    └─────────┘        └────────────┘
+```
 
 ## Roadmap
 
-### Download Clients
-- NZBGet
-- SABnzbd
-
-### Indexers
-- Plugin-based architecture with built-in support for NZBGeek and Newznab-compatible indexers (DogNZB, etc.)
-
-### Mobile
-Mobile will be delivered via PWA. The goal is a first-class PWA that behaves like a native app with UI controls designed for phone navigation.
-
-### Plugin Framework
-A WASM-based plugin framework enables community-developed components for additional indexers, download clients, and notification services.
+- Additional subtitle providers (Podnapisi, Addic7ed)
+- Torrent client support
+- Calendar view for upcoming releases
+- Import history and audit log improvements
+- Mobile PWA refinements
 
 ---
 

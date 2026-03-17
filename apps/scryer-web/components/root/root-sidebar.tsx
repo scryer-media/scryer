@@ -113,6 +113,11 @@ const settingsEntries: Array<{
     label: (t) => t("settings.postProcessing"),
     requiredEntitlement: "manage_config",
   },
+  {
+    id: "subtitles",
+    label: (t) => t("settings.subtitles"),
+    requiredEntitlement: "manage_config",
+  },
 ];
 
 const MEDIA_SETTINGS_SUB_PAGES: Array<{ id: ContentSettingsSection; labelKey: string }> = [

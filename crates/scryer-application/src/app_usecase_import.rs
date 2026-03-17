@@ -234,7 +234,10 @@ pub async fn try_import_completed_downloads(
         let import_start = std::time::Instant::now();
         match import_completed_download(app, actor, &completed).await {
             Ok(result) => {
-                if matches!(result.decision, ImportDecision::Failed | ImportDecision::Rejected | ImportDecision::Unmatched) {
+                if matches!(
+                    result.decision,
+                    ImportDecision::Failed | ImportDecision::Rejected | ImportDecision::Unmatched
+                ) {
                     tracing::warn!(
                         decision = ?result.decision,
                         title_id = ?result.title_id,
@@ -1084,9 +1087,7 @@ async fn import_interstitial_movie_download(
                 dest_path: None,
                 file_size_bytes: None,
                 link_type: None,
-                error_message: Some(format!(
-                    "interstitial collection {collection_id} not found"
-                )),
+                error_message: Some(format!("interstitial collection {collection_id} not found")),
                 started_at,
                 completed_at: Utc::now(),
             };
@@ -1541,7 +1542,13 @@ async fn mark_wanted_completed_for_collection(
     match app
         .services
         .wanted_items
-        .list_wanted_items(Some("wanted"), Some("interstitial_movie"), Some(title_id), 100, 0)
+        .list_wanted_items(
+            Some("wanted"),
+            Some("interstitial_movie"),
+            Some(title_id),
+            100,
+            0,
+        )
         .await
     {
         Ok(items) => {

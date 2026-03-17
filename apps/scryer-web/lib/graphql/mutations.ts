@@ -655,6 +655,10 @@ export const downloadSubtitleMutation = `mutation DownloadSubtitle($input: Downl
   downloadSubtitle(input: $input)
 }`;
 
+export const blacklistSubtitleMutation = `mutation BlacklistSubtitle($input: BlacklistSubtitleInput!) {
+  blacklistSubtitle(input: $input)
+}`;
+
 export type SubtitleSearchResult = {
   provider: string;
   providerFileId: string;

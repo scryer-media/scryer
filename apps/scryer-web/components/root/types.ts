@@ -11,7 +11,8 @@ export type SettingsSection =
   | "rules"
   | "plugins"
   | "notifications"
-  | "post-processing";
+  | "post-processing"
+  | "subtitles";
 export type ContentSettingsSection = "overview" | "settings" | "general" | "quality" | "renaming" | "routing";
 
 export type Translate = (

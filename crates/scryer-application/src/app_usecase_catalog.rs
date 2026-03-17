@@ -1051,21 +1051,15 @@ impl AppUseCase {
                             .find(|(s, _)| *s == 0)
                             .map(|(_, ep)| format!("S00E{:0>2}", ep));
                         if let Some(ref se) = new_season_episode
-                            && let Ok(Some(existing_coll)) = self
-                                .services
-                                .shows
-                                .get_collection_by_id(existing_id)
-                                .await
+                            && let Ok(Some(existing_coll)) =
+                                self.services.shows.get_collection_by_id(existing_id).await
                             && existing_coll.interstitial_season_episode.as_deref()
                                 != Some(se.as_str())
                         {
                             let _ = self
                                 .services
                                 .shows
-                                .update_interstitial_season_episode(
-                                    existing_id,
-                                    Some(se.clone()),
-                                )
+                                .update_interstitial_season_episode(existing_id, Some(se.clone()))
                                 .await;
                         }
 
