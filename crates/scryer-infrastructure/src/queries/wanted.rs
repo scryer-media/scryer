@@ -48,7 +48,7 @@ pub(crate) async fn upsert_wanted_item_query(
           last_search_at, search_count, baseline_date, status, grabbed_release, current_score,
           created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(title_id) WHERE episode_id IS NULL DO UPDATE SET
+         ON CONFLICT(title_id) WHERE episode_id IS NULL AND collection_id IS NULL DO UPDATE SET
             search_phase = excluded.search_phase,
             next_search_at = excluded.next_search_at,
             baseline_date = excluded.baseline_date,
