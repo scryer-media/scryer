@@ -27,6 +27,7 @@ import {
   sortDbCollections,
   findLatestSeasonKey,
   episodeSortValue,
+  isSpecialsCollection,
   formatDate,
 } from "./helpers";
 import { OverviewControlPanel } from "../overview-control-panel";
@@ -42,6 +43,7 @@ type Props = {
   events: TitleEvent[];
   episodesByCollection: Record<string, CollectionEpisode[]>;
   mediaFilesByEpisode: Record<string, EpisodeMediaFile[]>;
+  subtitleDownloads?: { id: string; mediaFileId: string; language: string; provider: string; hearingImpaired: boolean; forced: boolean }[];
   releaseBlocklistEntries: TitleReleaseBlocklistEntry[];
   onTitleChanged?: () => Promise<void>;
   onBackToList?: () => void;
@@ -51,6 +53,7 @@ type Props = {
   onSearchMonitored?: () => Promise<void> | void;
   onRefreshAndScan?: () => Promise<void> | void;
   onAutoSearchEpisode?: (episode: CollectionEpisode) => Promise<void> | void;
+  onAutoSearchInterstitialMovie?: (collection: TitleCollection) => Promise<void> | void;
   qualityProfiles?: { id: string; name: string }[];
   defaultRootFolder?: string;
   rootFolders?: { path: string; isDefault: boolean }[];
@@ -78,6 +81,7 @@ export function SeriesOverviewView({
   events,
   episodesByCollection,
   mediaFilesByEpisode,
+  subtitleDownloads,
   releaseBlocklistEntries,
   onTitleChanged,
   onBackToList,
@@ -87,6 +91,7 @@ export function SeriesOverviewView({
   onSearchMonitored,
   onRefreshAndScan,
   onAutoSearchEpisode,
+  onAutoSearchInterstitialMovie,
   qualityProfiles,
   defaultRootFolder,
   rootFolders,
@@ -310,6 +315,20 @@ export function SeriesOverviewView({
     [onAutoSearchEpisode, setGlobalStatus, t],
   );
 
+  const [interstitialSearchLoading, setInterstitialSearchLoading] = React.useState(false);
+  const handleAutoSearchInterstitialMovie = React.useCallback(
+    (collection: TitleCollection) => {
+      if (!onAutoSearchInterstitialMovie) return;
+      setInterstitialSearchLoading(true);
+      Promise.resolve(onAutoSearchInterstitialMovie(collection))
+        .catch((error: unknown) => {
+          setGlobalStatus(error instanceof Error ? error.message : t("status.queueFailed"));
+        })
+        .finally(() => setInterstitialSearchLoading(false));
+    },
+    [onAutoSearchInterstitialMovie, setGlobalStatus, t],
+  );
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -505,6 +524,11 @@ export function SeriesOverviewView({
                   ...(episodesByCollection[collection.id] ?? []),
                 ].sort((left, right) => episodeSortValue(right) - episodeSortValue(left));
 
+                // Hide specials section when it has no episodes and no movies
+                if (isSpecialsCollection(collection) && sortedEpisodes.length === 0 && collection.specialsMovies.length === 0) {
+                  return null;
+                }
+
                 return (
                   <SeasonSection
                     key={key}
@@ -516,6 +540,7 @@ export function SeriesOverviewView({
                     expandedEpisodeRows={episodePanel.expandedEpisodeRows}
                     episodeActiveTab={episodePanel.episodeActiveTab}
                     mediaFilesByEpisode={mediaFilesByEpisode}
+                    subtitleDownloads={subtitleDownloads}
                     releaseBlocklistEntries={releaseBlocklistEntries}
                     searchResultsByEpisode={episodePanel.searchResultsByEpisode}
                     searchLoadingByEpisode={episodePanel.searchLoadingByEpisode}
@@ -533,6 +558,8 @@ export function SeriesOverviewView({
                     onRunSeasonSearch={onRunSeasonSearch ? () => onRunSeasonSearch(collection) : undefined}
                     onQueueFromSeasonSearch={onQueueFromSeasonSearch}
                     onDeleteFile={onDeleteFile}
+                    onAutoSearchInterstitialMovie={onAutoSearchInterstitialMovie ? handleAutoSearchInterstitialMovie : undefined}
+                    autoSearchInterstitialMovieLoading={interstitialSearchLoading}
                   />
                 );
               })

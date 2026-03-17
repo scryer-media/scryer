@@ -61,6 +61,9 @@ export const titleDetailQuery = `query TitleDetail($id: String!) {
       movieForm
       confidence
       signalSummary
+      placement
+      movieTmdbId
+      movieMalId
     }
     specialsMovies {
       tvdbId
@@ -82,7 +85,11 @@ export const titleDetailQuery = `query TitleDetail($id: String!) {
       movieForm
       confidence
       signalSummary
+      placement
+      movieTmdbId
+      movieMalId
     }
+    interstitialSeasonEpisode
     monitored
     createdAt
   }
@@ -168,6 +175,9 @@ export const titleOverviewInitQuery = `query TitleOverviewInit($id: String!, $bl
       movieForm
       confidence
       signalSummary
+      placement
+      movieTmdbId
+      movieMalId
     }
     specialsMovies {
       tvdbId
@@ -189,7 +199,11 @@ export const titleOverviewInitQuery = `query TitleOverviewInit($id: String!, $bl
       movieForm
       confidence
       signalSummary
+      placement
+      movieTmdbId
+      movieMalId
     }
+    interstitialSeasonEpisode
     monitored
     createdAt
   }
@@ -874,6 +888,11 @@ export const acquisitionSettingsQuery = `query AcquisitionSettings {
 
 export const postProcessingSettingsQuery = `query PostProcessingSettings {
   postProcessingSettings: adminSettings(scope: "system", category: "post_processing") {${adminSettingsFieldSelection}
+  }
+}`;
+
+export const subtitleSettingsQuery = `query SubtitleSettings {
+  subtitleSettings: adminSettings(scope: "system", category: "subtitles") {${adminSettingsFieldSelection}
   }
 }`;
 

@@ -181,6 +181,7 @@ pub struct WantedItem {
     pub title_id: String,
     pub title_name: Option<String>,
     pub episode_id: Option<String>,
+    pub collection_id: Option<String>,
     pub season_number: Option<String>,
     pub media_type: String,
     pub search_phase: String,

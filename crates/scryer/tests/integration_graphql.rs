@@ -372,6 +372,7 @@ async fn graphql_scan_title_library() {
         last_episode_number: Some("1".to_string()),
         interstitial_movie: None,
         specials_movies: vec![],
+        interstitial_season_episode: None,
         monitored: true,
         created_at: chrono::Utc::now(),
     };
@@ -493,6 +494,7 @@ async fn graphql_delete_title_cleans_title_workflow_state() {
             title_id: id.clone(),
             title_name: Some("Delete With Cleanup".to_string()),
             episode_id: None,
+            collection_id: None,
             season_number: None,
             media_type: "movie".to_string(),
             search_phase: "auto".to_string(),
@@ -535,6 +537,7 @@ async fn graphql_delete_title_cleans_title_workflow_state() {
             "sabnzbd".to_string(),
             "queue-delete".to_string(),
             Some("Delete With Cleanup".to_string()),
+            None,
         )
         .await
         .expect("seed download submission");

@@ -3,12 +3,18 @@ import type { InterstitialMovieMetadata } from "@/components/containers/series-o
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 import { getImdbUrl, getTvdbMovieUrl, formatRuntimeFromMinutes } from "./helpers";
 
-export function InterstitialMoviePanel({ movie }: { movie: InterstitialMovieMetadata }) {
+type InterstitialMoviePanelProps = {
+  movie: InterstitialMovieMetadata;
+  hasFile?: boolean;
+  monitored?: boolean;
+};
+
+export function InterstitialMoviePanel({ movie, hasFile, monitored }: InterstitialMoviePanelProps) {
   const imdbUrl = getImdbUrl(movie.imdbId);
   const tvdbUrl = getTvdbMovieUrl(movie);
   const runtime = formatRuntimeFromMinutes(movie.runtimeMinutes);
   const posterUrl = selectPosterVariantUrl(movie.posterUrl, "w250");
-  const badges = buildMovieBadges(movie);
+  const badges = buildMovieBadges(movie, hasFile, monitored);
 
   return (
     <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
@@ -89,13 +95,24 @@ export function InterstitialMoviePanel({ movie }: { movie: InterstitialMovieMeta
   );
 }
 
-function buildMovieBadges(movie: InterstitialMovieMetadata): Array<{ label: string; tone: "emerald" | "amber" | "slate" | "sky" }> {
-  const badges: Array<{ label: string; tone: "emerald" | "amber" | "slate" | "sky" }> = [];
+function buildMovieBadges(movie: InterstitialMovieMetadata, hasFile?: boolean, monitored?: boolean): Array<{ label: string; tone: "emerald" | "amber" | "slate" | "sky" | "red" }> {
+  const badges: Array<{ label: string; tone: "emerald" | "amber" | "slate" | "sky" | "red" }> = [];
+
+  // File status badge
+  if (hasFile === true) {
+    badges.push({ label: "Downloaded", tone: "emerald" });
+  } else if (monitored === true && hasFile === false) {
+    badges.push({ label: "Missing", tone: "red" });
+  } else if (monitored === false) {
+    badges.push({ label: "Unmonitored", tone: "slate" });
+  }
 
   if (movie.movieForm === "recap") {
     badges.push({ label: "Recap", tone: "slate" });
   } else if (movie.movieForm === "special") {
     badges.push({ label: "Special", tone: "slate" });
+  } else if (movie.continuityStatus === "filler") {
+    badges.push({ label: "Filler", tone: "slate" });
   } else if (movie.continuityStatus === "canon") {
     badges.push({ label: "Canon", tone: "emerald" });
   } else if (movie.continuityStatus === "mixed") {
@@ -119,7 +136,7 @@ function buildMovieBadges(movie: InterstitialMovieMetadata): Array<{ label: stri
   return badges;
 }
 
-function badgeClassName(tone: "emerald" | "amber" | "slate" | "sky") {
+function badgeClassName(tone: "emerald" | "amber" | "slate" | "sky" | "red") {
   switch (tone) {
     case "emerald":
       return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
@@ -127,6 +144,8 @@ function badgeClassName(tone: "emerald" | "amber" | "slate" | "sky") {
       return "border-amber-500/30 bg-amber-500/10 text-amber-100";
     case "sky":
       return "border-sky-500/30 bg-sky-500/10 text-sky-100";
+    case "red":
+      return "border-red-500/30 bg-red-500/10 text-red-200";
     default:
       return "border-border bg-muted/30 text-muted-foreground";
   }

@@ -151,6 +151,7 @@ async fn seed_movie_wanted_item(
         title_id: title_id.to_string(),
         title_name: Some("Test Title".to_string()),
         episode_id: None,
+        collection_id: None,
         season_number: None,
         media_type: "movie".to_string(),
         search_phase: "initial".to_string(),
@@ -184,6 +185,7 @@ async fn seed_series_episode(ctx: &TestContext, title: &Title) -> Episode {
         last_episode_number: Some("1".to_string()),
         interstitial_movie: None,
         specials_movies: vec![],
+        interstitial_season_episode: None,
         monitored: true,
         created_at: chrono::Utc::now(),
     };
@@ -230,6 +232,7 @@ async fn seed_episode_wanted_item(
         title_id: title.id.clone(),
         title_name: Some(title.name.clone()),
         episode_id: Some(episode.id.clone()),
+        collection_id: None,
         season_number: Some("1".to_string()),
         media_type: "tv".to_string(),
         search_phase: "initial".to_string(),

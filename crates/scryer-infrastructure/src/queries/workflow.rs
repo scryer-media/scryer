@@ -547,17 +547,19 @@ pub(crate) async fn record_download_submission_query(
     download_client_type: &str,
     download_client_item_id: &str,
     source_title: Option<&str>,
+    collection_id: Option<&str>,
 ) -> AppResult<()> {
     let id = Id::new().0;
 
     sqlx::query(
         "INSERT INTO download_submissions
-         (id, title_id, facet, download_client_type, download_client_item_id, source_title)
-         VALUES (?, ?, ?, ?, ?, ?)
+         (id, title_id, facet, download_client_type, download_client_item_id, source_title, collection_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(download_client_type, download_client_item_id) DO UPDATE
          SET title_id = excluded.title_id,
              facet = excluded.facet,
-             source_title = excluded.source_title",
+             source_title = excluded.source_title,
+             collection_id = excluded.collection_id",
     )
     .bind(&id)
     .bind(title_id)
@@ -565,6 +567,7 @@ pub(crate) async fn record_download_submission_query(
     .bind(download_client_type)
     .bind(download_client_item_id)
     .bind(source_title)
+    .bind(collection_id)
     .execute(pool)
     .await
     .map_err(|err| AppError::Repository(err.to_string()))?;
@@ -578,7 +581,7 @@ pub(crate) async fn find_download_submission_query(
     download_client_item_id: &str,
 ) -> AppResult<Option<DownloadSubmission>> {
     let row = sqlx::query(
-        "SELECT title_id, facet, download_client_type, download_client_item_id, source_title
+        "SELECT title_id, facet, download_client_type, download_client_item_id, source_title, collection_id
          FROM download_submissions
          WHERE download_client_type = ? AND download_client_item_id = ?",
     )
@@ -605,6 +608,7 @@ pub(crate) async fn find_download_submission_query(
             source_title: row
                 .try_get("source_title")
                 .map_err(|err| AppError::Repository(err.to_string()))?,
+            collection_id: row.try_get("collection_id").unwrap_or(None),
         })),
         None => Ok(None),
     }
@@ -615,7 +619,7 @@ pub(crate) async fn list_download_submissions_for_title_query(
     title_id: &str,
 ) -> AppResult<Vec<DownloadSubmission>> {
     let rows = sqlx::query(
-        "SELECT title_id, facet, download_client_type, download_client_item_id, source_title
+        "SELECT title_id, facet, download_client_type, download_client_item_id, source_title, collection_id
          FROM download_submissions
          WHERE title_id = ?",
     )
@@ -642,6 +646,7 @@ pub(crate) async fn list_download_submissions_for_title_query(
             source_title: row
                 .try_get("source_title")
                 .map_err(|err| AppError::Repository(err.to_string()))?,
+            collection_id: row.try_get("collection_id").unwrap_or(None),
         });
     }
 

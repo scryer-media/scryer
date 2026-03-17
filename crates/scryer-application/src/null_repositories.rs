@@ -790,6 +790,13 @@ pub mod test_nulls {
         ) -> AppResult<Collection> {
             Err(AppError::Repository("not configured".into()))
         }
+        async fn update_interstitial_season_episode(
+            &self,
+            _: &str,
+            _: Option<String>,
+        ) -> AppResult<()> {
+            Ok(())
+        }
         async fn set_collection_episodes_monitored(&self, _: &str, _: bool) -> AppResult<()> {
             Ok(())
         }
@@ -1046,5 +1053,23 @@ impl crate::SubtitleDownloadRepository for NullSubtitleDownloadRepository {
     }
     async fn delete(&self, _id: &str) -> AppResult<Option<scryer_domain::SubtitleDownload>> {
         Ok(None)
+    }
+    async fn is_blacklisted(
+        &self,
+        _media_file_id: &str,
+        _provider: &str,
+        _provider_file_id: &str,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
+    async fn blacklist(
+        &self,
+        _media_file_id: &str,
+        _provider: &str,
+        _provider_file_id: &str,
+        _language: &str,
+        _reason: Option<&str>,
+    ) -> AppResult<()> {
+        Ok(())
     }
 }

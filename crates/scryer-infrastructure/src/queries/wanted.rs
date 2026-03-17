@@ -9,11 +9,29 @@ pub(crate) async fn upsert_wanted_item_query(
 ) -> AppResult<String> {
     let now = Utc::now().to_rfc3339();
 
-    let sql = if item.episode_id.is_some() {
+    let sql = if item.collection_id.is_some() {
+        // Interstitial movie: unique by collection_id
         "INSERT INTO wanted_items
-         (id, title_id, episode_id, media_type, search_phase, next_search_at, last_search_at,
-          search_count, baseline_date, status, grabbed_release, current_score, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (id, title_id, episode_id, collection_id, media_type, search_phase, next_search_at,
+          last_search_at, search_count, baseline_date, status, grabbed_release, current_score,
+          created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(collection_id) WHERE collection_id IS NOT NULL DO UPDATE SET
+            search_phase = excluded.search_phase,
+            next_search_at = excluded.next_search_at,
+            baseline_date = excluded.baseline_date,
+            status = CASE
+                WHEN wanted_items.status IN ('completed', 'paused') AND excluded.status = 'wanted'
+                THEN wanted_items.status
+                ELSE excluded.status
+            END,
+            updated_at = excluded.updated_at"
+    } else if item.episode_id.is_some() {
+        "INSERT INTO wanted_items
+         (id, title_id, episode_id, collection_id, media_type, search_phase, next_search_at,
+          last_search_at, search_count, baseline_date, status, grabbed_release, current_score,
+          created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(title_id, episode_id) DO UPDATE SET
             search_phase = excluded.search_phase,
             next_search_at = excluded.next_search_at,
@@ -26,9 +44,10 @@ pub(crate) async fn upsert_wanted_item_query(
             updated_at = excluded.updated_at"
     } else {
         "INSERT INTO wanted_items
-         (id, title_id, episode_id, media_type, search_phase, next_search_at, last_search_at,
-          search_count, baseline_date, status, grabbed_release, current_score, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (id, title_id, episode_id, collection_id, media_type, search_phase, next_search_at,
+          last_search_at, search_count, baseline_date, status, grabbed_release, current_score,
+          created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(title_id) WHERE episode_id IS NULL DO UPDATE SET
             search_phase = excluded.search_phase,
             next_search_at = excluded.next_search_at,
@@ -45,6 +64,7 @@ pub(crate) async fn upsert_wanted_item_query(
         .bind(&item.id)
         .bind(&item.title_id)
         .bind(&item.episode_id)
+        .bind(&item.collection_id)
         .bind(&item.media_type)
         .bind(&item.search_phase)
         .bind(&item.next_search_at)
@@ -69,7 +89,7 @@ pub(crate) async fn list_due_wanted_items_query(
     batch_limit: i64,
 ) -> AppResult<Vec<WantedItem>> {
     let rows: Vec<SqliteRow> = sqlx::query(
-        "SELECT w.id, w.title_id, w.episode_id, e.season_number,
+        "SELECT w.id, w.title_id, w.episode_id, w.collection_id, e.season_number,
                 w.media_type, w.search_phase, w.next_search_at,
                 w.last_search_at, w.search_count, w.baseline_date, w.status, w.grabbed_release,
                 w.current_score, w.created_at, w.updated_at
@@ -134,7 +154,7 @@ pub(crate) async fn get_wanted_item_for_title_query(
     let row: Option<SqliteRow> = match episode_id {
         Some(ep_id) => {
             sqlx::query(
-                "SELECT id, title_id, episode_id, media_type, search_phase, next_search_at,
+                "SELECT id, title_id, episode_id, collection_id, media_type, search_phase, next_search_at,
                         last_search_at, search_count, baseline_date, status, grabbed_release,
                         current_score, created_at, updated_at
                  FROM wanted_items
@@ -147,7 +167,7 @@ pub(crate) async fn get_wanted_item_for_title_query(
         }
         None => {
             sqlx::query(
-                "SELECT id, title_id, episode_id, media_type, search_phase, next_search_at,
+                "SELECT id, title_id, episode_id, collection_id, media_type, search_phase, next_search_at,
                         last_search_at, search_count, baseline_date, status, grabbed_release,
                         current_score, created_at, updated_at
                  FROM wanted_items
@@ -412,6 +432,7 @@ fn row_to_wanted_item(row: &SqliteRow) -> AppResult<WantedItem> {
             .map_err(|e| AppError::Repository(e.to_string()))?,
         title_name: row.try_get("title_name").unwrap_or(None),
         episode_id: row.try_get("episode_id").unwrap_or(None),
+        collection_id: row.try_get("collection_id").unwrap_or(None),
         season_number: row.try_get("season_number").unwrap_or(None),
         media_type: row
             .try_get("media_type")

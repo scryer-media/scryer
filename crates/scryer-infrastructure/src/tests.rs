@@ -673,6 +673,9 @@ async fn sqlite_show_queries_roundtrip() {
             movie_form: Some("movie".into()),
             confidence: Some("high".into()),
             signal_summary: Some("TVDB marked special as critical to story".into()),
+            placement: Some("ordered".into()),
+            movie_tmdb_id: Some("99001".into()),
+            movie_mal_id: Some("5001".into()),
         }),
         specials_movies: vec![InterstitialMovieMetadata {
             tvdb_id: "67890".into(),
@@ -694,7 +697,11 @@ async fn sqlite_show_queries_roundtrip() {
             movie_form: Some("recap".into()),
             confidence: Some("high".into()),
             signal_summary: Some("TVDB special category marks this as a recap".into()),
+            placement: Some("specials".into()),
+            movie_tmdb_id: None,
+            movie_mal_id: None,
         }],
+        interstitial_season_episode: None,
         monitored: true,
         created_at: Utc::now(),
     };

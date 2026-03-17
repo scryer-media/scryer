@@ -115,6 +115,10 @@ export function MediaContentView({
     setCategoryInterSeasonMovies: React.Dispatch<
       React.SetStateAction<Record<ViewCategoryId, string>>
     >;
+    categoryMonitorFillerMovies: Record<ViewCategoryId, string>;
+    setCategoryMonitorFillerMovies: React.Dispatch<
+      React.SetStateAction<Record<ViewCategoryId, string>>
+    >;
     nfoWriteOnImport: Record<ViewCategoryId, string>;
     setNfoWriteOnImport: React.Dispatch<
       React.SetStateAction<Record<ViewCategoryId, string>>
@@ -227,6 +231,8 @@ export function MediaContentView({
     setCategoryMonitorSpecials,
     categoryInterSeasonMovies,
     setCategoryInterSeasonMovies,
+    categoryMonitorFillerMovies,
+    setCategoryMonitorFillerMovies,
     nfoWriteOnImport,
     setNfoWriteOnImport,
     plexmatchWriteOnImport,
@@ -391,6 +397,15 @@ export function MediaContentView({
     [activeQualityScopeId, setCategoryInterSeasonMovies, saveSetting],
   );
 
+  const handleMonitorFillerMoviesChange = React.useCallback(
+    (checked: boolean) => {
+      const value = checked ? "true" : "false";
+      setCategoryMonitorFillerMovies((previous) => ({ ...previous, [activeQualityScopeId]: value }));
+      saveSetting("system", activeQualityScopeId, "anime.monitor_filler_movies", value);
+    },
+    [activeQualityScopeId, setCategoryMonitorFillerMovies, saveSetting],
+  );
+
   const handleNfoWriteChange = React.useCallback(
     (checked: boolean) => {
       const value = checked ? "true" : "false";
@@ -547,6 +562,8 @@ export function MediaContentView({
             handleMonitorSpecialsChange={handleMonitorSpecialsChange}
             categoryInterSeasonMovies={categoryInterSeasonMovies}
             handleInterSeasonMoviesChange={handleInterSeasonMoviesChange}
+            categoryMonitorFillerMovies={categoryMonitorFillerMovies}
+            handleMonitorFillerMoviesChange={handleMonitorFillerMoviesChange}
             nfoWriteOnImport={nfoWriteOnImport}
             handleNfoWriteChange={handleNfoWriteChange}
             plexmatchWriteOnImport={plexmatchWriteOnImport}

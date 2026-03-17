@@ -180,6 +180,9 @@ fn interstitial_movie_from_anime_movie(movie: &AnimeMovie) -> InterstitialMovieM
         movie_form: Some(movie.movie_form.clone()),
         confidence: Some(movie.confidence.clone()),
         signal_summary: Some(movie.signal_summary.clone()),
+        placement: Some(movie.placement.clone()),
+        movie_tmdb_id: movie.movie_tmdb_id.map(|id| id.to_string()),
+        movie_mal_id: movie.movie_mal_id.map(|id| id.to_string()),
     }
 }
 
@@ -301,6 +304,9 @@ mod anime_movie_mapping_tests {
         assert_eq!(mapped.continuity_status.as_deref(), Some("canon"));
         assert_eq!(mapped.association_confidence.as_deref(), Some("high"));
         assert_eq!(mapped.confidence.as_deref(), Some("high"));
+        assert_eq!(mapped.placement.as_deref(), Some("ordered"));
+        assert_eq!(mapped.movie_tmdb_id.as_deref(), Some("300"));
+        assert_eq!(mapped.movie_mal_id.as_deref(), Some("400"));
     }
 }
 
@@ -938,6 +944,7 @@ impl AppUseCase {
                 } else {
                     vec![]
                 },
+                interstitial_season_episode: None,
                 monitored: season_monitored,
                 created_at: Utc::now(),
             };
@@ -1036,6 +1043,32 @@ impl AppUseCase {
                     if let Some(existing_id) = existing_collection_map
                         .get(&("interstitial".to_string(), narrative_order.clone()))
                     {
+                        // Update interstitial_season_episode if it changed or was missing
+                        let new_season_episode = anime_movie_identity_keys(movie)
+                            .iter()
+                            .filter_map(|key| mapping_episode_links.get(key.as_str()))
+                            .flatten()
+                            .find(|(s, _)| *s == 0)
+                            .map(|(_, ep)| format!("S00E{:0>2}", ep));
+                        if let Some(ref se) = new_season_episode
+                            && let Ok(Some(existing_coll)) = self
+                                .services
+                                .shows
+                                .get_collection_by_id(existing_id)
+                                .await
+                            && existing_coll.interstitial_season_episode.as_deref()
+                                != Some(se.as_str())
+                        {
+                            let _ = self
+                                .services
+                                .shows
+                                .update_interstitial_season_episode(
+                                    existing_id,
+                                    Some(se.clone()),
+                                )
+                                .await;
+                        }
+
                         for key in anime_movie_identity_keys(movie) {
                             if let Some(linked_episodes) = mapping_episode_links.get(&key) {
                                 for (season_num, episode_num) in linked_episodes {
@@ -1046,6 +1079,14 @@ impl AppUseCase {
                         }
                         continue;
                     }
+
+                    // Compute the S00Exx episode number from the linked episode data
+                    let season_episode = anime_movie_identity_keys(movie)
+                        .iter()
+                        .filter_map(|key| mapping_episode_links.get(key.as_str()))
+                        .flatten()
+                        .find(|(s, _)| *s == 0)
+                        .map(|(_, ep)| format!("S00E{:0>2}", ep));
 
                     let collection = Collection {
                         id: Id::new().0,
@@ -1059,6 +1100,7 @@ impl AppUseCase {
                         last_episode_number: None,
                         interstitial_movie: Some(interstitial_movie_from_anime_movie(movie)),
                         specials_movies: vec![],
+                        interstitial_season_episode: season_episode,
                         monitored: true,
                         created_at: Utc::now(),
                     };
@@ -1351,6 +1393,7 @@ impl AppUseCase {
                         download_client_type: grab.client_type.clone(),
                         download_client_item_id: grab.job_id.clone(),
                         source_title: source_title_for_attempt.clone(),
+                        collection_id: None,
                     })
                     .await;
                 grab
@@ -1509,6 +1552,7 @@ impl AppUseCase {
                         download_client_type: grab.client_type.clone(),
                         download_client_item_id: grab.job_id.clone(),
                         source_title: source_title_for_attempt.clone(),
+                        collection_id: None,
                     })
                     .await;
                 grab
@@ -2164,6 +2208,7 @@ impl AppUseCase {
             last_episode_number: normalize_show_text_opt(last_episode_number),
             interstitial_movie: None,
             specials_movies: vec![],
+            interstitial_season_episode: None,
             monitored: true,
             created_at: Utc::now(),
         };

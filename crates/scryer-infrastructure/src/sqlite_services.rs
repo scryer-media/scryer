@@ -322,6 +322,7 @@ impl SqliteServices {
         download_client_type: String,
         download_client_item_id: String,
         source_title: Option<String>,
+        collection_id: Option<String>,
     ) -> AppResult<()> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
@@ -331,6 +332,7 @@ impl SqliteServices {
                 download_client_type,
                 download_client_item_id,
                 source_title,
+                collection_id,
                 reply: reply_tx,
             })
             .await

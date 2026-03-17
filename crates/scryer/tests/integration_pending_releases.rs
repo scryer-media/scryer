@@ -68,6 +68,7 @@ async fn seed_wanted_item(
         title_id: title_id.to_string(),
         title_name: Some("Test Title".to_string()),
         episode_id: None,
+        collection_id: None,
         season_number: None,
         media_type: "movie".to_string(),
         search_phase: "initial".to_string(),

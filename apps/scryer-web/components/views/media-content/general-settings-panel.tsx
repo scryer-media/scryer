@@ -25,6 +25,8 @@ export function GeneralSettingsPanel({
   handleMonitorSpecialsChange,
   categoryInterSeasonMovies,
   handleInterSeasonMoviesChange,
+  categoryMonitorFillerMovies,
+  handleMonitorFillerMoviesChange,
   nfoWriteOnImport,
   handleNfoWriteChange,
   plexmatchWriteOnImport,
@@ -40,6 +42,8 @@ export function GeneralSettingsPanel({
   handleMonitorSpecialsChange: (checked: boolean) => void;
   categoryInterSeasonMovies: Record<ViewCategoryId, string>;
   handleInterSeasonMoviesChange: (checked: boolean) => void;
+  categoryMonitorFillerMovies: Record<ViewCategoryId, string>;
+  handleMonitorFillerMoviesChange: (checked: boolean) => void;
   nfoWriteOnImport: Record<ViewCategoryId, string>;
   handleNfoWriteChange: (checked: boolean) => void;
   plexmatchWriteOnImport: Record<ViewCategoryId, string>;
@@ -125,6 +129,26 @@ export function GeneralSettingsPanel({
                       />
                     </button>
                     <span className="text-xs text-muted-foreground">{t("settings.interSeasonMoviesDescription")}</span>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm text-card-foreground">
+                    {t("settings.monitorFillerMoviesLabel")}
+                  </Label>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={categoryMonitorFillerMovies[activeQualityScopeId] === "true"}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${categoryMonitorFillerMovies[activeQualityScopeId] === "true" ? "bg-primary" : "bg-muted"}`}
+                      onClick={() => handleMonitorFillerMoviesChange(categoryMonitorFillerMovies[activeQualityScopeId] !== "true")}
+                      disabled={mediaSettingsLoading}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-background shadow-lg transition-transform ${categoryMonitorFillerMovies[activeQualityScopeId] === "true" ? "translate-x-5" : "translate-x-0"}`}
+                      />
+                    </button>
+                    <span className="text-xs text-muted-foreground">{t("settings.monitorFillerMoviesDescription")}</span>
                   </div>
                 </div>
               </div>

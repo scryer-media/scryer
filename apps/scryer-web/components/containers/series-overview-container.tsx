@@ -4,9 +4,11 @@ import {
   activitySubscriptionQuery,
   adminSettingsQuery,
   buildCollectionEpisodesBatchQuery,
+  searchQuery,
   searchSeriesEpisodeQuery,
   titleMediaFilesQuery,
   titleOverviewInitQuery,
+  subtitleDownloadsQuery,
 } from "@/lib/graphql/queries";
 import {
   deleteMediaFileMutation,
@@ -81,6 +83,7 @@ export type TitleCollection = {
   lastEpisodeNumber: string | null;
   interstitialMovie: InterstitialMovieMetadata | null;
   specialsMovies: InterstitialMovieMetadata[];
+  interstitialSeasonEpisode: string | null;
   monitored: boolean;
   createdAt: string;
 };
@@ -105,6 +108,9 @@ export type InterstitialMovieMetadata = {
   movieForm: string | null;
   confidence: string | null;
   signalSummary: string | null;
+  placement: string | null;
+  movieTmdbId: string | null;
+  movieMalId: string | null;
 };
 
 export type TitleEvent = {
@@ -221,6 +227,9 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   const [mediaFilesByEpisode, setMediaFilesByEpisode] = React.useState<
     Record<string, EpisodeMediaFile[]>
   >({});
+  const [subtitleDownloads, setSubtitleDownloads] = React.useState<
+    import("@/components/containers/movie-overview-container").SubtitleDownloadRecord[]
+  >([]);
   const [completedDownloads, setCompletedDownloads] = React.useState<DownloadQueueItem[]>([]);
   const [manualImportItem, setManualImportItem] = React.useState<DownloadQueueItem | null>(null);
   const [hydratingFromActivity, setHydratingFromActivity] = React.useState(false);
@@ -454,6 +463,10 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         (grouped[key] ??= []).push(file);
       }
       setMediaFilesByEpisode(grouped);
+      // Also fetch subtitle downloads
+      client.query(subtitleDownloadsQuery, { titleId: title.id }).toPromise().then((subResult) => {
+        setSubtitleDownloads(subResult.data?.subtitleDownloads ?? []);
+      }).catch(() => {});
     } catch {
       // Media files fetch is best-effort
     }
@@ -611,6 +624,51 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       }
     },
     [collections, refreshTitleDetail, client, title, t, setGlobalStatus],
+  );
+
+  const handleAutoSearchInterstitialMovie = React.useCallback(
+    async (collection: TitleCollection) => {
+      if (!title || !collection.interstitialMovie) return;
+      const movie = collection.interstitialMovie;
+      const imdbId = movie.imdbId || null;
+      const movieQuery = movie.year ? `${movie.name} ${movie.year}` : movie.name;
+
+      const { data, error } = await client.query(searchQuery, {
+        query: movieQuery,
+        imdbId,
+        tvdbId: null,
+        category: "movies",
+        limit: 25,
+      }).toPromise();
+      if (error) throw error;
+
+      const top = data.searchIndexers.find(
+        (release: Release) => release.qualityProfileDecision?.allowed ?? true,
+      );
+      if (!top) {
+        setGlobalStatus(t("status.noReleaseForTitle", { name: movie.name }));
+        return;
+      }
+
+      const sourceHint = top.downloadUrl || top.link;
+      if (!sourceHint) {
+        setGlobalStatus(t("status.noSource", { name: movie.name }));
+        return;
+      }
+
+      const { error: queueError } = await client.mutation(queueExistingMutation, {
+        input: {
+          titleId: title.id,
+          sourceHint,
+          sourceKind: top.sourceKind ?? null,
+          sourceTitle: top.title,
+        },
+      }).toPromise();
+      if (queueError) throw queueError;
+      setGlobalStatus(t("status.queuedLatest", { name: movie.name }));
+      await refreshTitleDetail();
+    },
+    [refreshTitleDetail, client, title, t, setGlobalStatus],
   );
 
   const [seasonSearchResultsByCollection, setSeasonSearchResultsByCollection] = React.useState<
@@ -861,6 +919,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         events={events}
         episodesByCollection={episodesByCollection}
         mediaFilesByEpisode={mediaFilesByEpisode}
+        subtitleDownloads={subtitleDownloads}
         releaseBlocklistEntries={releaseBlocklistEntries}
         onTitleChanged={refreshTitleDetail}
         onBackToList={onBackToList}
@@ -869,6 +928,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         onSetTitleMonitored={handleSetTitleMonitored}
         onSearchMonitored={handleSearchMonitored}
         onAutoSearchEpisode={handleAutoSearchEpisode}
+        onAutoSearchInterstitialMovie={handleAutoSearchInterstitialMovie}
         qualityProfiles={qualityProfiles}
         defaultRootFolder={defaultRootFolder}
         rootFolders={rootFolders}

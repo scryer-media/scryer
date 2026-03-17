@@ -402,6 +402,9 @@ pub(crate) fn from_collection(collection: Collection) -> CollectionPayload {
             movie_form: movie.movie_form,
             confidence: movie.confidence,
             signal_summary: movie.signal_summary,
+            placement: movie.placement,
+            movie_tmdb_id: movie.movie_tmdb_id,
+            movie_mal_id: movie.movie_mal_id,
         };
     CollectionPayload {
         id: collection.id,
@@ -415,6 +418,7 @@ pub(crate) fn from_collection(collection: Collection) -> CollectionPayload {
         first_episode_number: collection.first_episode_number,
         last_episode_number: collection.last_episode_number,
         interstitial_movie: collection.interstitial_movie.map(map_movie),
+        interstitial_season_episode: collection.interstitial_season_episode,
         specials_movies: collection
             .specials_movies
             .into_iter()
@@ -657,6 +661,7 @@ pub(crate) fn from_wanted_item(item: scryer_application::WantedItem) -> WantedIt
         title_id: item.title_id,
         title_name: item.title_name,
         episode_id: item.episode_id,
+        collection_id: item.collection_id,
         media_type: item.media_type,
         search_phase: item.search_phase,
         next_search_at: item.next_search_at,

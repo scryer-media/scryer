@@ -75,7 +75,7 @@ type WantedViewState = {
 };
 
 const STATUS_OPTIONS = ["wanted", "grabbed", "completed", "paused"] as const;
-const MEDIA_TYPE_OPTIONS = ["movie", "episode"] as const;
+const MEDIA_TYPE_OPTIONS = ["movie", "episode", "interstitial_movie"] as const;
 
 function statusBadge(status: string) {
   const colors: Record<string, string> = {
@@ -323,7 +323,7 @@ function WantedItemsCard({ state }: { state: WantedViewState }) {
               <SelectItem value="__all__">{t("wanted.allTypes")}</SelectItem>
               {MEDIA_TYPE_OPTIONS.map((m) => (
                 <SelectItem key={m} value={m}>
-                  {m}
+                  {m === "interstitial_movie" ? "franchise movie" : m}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -356,7 +356,7 @@ function WantedItemsCard({ state }: { state: WantedViewState }) {
                         {statusBadge(item.status)}
                         {phaseBadge(item.searchPhase)}
                         <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                          {item.mediaType}
+                          {item.mediaType === "interstitial_movie" ? "franchise movie" : item.mediaType}
                         </span>
                       </div>
                     </div>
@@ -476,7 +476,7 @@ function WantedItemsCard({ state }: { state: WantedViewState }) {
                       <TableCell className="max-w-[200px] truncate text-sm" title={item.titleName ?? item.titleId}>
                         {item.titleName ?? item.titleId.slice(0, 8)}
                       </TableCell>
-                      <TableCell>{item.mediaType}</TableCell>
+                      <TableCell>{item.mediaType === "interstitial_movie" ? "franchise movie" : item.mediaType}</TableCell>
                       <TableCell>{statusBadge(item.status)}</TableCell>
                       <TableCell>{phaseBadge(item.searchPhase)}</TableCell>
                       <TableCell className="text-xs">

@@ -2,6 +2,12 @@ use async_graphql::{Context, InputObject, Object, SimpleObject};
 
 use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_error};
 
+#[derive(InputObject)]
+pub struct BlacklistSubtitleInput {
+    pub subtitle_download_id: String,
+    pub reason: Option<String>,
+}
+
 type GqlResult<T> = async_graphql::Result<T>;
 
 #[derive(Default)]
@@ -235,6 +241,92 @@ impl SubtitleMutations {
         scryer_infrastructure::queries::subtitle::insert_subtitle_download(db.pool(), &record)
             .await
             .map_err(to_gql_error)?;
+
+        // Attempt subtitle timing sync if enabled
+        let sync_enabled = read_subtitle_setting(&db, "subtitles.sync_enabled")
+            .await
+            .as_deref()
+            != Some("false");
+        if sync_enabled && !forced {
+            let is_series = {
+                let title = app
+                    .services
+                    .titles
+                    .get_by_id(&mf.title_id)
+                    .await
+                    .ok()
+                    .flatten();
+                title
+                    .as_ref()
+                    .map(|t| {
+                        t.facet == scryer_domain::MediaFacet::Tv
+                            || t.facet == scryer_domain::MediaFacet::Anime
+                    })
+                    .unwrap_or(false)
+            };
+            let threshold_key = if is_series {
+                "subtitles.sync_threshold_series"
+            } else {
+                "subtitles.sync_threshold_movie"
+            };
+            let threshold: i32 = read_subtitle_setting(&db, threshold_key)
+                .await
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(if is_series { 90 } else { 70 });
+
+            let score = record.score.unwrap_or(0);
+            if score < threshold
+                && let Err(err) =
+                    scryer_application::subtitles::sync::sync_subtitle(file_path, &dest_path, 60)
+                        .await
+            {
+                tracing::warn!(error = %err, "subtitle sync failed (non-fatal)");
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Blacklist a downloaded subtitle: delete the file and DB record, then add to blacklist.
+    async fn blacklist_subtitle(
+        &self,
+        ctx: &Context<'_>,
+        input: BlacklistSubtitleInput,
+    ) -> GqlResult<bool> {
+        let app = app_from_ctx(ctx)?;
+        let _actor = actor_from_ctx(ctx)?;
+
+        // Delete the download record (returns the record so we have the file_path)
+        let record = app
+            .services
+            .subtitle_downloads
+            .delete(&input.subtitle_download_id)
+            .await
+            .map_err(to_gql_error)?
+            .ok_or_else(|| async_graphql::Error::new("subtitle download not found"))?;
+
+        // Delete the file from disk
+        let path = std::path::Path::new(&record.file_path);
+        if path.exists()
+            && let Err(err) = tokio::fs::remove_file(path).await
+        {
+            tracing::warn!(error = %err, path = %record.file_path, "failed to delete subtitle file");
+        }
+
+        // Insert into blacklist
+        if let Some(provider_file_id) = &record.provider_file_id {
+            app.services
+                .subtitle_downloads
+                .blacklist(
+                    &record.media_file_id,
+                    &record.provider,
+                    provider_file_id,
+                    &record.language,
+                    input.reason.as_deref(),
+                )
+                .await
+                .map_err(to_gql_error)?;
+        }
 
         Ok(true)
     }

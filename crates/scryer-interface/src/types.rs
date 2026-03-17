@@ -77,6 +77,9 @@ pub struct InterstitialMovieMetadataPayload {
     pub movie_form: Option<String>,
     pub confidence: Option<String>,
     pub signal_summary: Option<String>,
+    pub placement: Option<String>,
+    pub movie_tmdb_id: Option<String>,
+    pub movie_mal_id: Option<String>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -93,6 +96,7 @@ pub struct CollectionPayload {
     pub last_episode_number: Option<String>,
     pub interstitial_movie: Option<InterstitialMovieMetadataPayload>,
     pub specials_movies: Vec<InterstitialMovieMetadataPayload>,
+    pub interstitial_season_episode: Option<String>,
     pub monitored: bool,
     pub created_at: String,
 }
@@ -932,6 +936,7 @@ pub struct WantedItemPayload {
     pub title_id: String,
     pub title_name: Option<String>,
     pub episode_id: Option<String>,
+    pub collection_id: Option<String>,
     pub media_type: String,
     pub search_phase: String,
     pub next_search_at: Option<String>,

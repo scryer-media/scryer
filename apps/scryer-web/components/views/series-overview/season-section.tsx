@@ -93,6 +93,7 @@ export function SeasonSection({
   expandedEpisodeRows,
   episodeActiveTab,
   mediaFilesByEpisode,
+  subtitleDownloads,
   releaseBlocklistEntries,
   searchResultsByEpisode,
   searchLoadingByEpisode,
@@ -110,6 +111,8 @@ export function SeasonSection({
   onRunSeasonSearch,
   onQueueFromSeasonSearch,
   onDeleteFile,
+  onAutoSearchInterstitialMovie,
+  autoSearchInterstitialMovieLoading,
 }: {
   collection: TitleCollection;
   facet: string;
@@ -119,6 +122,7 @@ export function SeasonSection({
   expandedEpisodeRows: Set<string>;
   episodeActiveTab: Record<string, EpisodePanelTab>;
   mediaFilesByEpisode: Record<string, EpisodeMediaFile[]>;
+  subtitleDownloads?: { id: string; mediaFileId: string; language: string; provider: string; hearingImpaired: boolean; forced: boolean }[];
   releaseBlocklistEntries: TitleReleaseBlocklistEntry[];
   searchResultsByEpisode: Record<string, Release[]>;
   searchLoadingByEpisode: Record<string, boolean>;
@@ -136,6 +140,8 @@ export function SeasonSection({
   onRunSeasonSearch?: () => void;
   onQueueFromSeasonSearch?: (release: Release) => Promise<void> | void;
   onDeleteFile?: (fileId: string) => void;
+  onAutoSearchInterstitialMovie?: (collection: TitleCollection) => void;
+  autoSearchInterstitialMovieLoading?: boolean;
 }) {
   const t = useTranslate();
   const isMobile = useIsMobile();
@@ -187,6 +193,40 @@ export function SeasonSection({
       ) : null}
     </>
   ), [t]);
+
+  const renderSubtitleBadges = React.useCallback(
+    (episodeFiles: EpisodeMediaFile[]) => {
+      const fileIds = new Set(episodeFiles.map((f) => f.id));
+      const embedded = new Set<string>();
+      const downloaded = new Set<string>();
+      for (const f of episodeFiles) {
+        for (const lang of f.subtitleLanguages ?? []) {
+          embedded.add(lang);
+        }
+      }
+      for (const dl of subtitleDownloads ?? []) {
+        if (fileIds.has(dl.mediaFileId)) {
+          downloaded.add(dl.language);
+        }
+      }
+      if (embedded.size === 0 && downloaded.size === 0) return null;
+      return (
+        <>
+          {[...embedded].map((lang) => (
+            <span key={`emb-${lang}`} className="rounded bg-emerald-500/15 px-1 py-0.5 text-[10px] text-emerald-700 dark:text-emerald-300">
+              {lang}
+            </span>
+          ))}
+          {[...downloaded].filter((l) => !embedded.has(l)).map((lang) => (
+            <span key={`dl-${lang}`} className="rounded bg-blue-500/15 px-1 py-0.5 text-[10px] text-blue-700 dark:text-blue-300">
+              {lang}
+            </span>
+          ))}
+        </>
+      );
+    },
+    [subtitleDownloads],
+  );
 
   const renderEpisodeQualityBadge = React.useCallback(
     (episode: CollectionEpisode, episodeFiles: EpisodeMediaFile[]) => {
@@ -381,7 +421,24 @@ export function SeasonSection({
         collection.collectionType === "interstitial" ? (
           <div className="border-t border-border px-4 py-3 text-sm text-muted-foreground">
             {collection.interstitialMovie ? (
-              <InterstitialMoviePanel movie={collection.interstitialMovie} />
+              <div className="flex flex-col gap-3">
+                <InterstitialMoviePanel
+                  movie={collection.interstitialMovie}
+                  hasFile={collection.orderedPath != null}
+                  monitored={collection.monitored}
+                />
+                {collection.monitored && !collection.orderedPath && onAutoSearchInterstitialMovie ? (
+                  <button
+                    type="button"
+                    disabled={autoSearchInterstitialMovieLoading}
+                    onClick={() => onAutoSearchInterstitialMovie(collection)}
+                    className="inline-flex items-center gap-1.5 self-start rounded-md border border-border bg-card/45 px-3 py-1.5 text-xs text-card-foreground transition hover:bg-muted disabled:opacity-50"
+                  >
+                    <Search className="h-3.5 w-3.5" />
+                    {autoSearchInterstitialMovieLoading ? "Searching..." : "Search Movie"}
+                  </button>
+                ) : null}
+              </div>
             ) : (
               <p>No local metadata has been hydrated for this movie yet.</p>
             )}
@@ -489,8 +546,9 @@ export function SeasonSection({
                                     {episode.title || episode.episodeLabel || "—"}
                                   </p>
                                 </button>
-                                <div className="shrink-0">
+                                <div className="flex shrink-0 items-center gap-1">
                                   {renderEpisodeQualityBadge(episode, episodeFiles)}
+                                  {renderSubtitleBadges(episodeFiles)}
                                 </div>
                               </div>
                               <div className="mt-2 flex flex-wrap gap-2">
@@ -647,7 +705,10 @@ export function SeasonSection({
                                 </span>
                               </TableCell>
                               <TableCell className="text-center">
-                                {renderEpisodeQualityBadge(episode, episodeFiles)}
+                                <div className="inline-flex items-center gap-1">
+                                  {renderEpisodeQualityBadge(episode, episodeFiles)}
+                                  {renderSubtitleBadges(episodeFiles)}
+                                </div>
                               </TableCell>
                               <TableCell className="text-right">
                                 <div className="inline-flex items-center justify-end gap-2">

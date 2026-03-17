@@ -9,6 +9,7 @@ import {
   ANIME_FILLER_POLICY_KEY,
   ANIME_RECAP_POLICY_KEY,
   ANIME_INTER_SEASON_MOVIES_KEY,
+  ANIME_MONITOR_FILLER_MOVIES_KEY,
   ANIME_MONITOR_SPECIALS_KEY,
   DEFAULT_MOVIE_LIBRARY_PATH,
   DEFAULT_SERIES_LIBRARY_PATH,
@@ -96,6 +97,10 @@ export type UseMediaSettingsResult = {
   >;
   categoryInterSeasonMovies: Record<ViewCategoryId, string>;
   setCategoryInterSeasonMovies: React.Dispatch<
+    React.SetStateAction<Record<ViewCategoryId, string>>
+  >;
+  categoryMonitorFillerMovies: Record<ViewCategoryId, string>;
+  setCategoryMonitorFillerMovies: React.Dispatch<
     React.SetStateAction<Record<ViewCategoryId, string>>
   >;
   nfoWriteOnImport: Record<ViewCategoryId, string>;
@@ -280,6 +285,12 @@ export function useMediaSettings({
       movie: "true",
       series: "true",
       anime: "true",
+    });
+  const [categoryMonitorFillerMovies, setCategoryMonitorFillerMovies] =
+    React.useState<Record<ViewCategoryId, string>>({
+      movie: "false",
+      series: "false",
+      anime: "false",
     });
   const [nfoWriteOnImport, setNfoWriteOnImport] = React.useState<
     Record<ViewCategoryId, string>
@@ -657,6 +668,21 @@ export function useMediaSettings({
         return { ...previous, anime: next };
       });
 
+      setCategoryMonitorFillerMovies((previous) => {
+        const animeBody = categoryPayloads.find(
+          (body) => body.scopeId === "anime",
+        );
+        if (!animeBody) return previous;
+
+        const record = animeBody.items.find(
+          (item) => item.keyName === ANIME_MONITOR_FILLER_MOVIES_KEY,
+        );
+        const raw = getSettingDisplayValue(record).trim().toLowerCase();
+        const next = raw === "true" ? "true" : "false";
+        if (previous.anime === next) return previous;
+        return { ...previous, anime: next };
+      });
+
       // NFO write-on-import (system-scoped, keyed per facet)
       setNfoWriteOnImport((previous) => {
         let hasUpdate = false;
@@ -865,6 +891,10 @@ export function useMediaSettings({
                         keyName: ANIME_INTER_SEASON_MOVIES_KEY,
                         value: categoryInterSeasonMovies.anime,
                       },
+                      {
+                        keyName: ANIME_MONITOR_FILLER_MOVIES_KEY,
+                        value: categoryMonitorFillerMovies.anime,
+                      },
                     ]
                   : []),
               ],
@@ -1042,6 +1072,7 @@ export function useMediaSettings({
       categoryFillerPolicies,
       categoryRecapPolicies,
       categoryInterSeasonMovies,
+      categoryMonitorFillerMovies,
       categoryMonitorSpecials,
       categoryQualityProfileOverrides,
       categoryRenameCollisionPolicies,
@@ -1178,6 +1209,8 @@ export function useMediaSettings({
     setCategoryMonitorSpecials,
     categoryInterSeasonMovies,
     setCategoryInterSeasonMovies,
+    categoryMonitorFillerMovies,
+    setCategoryMonitorFillerMovies,
     nfoWriteOnImport,
     setNfoWriteOnImport,
     plexmatchWriteOnImport,

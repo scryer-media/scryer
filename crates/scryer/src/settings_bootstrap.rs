@@ -49,6 +49,7 @@ pub(crate) const POST_PROCESSING_SCRIPT_SERIES_KEY: &str = "post_processing.scri
 pub(crate) const POST_PROCESSING_SCRIPT_ANIME_KEY: &str = "post_processing.script.anime";
 pub(crate) const POST_PROCESSING_TIMEOUT_KEY: &str = "post_processing.timeout_secs";
 pub(crate) const SETUP_COMPLETE_KEY: &str = "setup.complete";
+pub(crate) const SETTINGS_CATEGORY_SUBTITLES: &str = "subtitles";
 
 #[derive(Debug)]
 pub(crate) struct ServiceSettingSeed {
@@ -540,6 +541,128 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             key_name: POST_PROCESSING_TIMEOUT_KEY,
             data_type: "number",
             default_value_json: "1800",
+            is_sensitive: false,
+        },
+        // ── Anime ─────────────────────────────────────────────────────
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "anime.monitor_filler_movies",
+            data_type: "boolean",
+            default_value_json: "false",
+            is_sensitive: false,
+        },
+        // ── Subtitles ──────────────────────────────────────────────────
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SUBTITLES,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "subtitles.enabled",
+            data_type: "boolean",
+            default_value_json: "false",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SUBTITLES,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "subtitles.opensubtitles_api_key",
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: true,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SUBTITLES,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "subtitles.opensubtitles_username",
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: true,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SUBTITLES,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "subtitles.opensubtitles_password",
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: true,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SUBTITLES,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "subtitles.languages",
+            data_type: "json",
+            default_value_json: "[]",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SUBTITLES,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "subtitles.auto_download_on_import",
+            data_type: "boolean",
+            default_value_json: "false",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SUBTITLES,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "subtitles.minimum_score_series",
+            data_type: "number",
+            default_value_json: "240",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SUBTITLES,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "subtitles.minimum_score_movie",
+            data_type: "number",
+            default_value_json: "70",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SUBTITLES,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "subtitles.search_interval_hours",
+            data_type: "number",
+            default_value_json: "6",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SUBTITLES,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "subtitles.include_ai_translated",
+            data_type: "boolean",
+            default_value_json: "false",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SUBTITLES,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "subtitles.include_machine_translated",
+            data_type: "boolean",
+            default_value_json: "false",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SUBTITLES,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "subtitles.sync_enabled",
+            data_type: "boolean",
+            default_value_json: "true",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SUBTITLES,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "subtitles.sync_threshold_series",
+            data_type: "number",
+            default_value_json: "90",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SUBTITLES,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "subtitles.sync_threshold_movie",
+            data_type: "number",
+            default_value_json: "70",
             is_sensitive: false,
         },
     ]

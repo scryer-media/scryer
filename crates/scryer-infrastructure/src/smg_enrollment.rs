@@ -47,6 +47,8 @@ struct RegisterResponse {
     certificate: String,
     expires_at: String,
     ca_certificate: String,
+    #[serde(default)]
+    opensubtitles_api_key: Option<String>,
 }
 
 /// Load or generate the instance ID (UUIDv4) for this Scryer instance.
@@ -254,6 +256,16 @@ async fn enroll_with_smg(
     persist_setting(db, "smg.ca_cert", &reg.ca_certificate)
         .await
         .map_err(EnrollmentError::Other)?;
+
+    // Persist OpenSubtitles API key if provided by SMG
+    if let Some(os_key) = &reg.opensubtitles_api_key
+        && !os_key.is_empty()
+    {
+        persist_setting(db, "subtitles.opensubtitles_api_key", os_key)
+            .await
+            .map_err(EnrollmentError::Other)?;
+        info!("OpenSubtitles API key received from SMG");
+    }
 
     let ca_cn = extract_pem_cn(&reg.ca_certificate).unwrap_or_default();
     let cert_issuer = extract_pem_issuer_cn(&reg.certificate).unwrap_or_default();

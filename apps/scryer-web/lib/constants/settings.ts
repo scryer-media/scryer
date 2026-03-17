@@ -19,6 +19,7 @@ export const ANIME_FILLER_POLICY_KEY = "anime.filler_policy";
 export const ANIME_RECAP_POLICY_KEY = "anime.recap_policy";
 export const ANIME_MONITOR_SPECIALS_KEY = "anime.monitor_specials";
 export const ANIME_INTER_SEASON_MOVIES_KEY = "anime.inter_season_movies";
+export const ANIME_MONITOR_FILLER_MOVIES_KEY = "anime.monitor_filler_movies";
 
 // NFO sidecar writing on import (per facet)
 export const NFO_WRITE_ON_IMPORT_MOVIE_KEY = "nfo.write_on_import.movie";
@@ -89,6 +90,7 @@ export const SETTINGS_SECTION_PATH_TO_ID: Record<string, SettingsSection> = {
   plugins: "plugins",
   notifications: "notifications",
   "post-processing": "post-processing",
+  subtitles: "subtitles",
 };
 
 export const CONTENT_SECTION_PATH_TO_ID: Record<string, ContentSettingsSection> = {

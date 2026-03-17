@@ -82,7 +82,7 @@ pub use app_usecase_integration::start_download_queue_poller;
 pub use app_usecase_plugins::RegistryPlugin;
 pub use app_usecase_post_processing::{PostProcessingContext, run_post_processing};
 pub use app_usecase_rss::RssSyncReport;
-pub use app_usecase_subtitles::start_background_subtitle_poller;
+pub use app_usecase_subtitles::{start_background_subtitle_poller, spawn_subtitle_search_for_file};
 pub use app_usecase_title_images::start_background_banner_loop;
 pub use app_usecase_title_images::start_background_fanart_loop;
 pub use app_usecase_title_images::start_background_poster_loop;
@@ -497,6 +497,11 @@ pub trait ShowRepository: Send + Sync {
         last_episode_number: Option<String>,
         monitored: Option<bool>,
     ) -> AppResult<Collection>;
+    async fn update_interstitial_season_episode(
+        &self,
+        collection_id: &str,
+        season_episode: Option<String>,
+    ) -> AppResult<()>;
     async fn set_collection_episodes_monitored(
         &self,
         collection_id: &str,
@@ -701,6 +706,7 @@ pub struct DownloadSubmission {
     pub download_client_type: String,
     pub download_client_item_id: String,
     pub source_title: Option<String>,
+    pub collection_id: Option<String>,
 }
 
 #[async_trait]
@@ -1558,6 +1564,20 @@ pub trait SubtitleDownloadRepository: Send + Sync {
     ) -> AppResult<Vec<scryer_domain::SubtitleDownload>>;
     async fn insert(&self, download: &scryer_domain::SubtitleDownload) -> AppResult<()>;
     async fn delete(&self, id: &str) -> AppResult<Option<scryer_domain::SubtitleDownload>>;
+    async fn is_blacklisted(
+        &self,
+        media_file_id: &str,
+        provider: &str,
+        provider_file_id: &str,
+    ) -> AppResult<bool>;
+    async fn blacklist(
+        &self,
+        media_file_id: &str,
+        provider: &str,
+        provider_file_id: &str,
+        language: &str,
+        reason: Option<&str>,
+    ) -> AppResult<()>;
 }
 
 #[cfg(test)]
@@ -1848,6 +1868,14 @@ mod tests {
             }
 
             Ok(item.clone())
+        }
+
+        async fn update_interstitial_season_episode(
+            &self,
+            _collection_id: &str,
+            _season_episode: Option<String>,
+        ) -> AppResult<()> {
+            Ok(())
         }
 
         async fn set_collection_episodes_monitored(
@@ -2933,6 +2961,7 @@ mod tests {
                 download_client_type: "sabnzbd".to_string(),
                 download_client_item_id: "queue-fallback".to_string(),
                 source_title: Some(created.name.clone()),
+                collection_id: None,
             })
             .await
             .expect("record submission");

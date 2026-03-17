@@ -212,6 +212,79 @@ pub(crate) fn render_episode_nfo(title: &Title, episode: &Episode) -> String {
     out
 }
 
+/// Render a Kodi/Jellyfin-compatible `<episodedetails>` NFO for an interstitial anime movie.
+///
+/// Written as a season 0 special so media servers recognize it as part of the series.
+/// Includes `<airsbefore_season>` for Jellyfin's "Display specials within seasons" feature.
+pub(crate) fn render_interstitial_movie_nfo(
+    movie: &scryer_domain::InterstitialMovieMetadata,
+    season_episode: &str,
+    collection_index: &str,
+) -> String {
+    let mut out = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>\n<episodedetails>\n",
+    );
+
+    push_element(&mut out, "title", &movie.name);
+    push_element(&mut out, "season", "0");
+
+    // Extract episode number from "S00E03" format
+    if let Some(ep_str) = season_episode.strip_prefix("S00E")
+        && let Ok(ep_num) = ep_str.parse::<i32>()
+    {
+        push_element(&mut out, "episode", &ep_num.to_string());
+    }
+
+    if !movie.overview.is_empty() {
+        push_element(&mut out, "plot", &movie.overview);
+    }
+    if let Some(ref release_date) = movie.digital_release_date {
+        push_element(&mut out, "aired", release_date);
+    }
+    if movie.runtime_minutes > 0 {
+        push_element(&mut out, "runtime", &movie.runtime_minutes.to_string());
+    }
+
+    // airsbefore_season: collection_index "1.1" means after season 1 → airs before season 2
+    if let Some(airs_before) = airs_before_season_from_collection_index(collection_index) {
+        push_element(&mut out, "airsbefore_season", &airs_before.to_string());
+        push_element(&mut out, "airsbefore_episode", "1");
+    }
+
+    // Unique IDs from the movie metadata
+    if !movie.tvdb_id.is_empty() {
+        out.push_str(&format!(
+            "  <uniqueid type=\"tvdb\" default=\"true\">{}</uniqueid>\n",
+            xml_escape(&movie.tvdb_id)
+        ));
+    }
+    if !movie.imdb_id.is_empty() {
+        out.push_str(&format!(
+            "  <uniqueid type=\"imdb\">{}</uniqueid>\n",
+            xml_escape(&movie.imdb_id)
+        ));
+    }
+    if let Some(ref tmdb_id) = movie.movie_tmdb_id {
+        out.push_str(&format!(
+            "  <uniqueid type=\"tmdb\">{}</uniqueid>\n",
+            xml_escape(tmdb_id)
+        ));
+    }
+
+    out.push_str("</episodedetails>\n");
+    out
+}
+
+/// Derive the Jellyfin `airsbefore_season` value from a collection index.
+///
+/// Collection index "1.1" means the movie airs after season 1, so it should display
+/// before season 2. Returns `Some(2)` for "1.1", `Some(3)` for "2.1", etc.
+fn airs_before_season_from_collection_index(index: &str) -> Option<i32> {
+    let before_dot = index.split('.').next()?;
+    let after_season: i32 = before_dot.parse().ok()?;
+    Some(after_season + 1)
+}
+
 /// Render a Plex `.plexmatch` hint file for the given series Title.
 ///
 /// Plain text key-value format. Lines are omitted when the value is empty.
@@ -829,5 +902,79 @@ mod tests {
         assert!(out.contains("title: The Matrix\n"));
         assert!(!out.contains("year:"));
         assert!(out.contains("tvdbid: 12345\n"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Interstitial movie NFO tests
+    // -----------------------------------------------------------------------
+
+    fn make_interstitial_movie() -> scryer_domain::InterstitialMovieMetadata {
+        scryer_domain::InterstitialMovieMetadata {
+            tvdb_id: "54321".into(),
+            name: "Mugen Train".into(),
+            slug: "mugen-train".into(),
+            year: Some(2020),
+            content_status: "released".into(),
+            overview: "Tanjiro boards the Mugen Train.".into(),
+            poster_url: String::new(),
+            language: "jpn".into(),
+            runtime_minutes: 117,
+            sort_title: "Mugen Train".into(),
+            imdb_id: "tt11032374".into(),
+            genres: vec!["Action".into(), "Anime".into()],
+            studio: "ufotable".into(),
+            digital_release_date: Some("2020-10-16".into()),
+            association_confidence: Some("high".into()),
+            continuity_status: Some("canon".into()),
+            movie_form: Some("movie".into()),
+            confidence: Some("high".into()),
+            signal_summary: Some("TVDB linked movie".into()),
+            placement: Some("ordered".into()),
+            movie_tmdb_id: Some("635302".into()),
+            movie_mal_id: Some("40748".into()),
+        }
+    }
+
+    #[test]
+    fn render_interstitial_movie_nfo_full() {
+        let movie = make_interstitial_movie();
+        let xml = render_interstitial_movie_nfo(&movie, "S00E01", "1.1");
+        assert!(xml.contains("<episodedetails>"));
+        assert!(xml.contains("<title>Mugen Train</title>"));
+        assert!(xml.contains("<season>0</season>"));
+        assert!(xml.contains("<episode>1</episode>"));
+        assert!(xml.contains("<plot>Tanjiro boards the Mugen Train.</plot>"));
+        assert!(xml.contains("<aired>2020-10-16</aired>"));
+        assert!(xml.contains("<runtime>117</runtime>"));
+        assert!(xml.contains("<airsbefore_season>2</airsbefore_season>"));
+        assert!(xml.contains("<airsbefore_episode>1</airsbefore_episode>"));
+        assert!(xml.contains("<uniqueid type=\"tvdb\" default=\"true\">54321</uniqueid>"));
+        assert!(xml.contains("<uniqueid type=\"imdb\">tt11032374</uniqueid>"));
+        assert!(xml.contains("<uniqueid type=\"tmdb\">635302</uniqueid>"));
+        assert!(xml.contains("</episodedetails>"));
+    }
+
+    #[test]
+    fn render_interstitial_movie_nfo_no_release_date() {
+        let mut movie = make_interstitial_movie();
+        movie.digital_release_date = None;
+        let xml = render_interstitial_movie_nfo(&movie, "S00E03", "2.1");
+        assert!(!xml.contains("<aired>"));
+        assert!(xml.contains("<episode>3</episode>"));
+        assert!(xml.contains("<airsbefore_season>3</airsbefore_season>"));
+    }
+
+    #[test]
+    fn airs_before_season_basic() {
+        assert_eq!(airs_before_season_from_collection_index("1.1"), Some(2));
+        assert_eq!(airs_before_season_from_collection_index("2.1"), Some(3));
+        assert_eq!(airs_before_season_from_collection_index("0.1"), Some(1));
+        assert_eq!(airs_before_season_from_collection_index("5.2"), Some(6));
+    }
+
+    #[test]
+    fn airs_before_season_invalid() {
+        assert_eq!(airs_before_season_from_collection_index("abc"), None);
+        assert_eq!(airs_before_season_from_collection_index(""), None);
     }
 }

@@ -3,7 +3,7 @@ use crate::acquisition_policy::{AcquisitionThresholds, compute_search_schedule, 
 use chrono::{DateTime, Utc};
 use scryer_domain::NotificationEventType;
 use std::collections::HashMap;
-use tracing::{info, warn};
+use tracing::{info, trace, warn};
 
 impl AppUseCase {
     /// Sync the wanted_items table with current monitored state.
@@ -93,6 +93,7 @@ impl AppUseCase {
             title_id: title.id.clone(),
             title_name: None,
             episode_id: None,
+            collection_id: None,
             season_number: None,
             media_type: "movie".to_string(),
             search_phase: schedule.search_phase,
@@ -201,6 +202,7 @@ impl AppUseCase {
                     title_id: title.id.clone(),
                     title_name: None,
                     episode_id: Some(episode.id.clone()),
+                    collection_id: None,
                     season_number: episode.season_number.clone(),
                     media_type: "episode".to_string(),
                     search_phase: schedule.search_phase,
@@ -221,6 +223,103 @@ impl AppUseCase {
                         episode_id = episode.id.as_str(),
                         error = %err,
                         "failed to upsert wanted item for episode"
+                    );
+                }
+            }
+        }
+
+        // Generate wanted items for interstitial anime movies (franchise movies stored in Season 00)
+        if title.facet == scryer_domain::MediaFacet::Anime {
+            for collection in &collections {
+                if collection.collection_type != "interstitial" || !collection.monitored {
+                    continue;
+                }
+                // Skip if already has a file on disk
+                if collection.ordered_path.is_some() {
+                    continue;
+                }
+                let Some(ref movie) = collection.interstitial_movie else {
+                    continue;
+                };
+                // Skip filler movies unless the user opted in
+                if movie.continuity_status.as_deref() == Some("filler") {
+                    let monitor_filler = self
+                        .read_setting_string_value("anime.monitor_filler_movies", None)
+                        .await
+                        .ok()
+                        .flatten()
+                        .as_deref()
+                        == Some("true");
+                    if !monitor_filler {
+                        continue;
+                    }
+                }
+
+                // Skip if the movie already exists as a separate Movie facet title
+                // (prevents downloading the same movie twice)
+                if (!movie.imdb_id.is_empty() || movie.movie_tmdb_id.is_some())
+                    && let Ok(all_titles) = self.services.titles.list(None, None).await
+                {
+                        let already_exists = all_titles.iter().any(|t| {
+                            t.facet == scryer_domain::MediaFacet::Movie
+                                && ((!movie.imdb_id.is_empty()
+                                    && t.imdb_id.as_deref() == Some(&movie.imdb_id))
+                                    || movie.movie_tmdb_id.as_deref().is_some_and(|tmdb| {
+                                        t.external_ids.iter().any(|eid| {
+                                            eid.source == "tmdb" && eid.value == tmdb
+                                        })
+                                    }))
+                        });
+                    if already_exists {
+                        trace!(
+                            movie_name = movie.name.as_str(),
+                            "skipping interstitial wanted item: movie exists as separate title"
+                        );
+                        continue;
+                    }
+                }
+
+                let baseline_date = movie.digital_release_date.clone();
+                let schedule = compute_search_schedule(
+                    "movie",
+                    baseline_date.as_deref(),
+                    "primary",
+                    now,
+                );
+
+                let next_search_at = if immediate {
+                    now.to_rfc3339()
+                } else {
+                    schedule.next_search_at
+                };
+
+                let item = WantedItem {
+                    id: Id::new().0,
+                    title_id: title.id.clone(),
+                    title_name: None,
+                    episode_id: None,
+                    collection_id: Some(collection.id.clone()),
+                    season_number: Some("0".to_string()),
+                    media_type: "interstitial_movie".to_string(),
+                    search_phase: schedule.search_phase,
+                    next_search_at: Some(next_search_at),
+                    last_search_at: None,
+                    search_count: 0,
+                    baseline_date,
+                    status: "wanted".to_string(),
+                    grabbed_release: None,
+                    current_score: None,
+                    created_at: now.to_rfc3339(),
+                    updated_at: now.to_rfc3339(),
+                };
+
+                if let Err(err) = self.services.wanted_items.upsert_wanted_item(&item).await {
+                    warn!(
+                        title_id = title.id.as_str(),
+                        collection_id = collection.id.as_str(),
+                        movie_name = movie.name.as_str(),
+                        error = %err,
+                        "failed to upsert wanted item for interstitial movie"
                     );
                 }
             }
@@ -585,8 +684,41 @@ async fn process_single_wanted_item(
         None
     };
 
+    // For interstitial movies, build a synthetic title from the collection's movie metadata
+    // so the search uses the movie's name/year/IMDB ID instead of the parent series'
+    let search_title = if item.media_type == "interstitial_movie" {
+        if let Some(ref coll_id) = item.collection_id
+            && let Ok(Some(collection)) =
+                app.services.shows.get_collection_by_id(coll_id).await
+            && let Some(ref movie) = collection.interstitial_movie
+        {
+            let mut t = title.clone();
+            t.name = movie.name.clone();
+            t.year = movie.year;
+            t.imdb_id = if movie.imdb_id.is_empty() {
+                None
+            } else {
+                Some(movie.imdb_id.clone())
+            };
+            // Add TMDB ID as external ID for indexer search
+            if let Some(ref tmdb_id) = movie.movie_tmdb_id {
+                t.external_ids.retain(|e| e.source != "tmdb");
+                t.external_ids.push(scryer_domain::ExternalId {
+                    source: "tmdb".into(),
+                    value: tmdb_id.clone(),
+                });
+            }
+            t.aliases = vec![];
+            t
+        } else {
+            title.clone()
+        }
+    } else {
+        title.clone()
+    };
+
     // Build search queries based on media type
-    let sq = build_search_queries(&title, item, episode.as_ref(), &app.facet_registry);
+    let sq = build_search_queries(&search_title, item, episode.as_ref(), &app.facet_registry);
     let (queries, imdb_id, tvdb_id, anidb_id, category) =
         (sq.queries, sq.imdb_id, sq.tvdb_id, sq.anidb_id, sq.category);
     let (search_season, search_episode) = (sq.season, sq.episode);
@@ -722,6 +854,7 @@ async fn process_single_wanted_item(
                                     download_client_type: grab.client_type,
                                     download_client_item_id: grab.job_id,
                                     source_title: Some(best_pack.title.clone()),
+                                    collection_id: None,
                                 })
                                 .await;
                             let pack_score = best_pack
@@ -1320,6 +1453,7 @@ async fn process_single_wanted_item(
                     download_client_type: grab.client_type,
                     download_client_item_id: grab.job_id,
                     source_title: source_title.clone(),
+                    collection_id: item.collection_id.clone(),
                 })
                 .await;
 
@@ -1573,6 +1707,45 @@ fn build_search_queries(
                 category,
                 season: season_param,
                 episode: episode_param,
+            }
+        }
+        "interstitial_movie" => {
+            // Search for franchise movies using the movie's own metadata, not the series'
+            // Search in the "movies" category since anime movies are released as movies
+            let mut queries = Vec::new();
+            // The movie name and year come from the interstitial collection metadata,
+            // passed via the title's name/year fields for interstitial wanted items
+            if !title.name.is_empty() {
+                let query = if let Some(year) = title.year {
+                    format!("{} {}", title.name, year)
+                } else {
+                    title.name.clone()
+                };
+                queries.push(query);
+            }
+            for alias in &title.aliases {
+                if !alias.is_empty() {
+                    let query = if let Some(year) = title.year {
+                        format!("{} {}", alias, year)
+                    } else {
+                        alias.clone()
+                    };
+                    queries.push(query);
+                }
+            }
+            let mut seen = std::collections::HashSet::new();
+            queries.retain(|q| seen.insert(q.to_ascii_lowercase()));
+            if queries.is_empty() && imdb_id.is_some() {
+                queries.push(String::new());
+            }
+            SearchQueryResult {
+                queries,
+                imdb_id,
+                tvdb_id,
+                anidb_id,
+                category: "movies".to_string(),
+                season: None,
+                episode: None,
             }
         }
         _ => SearchQueryResult {
@@ -1836,6 +2009,7 @@ impl AppUseCase {
             title_id: title.id.clone(),
             title_name: None,
             episode_id: None,
+            collection_id: None,
             season_number: None,
             media_type: "movie".to_string(),
             search_phase: schedule.search_phase,
@@ -1928,6 +2102,7 @@ impl AppUseCase {
                     title_id: title.id.clone(),
                     title_name: None,
                     episode_id: Some(episode.id.clone()),
+                    collection_id: None,
                     season_number: episode.season_number.clone(),
                     media_type: "episode".to_string(),
                     search_phase: schedule.search_phase,

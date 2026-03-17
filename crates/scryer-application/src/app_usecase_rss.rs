@@ -942,6 +942,7 @@ impl AppUseCase {
                         download_client_type: grab.client_type,
                         download_client_item_id: grab.job_id,
                         source_title: source_title.clone(),
+                        collection_id: None,
                     })
                     .await;
 

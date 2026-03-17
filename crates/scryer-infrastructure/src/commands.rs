@@ -93,6 +93,11 @@ pub(crate) enum DbCommand {
         monitored: Option<bool>,
         reply: Sender<AppResult<Collection>>,
     },
+    UpdateInterstitialSeasonEpisode {
+        collection_id: String,
+        season_episode: Option<String>,
+        reply: Sender<AppResult<()>>,
+    },
     SetCollectionEpisodesMonitored {
         collection_id: String,
         monitored: bool,
@@ -368,6 +373,7 @@ pub(crate) enum DbCommand {
         download_client_type: String,
         download_client_item_id: String,
         source_title: Option<String>,
+        collection_id: Option<String>,
         reply: Sender<AppResult<()>>,
     },
     FindDownloadSubmission {
@@ -895,6 +901,20 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                         .await,
                     );
                 }
+                DbCommand::UpdateInterstitialSeasonEpisode {
+                    collection_id,
+                    season_episode,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        update_interstitial_season_episode_query(
+                            &pool,
+                            &collection_id,
+                            season_episode.as_deref(),
+                        )
+                        .await,
+                    );
+                }
                 DbCommand::SetCollectionEpisodesMonitored {
                     collection_id,
                     monitored,
@@ -1346,6 +1366,7 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     download_client_type,
                     download_client_item_id,
                     source_title,
+                    collection_id,
                     reply,
                 } => {
                     let _ = reply.send(
@@ -1356,6 +1377,7 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                             &download_client_type,
                             &download_client_item_id,
                             source_title.as_deref(),
+                            collection_id.as_deref(),
                         )
                         .await,
                     );

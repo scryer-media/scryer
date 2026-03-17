@@ -284,6 +284,26 @@ impl ShowRepository for SqliteServices {
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
+    async fn update_interstitial_season_episode(
+        &self,
+        collection_id: &str,
+        season_episode: Option<String>,
+    ) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::UpdateInterstitialSeasonEpisode {
+                collection_id: collection_id.to_string(),
+                season_episode,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
     async fn set_collection_episodes_monitored(
         &self,
         collection_id: &str,
@@ -897,6 +917,7 @@ impl DownloadSubmissionRepository for SqliteServices {
             submission.download_client_type,
             submission.download_client_item_id,
             submission.source_title,
+            submission.collection_id,
         )
         .await
     }
@@ -966,7 +987,7 @@ impl ImportRepository for SqliteServices {
         {
             Some(record) => Ok(matches!(
                 record.status.as_str(),
-                "completed" | "failed" | "skipped"
+                "completed" | "skipped"
             )),
             None => Ok(false),
         }
@@ -2002,5 +2023,35 @@ impl scryer_application::SubtitleDownloadRepository for SqliteServices {
 
     async fn delete(&self, id: &str) -> AppResult<Option<scryer_domain::SubtitleDownload>> {
         crate::queries::subtitle::delete_subtitle_download(&self.pool, id).await
+    }
+
+    async fn is_blacklisted(
+        &self,
+        media_file_id: &str,
+        provider: &str,
+        provider_file_id: &str,
+    ) -> AppResult<bool> {
+        crate::queries::subtitle::is_blacklisted(&self.pool, media_file_id, provider, provider_file_id)
+            .await
+    }
+
+    async fn blacklist(
+        &self,
+        media_file_id: &str,
+        provider: &str,
+        provider_file_id: &str,
+        language: &str,
+        reason: Option<&str>,
+    ) -> AppResult<()> {
+        crate::queries::subtitle::insert_blacklist_entry(
+            &self.pool,
+            media_file_id,
+            provider,
+            provider_file_id,
+            language,
+            reason,
+        )
+        .await?;
+        Ok(())
     }
 }

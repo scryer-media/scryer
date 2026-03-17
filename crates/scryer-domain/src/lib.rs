@@ -108,6 +108,12 @@ pub struct InterstitialMovieMetadata {
     pub confidence: Option<String>,
     #[serde(default)]
     pub signal_summary: Option<String>,
+    #[serde(default)]
+    pub placement: Option<String>,
+    #[serde(default)]
+    pub movie_tmdb_id: Option<String>,
+    #[serde(default)]
+    pub movie_mal_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -124,6 +130,7 @@ pub struct Collection {
     pub interstitial_movie: Option<InterstitialMovieMetadata>,
     #[serde(default)]
     pub specials_movies: Vec<InterstitialMovieMetadata>,
+    pub interstitial_season_episode: Option<String>,
     pub monitored: bool,
     pub created_at: DateTime<Utc>,
 }
