@@ -200,16 +200,6 @@ resources {
 }
 ```
 
-### Example: ECS
-
-```json
-{
-  "cpu": 256,
-  "memory": 256,
-  "memoryReservation": 128
-}
-```
-
 ## Upgrading
 
 Pull the latest image and recreate the container:
