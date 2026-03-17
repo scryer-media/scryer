@@ -586,7 +586,10 @@ impl AppUseCase {
             .map_err(|_| AppError::Validation("invalid episode value".into()))?;
 
         let mut queries = vec![
-            format!("{} S{:0>2}E{:0>2}", normalized_title, season_num, episode_num),
+            format!(
+                "{} S{:0>2}E{:0>2}",
+                normalized_title, season_num, episode_num
+            ),
             format!("{} S{}E{}", normalized_title, season_num, episode_num),
         ];
 
