@@ -551,6 +551,7 @@ impl AppUseCase {
             metadata_fetched_at: None,
             min_availability: request.min_availability,
             digital_release_date: None,
+            folder_path: None,
         };
 
         let title = self.services.titles.create(title).await?;
@@ -1784,59 +1785,27 @@ impl AppUseCase {
             .ok_or_else(|| AppError::NotFound(format!("title {}", id)))?;
 
         if delete_files_on_disk {
-            let media_files = self
-                .services
-                .media_files
-                .list_media_files_for_title(id)
-                .await?;
-
-            let mut unique_paths = HashSet::new();
-            for media_file in media_files {
-                unique_paths.insert(media_file.file_path.trim().to_string());
-            }
-
-            let media_root = crate::recycle_bin::media_root_for_title(self, &title).await;
-            let recycle_config =
-                crate::recycle_bin::resolve_recycle_config(self, media_root.as_deref()).await;
-
-            let mut delete_failures = Vec::new();
-            for file_path in unique_paths {
-                if file_path.is_empty() {
-                    continue;
-                }
-
-                let manifest = crate::recycle_bin::RecycleManifest {
-                    recycled_at: chrono::Utc::now().to_rfc3339(),
-                    original_path: file_path.clone(),
-                    size_bytes: fs::metadata(&file_path).await.map(|m| m.len()).unwrap_or(0),
-                    title_id: Some(id.to_string()),
-                    reason: "title_deleted".to_string(),
-                };
-
-                if let Err(error) = crate::recycle_bin::recycle_file(
-                    &recycle_config,
-                    Path::new(&file_path),
-                    manifest,
-                )
-                .await
-                {
-                    warn!(
-                        title_id = %id,
-                        title_name = %title.name,
-                        file_path = %file_path,
-                        error = %error,
-                        "failed to recycle media file while removing title from catalog"
+            if let Some(ref folder_path) = title.folder_path {
+                let folder = Path::new(folder_path);
+                if folder.exists() {
+                    if let Err(err) = fs::remove_dir_all(folder).await {
+                        return Err(AppError::Repository(format!(
+                            "failed to delete title folder {}: {err}",
+                            folder.display()
+                        )));
+                    }
+                    info!(
+                        path = %folder.display(),
+                        title = %title.name,
+                        "deleted title folder"
                     );
-                    delete_failures.push(format!("{file_path}: {error}"));
                 }
-            }
-
-            if !delete_failures.is_empty() {
-                return Err(AppError::Repository(format!(
-                    "failed to delete one or more files from disk for title {}: {}",
-                    title.name,
-                    delete_failures.join(", ")
-                )));
+            } else {
+                info!(
+                    title_id = %id,
+                    title_name = %title.name,
+                    "no folder_path set, skipping file deletion"
+                );
             }
         }
 

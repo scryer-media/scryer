@@ -671,10 +671,18 @@ async fn import_movie_download(
 
     let year_str = parsed.year.map(|y| format!(" ({})", y)).unwrap_or_default();
     let title_folder = format!("{}{}", title.name, year_str);
+    let full_folder_path = PathBuf::from(&media_root).join(&title_folder);
 
-    let dest_path = PathBuf::from(&media_root)
-        .join(&title_folder)
-        .join(&rendered_filename);
+    // Persist the folder path on the title so delete can find it deterministically.
+    if title.folder_path.is_none() {
+        let _ = app
+            .services
+            .titles
+            .set_folder_path(&title.id, &full_folder_path.to_string_lossy())
+            .await;
+    }
+
+    let dest_path = full_folder_path.join(&rendered_filename);
 
     // Pre-import checks
     let existing_files = app
@@ -1598,6 +1606,16 @@ async fn import_series_download(
 ) -> AppResult<ImportResult> {
     let (media_root, rename_template) = resolve_import_paths(app, title).await?;
     let title_folder = title.name.clone();
+    let full_folder_path = PathBuf::from(&media_root).join(&title_folder);
+
+    if title.folder_path.is_none() {
+        let _ = app
+            .services
+            .titles
+            .set_folder_path(&title.id, &full_folder_path.to_string_lossy())
+            .await;
+    }
+
     let quality_profile = resolve_import_quality_profile(app, title).await;
 
     // Check NFO write setting (non-fatal, opt-in)

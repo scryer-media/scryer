@@ -374,7 +374,7 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             scope: SETTINGS_SCOPE_SYSTEM,
             key_name: "anime.recap_policy",
             data_type: "string",
-            default_value_json: "\"download_all\"",
+            default_value_json: "\"skip_recap\"",
             is_sensitive: false,
         },
         ServiceSettingSeed {

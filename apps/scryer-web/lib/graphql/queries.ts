@@ -309,8 +309,8 @@ export const searchQuery = `query SearchIndexers($query: String!, $imdbId: Strin
   }
 }`;
 
-export const searchSeriesEpisodeQuery = `query SearchIndexersEpisode($title: String!, $season: String!, $episode: String!, $imdbId: String, $tvdbId: String, $category: String, $absoluteEpisode: Int, $limit: Int) {
-  searchIndexersEpisode(title: $title, season: $season, episode: $episode, imdbId: $imdbId, tvdbId: $tvdbId, category: $category, absoluteEpisode: $absoluteEpisode, limit: $limit) {
+export const searchSeriesEpisodeQuery = `query SearchIndexersEpisode($title: String!, $season: String!, $episode: String!, $imdbId: String, $tvdbId: String, $anidbId: String, $category: String, $absoluteEpisode: Int, $limit: Int) {
+  searchIndexersEpisode(title: $title, season: $season, episode: $episode, imdbId: $imdbId, tvdbId: $tvdbId, anidbId: $anidbId, category: $category, absoluteEpisode: $absoluteEpisode, limit: $limit) {
     source
     title
     link

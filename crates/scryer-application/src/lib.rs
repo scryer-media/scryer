@@ -440,6 +440,7 @@ pub trait TitleRepository: Send + Sync {
         metadata: TitleMetadataUpdate,
     ) -> AppResult<Title>;
     async fn delete(&self, id: &str) -> AppResult<()>;
+    async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()>;
     /// Return titles that need hydration: either never hydrated
     /// (`metadata_fetched_at IS NULL`) or hydrated in a different language
     /// (`metadata_language IS NULL OR metadata_language != language`).
@@ -1703,6 +1704,16 @@ mod tests {
                 .position(|entry| entry.id == id)
                 .ok_or_else(|| AppError::NotFound(format!("title {}", id)))?;
             list.remove(position);
+            Ok(())
+        }
+
+        async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()> {
+            let mut list = self.store.lock().await;
+            let title = list
+                .iter_mut()
+                .find(|entry| entry.id == id)
+                .ok_or_else(|| AppError::NotFound(format!("title {}", id)))?;
+            title.folder_path = Some(folder_path.to_string());
             Ok(())
         }
 

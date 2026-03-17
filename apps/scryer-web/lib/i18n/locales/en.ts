@@ -1061,6 +1061,11 @@ const en: LocaleDictionary = {
   "qualityProfile.minScoreToGrabInfo":
     "Only grab releases that score at or above this threshold. Leave empty for no minimum.",
   "qualityProfile.minScorePlaceholder": "No minimum",
+  "qualityProfile.confirmDeleteTitle": "Delete Quality Profile",
+  "qualityProfile.confirmDeleteDescription":
+    "Are you sure you want to delete the quality profile \"{{name}}\"? This cannot be undone.",
+  "qualityProfile.deleteDisabledInUse":
+    "This profile is in use. Remove it from all titles and category defaults before deleting.",
 
   "episode.details": "Details",
   "episode.search": "Search",

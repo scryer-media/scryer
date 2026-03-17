@@ -117,20 +117,6 @@ function buildMovieBadges(movie: InterstitialMovieMetadata, hasFile?: boolean, m
     badges.push({ label: "Canon", tone: "emerald" });
   } else if (movie.continuityStatus === "mixed") {
     badges.push({ label: "Mixed", tone: "amber" });
-  } else {
-    badges.push({ label: "Guess", tone: "sky" });
-  }
-
-  if (movie.confidence) {
-    badges.push({
-      label: movie.confidence === "high" ? "High Confidence" : "Medium Confidence",
-      tone: movie.confidence === "high" ? "emerald" : "amber",
-    });
-  } else if (movie.associationConfidence) {
-    badges.push({
-      label: movie.associationConfidence === "high" ? "High Match" : "Medium Match",
-      tone: movie.associationConfidence === "high" ? "emerald" : "amber",
-    });
   }
 
   return badges;

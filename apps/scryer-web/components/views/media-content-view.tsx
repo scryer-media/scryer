@@ -540,7 +540,7 @@ export function MediaContentView({
         </div>
       ) : contentSettingsSection === "settings" || contentSettingsSection === "general" ? (
         <div className="space-y-4">
-          {view === "movies" || view === "series" ? (
+          {view === "movies" || view === "series" || view === "anime" ? (
             <MediaLibrarySettingsPanel
               settingsTitle={mediaLibrarySettingsTitle}
               rootFolders={rootFolders}

@@ -13,7 +13,7 @@ use scryer_application::TitleImageKind;
 const TITLE_COLUMNS: &str = "id, name, facet, monitored, tags, external_ids, created_by, created_at, \
     year, overview, poster_url, banner_url, background_url, sort_title, slug, imdb_id, runtime_minutes, genres, \
     content_status, language, first_aired, network, studio, country, aliases, \
-    metadata_language, metadata_fetched_at, min_availability, digital_release_date";
+    metadata_language, metadata_fetched_at, min_availability, digital_release_date, folder_path";
 
 fn parse_facet(raw: &str) -> MediaFacet {
     match raw.to_lowercase().as_str() {
@@ -177,6 +177,7 @@ fn row_to_title(row: &sqlx::sqlite::SqliteRow) -> AppResult<Title> {
         row.try_get("metadata_fetched_at").unwrap_or(None);
     let min_availability: Option<String> = row.try_get("min_availability").unwrap_or(None);
     let digital_release_date: Option<String> = row.try_get("digital_release_date").unwrap_or(None);
+    let folder_path: Option<String> = row.try_get("folder_path").unwrap_or(None);
 
     let genres: Vec<String> =
         serde_json::from_str(&genres_json).map_err(|err| AppError::Repository(err.to_string()))?;
@@ -217,6 +218,7 @@ fn row_to_title(row: &sqlx::sqlite::SqliteRow) -> AppResult<Title> {
         metadata_fetched_at,
         min_availability,
         digital_release_date,
+        folder_path,
     })
 }
 
@@ -1189,9 +1191,9 @@ pub(crate) async fn create_title_query(pool: &SqlitePool, title: &Title) -> AppR
         "INSERT INTO titles (
             id, name, facet, monitored, tags, external_ids, created_by, created_at,
             year, overview, poster_url, sort_title, slug, runtime_minutes,
-            genres, content_status, language, min_availability, aliases
+            genres, content_status, language, min_availability, aliases, folder_path
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&title.id)
     .bind(&title.name)
@@ -1212,6 +1214,7 @@ pub(crate) async fn create_title_query(pool: &SqlitePool, title: &Title) -> AppR
     .bind(&title.language)
     .bind(&title.min_availability)
     .bind(&aliases_json)
+    .bind(&title.folder_path)
     .execute(pool)
     .await
     .map_err(|err| AppError::Repository(err.to_string()))?;
@@ -1238,6 +1241,20 @@ pub(crate) async fn update_title_monitored_query(
     get_title_by_id_query(pool, id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("title {}", id)))
+}
+
+pub(crate) async fn set_title_folder_path_query(
+    pool: &SqlitePool,
+    id: &str,
+    folder_path: &str,
+) -> AppResult<()> {
+    sqlx::query("UPDATE titles SET folder_path = ? WHERE id = ?")
+        .bind(folder_path)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+    Ok(())
 }
 
 pub(crate) async fn update_title_metadata_query(

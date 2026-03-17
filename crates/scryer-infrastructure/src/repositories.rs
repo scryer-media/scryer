@@ -158,6 +158,10 @@ impl TitleRepository for SqliteServices {
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
+    async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()> {
+        crate::queries::title::set_title_folder_path_query(&self.pool, id, folder_path).await
+    }
+
     async fn list_unhydrated(&self, limit: usize, language: &str) -> AppResult<Vec<Title>> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender

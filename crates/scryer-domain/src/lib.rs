@@ -80,6 +80,7 @@ pub struct Title {
     pub metadata_fetched_at: Option<DateTime<Utc>>,
     pub min_availability: Option<String>,
     pub digital_release_date: Option<String>,
+    pub folder_path: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

@@ -124,7 +124,7 @@ export default function RegoEditor({ value, onChange, readOnly = false, height =
   return (
     <div
       ref={containerRef}
-      className="overflow-hidden rounded-lg border border-border text-sm"
+      className="overflow-auto rounded-lg border border-border text-sm"
       style={{ height, minHeight: "120px" }}
     />
   );

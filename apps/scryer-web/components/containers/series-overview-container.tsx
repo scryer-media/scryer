@@ -568,6 +568,9 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       const tvdbId = title.externalIds
         ?.find((id) => id.source.toLowerCase() === "tvdb")
         ?.value?.trim() || null;
+      const anidbId = title.externalIds
+        ?.find((id) => id.source.toLowerCase() === "anidb")
+        ?.value?.trim() || null;
       const collection = collections.find((item) => item.id === episode.collectionId);
       const seasonNum =
         episode.seasonNumber?.trim().replace(/\D+/g, "") ||
@@ -581,6 +584,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
           season: seasonNum,
           episode: episodeNum,
           tvdbId: searchTvdbId,
+          anidbId,
           category: title.facet,
           limit: 25,
         }).toPromise();

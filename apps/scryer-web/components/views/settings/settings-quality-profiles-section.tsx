@@ -4,6 +4,7 @@ import { ArrowLeft, ArrowRight, Edit, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { Input, signedIntegerInputProps } from "@/components/ui/input";
 import { InfoHelp } from "@/components/common/info-help";
 import { RenderBooleanIcon } from "@/components/common/boolean-icon";
@@ -17,6 +18,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useTranslate } from "@/lib/context/translate-context";
 import { PERSONA_OVERRIDE_DEFAULTS } from "@/lib/constants/quality-profiles";
 import { cn } from "@/lib/utils";
@@ -442,6 +449,7 @@ export function SettingsQualityProfilesSection({
   const [categoryQualityProfileDrafts, setCategoryQualityProfileDrafts] = React.useState<
     Record<ViewCategoryId, string>
   >(categoryQualityProfileOverrides);
+  const [pendingDeleteProfile, setPendingDeleteProfile] = React.useState<{ id: string; name: string } | null>(null);
 
   React.useEffect(() => {
     setGlobalQualityProfileDraft(globalQualityProfileId);
@@ -455,60 +463,42 @@ export function SettingsQualityProfilesSection({
     (scopeId: ViewCategoryId, rawValue: string) => {
       if (!initialLoadComplete) return;
       const normalized = rawValue.trim();
-      if (categoryQualityProfileDrafts[scopeId] === normalized) return;
+      if (categoryQualityProfileOverrides[scopeId] === normalized) return;
       setCategoryQualityProfileDrafts((previous) => ({
         ...previous,
         [scopeId]: normalized,
       }));
+      setCategoryQualityProfileOverrides((previous) => ({
+        ...previous,
+        [scopeId]: normalized,
+      }));
+      void saveCategoryQualityProfile(scopeId, normalized);
     },
-    [initialLoadComplete, categoryQualityProfileDrafts],
+    [initialLoadComplete, categoryQualityProfileOverrides, saveCategoryQualityProfile, setCategoryQualityProfileOverrides],
   );
 
   const handleGlobalProfileChange = React.useCallback(
     (rawValue: string) => {
       if (!initialLoadComplete) return;
       const normalized = rawValue.trim();
-      if (globalQualityProfileDraft === normalized) return;
+      if (globalQualityProfileId === normalized) return;
       setGlobalQualityProfileDraft(normalized);
+      setGlobalQualityProfileId(normalized);
+      void saveGlobalQualityProfile(normalized);
     },
-    [initialLoadComplete, globalQualityProfileDraft],
+    [initialLoadComplete, globalQualityProfileId, saveGlobalQualityProfile, setGlobalQualityProfileId],
   );
 
-  const handleGlobalProfileBlur = React.useCallback(() => {
-    if (!initialLoadComplete) return;
-    if (globalQualityProfileDraft === globalQualityProfileId) return;
-    setGlobalQualityProfileId(globalQualityProfileDraft);
-    void saveGlobalQualityProfile(globalQualityProfileDraft);
-  }, [
-    initialLoadComplete,
-    globalQualityProfileDraft,
-    globalQualityProfileId,
-    saveGlobalQualityProfile,
-    setGlobalQualityProfileId,
-  ]);
+  // Keep for backwards compat but these are now no-ops since we save on change
+  const handleGlobalProfileBlur = React.useCallback(() => {}, []);
 
   const handleCategoryProfileOverrideBlur = React.useCallback(
-    (scopeId: ViewCategoryId) => {
-      if (!initialLoadComplete) return;
-      const draftValue = categoryQualityProfileDrafts[scopeId];
-      const persistedValue = categoryQualityProfileOverrides[scopeId];
-      if (draftValue === persistedValue) return;
-      setCategoryQualityProfileOverrides((previous) => ({
-        ...previous,
-        [scopeId]: draftValue,
-      }));
-      void saveCategoryQualityProfile(scopeId, draftValue);
-    },
-    [
-      initialLoadComplete,
-      categoryQualityProfileDrafts,
-      categoryQualityProfileOverrides,
-      saveCategoryQualityProfile,
-      setCategoryQualityProfileOverrides,
-    ],
+    (_scopeId: ViewCategoryId) => {},
+    [],
   );
 
   return (
+    <>
     <form
       className="space-y-4 text-sm"
       onSubmit={(event) => {
@@ -611,20 +601,38 @@ export function SettingsQualityProfilesSection({
                         >
                           <Edit className="h-4 w-4" />
                         </QualityProfileActionButton>
-                        <QualityProfileActionButton
-                          tone="delete"
-                          disabled={
-                            qualityProfilesSaving ||
+                        {(() => {
+                          const isInUse =
                             profile.id === globalQualityProfileId ||
                             Object.values(categoryQualityProfileOverrides).some(
                               (v) => v === profile.id,
-                            )
+                            );
+                          const deleteButton = (
+                            <QualityProfileActionButton
+                              tone="delete"
+                              disabled={qualityProfilesSaving || isInUse}
+                              onClick={() => setPendingDeleteProfile({ id: profile.id, name: profile.name })}
+                              label={t("label.delete")}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </QualityProfileActionButton>
+                          );
+                          if (isInUse) {
+                            return (
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <span tabIndex={0}>{deleteButton}</span>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    {t("qualityProfile.deleteDisabledInUse")}
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            );
                           }
-                          onClick={() => void deleteQualityProfile(profile.id)}
-                          label={t("label.delete")}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </QualityProfileActionButton>
+                          return deleteButton;
+                        })()}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -1192,6 +1200,8 @@ export function SettingsQualityProfilesSection({
                           next[scopeId] = v as ScoringPersonaId;
                         }
                         updateQualityProfileDraft({ facet_persona_overrides: next });
+                        // Save immediately on selection
+                        setTimeout(() => void updateQualityProfilesGlobal(), 0);
                       }}
                     >
                       <SelectTrigger className="w-full">
@@ -1213,5 +1223,25 @@ export function SettingsQualityProfilesSection({
         </CardContent>
       </Card>
     </form>
+    <ConfirmDialog
+      open={pendingDeleteProfile !== null}
+      title={t("qualityProfile.confirmDeleteTitle")}
+      description={
+        pendingDeleteProfile
+          ? t("qualityProfile.confirmDeleteDescription", { name: pendingDeleteProfile.name })
+          : ""
+      }
+      confirmLabel={t("label.delete")}
+      cancelLabel={t("label.cancel")}
+      isBusy={qualityProfilesSaving}
+      onConfirm={async () => {
+        if (pendingDeleteProfile) {
+          await deleteQualityProfile(pendingDeleteProfile.id);
+          setPendingDeleteProfile(null);
+        }
+      }}
+      onCancel={() => setPendingDeleteProfile(null)}
+    />
+    </>
   );
 }

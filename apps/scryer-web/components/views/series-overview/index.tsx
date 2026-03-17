@@ -178,6 +178,10 @@ export function SeriesOverviewView({
         title.externalIds
           ?.find((eid) => eid.source.toLowerCase() === "tvdb")
           ?.value?.trim() ?? "";
+      const anidbId =
+        title.externalIds
+          ?.find((eid) => eid.source.toLowerCase() === "anidb")
+          ?.value?.trim() || null;
       const collection = collections.find((c) => c.id === episode.collectionId);
       const seasonNum = episode.seasonNumber?.trim().replace(/\D+/g, "")
         || collection?.collectionIndex?.trim().replace(/\D+/g, "")
@@ -192,6 +196,7 @@ export function SeriesOverviewView({
         season: seasonNum,
         episode: episodeNum,
         tvdbId,
+        anidbId,
         category: title.facet,
         absoluteEpisode,
         limit: 25,

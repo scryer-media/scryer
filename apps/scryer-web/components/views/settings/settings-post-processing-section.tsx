@@ -10,6 +10,11 @@ import {
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import {
+  boxedActionButtonBaseClass,
+  boxedActionButtonToneClass,
+} from "@/lib/utils/action-button-styles";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -279,43 +284,52 @@ export const SettingsPostProcessingSection = React.memo(
                       </TableCell>
                       <TableCell className="text-right">
                         <div
-                          className="flex justify-end gap-2"
+                          className="flex justify-end gap-1"
                           onClick={(e) => e.stopPropagation()}
                         >
                           <Button
-                            size="sm"
+                            type="button"
+                            size="icon-sm"
                             variant="secondary"
+                            title={script.enabled ? t("label.disable") : t("label.enable")}
+                            aria-label={script.enabled ? t("label.disable") : t("label.enable")}
                             onClick={() => void toggleScript(script)}
                             disabled={mutatingScriptId === script.id}
-                            className={
-                              script.enabled
-                                ? "border-red-700/70 bg-red-900/60 text-red-200 hover:bg-red-900/80 hover:text-red-100"
-                                : "border-emerald-300/70 dark:border-emerald-700/70 bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-100 hover:bg-emerald-200 dark:hover:bg-emerald-800/80"
-                            }
+                            className={cn(
+                              boxedActionButtonBaseClass,
+                              boxedActionButtonToneClass[script.enabled ? "disabled" : "enabled"],
+                            )}
                           >
-                            <Power className="mr-1 h-3.5 w-3.5" />
-                            {script.enabled
-                              ? t("label.disable")
-                              : t("label.enable")}
+                            <Power className="h-4 w-4" />
                           </Button>
                           <Button
-                            size="sm"
+                            type="button"
+                            size="icon-sm"
                             variant="secondary"
+                            title={t("label.edit")}
+                            aria-label={t("label.edit")}
                             onClick={() => editScript(script)}
+                            className={cn(
+                              boxedActionButtonBaseClass,
+                              boxedActionButtonToneClass.edit,
+                            )}
                           >
-                            <Edit className="mr-1 h-3.5 w-3.5" />
-                            {t("label.edit")}
+                            <Edit className="h-4 w-4" />
                           </Button>
                           <Button
-                            size="sm"
-                            variant="destructive"
+                            type="button"
+                            size="icon-sm"
+                            variant="secondary"
+                            title={t("label.delete")}
+                            aria-label={t("label.delete")}
                             onClick={() => deleteScript(script)}
                             disabled={mutatingScriptId === script.id}
+                            className={cn(
+                              boxedActionButtonBaseClass,
+                              boxedActionButtonToneClass.delete,
+                            )}
                           >
-                            <Trash2 className="mr-1 h-3.5 w-3.5" />
-                            {mutatingScriptId === script.id
-                              ? t("label.deleting")
-                              : t("label.delete")}
+                            <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>
                       </TableCell>

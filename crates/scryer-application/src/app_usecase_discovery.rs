@@ -410,6 +410,7 @@ impl AppUseCase {
         queries: Vec<String>,
         imdb_id: Option<String>,
         tvdb_id: Option<String>,
+        anidb_id: Option<String>,
         category: Option<String>,
         limit: usize,
         season: Option<u32>,
@@ -420,7 +421,7 @@ impl AppUseCase {
             queries,
             imdb_id,
             tvdb_id,
-            None, // anidb_id — not available in interactive search path
+            anidb_id,
             category,
             &[],
             limit,
@@ -475,6 +476,7 @@ impl AppUseCase {
                 vec![normalized_query.to_string()],
                 normalized_imdb_id.clone(),
                 normalized_tvdb_id.clone(),
+                None, // anidb_id — not available in general search
                 normalized_category.clone(),
                 limit.max(1),
                 None,
@@ -537,6 +539,7 @@ impl AppUseCase {
         episode: String,
         imdb_id: Option<String>,
         tvdb_id: Option<String>,
+        anidb_id: Option<String>,
         category: Option<String>,
         absolute_episode: Option<u32>,
         limit: usize,
@@ -554,6 +557,7 @@ impl AppUseCase {
         }
 
         let normalized_imdb_id = normalize_imdb_id(imdb_id);
+        let normalized_anidb_id = normalize_numeric_id(anidb_id);
         let normalized_tvdb_id = normalize_numeric_id(tvdb_id);
         let normalized_category = category
             .map(|value| value.trim().to_string())
@@ -582,9 +586,8 @@ impl AppUseCase {
             .map_err(|_| AppError::Validation("invalid episode value".into()))?;
 
         let mut queries = vec![
-            format!("S{:0>2}E{:0>2}", season_num, episode_num),
-            format!("S{}E{}", season_num, episode_num),
-            format!("{}x{}", season_num, episode_num),
+            format!("{} S{:0>2}E{:0>2}", normalized_title, season_num, episode_num),
+            format!("{} S{}E{}", normalized_title, season_num, episode_num),
         ];
 
         let mut unique = std::collections::HashSet::new();
@@ -596,6 +599,7 @@ impl AppUseCase {
                 queries,
                 normalized_imdb_id.clone(),
                 normalized_tvdb_id.clone(),
+                normalized_anidb_id.clone(),
                 normalized_category.clone(),
                 limit,
                 Some(season_num as u32),
@@ -684,6 +688,7 @@ impl AppUseCase {
                 queries,
                 normalized_imdb_id.clone(),
                 normalized_tvdb_id.clone(),
+                None, // anidb_id — not available in season search
                 normalized_category.clone(),
                 limit,
                 Some(season_num as u32),
