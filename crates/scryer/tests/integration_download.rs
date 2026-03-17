@@ -499,6 +499,7 @@ async fn nzbget_submit_download() {
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        folder_path: None,
     };
 
     let source_hint = format!("{}/getnzb/test.nzb", ctx.nzbget_server.uri());
@@ -580,6 +581,7 @@ async fn nzbget_submit_download_supports_v25_3_append_signature() {
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        folder_path: None,
     };
 
     let source_hint = format!("{}/getnzb/test.nzb", ctx.nzbget_server.uri());
@@ -627,6 +629,7 @@ async fn nzbget_submit_download_no_source_hint() {
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        folder_path: None,
     };
 
     let result = new_nzbget_client(&ctx.nzbget_server.uri())
@@ -1358,6 +1361,7 @@ async fn sabnzbd_submit_download() {
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        folder_path: None,
     };
 
     let nzb_url = format!("{}/getnzb?id=abc123&apikey=xyz", server.uri());
@@ -1410,6 +1414,7 @@ async fn sabnzbd_submit_download_no_source_hint() {
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        folder_path: None,
     };
 
     let server = MockServer::start().await;

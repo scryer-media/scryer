@@ -755,6 +755,9 @@ pub mod test_nulls {
         async fn delete(&self, _: &str) -> AppResult<()> {
             Ok(())
         }
+        async fn set_folder_path(&self, _: &str, _: &str) -> AppResult<()> {
+            Ok(())
+        }
         async fn list_unhydrated(&self, _: usize, _: &str) -> AppResult<Vec<Title>> {
             Ok(vec![])
         }

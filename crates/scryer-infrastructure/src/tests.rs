@@ -56,6 +56,7 @@ fn make_test_title(id: &str, poster_url: Option<&str>) -> Title {
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        folder_path: None,
     }
 }
 
@@ -638,6 +639,7 @@ async fn sqlite_show_queries_roundtrip() {
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        folder_path: None,
     };
     <SqliteServices as scryer_application::TitleRepository>::create(&services, title.clone())
         .await

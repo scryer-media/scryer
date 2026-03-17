@@ -53,6 +53,7 @@ async fn seed_title(ctx: &TestContext, id: &str) {
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        folder_path: None,
     };
     ctx.db.create(title).await.expect("seed title");
 }

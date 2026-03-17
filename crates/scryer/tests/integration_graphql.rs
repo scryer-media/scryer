@@ -357,6 +357,7 @@ async fn graphql_scan_title_library() {
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        folder_path: None,
     };
     let title = ctx.db.create(title).await.expect("create series title");
 
