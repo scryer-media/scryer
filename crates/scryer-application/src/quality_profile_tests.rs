@@ -365,9 +365,7 @@ fn dual_audio_no_baseline_bonus() {
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.DUAL.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
     assert!(
-        !d.scoring_log
-            .iter()
-            .any(|e| e.code == "dual_audio"),
+        !d.scoring_log.iter().any(|e| e.code == "dual_audio"),
         "dual_audio scoring should not appear — handled by convenience rules"
     );
 }

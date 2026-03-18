@@ -808,7 +808,9 @@ impl AppUseCase {
 
         let query = title.name.trim().to_string();
         if query.is_empty() && imdb_id.is_none() && tvdb_id.is_none() && anidb_id.is_none() {
-            return Err(AppError::Validation("title has no name or external IDs".into()));
+            return Err(AppError::Validation(
+                "title has no name or external IDs".into(),
+            ));
         }
 
         info!(
@@ -839,7 +841,12 @@ impl AppUseCase {
                 Some(actor.id.clone()),
                 None,
                 ActivityKind::MovieFetched,
-                format!("{} searched: {} ({} results)", category, query, results.len()),
+                format!(
+                    "{} searched: {} ({} results)",
+                    category,
+                    query,
+                    results.len()
+                ),
                 ActivitySeverity::Info,
                 vec![ActivityChannel::WebUi],
             )
@@ -907,18 +914,17 @@ impl AppUseCase {
         let absolute_episode: Option<u32> = self
             .services
             .shows
-            .find_episode_by_title_and_numbers(
-                &title_id,
-                &season_digits,
-                &episode_digits,
-            )
+            .find_episode_by_title_and_numbers(&title_id, &season_digits, &episode_digits)
             .await
             .ok()
             .flatten()
             .and_then(|ep| {
-                ep.absolute_number
-                    .as_ref()
-                    .and_then(|n: &String| n.trim().replace(|c: char| !c.is_ascii_digit(), "").parse::<u32>().ok())
+                ep.absolute_number.as_ref().and_then(|n: &String| {
+                    n.trim()
+                        .replace(|c: char| !c.is_ascii_digit(), "")
+                        .parse::<u32>()
+                        .ok()
+                })
             });
 
         let queries = vec![format!(
@@ -969,7 +975,6 @@ impl AppUseCase {
 
         Ok(results)
     }
-
 }
 
 pub(crate) fn is_release_blocklisted(

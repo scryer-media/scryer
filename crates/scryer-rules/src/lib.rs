@@ -308,7 +308,11 @@ impl UserRulesEngine {
             engine
                 .add_policy(path, policy.rego_source.clone())
                 .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id)))?;
-            rules.push((policy.id.clone(), policy.name.clone(), policy.applied_facets.clone()));
+            rules.push((
+                policy.id.clone(),
+                policy.name.clone(),
+                policy.applied_facets.clone(),
+            ));
         }
 
         Ok(Self {
@@ -419,7 +423,12 @@ impl UserRulesEvaluator {
 
     /// Extract score_entry map from the Rego evaluation result.
     /// Expected shape: `{"code_name": delta_integer, ...}`
-    fn extract_entries(value: &Value, rule_id: &str, rule_name: &str, entries: &mut Vec<UserRuleEntry>) {
+    fn extract_entries(
+        value: &Value,
+        rule_id: &str,
+        rule_name: &str,
+        entries: &mut Vec<UserRuleEntry>,
+    ) {
         // Value::Undefined means the rule conditions weren't met — no entries.
         if matches!(value, Value::Undefined) {
             return;

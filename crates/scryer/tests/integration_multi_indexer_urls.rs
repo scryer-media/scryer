@@ -402,21 +402,23 @@ async fn multi_indexer_url_trace_season_pack() {
         .services
         .indexer_client
         .search(
-            "Demon Slayer S02".into(),      // title + S02 for freetext matching
-            None,                           // imdb_id
-            Some("348545".into()),          // tvdb_id
-            Some("1535".into()),            // anidb_id
-            Some("anime".into()),           // category
-            None,                           // newznab_categories
-            None,                           // indexer_routing
+            "Demon Slayer S02".into(), // title + S02 for freetext matching
+            None,                      // imdb_id
+            Some("348545".into()),     // tvdb_id
+            Some("1535".into()),       // anidb_id
+            Some("anime".into()),      // category
+            None,                      // newznab_categories
+            None,                      // indexer_routing
             SearchMode::Auto,
-            Some(2),                        // season
-            None,                           // episode=None → season pack
+            Some(2), // season
+            None,    // episode=None → season pack
         )
         .await
         .expect("search should succeed");
 
-    println!("\n=== Demon Slayer Season 2 Pack (anime, tvdb=348545, anidb=1535, season=2, ep=None) ===");
+    println!(
+        "\n=== Demon Slayer Season 2 Pack (anime, tvdb=348545, anidb=1535, season=2, ep=None) ==="
+    );
     print_summary(
         &captured_urls(&tosho).await,
         &captured_urls(&nzbgeek).await,

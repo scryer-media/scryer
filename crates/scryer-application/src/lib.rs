@@ -169,12 +169,13 @@ pub enum AppError {
 pub fn nice_thread() {
     // SAFETY: nice() is always safe to call; worst case it returns -1 with EPERM
     // which we intentionally ignore — the work still proceeds at normal priority.
-    unsafe { libc::nice(10); }
+    unsafe {
+        libc::nice(10);
+    }
 }
 
 #[cfg(not(unix))]
 pub fn nice_thread() {}
-
 
 #[derive(Clone)]
 pub struct AppServices {

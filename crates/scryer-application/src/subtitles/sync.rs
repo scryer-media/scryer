@@ -108,8 +108,8 @@ async fn extract_audio_speech_spans(video_path: &Path) -> AppResult<Vec<TimeSpan
         crate::nice_thread();
         decode_audio_to_speech_spans(&path)
     })
-        .await
-        .map_err(|e| AppError::Repository(format!("audio decode task panicked: {e}")))?
+    .await
+    .map_err(|e| AppError::Repository(format!("audio decode task panicked: {e}")))?
 }
 
 /// Decode the first audio track and produce speech spans via energy VAD.
