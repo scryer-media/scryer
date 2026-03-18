@@ -655,37 +655,33 @@ impl IndexerClient for MultiIndexerSearchClient {
                     }
 
                     // Season check (season pack or episode search)
-                    if let Some(expected_s) = season {
-                        if let Some(ref res_ep) = parsed.episode {
-                            if let Some(rs) = res_ep.season {
-                                if rs != expected_s {
-                                    tracing::debug!(
-                                        query = %query,
-                                        expected_season = expected_s,
-                                        got_season = rs,
-                                        "title guard: season mismatch"
-                                    );
-                                    return false;
-                                }
-                            }
-                        }
+                    if let Some(expected_s) = season
+                        && let Some(ref res_ep) = parsed.episode
+                        && let Some(rs) = res_ep.season
+                        && rs != expected_s
+                    {
+                        tracing::debug!(
+                            query = %query,
+                            expected_season = expected_s,
+                            got_season = rs,
+                            "title guard: season mismatch"
+                        );
+                        return false;
                     }
 
                     // Episode check (episode search only)
-                    if let Some(expected_e) = episode {
-                        if let Some(ref res_ep) = parsed.episode {
-                            if !res_ep.episode_numbers.is_empty()
-                                && !res_ep.episode_numbers.contains(&expected_e)
-                            {
-                                tracing::debug!(
-                                    query = %query,
-                                    expected_episode = expected_e,
-                                    got_episodes = ?res_ep.episode_numbers,
-                                    "title guard: episode mismatch"
-                                );
-                                return false;
-                            }
-                        }
+                    if let Some(expected_e) = episode
+                        && let Some(ref res_ep) = parsed.episode
+                        && !res_ep.episode_numbers.is_empty()
+                        && !res_ep.episode_numbers.contains(&expected_e)
+                    {
+                        tracing::debug!(
+                            query = %query,
+                            expected_episode = expected_e,
+                            got_episodes = ?res_ep.episode_numbers,
+                            "title guard: episode mismatch"
+                        );
+                        return false;
                     }
 
                     true
