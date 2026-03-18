@@ -888,11 +888,11 @@ fn expected_size_gib_for_quality(quality: Option<&str>, media_category: MediaSiz
             _ => 1.8,
         },
         MediaSizeCategory::Anime => match quality {
-            Some("2160P") => 5.5,
-            Some("1080P") => 1.9,
-            Some("720P") => 0.75,
-            Some("480P") => 0.32,
-            _ => 1.2,
+            Some("2160P") => 4.0,
+            Some("1080P") => 1.5,
+            Some("720P") => 0.6,
+            Some("480P") => 0.25,
+            _ => 1.0,
         },
     }
 }
@@ -978,6 +978,12 @@ pub fn apply_size_scoring_for_category(
     }
     if matches!(source.as_deref(), Some("WEB-DL") | Some("WEBRIP")) {
         expected_gib *= 0.8;
+    }
+    // AV1 is dramatically more efficient than H.264/H.265 at the same
+    // visual quality.  A 350 MB AV1 encode of a 24-min 1080p anime episode
+    // is perfectly normal.
+    if matches!(release.video_codec.as_deref(), Some("AV1")) {
+        expected_gib *= 0.25;
     }
 
     if let Some(runtime) = runtime_minutes

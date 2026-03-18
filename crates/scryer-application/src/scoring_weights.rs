@@ -146,6 +146,24 @@ pub fn build_weights(persona: &ScoringPersona, overrides: &ScoringOverrides) -> 
     weights
 }
 
+/// Build weights with category-aware adjustments.  Anime content never
+/// ships with Atmos audio, so the atmos missing penalty is zeroed out
+/// to avoid penalizing every anime release.
+pub fn build_weights_for_category(
+    persona: &ScoringPersona,
+    overrides: &ScoringOverrides,
+    category: Option<&str>,
+) -> ScoringWeights {
+    let mut weights = build_weights(persona, overrides);
+    if matches!(
+        category.map(|c| c.trim().to_ascii_lowercase()).as_deref(),
+        Some("anime")
+    ) {
+        weights.atmos_missing_penalty = 0;
+    }
+    weights
+}
+
 struct OverrideDefaults {
     allow_x265_non4k: bool,
     prefer_compact_encodes: bool,

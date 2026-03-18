@@ -591,9 +591,10 @@ impl AppUseCase {
             let persona = quality_profile
                 .criteria
                 .resolve_persona(category.as_deref());
-            let weights = crate::scoring_weights::build_weights(
+            let weights = crate::scoring_weights::build_weights_for_category(
                 persona,
                 &quality_profile.criteria.scoring_overrides,
+                category.as_deref(),
             );
             let mut decision = evaluate_against_profile(&quality_profile, &parsed, false, &weights);
             apply_age_scoring(&mut decision, result.published_at.as_deref());

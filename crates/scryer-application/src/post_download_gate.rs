@@ -46,8 +46,11 @@ pub(crate) fn build_import_profile_decision(
     has_existing_file: bool,
 ) -> crate::QualityProfileDecision {
     let persona = profile.criteria.resolve_persona(Some(category_hint));
-    let weights =
-        crate::scoring_weights::build_weights(persona, &profile.criteria.scoring_overrides);
+    let weights = crate::scoring_weights::build_weights_for_category(
+        persona,
+        &profile.criteria.scoring_overrides,
+        Some(category_hint),
+    );
     let mut decision =
         crate::evaluate_against_profile(profile, parsed, has_existing_file, &weights);
     crate::quality_profile::apply_size_scoring_for_category(
