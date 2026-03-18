@@ -6189,8 +6189,8 @@ dependencies = [
 
 [[package]]
 name = "weaver-rar"
-version = "0.1.15"
-source = "git+https://github.com/scryer-media/weaver.git?tag=weaver-v0.1.15#b0d666e9d5103b634c8cc004c08e0d268cfc44c3"
+version = "0.1.29"
+source = "git+https://github.com/scryer-media/weaver.git?tag=weaver-v0.1.29#bf6e2ac32aab4600470a0d69bf82598d16f04d79"
 dependencies = [
  "aes",
  "blake2",
