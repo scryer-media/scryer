@@ -412,7 +412,7 @@ async fn multi_indexer_url_trace_season_pack() {
             SearchMode::Auto,
             Some(2), // season
             None,    // episode=None → season pack
-            None, // absolute_episode
+            None,    // absolute_episode
         )
         .await
         .expect("search should succeed");

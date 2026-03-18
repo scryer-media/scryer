@@ -127,7 +127,9 @@ pub use quality_profile::{
     default_quality_profile_for_search, evaluate_against_profile, parse_profile_catalog_from_json,
 };
 pub use release_parser::{ParsedEpisodeMetadata, ParsedReleaseMetadata, parse_release_metadata};
-pub use scoring_weights::{ScoringOverrides, ScoringPersona, ScoringWeights, build_weights, build_weights_for_category};
+pub use scoring_weights::{
+    ScoringOverrides, ScoringPersona, ScoringWeights, build_weights, build_weights_for_category,
+};
 pub(crate) use types::JwtClaims;
 pub use types::{
     BackupInfo, DiskSpaceInfo, DownloadGrabResult, DownloadSourceKind, HealthCheckResult,

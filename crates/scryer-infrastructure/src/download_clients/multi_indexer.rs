@@ -485,17 +485,16 @@ impl IndexerClient for MultiIndexerSearchClient {
                 .and_then(|s| s.api_max)
                 .is_some_and(|max| max > 0);
 
-            let mut strategies: Vec<SearchStrategy> =
-                build_strategies(&StrategyParams {
-                    query: &query,
-                    facet,
-                    ids: &available_ids,
-                    caps: &caps,
-                    season,
-                    episode,
-                    absolute_episode,
-                    is_alias_query: false,
-                });
+            let mut strategies: Vec<SearchStrategy> = build_strategies(&StrategyParams {
+                query: &query,
+                facet,
+                ids: &available_ids,
+                caps: &caps,
+                season,
+                episode,
+                absolute_episode,
+                is_alias_query: false,
+            });
 
             // Skip freetext strategies when ID-based strategies are available and
             // the indexer has API limits or deduplicates aliases (freetext without
@@ -798,7 +797,8 @@ fn build_strategies(p: &StrategyParams<'_>) -> Vec<SearchStrategy> {
 
     // Anime absolute-episode strategy: when we have an absolute episode number,
     // add a second strategy that searches by absolute number instead of SXXEXX.
-    if facet == "anime" && !is_alias_query
+    if facet == "anime"
+        && !is_alias_query
         && let Some(abs) = absolute_episode
     {
         strategies.push(SearchStrategy {
