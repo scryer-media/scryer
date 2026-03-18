@@ -28,6 +28,14 @@ fn non_empty(s: String) -> Option<String> {
 ///
 /// Shared by the single-title facet handler path and the bulk hydration loop.
 pub fn movie_to_hydration_result(movie: MovieMetadata, language: &str) -> HydrationResult {
+    let mut extra_external_ids = Vec::new();
+    if let Some(anidb_id) = movie.anidb_id {
+        extra_external_ids.push(scryer_domain::ExternalId {
+            source: "anidb".into(),
+            value: anidb_id.to_string(),
+        });
+    }
+
     let update = TitleMetadataUpdate {
         year: movie.year.filter(|&y| y > 0),
         overview: non_empty(movie.overview),
@@ -53,6 +61,7 @@ pub fn movie_to_hydration_result(movie: MovieMetadata, language: &str) -> Hydrat
         metadata_language: Some(language.to_string()),
         metadata_fetched_at: Some(Utc::now().to_rfc3339()),
         digital_release_date: movie.tmdb_release_date,
+        extra_external_ids,
         ..Default::default()
     };
     HydrationResult {
@@ -88,6 +97,7 @@ pub fn series_to_hydration_result(series: SeriesMetadata, language: &str) -> Hyd
         studio: None,
         country: non_empty(series.country),
         aliases: series.aliases,
+        tagged_aliases: series.tagged_aliases,
         metadata_language: Some(language.to_string()),
         metadata_fetched_at: Some(Utc::now().to_rfc3339()),
         ..Default::default()

@@ -251,14 +251,13 @@ impl QueryRoot {
         query: String,
         imdb_id: Option<String>,
         tvdb_id: Option<String>,
+        anidb_id: Option<String>,
         category: Option<String>,
-        limit: Option<i32>,
     ) -> GqlResult<Vec<IndexerSearchResultPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let limit = limit.unwrap_or(200).clamp(1, 200) as usize;
         let results = app
-            .search_indexers(&actor, query, imdb_id, tvdb_id, category, limit)
+            .search_indexers(&actor, query, imdb_id, tvdb_id, anidb_id, category)
             .await
             .map_err(to_gql_error)?;
 
@@ -279,11 +278,9 @@ impl QueryRoot {
         anidb_id: Option<String>,
         category: Option<String>,
         absolute_episode: Option<i32>,
-        limit: Option<i32>,
     ) -> GqlResult<Vec<IndexerSearchResultPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let limit = limit.unwrap_or(200).clamp(1, 200) as usize;
         let results = app
             .search_indexers_episode(
                 &actor,
@@ -295,7 +292,6 @@ impl QueryRoot {
                 anidb_id,
                 category,
                 absolute_episode.map(|v| v as u32),
-                limit,
             )
             .await
             .map_err(to_gql_error)?;
@@ -314,13 +310,11 @@ impl QueryRoot {
         imdb_id: Option<String>,
         tvdb_id: Option<String>,
         category: Option<String>,
-        limit: Option<i32>,
     ) -> GqlResult<Vec<IndexerSearchResultPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let limit = limit.unwrap_or(200).clamp(1, 200) as usize;
         let results = app
-            .search_indexers_season(&actor, title, season, imdb_id, tvdb_id, category, limit)
+            .search_indexers_season(&actor, title, season, imdb_id, tvdb_id, category)
             .await
             .map_err(to_gql_error)?;
 

@@ -32,6 +32,7 @@ metrics-exporter-prometheus = "0.16"
 
 [dev-dependencies]
 scryer-rules = { path = "../scryer-rules" }
+async-trait = { workspace = true }
 chrono = { workspace = true }
 wiremock = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "brotli", "zstd", "deflate"] }

@@ -15,6 +15,13 @@ struct PluginDescriptor {
 
 #[derive(Serialize)]
 struct Capabilities {
+    supported_ids: HashMap<String, Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    season_param: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    episode_param: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    query_param: Option<String>,
     search: bool,
     imdb_search: bool,
     tvdb_search: bool,
@@ -73,6 +80,12 @@ pub fn describe(_input: String) -> FnResult<String> {
         plugin_type: "indexer".to_string(),
         provider_type: "test".to_string(),
         capabilities: Capabilities {
+            supported_ids: HashMap::from([
+                ("movie".into(), vec!["imdb_id".into()]),
+            ]),
+            season_param: None,
+            episode_param: None,
+            query_param: Some("q".into()),
             search: true,
             imdb_search: true,
             tvdb_search: false,

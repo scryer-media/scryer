@@ -268,15 +268,31 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
         let key = provider_type.trim().to_ascii_lowercase();
         self.plugins
             .get(&key)
-            .map(|loaded| scryer_domain::IndexerProviderCapabilities {
-                rss: loaded.descriptor.capabilities.rss,
-                search: loaded.descriptor.capabilities.search,
-                imdb_search: loaded.descriptor.capabilities.imdb_search,
-                tvdb_search: loaded.descriptor.capabilities.tvdb_search,
-                anidb_search: loaded.descriptor.capabilities.anidb_search,
+            .map(|loaded| {
+                let caps = &loaded.descriptor.capabilities;
+                scryer_domain::IndexerProviderCapabilities {
+                    rss: caps.rss,
+                    supported_ids: caps.supported_ids.clone(),
+                    deduplicates_aliases: caps.deduplicates_aliases,
+                    season_param: caps.season_param.clone(),
+                    episode_param: caps.episode_param.clone(),
+                    query_param: caps.query_param.clone(),
+                    search: caps.search,
+                    imdb_search: caps.imdb_search,
+                    tvdb_search: caps.tvdb_search,
+                    anidb_search: caps.anidb_search,
+                }
             })
             .unwrap_or(scryer_domain::IndexerProviderCapabilities {
                 rss: true,
+                supported_ids: std::collections::HashMap::from([
+                    ("movie".into(), vec!["imdb_id".into()]),
+                    ("series".into(), vec!["tvdb_id".into()]),
+                ]),
+                deduplicates_aliases: false,
+                season_param: Some("season".into()),
+                episode_param: Some("ep".into()),
+                query_param: Some("q".into()),
                 search: true,
                 imdb_search: true,
                 tvdb_search: true,
@@ -477,7 +493,9 @@ impl IndexerPluginProvider for DynamicPluginProvider {
         // Layer builtins (skipped if external overrides same provider_type)
         provider = provider
             .with_builtin(crate::builtins::NZBGEEK_WASM)
-            .with_builtin(crate::builtins::NEWZNAB_WASM);
+            .with_builtin(crate::builtins::NEWZNAB_WASM)
+            .with_builtin(crate::builtins::ANIMETOSHO_WASM)
+            .with_builtin(crate::builtins::TORZNAB_WASM);
 
         // Remove builtins the user has disabled
         for pt in disabled_builtins {

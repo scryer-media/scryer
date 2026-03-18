@@ -183,6 +183,7 @@ fn interstitial_movie_from_anime_movie(movie: &AnimeMovie) -> InterstitialMovieM
         placement: Some(movie.placement.clone()),
         movie_tmdb_id: movie.movie_tmdb_id.map(|id| id.to_string()),
         movie_mal_id: movie.movie_mal_id.map(|id| id.to_string()),
+        movie_anidb_id: movie.movie_anidb_id.map(|id| id.to_string()),
     }
 }
 
@@ -278,6 +279,7 @@ mod anime_movie_mapping_tests {
             movie_tmdb_id: Some(300),
             movie_imdb_id: Some("tt123".into()),
             movie_mal_id: Some(400),
+            movie_anidb_id: None,
             name: "Sample Movie".into(),
             slug: "sample-movie".into(),
             year: Some(2024),
@@ -547,6 +549,7 @@ impl AppUseCase {
             studio: None,
             country: None,
             aliases: vec![],
+            tagged_aliases: vec![],
             metadata_language: None,
             metadata_fetched_at: None,
             min_availability: request.min_availability,

@@ -534,6 +534,7 @@ mod tests {
             studio: Some("Warner Bros.".into()),
             country: None,
             aliases: vec![],
+            tagged_aliases: vec![],
             metadata_language: None,
             metadata_fetched_at: None,
             min_availability: None,
@@ -798,6 +799,7 @@ mod tests {
             studio: None,
             country: None,
             aliases: vec![],
+            tagged_aliases: vec![],
             metadata_language: None,
             metadata_fetched_at: None,
             min_availability: None,
@@ -934,6 +936,7 @@ mod tests {
             placement: Some("ordered".into()),
             movie_tmdb_id: Some("635302".into()),
             movie_mal_id: Some("40748".into()),
+            movie_anidb_id: None,
         }
     }
 

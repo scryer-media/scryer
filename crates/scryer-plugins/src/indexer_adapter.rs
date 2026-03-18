@@ -36,7 +36,6 @@ impl IndexerClient for WasmIndexerClient {
         category: Option<String>,
         newznab_categories: Option<Vec<String>>,
         _indexer_routing: Option<IndexerRoutingPlan>,
-        limit: usize,
         _mode: SearchMode,
         season: Option<u32>,
         episode: Option<u32>,
@@ -48,7 +47,7 @@ impl IndexerClient for WasmIndexerClient {
             anidb_id,
             category,
             categories: newznab_categories.unwrap_or_default(),
-            limit,
+            limit: 1000,
             season,
             episode,
         };

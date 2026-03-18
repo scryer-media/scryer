@@ -932,7 +932,6 @@ pub mod test_nulls {
             _: Option<String>,
             _: Option<Vec<String>>,
             _: Option<IndexerRoutingPlan>,
-            _: usize,
             _: SearchMode,
             _: Option<u32>,
             _: Option<u32>,

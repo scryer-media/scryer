@@ -72,7 +72,6 @@ impl AppUseCase {
                 None,
                 None,
                 None,
-                1, // limit 1
                 SearchMode::Interactive,
                 None,
                 None,

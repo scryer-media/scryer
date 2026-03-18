@@ -1150,7 +1150,6 @@ pub trait IndexerClient: Send + Sync {
         category: Option<String>,
         newznab_categories: Option<Vec<String>>,
         indexer_routing: Option<IndexerRoutingPlan>,
-        limit: usize,
         mode: SearchMode,
         season: Option<u32>,
         episode: Option<u32>,
@@ -1201,13 +1200,22 @@ pub trait IndexerPluginProvider: Send + Sync {
         None
     }
     /// Returns the search capabilities declared by the plugin for a provider type.
-    /// Defaults to all-true for backward compat with unknown providers.
+    /// Defaults to a generic newznab-like profile for backward compat with unknown providers.
     fn capabilities_for_provider(
         &self,
         _provider_type: &str,
     ) -> scryer_domain::IndexerProviderCapabilities {
         scryer_domain::IndexerProviderCapabilities {
             rss: true,
+            supported_ids: std::collections::HashMap::from([
+                ("movie".into(), vec!["imdb_id".into()]),
+                ("series".into(), vec!["tvdb_id".into()]),
+            ]),
+            deduplicates_aliases: false,
+            season_param: Some("season".into()),
+            episode_param: Some("ep".into()),
+            query_param: Some("q".into()),
+            // Legacy fields
             search: true,
             imdb_search: true,
             tvdb_search: true,
@@ -2130,7 +2138,6 @@ mod tests {
             category: Option<String>,
             _newznab_categories: Option<Vec<String>>,
             _indexer_routing: Option<IndexerRoutingPlan>,
-            _limit: usize,
             _mode: SearchMode,
             _season: Option<u32>,
             _episode: Option<u32>,
@@ -2854,7 +2861,7 @@ mod tests {
         let (app, user) = bootstrap();
 
         let result = app
-            .search_indexers(&user, "   ".into(), None, None, None, 10)
+            .search_indexers(&user, "   ".into(), None, None, None, None)
             .await;
         assert!(result.is_err());
     }
@@ -3297,6 +3304,7 @@ mod tests {
                     runtime_minutes: 117,
                     sort_title: "Mugen Train".into(),
                     imdb_id: "tt11032374".into(),
+                    anidb_id: None,
                     genres: vec!["Action".into(), "Anime".into()],
                     studio: "ufotable".into(),
                     tmdb_release_date: Some("2020-10-16".into()),
@@ -3312,7 +3320,7 @@ mod tests {
                     monitored: true,
                     tags: vec![],
                     external_ids: vec![ExternalId {
-                        source: "tvdb".into(),
+                        source: "tvdb_id".into(),
                         value: "348545".into(),
                     }],
                     min_availability: None,
@@ -3398,6 +3406,7 @@ mod tests {
             movie_tmdb_id: Some(438759),
             movie_imdb_id: Some("tt11032374".into()),
             movie_mal_id: Some(40456),
+            movie_anidb_id: None,
             name: "Mugen Train".into(),
             slug: "mugen-train".into(),
             year: Some(2020),
@@ -3469,7 +3478,7 @@ mod tests {
                     monitored: true,
                     tags: vec![],
                     external_ids: vec![ExternalId {
-                        source: "tvdb".into(),
+                        source: "tvdb_id".into(),
                         value: "361218".into(),
                     }],
                     min_availability: None,
@@ -3567,7 +3576,7 @@ mod tests {
                     monitored: true,
                     tags: vec!["scryer:monitor-specials:false".into()],
                     external_ids: vec![ExternalId {
-                        source: "tvdb".into(),
+                        source: "tvdb_id".into(),
                         value: "267440".into(),
                     }],
                     min_availability: None,
@@ -3630,6 +3639,7 @@ mod tests {
                 movie_tmdb_id: Some(379088),
                 movie_imdb_id: Some("tt3865768".into()),
                 movie_mal_id: Some(23775),
+                movie_anidb_id: None,
                 name: "Attack on Titan: Crimson Bow and Arrow".into(),
                 slug: "crimson-bow-and-arrow".into(),
                 year: Some(2014),
@@ -3655,6 +3665,7 @@ mod tests {
                 movie_tmdb_id: Some(438759),
                 movie_imdb_id: Some("tt11032374".into()),
                 movie_mal_id: Some(40456),
+                movie_anidb_id: None,
                 name: "Mugen Train".into(),
                 slug: "mugen-train".into(),
                 year: Some(2020),

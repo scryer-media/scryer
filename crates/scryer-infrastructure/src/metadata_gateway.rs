@@ -123,6 +123,7 @@ const GET_MOVIE_QUERY: &str = r#"
         runtime_minutes
         sort_title
         imdb_id
+        anidb_id
         genres
         studio
         tmdb_release_date
@@ -153,6 +154,7 @@ const GET_SERIES_QUERY: &str = r#"
         country
         genres
         aliases
+        tagged_aliases { name language }
         artworks {
           kind
           url
@@ -199,6 +201,7 @@ const GET_SERIES_QUERY: &str = r#"
           movie_tmdb_id
           movie_imdb_id
           movie_mal_id
+          movie_anidb_id
           name
           slug
           year
@@ -917,7 +920,7 @@ impl MetadataGatewayClient {
 
 const MOVIE_FIELD_SELECTION: &str = "\
     tvdb_id name slug year status overview poster_url language \
-    runtime_minutes sort_title imdb_id genres studio tmdb_release_date \
+    runtime_minutes sort_title imdb_id anidb_id genres studio tmdb_release_date \
     artworks { kind url }";
 
 const SERIES_FIELD_SELECTION: &str = "\
@@ -929,7 +932,7 @@ const SERIES_FIELD_SELECTION: &str = "\
     anime_mappings { mal_id anilist_id anidb_id kitsu_id thetvdb_id themoviedb_id alt_tvdb_id thetvdb_season score \
                      anime_media_type global_media_type status \
                      episode_mappings { tvdb_season episode_start episode_end } } \
-    anime_movies { movie_tvdb_id movie_tmdb_id movie_imdb_id movie_mal_id name slug year \
+    anime_movies { movie_tvdb_id movie_tmdb_id movie_imdb_id movie_mal_id movie_anidb_id name slug year \
                    content_status overview poster_url language runtime_minutes sort_title imdb_id \
                    genres studio digital_release_date association_confidence continuity_status \
                    movie_form placement confidence signal_summary }";
@@ -1053,6 +1056,8 @@ struct MovieItem {
     runtime_minutes: i32,
     sort_title: String,
     imdb_id: String,
+    #[serde(default)]
+    anidb_id: Option<i64>,
     genres: Vec<String>,
     studio: String,
     tmdb_release_date: Option<String>,
@@ -1066,6 +1071,12 @@ struct MovieItem {
 struct ArtworkItem {
     kind: String,
     url: String,
+}
+
+#[derive(Deserialize)]
+struct TaggedAliasItem {
+    name: String,
+    language: String,
 }
 
 fn pick_artwork_url(artworks: &[ArtworkItem], kind: &str) -> Option<String> {
@@ -1103,6 +1114,8 @@ struct SeriesItem {
     country: String,
     genres: Vec<String>,
     aliases: Vec<String>,
+    #[serde(default)]
+    tagged_aliases: Vec<TaggedAliasItem>,
     #[serde(default)]
     artworks: Vec<ArtworkItem>,
     seasons: Vec<SeriesSeasonItem>,
@@ -1166,6 +1179,8 @@ struct AnimeMovieItem {
     movie_tmdb_id: Option<i64>,
     movie_imdb_id: Option<String>,
     movie_mal_id: Option<i64>,
+    #[serde(default)]
+    movie_anidb_id: Option<i64>,
     name: String,
     slug: String,
     year: Option<i32>,
@@ -1325,6 +1340,7 @@ impl MetadataGateway for MetadataGatewayClient {
             runtime_minutes: m.runtime_minutes,
             sort_title: m.sort_title,
             imdb_id: m.imdb_id,
+            anidb_id: m.anidb_id,
             genres: m.genres,
             studio: m.studio,
             tmdb_release_date: m.tmdb_release_date,
@@ -1360,6 +1376,14 @@ impl MetadataGateway for MetadataGatewayClient {
             country: s.country,
             genres: s.genres,
             aliases: s.aliases,
+            tagged_aliases: s
+                .tagged_aliases
+                .into_iter()
+                .map(|ta| scryer_domain::TaggedAlias {
+                    name: ta.name,
+                    language: ta.language,
+                })
+                .collect(),
             seasons: s
                 .seasons
                 .into_iter()
@@ -1421,6 +1445,7 @@ impl MetadataGateway for MetadataGatewayClient {
                     movie_tmdb_id: movie.movie_tmdb_id,
                     movie_imdb_id: movie.movie_imdb_id,
                     movie_mal_id: movie.movie_mal_id,
+                    movie_anidb_id: movie.movie_anidb_id,
                     name: movie.name,
                     slug: movie.slug,
                     year: movie.year,
@@ -1504,6 +1529,7 @@ impl MetadataGateway for MetadataGatewayClient {
                                 runtime_minutes: m.runtime_minutes,
                                 sort_title: m.sort_title,
                                 imdb_id: m.imdb_id,
+                                anidb_id: m.anidb_id,
                                 genres: m.genres,
                                 studio: m.studio,
                                 tmdb_release_date: m.tmdb_release_date,
@@ -1533,6 +1559,14 @@ impl MetadataGateway for MetadataGatewayClient {
                             country: s.country,
                             genres: s.genres,
                             aliases: s.aliases,
+                            tagged_aliases: s
+                                .tagged_aliases
+                                .into_iter()
+                                .map(|ta| scryer_domain::TaggedAlias {
+                                    name: ta.name,
+                                    language: ta.language,
+                                })
+                                .collect(),
                             seasons: s
                                 .seasons
                                 .into_iter()
@@ -1594,6 +1628,7 @@ impl MetadataGateway for MetadataGatewayClient {
                                     movie_tmdb_id: movie.movie_tmdb_id,
                                     movie_imdb_id: movie.movie_imdb_id,
                                     movie_mal_id: movie.movie_mal_id,
+                                    movie_anidb_id: movie.movie_anidb_id,
                                     name: movie.name,
                                     slug: movie.slug,
                                     year: movie.year,

@@ -46,6 +46,7 @@ fn base_title() -> Title {
         studio: None,
         country: None,
         aliases: vec![],
+            tagged_aliases: vec![],
         metadata_language: None,
         metadata_fetched_at: None,
         min_availability: None,

@@ -12,13 +12,14 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 /// A single search strategy dispatched as an independent parallel task.
+/// Each strategy carries the raw query/ID params to pass through to the plugin.
 #[derive(Clone, Debug)]
 struct SearchStrategy {
     query: String,
     imdb_id: Option<String>,
     tvdb_id: Option<String>,
     anidb_id: Option<String>,
-    label: &'static str,
+    label: String,
 }
 
 /// Per-indexer rate limiter tracking the last request time.
@@ -215,7 +216,6 @@ impl IndexerClient for MultiIndexerSearchClient {
         category: Option<String>,
         newznab_categories: Option<Vec<String>>,
         indexer_routing: Option<IndexerRoutingPlan>,
-        limit: usize,
         mode: SearchMode,
         season: Option<u32>,
         episode: Option<u32>,
@@ -294,6 +294,21 @@ impl IndexerClient for MultiIndexerSearchClient {
             "dispatching search to indexers"
         );
 
+        // Determine the search facet from available IDs and category hints
+        let facet = infer_facet(&anidb_id, &tvdb_id, &imdb_id, &category);
+
+        // Build the well-known ID map for strategy dispatch
+        let mut available_ids: HashMap<String, String> = HashMap::new();
+        if let Some(ref id) = imdb_id {
+            available_ids.insert("imdb_id".into(), id.clone());
+        }
+        if let Some(ref id) = tvdb_id {
+            available_ids.insert("tvdb_id".into(), id.clone());
+        }
+        if let Some(ref id) = anidb_id {
+            available_ids.insert("anidb_id".into(), id.clone());
+        }
+
         // Spawn parallel searches across enabled indexers, applying per-indexer routing
         let mut set = tokio::task::JoinSet::new();
         for config in enabled {
@@ -334,35 +349,36 @@ impl IndexerClient for MultiIndexerSearchClient {
                 continue;
             }
 
-            // Skip indexers that don't support the requested search type
             let caps = self
                 .plugin_provider
                 .capabilities_for_provider(&config.provider_type);
-            if imdb_id.is_some() && !caps.imdb_search && !caps.search {
-                info!(
-                    indexer = config.name.as_str(),
-                    "skipping indexer: does not support IMDB or freetext search"
-                );
-                continue;
-            }
-            if tvdb_id.is_some() && !caps.tvdb_search && !caps.search {
-                info!(
-                    indexer = config.name.as_str(),
-                    "skipping indexer: does not support TVDB or freetext search"
-                );
-                continue;
-            }
-            if anidb_id.is_some() && !caps.anidb_search && !caps.search {
-                info!(
-                    indexer = config.name.as_str(),
-                    "skipping indexer: does not support AniDB or freetext search"
-                );
-                continue;
-            }
+
+            // RSS-only check: skip non-RSS indexers for RSS sync requests
             if is_rss_request && !caps.rss {
                 info!(
                     indexer = config.name.as_str(),
                     "skipping indexer: does not support RSS sync"
+                );
+                continue;
+            }
+
+            // Skip indexers that can't contribute to this facet.
+            // - Indexers with declared facets that don't include the current facet are skipped.
+            // - Indexers that have the facet but only for ID-based search (deduplicates_aliases)
+            //   are skipped when none of their supported IDs are available — freetext on
+            //   AnimeTosho for "The Matrix" is pointless when there's no anidb_id.
+            let has_facet_entry = caps.has_facet(facet);
+            let has_declared_facets = !caps.supported_ids.is_empty();
+            let skip_no_facet = !has_facet_entry && has_declared_facets;
+            let skip_no_matching_id = has_facet_entry && caps.deduplicates_aliases && {
+                let id_types = caps.id_types_for_facet(facet);
+                !id_types.iter().any(|id_type| available_ids.contains_key(id_type.as_str()))
+            };
+            if !is_rss_request && (skip_no_facet || skip_no_matching_id) {
+                info!(
+                    indexer = config.name.as_str(),
+                    facet,
+                    "skipping indexer: no supported IDs for facet and no freetext"
                 );
                 continue;
             }
@@ -382,7 +398,7 @@ impl IndexerClient for MultiIndexerSearchClient {
             // RSS-only indexers: fetch the feed once, cache it, return cached
             // results for all concurrent callers. The feed content is the same
             // regardless of query — the caller matches results downstream.
-            let is_rss_only = !caps.search && caps.rss;
+            let is_rss_only = !caps.supports_any_search() && caps.rss;
             if is_rss_only {
                 let cell = {
                     let mut cache = self.rss_feed_cache.lock().await;
@@ -411,7 +427,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                             let start = std::time::Instant::now();
                             match tokio::time::timeout(
                                 std::time::Duration::from_secs(30),
-                                client.search(query, None, None, None, category, per_indexer_categories, None, limit, mode, season, episode),
+                                client.search(query, None, None, None, category, per_indexer_categories, None, mode, season, episode),
                             ).await {
                                 Ok(Ok(response)) => {
                                     info!(indexer = indexer_name.as_str(), count = response.results.len(), "RSS feed cached");
@@ -439,7 +455,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                         results: results.clone(),
                         api_current: None, api_max: None, grab_current: None, grab_max: None,
                     };
-                    (indexer_id, indexer_name, Ok(response), std::time::Duration::ZERO, "rss_cached")
+                    (indexer_id, indexer_name, Ok(response), std::time::Duration::ZERO, "rss_cached".to_string())
                 });
                 continue;
             }
@@ -456,14 +472,14 @@ impl IndexerClient for MultiIndexerSearchClient {
                 .is_some_and(|max| max > 0);
 
             let mut strategies: Vec<SearchStrategy> = if mode == SearchMode::Interactive {
-                build_strategies(&query, &imdb_id, &tvdb_id, &anidb_id, &caps)
+                build_strategies(&query, facet, &available_ids, &caps, season, episode, false)
             } else {
                 vec![SearchStrategy {
                     query: query.clone(),
                     imdb_id: imdb_id.clone(),
                     tvdb_id: tvdb_id.clone(),
                     anidb_id: anidb_id.clone(),
-                    label: "auto",
+                    label: "auto".into(),
                 }]
             };
 
@@ -486,7 +502,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 let indexer_name = config.name.clone();
                 let rate_limiter = self.rate_limiter.clone();
                 let rate_limit_seconds = config.rate_limit_seconds;
-                let strategy_label = strategy.label;
+                let strategy_label = strategy.label.clone();
 
                 set.spawn(async move {
                     rate_limiter
@@ -504,7 +520,6 @@ impl IndexerClient for MultiIndexerSearchClient {
                             category,
                             per_indexer_categories,
                             None,
-                            limit,
                             mode,
                             season,
                             episode,
@@ -547,8 +562,8 @@ impl IndexerClient for MultiIndexerSearchClient {
                     // De-escalate on success
                     self.backoff_tracker.record_success(&id).await;
 
-                    metrics::counter!("scryer_indexer_queries_total", "indexer" => name.clone(), "status" => "success", "mode" => mode_label).increment(1);
-                    metrics::histogram!("scryer_indexer_query_duration_seconds", "indexer" => name.clone(), "mode" => mode_label).record(elapsed.as_secs_f64());
+                    metrics::counter!("scryer_indexer_queries_total", "indexer" => name.clone(), "status" => "success", "mode" => mode_label.clone()).increment(1);
+                    metrics::histogram!("scryer_indexer_query_duration_seconds", "indexer" => name.clone(), "mode" => mode_label.clone()).record(elapsed.as_secs_f64());
                     metrics::counter!("scryer_indexer_query_results_total", "indexer" => name.clone(), "mode" => mode_label).increment(response.results.len() as u64);
 
                     all_results.append(&mut response.results);
@@ -564,7 +579,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                         "indexer backoff escalated"
                     );
 
-                    metrics::counter!("scryer_indexer_queries_total", "indexer" => name.clone(), "status" => "error", "mode" => mode_label).increment(1);
+                    metrics::counter!("scryer_indexer_queries_total", "indexer" => name.clone(), "status" => "error", "mode" => mode_label.clone()).increment(1);
                     metrics::histogram!("scryer_indexer_query_duration_seconds", "indexer" => name.clone(), "mode" => mode_label).record(elapsed.as_secs_f64());
                 }
                 Err(err) => {
@@ -612,77 +627,120 @@ impl IndexerClient for MultiIndexerSearchClient {
 }
 
 /// Build parallel search strategies for interactive mode.
-/// Each strategy targets one ID type so the host can dispatch them
-/// all in parallel instead of the plugin calling endpoints sequentially.
+///
+/// Uses the plugin's facet-scoped `supported_ids` to determine which ID-based
+/// strategies to generate. Each strategy targets one ID type so the host can
+/// dispatch them all in parallel.
+///
+/// The `facet` parameter is the current search facet ("movies", "series", "anime",
+/// "anime_movies"). The orchestrator only builds ID strategies for facets the
+/// indexer declares in `supported_ids`.
 fn build_strategies(
     query: &str,
-    imdb_id: &Option<String>,
-    tvdb_id: &Option<String>,
-    anidb_id: &Option<String>,
+    facet: &str,
+    ids: &HashMap<String, String>,
     caps: &scryer_domain::IndexerProviderCapabilities,
+    season: Option<u32>,
+    episode: Option<u32>,
+    is_alias_query: bool,
 ) -> Vec<SearchStrategy> {
+    // Alias queries skip indexers that deduplicate aliases internally
+    if is_alias_query && caps.deduplicates_aliases {
+        return vec![];
+    }
+
     let mut strategies = Vec::with_capacity(4);
 
-    // Strategy per ID type (only if indexer supports it)
-    // For AniDB, also pass the query so the plugin can filter by episode.
-    if let Some(id) = anidb_id
-        && caps.anidb_search
-    {
-        strategies.push(SearchStrategy {
-            query: query.to_string(),
-            imdb_id: None,
-            tvdb_id: None,
-            anidb_id: Some(id.clone()),
-            label: "anidb_id",
-        });
-    }
-    if let Some(id) = tvdb_id
-        && caps.tvdb_search
-    {
-        strategies.push(SearchStrategy {
-            query: String::new(),
-            imdb_id: None,
-            tvdb_id: Some(id.clone()),
-            anidb_id: None,
-            label: "tvdb_id",
-        });
-    }
-    if let Some(id) = imdb_id
-        && caps.imdb_search
-    {
-        strategies.push(SearchStrategy {
-            query: String::new(),
-            imdb_id: Some(id.clone()),
-            tvdb_id: None,
-            anidb_id: None,
-            label: "imdb_id",
-        });
+    // ID-based strategies: match well-known ID names from the plugin's
+    // supported_ids against the available IDs from the search query.
+    let id_types = caps.id_types_for_facet(facet);
+    if !id_types.is_empty() && !is_alias_query {
+        for id_type in id_types {
+            if let Some(id_val) = ids.get(id_type.as_str()) {
+                // For anidb, pass just the episode identifier as query text
+                let strat_query = if id_type == "anidb_id" {
+                    match (season, episode) {
+                        (Some(s), Some(e)) => format!("S{s:0>2}E{e:0>2}"),
+                        _ => String::new(),
+                    }
+                } else {
+                    String::new()
+                };
+
+                strategies.push(SearchStrategy {
+                    query: strat_query,
+                    imdb_id: if id_type == "imdb_id" { Some(id_val.clone()) } else { None },
+                    tvdb_id: if id_type == "tvdb_id" { Some(id_val.clone()) } else { None },
+                    anidb_id: if id_type == "anidb_id" { Some(id_val.clone()) } else { None },
+                    label: id_type.clone(),
+                });
+                break; // one ID strategy per facet is sufficient
+            }
+        }
     }
 
-    // Freetext strategy (always, if query is non-empty and indexer supports search)
-    if !query.is_empty() && caps.search {
+    // Freetext strategy: skip if indexer has no capability for this facet at all.
+    // An indexer that only declares "anime" should not get freetext for "series" searches.
+    // For alias queries, indexers with deduplicates_aliases skip freetext (handled at top).
+    let has_facet_entry = caps.has_facet(facet);
+    let skip_no_facet = !has_facet_entry && !caps.supported_ids.is_empty();
+    if caps.query_param.is_some() && !query.is_empty() && !skip_no_facet {
         strategies.push(SearchStrategy {
             query: query.to_string(),
             imdb_id: None,
             tvdb_id: None,
             anidb_id: None,
-            label: "freetext",
+            label: "freetext".into(),
         });
     }
 
-    // If no strategies were generated (no IDs, no query), fall back to
-    // a single combined call so the indexer can at least try RSS/empty search.
+    // If no strategies were generated, fall back to a single combined call
     if strategies.is_empty() {
         strategies.push(SearchStrategy {
             query: query.to_string(),
-            imdb_id: imdb_id.clone(),
-            tvdb_id: tvdb_id.clone(),
-            anidb_id: anidb_id.clone(),
-            label: "fallback",
+            imdb_id: ids.get("imdb_id").cloned(),
+            tvdb_id: ids.get("tvdb_id").cloned(),
+            anidb_id: ids.get("anidb_id").cloned(),
+            label: "fallback".into(),
         });
     }
 
     strategies
+}
+
+/// Determine the search facet from the category hint and available IDs.
+/// Category is the primary signal (set by the facet handler or acquisition layer).
+/// IDs are only used as fallback when no category is provided.
+fn infer_facet(
+    anidb_id: &Option<String>,
+    tvdb_id: &Option<String>,
+    imdb_id: &Option<String>,
+    category: &Option<String>,
+) -> &'static str {
+    // Category hint is the authoritative signal from the caller
+    if let Some(cat) = category {
+        let lower = cat.trim().to_ascii_lowercase();
+        if lower.contains("anime") {
+            return "anime";
+        }
+        if lower.contains("movie") {
+            return "movie";
+        }
+        if lower.contains("tv") || lower.contains("series") {
+            return "series";
+        }
+    }
+    // Fallback: infer from available IDs
+    if anidb_id.is_some() {
+        return "anime";
+    }
+    if imdb_id.is_some() && tvdb_id.is_none() {
+        return "movie";
+    }
+    if tvdb_id.is_some() {
+        return "series";
+    }
+    "series"
 }
 
 #[cfg(test)]
@@ -775,7 +833,6 @@ mod tests {
             _category: Option<String>,
             _newznab_categories: Option<Vec<String>>,
             _indexer_routing: Option<IndexerRoutingPlan>,
-            _limit: usize,
             _mode: SearchMode,
             _season: Option<u32>,
             _episode: Option<u32>,
@@ -814,6 +871,14 @@ mod tests {
         fn capabilities_for_provider(&self, _provider_type: &str) -> IndexerProviderCapabilities {
             IndexerProviderCapabilities {
                 rss: self.rss,
+                supported_ids: HashMap::from([
+                    ("movie".into(), vec!["imdb_id".into()]),
+                    ("series".into(), vec!["tvdb_id".into()]),
+                ]),
+                deduplicates_aliases: false,
+                season_param: Some("season".into()),
+                episode_param: Some("ep".into()),
+                query_param: Some("q".into()),
                 search: true,
                 imdb_search: true,
                 tvdb_search: true,
@@ -866,7 +931,6 @@ mod tests {
                 None,
                 None,
                 None,
-                500,
                 SearchMode::Auto,
                 None,
                 None,

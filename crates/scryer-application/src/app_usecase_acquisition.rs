@@ -703,6 +703,14 @@ async fn process_single_wanted_item(
                     value: tmdb_id.clone(),
                 });
             }
+            // Add AniDB ID as external ID for AnimeTosho searches
+            if let Some(ref anidb_id) = movie.movie_anidb_id {
+                t.external_ids.retain(|e| e.source != "anidb");
+                t.external_ids.push(scryer_domain::ExternalId {
+                    source: "anidb".into(),
+                    value: anidb_id.clone(),
+                });
+            }
             t.aliases = vec![];
             t
         } else {
@@ -750,7 +758,6 @@ async fn process_single_wanted_item(
                     anidb_id.clone(),
                     Some(category.clone()),
                     &title.tags,
-                    50,
                     "background_acquisition_season_pack",
                     SearchMode::Auto,
                     title.runtime_minutes,
@@ -975,7 +982,6 @@ async fn process_single_wanted_item(
             anidb_id,
             Some(category.clone()),
             &title.tags,
-            200,
             "background_acquisition",
             SearchMode::Auto,
             runtime_minutes,
@@ -1653,6 +1659,24 @@ fn build_search_queries(
                         "{} S{:0>2}E{:0>2}",
                         title.name, season_num, episode_num
                     ));
+
+                    // For anime: add the Japanese romanized name so *nab indexers
+                    // find releases titled "Kimetsu no Yaiba S01E01" when our
+                    // primary title is "Demon Slayer". Only use romanized names
+                    // (Latin characters), not kanji/kana.
+                    if title.facet == scryer_domain::MediaFacet::Anime {
+                        for alias in &title.tagged_aliases {
+                            if alias.language == "jpn"
+                                && !alias.name.is_empty()
+                                && alias.name.chars().all(|c| c <= '\u{FF}' || c.is_ascii())
+                            {
+                                queries.push(format!(
+                                    "{} S{:0>2}E{:0>2}",
+                                    alias.name, season_num, episode_num
+                                ));
+                            }
+                        }
+                    }
                 }
 
                 // For anime season 0 (specials/OVAs): use title-based search

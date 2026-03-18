@@ -95,7 +95,6 @@ impl AppUseCase {
         anidb_id: Option<String>,
         category: Option<String>,
         title_tags: &[String],
-        limit: usize,
         caller_label: &str,
         mode: SearchMode,
         runtime_minutes: Option<i32>,
@@ -132,7 +131,6 @@ impl AppUseCase {
             }
         }
 
-        let limit = limit.max(1);
         let title_hint = extract_title_hint(&queries);
 
         // Auto mode: conserve API calls by using only the first (canonical) query variant
@@ -160,7 +158,6 @@ impl AppUseCase {
                         category,
                         None,
                         indexer_routing,
-                        limit,
                         mode,
                         season,
                         episode,
@@ -542,10 +539,6 @@ impl AppUseCase {
             }
         });
 
-        if deduped.len() > limit {
-            deduped.truncate(limit);
-        }
-
         Ok(deduped)
     }
 
@@ -557,7 +550,6 @@ impl AppUseCase {
         tvdb_id: Option<String>,
         anidb_id: Option<String>,
         category: Option<String>,
-        limit: usize,
         season: Option<u32>,
         episode: Option<u32>,
         absolute_episode: Option<u32>,
@@ -569,7 +561,6 @@ impl AppUseCase {
             anidb_id,
             category,
             &[],
-            limit,
             &actor.id,
             SearchMode::Interactive,
             None,
@@ -586,14 +577,15 @@ impl AppUseCase {
         query: String,
         imdb_id: Option<String>,
         tvdb_id: Option<String>,
+        anidb_id: Option<String>,
         category: Option<String>,
-        limit: usize,
     ) -> AppResult<Vec<IndexerSearchResult>> {
         require(actor, &Entitlement::ViewCatalog)?;
 
         let normalized_query = query.trim();
         let normalized_imdb_id = normalize_imdb_id(imdb_id);
         let normalized_tvdb_id = normalize_numeric_id(tvdb_id);
+        let normalized_anidb_id = normalize_numeric_id(anidb_id);
         let normalized_category = category
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
@@ -610,8 +602,8 @@ impl AppUseCase {
             query = normalized_query,
             imdb_id = normalized_imdb_id.as_deref(),
             tvdb_id = normalized_tvdb_id.as_deref(),
+            anidb_id = normalized_anidb_id.as_deref(),
             category = normalized_category.as_deref(),
-            limit = limit,
             "searching indexers"
         );
 
@@ -621,9 +613,8 @@ impl AppUseCase {
                 vec![normalized_query.to_string()],
                 normalized_imdb_id.clone(),
                 normalized_tvdb_id.clone(),
-                None, // anidb_id — not available in general search
+                normalized_anidb_id.clone(),
                 normalized_category.clone(),
-                limit.max(1),
                 None,
                 None,
                 None,
@@ -687,7 +678,6 @@ impl AppUseCase {
         anidb_id: Option<String>,
         category: Option<String>,
         absolute_episode: Option<u32>,
-        limit: usize,
     ) -> AppResult<Vec<IndexerSearchResult>> {
         require(actor, &Entitlement::ViewCatalog)?;
 
@@ -730,16 +720,10 @@ impl AppUseCase {
             .parse::<usize>()
             .map_err(|_| AppError::Validation("invalid episode value".into()))?;
 
-        let mut queries = vec![
-            format!(
-                "{} S{:0>2}E{:0>2}",
-                normalized_title, season_num, episode_num
-            ),
-            format!("{} S{}E{}", normalized_title, season_num, episode_num),
-        ];
-
-        let mut unique = std::collections::HashSet::new();
-        queries.retain(|value| unique.insert(value.to_ascii_lowercase()));
+        let queries = vec![format!(
+            "{} S{:0>2}E{:0>2}",
+            normalized_title, season_num, episode_num
+        )];
 
         let results = self
             .search_indexer_queries(
@@ -749,7 +733,6 @@ impl AppUseCase {
                 normalized_tvdb_id.clone(),
                 normalized_anidb_id.clone(),
                 normalized_category.clone(),
-                limit,
                 Some(season_num as u32),
                 Some(episode_num as u32),
                 absolute_episode,
@@ -795,7 +778,6 @@ impl AppUseCase {
         imdb_id: Option<String>,
         tvdb_id: Option<String>,
         category: Option<String>,
-        limit: usize,
     ) -> AppResult<Vec<IndexerSearchResult>> {
         require(actor, &Entitlement::ViewCatalog)?;
 
@@ -826,9 +808,7 @@ impl AppUseCase {
             .parse::<usize>()
             .map_err(|_| AppError::Validation("invalid season value".into()))?;
 
-        let mut queries = vec![format!("S{:0>2}", season_num), format!("S{}", season_num)];
-        let mut unique = std::collections::HashSet::new();
-        queries.retain(|value| unique.insert(value.to_ascii_lowercase()));
+        let queries = vec![format!("{} S{:0>2}", normalized_title, season_num)];
 
         let results = self
             .search_indexer_queries(
@@ -838,7 +818,6 @@ impl AppUseCase {
                 normalized_tvdb_id.clone(),
                 None, // anidb_id — not available in season search
                 normalized_category.clone(),
-                limit,
                 Some(season_num as u32),
                 None,
                 None,

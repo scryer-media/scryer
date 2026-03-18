@@ -13,12 +13,14 @@ permissions:
   contents: read
 
 jobs:
-  web-lint:
-    name: web-lint
+  web:
+    name: web
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
@@ -31,89 +33,6 @@ jobs:
       - name: Lint
         working-directory: apps/scryer-web
         run: npm run lint
-
-  rust-build:
-    name: rust-build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@v1
-        with:
-          toolchain: "1.94"
-          components: clippy
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y nasm
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: true
-      - name: Build workspace (populate cache)
-        run: cargo test --workspace --locked --no-run
-
-  rust-clippy:
-    name: rust-clippy
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    needs: [rust-build]
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@v1
-        with:
-          toolchain: "1.94"
-          components: clippy
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y nasm
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: false
-      - name: Run clippy
-        run: cargo clippy --workspace -- -D warnings
-
-  rust-test:
-    name: rust-test
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    needs: [rust-build]
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@v1
-        with:
-          toolchain: "1.94"
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y nasm
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: false
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: nextest
-      - name: Run workspace tests
-        run: cargo nextest run --workspace --locked
-
-  web-build:
-    name: web-build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 40
-    needs: [web-lint]
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 25
-          cache: npm
-          cache-dependency-path: apps/scryer-web/package-lock.json
-      - name: Install dependencies
-        working-directory: apps/scryer-web
-        run: npm ci
       - name: Build web app
         working-directory: apps/scryer-web
         env:
@@ -130,22 +49,51 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-
-  rust-package:
-    name: rust-package-${{ matrix.platform }}
-    runs-on: ${{ matrix.runs_on }}
+  rust-build:
+    name: rust-build
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
-    needs: [web-build, rust-clippy, rust-test]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-musl
-            platform: linux-x86_64
-            runs_on: ubuntu-24.04
-          - target: aarch64-unknown-linux-musl
-            platform: linux-arm64
-            runs_on: ubuntu-24.04-arm
+    needs: [web]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.94"
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y musl-tools mold nasm
+      - name: Add musl target
+        run: rustup target add x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: true
+      - name: Download embedded web artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: scryer-web-out-${{ github.run_id }}
+          path: scryer-web-out
+      - name: Build release binary (x86 musl + embedded UI)
+        env:
+          SCRYER_EMBED_UI_DIR: ${{ github.workspace }}/scryer-web-out
+          SCRYER_SMG_REGISTRATION_SECRET: ${{ secrets.SMG_REGISTRATION_SECRET }}
+          SCRYER_SMG_GRAPHQL_URL: https://smg.scryer.media/graphql
+        run: mold -run cargo build -p scryer --release --locked --target x86_64-unknown-linux-musl
+      - name: Package tarball
+        run: tar -czf scryer-linux-x86_64.tar.gz -C target/x86_64-unknown-linux-musl/release scryer
+      - name: Upload release package
+        uses: actions/upload-artifact@v7
+        with:
+          name: scryer-linux-x86_64-${{ github.run_id }}
+          path: scryer-linux-x86_64.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  rust-build-arm:
+    name: rust-build-arm
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    needs: [web]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -154,12 +102,9 @@ jobs:
         with:
           toolchain: "1.94"
       - name: Install target
-        run: rustup target add ${{ matrix.target }}
-      - name: Install musl toolchain
-        if: contains(matrix.target, '-musl')
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools mold nasm
+        run: rustup target add aarch64-unknown-linux-musl
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y musl-tools mold nasm
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: false
@@ -168,35 +113,68 @@ jobs:
         with:
           name: scryer-web-out-${{ github.run_id }}
           path: scryer-web-out
-      - name: Build release binary with embedded UI
+      - name: Build release binary (arm64 musl + embedded UI)
         env:
           SCRYER_EMBED_UI_DIR: ${{ github.workspace }}/scryer-web-out
           SCRYER_SMG_REGISTRATION_SECRET: ${{ secrets.SMG_REGISTRATION_SECRET }}
           SCRYER_SMG_GRAPHQL_URL: https://smg.scryer.media/graphql
-        run: |
-          if [[ "${{ matrix.target }}" == *"-musl" ]]; then
-            mold -run cargo build -p scryer --release --locked --target ${{ matrix.target }}
-          else
-            cargo build -p scryer --release --locked --target ${{ matrix.target }}
-          fi
+        run: mold -run cargo build -p scryer --release --locked --target aarch64-unknown-linux-musl
       - name: Package tarball
-        run: |
-          mkdir -p dist/package
-          cp target/${{ matrix.target }}/release/scryer dist/package/scryer
-          tar -czf scryer-${{ matrix.platform }}.tar.gz -C dist/package .
+        run: tar -czf scryer-linux-arm64.tar.gz -C target/aarch64-unknown-linux-musl/release scryer
       - name: Upload release package
         uses: actions/upload-artifact@v7
         with:
-          name: scryer-${{ matrix.platform }}-${{ github.run_id }}
-          path: scryer-${{ matrix.platform }}.tar.gz
+          name: scryer-linux-arm64-${{ github.run_id }}
+          path: scryer-linux-arm64.tar.gz
           if-no-files-found: error
           retention-days: 14
+
+  rust-check:
+    name: rust-check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    needs: [web]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.94"
+          components: clippy
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y musl-tools nasm
+      - name: Add musl target
+        run: rustup target add x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: true
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: Download embedded web artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: scryer-web-out-${{ github.run_id }}
+          path: scryer-web-out
+      - name: Run clippy
+        env:
+          SCRYER_EMBED_UI_DIR: ${{ github.workspace }}/scryer-web-out
+          SCRYER_SMG_REGISTRATION_SECRET: ${{ secrets.SMG_REGISTRATION_SECRET }}
+          SCRYER_SMG_GRAPHQL_URL: https://smg.scryer.media/graphql
+        run: cargo clippy --target x86_64-unknown-linux-musl --workspace -- -D warnings
+      - name: Run workspace tests
+        env:
+          SCRYER_EMBED_UI_DIR: ${{ github.workspace }}/scryer-web-out
+          SCRYER_SMG_REGISTRATION_SECRET: ${{ secrets.SMG_REGISTRATION_SECRET }}
+          SCRYER_SMG_GRAPHQL_URL: https://smg.scryer.media/graphql
+        run: cargo nextest run --target x86_64-unknown-linux-musl --workspace --locked
 
   docker-publish:
     name: docker-publish
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    needs: [rust-package]
+    needs: [rust-build, rust-build-arm, rust-check]
     permissions:
       contents: read
       packages: write
@@ -248,7 +226,7 @@ jobs:
     name: publish-release
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    needs: [rust-package, docker-publish]
+    needs: [rust-build, rust-build-arm, rust-check]
     permissions:
       contents: write
     if: ${{ github.ref_type == 'tag' && startsWith(github.ref_name, 'scryer-v') }}

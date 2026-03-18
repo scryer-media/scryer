@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -49,6 +49,12 @@ pub struct ExternalId {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaggedAlias {
+    pub name: String,
+    pub language: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Title {
     pub id: String,
     pub name: String,
@@ -76,6 +82,7 @@ pub struct Title {
     pub studio: Option<String>,
     pub country: Option<String>,
     pub aliases: Vec<String>,
+    pub tagged_aliases: Vec<TaggedAlias>,
     pub metadata_language: Option<String>,
     pub metadata_fetched_at: Option<DateTime<Utc>>,
     pub min_availability: Option<String>,
@@ -115,6 +122,8 @@ pub struct InterstitialMovieMetadata {
     pub movie_tmdb_id: Option<String>,
     #[serde(default)]
     pub movie_mal_id: Option<String>,
+    #[serde(default)]
+    pub movie_anidb_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -766,6 +775,43 @@ fn default_true() -> bool {
 pub struct IndexerProviderCapabilities {
     #[serde(default = "default_true")]
     pub rss: bool,
+
+    /// Which search facets this indexer supports, and which well-known IDs
+    /// it can search on for each facet. Values must be from the core vocabulary:
+    /// `"imdb_id"`, `"tvdb_id"`, `"anidb_id"` — matching the field names on
+    /// `PluginSearchRequest`. The plugin maps these to its own query format
+    /// internally (e.g. `anidb_id` → `aid=` for AnimeTosho).
+    ///
+    /// Examples:
+    ///   NZBGeek:    {"movie": ["imdb_id"], "series": ["tvdb_id"]}
+    ///   AnimeTosho: {"anime": ["anidb_id"], "movie": ["anidb_id"]}
+    ///   RSS:        {} (empty — feed-only, no structured search)
+    #[serde(default)]
+    pub supported_ids: HashMap<String, Vec<String>>,
+
+    /// Does this indexer index all title aliases internally?
+    /// When true, the search orchestrator does NOT send alias title variants.
+    #[serde(default)]
+    pub deduplicates_aliases: bool,
+
+    /// Query param name for season filtering, if supported.
+    /// e.g. Some("season") → appends &season=1
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub season_param: Option<String>,
+
+    /// Query param name for episode filtering, if supported.
+    /// e.g. Some("ep") → appends &ep=5
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub episode_param: Option<String>,
+
+    /// Query param name for freetext search, if supported.
+    /// e.g. Some("q") → appends &q=Demon+Slayer+S01E01
+    /// None → indexer does not accept freetext queries (RSS-only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_param: Option<String>,
+
+    // -- Legacy boolean fields kept for backward compat during migration.
+    // -- New code should use supported_ids / query_param instead.
     #[serde(default)]
     pub search: bool,
     #[serde(default)]
@@ -774,6 +820,28 @@ pub struct IndexerProviderCapabilities {
     pub tvdb_search: bool,
     #[serde(default)]
     pub anidb_search: bool,
+}
+
+impl IndexerProviderCapabilities {
+    /// Whether this indexer supports any structured or freetext search at all.
+    pub fn supports_any_search(&self) -> bool {
+        self.query_param.is_some() || !self.supported_ids.is_empty() || self.search
+    }
+
+    /// Whether this indexer has any ID types for the given facet.
+    pub fn has_facet(&self, facet: &str) -> bool {
+        self.supported_ids
+            .get(facet)
+            .is_some_and(|ids| !ids.is_empty())
+    }
+
+    /// Get the supported ID types for a given facet.
+    pub fn id_types_for_facet(&self, facet: &str) -> &[String] {
+        self.supported_ids
+            .get(facet)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
 }
 
 /// Describes a single configuration field a plugin expects.

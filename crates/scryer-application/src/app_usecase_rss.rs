@@ -152,7 +152,6 @@ impl AppUseCase {
                 None, // no category filter
                 None,
                 None, // no routing filter
-                500,  // generous limit for RSS
                 SearchMode::Auto,
                 None,
                 None,
@@ -1068,6 +1067,7 @@ mod tests {
             studio: None,
             country: None,
             aliases: vec![],
+            tagged_aliases: vec![],
             metadata_language: None,
             metadata_fetched_at: None,
             min_availability: None,

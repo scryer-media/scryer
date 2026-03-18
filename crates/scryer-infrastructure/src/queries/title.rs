@@ -13,7 +13,7 @@ use scryer_application::TitleImageKind;
 const TITLE_COLUMNS: &str = "id, name, facet, monitored, tags, external_ids, created_by, created_at, \
     year, overview, poster_url, banner_url, background_url, sort_title, slug, imdb_id, runtime_minutes, genres, \
     content_status, language, first_aired, network, studio, country, aliases, \
-    metadata_language, metadata_fetched_at, min_availability, digital_release_date, folder_path";
+    metadata_language, metadata_fetched_at, min_availability, digital_release_date, folder_path, tagged_aliases_json";
 
 fn parse_facet(raw: &str) -> MediaFacet {
     match raw.to_lowercase().as_str() {
@@ -214,6 +214,12 @@ fn row_to_title(row: &sqlx::sqlite::SqliteRow) -> AppResult<Title> {
         studio,
         country,
         aliases,
+        tagged_aliases: {
+            let raw: Option<String> = row.try_get("tagged_aliases_json").unwrap_or(None);
+            raw.as_deref()
+                .and_then(|s| serde_json::from_str(s).ok())
+                .unwrap_or_default()
+        },
         metadata_language,
         metadata_fetched_at,
         min_availability,
@@ -236,7 +242,7 @@ pub(crate) async fn list_collections_for_title_query(
                 interstitial_digital_release_date, interstitial_association_confidence,
                 interstitial_continuity_status, interstitial_movie_form, interstitial_confidence,
                 interstitial_signal_summary, interstitial_placement, interstitial_movie_tmdb_id,
-                interstitial_movie_mal_id, interstitial_season_episode,
+                interstitial_movie_mal_id, interstitial_movie_anidb_id, interstitial_season_episode,
                 special_movies_json, monitored, created_at
          FROM collections WHERE title_id = ? ORDER BY collection_index ASC, id ASC",
     )
@@ -358,7 +364,7 @@ pub(crate) async fn get_collection_by_id_query(
                 interstitial_digital_release_date, interstitial_association_confidence,
                 interstitial_continuity_status, interstitial_movie_form, interstitial_confidence,
                 interstitial_signal_summary, interstitial_placement, interstitial_movie_tmdb_id,
-                interstitial_movie_mal_id, interstitial_season_episode,
+                interstitial_movie_mal_id, interstitial_movie_anidb_id, interstitial_season_episode,
                 special_movies_json, monitored, created_at
          FROM collections WHERE id = ?",
     )
@@ -388,8 +394,8 @@ pub(crate) async fn create_collection_query(
           interstitial_association_confidence, interstitial_continuity_status,
           interstitial_movie_form, interstitial_confidence, interstitial_signal_summary,
           interstitial_placement, interstitial_movie_tmdb_id, interstitial_movie_mal_id,
-          interstitial_season_episode, special_movies_json, monitored, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          interstitial_movie_anidb_id, interstitial_season_episode, special_movies_json, monitored, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&collection.id)
     .bind(&collection.title_id)
@@ -531,6 +537,12 @@ pub(crate) async fn create_collection_query(
             .interstitial_movie
             .as_ref()
             .and_then(|movie| movie.movie_mal_id.clone()),
+    )
+    .bind(
+        collection
+            .interstitial_movie
+            .as_ref()
+            .and_then(|movie| movie.movie_anidb_id.clone()),
     )
     .bind(&collection.interstitial_season_episode)
     .bind(serde_json::to_string(&collection.specials_movies).unwrap_or_else(|_| "[]".to_string()))
@@ -1079,6 +1091,7 @@ fn row_to_interstitial_movie(
         placement: row.try_get("interstitial_placement").unwrap_or(None),
         movie_tmdb_id: row.try_get("interstitial_movie_tmdb_id").unwrap_or(None),
         movie_mal_id: row.try_get("interstitial_movie_mal_id").unwrap_or(None),
+        movie_anidb_id: row.try_get("interstitial_movie_anidb_id").unwrap_or(None),
     }))
 }
 
@@ -1191,9 +1204,9 @@ pub(crate) async fn create_title_query(pool: &SqlitePool, title: &Title) -> AppR
         "INSERT INTO titles (
             id, name, facet, monitored, tags, external_ids, created_by, created_at,
             year, overview, poster_url, sort_title, slug, runtime_minutes,
-            genres, content_status, language, min_availability, aliases, folder_path
+            genres, content_status, language, min_availability, aliases, folder_path, tagged_aliases_json
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&title.id)
     .bind(&title.name)
@@ -1215,6 +1228,7 @@ pub(crate) async fn create_title_query(pool: &SqlitePool, title: &Title) -> AppR
     .bind(&title.min_availability)
     .bind(&aliases_json)
     .bind(&title.folder_path)
+    .bind(serde_json::to_string(&title.tagged_aliases).unwrap_or_else(|_| "[]".to_string()))
     .execute(pool)
     .await
     .map_err(|err| AppError::Repository(err.to_string()))?;
@@ -1344,6 +1358,7 @@ pub(crate) async fn update_title_hydrated_metadata_query(
             studio = COALESCE(NULLIF(?, ''), studio),
             country = COALESCE(NULLIF(?, ''), country),
             aliases = CASE WHEN NULLIF(?, '[]') IS NOT NULL THEN ? ELSE aliases END,
+            tagged_aliases_json = CASE WHEN NULLIF(?, '[]') IS NOT NULL THEN ? ELSE tagged_aliases_json END,
             metadata_language = COALESCE(NULLIF(?, ''), metadata_language),
             metadata_fetched_at = COALESCE(NULLIF(?, ''), metadata_fetched_at),
             digital_release_date = COALESCE(NULLIF(?, ''), digital_release_date)
@@ -1368,6 +1383,8 @@ pub(crate) async fn update_title_hydrated_metadata_query(
     .bind(&metadata.country)
     .bind(&aliases_json)
     .bind(&aliases_json)
+    .bind(serde_json::to_string(&metadata.tagged_aliases).unwrap_or_else(|_| "[]".to_string()))
+    .bind(serde_json::to_string(&metadata.tagged_aliases).unwrap_or_else(|_| "[]".to_string()))
     .bind(&metadata.metadata_language)
     .bind(&metadata.metadata_fetched_at)
     .bind(&metadata.digital_release_date)

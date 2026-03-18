@@ -25,6 +25,7 @@ pub struct TitleMetadataUpdate {
     pub studio: Option<String>,
     pub country: Option<String>,
     pub aliases: Vec<String>,
+    pub tagged_aliases: Vec<scryer_domain::TaggedAlias>,
     pub metadata_language: Option<String>,
     pub metadata_fetched_at: Option<String>,
     pub digital_release_date: Option<String>,

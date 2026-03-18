@@ -335,6 +335,10 @@ pub struct PluginSearchRequest {
     pub category: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub categories: Vec<String>,
+    /// Maximum results the plugin should return. The plugin owns pagination
+    /// internally — this is just an upper bound hint so the plugin can stop
+    /// early. The host always sends 1000.
+    #[serde(default)]
     pub limit: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub season: Option<u32>,
@@ -482,7 +486,7 @@ mod tests {
             anidb_id: None,
             category: Some("movie".to_string()),
             categories: vec!["2000".to_string()],
-            limit: 50,
+            limit: 1000,
             season: None,
             episode: None,
         };
