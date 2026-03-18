@@ -930,7 +930,7 @@ const SERIES_FIELD_SELECTION: &str = "\
     episodes { tvdb_id episode_number season_number name aired runtime_minutes \
                is_filler is_recap overview absolute_number } \
     anime_mappings { mal_id anilist_id anidb_id kitsu_id thetvdb_id themoviedb_id alt_tvdb_id thetvdb_season score \
-                     anime_media_type global_media_type status \
+                     anime_media_type global_media_type status mapping_type \
                      episode_mappings { tvdb_season episode_start episode_end } } \
     anime_movies { movie_tvdb_id movie_tmdb_id movie_imdb_id movie_mal_id movie_anidb_id name slug year \
                    content_status overview poster_url language runtime_minutes sort_title imdb_id \
