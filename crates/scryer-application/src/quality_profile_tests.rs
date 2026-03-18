@@ -354,10 +354,10 @@ fn atmos_preference_bonus() {
 }
 
 #[test]
-fn dual_audio_baseline_bonus() {
+fn dual_audio_no_baseline_bonus() {
     // prefer_dual_audio no longer triggers built-in scoring — that's now
-    // handled by managed convenience rules. Dual audio always gets a
-    // neutral baseline bonus regardless of the profile setting.
+    // handled by managed convenience rules. The quality profile scorer
+    // should NOT emit a dual_audio scoring entry.
     let profile = QualityProfile::parse(
         r#"{"id":"t","name":"T","criteria":{"prefer_dual_audio":true,"allow_unknown_quality":true,"allow_upgrades":true}}"#,
     ).unwrap();
@@ -365,9 +365,10 @@ fn dual_audio_baseline_bonus() {
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.DUAL.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
     assert!(
-        d.scoring_log
+        !d.scoring_log
             .iter()
-            .any(|e| e.code == "dual_audio" && e.delta == 40)
+            .any(|e| e.code == "dual_audio"),
+        "dual_audio scoring should not appear — handled by convenience rules"
     );
 }
 

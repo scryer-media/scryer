@@ -702,8 +702,15 @@ impl AppUseCase {
         }
 
         // Build extra external IDs from the primary anime mapping only.
+        // Prefer non-special (R/regular) mappings over specials (S) to avoid
+        // OVA metadata clobbering the main series (e.g. Bleach anilist 834 vs 269).
         let mut metadata_update = result.metadata_update;
-        if let Some(mapping) = result.anime_mappings.first() {
+        if let Some(mapping) = result
+            .anime_mappings
+            .iter()
+            .find(|m| m.mapping_type != "S")
+            .or(result.anime_mappings.first())
+        {
             if let Some(mal_id) = mapping.mal_id {
                 metadata_update.extra_external_ids.push(ExternalId {
                     source: "mal".to_string(),
@@ -731,7 +738,12 @@ impl AppUseCase {
         }
 
         // Store anime-specific metadata as tags on the title
-        if let Some(primary) = result.anime_mappings.first() {
+        if let Some(primary) = result
+            .anime_mappings
+            .iter()
+            .find(|m| m.mapping_type != "S")
+            .or(result.anime_mappings.first())
+        {
             if let Some(score) = primary.score {
                 metadata_update
                     .extra_tags

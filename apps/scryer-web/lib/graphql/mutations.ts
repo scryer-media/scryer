@@ -342,6 +342,10 @@ export const triggerTitleWantedSearchMutation = `mutation TriggerTitleWantedSear
   triggerTitleWantedSearch(input: $input)
 }`;
 
+export const triggerSeasonWantedSearchMutation = `mutation TriggerSeasonWantedSearch($input: SeasonSearchInput!) {
+  triggerSeasonWantedSearch(input: $input)
+}`;
+
 export const pauseWantedItemMutation = `mutation PauseWantedItem($input: WantedItemIdInput!) {
   pauseWantedItem(input: $input)
 }`;

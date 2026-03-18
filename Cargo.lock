@@ -4159,6 +4159,7 @@ dependencies = [
  "ring",
  "scryer-application",
  "scryer-domain",
+ "scryer-release-parser",
  "scryer-rules",
  "serde",
  "serde_json",

@@ -480,6 +480,7 @@ impl AppUseCase {
             .iter()
             .map(|rs| scryer_rules::UserPolicy {
                 id: rs.id.clone(),
+                name: rs.name.clone(),
                 rego_source: rs.rego_source.clone(),
                 applied_facets: rs
                     .applied_facets

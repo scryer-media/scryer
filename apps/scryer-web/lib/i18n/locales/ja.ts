@@ -433,7 +433,7 @@ const ja: LocaleDictionary = {
   "nzb.searchResults": "NZBGeek検索結果",
   "nzb.searchResultsFor": "{{name}}のNZB結果",
   "nzb.selectTvdbFirst": "NZBGeekを検索するにはTVDBマッチを選択してください。",
-  "nzb.noResultsYet": "NZBGeekリリースマッチはまだありません。",
+  "nzb.noResultsYet": "リリースマッチはまだありません。",
   "nzb.blockedByProfile": "プロファイルによりブロック: {{reason}}",
   "nzb.queue": "キュー",
   "nzb.blocked": "ブロック",

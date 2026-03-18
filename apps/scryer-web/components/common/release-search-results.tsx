@@ -220,15 +220,36 @@ function SearchResultRow({
             <div className="bg-background/80 px-3 py-2">
               <p className="mb-1 text-xs font-semibold text-muted-foreground">{t("nzb.scoringLog")}</p>
               <div className="space-y-0.5">
-                {decision.scoringLog.map((entry) => (
-                  <div key={entry.code} className="flex justify-between gap-4 font-mono text-xs">
-                    <span className="text-muted-foreground">{entry.code}</span>
-                    <span className={entry.delta < 0 ? "text-red-400" : "text-emerald-600 dark:text-emerald-400"}>
-                      {entry.delta > 0 ? "+" : ""}
-                      {entry.delta}
-                    </span>
-                  </div>
-                ))}
+                {decision.scoringLog.map((entry) => {
+                  const badge = entry.source?.startsWith("user:")
+                    ? "Custom Rule"
+                    : entry.source?.startsWith("system:")
+                      ? "System Rule"
+                      : null;
+                  return (
+                    <div key={entry.code} className="flex justify-between gap-4 font-mono text-xs">
+                      <span className="flex items-center gap-1.5 text-muted-foreground">
+                        {entry.code}
+                        {badge && (
+                          <>
+                            <span className="rounded bg-muted px-1 py-0.5 font-sans text-[10px] leading-none text-muted-foreground">
+                              {badge}
+                            </span>
+                            {entry.ruleSetName && (
+                              <span className="font-sans text-[10px] text-muted-foreground/60">
+                                {entry.ruleSetName}
+                              </span>
+                            )}
+                          </>
+                        )}
+                      </span>
+                      <span className={entry.delta < 0 ? "text-red-400" : "text-emerald-600 dark:text-emerald-400"}>
+                        {entry.delta > 0 ? "+" : ""}
+                        {entry.delta}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
               <div className="mt-1.5 flex justify-between border-t border-border pt-1.5 font-mono text-xs font-semibold">
                 <span className="text-muted-foreground">{t("nzb.total")}</span>

@@ -41,6 +41,8 @@ import { blacklistSubtitleMutation } from "@/lib/graphql/mutations";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 
 const imdbLogoUrl = `${import.meta.env.BASE_URL}media-sites/imdb.svg`;
+const tmdbLogoUrl = `${import.meta.env.BASE_URL}media-sites/tmdb.svg`;
+const anidbLogoUrl = `${import.meta.env.BASE_URL}media-sites/anidb.png`;
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -422,6 +424,8 @@ export function MovieOverviewView({
   }
 
   const imdbId = title.imdbId ?? title.externalIds.find((e) => e.source === "imdb")?.value;
+  const anidbId = title.externalIds.find((e) => e.source === "anidb")?.value;
+  const tmdbId = title.externalIds.find((e) => e.source === "tmdb")?.value;
 
   const posterUrl = title.posterUrl;
   const overview = title.overview;
@@ -639,8 +643,32 @@ export function MovieOverviewView({
                     <span className="text-muted-foreground">IMDb</span>
                   </a>
                 ) : null}
+                {tmdbId ? (
+                  <a
+                    href={`https://www.themoviedb.org/movie/${tmdbId}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex h-12 items-center gap-2 rounded-md border border-border bg-card/45 px-3 py-2 text-base hover:bg-muted"
+                    aria-label="Open on TMDB"
+                  >
+                    <img src={tmdbLogoUrl} alt="TMDB" className="h-8 w-8" />
+                    <span className="text-muted-foreground">TMDB</span>
+                  </a>
+                ) : null}
+                {anidbId ? (
+                  <a
+                    href={`https://anidb.net/anime/${anidbId}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex h-12 items-center gap-2 rounded-md border border-border bg-card/45 px-3 py-2 text-base hover:bg-muted"
+                    aria-label="Open on AniDB"
+                  >
+                    <img src={anidbLogoUrl} alt="AniDB" className="h-8 w-8" />
+                    <span className="text-muted-foreground">AniDB</span>
+                  </a>
+                ) : null}
                 {title.externalIds
-                  .filter((e) => e.source !== "imdb" && e.source !== "tvdb")
+                  .filter((e) => e.source !== "imdb" && e.source !== "tvdb" && e.source !== "anidb" && e.source !== "tmdb")
                   .map((e) => (
                     <div key={e.source}>
                       <span className="text-muted-foreground capitalize">{e.source} </span>

@@ -56,6 +56,8 @@ impl IndexerClient for WasmIndexerClient {
             AppError::Repository(format!("failed to serialize plugin request: {e}"))
         })?;
 
+        tracing::debug!(plugin = %self.descriptor.name, %input, "plugin search request");
+
         let plugin_name = self.descriptor.name.clone();
         let indexer_name = self.indexer_name.clone();
 

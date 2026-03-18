@@ -4,7 +4,7 @@ import {
   activitySubscriptionQuery,
   adminSettingsQuery,
   mediaRenamePreviewQuery,
-  searchQuery,
+  searchForTitleQuery,
   titleMediaFilesQuery,
   titleOverviewInitQuery,
   subtitleDownloadsQuery,
@@ -313,16 +313,6 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
     }
   }, [loading, titleId, titleLookupAttempted, titleLookupFailed, title, onTitleNotFound]);
 
-  const tvdbId = React.useMemo(
-    () => title?.externalIds.find((e) => e.source === "tvdb")?.value ?? null,
-    [title],
-  );
-
-  const imdbId = React.useMemo(
-    () => title?.externalIds.find((e) => e.source === "imdb")?.value ?? null,
-    [title],
-  );
-
   // Fetch quality profile catalog and default root folder
   React.useEffect(() => {
     let cancelled = false;
@@ -495,15 +485,11 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
     setSearching(true);
     setGlobalStatus(t("status.searchingNzb", { query: title.name, category: "" }));
     try {
-      const { data, error } = await client.query(searchQuery, {
-        query: title.name,
-        tvdbId,
-        imdbId,
-        category: "movie",
-        limit: 50,
+      const { data, error } = await client.query(searchForTitleQuery, {
+        titleId: title.id,
       }).toPromise();
       if (error) throw error;
-      const results = data.searchIndexers ?? [];
+      const results = data.searchIndexersForTitle ?? [];
       setSearchResults(results);
       setGlobalStatus(t("status.foundNzb", { count: results.length }));
     } catch (err) {
@@ -512,7 +498,7 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
     } finally {
       setSearching(false);
     }
-  }, [title, tvdbId, imdbId, client, t, setGlobalStatus]);
+  }, [title, client, t, setGlobalStatus]);
 
   const queueRelease = React.useCallback(
     async (release: Release) => {

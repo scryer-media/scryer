@@ -433,7 +433,7 @@ const ko: LocaleDictionary = {
   "nzb.searchResults": "NZBGeek 검색 결과",
   "nzb.searchResultsFor": "{{name}}에 대한 NZB 결과",
   "nzb.selectTvdbFirst": "NZBGeek을 검색하려면 TVDB 매치를 선택하세요.",
-  "nzb.noResultsYet": "아직 NZBGeek 릴리스 매치가 없습니다.",
+  "nzb.noResultsYet": "아직 릴리스 매치가 없습니다.",
   "nzb.blockedByProfile": "프로필에 의해 차단됨: {{reason}}",
   "nzb.queue": "대기열",
   "nzb.blocked": "차단됨",

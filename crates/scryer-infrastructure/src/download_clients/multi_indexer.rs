@@ -297,6 +297,18 @@ impl IndexerClient for MultiIndexerSearchClient {
         // Determine the search facet from available IDs and category hints
         let facet = infer_facet(&anidb_id, &tvdb_id, &imdb_id, &category);
 
+        tracing::debug!(
+            %facet,
+            ?anidb_id,
+            ?tvdb_id,
+            ?imdb_id,
+            ?category,
+            ?season,
+            ?episode,
+            %query,
+            "search context"
+        );
+
         // Build the well-known ID map for strategy dispatch
         let mut available_ids: HashMap<String, String> = HashMap::new();
         if let Some(ref id) = imdb_id {
@@ -472,21 +484,13 @@ impl IndexerClient for MultiIndexerSearchClient {
                 .and_then(|s| s.api_max)
                 .is_some_and(|max| max > 0);
 
-            let mut strategies: Vec<SearchStrategy> = if mode == SearchMode::Interactive {
-                build_strategies(&query, facet, &available_ids, &caps, season, episode, false)
-            } else {
-                vec![SearchStrategy {
-                    query: query.clone(),
-                    imdb_id: imdb_id.clone(),
-                    tvdb_id: tvdb_id.clone(),
-                    anidb_id: anidb_id.clone(),
-                    label: "auto".into(),
-                }]
-            };
+            let mut strategies: Vec<SearchStrategy> =
+                build_strategies(&query, facet, &available_ids, &caps, season, episode, false);
 
-            // If the indexer has API call limits, skip freetext strategies when
-            // ID-based strategies are available (conserves quota).
-            if has_api_limit && strategies.len() > 1 {
+            // Skip freetext strategies when ID-based strategies are available and
+            // the indexer has API limits or deduplicates aliases (freetext without
+            // the constraining ID returns broad, unrelated results).
+            if (has_api_limit || caps.deduplicates_aliases) && strategies.len() > 1 {
                 let has_id_strategy = strategies
                     .iter()
                     .any(|s| s.label != "freetext" && s.label != "fallback");
@@ -617,6 +621,87 @@ impl IndexerClient for MultiIndexerSearchClient {
             }
         }
 
+        // Title relevance guard: parse the search query with the release parser
+        // to extract the expected title/season/episode, then drop results that
+        // don't match.  What we check depends on the search type:
+        //   Movie:       title only
+        //   Season pack: title + season
+        //   Episode:     title + season + episode
+        if !query.is_empty() {
+            let expected = scryer_release_parser::parse_release_metadata(&query);
+            if !expected.normalized_title.is_empty() {
+                let expected_title = normalize_for_comparison(&expected.normalized_title);
+                let before = all_results.len();
+                all_results.retain(|r| {
+                    let Some(ref parsed) = r.parsed_release_metadata else {
+                        return true;
+                    };
+                    if parsed.normalized_title.is_empty() {
+                        return true;
+                    }
+
+                    // Always check title
+                    let release_title = normalize_for_comparison(&parsed.normalized_title);
+                    let title_ok = expected_title.contains(&release_title)
+                        || release_title.contains(&expected_title);
+                    if !title_ok {
+                        tracing::debug!(
+                            query = %query,
+                            expected = %expected.normalized_title,
+                            got = %parsed.normalized_title,
+                            "title guard: title mismatch"
+                        );
+                        return false;
+                    }
+
+                    // Season check (season pack or episode search)
+                    if let Some(expected_s) = season {
+                        if let Some(ref res_ep) = parsed.episode {
+                            if let Some(rs) = res_ep.season {
+                                if rs != expected_s {
+                                    tracing::debug!(
+                                        query = %query,
+                                        expected_season = expected_s,
+                                        got_season = rs,
+                                        "title guard: season mismatch"
+                                    );
+                                    return false;
+                                }
+                            }
+                        }
+                    }
+
+                    // Episode check (episode search only)
+                    if let Some(expected_e) = episode {
+                        if let Some(ref res_ep) = parsed.episode {
+                            if !res_ep.episode_numbers.is_empty()
+                                && !res_ep.episode_numbers.contains(&expected_e)
+                            {
+                                tracing::debug!(
+                                    query = %query,
+                                    expected_episode = expected_e,
+                                    got_episodes = ?res_ep.episode_numbers,
+                                    "title guard: episode mismatch"
+                                );
+                                return false;
+                            }
+                        }
+                    }
+
+                    true
+                });
+                let filtered = before - all_results.len();
+                if filtered > 0 {
+                    info!(
+                        before,
+                        after = all_results.len(),
+                        filtered,
+                        "title guard: removed irrelevant results"
+                    );
+                }
+            }
+        }
+
         Ok(IndexerSearchResponse {
             results: all_results,
             api_current: None,
@@ -658,10 +743,12 @@ fn build_strategies(
     if !id_types.is_empty() && !is_alias_query {
         for id_type in id_types {
             if let Some(id_val) = ids.get(id_type.as_str()) {
-                // For anidb, pass just the episode identifier as query text
+                // For anidb, pass a season/episode filter as query text.
+                // AnimeTosho uses q= as a substring filter alongside aid=.
                 let strat_query = if id_type == "anidb_id" {
                     match (season, episode) {
                         (Some(s), Some(e)) => format!("S{s:0>2}E{e:0>2}"),
+                        (Some(s), None) => format!("S{s}"),
                         _ => String::new(),
                     }
                 } else {
@@ -754,6 +841,15 @@ fn infer_facet(
         return "series";
     }
     "series"
+}
+
+/// Normalize a title for substring comparison: lowercase, alpha-only, no spaces.
+fn normalize_for_comparison(input: &str) -> String {
+    input
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
 }
 
 #[cfg(test)]

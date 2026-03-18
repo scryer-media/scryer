@@ -622,7 +622,10 @@ impl AppUseCase {
                             decision.log_with_source(
                                 &entry.code,
                                 entry.delta,
-                                crate::quality_profile::ScoringSource::UserRule(entry.rule_set_id),
+                                crate::quality_profile::ScoringSource::UserRule {
+                                    id: entry.rule_set_id,
+                                    name: entry.rule_set_name,
+                                },
                             );
                         }
                     }

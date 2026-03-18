@@ -302,19 +302,35 @@ impl QueryRoot {
             .collect())
     }
 
-    async fn search_indexers_season(
+    async fn search_indexers_for_title(
         &self,
         ctx: &Context<'_>,
-        title: String,
-        season: String,
-        imdb_id: Option<String>,
-        tvdb_id: Option<String>,
-        category: Option<String>,
+        title_id: String,
     ) -> GqlResult<Vec<IndexerSearchResultPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let results = app
-            .search_indexers_season(&actor, title, season, imdb_id, tvdb_id, category)
+            .search_indexers_for_title(&actor, title_id)
+            .await
+            .map_err(to_gql_error)?;
+
+        Ok(results
+            .into_iter()
+            .map(crate::mappers::from_search_result)
+            .collect())
+    }
+
+    async fn search_indexers_for_episode(
+        &self,
+        ctx: &Context<'_>,
+        title_id: String,
+        season: String,
+        episode: String,
+    ) -> GqlResult<Vec<IndexerSearchResultPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let results = app
+            .search_indexers_for_episode(&actor, title_id, season, episode)
             .await
             .map_err(to_gql_error)?;
 

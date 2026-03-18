@@ -746,9 +746,23 @@ async fn process_single_wanted_item(
         if due_count >= 2 && !season_pack_attempted.contains(&season_key) {
             season_pack_attempted.insert(season_key.clone());
 
-            let mut pack_queries = vec![format!("S{:0>2}", season_num), format!("S{}", season_num)];
-            let mut seen = std::collections::HashSet::new();
-            pack_queries.retain(|q| seen.insert(q.to_ascii_lowercase()));
+            let pack_queries = vec![format!("{} S{:0>2}", title.name, season_num)];
+
+            // Calculate total season runtime for accurate size scoring.
+            // A 10-episode × 24-min season should expect ~10× a single episode's size.
+            let pack_runtime = if let Some(ref coll_id) = item.collection_id
+                && let Ok(episodes) = app
+                    .services
+                    .shows
+                    .list_episodes_for_collection(coll_id)
+                    .await
+            {
+                let ep_count = episodes.len().max(1) as i32;
+                let per_ep = title.runtime_minutes.unwrap_or(24);
+                Some(per_ep * ep_count)
+            } else {
+                title.runtime_minutes
+            };
 
             let pack_results = app
                 .search_and_score_releases(
@@ -760,7 +774,7 @@ async fn process_single_wanted_item(
                     &title.tags,
                     "background_acquisition_season_pack",
                     SearchMode::Auto,
-                    title.runtime_minutes,
+                    pack_runtime,
                     Some(season_num),
                     None, // episode=None signals a season pack search
                     None, // no absolute episode for season packs
@@ -1792,14 +1806,14 @@ fn build_search_queries(
     }
 }
 
-fn tvdb_id_from_external_ids(external_ids: &[ExternalId]) -> Option<String> {
+pub(crate) fn tvdb_id_from_external_ids(external_ids: &[ExternalId]) -> Option<String> {
     external_ids
         .iter()
         .find(|id| id.source == "tvdb")
         .map(|id| id.value.clone())
 }
 
-fn anidb_id_from_external_ids(external_ids: &[ExternalId]) -> Option<String> {
+pub(crate) fn anidb_id_from_external_ids(external_ids: &[ExternalId]) -> Option<String> {
     external_ids
         .iter()
         .find(|id| id.source == "anidb")
@@ -1874,6 +1888,45 @@ impl AppUseCase {
         } else {
             0
         };
+
+        if queued > 0 {
+            self.services.acquisition_wake.notify_one();
+        }
+
+        Ok(queued)
+    }
+
+    pub async fn trigger_season_wanted_search(
+        &self,
+        title_id: &str,
+        season_number: u32,
+    ) -> AppResult<usize> {
+        let season_str = season_number.to_string();
+        let items = self
+            .services
+            .wanted_items
+            .list_wanted_items(Some("wanted"), Some("episode"), Some(title_id), 500, 0)
+            .await?;
+
+        let now = Utc::now();
+        let mut queued = 0usize;
+        for item in &items {
+            if item.season_number.as_deref() == Some(season_str.as_str()) {
+                self.services
+                    .wanted_items
+                    .update_wanted_item_status(
+                        &item.id,
+                        "wanted",
+                        Some(&now.to_rfc3339()),
+                        item.last_search_at.as_deref(),
+                        item.search_count,
+                        item.current_score,
+                        item.grabbed_release.as_deref(),
+                    )
+                    .await?;
+                queued += 1;
+            }
+        }
 
         if queued > 0 {
             self.services.acquisition_wake.notify_one();

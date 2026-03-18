@@ -131,13 +131,18 @@ pub(crate) fn from_quality_profile_decision(
         scoring_log: decision
             .scoring_log
             .into_iter()
-            .map(|e: ScoringEntry| ScoringEntryPayload {
-                code: e.code,
-                delta: e.delta,
-                source: match e.source {
-                    ScoringSource::Builtin => "builtin".to_string(),
-                    ScoringSource::UserRule(id) => format!("user:{id}"),
-                },
+            .map(|e: ScoringEntry| {
+                let (source, rule_set_name) = match e.source {
+                    ScoringSource::Builtin => ("builtin".to_string(), None),
+                    ScoringSource::UserRule { id, name } => (format!("user:{id}"), Some(name)),
+                    ScoringSource::SystemRule { id, name } => (format!("system:{id}"), Some(name)),
+                };
+                ScoringEntryPayload {
+                    code: e.code,
+                    delta: e.delta,
+                    source,
+                    rule_set_name,
+                }
             })
             .collect(),
     }
@@ -665,6 +670,7 @@ pub(crate) fn from_policy(policy: PolicyOutput) -> PolicyOutputPayload {
                 code: e.code,
                 delta: e.delta,
                 source: e.source,
+                rule_set_name: None,
             })
             .collect(),
     }

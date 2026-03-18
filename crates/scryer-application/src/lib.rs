@@ -160,6 +160,22 @@ pub enum AppError {
     Repository(String),
 }
 
+/// Lower the calling thread's scheduling priority via `nice(10)`.
+///
+/// Call this at the top of CPU-heavy `spawn_blocking` closures (AVIF encoding,
+/// alass alignment, audio decoding) so they don't starve the async runtime.
+/// Safe to call on any Unix platform; silently ignored on Windows.
+#[cfg(unix)]
+pub fn nice_thread() {
+    // SAFETY: nice() is always safe to call; worst case it returns -1 with EPERM
+    // which we intentionally ignore — the work still proceeds at normal priority.
+    unsafe { libc::nice(10); }
+}
+
+#[cfg(not(unix))]
+pub fn nice_thread() {}
+
+
 #[derive(Clone)]
 pub struct AppServices {
     pub titles: Arc<dyn TitleRepository>,
@@ -3395,6 +3411,7 @@ mod tests {
             anime_media_type: "TV".into(),
             global_media_type: "series".into(),
             status: "finished".into(),
+            mapping_type: String::new(),
             episode_mappings: vec![AnimeEpisodeMapping {
                 tvdb_season: 0,
                 episode_start: 1,
@@ -3541,6 +3558,7 @@ mod tests {
             anime_media_type: "TV".into(),
             global_media_type: "series".into(),
             status: "finished".into(),
+            mapping_type: String::new(),
             episode_mappings: vec![AnimeEpisodeMapping {
                 tvdb_season: 0,
                 episode_start: 1,

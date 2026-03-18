@@ -348,6 +348,7 @@ pub struct ScoringEntryPayload {
     pub code: String,
     pub delta: i32,
     pub source: String,
+    pub rule_set_name: Option<String>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -992,6 +993,12 @@ pub struct WantedItemIdInput {
 #[derive(InputObject)]
 pub struct TitleIdInput {
     pub title_id: String,
+}
+
+#[derive(InputObject)]
+pub struct SeasonSearchInput {
+    pub title_id: String,
+    pub season_number: i32,
 }
 
 // ── Rule Sets ──────────────────────────────────────────────────────────────

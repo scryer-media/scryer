@@ -43,6 +43,7 @@ pub async fn sync_subtitle(
 
     // alass alignment is CPU-intensive — run on the blocking pool
     let (deltas, _score) = tokio::task::spawn_blocking(move || {
+        crate::nice_thread();
         alass_core::align(
             &reference_spans,
             &subtitle_spans,
@@ -103,7 +104,10 @@ async fn extract_audio_speech_spans(video_path: &Path) -> AppResult<Vec<TimeSpan
     let path = video_path.to_path_buf();
 
     // Audio decoding is CPU-bound — run on blocking pool
-    tokio::task::spawn_blocking(move || decode_audio_to_speech_spans(&path))
+    tokio::task::spawn_blocking(move || {
+        crate::nice_thread();
+        decode_audio_to_speech_spans(&path)
+    })
         .await
         .map_err(|e| AppError::Repository(format!("audio decode task panicked: {e}")))?
 }

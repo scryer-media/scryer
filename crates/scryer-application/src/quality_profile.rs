@@ -77,11 +77,12 @@ impl QualityProfileCriteria {
 /// always sort below considered ones regardless of other bonuses.
 pub const BLOCK_SCORE: i32 = -10_000;
 
-/// Distinguishes built-in scoring entries from user-rule entries.
+/// Distinguishes built-in scoring entries from named-rule entries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScoringSource {
     Builtin,
-    UserRule(String),
+    UserRule { id: String, name: String },
+    SystemRule { id: String, name: String },
 }
 
 /// A single entry in the scoring log. Every decision point — blocking or preferential —
@@ -696,14 +697,6 @@ pub fn evaluate_against_profile(
         } else {
             d.log("atmos_preferred_missing", weights.atmos_missing_penalty);
         }
-    }
-
-    // ── Dual audio (neutral bonus when detected) ──────────────────────────────
-    // The "prefer dual audio" scoring preference is now handled by managed
-    // convenience rules, not the quality profile. This baseline bonus rewards
-    // dual audio releases regardless of user preference.
-    if release.is_dual_audio {
-        d.log("dual_audio", weights.dual_audio_present);
     }
 
     if !c.required_audio_languages.is_empty() {

@@ -5,7 +5,7 @@ import {
   adminSettingsQuery,
   buildCollectionEpisodesBatchQuery,
   searchQuery,
-  searchSeriesEpisodeQuery,
+  searchForEpisodeQuery,
   titleMediaFilesQuery,
   titleOverviewInitQuery,
   subtitleDownloadsQuery,
@@ -19,9 +19,10 @@ import {
   setEpisodeMonitoredMutation,
   setTitleMonitoredMutation,
   triggerTitleWantedSearchMutation,
+  triggerSeasonWantedSearchMutation,
   updateTitleMutation,
 } from "@/lib/graphql/mutations";
-import { downloadQueueQuery, rootFoldersQuery, searchSeasonQuery } from "@/lib/graphql/queries";
+import { downloadQueueQuery, rootFoldersQuery } from "@/lib/graphql/queries";
 import type { DownloadQueueItem } from "@/lib/types/download-queue";
 import type { AdminSetting } from "@/lib/types/admin-settings";
 import type { Release } from "@/lib/types";
@@ -559,12 +560,6 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     async (episode: CollectionEpisode) => {
       if (!title) return;
 
-      const tvdbId = title.externalIds
-        ?.find((id) => id.source.toLowerCase() === "tvdb")
-        ?.value?.trim() || null;
-      const anidbId = title.externalIds
-        ?.find((id) => id.source.toLowerCase() === "anidb")
-        ?.value?.trim() || null;
       const collection = collections.find((item) => item.id === episode.collectionId);
       const seasonNum =
         episode.seasonNumber?.trim().replace(/\D+/g, "") ||
@@ -572,26 +567,14 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         "1";
       const episodeNum = episode.episodeNumber?.trim().replace(/\D+/g, "") || "1";
 
-      const runEpisodeSearch = async (searchTvdbId: string | null) => {
-        const { data, error } = await client.query(searchSeriesEpisodeQuery, {
-          title: title.name,
-          season: seasonNum,
-          episode: episodeNum,
-          tvdbId: searchTvdbId,
-          anidbId,
-          category: title.facet,
-          limit: 25,
-        }).toPromise();
-        if (error) throw error;
-        return data;
-      };
+      const { data: payload, error } = await client.query(searchForEpisodeQuery, {
+        titleId: title.id,
+        season: seasonNum,
+        episode: episodeNum,
+      }).toPromise();
+      if (error) throw error;
 
-      let payload = await runEpisodeSearch(tvdbId);
-      if (payload.searchIndexersEpisode.length === 0 && tvdbId) {
-        payload = await runEpisodeSearch(null);
-      }
-
-      const top = payload.searchIndexersEpisode.find(
+      const top = payload.searchIndexersForEpisode.find(
         (release: Release) => release.qualityProfileDecision?.allowed ?? true,
       );
       if (!top) {
@@ -669,7 +652,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     [refreshTitleDetail, client, title, t, setGlobalStatus],
   );
 
-  const [seasonSearchResultsByCollection, setSeasonSearchResultsByCollection] = React.useState<
+  const [seasonSearchResultsByCollection] = React.useState<
     Record<string, Release[]>
   >({});
   const [seasonSearchLoadingByCollection, setSeasonSearchLoadingByCollection] = React.useState<
@@ -679,26 +662,16 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   const handleRunSeasonSearch = React.useCallback(
     async (collection: TitleCollection) => {
       if (!title) return;
-      const tvdbId =
-        title.externalIds?.find((id) => id.source.toLowerCase() === "tvdb")?.value?.trim() || null;
-      const seasonNum = collection.collectionIndex?.trim().replace(/\D+/g, "") || "";
+      const seasonNum = parseInt(collection.collectionIndex?.trim().replace(/\D+/g, "") || "0", 10);
       if (!seasonNum) return;
 
       setSeasonSearchLoadingByCollection((prev) => ({ ...prev, [collection.id]: true }));
       try {
-        const { data } = await client
-          .query(searchSeasonQuery, {
-            title: title.name,
-            season: seasonNum,
-            tvdbId,
-            category: title.facet,
-            limit: 50,
+        await client
+          .mutation(triggerSeasonWantedSearchMutation, {
+            input: { titleId: title.id, seasonNumber: seasonNum },
           })
           .toPromise();
-        setSeasonSearchResultsByCollection((prev) => ({
-          ...prev,
-          [collection.id]: data?.searchIndexersSeason ?? [],
-        }));
       } finally {
         setSeasonSearchLoadingByCollection((prev) => ({ ...prev, [collection.id]: false }));
       }

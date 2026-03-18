@@ -27,6 +27,8 @@ pub enum RulesError {
 #[derive(Debug, Clone)]
 pub struct UserPolicy {
     pub id: String,
+    /// Human-readable name shown in the scoring breakdown.
+    pub name: String,
     pub rego_source: String,
     /// Facets this rule applies to (e.g. "movie", "tv", "anime").
     /// Empty means the rule applies to all facets.
@@ -192,12 +194,14 @@ pub struct UserRuleEntry {
     pub code: String,
     pub delta: i32,
     pub rule_set_id: String,
+    pub rule_set_name: String,
 }
 
 /// A per-rule error encountered during evaluation.
 #[derive(Debug, Clone)]
 pub struct RuleEvalError {
     pub rule_set_id: String,
+    pub rule_set_name: String,
     pub message: String,
 }
 
@@ -286,8 +290,8 @@ pub fn strip_editor_source(rego_source: &str) -> String {
 #[derive(Clone)]
 pub struct UserRulesEngine {
     template: Arc<Engine>,
-    /// (rule_id, applied_facets) pairs in policy order.
-    rules: Vec<(String, Vec<String>)>,
+    /// (rule_id, rule_name, applied_facets) triples in policy order.
+    rules: Vec<(String, String, Vec<String>)>,
 }
 
 impl UserRulesEngine {
@@ -304,7 +308,7 @@ impl UserRulesEngine {
             engine
                 .add_policy(path, policy.rego_source.clone())
                 .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id)))?;
-            rules.push((policy.id.clone(), policy.applied_facets.clone()));
+            rules.push((policy.id.clone(), policy.name.clone(), policy.applied_facets.clone()));
         }
 
         Ok(Self {
@@ -350,7 +354,7 @@ impl UserRulesEngine {
 /// in the batch.
 pub struct UserRulesEvaluator {
     engine: Engine,
-    rules: Vec<(String, Vec<String>)>,
+    rules: Vec<(String, String, Vec<String>)>,
 }
 
 impl UserRulesEvaluator {
@@ -379,7 +383,7 @@ impl UserRulesEvaluator {
         let input_value = serde_json::to_value(input)?;
         self.engine.set_input(input_value.into());
 
-        for (rule_id, applied_facets) in &self.rules {
+        for (rule_id, rule_name, applied_facets) in &self.rules {
             // Skip rules that are scoped to other facets.
             if !applied_facets.is_empty() && !applied_facets.iter().any(|f| f == facet) {
                 continue;
@@ -392,7 +396,7 @@ impl UserRulesEvaluator {
                     if let Some(r) = results.result.first()
                         && let Some(expr) = r.expressions.first()
                     {
-                        Self::extract_entries(&expr.value, rule_id, &mut result.entries);
+                        Self::extract_entries(&expr.value, rule_id, rule_name, &mut result.entries);
                     }
                 }
                 Err(e) => {
@@ -403,6 +407,7 @@ impl UserRulesEvaluator {
                     );
                     result.errors.push(RuleEvalError {
                         rule_set_id: rule_id.clone(),
+                        rule_set_name: rule_name.clone(),
                         message: e.to_string(),
                     });
                 }
@@ -414,7 +419,7 @@ impl UserRulesEvaluator {
 
     /// Extract score_entry map from the Rego evaluation result.
     /// Expected shape: `{"code_name": delta_integer, ...}`
-    fn extract_entries(value: &Value, rule_id: &str, entries: &mut Vec<UserRuleEntry>) {
+    fn extract_entries(value: &Value, rule_id: &str, rule_name: &str, entries: &mut Vec<UserRuleEntry>) {
         // Value::Undefined means the rule conditions weren't met — no entries.
         if matches!(value, Value::Undefined) {
             return;
@@ -460,6 +465,7 @@ impl UserRulesEvaluator {
                 code,
                 delta,
                 rule_set_id: rule_id.to_string(),
+                rule_set_name: rule_name.to_string(),
             });
         }
     }
@@ -486,6 +492,7 @@ mod tests {
     fn single_rule_produces_entries() {
         let policy = UserPolicy {
             id: "test_rule".to_string(),
+            name: "Test Rule".to_string(),
             rego_source: r#"
                 package scryer.rules.user.test_rule
                 import rego.v1
@@ -517,6 +524,7 @@ mod tests {
     fn rule_does_not_fire_when_condition_unmet() {
         let policy = UserPolicy {
             id: "test_rule".to_string(),
+            name: "Test Rule".to_string(),
             rego_source: r#"
                 package scryer.rules.user.test_rule
                 import rego.v1
@@ -543,6 +551,7 @@ mod tests {
         let policies = vec![
             UserPolicy {
                 id: "rule_a".to_string(),
+                name: "Rule A".to_string(),
                 rego_source: r#"
                     package scryer.rules.user.rule_a
                     import rego.v1
@@ -553,6 +562,7 @@ mod tests {
             },
             UserPolicy {
                 id: "rule_b".to_string(),
+                name: "Rule B".to_string(),
                 rego_source: r#"
                     package scryer.rules.user.rule_b
                     import rego.v1
@@ -587,6 +597,7 @@ mod tests {
     fn rule_can_read_builtin_score() {
         let policy = UserPolicy {
             id: "score_aware".to_string(),
+            name: "Score Aware".to_string(),
             rego_source: r#"
                 package scryer.rules.user.score_aware
                 import rego.v1
@@ -613,6 +624,7 @@ mod tests {
     fn rule_can_use_block_score_builtin() {
         let policy = UserPolicy {
             id: "blocker".to_string(),
+            name: "Blocker".to_string(),
             rego_source: r#"
                 package scryer.rules.user.blocker
                 import rego.v1
@@ -641,6 +653,7 @@ mod tests {
     fn compilation_error_is_reported() {
         let policy = UserPolicy {
             id: "bad_rule".to_string(),
+            name: "Bad Rule".to_string(),
             rego_source: "this is not valid rego".to_string(),
             applied_facets: vec![],
         };
@@ -653,6 +666,7 @@ mod tests {
     fn evaluator_reuse_across_multiple_inputs() {
         let policy = UserPolicy {
             id: "reuse_test".to_string(),
+            name: "Reuse Test".to_string(),
             rego_source: r#"
                 package scryer.rules.user.reuse_test
                 import rego.v1
@@ -676,6 +690,7 @@ mod tests {
     fn facet_scoped_rule_skipped_for_other_facets() {
         let policy = UserPolicy {
             id: "anime_only".to_string(),
+            name: "Anime Only".to_string(),
             rego_source: r#"
                 package scryer.rules.user.anime_only
                 import rego.v1
@@ -702,6 +717,7 @@ mod tests {
     fn global_rule_applies_to_all_facets() {
         let policy = UserPolicy {
             id: "global_rule".to_string(),
+            name: "Global Rule".to_string(),
             rego_source: r#"
                 package scryer.rules.user.global_rule
                 import rego.v1
@@ -782,6 +798,7 @@ mod tests {
     fn i32_overflow_clamped() {
         let policy = UserPolicy {
             id: "big_score".to_string(),
+            name: "Big Score".to_string(),
             rego_source: r#"
                 package scryer.rules.user.big_score
                 import rego.v1
@@ -817,6 +834,7 @@ score_entry["nzbgeek_thumbs_down"] := penalty if {
 
         let policy = UserPolicy {
             id: id.to_string(),
+            name: id.to_string(),
             rego_source: rewritten,
             applied_facets: vec![],
         };
@@ -852,6 +870,7 @@ score_entry["nzbgeek_english_confirmed"] := 200 if {
 
         let policy = UserPolicy {
             id: id.to_string(),
+            name: id.to_string(),
             rego_source: rewritten,
             applied_facets: vec![],
         };
@@ -873,6 +892,7 @@ score_entry["nzbgeek_english_confirmed"] := 200 if {
     fn post_download_rule_blocks_on_num_chapters() {
         let policy = UserPolicy {
             id: "chapter_gate".to_string(),
+            name: "Chapter Gate".to_string(),
             rego_source: rewrite_package_declaration(
                 r#"
 score_entry["too_few_chapters"] := scryer.block_score() if {
@@ -900,6 +920,7 @@ score_entry["too_few_chapters"] := scryer.block_score() if {
     fn post_download_rule_is_noop_pre_download_when_file_is_null() {
         let policy = UserPolicy {
             id: "chapter_gate".to_string(),
+            name: "Chapter Gate".to_string(),
             rego_source: rewrite_package_declaration(
                 r#"
 score_entry["too_few_chapters"] := scryer.block_score() if {

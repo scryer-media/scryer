@@ -111,6 +111,7 @@ pub struct AnimeMapping {
     pub anime_media_type: String,
     pub global_media_type: String,
     pub status: String,
+    pub mapping_type: String,
     pub episode_mappings: Vec<AnimeEpisodeMapping>,
 }
 

@@ -59,7 +59,8 @@ services:
       SCRYER_TITLE_IMAGE_AVIF_SPEED: "10"
       SCRYER_TITLE_IMAGE_AVIF_QUALITY: "60"
       SCRYER_SMG_REGISTRATION_SECRET: ${SCRYER_SMG_REGISTRATION_SECRET}
-      RUST_LOG: "info,scryer_infrastructure::metadata_gateway=debug"
+      RUST_LOG: "scryer_infrastructure::download_clients::multi_indexer=debug,scryer_plugins=debug,extism=debug"
+#      RUST_LOG: "info,scryer_infrastructure::metadata_gateway=debug,extism=debug"
     command: >
       sh -c '
         set -eu

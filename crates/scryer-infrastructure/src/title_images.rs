@@ -232,6 +232,7 @@ impl TitleImageProcessor for SqliteTitleImageProcessor {
         let this = self.clone();
         let source_url = source_url.to_string();
         tokio::task::spawn_blocking(move || {
+            scryer_application::nice_thread();
             this.process_bytes(kind, &source_url, &bytes, etag, last_modified)
         })
         .await

@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 scryer-domain = { path = "../scryer-domain" }
 scryer-application = { path = "../scryer-application" }
+scryer-release-parser = { path = "../scryer-release-parser" }
 async-trait = { workspace = true }
 base64 = "0.22"
 serde_json = { workspace = true }

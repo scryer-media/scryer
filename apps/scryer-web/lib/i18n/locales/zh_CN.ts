@@ -433,7 +433,7 @@ const zh_CN: LocaleDictionary = {
   "nzb.searchResults": "NZBGeek 搜索结果",
   "nzb.searchResultsFor": "{{name}} 的 NZB 结果",
   "nzb.selectTvdbFirst": "选择一个 TVDB 匹配以搜索 NZBGeek。",
-  "nzb.noResultsYet": "暂无 NZBGeek 版本匹配。",
+  "nzb.noResultsYet": "暂无版本匹配。",
   "nzb.blockedByProfile": "被配置阻止：{{reason}}",
   "nzb.queue": "队列",
   "nzb.blocked": "已阻止",

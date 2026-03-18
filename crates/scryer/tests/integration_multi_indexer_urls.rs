@@ -9,8 +9,8 @@ mod common;
 use std::sync::Arc;
 
 use scryer_application::{
-    AppServices, AppUseCase, FacetRegistry, IndexerPluginProvider, JwtAuthConfig,
-    MovieFacetHandler, SeriesFacetHandler,
+    AppServices, AppUseCase, FacetRegistry, IndexerClient, IndexerPluginProvider, JwtAuthConfig,
+    MovieFacetHandler, SearchMode, SeriesFacetHandler,
 };
 use scryer_domain::{Entitlement, User};
 use scryer_infrastructure::{
@@ -379,6 +379,44 @@ async fn multi_indexer_url_trace_movie_spirited_away() {
         .expect("search should succeed");
 
     println!("\n=== Spirited Away (movie, imdb=tt0245429, anidb=112) ===");
+    print_summary(
+        &captured_urls(&tosho).await,
+        &captured_urls(&nzbgeek).await,
+        &captured_urls(&torznab).await,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Demon Slayer Season 2 pack — background acquisition path
+// (season=Some, episode=None, query=title name only)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn multi_indexer_url_trace_season_pack() {
+    let (app, _user, tosho, nzbgeek, torznab) = setup().await;
+
+    // Call the indexer client directly as the background acquisition loop would.
+    // season=Some(2), episode=None signals a season pack search.
+    // The acquisition loop builds "Title S02" as the query.
+    let _results = app
+        .services
+        .indexer_client
+        .search(
+            "Demon Slayer S02".into(),      // title + S02 for freetext matching
+            None,                           // imdb_id
+            Some("348545".into()),          // tvdb_id
+            Some("1535".into()),            // anidb_id
+            Some("anime".into()),           // category
+            None,                           // newznab_categories
+            None,                           // indexer_routing
+            SearchMode::Auto,
+            Some(2),                        // season
+            None,                           // episode=None → season pack
+        )
+        .await
+        .expect("search should succeed");
+
+    println!("\n=== Demon Slayer Season 2 Pack (anime, tvdb=348545, anidb=1535, season=2, ep=None) ===");
     print_summary(
         &captured_urls(&tosho).await,
         &captured_urls(&nzbgeek).await,

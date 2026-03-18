@@ -440,7 +440,7 @@ const en: LocaleDictionary = {
   "nzb.searchResults": "NZBGeek Search Results",
   "nzb.searchResultsFor": "NZB results for {{name}}",
   "nzb.selectTvdbFirst": "Select a TVDB match to search NZBGeek.",
-  "nzb.noResultsYet": "No NZBGeek release matches yet.",
+  "nzb.noResultsYet": "No release matches yet.",
   "nzb.blockedByProfile": "Blocked by profile: {{reason}}",
   "nzb.queue": "Queue",
   "nzb.blocked": "Blocked",

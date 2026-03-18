@@ -404,35 +404,58 @@ else
     ok "No old artifacts to prune"
 fi
 
-# Prune old GHCR container images (keep versions matching kept releases)
+# Prune old GHCR container images. Each release produces a tagged manifest
+# plus untagged platform layers. Find the cutoff timestamp from the Nth
+# most recent tagged image, then delete everything older.
+GHCR_ORG="scryer-media"
 GHCR_PACKAGE="scryer"
-IMAGES_DELETED=0
-while IFS=$'\t' read -r VID VTAGS; do
-    KEEP=false
-    for kept_tag in "${KEEP_TAGS[@]}"; do
-        # Scryer tags are "scryer-v0.8.3" → GHCR version tag is "0.8.3"
-        STRIPPED="${kept_tag#scryer-v}"
-        if echo "$VTAGS" | grep -qF "$STRIPPED"; then
-            KEEP=true
-            break
-        fi
-        if echo "$VTAGS" | grep -qw "latest"; then
-            KEEP=true
-            break
-        fi
-    done
-    if ! $KEEP; then
-        gh api -X DELETE "/orgs/scryer-media/packages/container/$GHCR_PACKAGE/versions/$VID" 2>/dev/null || true
-        IMAGES_DELETED=$((IMAGES_DELETED + 1))
-    fi
-done < <(gh api "/orgs/scryer-media/packages/container/$GHCR_PACKAGE/versions?per_page=100" --paginate --jq '
-    .[] | [(.id | tostring), (.metadata.container.tags | join(","))] | @tsv
-' 2>/dev/null || true)
+if gh api "orgs/$GHCR_ORG/packages/container/$GHCR_PACKAGE" &>/dev/null; then
+    # Get the created_at of the Nth most recent tagged image, then subtract
+    # 60 seconds to ensure we keep all layers from that CI run.
+    RAW_CUTOFF="$(
+        gh api "orgs/$GHCR_ORG/packages/container/$GHCR_PACKAGE/versions" \
+            --paginate \
+            -q "[.[] | select(.metadata.container.tags | length > 0)]
+                | sort_by(.created_at) | reverse
+                | .[$((KEEP_RELEASES - 1))].created_at // empty"
+    )"
 
-if [[ $IMAGES_DELETED -gt 0 ]]; then
-    ok "Deleted $IMAGES_DELETED old container image(s) from ghcr.io/scryer-media/$GHCR_PACKAGE"
+    if [[ -n "$RAW_CUTOFF" ]]; then
+        # Subtract 60s from the cutoff to keep all layers from the same CI run.
+        if date --version &>/dev/null 2>&1; then
+            CUTOFF_TS="$(date -u -d "$RAW_CUTOFF - 60 seconds" +%Y-%m-%dT%H:%M:%SZ)"
+        else
+            EPOCH="$(date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$RAW_CUTOFF" +%s)"
+            CUTOFF_TS="$(date -j -u -f "%s" "$((EPOCH - 60))" +%Y-%m-%dT%H:%M:%SZ)"
+        fi
+    fi
+    CUTOFF_TS="${CUTOFF_TS:-}"
+
+    if [[ -n "$CUTOFF_TS" ]]; then
+        OLD_IDS="$(
+            gh api "orgs/$GHCR_ORG/packages/container/$GHCR_PACKAGE/versions" \
+                --paginate \
+                -q ".[] | select(.created_at < \"$CUTOFF_TS\") | .id"
+        )"
+
+        IMAGES_DELETED=0
+        while IFS= read -r vid; do
+            [[ -z "$vid" ]] && continue
+            gh api --method DELETE \
+                "orgs/$GHCR_ORG/packages/container/$GHCR_PACKAGE/versions/$vid" 2>/dev/null || true
+            IMAGES_DELETED=$((IMAGES_DELETED + 1))
+        done <<< "$OLD_IDS"
+
+        if [[ $IMAGES_DELETED -gt 0 ]]; then
+            ok "Deleted $IMAGES_DELETED old Docker image version(s) from ghcr.io/$GHCR_ORG/$GHCR_PACKAGE"
+        else
+            ok "No old Docker images to cull"
+        fi
+    else
+        ok "Fewer than $KEEP_RELEASES Docker releases — nothing to cull"
+    fi
 else
-    ok "No old container images to prune"
+    ok "No GHCR package found — skipping Docker cleanup"
 fi
 
 # ── Create signed tag ──────────────────────────────────────────────────────────

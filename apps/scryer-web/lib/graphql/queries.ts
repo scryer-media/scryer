@@ -314,6 +314,7 @@ export const searchQuery = `query SearchIndexers($query: String!, $imdbId: Strin
         code
         delta
         source
+        ruleSetName
       }
     }
     seeders
@@ -324,8 +325,8 @@ export const searchQuery = `query SearchIndexers($query: String!, $imdbId: Strin
   }
 }`;
 
-export const searchSeriesEpisodeQuery = `query SearchIndexersEpisode($title: String!, $season: String!, $episode: String!, $imdbId: String, $tvdbId: String, $anidbId: String, $category: String, $absoluteEpisode: Int, $limit: Int) {
-  searchIndexersEpisode(title: $title, season: $season, episode: $episode, imdbId: $imdbId, tvdbId: $tvdbId, anidbId: $anidbId, category: $category, absoluteEpisode: $absoluteEpisode, limit: $limit) {
+export const searchSeriesEpisodeQuery = `query SearchIndexersEpisode($title: String!, $season: String!, $episode: String!, $imdbId: String, $tvdbId: String, $anidbId: String, $category: String, $absoluteEpisode: Int) {
+  searchIndexersEpisode(title: $title, season: $season, episode: $episode, imdbId: $imdbId, tvdbId: $tvdbId, anidbId: $anidbId, category: $category, absoluteEpisode: $absoluteEpisode) {
     source
     title
     link
@@ -363,6 +364,7 @@ export const searchSeriesEpisodeQuery = `query SearchIndexersEpisode($title: Str
         code
         delta
         source
+        ruleSetName
       }
     }
     seeders
@@ -373,8 +375,8 @@ export const searchSeriesEpisodeQuery = `query SearchIndexersEpisode($title: Str
   }
 }`;
 
-export const searchSeasonQuery = `query SearchIndexersSeason($title: String!, $season: String!, $imdbId: String, $tvdbId: String, $category: String, $limit: Int) {
-  searchIndexersSeason(title: $title, season: $season, imdbId: $imdbId, tvdbId: $tvdbId, category: $category, limit: $limit) {
+export const searchForTitleQuery = `query SearchIndexersForTitle($titleId: String!) {
+  searchIndexersForTitle(titleId: $titleId) {
     source
     title
     link
@@ -412,6 +414,57 @@ export const searchSeasonQuery = `query SearchIndexersSeason($title: String!, $s
         code
         delta
         source
+        ruleSetName
+      }
+    }
+    seeders
+    peers
+    infoHash
+    freeleech
+    downloadVolumeFactor
+  }
+}`;
+
+export const searchForEpisodeQuery = `query SearchIndexersForEpisode($titleId: String!, $season: String!, $episode: String!) {
+  searchIndexersForEpisode(titleId: $titleId, season: $season, episode: $episode) {
+    source
+    title
+    link
+    downloadUrl
+    sourceKind
+    sizeBytes
+    publishedAt
+    thumbsUp
+    thumbsDown
+    parsedRelease {
+      rawTitle
+      normalizedTitle
+      releaseGroup
+      quality
+      source
+      videoCodec
+      videoEncoding
+      audio
+      isDualAudio
+      isAtmos
+      isDolbyVision
+      detectedHdr
+      parseConfidence
+      isProperUpload
+      isRemux
+      isBdDisk
+      isAiEnhanced
+    }
+    qualityProfileDecision {
+      allowed
+      blockCodes
+      releaseScore
+      preferenceScore
+      scoringLog {
+        code
+        delta
+        source
+        ruleSetName
       }
     }
     seeders

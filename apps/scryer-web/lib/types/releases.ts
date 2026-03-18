@@ -32,6 +32,6 @@ export type Release = {
     blockCodes: string[];
     releaseScore: number;
     preferenceScore: number;
-    scoringLog: { code: string; delta: number }[];
+    scoringLog: { code: string; delta: number; source: string; ruleSetName?: string | null }[];
   } | null;
 };

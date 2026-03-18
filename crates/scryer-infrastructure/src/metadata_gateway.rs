@@ -1163,6 +1163,8 @@ struct AnimeMappingItem {
     global_media_type: Option<String>,
     status: Option<String>,
     #[serde(default)]
+    mapping_type: Option<String>,
+    #[serde(default)]
     episode_mappings: Vec<AnimeEpisodeMappingItem>,
 }
 
@@ -1426,6 +1428,7 @@ impl MetadataGateway for MetadataGatewayClient {
                     anime_media_type: m.anime_media_type.unwrap_or_default(),
                     global_media_type: m.global_media_type.unwrap_or_default(),
                     status: m.status.unwrap_or_default(),
+                    mapping_type: m.mapping_type.unwrap_or_default(),
                     episode_mappings: m
                         .episode_mappings
                         .into_iter()
@@ -1609,6 +1612,7 @@ impl MetadataGateway for MetadataGatewayClient {
                                     anime_media_type: m.anime_media_type.unwrap_or_default(),
                                     global_media_type: m.global_media_type.unwrap_or_default(),
                                     status: m.status.unwrap_or_default(),
+                                    mapping_type: m.mapping_type.unwrap_or_default(),
                                     episode_mappings: m
                                         .episode_mappings
                                         .into_iter()

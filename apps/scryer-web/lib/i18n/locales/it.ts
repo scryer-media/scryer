@@ -434,7 +434,7 @@ const it: LocaleDictionary = {
   "nzb.searchResults": "Risultati ricerca NZBGeek",
   "nzb.searchResultsFor": "Risultati NZB per {{name}}",
   "nzb.selectTvdbFirst": "Seleziona una corrispondenza TVDB per cercare su NZBGeek.",
-  "nzb.noResultsYet": "Ancora nessun risultato NZBGeek.",
+  "nzb.noResultsYet": "Ancora nessun risultato.",
   "nzb.blockedByProfile": "Bloccato dal profilo: {{reason}}",
   "nzb.queue": "Accoda",
   "nzb.blocked": "Bloccato",

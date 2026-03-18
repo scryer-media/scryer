@@ -221,6 +221,7 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
                     let id = format!("plugin_{safe_provider}_{safe_name}");
                     scryer_rules::UserPolicy {
                         id,
+                        name: sp.name.clone(),
                         rego_source: sp.rego_source.clone(),
                         applied_facets: sp.applied_facets.clone(),
                     }

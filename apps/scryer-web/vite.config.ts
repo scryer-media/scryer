@@ -3,13 +3,14 @@ import react from "@vitejs/plugin-react";
 import { compression } from "vite-plugin-compression2";
 import path from "path";
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   base: "./",
   plugins: [
     react({
-      babel: {
-        plugins: ["babel-plugin-react-compiler"],
-      },
+      babel:
+        mode === "production"
+          ? { plugins: ["babel-plugin-react-compiler"] }
+          : undefined,
     }),
     compression({
       include: /\.(js|css|svg|webmanifest|json)$/i,
@@ -71,4 +72,4 @@ export default defineConfig({
     port: 3000,
     host: "0.0.0.0",
   },
-});
+}));

@@ -391,14 +391,20 @@ impl AppUseCase {
                             decision.log_with_source(
                                 &entry.code,
                                 entry.delta,
-                                ScoringSource::UserRule(entry.rule_set_id),
+                                ScoringSource::UserRule {
+                                    id: entry.rule_set_id,
+                                    name: entry.rule_set_name,
+                                },
                             );
                         }
                         for err in eval_result.errors {
                             decision.log_with_source(
                                 "user_rule_error",
                                 0,
-                                ScoringSource::UserRule(err.rule_set_id),
+                                ScoringSource::UserRule {
+                                    id: err.rule_set_id,
+                                    name: err.rule_set_name,
+                                },
                             );
                         }
                     }
@@ -770,68 +776,179 @@ impl AppUseCase {
         Ok(results)
     }
 
-    pub async fn search_indexers_season(
+    /// Interactive search for a title (movie or standalone). Resolves all
+    /// external IDs and search category from the title record so the frontend
+    /// only needs to pass the title ID.
+    pub async fn search_indexers_for_title(
         &self,
         actor: &User,
-        title: String,
-        season: String,
-        imdb_id: Option<String>,
-        tvdb_id: Option<String>,
-        category: Option<String>,
+        title_id: String,
     ) -> AppResult<Vec<IndexerSearchResult>> {
         require(actor, &Entitlement::ViewCatalog)?;
 
-        let normalized_title = title.trim();
-        let season = season.trim();
+        let title = self
+            .services
+            .titles
+            .get_by_id(&title_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
 
-        if normalized_title.is_empty() || season.is_empty() {
-            return Err(AppError::Validation("title and season are required".into()));
+        let imdb_id = normalize_imdb_id(title.imdb_id);
+        let tvdb_id = normalize_numeric_id(
+            crate::app_usecase_acquisition::tvdb_id_from_external_ids(&title.external_ids),
+        );
+        let anidb_id = normalize_numeric_id(
+            crate::app_usecase_acquisition::anidb_id_from_external_ids(&title.external_ids),
+        );
+        let category = self
+            .facet_registry
+            .get(&title.facet)
+            .map(|h| h.search_category().to_string())
+            .unwrap_or_else(|| "movie".to_string());
+
+        let query = title.name.trim().to_string();
+        if query.is_empty() && imdb_id.is_none() && tvdb_id.is_none() && anidb_id.is_none() {
+            return Err(AppError::Validation("title has no name or external IDs".into()));
         }
 
-        let normalized_imdb_id = normalize_imdb_id(imdb_id);
-        let normalized_tvdb_id = normalize_numeric_id(tvdb_id);
-        let normalized_category = category
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
+        info!(
+            actor = actor.id.as_str(),
+            title_id = title_id.as_str(),
+            query = query.as_str(),
+            category = category.as_str(),
+            "searching indexers for title"
+        );
 
-        let season_digits: String = season
-            .chars()
-            .filter(|value| value.is_ascii_digit())
-            .collect();
-        if season_digits.is_empty() {
+        let results = self
+            .search_indexer_queries(
+                actor,
+                vec![query.clone()],
+                imdb_id,
+                tvdb_id,
+                anidb_id,
+                Some(category.clone()),
+                None,
+                None,
+                None,
+            )
+            .await?;
+
+        let _ = self
+            .services
+            .record_activity_event(
+                Some(actor.id.clone()),
+                None,
+                ActivityKind::MovieFetched,
+                format!("{} searched: {} ({} results)", category, query, results.len()),
+                ActivitySeverity::Info,
+                vec![ActivityChannel::WebUi],
+            )
+            .await;
+
+        Ok(results)
+    }
+
+    /// Interactive search for a specific episode. Resolves all external IDs,
+    /// search category, and absolute episode number from the title/episode
+    /// records so the frontend only needs to pass title ID + season + episode.
+    pub async fn search_indexers_for_episode(
+        &self,
+        actor: &User,
+        title_id: String,
+        season: String,
+        episode: String,
+    ) -> AppResult<Vec<IndexerSearchResult>> {
+        require(actor, &Entitlement::ViewCatalog)?;
+
+        let title = self
+            .services
+            .titles
+            .get_by_id(&title_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+
+        let season = season.trim().to_string();
+        let episode = episode.trim().to_string();
+        if season.is_empty() || episode.is_empty() {
             return Err(AppError::Validation(
-                "season must include a numeric value".into(),
+                "season and episode are required".into(),
+            ));
+        }
+
+        let season_digits: String = season.chars().filter(|c| c.is_ascii_digit()).collect();
+        let episode_digits: String = episode.chars().filter(|c| c.is_ascii_digit()).collect();
+        if season_digits.is_empty() || episode_digits.is_empty() {
+            return Err(AppError::Validation(
+                "season and episode must include numeric values".into(),
             ));
         }
 
         let season_num = season_digits
             .parse::<usize>()
             .map_err(|_| AppError::Validation("invalid season value".into()))?;
+        let episode_num = episode_digits
+            .parse::<usize>()
+            .map_err(|_| AppError::Validation("invalid episode value".into()))?;
 
-        let queries = vec![format!("{} S{:0>2}", normalized_title, season_num)];
+        let imdb_id = normalize_imdb_id(title.imdb_id.clone());
+        let tvdb_id = normalize_numeric_id(
+            crate::app_usecase_acquisition::tvdb_id_from_external_ids(&title.external_ids),
+        );
+        let anidb_id = normalize_numeric_id(
+            crate::app_usecase_acquisition::anidb_id_from_external_ids(&title.external_ids),
+        );
+        let category = self
+            .facet_registry
+            .get(&title.facet)
+            .map(|h| h.search_category().to_string())
+            .unwrap_or_else(|| "series".to_string());
+
+        // Look up absolute episode number from the episode record
+        let absolute_episode: Option<u32> = self
+            .services
+            .shows
+            .find_episode_by_title_and_numbers(
+                &title_id,
+                &season_digits,
+                &episode_digits,
+            )
+            .await
+            .ok()
+            .flatten()
+            .and_then(|ep| {
+                ep.absolute_number
+                    .as_ref()
+                    .and_then(|n: &String| n.trim().replace(|c: char| !c.is_ascii_digit(), "").parse::<u32>().ok())
+            });
+
+        let queries = vec![format!(
+            "{} S{:0>2}E{:0>2}",
+            title.name.trim(),
+            season_num,
+            episode_num
+        )];
+
+        info!(
+            actor = actor.id.as_str(),
+            title_id = title_id.as_str(),
+            query = queries[0].as_str(),
+            category = category.as_str(),
+            "searching indexers for episode"
+        );
 
         let results = self
             .search_indexer_queries(
                 actor,
-                queries,
-                normalized_imdb_id.clone(),
-                normalized_tvdb_id.clone(),
-                None, // anidb_id — not available in season search
-                normalized_category.clone(),
+                queries.clone(),
+                imdb_id,
+                tvdb_id,
+                anidb_id,
+                Some(category.clone()),
                 Some(season_num as u32),
-                None,
-                None,
+                Some(episode_num as u32),
+                absolute_episode,
             )
             .await?;
-
-        let activity_media_label = normalized_category
-            .as_deref()
-            .map(|value| match value.trim().to_ascii_lowercase().as_str() {
-                "series" | "tv" => "series",
-                "anime" => "anime",
-                _ => "movie",
-            })
-            .unwrap_or("series");
 
         let _ = self
             .services
@@ -840,10 +957,9 @@ impl AppUseCase {
                 None,
                 ActivityKind::MovieFetched,
                 format!(
-                    "{} season pack searched: {} S{:0>2} ({} results)",
-                    activity_media_label,
-                    normalized_title,
-                    season_num,
+                    "{} searched: {} ({} results)",
+                    category,
+                    queries[0],
                     results.len()
                 ),
                 ActivitySeverity::Info,
@@ -853,6 +969,7 @@ impl AppUseCase {
 
         Ok(results)
     }
+
 }
 
 pub(crate) fn is_release_blocklisted(
