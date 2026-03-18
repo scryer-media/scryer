@@ -1,6 +1,6 @@
 [package]
 name = "scryer-rules"
-version = "0.9.5"
+version = "0.9.6"
 edition.workspace = true
 
 [dependencies]
