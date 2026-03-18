@@ -1,6 +1,6 @@
 [package]
 name = "scryer-release-parser"
-version = "0.9.6"
+version = "0.9.7"
 edition.workspace = true
 
 [dependencies]
