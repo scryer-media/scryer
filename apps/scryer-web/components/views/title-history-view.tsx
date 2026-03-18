@@ -1,14 +1,10 @@
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { TitleHistoryEvent } from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import { HistoryEventTable } from "@/components/common/history-event-table";
-import {
-  HistoryEventIcon,
-  getEventTypeLabel,
-} from "@/components/common/history-event-icon";
+import { HistoryEventIcon } from "@/components/common/history-event-icon";
 
 const filterI18nKeys: Record<string, string> = {
   grabbed: "history.grabbed",

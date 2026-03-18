@@ -372,13 +372,14 @@ impl IndexerClient for MultiIndexerSearchClient {
             let skip_no_facet = !has_facet_entry && has_declared_facets;
             let skip_no_matching_id = has_facet_entry && caps.deduplicates_aliases && {
                 let id_types = caps.id_types_for_facet(facet);
-                !id_types.iter().any(|id_type| available_ids.contains_key(id_type.as_str()))
+                !id_types
+                    .iter()
+                    .any(|id_type| available_ids.contains_key(id_type.as_str()))
             };
             if !is_rss_request && (skip_no_facet || skip_no_matching_id) {
                 info!(
                     indexer = config.name.as_str(),
-                    facet,
-                    "skipping indexer: no supported IDs for facet and no freetext"
+                    facet, "skipping indexer: no supported IDs for facet and no freetext"
                 );
                 continue;
             }
@@ -669,9 +670,21 @@ fn build_strategies(
 
                 strategies.push(SearchStrategy {
                     query: strat_query,
-                    imdb_id: if id_type == "imdb_id" { Some(id_val.clone()) } else { None },
-                    tvdb_id: if id_type == "tvdb_id" { Some(id_val.clone()) } else { None },
-                    anidb_id: if id_type == "anidb_id" { Some(id_val.clone()) } else { None },
+                    imdb_id: if id_type == "imdb_id" {
+                        Some(id_val.clone())
+                    } else {
+                        None
+                    },
+                    tvdb_id: if id_type == "tvdb_id" {
+                        Some(id_val.clone())
+                    } else {
+                        None
+                    },
+                    anidb_id: if id_type == "anidb_id" {
+                        Some(id_val.clone())
+                    } else {
+                        None
+                    },
                     label: id_type.clone(),
                 });
                 break; // one ID strategy per facet is sufficient

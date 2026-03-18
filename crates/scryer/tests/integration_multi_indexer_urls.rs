@@ -14,8 +14,7 @@ use scryer_application::{
 };
 use scryer_domain::{Entitlement, User};
 use scryer_infrastructure::{
-    FileSystemLibraryScanner, InMemoryIndexerStatsTracker, MultiIndexerSearchClient,
-    SqliteServices,
+    FileSystemLibraryScanner, InMemoryIndexerStatsTracker, MultiIndexerSearchClient, SqliteServices,
 };
 use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -56,13 +55,20 @@ async fn setup() -> (
         .expect("in-memory SQLite");
 
     // Seed JWT so AppUseCase can construct
-    db.ensure_setting_definition("security", "system", "jwt.hmac_secret", "string", "\"\"", true, None)
+    db.ensure_setting_definition(
+        "security",
+        "system",
+        "jwt.hmac_secret",
+        "string",
+        "\"\"",
+        true,
+        None,
+    )
+    .await
+    .unwrap();
+    let jwt_hmac_secret = scryer_infrastructure::jwt_keys::ensure_jwt_hmac_secret(&db, None)
         .await
         .unwrap();
-    let jwt_hmac_secret =
-        scryer_infrastructure::jwt_keys::ensure_jwt_hmac_secret(&db, None)
-            .await
-            .unwrap();
 
     // Load all three indexer plugins
     let plugin_provider: Arc<dyn IndexerPluginProvider> =
@@ -177,10 +183,18 @@ async fn setup() -> (
         Arc::new(db.clone());
 
     let mut services = AppServices::with_default_channels(
-        titles, shows, users, events, indexer_configs_repo,
-        Arc::new(indexer_client), Arc::new(nzbget),
-        download_client_configs, release_attempts, settings,
-        quality_profiles, ":memory:".to_string(),
+        titles,
+        shows,
+        users,
+        events,
+        indexer_configs_repo,
+        Arc::new(indexer_client),
+        Arc::new(nzbget),
+        download_client_configs,
+        release_attempts,
+        settings,
+        quality_profiles,
+        ":memory:".to_string(),
     );
     services.metadata_gateway = Arc::new(smg);
     services.library_scanner = Arc::new(FileSystemLibraryScanner::new());
@@ -196,8 +210,12 @@ async fn setup() -> (
 
     let mut registry = FacetRegistry::new();
     registry.register(Arc::new(MovieFacetHandler));
-    registry.register(Arc::new(SeriesFacetHandler::new(scryer_domain::MediaFacet::Tv)));
-    registry.register(Arc::new(SeriesFacetHandler::new(scryer_domain::MediaFacet::Anime)));
+    registry.register(Arc::new(SeriesFacetHandler::new(
+        scryer_domain::MediaFacet::Tv,
+    )));
+    registry.register(Arc::new(SeriesFacetHandler::new(
+        scryer_domain::MediaFacet::Anime,
+    )));
 
     let app = AppUseCase::new(
         services,
@@ -264,11 +282,11 @@ async fn multi_indexer_url_trace_anime_episode() {
             "Demon Slayer".into(),
             "02".into(),
             "03".into(),
-            None,                       // imdb_id
-            Some("348545".into()),      // tvdb_id
-            Some("1535".into()),        // anidb_id
-            Some("anime".into()),       // category
-            None,                       // absolute_episode
+            None,                  // imdb_id
+            Some("348545".into()), // tvdb_id
+            Some("1535".into()),   // anidb_id
+            Some("anime".into()),  // category
+            None,                  // absolute_episode
         )
         .await
         .expect("search should succeed");
@@ -296,8 +314,8 @@ async fn multi_indexer_url_trace_tv_episode() {
             "05".into(),
             "01".into(),
             None,
-            Some("81189".into()),       // tvdb_id
-            None,                       // anidb_id
+            Some("81189".into()), // tvdb_id
+            None,                 // anidb_id
             Some("series".into()),
             None,
         )
@@ -324,9 +342,9 @@ async fn multi_indexer_url_trace_movie() {
         .search_indexers(
             &user,
             "The Matrix".into(),
-            Some("tt0133093".into()),   // imdb_id
-            None,                       // tvdb_id
-            None,                       // anidb_id
+            Some("tt0133093".into()), // imdb_id
+            None,                     // tvdb_id
+            None,                     // anidb_id
             Some("movie".into()),
         )
         .await
@@ -352,9 +370,9 @@ async fn multi_indexer_url_trace_movie_spirited_away() {
         .search_indexers(
             &user,
             "Spirited Away".into(),
-            Some("tt0245429".into()),   // imdb_id
-            None,                       // tvdb_id
-            Some("112".into()),         // anidb_id
+            Some("tt0245429".into()), // imdb_id
+            None,                     // tvdb_id
+            Some("112".into()),       // anidb_id
             Some("movie".into()),
         )
         .await
