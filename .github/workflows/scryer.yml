@@ -391,6 +391,13 @@ jobs:
               end
             end
 
+            service do
+              run [opt_bin/"scryer", "--data-dir", var/"scryer", "serve"]
+              keep_alive true
+              log_path var/"log/scryer.log"
+              error_log_path var/"log/scryer.log"
+            end
+
             test do
               assert_match "scryer", shell_output("#{bin}/scryer --version")
             end

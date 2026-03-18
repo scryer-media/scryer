@@ -942,15 +942,22 @@ impl AppUseCase {
             {
                 // Update language-sensitive label if it changed
                 if !season.label.is_empty()
-                    && let Ok(Some(existing)) = self.services.shows.get_collection_by_id(existing_id).await
+                    && let Ok(Some(existing)) =
+                        self.services.shows.get_collection_by_id(existing_id).await
                     && existing.label.as_deref() != Some(&season.label)
                 {
                     let _ = self
                         .services
                         .shows
                         .update_collection(
-                            existing_id, None, None, Some(season.label.clone()),
-                            None, None, None, None,
+                            existing_id,
+                            None,
+                            None,
+                            Some(season.label.clone()),
+                            None,
+                            None,
+                            None,
+                            None,
                         )
                         .await;
                 }
@@ -1083,8 +1090,14 @@ impl AppUseCase {
                                 .services
                                 .shows
                                 .update_collection(
-                                    existing_id, None, None, Some(label.clone()),
-                                    None, None, None, None,
+                                    existing_id,
+                                    None,
+                                    None,
+                                    Some(label.clone()),
+                                    None,
+                                    None,
+                                    None,
+                                    None,
                                 )
                                 .await;
                         }
@@ -1300,7 +1313,11 @@ impl AppUseCase {
                 )
                 .await
             {
-                let new_title = if ep.name.is_empty() { None } else { Some(ep.name.clone()) };
+                let new_title = if ep.name.is_empty() {
+                    None
+                } else {
+                    Some(ep.name.clone())
+                };
                 let new_overview = if ep.overview.trim().is_empty() {
                     None
                 } else {
@@ -1318,7 +1335,11 @@ impl AppUseCase {
                             None,
                             None,
                             None,
-                            if title_changed { new_title.clone() } else { None },
+                            if title_changed {
+                                new_title.clone()
+                            } else {
+                                None
+                            },
                             if title_changed { new_title } else { None },
                             None,
                             None,
