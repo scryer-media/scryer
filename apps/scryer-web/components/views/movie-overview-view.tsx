@@ -336,7 +336,7 @@ export function MovieOverviewView({
   loading,
   title,
   collections,
-  events,
+  events: _events,
   searchResults,
   searching,
   renamePlan,

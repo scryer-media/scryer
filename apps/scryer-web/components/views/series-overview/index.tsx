@@ -79,7 +79,7 @@ export function SeriesOverviewView({
   hydrating,
   title,
   collections,
-  events,
+  events: _events,
   episodesByCollection,
   mediaFilesByEpisode,
   subtitleDownloads,
