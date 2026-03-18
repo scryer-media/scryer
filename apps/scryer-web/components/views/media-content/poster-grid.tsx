@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useTranslate } from "@/lib/context/translate-context";
 import { Button } from "@/components/ui/button";
-import { Loader2, Trash2, Zap } from "lucide-react";
+import { Eye, EyeOff, Loader2, Trash2, Zap } from "lucide-react";
 import type { ViewId } from "@/components/root/types";
 import type { TitleRecord } from "@/lib/types";
 import type { ParsedQualityProfile } from "@/lib/types/quality-profiles";
@@ -179,67 +179,41 @@ function PosterCard({
               )}
 
               {!isMobile ? (
-                <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/80 via-black/40 to-transparent px-2 pb-2 pt-8 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-                  <p className="line-clamp-2 text-sm font-semibold leading-tight text-white">
-                    {title.name}
-                  </p>
-                </div>
+                <>
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-0 z-10 bg-black/50 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                  />
+                  <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center px-3 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                    <p className="line-clamp-3 text-center text-sm font-semibold leading-tight text-white drop-shadow-md">
+                      {title.name}
+                    </p>
+                  </div>
+                </>
               ) : null}
 
-              {title.monitored ? (
-                <div className="absolute left-1.5 top-1.5 z-20 rounded-full bg-primary/90 px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground">
-                  {t("title.monitored")}
-                </div>
-              ) : null}
+              <div className="absolute left-1.5 top-1.5 z-20 flex h-7 w-7 items-center justify-center rounded-full bg-black/60 backdrop-blur-sm">
+                {title.monitored ? (
+                  <Eye className="h-4.5 w-4.5 text-emerald-400" />
+                ) : (
+                  <EyeOff className="h-4.5 w-4.5 text-rose-400" />
+                )}
+              </div>
 
               {qualityLabel ? (
                 <div className="absolute right-1.5 top-1.5 z-20 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">
                   {qualityLabel}
                 </div>
               ) : null}
+
+              {!isMovieView && title.contentStatus?.toLowerCase() === "ended" ? (
+                <div className="absolute bottom-1.5 right-1.5 z-20 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-zinc-300 backdrop-blur-sm">
+                  {t("title.ended")}
+                </div>
+              ) : null}
             </div>
           </button>
 
-          {!isMobile ? (
-            <>
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-0 z-10 bg-black/50 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
-              />
-              <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center gap-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-                {isMovieView ? (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    className="pointer-events-auto"
-                    aria-label={t("label.search")}
-                    onClick={() => onAutoQueue(title)}
-                    disabled={autoQueueLoading}
-                  >
-                    {autoQueueLoading ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Zap className="h-4 w-4" />
-                    )}
-                  </Button>
-                ) : null}
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  className="pointer-events-auto"
-                  aria-label={t("label.delete")}
-                  onClick={() => onDelete(title)}
-                  disabled={deleteLoading}
-                >
-                  {deleteLoading ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Trash2 className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
-            </>
-          ) : null}
         </div>
 
         {isMobile ? (

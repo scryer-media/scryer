@@ -486,6 +486,7 @@ export const titlesQuery = `query Titles($facet: String, $query: String) {
     posterUrl
     qualityTier
     sizeBytes
+    contentStatus
     externalIds {
       source
       value

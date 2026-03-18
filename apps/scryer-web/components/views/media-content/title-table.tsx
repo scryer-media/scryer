@@ -99,6 +99,20 @@ function resolveDisplayedQualityLabel(
   return resolveTitleProfileName(item, profiles, fallback) || unknownLabel;
 }
 
+function StatusBadge({ status, t }: { status?: string | null; t: (key: string) => string }) {
+  const normalized = status?.toLowerCase() ?? "";
+  if (normalized === "ended") {
+    return <span className="rounded bg-zinc-700/60 px-2 py-0.5 text-xs text-zinc-300">{t("title.ended")}</span>;
+  }
+  if (normalized === "upcoming") {
+    return <span className="rounded bg-blue-900/50 px-2 py-0.5 text-xs text-blue-300">{t("title.upcoming")}</span>;
+  }
+  if (normalized === "continuing") {
+    return <span className="rounded bg-emerald-900/50 px-2 py-0.5 text-xs text-emerald-300">{t("title.continuing")}</span>;
+  }
+  return null;
+}
+
 function TitleTableActionButton({
   label,
   tone,
@@ -281,6 +295,19 @@ export function TitleTable({
               <span className="block truncate">{item.name}</span>
             </button>
           </TableCell>
+          <TableCell className="text-center align-middle">
+            <span
+              className="inline-flex h-6 w-6 shrink-0 items-center justify-center"
+              title={`${t("title.table.monitored")}: ${item.name}`}
+              aria-label={`${t("title.table.monitored")}: ${item.name}`}
+            >
+              {item.monitored ? (
+                <Eye className="h-5 w-5 text-emerald-600 dark:text-emerald-300" />
+              ) : (
+                <EyeOff className="h-5 w-5 text-rose-600 dark:text-rose-300" />
+              )}
+            </span>
+          </TableCell>
           <TableCell className="align-middle whitespace-nowrap">
             {resolveDisplayedQualityLabel(
               item,
@@ -289,21 +316,13 @@ export function TitleTable({
               t("label.unknown"),
             )}
           </TableCell>
+          {!isMovieView ? (
+            <TableCell className="align-middle whitespace-nowrap">
+              <StatusBadge status={item.contentStatus} t={t} />
+            </TableCell>
+          ) : null}
           {isMovieView ? <TableCell className="align-middle whitespace-nowrap">{bytesToReadable(item.sizeBytes)}</TableCell> : null}
           <TableCell className="text-center align-middle">
-            <span
-              className="inline-flex h-5 w-5 shrink-0 items-center justify-center"
-              title={`${t("title.table.monitored")}: ${item.name}`}
-              aria-label={`${t("title.table.monitored")}: ${item.name}`}
-            >
-              {item.monitored ? (
-                <Eye className="h-4 w-4 text-emerald-600 dark:text-emerald-300" />
-              ) : (
-                <EyeOff className="h-4 w-4 text-rose-600 dark:text-rose-300" />
-              )}
-            </span>
-          </TableCell>
-          <TableCell className="text-right align-middle">
             <div data-ui="row-actions" className="inline-flex items-center justify-end gap-2">
               <HoverCard openDelay={3000} closeDelay={75}>
                 <HoverCardTrigger asChild>
@@ -419,12 +438,13 @@ export function TitleTable({
   const titleTableHeader = (
     <TableHeader>
       <TableRow className="sticky top-0 z-10 bg-background">
-        <TableHead className="whitespace-nowrap">{t("title.table.poster")}</TableHead>
+        <TableHead className="w-14" />
         <TableHead>{t("label.name")}</TableHead>
-        <TableHead className="whitespace-nowrap">{t("title.table.qualityTier")}</TableHead>
-        {isMovieView ? <TableHead className="whitespace-nowrap">{t("title.table.size")}</TableHead> : null}
         <TableHead className="text-center whitespace-nowrap">{t("title.table.monitored")}</TableHead>
-        <TableHead className="text-right whitespace-nowrap">{t("label.actions")}</TableHead>
+        <TableHead className="w-48 whitespace-nowrap">{t("title.table.qualityTier")}</TableHead>
+        {!isMovieView ? <TableHead className="whitespace-nowrap">{t("title.table.status")}</TableHead> : null}
+        {isMovieView ? <TableHead className="whitespace-nowrap">{t("title.table.size")}</TableHead> : null}
+        <TableHead className="text-center whitespace-nowrap">{t("label.actions")}</TableHead>
       </TableRow>
     </TableHeader>
   );
