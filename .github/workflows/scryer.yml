@@ -255,3 +255,63 @@ jobs:
             release-artifacts/scryer-checksums.txt
           fail_on_unmatched_files: true
           generate_release_notes: true
+      - name: Update Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "TAP_PUSH_TOKEN not set; skipping tap update."
+            exit 0
+          fi
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#scryer-v}"
+          X86_SHA=$(shasum -a 256 release-artifacts/scryer-linux-x86_64.tar.gz | cut -d ' ' -f1)
+          ARM_SHA=$(shasum -a 256 release-artifacts/scryer-linux-arm64.tar.gz | cut -d ' ' -f1)
+          REPO="${{ github.repository }}"
+
+          mkdir -p tap/Formula
+          cat > tap/Formula/scryer.rb << FORMULA
+          class Scryer < Formula
+            desc "Self-hosted media acquisition and management platform"
+            homepage "https://github.com/${REPO}"
+            version "${VERSION}"
+            license "MIT"
+
+            on_linux do
+              on_arm do
+                url "https://github.com/${REPO}/releases/download/scryer-v${VERSION}/scryer-linux-arm64.tar.gz"
+                sha256 "${ARM_SHA}"
+              end
+
+              on_intel do
+                url "https://github.com/${REPO}/releases/download/scryer-v${VERSION}/scryer-linux-x86_64.tar.gz"
+                sha256 "${X86_SHA}"
+              end
+            end
+
+            def install
+              bin.install "scryer"
+            end
+
+            test do
+              assert_match "scryer", shell_output("#{bin}/scryer --version")
+            end
+          end
+          FORMULA
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' tap/Formula/scryer.rb
+
+          git clone "https://${TAP_TOKEN}@github.com/scryer-media/homebrew-scryer.git" tap-repo
+          mkdir -p tap-repo/Formula
+          cp tap/Formula/scryer.rb tap-repo/Formula/scryer.rb
+          cd tap-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/scryer.rb
+          if git diff --cached --quiet; then
+            echo "Homebrew tap already up to date."
+          else
+            git commit -m "scryer ${VERSION}"
+            git push origin HEAD:main
+          fi
