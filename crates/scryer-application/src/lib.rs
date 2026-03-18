@@ -548,6 +548,7 @@ pub trait ShowRepository: Send + Sync {
         has_subtitle: Option<bool>,
         monitored: Option<bool>,
         collection_id: Option<String>,
+        overview: Option<String>,
     ) -> AppResult<Episode>;
     async fn delete_episode(&self, episode_id: &str) -> AppResult<()>;
     async fn find_episode_by_title_and_numbers(
@@ -2005,6 +2006,7 @@ mod tests {
             has_subtitle: Option<bool>,
             monitored: Option<bool>,
             collection_id: Option<String>,
+            overview: Option<String>,
         ) -> AppResult<Episode> {
             let mut episodes = self.episodes.lock().await;
             let item = episodes
@@ -2044,6 +2046,9 @@ mod tests {
             }
             if let Some(value) = collection_id {
                 item.collection_id = Some(value);
+            }
+            if let Some(value) = overview {
+                item.overview = Some(value);
             }
 
             Ok(item.clone())
@@ -4089,6 +4094,7 @@ mod tests {
                 None,
                 None,
                 Some(collection.id.clone()),
+                Some("Updated overview".into()),
             )
             .await
             .expect("update episode");
@@ -4097,6 +4103,7 @@ mod tests {
         assert_eq!(updated.episode_number, Some("E01".into()));
         assert_eq!(updated.title, Some("Pilot Updated".into()));
         assert_eq!(updated.air_date, Some("2026-01-01".into()));
+        assert_eq!(updated.overview, Some("Updated overview".into()));
         assert_eq!(updated.duration_seconds, Some(1_800));
         assert!(updated.has_multi_audio);
         assert!(!updated.has_subtitle);

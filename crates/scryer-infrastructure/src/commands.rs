@@ -128,6 +128,7 @@ pub(crate) enum DbCommand {
         has_subtitle: Option<bool>,
         monitored: Option<bool>,
         collection_id: Option<String>,
+        overview: Option<String>,
         reply: Sender<AppResult<Episode>>,
     },
     DeleteCollection {
@@ -967,6 +968,7 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     has_subtitle,
                     monitored,
                     collection_id,
+                    overview,
                     reply,
                 } => {
                     let _ = reply.send(
@@ -984,6 +986,7 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                             has_subtitle,
                             monitored,
                             collection_id,
+                            overview,
                         )
                         .await,
                     );

@@ -140,6 +140,7 @@ impl CollectionMutations {
                 input.has_subtitle,
                 input.monitored,
                 input.collection_id,
+                input.overview,
             )
             .await
             .map_err(to_gql_error)?;

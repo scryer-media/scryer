@@ -940,6 +940,20 @@ impl AppUseCase {
             if let Some(existing_id) =
                 existing_collection_map.get(&(collection_type.clone(), collection_index.clone()))
             {
+                // Update language-sensitive label if it changed
+                if !season.label.is_empty()
+                    && let Ok(Some(existing)) = self.services.shows.get_collection_by_id(existing_id).await
+                    && existing.label.as_deref() != Some(&season.label)
+                {
+                    let _ = self
+                        .services
+                        .shows
+                        .update_collection(
+                            existing_id, None, None, Some(season.label.clone()),
+                            None, None, None, None,
+                        )
+                        .await;
+                }
                 season_number_to_collection.insert(season.number, existing_id.clone());
                 continue;
             }
@@ -1059,6 +1073,22 @@ impl AppUseCase {
                     if let Some(existing_id) = existing_collection_map
                         .get(&("interstitial".to_string(), narrative_order.clone()))
                     {
+                        // Update language-sensitive label if it changed
+                        if !label.is_empty()
+                            && let Ok(Some(existing_coll)) =
+                                self.services.shows.get_collection_by_id(existing_id).await
+                            && existing_coll.label.as_deref() != Some(&label)
+                        {
+                            let _ = self
+                                .services
+                                .shows
+                                .update_collection(
+                                    existing_id, None, None, Some(label.clone()),
+                                    None, None, None, None,
+                                )
+                                .await;
+                        }
+
                         // Update interstitial_season_episode if it changed or was missing
                         let new_season_episode = anime_movie_identity_keys(movie)
                             .iter()
@@ -1259,8 +1289,8 @@ impl AppUseCase {
                 anime_media_type,
             );
 
-            // Skip episode if it already exists for this title.
-            if let Ok(Some(_)) = self
+            // If episode already exists, update language-sensitive fields instead of skipping.
+            if let Ok(Some(existing)) = self
                 .services
                 .shows
                 .find_episode_by_title_and_numbers(
@@ -1270,6 +1300,36 @@ impl AppUseCase {
                 )
                 .await
             {
+                let new_title = if ep.name.is_empty() { None } else { Some(ep.name.clone()) };
+                let new_overview = if ep.overview.trim().is_empty() {
+                    None
+                } else {
+                    Some(ep.overview.clone())
+                };
+                // Only update if the new data differs from existing
+                let title_changed = new_title.as_deref() != existing.title.as_deref();
+                let overview_changed = new_overview.as_deref() != existing.overview.as_deref();
+                if title_changed || overview_changed {
+                    let _ = self
+                        .services
+                        .shows
+                        .update_episode(
+                            &existing.id,
+                            None,
+                            None,
+                            None,
+                            if title_changed { new_title.clone() } else { None },
+                            if title_changed { new_title } else { None },
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            if overview_changed { new_overview } else { None },
+                        )
+                        .await;
+                }
                 continue;
             }
 
@@ -1770,6 +1830,7 @@ impl AppUseCase {
                 None,
                 None,
                 Some(monitored),
+                None,
                 None,
             )
             .await?;
@@ -2352,6 +2413,7 @@ impl AppUseCase {
         has_subtitle: Option<bool>,
         monitored: Option<bool>,
         collection_id: Option<String>,
+        overview: Option<String>,
     ) -> AppResult<Episode> {
         require(actor, &Entitlement::ManageTitle)?;
 
@@ -2366,6 +2428,7 @@ impl AppUseCase {
             && has_subtitle.is_none()
             && monitored.is_none()
             && collection_id.is_none()
+            && overview.is_none()
         {
             return Err(AppError::Validation(
                 "at least one episode field must be provided".into(),
@@ -2394,6 +2457,7 @@ impl AppUseCase {
                 has_subtitle,
                 monitored,
                 collection_id,
+                overview,
             )
             .await?;
 

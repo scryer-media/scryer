@@ -842,6 +842,7 @@ pub struct UpdateEpisodeInput {
     pub has_subtitle: Option<bool>,
     pub monitored: Option<bool>,
     pub collection_id: Option<String>,
+    pub overview: Option<String>,
 }
 
 #[derive(InputObject, Clone)]

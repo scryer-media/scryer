@@ -696,6 +696,7 @@ pub(crate) async fn update_episode_query(
     has_subtitle: Option<bool>,
     monitored: Option<bool>,
     collection_id: Option<String>,
+    overview: Option<String>,
 ) -> AppResult<Episode> {
     let mut assignments = Vec::new();
     if episode_type.is_some() {
@@ -730,6 +731,9 @@ pub(crate) async fn update_episode_query(
     }
     if collection_id.is_some() {
         assignments.push("collection_id = ?");
+    }
+    if overview.is_some() {
+        assignments.push("overview = ?");
     }
 
     if assignments.is_empty() {
@@ -775,6 +779,9 @@ pub(crate) async fn update_episode_query(
     }
     if let Some(collection_id) = collection_id {
         statement = statement.bind(collection_id);
+    }
+    if let Some(overview) = overview {
+        statement = statement.bind(overview);
     }
     statement = statement.bind(episode_id);
 

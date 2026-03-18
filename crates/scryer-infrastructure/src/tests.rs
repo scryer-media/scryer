@@ -834,6 +834,7 @@ async fn sqlite_show_queries_roundtrip() {
         Some(false),
         None,
         Some(collection.id.clone()),
+        Some("Updated overview".into()),
     )
     .await
     .expect("update episode");

@@ -841,6 +841,7 @@ pub mod test_nulls {
             _: Option<bool>,
             _: Option<bool>,
             _: Option<String>,
+            _: Option<String>,
         ) -> AppResult<Episode> {
             Err(AppError::Repository("not configured".into()))
         }

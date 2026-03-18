@@ -404,6 +404,7 @@ impl ShowRepository for SqliteServices {
         has_subtitle: Option<bool>,
         monitored: Option<bool>,
         collection_id: Option<String>,
+        overview: Option<String>,
     ) -> AppResult<Episode> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
@@ -420,6 +421,7 @@ impl ShowRepository for SqliteServices {
                 has_subtitle,
                 monitored,
                 collection_id,
+                overview,
                 reply: reply_tx,
             })
             .await
