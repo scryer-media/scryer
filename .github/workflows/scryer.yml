@@ -129,6 +129,78 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  rust-build-macos-arm:
+    name: rust-build-macos-arm
+    runs-on: macos-latest
+    timeout-minutes: 45
+    needs: [web]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.94"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: false
+      - name: Download embedded web artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: scryer-web-out-${{ github.run_id }}
+          path: scryer-web-out
+      - name: Build release binary (macOS arm64)
+        env:
+          SCRYER_EMBED_UI_DIR: ${{ github.workspace }}/scryer-web-out
+          SCRYER_SMG_REGISTRATION_SECRET: ${{ secrets.SMG_REGISTRATION_SECRET }}
+          SCRYER_SMG_GRAPHQL_URL: https://smg.scryer.media/graphql
+        run: cargo build -p scryer --release --locked
+      - name: Package tarball
+        run: tar -czf scryer-darwin-arm64.tar.gz -C target/release scryer
+      - name: Upload release package
+        uses: actions/upload-artifact@v7
+        with:
+          name: scryer-darwin-arm64-${{ github.run_id }}
+          path: scryer-darwin-arm64.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  rust-build-macos-intel:
+    name: rust-build-macos-intel
+    runs-on: macos-latest-large
+    timeout-minutes: 45
+    needs: [web]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.94"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: false
+      - name: Download embedded web artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: scryer-web-out-${{ github.run_id }}
+          path: scryer-web-out
+      - name: Build release binary (macOS x86_64)
+        env:
+          SCRYER_EMBED_UI_DIR: ${{ github.workspace }}/scryer-web-out
+          SCRYER_SMG_REGISTRATION_SECRET: ${{ secrets.SMG_REGISTRATION_SECRET }}
+          SCRYER_SMG_GRAPHQL_URL: https://smg.scryer.media/graphql
+        run: cargo build -p scryer --release --locked
+      - name: Package tarball
+        run: tar -czf scryer-darwin-x86_64.tar.gz -C target/release scryer
+      - name: Upload release package
+        uses: actions/upload-artifact@v7
+        with:
+          name: scryer-darwin-x86_64-${{ github.run_id }}
+          path: scryer-darwin-x86_64.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
   rust-check:
     name: rust-check
     runs-on: ubuntu-24.04
@@ -226,7 +298,7 @@ jobs:
     name: publish-release
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    needs: [rust-build, rust-build-arm, rust-check]
+    needs: [rust-build, rust-build-arm, rust-build-macos-arm, rust-build-macos-intel, rust-check]
     permissions:
       contents: write
     if: ${{ github.ref_type == 'tag' && startsWith(github.ref_name, 'scryer-v') }}
@@ -265,8 +337,10 @@ jobs:
           fi
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#scryer-v}"
-          X86_SHA=$(shasum -a 256 release-artifacts/scryer-linux-x86_64.tar.gz | cut -d ' ' -f1)
-          ARM_SHA=$(shasum -a 256 release-artifacts/scryer-linux-arm64.tar.gz | cut -d ' ' -f1)
+          LINUX_X86_SHA=$(shasum -a 256 release-artifacts/scryer-linux-x86_64.tar.gz | cut -d ' ' -f1)
+          LINUX_ARM_SHA=$(shasum -a 256 release-artifacts/scryer-linux-arm64.tar.gz | cut -d ' ' -f1)
+          DARWIN_ARM_SHA=$(shasum -a 256 release-artifacts/scryer-darwin-arm64.tar.gz | cut -d ' ' -f1)
+          DARWIN_X86_SHA=$(shasum -a 256 release-artifacts/scryer-darwin-x86_64.tar.gz | cut -d ' ' -f1)
           REPO="${{ github.repository }}"
 
           mkdir -p tap/Formula
@@ -277,20 +351,44 @@ jobs:
             version "${VERSION}"
             license "MIT"
 
+            on_macos do
+              on_arm do
+                url "https://github.com/${REPO}/releases/download/scryer-v${VERSION}/scryer-darwin-arm64.tar.gz"
+                sha256 "${DARWIN_ARM_SHA}"
+
+                def install
+                  bin.install "scryer"
+                end
+              end
+
+              on_intel do
+                url "https://github.com/${REPO}/releases/download/scryer-v${VERSION}/scryer-darwin-x86_64.tar.gz"
+                sha256 "${DARWIN_X86_SHA}"
+
+                def install
+                  bin.install "scryer"
+                end
+              end
+            end
+
             on_linux do
               on_arm do
                 url "https://github.com/${REPO}/releases/download/scryer-v${VERSION}/scryer-linux-arm64.tar.gz"
-                sha256 "${ARM_SHA}"
+                sha256 "${LINUX_ARM_SHA}"
+
+                def install
+                  bin.install "scryer"
+                end
               end
 
               on_intel do
                 url "https://github.com/${REPO}/releases/download/scryer-v${VERSION}/scryer-linux-x86_64.tar.gz"
-                sha256 "${X86_SHA}"
-              end
-            end
+                sha256 "${LINUX_X86_SHA}"
 
-            def install
-              bin.install "scryer"
+                def install
+                  bin.install "scryer"
+                end
+              end
             end
 
             test do
