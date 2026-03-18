@@ -613,13 +613,14 @@ fn size_implausible_blocks_wildly_oversized() {
 
 #[test]
 fn size_excessive_penalizes_oversized_anime() {
-    // 5 GB for a 720p anime Blu-ray episode is far outside the anime envelope.
+    // 3 GB for a 720p anime Blu-ray episode is far outside the anime envelope.
+    // (720p anime baseline = 0.6 GiB × 1.35 BLURAY = 0.81 GiB; 3/0.81 = 3.7 → excessive)
     let release = parse_release_metadata("Anime.2024.720p.BluRay.H.265");
     let w = balanced_weights();
-    let size_5gb = 5 * 1024 * 1024 * 1024_i64;
+    let size_3gb = 3 * 1024 * 1024 * 1024_i64;
 
     let mut d = QualityProfileDecision::new();
-    apply_size_scoring_for_category(&mut d, &release, Some(size_5gb), Some("anime"), None, &w);
+    apply_size_scoring_for_category(&mut d, &release, Some(size_3gb), Some("anime"), None, &w);
     assert!(d.allowed);
     assert!(
         d.scoring_log
