@@ -17,6 +17,7 @@ use crate::types::PluginDescriptor;
 
 const SUPPORTED_SDK_MAJOR: &str = "0";
 const NZBGEEK_DEFAULT_BASE_URL: &str = "https://api.nzbgeek.info";
+const DOGNZB_DEFAULT_BASE_URL: &str = "https://api.dognzb.cr";
 const SUPPORTED_PLUGIN_TYPES: &[&str] = &[
     "indexer",
     "usenet_indexer",
@@ -186,6 +187,9 @@ impl WasmIndexerPluginProvider {
 fn apply_builtin_indexer_overrides(mut descriptor: PluginDescriptor) -> PluginDescriptor {
     if descriptor.provider_type.eq_ignore_ascii_case("nzbgeek") {
         descriptor.default_base_url = Some(NZBGEEK_DEFAULT_BASE_URL.to_string());
+    }
+    if descriptor.provider_type.eq_ignore_ascii_case("dognzb") {
+        descriptor.default_base_url = Some(DOGNZB_DEFAULT_BASE_URL.to_string());
     }
 
     descriptor
@@ -494,6 +498,7 @@ impl IndexerPluginProvider for DynamicPluginProvider {
         // Layer builtins (skipped if external overrides same provider_type)
         provider = provider
             .with_builtin(crate::builtins::NZBGEEK_WASM)
+            .with_builtin(crate::builtins::DOGNZB_WASM)
             .with_builtin(crate::builtins::NEWZNAB_WASM)
             .with_builtin(crate::builtins::ANIMETOSHO_WASM)
             .with_builtin(crate::builtins::TORZNAB_WASM);
