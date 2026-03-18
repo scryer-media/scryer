@@ -1,14 +1,42 @@
 # Getting Started
 
-This guide walks you through setting up scryer with Docker Compose.
+## macOS — Homebrew
 
-## Prerequisites
+The easiest way to run scryer on macOS is via Homebrew:
+
+```bash
+brew install scryer-media/scryer/scryer
+```
+
+Start scryer as a background service:
+
+```bash
+brew services start scryer
+```
+
+Open `http://localhost:8080` to access the web UI.
+
+To stop the service:
+
+```bash
+brew services stop scryer
+```
+
+Configuration is at `$(brew --prefix)/etc/scryer/config.env`. Edit it to set your media paths and encryption key, then restart the service.
+
+---
+
+## Docker Compose
+
+For Linux, NAS devices, or if you prefer containers.
+
+### Prerequisites
 
 - Docker and Docker Compose installed
 - A Usenet download client (NZBGet or SABnzbd) running and accessible
 - Media directories on your host for movies and/or series
 
-## Quick Start
+### Quick Start
 
 The fastest way to get running is the built-in setup wizard. It generates a `docker-compose.yml` with a fresh encryption key and your media paths:
 
@@ -35,14 +63,7 @@ Then start it:
 docker compose up -d
 ```
 
-Open `http://localhost:8080` and log in with the default credentials:
-
-| | |
-|---|---|
-| Username | `admin` |
-| Password | `admin` |
-
-Change your password in Settings after first login.
+Open `http://localhost:8080` to access the web UI.
 
 ## Manual Setup
 
