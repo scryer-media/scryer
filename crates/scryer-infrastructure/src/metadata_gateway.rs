@@ -7,9 +7,9 @@ use async_trait::async_trait;
 use reqwest::Client;
 use ring::digest;
 use scryer_application::{
-    AnimeEpisodeMapping, AnimeMapping, AnimeMovie, AppError, AppResult, BulkMetadataResult,
-    EpisodeMetadata, MetadataGateway, MetadataSearchItem, MovieMetadata, MultiMetadataSearchResult,
-    RichMetadataSearchItem, SeasonMetadata, SeriesMetadata,
+    AnibridgeSourceMapping, AnimeEpisodeMapping, AnimeMapping, AnimeMovie, AppError, AppResult,
+    BulkMetadataResult, EpisodeMetadata, MetadataGateway, MetadataSearchItem, MovieMetadata,
+    MultiMetadataSearchResult, RichMetadataSearchItem, SeasonMetadata, SeriesMetadata,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -1666,5 +1666,53 @@ impl MetadataGateway for MetadataGatewayClient {
             "bulk metadata complete"
         );
         Ok(BulkMetadataResult { movies, series })
+    }
+
+    async fn anibridge_mappings_for_episode(
+        &self,
+        tvdb_id: i64,
+        season: i32,
+        episode: i32,
+    ) -> AppResult<Vec<AnibridgeSourceMapping>> {
+        let query = r#"query($tvdbId: Int!, $season: Int!, $episode: Int!) {
+            anibridgeMappingsForEpisode(tvdbId: $tvdbId, season: $season, episode: $episode) {
+                source_type source_id source_scope
+            }
+        }"#;
+
+        let variables = json!({
+            "tvdbId": tvdb_id,
+            "season": season,
+            "episode": episode,
+        });
+
+        #[derive(Deserialize)]
+        struct Response {
+            #[serde(rename = "anibridgeMappingsForEpisode")]
+            mappings: Vec<AnibridgeMappingItem>,
+        }
+
+        #[derive(Deserialize)]
+        struct AnibridgeMappingItem {
+            source_type: String,
+            source_id: i64,
+            source_scope: String,
+        }
+
+        let payload = json!({
+            "query": query,
+            "variables": variables,
+        });
+        let data: Response = self.execute_graphql(payload).await?;
+
+        Ok(data
+            .mappings
+            .into_iter()
+            .map(|m| AnibridgeSourceMapping {
+                source_type: m.source_type,
+                source_id: m.source_id,
+                source_scope: m.source_scope,
+            })
+            .collect())
     }
 }

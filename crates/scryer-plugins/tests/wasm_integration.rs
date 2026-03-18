@@ -79,6 +79,7 @@ async fn test_indexer_search() {
             SearchMode::Auto,
             None,
             None,
+            None,
         )
         .await
         .unwrap()

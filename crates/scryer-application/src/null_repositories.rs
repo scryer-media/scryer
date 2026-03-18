@@ -935,6 +935,7 @@ pub mod test_nulls {
             _: SearchMode,
             _: Option<u32>,
             _: Option<u32>,
+            _: Option<u32>,
         ) -> AppResult<IndexerSearchResponse> {
             Ok(IndexerSearchResponse {
                 results: vec![],

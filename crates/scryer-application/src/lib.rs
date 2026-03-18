@@ -105,10 +105,10 @@ pub use library_rename::{
     RenamePlanItem, RenameWriteAction, build_rename_plan_fingerprint, render_rename_template,
 };
 pub use library_scan::{
-    AnimeEpisodeMapping, AnimeMapping, AnimeMovie, BulkMetadataResult, EpisodeMetadata,
-    LibraryFile, LibraryScanSummary, LibraryScanner, MetadataGateway, MetadataSearchItem,
-    MovieMetadata, MultiMetadataSearchResult, RichMetadataSearchItem, SeasonMetadata,
-    SeriesMetadata,
+    AnibridgeSourceMapping, AnimeEpisodeMapping, AnimeMapping, AnimeMovie, BulkMetadataResult,
+    EpisodeMetadata, LibraryFile, LibraryScanSummary, LibraryScanner, MetadataGateway,
+    MetadataSearchItem, MovieMetadata, MultiMetadataSearchResult, RichMetadataSearchItem,
+    SeasonMetadata, SeriesMetadata,
 };
 pub use notification_dispatcher::start_notification_dispatcher;
 pub use null_repositories::{
@@ -1170,6 +1170,7 @@ pub trait IndexerClient: Send + Sync {
         mode: SearchMode,
         season: Option<u32>,
         episode: Option<u32>,
+        absolute_episode: Option<u32>,
     ) -> AppResult<IndexerSearchResponse>;
 }
 
@@ -2158,6 +2159,7 @@ mod tests {
             _mode: SearchMode,
             _season: Option<u32>,
             _episode: Option<u32>,
+            _absolute_episode: Option<u32>,
         ) -> AppResult<IndexerSearchResponse> {
             if let Some(tvdb) = tvdb_id {
                 tracing::info!(tvdb_id = %tvdb, category = ?category, "mock nzbgeek search");
@@ -2257,6 +2259,15 @@ mod tests {
                 movies,
                 series: HashMap::new(),
             })
+        }
+
+        async fn anibridge_mappings_for_episode(
+            &self,
+            _tvdb_id: i64,
+            _season: i32,
+            _episode: i32,
+        ) -> AppResult<Vec<crate::library_scan::AnibridgeSourceMapping>> {
+            Ok(vec![])
         }
     }
 

@@ -39,6 +39,7 @@ impl IndexerClient for WasmIndexerClient {
         _mode: SearchMode,
         season: Option<u32>,
         episode: Option<u32>,
+        _absolute_episode: Option<u32>,
     ) -> AppResult<IndexerSearchResponse> {
         let request = PluginSearchRequest {
             query,

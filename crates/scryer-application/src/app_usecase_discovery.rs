@@ -161,6 +161,7 @@ impl AppUseCase {
                         mode,
                         season,
                         episode,
+                        absolute_episode,
                     )
                     .await
             });
@@ -901,7 +902,7 @@ impl AppUseCase {
         let tvdb_id = normalize_numeric_id(
             crate::app_usecase_acquisition::tvdb_id_from_external_ids(&title.external_ids),
         );
-        let anidb_id = normalize_numeric_id(
+        let title_anidb_id = normalize_numeric_id(
             crate::app_usecase_acquisition::anidb_id_from_external_ids(&title.external_ids),
         );
         let category = self
@@ -909,6 +910,29 @@ impl AppUseCase {
             .get(&title.facet)
             .map(|h| h.search_category().to_string())
             .unwrap_or_else(|| "series".to_string());
+
+        // Resolve episode-specific anidb_id from anibridge (e.g. Bleach S17E08 → 15449)
+        let anidb_id = if let Some(ref tvdb) = tvdb_id {
+            if let Ok(tvdb_num) = tvdb.parse::<i64>() {
+                match self
+                    .services
+                    .metadata_gateway
+                    .anibridge_mappings_for_episode(tvdb_num, season_num as i32, episode_num as i32)
+                    .await
+                {
+                    Ok(mappings) => mappings
+                        .iter()
+                        .find(|m| m.source_type == "anidb" && m.source_scope == "R")
+                        .map(|m| m.source_id.to_string())
+                        .or(title_anidb_id),
+                    Err(_) => title_anidb_id,
+                }
+            } else {
+                title_anidb_id
+            }
+        } else {
+            title_anidb_id
+        };
 
         // Look up absolute episode number from the episode record
         let absolute_episode: Option<u32> = self

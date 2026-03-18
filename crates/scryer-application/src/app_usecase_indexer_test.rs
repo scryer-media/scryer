@@ -75,6 +75,7 @@ impl AppUseCase {
                 SearchMode::Interactive,
                 None,
                 None,
+                None,
             )
             .await
             .map_err(|e| AppError::Repository(format!("indexer connection test failed: {e}")))?;

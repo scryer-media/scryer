@@ -155,6 +155,7 @@ impl AppUseCase {
                 SearchMode::Auto,
                 None,
                 None,
+                None,
             )
             .await;
 

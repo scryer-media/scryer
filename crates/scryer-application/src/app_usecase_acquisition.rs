@@ -720,6 +720,54 @@ async fn process_single_wanted_item(
         title.clone()
     };
 
+    // Resolve episode-specific anidb_id from anibridge (e.g. Bleach S17E08 → 15449)
+    let search_title = if item.media_type == "episode" {
+        if let Some(ref ep) = episode {
+            if let (Ok(s), Ok(e)) = (
+                ep.season_number.as_deref().unwrap_or("").parse::<i32>(),
+                ep.episode_number.as_deref().unwrap_or("").parse::<i32>(),
+            ) {
+                if let Some(tvdb_str) = tvdb_id_from_external_ids(&search_title.external_ids) {
+                    if let Ok(tvdb_num) = tvdb_str.parse::<i64>() {
+                        if let Ok(mappings) = app
+                            .services
+                            .metadata_gateway
+                            .anibridge_mappings_for_episode(tvdb_num, s, e)
+                            .await
+                        {
+                            if let Some(m) = mappings
+                                .iter()
+                                .find(|m| m.source_type == "anidb" && m.source_scope == "R")
+                            {
+                                let mut t = search_title;
+                                t.external_ids.retain(|e| e.source != "anidb");
+                                t.external_ids.push(scryer_domain::ExternalId {
+                                    source: "anidb".into(),
+                                    value: m.source_id.to_string(),
+                                });
+                                t
+                            } else {
+                                search_title
+                            }
+                        } else {
+                            search_title
+                        }
+                    } else {
+                        search_title
+                    }
+                } else {
+                    search_title
+                }
+            } else {
+                search_title
+            }
+        } else {
+            search_title
+        }
+    } else {
+        search_title
+    };
+
     // Build search queries based on media type
     let sq = build_search_queries(&search_title, item, episode.as_ref(), &app.facet_registry);
     let (queries, imdb_id, tvdb_id, anidb_id, category) =

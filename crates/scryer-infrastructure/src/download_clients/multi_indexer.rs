@@ -219,6 +219,7 @@ impl IndexerClient for MultiIndexerSearchClient {
         mode: SearchMode,
         season: Option<u32>,
         episode: Option<u32>,
+        absolute_episode: Option<u32>,
     ) -> AppResult<IndexerSearchResponse> {
         let is_rss_request = Self::is_rss_sync_request(
             &query,
@@ -440,7 +441,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                             let start = std::time::Instant::now();
                             match tokio::time::timeout(
                                 std::time::Duration::from_secs(30),
-                                client.search(query, None, None, None, category, per_indexer_categories, None, mode, season, episode),
+                                client.search(query, None, None, None, category, per_indexer_categories, None, mode, season, episode, None),
                             ).await {
                                 Ok(Ok(response)) => {
                                     info!(indexer = indexer_name.as_str(), count = response.results.len(), "RSS feed cached");
@@ -485,7 +486,16 @@ impl IndexerClient for MultiIndexerSearchClient {
                 .is_some_and(|max| max > 0);
 
             let mut strategies: Vec<SearchStrategy> =
-                build_strategies(&query, facet, &available_ids, &caps, season, episode, false);
+                build_strategies(&StrategyParams {
+                    query: &query,
+                    facet,
+                    ids: &available_ids,
+                    caps: &caps,
+                    season,
+                    episode,
+                    absolute_episode,
+                    is_alias_query: false,
+                });
 
             // Skip freetext strategies when ID-based strategies are available and
             // the indexer has API limits or deduplicates aliases (freetext without
@@ -528,6 +538,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                             mode,
                             season,
                             episode,
+                            absolute_episode,
                         ),
                     )
                     .await;
@@ -713,19 +724,29 @@ impl IndexerClient for MultiIndexerSearchClient {
 /// Uses the plugin's facet-scoped `supported_ids` to determine which ID-based
 /// strategies to generate. Each strategy targets one ID type so the host can
 /// dispatch them all in parallel.
-///
+struct StrategyParams<'a> {
+    query: &'a str,
+    facet: &'a str,
+    ids: &'a HashMap<String, String>,
+    caps: &'a scryer_domain::IndexerProviderCapabilities,
+    season: Option<u32>,
+    episode: Option<u32>,
+    absolute_episode: Option<u32>,
+    is_alias_query: bool,
+}
+
 /// The `facet` parameter is the current search facet ("movies", "series", "anime",
 /// "anime_movies"). The orchestrator only builds ID strategies for facets the
 /// indexer declares in `supported_ids`.
-fn build_strategies(
-    query: &str,
-    facet: &str,
-    ids: &HashMap<String, String>,
-    caps: &scryer_domain::IndexerProviderCapabilities,
-    season: Option<u32>,
-    episode: Option<u32>,
-    is_alias_query: bool,
-) -> Vec<SearchStrategy> {
+fn build_strategies(p: &StrategyParams<'_>) -> Vec<SearchStrategy> {
+    let query = p.query;
+    let facet = p.facet;
+    let ids = p.ids;
+    let caps = p.caps;
+    let season = p.season;
+    let episode = p.episode;
+    let absolute_episode = p.absolute_episode;
+    let is_alias_query = p.is_alias_query;
     // Alias queries skip indexers that deduplicate aliases internally
     if is_alias_query && caps.deduplicates_aliases {
         return vec![];
@@ -773,6 +794,20 @@ fn build_strategies(
                 break; // one ID strategy per facet is sufficient
             }
         }
+    }
+
+    // Anime absolute-episode strategy: when we have an absolute episode number,
+    // add a second strategy that searches by absolute number instead of SXXEXX.
+    if facet == "anime" && !is_alias_query
+        && let Some(abs) = absolute_episode
+    {
+        strategies.push(SearchStrategy {
+            query: abs.to_string(),
+            imdb_id: None,
+            tvdb_id: None,
+            anidb_id: ids.get("anidb_id").cloned(),
+            label: "anime_absolute".into(),
+        });
     }
 
     // Freetext strategy: skip if indexer has no capability for this facet at all.
@@ -941,6 +976,7 @@ mod tests {
             _mode: SearchMode,
             _season: Option<u32>,
             _episode: Option<u32>,
+            _absolute_episode: Option<u32>,
         ) -> AppResult<IndexerSearchResponse> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(IndexerSearchResponse {
@@ -1037,6 +1073,7 @@ mod tests {
                 None,
                 None,
                 SearchMode::Auto,
+                None,
                 None,
                 None,
             )
