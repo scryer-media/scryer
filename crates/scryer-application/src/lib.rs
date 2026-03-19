@@ -2757,8 +2757,7 @@ mod tests {
             JwtAuthConfig {
                 issuer: "scryer-test".to_string(),
                 access_ttl_seconds: 3600,
-                jwt_hmac_secret: "dGVzdC1zZWNyZXQtZm9yLXVuaXQtdGVzdHMtb25seS0zMmJ5dGVzISE="
-                    .to_string(),
+                jwt_signing_salt: "test-salt".to_string(),
             },
             Arc::new(registry),
         );
@@ -2812,8 +2811,7 @@ mod tests {
             JwtAuthConfig {
                 issuer: "scryer-test".to_string(),
                 access_ttl_seconds: 3600,
-                jwt_hmac_secret: "dGVzdC1zZWNyZXQtZm9yLXVuaXQtdGVzdHMtb25seS0zMmJ5dGVzISE="
-                    .to_string(),
+                jwt_signing_salt: "test-salt".to_string(),
             },
             Arc::new(registry),
         );
@@ -4191,15 +4189,27 @@ mod tests {
 
     // ── JWT round-trip ────────────────────────────────────────────────────────
 
+    /// Derive a per-user JWT signing key (mirrors `AppUseCase::derive_jwt_key`).
+    fn test_derive_jwt_key(salt: &str, password_hash: &str) -> Vec<u8> {
+        use ring::hmac;
+        let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, salt.as_bytes());
+        hmac::sign(&hmac_key, password_hash.as_bytes())
+            .as_ref()
+            .to_vec()
+    }
+
+    const TEST_PASSWORD_HASH: &str = "v2$argon2id$v=19$m=19456,t=2,p=1$dGVzdHNhbHQ$dGVzdGhhc2g";
+
     #[tokio::test]
     async fn issue_and_authenticate_token_round_trips() {
         let (app, _) = bootstrap();
         let user = User {
             id: "user-jwt-1".to_string(),
             username: "jwt_user".to_string(),
-            password_hash: None,
+            password_hash: Some(TEST_PASSWORD_HASH.to_string()),
             entitlements: vec![Entitlement::ViewCatalog],
         };
+        app.services.users.create(user.clone()).await.unwrap();
         let token = app.issue_access_token(&user).expect("issue token");
         let decoded = app
             .authenticate_token(&token)
@@ -4215,9 +4225,10 @@ mod tests {
         let user = User {
             id: "user-jwt-2".to_string(),
             username: "ent_user".to_string(),
-            password_hash: None,
+            password_hash: Some(TEST_PASSWORD_HASH.to_string()),
             entitlements: vec![Entitlement::ViewCatalog, Entitlement::ManageTitle],
         };
+        app.services.users.create(user.clone()).await.unwrap();
         let token = app.issue_access_token(&user).expect("issue token");
         let decoded = app
             .authenticate_token(&token)
@@ -4233,9 +4244,10 @@ mod tests {
         let user = User {
             id: "user-jwt-3".to_string(),
             username: "exp_user".to_string(),
-            password_hash: None,
+            password_hash: Some(TEST_PASSWORD_HASH.to_string()),
             entitlements: vec![],
         };
+        app.services.users.create(user.clone()).await.unwrap();
         // Encode a token with an exp 100 seconds in the past
         let claims = JwtClaims {
             sub: user.id.clone(),
@@ -4245,8 +4257,9 @@ mod tests {
             username: user.username.clone(),
             entitlements: vec![],
         };
-        let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS512);
-        let key = jsonwebtoken::EncodingKey::from_secret(app.auth.jwt_hmac_secret.as_bytes());
+        let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
+        let signing_key = test_derive_jwt_key(&app.auth.jwt_signing_salt, TEST_PASSWORD_HASH);
+        let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
         let expired_token = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
         let result = app.authenticate_token(&expired_token).await;
         assert!(result.is_err(), "expired token should be rejected");
@@ -4258,9 +4271,10 @@ mod tests {
         let user = User {
             id: "user-jwt-4".to_string(),
             username: "iss_user".to_string(),
-            password_hash: None,
+            password_hash: Some(TEST_PASSWORD_HASH.to_string()),
             entitlements: vec![Entitlement::ViewCatalog],
         };
+        app.services.users.create(user.clone()).await.unwrap();
         let claims = JwtClaims {
             sub: user.id.clone(),
             exp: Utc::now().timestamp() + 3600,
@@ -4269,8 +4283,9 @@ mod tests {
             username: user.username.clone(),
             entitlements: vec!["view_catalog".to_string()],
         };
-        let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS512);
-        let key = jsonwebtoken::EncodingKey::from_secret(app.auth.jwt_hmac_secret.as_bytes());
+        let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
+        let signing_key = test_derive_jwt_key(&app.auth.jwt_signing_salt, TEST_PASSWORD_HASH);
+        let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
         let bad_token = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
         let result = app.authenticate_token(&bad_token).await;
         assert!(

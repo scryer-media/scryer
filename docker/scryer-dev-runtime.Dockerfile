@@ -14,7 +14,7 @@ RUN apk add --no-cache \
 
 # Use mold for faster linking in all stages (chef cook and cargo run).
 # -fuse-ld=mold tells gcc (Alpine's default cc) to use mold as the linker.
-ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold"
+ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold -C target-cpu=native"
 
 FROM rust-base AS planner
 

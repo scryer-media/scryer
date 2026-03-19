@@ -1,5 +1,6 @@
 use argon2::password_hash::SaltString;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
+use ring::hmac;
 
 use super::*;
 
@@ -61,11 +62,27 @@ impl AppUseCase {
         Ok(candidate == stored_hash)
     }
 
+    /// Derive a per-user JWT signing key: HMAC-SHA256(key=salt, msg=password_hash).
+    ///
+    /// The salt is the registration secret baked into the binary, so an offline
+    /// DB dump alone cannot forge tokens.
+    fn derive_jwt_key(&self, password_hash: &str) -> Vec<u8> {
+        let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, self.auth.jwt_signing_salt.as_bytes());
+        hmac::sign(&hmac_key, password_hash.as_bytes())
+            .as_ref()
+            .to_vec()
+    }
+
     pub fn token_lifetime(&self) -> i64 {
         i64::try_from(self.auth.access_ttl_seconds).unwrap_or(86_400)
     }
 
     pub fn issue_access_token(&self, actor: &User) -> AppResult<String> {
+        let password_hash = actor
+            .password_hash
+            .as_deref()
+            .ok_or_else(|| AppError::Unauthorized("cannot issue token: no password hash".into()))?;
+
         let now = Utc::now();
         let iat = now.timestamp();
         let exp = (now + Duration::seconds(self.token_lifetime())).timestamp();
@@ -86,8 +103,9 @@ impl AppUseCase {
             entitlements,
         };
 
-        let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS512);
-        let key = jsonwebtoken::EncodingKey::from_secret(self.auth.jwt_hmac_secret.as_bytes());
+        let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
+        let signing_key = self.derive_jwt_key(password_hash);
+        let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
 
         let token = jsonwebtoken::encode(&header, &claims, &key)
             .map_err(|err| AppError::Repository(format!("failed to issue token: {err}")))?;
@@ -96,35 +114,46 @@ impl AppUseCase {
     }
 
     pub async fn authenticate_token(&self, token: &str) -> AppResult<User> {
-        let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS512);
+        // Decode claims without signature verification to extract the subject (user ID).
+        let mut insecure = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+        insecure.insecure_disable_signature_validation();
+        insecure.validate_exp = false;
+
+        let unverified = jsonwebtoken::decode::<JwtClaims>(
+            token,
+            &jsonwebtoken::DecodingKey::from_secret(&[]),
+            &insecure,
+        )
+        .map_err(|err| AppError::Unauthorized(format!("malformed token: {err}")))?;
+
+        let user_id = &unverified.claims.sub;
+
+        // Fetch the user from DB to get the current password hash.
+        let user = self
+            .services
+            .users
+            .get_by_id(user_id)
+            .await?
+            .ok_or_else(|| AppError::Unauthorized("unknown token subject".into()))?;
+
+        let password_hash = user
+            .password_hash
+            .as_deref()
+            .ok_or_else(|| AppError::Unauthorized("user has no password hash".into()))?;
+
+        // Now verify the signature with the per-user key.
+        let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
         validation.validate_exp = true;
         validation.set_issuer(&[self.auth.issuer.as_str()]);
 
-        let key = jsonwebtoken::DecodingKey::from_secret(self.auth.jwt_hmac_secret.as_bytes());
+        let signing_key = self.derive_jwt_key(password_hash);
+        let key = jsonwebtoken::DecodingKey::from_secret(&signing_key);
 
-        let token_data = jsonwebtoken::decode::<JwtClaims>(token, &key, &validation)
+        jsonwebtoken::decode::<JwtClaims>(token, &key, &validation)
             .map_err(|err| AppError::Unauthorized(format!("invalid token: {err}")))?;
 
-        let claims = token_data.claims;
-
-        // Old tokens lack embedded entitlements/username — fall back to DB lookup
-        if claims.entitlements.is_empty() || claims.username.is_empty() {
-            let user = self.services.users.get_by_id(&claims.sub).await?;
-            return user.ok_or_else(|| AppError::Unauthorized("unknown token subject".into()));
-        }
-
-        let entitlements: Vec<Entitlement> = claims
-            .entitlements
-            .iter()
-            .filter_map(|s| serde_json::from_value(serde_json::Value::String(s.clone())).ok())
-            .collect();
-
-        Ok(User {
-            id: claims.sub,
-            username: claims.username,
-            password_hash: None,
-            entitlements,
-        })
+        // Return the DB user — always has fresh entitlements/username.
+        Ok(user)
     }
 
     pub async fn authenticate_credentials(
@@ -157,19 +186,24 @@ impl AppUseCase {
             return Err(AppError::Unauthorized("invalid credentials".into()));
         }
 
-        // Online migration: re-hash v1 passwords with Argon2id on successful login
+        // Online migration: re-hash v1 passwords with Argon2id on successful login.
+        // Must return the updated user so the caller's JWT signing key matches the DB.
         if password_hash.starts_with("v1$")
             && let Ok(new_hash) = self.hash_password(password)
         {
-            if let Err(err) = self
+            match self
                 .services
                 .users
                 .update_password_hash(&user.id, new_hash)
                 .await
             {
-                tracing::warn!(user_id = %user.id, error = %err, "failed to migrate password hash from v1 to v2");
-            } else {
-                tracing::info!(user_id = %user.id, "migrated password hash from v1 to v2");
+                Ok(updated) => {
+                    tracing::info!(user_id = %user.id, "migrated password hash from v1 to v2");
+                    return Ok(updated);
+                }
+                Err(err) => {
+                    tracing::warn!(user_id = %user.id, error = %err, "failed to migrate password hash from v1 to v2");
+                }
             }
         }
 

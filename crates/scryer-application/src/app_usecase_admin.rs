@@ -151,14 +151,21 @@ impl AppUseCase {
         }
         let desired_entitlements = User::all_entitlements();
 
-        if let Some(found) = self.services.users.get_by_username(username).await? {
+        if let Some(mut found) = self.services.users.get_by_username(username).await? {
             if !found.has_all_entitlements() {
-                let user = self
+                found = self
                     .services
                     .users
                     .update_entitlements(&found.id, desired_entitlements)
                     .await?;
-                return Ok(user);
+            }
+            // Migration-seeded admin may lack a password hash — set one.
+            if found.password_hash.is_none() {
+                found = self
+                    .services
+                    .users
+                    .update_password_hash(&found.id, self.hash_password(password)?)
+                    .await?;
             }
             return Ok(found);
         }

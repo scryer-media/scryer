@@ -196,6 +196,7 @@ async fn main() {
             bootstrap_shutdown,
             log_ring_buffer,
             metrics_handle,
+            data_dir,
         )
         .await
         {
@@ -279,6 +280,7 @@ async fn bootstrap_application(
     shutdown_token: CancellationToken,
     log_ring_buffer: log_buffer::LogRingBuffer,
     metrics_handle: Option<metrics_exporter_prometheus::PrometheusHandle>,
+    data_dir: PathBuf,
 ) -> Result<Router, Box<dyn std::error::Error + Send + Sync>> {
     let bootstrap_start = std::time::Instant::now();
 
@@ -294,12 +296,12 @@ async fn bootstrap_application(
         .map_err(|e| format!("failed to seed service setting definitions: {e}"))?;
     tracing::info!(elapsed_ms = %t.elapsed().as_millis(), "setting definitions seeded");
 
-    // Bootstrap encryption master key (env > DB > auto-generate).
-    // This runs before set_encryption_key so the master key itself is stored unencrypted.
+    // Bootstrap encryption master key (env > keystore > legacy DB migration > auto-generate).
     let t = std::time::Instant::now();
-    let encryption_key = scryer_infrastructure::encryption::ensure_encryption_key(&db)
-        .await
-        .map_err(|e| format!("failed to ensure encryption master key: {e}"))?;
+    let encryption_key =
+        scryer_infrastructure::encryption::ensure_encryption_key(&db, Some(data_dir))
+            .await
+            .map_err(|e| format!("failed to ensure encryption master key: {e}"))?;
 
     // Activate encryption for all subsequent DB operations
     db.set_encryption_key(encryption_key)
@@ -365,15 +367,6 @@ async fn bootstrap_application(
         );
     }
     tracing::info!(elapsed_ms = %t.elapsed().as_millis(), "settings normalized");
-
-    // Bootstrap JWT HMAC secret (env > DB > auto-generate, persisted)
-    let t = std::time::Instant::now();
-    let env_jwt_secret = normalize_env_option("SCRYER_JWT_HMAC_SECRET");
-    let jwt_hmac_secret =
-        scryer_infrastructure::jwt_keys::ensure_jwt_hmac_secret(&db, env_jwt_secret)
-            .await
-            .map_err(|e| format!("failed to ensure JWT HMAC secret: {e}"))?;
-    tracing::info!(elapsed_ms = %t.elapsed().as_millis(), "JWT secret bootstrapped");
 
     let t = std::time::Instant::now();
     let runtime_settings = load_service_runtime_settings(&db)
@@ -476,6 +469,21 @@ async fn bootstrap_application(
         .map(String::from)
         .or_else(|| std::env::var("SCRYER_SMG_REGISTRATION_SECRET").ok())
         .filter(|s| !s.is_empty());
+
+    // JWT signing salt: use the registration secret (baked into the binary) so an
+    // offline DB dump alone cannot forge tokens.  Fall back to a static dev salt
+    // when no registration secret is configured.
+    let jwt_signing_salt = match &smg_registration_secret {
+        Some(secret) => secret.clone(),
+        None => {
+            tracing::warn!(
+                "no registration secret available — using static dev salt for JWT signing. \
+                 Set SCRYER_SMG_REGISTRATION_SECRET for production use."
+            );
+            "scryer-jwt-dev".to_string()
+        }
+    };
+
     let smg_ca_cert = SMG_CA_CERT
         .map(String::from)
         .or_else(|| std::env::var("SCRYER_SMG_CA_CERT").ok())
@@ -570,7 +578,7 @@ async fn bootstrap_application(
         scryer_application::JwtAuthConfig {
             issuer: jwt_issuer,
             access_ttl_seconds: jwt_access_ttl_seconds as usize,
-            jwt_hmac_secret,
+            jwt_signing_salt,
         },
         facet_registry,
     );

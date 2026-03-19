@@ -389,7 +389,7 @@ fn bootstrap_plugins(provider: Option<MockPluginProvider>) -> TestHarness {
         JwtAuthConfig {
             issuer: "test".to_string(),
             access_ttl_seconds: 3600,
-            jwt_hmac_secret: "dGVzdC1zZWNyZXQtZm9yLXVuaXQtdGVzdHMtb25seS0zMmJ5dGVzISE=".to_string(),
+            jwt_signing_salt: "test-salt".to_string(),
         },
         Arc::new(registry),
     );

@@ -31,5 +31,13 @@ ravif = { version = "0.13", features = ["threading"] }
 fast_image_resize = "5"
 kamadak-exif = "0.6"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { workspace = true }
+security-framework-sys = { workspace = true }
+# security-framework-sys is v2 (re-exported by security-framework v3)
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { workspace = true }
+
 [dev-dependencies]
 scryer-rules = { path = "../scryer-rules" }

@@ -54,22 +54,6 @@ async fn setup() -> (
         .await
         .expect("in-memory SQLite");
 
-    // Seed JWT so AppUseCase can construct
-    db.ensure_setting_definition(
-        "security",
-        "system",
-        "jwt.hmac_secret",
-        "string",
-        "\"\"",
-        true,
-        None,
-    )
-    .await
-    .unwrap();
-    let jwt_hmac_secret = scryer_infrastructure::jwt_keys::ensure_jwt_hmac_secret(&db, None)
-        .await
-        .unwrap();
-
     // Load all three indexer plugins
     let plugin_provider: Arc<dyn IndexerPluginProvider> =
         Arc::new(scryer_plugins::DynamicPluginProvider::new(
@@ -222,7 +206,7 @@ async fn setup() -> (
         JwtAuthConfig {
             issuer: "scryer-test".into(),
             access_ttl_seconds: 3600,
-            jwt_hmac_secret,
+            jwt_signing_salt: "test-salt".into(),
         },
         Arc::new(registry),
     );

@@ -114,40 +114,184 @@ pub fn is_encrypted(value: &str) -> bool {
     value.starts_with(ENCRYPTED_PREFIX)
 }
 
+use crate::keystore::{self, KeyStore};
+use std::path::PathBuf;
+
 const ENCRYPTION_KEY_SETTING: &str = "encryption.master_key";
 const SETTINGS_SCOPE_SYSTEM: &str = "system";
 
-/// Ensure an encryption master key exists in the database.
+/// Ensure an encryption master key is available.
 ///
-/// Priority: `SCRYER_ENCRYPTION_KEY` env var > DB setting > auto-generate.
+/// Priority:
+/// 1. `SCRYER_ENCRYPTION_KEY` env var (explicit override, always wins)
+/// 2. Platform keystores (Docker secret, OS keychain, key file — in priority order)
+/// 3. Legacy DB migration (one-time, deprecated — remove at 1.0.0)
+/// 4. Auto-generate in memory, store in best available keystore, warn loudly
 ///
-/// This must run BEFORE `set_encryption_key` is called, so the master key
-/// itself is stored unencrypted (it's the one unprotected sensitive value).
-pub async fn ensure_encryption_key(db: &crate::SqliteServices) -> Result<EncryptionKey, String> {
-    // Check env var first
-    if let Ok(env_key) = std::env::var("SCRYER_ENCRYPTION_KEY") {
-        let env_key = env_key.trim().to_string();
-        if !env_key.is_empty() {
-            let key = EncryptionKey::from_base64(&env_key)
-                .map_err(|e| format!("invalid SCRYER_ENCRYPTION_KEY: {e}"))?;
+/// The master key is **never** stored in the database. Legacy DB keys are migrated
+/// out on first startup after upgrade.
+pub async fn ensure_encryption_key(
+    db: &crate::SqliteServices,
+    data_dir: Option<PathBuf>,
+) -> Result<EncryptionKey, String> {
+    let stores = keystore::platform_keystores(data_dir);
 
-            db.upsert_setting_value(
-                SETTINGS_SCOPE_SYSTEM,
-                ENCRYPTION_KEY_SETTING,
-                None,
-                serde_json::to_string(&key.to_base64()).unwrap(),
-                "env",
-                None,
-            )
-            .await
-            .map_err(|e| format!("failed to persist encryption key from env: {e}"))?;
+    // 1. Env var (always wins, all platforms)
+    if let Some(key) = from_env_var()? {
+        opportunistic_store(&stores, &key);
+        tracing::info!("using encryption master key from SCRYER_ENCRYPTION_KEY");
+        return Ok(key);
+    }
 
-            tracing::info!("using encryption master key from SCRYER_ENCRYPTION_KEY");
-            return Ok(key);
+    // 2. Platform keystores (Docker secret, keychain, key file — in priority order)
+    for store in &stores {
+        match store.get_key() {
+            Ok(Some(key_b64)) => {
+                let key = EncryptionKey::from_base64(&key_b64)
+                    .map_err(|e| format!("invalid key in {}: {e}", store.name()))?;
+                tracing::info!("using encryption master key from {}", store.name());
+                return Ok(key);
+            }
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!("could not read from {}: {e}", store.name());
+                continue;
+            }
         }
     }
 
-    // Check DB
+    // 3. Legacy DB migration (deprecated — remove at 1.0.0)
+    #[expect(deprecated)]
+    if let Some(key) = try_migrate_from_db(db, &stores).await? {
+        return Ok(key);
+    }
+
+    // 4. Auto-generate, store in best available keystore, warn user
+    let key = EncryptionKey::generate();
+    let stored_in = try_store_new_key(&stores, &key);
+    match stored_in {
+        Some(name) => {
+            tracing::warn!(
+                "generated new encryption master key and stored in {name} — \
+                 all sensitive settings (passwords, API keys) are encrypted with this key"
+            );
+        }
+        None => {
+            tracing::warn!(
+                "generated new encryption master key (in memory only) — \
+                 set SCRYER_ENCRYPTION_KEY to persist it across restarts\n\n  \
+                 SCRYER_ENCRYPTION_KEY={}\n",
+                key.to_base64()
+            );
+        }
+    }
+    Ok(key)
+}
+
+/// Check the `SCRYER_ENCRYPTION_KEY` environment variable.
+fn from_env_var() -> Result<Option<EncryptionKey>, String> {
+    let Ok(env_key) = std::env::var("SCRYER_ENCRYPTION_KEY") else {
+        return Ok(None);
+    };
+    let trimmed = env_key.trim().to_string();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let key = EncryptionKey::from_base64(&trimmed)
+        .map_err(|e| format!("invalid SCRYER_ENCRYPTION_KEY: {e}"))?;
+    Ok(Some(key))
+}
+
+/// Try to store the key in the first writable keystore. Returns the store name on success.
+fn try_store_new_key(stores: &[Box<dyn KeyStore>], key: &EncryptionKey) -> Option<&'static str> {
+    for store in stores {
+        match store.set_key(&key.to_base64()) {
+            Ok(()) => return Some(store.name()),
+            Err(e) => {
+                tracing::debug!("could not store key in {}: {e}", store.name());
+                continue;
+            }
+        }
+    }
+    None
+}
+
+/// If the key was loaded from an env var or other source, also store it in the
+/// first available keystore so the user can drop the env var later.
+/// If the keystore already has a different key, overwrite it to stay in sync.
+fn opportunistic_store(stores: &[Box<dyn KeyStore>], key: &EncryptionKey) {
+    let key_b64 = key.to_base64();
+    for store in stores {
+        match store.get_key() {
+            Ok(None) => match store.set_key(&key_b64) {
+                Ok(()) => {
+                    tracing::info!("copied encryption key to {}", store.name());
+                    return;
+                }
+                Err(_) => continue,
+            },
+            Ok(Some(existing)) if existing == key_b64 => return, // already in sync
+            Ok(Some(_)) => {
+                // Keystore has a stale key — overwrite with the authoritative one
+                match store.set_key(&key_b64) {
+                    Ok(()) => {
+                        tracing::info!("updated stale encryption key in {}", store.name());
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "{} has a different encryption key but could not be updated: {e}",
+                            store.name()
+                        );
+                        continue;
+                    }
+                }
+            }
+            Err(_) => continue,
+        }
+    }
+}
+
+// ── Legacy DB migration (deprecated) ────────────────────────────────────────
+
+/// One-time migration of the encryption key from plaintext DB storage to a
+/// proper keystore. The DB setting is cleared after migration.
+#[deprecated(since = "0.10.0", note = "legacy DB key migration — remove at 1.0.0")]
+async fn try_migrate_from_db(
+    db: &crate::SqliteServices,
+    stores: &[Box<dyn KeyStore>],
+) -> Result<Option<EncryptionKey>, String> {
+    #[allow(deprecated)]
+    let db_key = read_legacy_db_key(db).await?;
+    let Some(key) = db_key else {
+        return Ok(None);
+    };
+
+    let migrated_to = try_store_new_key(stores, &key);
+    if let Some(name) = migrated_to {
+        #[allow(deprecated)]
+        clear_legacy_db_key(db).await?;
+        tracing::info!(
+            "migrated encryption key from database to {name} — \
+             plaintext key removed from database"
+        );
+    } else {
+        // No writable keystore — keep the key in the DB rather than risk losing it.
+        // Log the key so the user can capture it, but do NOT clear the DB entry.
+        tracing::warn!(
+            "encryption key is in the database (legacy storage) — \
+             no secure keystore available to migrate it to. Set \
+             SCRYER_ENCRYPTION_KEY as an environment variable or Docker \
+             secret to complete the migration:\n\n  \
+             SCRYER_ENCRYPTION_KEY={}\n",
+            key.to_base64()
+        );
+    }
+    Ok(Some(key))
+}
+
+#[deprecated(since = "0.10.0", note = "legacy DB key migration — remove at 1.0.0")]
+async fn read_legacy_db_key(db: &crate::SqliteServices) -> Result<Option<EncryptionKey>, String> {
     let record = db
         .get_setting_with_defaults(SETTINGS_SCOPE_SYSTEM, ENCRYPTION_KEY_SETTING, None)
         .await
@@ -158,36 +302,29 @@ pub async fn ensure_encryption_key(db: &crate::SqliteServices) -> Result<Encrypt
         .and_then(|r| r.value_json.as_deref())
         .and_then(parse_string_json);
 
-    if let Some(key_b64) = existing
-        && !key_b64.is_empty()
-    {
-        let key = EncryptionKey::from_base64(&key_b64)
-            .map_err(|e| format!("invalid encryption key in database: {e}"))?;
-        tracing::info!("loaded encryption master key from database");
-        return Ok(key);
+    match existing {
+        Some(key_b64) if !key_b64.is_empty() && key_b64 != "migrated" => {
+            let key = EncryptionKey::from_base64(&key_b64)
+                .map_err(|e| format!("invalid encryption key in database: {e}"))?;
+            Ok(Some(key))
+        }
+        _ => Ok(None),
     }
+}
 
-    // Generate new key
-    let key = EncryptionKey::generate();
-    tracing::warn!(
-        "generated new encryption master key — all sensitive settings (passwords, API keys) \
-         are encrypted with this key. To preserve it across upgrades, add this to your \
-         docker-compose.yml environment:\n\n  SCRYER_ENCRYPTION_KEY: {}\n",
-        key.to_base64()
-    );
-
+#[deprecated(since = "0.10.0", note = "legacy DB key migration — remove at 1.0.0")]
+async fn clear_legacy_db_key(db: &crate::SqliteServices) -> Result<(), String> {
     db.upsert_setting_value(
         SETTINGS_SCOPE_SYSTEM,
         ENCRYPTION_KEY_SETTING,
         None,
-        serde_json::to_string(&key.to_base64()).unwrap(),
-        "auto-generated",
+        serde_json::to_string("migrated").unwrap(),
+        "migration",
         None,
     )
     .await
-    .map_err(|e| format!("failed to persist generated encryption key: {e}"))?;
-
-    Ok(key)
+    .map_err(|e| format!("failed to clear legacy DB key: {e}"))?;
+    Ok(())
 }
 
 fn parse_string_json(raw: &str) -> Option<String> {

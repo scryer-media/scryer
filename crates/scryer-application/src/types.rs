@@ -406,7 +406,7 @@ pub struct IndexerSearchResponse {
 pub struct JwtAuthConfig {
     pub issuer: String,
     pub access_ttl_seconds: usize,
-    pub jwt_hmac_secret: String,
+    pub jwt_signing_salt: String,
 }
 
 #[derive(Serialize, Deserialize)]

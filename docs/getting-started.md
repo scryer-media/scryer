@@ -22,7 +22,7 @@ To stop the service:
 brew services stop scryer
 ```
 
-Configuration is at `$(brew --prefix)/etc/scryer/config.env`. Edit it to set your media paths and encryption key, then restart the service.
+Configuration is at `$(brew --prefix)/etc/scryer/config.env`. Edit it to set your media paths, then restart the service.
 
 ---
 
@@ -38,7 +38,7 @@ For Linux, NAS devices, or if you prefer containers.
 
 ### Quick Start
 
-The fastest way to get running is the built-in setup wizard. It generates a `docker-compose.yml` with a fresh encryption key and your media paths:
+The fastest way to get running is the built-in setup wizard. It generates a `docker-compose.yml` and a `scryer_encryption_key.txt` file with a fresh encryption key:
 
 ```bash
 mkdir scryer && cd scryer
@@ -52,10 +52,17 @@ You'll be prompted for your host media directories:
 Movies directory on this host [/media/movies]: /mnt/nas/movies
 Series directory on this host [/media/series]: /mnt/nas/series
 wrote docker-compose.yml
+wrote scryer_encryption_key.txt (0600)
+
+Your encryption key is stored in scryer_encryption_key.txt and mounted
+as a Docker secret. Do not lose this file — you will need to reconfigure
+passwords and API keys if it changes.
 
 next steps:
   docker compose up -d
 ```
+
+The encryption key is mounted as a [Docker secret](https://docs.docker.com/compose/how-tos/use-secrets/) — it never appears as an environment variable or in `docker inspect` output.
 
 Then start it:
 
@@ -74,10 +81,9 @@ If you prefer to create the compose file yourself:
 The encryption key protects passwords and API keys stored in the database. Generate one before first run:
 
 ```bash
-docker run --rm ghcr.io/scryer-media/scryer --generate-key
+docker run --rm ghcr.io/scryer-media/scryer --generate-key > scryer_encryption_key.txt
+chmod 600 scryer_encryption_key.txt
 ```
-
-Copy the output — you'll paste it into your compose file.
 
 ### 2. Create docker-compose.yml
 
@@ -90,20 +96,27 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - scryer-data:/data
+      - scryer-config:/config
       - /path/to/your/movies:/media/movies
       - /path/to/your/series:/media/series
+    secrets:
+      - scryer_encryption_key
     environment:
-      SCRYER_ENCRYPTION_KEY: <paste your key here>
       SCRYER_MOVIES_PATH: /media/movies
       SCRYER_SERIES_PATH: /media/series
       SCRYER_METADATA_GATEWAY_GRAPHQL_URL: https://smg.scryer.media/graphql
 
+secrets:
+  scryer_encryption_key:
+    file: ./scryer_encryption_key.txt
+
 volumes:
-  scryer-data:
+  scryer-config:
 ```
 
 Replace `/path/to/your/movies` and `/path/to/your/series` with the actual directories on your host where your media lives (or where you want scryer to organize files into).
+
+The encryption key is mounted as a Docker secret at `/run/secrets/scryer_encryption_key` inside the container. It never appears as an environment variable.
 
 ### 3. Start the service
 
@@ -145,10 +158,10 @@ Download clients (NZBGet, SABnzbd) and indexers are configured in **Settings** t
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `SCRYER_ENCRYPTION_KEY` | Recommended | Auto-generated | Encryption key for sensitive settings |
 | `SCRYER_MOVIES_PATH` | Yes | — | Movies directory inside the container |
 | `SCRYER_SERIES_PATH` | Yes | — | Series directory inside the container |
 | `SCRYER_METADATA_GATEWAY_GRAPHQL_URL` | Yes | — | Metadata API endpoint URL |
+| `SCRYER_ENCRYPTION_KEY` | No | Auto-managed | Override encryption key (see below) |
 | `SCRYER_BIND` | No | `0.0.0.0:8080` | Listen address and port |
 | `SCRYER_BASE_PATH` | No | `/` | Optional reverse-proxy path prefix, for example `/scryer` |
 | `SCRYER_TLS_CERT` | No | — | Path to TLS certificate (PEM) |
@@ -167,12 +180,15 @@ With that setting, the UI, GraphQL endpoint, WebSocket endpoint, splash screen, 
 
 ## Encryption Key
 
-The encryption key protects passwords and API keys at rest in the database. There are two ways it can be managed:
+The encryption key protects passwords and API keys at rest in the database.
 
-1. **Set explicitly in docker-compose.yml** (recommended) — survives volume deletion, makes backup/restore straightforward
-2. **Auto-generated on first run** — stored in the database inside the `scryer-data` volume. If you lose the volume, the key is gone and encrypted settings cannot be recovered
+**macOS and Windows:** Managed automatically — no action needed. The key is generated on first startup and stored securely by the OS.
 
-If you used the `init` wizard, the key is already in your compose file. If you see a warning on startup about a generated key, copy it into your `docker-compose.yml` `SCRYER_ENCRYPTION_KEY` variable.
+**Docker:** The key lives in `scryer_encryption_key.txt` and is mounted as a Docker secret. The `init` wizard creates this file for you. Do not lose it — you'll need to reconfigure passwords and API keys if it changes.
+
+**Linux (bare metal):** The key is stored at `<data_dir>/encryption.key` on first startup.
+
+The `SCRYER_ENCRYPTION_KEY` environment variable is supported as an explicit override on any platform.
 
 ## Resource Requirements
 
@@ -230,17 +246,18 @@ docker compose pull
 docker compose up -d
 ```
 
-Database migrations run automatically on startup. The `scryer-data` volume preserves your database and all settings across upgrades. No manual steps required.
+Database migrations run automatically on startup. The `scryer-config` volume preserves your database and all settings across upgrades. No manual steps required.
 
 ## Backup & Restore
 
-Scryer stores everything in a single SQLite database file at `/data/scryer.db` inside the container, which lives on the `scryer-data` Docker volume.
+Scryer stores everything in a single SQLite database file at `/config/scryer.db` inside the container, which lives on the `scryer-config` Docker volume. Back up your `scryer_encryption_key.txt` file as well — without it, encrypted settings cannot be recovered.
 
 **Quick backup:**
 
 ```bash
 docker compose stop
-docker run --rm -v scryer-data:/data -v .:/backup busybox cp /data/scryer.db /backup/scryer-backup.db
+docker run --rm -v scryer-config:/config -v .:/backup busybox cp /config/scryer.db /backup/scryer-backup.db
+cp scryer_encryption_key.txt scryer_encryption_key.txt.bak
 docker compose start
 ```
 
@@ -248,7 +265,7 @@ docker compose start
 
 ```bash
 docker compose stop
-docker run --rm -v scryer-data:/data -v .:/backup busybox cp /backup/scryer-backup.db /data/scryer.db
+docker run --rm -v scryer-config:/config -v .:/backup busybox cp /backup/scryer-backup.db /config/scryer.db
 docker compose start
 ```
 
@@ -268,7 +285,8 @@ docker compose start
 - Check that `SCRYER_MOVIES_PATH` / `SCRYER_SERIES_PATH` match the container-side mount paths
 
 **Encryption key warning on startup**
-- This means scryer auto-generated a key. Copy the key from the log output into your `docker-compose.yml` to persist it across volume recreations
+- On Docker, check that `scryer_encryption_key.txt` exists and is mounted via the `secrets:` section in your compose file
+- On macOS/Windows/Linux bare metal, the key is managed automatically — this warning only appears on first run
 
 **Check the version**
 

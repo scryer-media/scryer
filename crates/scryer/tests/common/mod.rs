@@ -47,24 +47,6 @@ impl TestContext {
             .await
             .expect("failed to create in-memory SQLite");
 
-        // Seed the JWT setting definition so ensure_jwt_hmac_secret can persist the secret
-        db.ensure_setting_definition(
-            "security",
-            "system",
-            "jwt.hmac_secret",
-            "string",
-            "\"\"",
-            true,
-            None,
-        )
-        .await
-        .expect("failed to seed jwt setting definition");
-
-        // Generate JWT HMAC secret via the standard bootstrap path
-        let jwt_hmac_secret = scryer_infrastructure::jwt_keys::ensure_jwt_hmac_secret(&db, None)
-            .await
-            .expect("failed to generate JWT HMAC secret");
-
         // Real clients pointed at wiremock URLs
         let nzbget = NzbgetDownloadClient::new(
             nzbget_server.uri(),
@@ -157,7 +139,7 @@ impl TestContext {
             JwtAuthConfig {
                 issuer: "scryer-test".to_string(),
                 access_ttl_seconds: 3600,
-                jwt_hmac_secret,
+                jwt_signing_salt: "test-salt".to_string(),
             },
             facet_registry,
         );

@@ -41,6 +41,9 @@ toml = "0.8"
 extism = "1.13"
 semver = "1"
 metrics = "0.24"
+security-framework = "3"
+security-framework-sys = "2"
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
 wiremock = "0.6"
 
 [profile.release]

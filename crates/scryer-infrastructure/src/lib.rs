@@ -4,7 +4,7 @@ pub mod encryption;
 pub mod external_import;
 mod file_importer;
 mod indexer_stats;
-pub mod jwt_keys;
+pub mod keystore;
 mod library_renamer;
 mod library_scanner;
 mod metadata_gateway;

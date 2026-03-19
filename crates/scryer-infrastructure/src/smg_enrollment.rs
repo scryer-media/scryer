@@ -84,8 +84,6 @@ pub async fn clear_enrollment_cache(db: &crate::SqliteServices) -> Result<(), St
 }
 
 /// Load existing enrollment from DB, or enroll with SMG if missing/expired.
-///
-/// Follows the same ensure pattern as `jwt_keys::ensure_jwt_hmac_secret`.
 pub async fn ensure_enrolled(
     db: &crate::SqliteServices,
     registration_url: &str,

@@ -170,7 +170,7 @@ jobs:
           security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
           security set-keychain-settings -lut 900 "$KEYCHAIN"
           security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
-          echo "$CERT_P12" | base64 --decode > /tmp/cert.p12
+          echo -n "$CERT_P12" | base64 --decode > /tmp/cert.p12
           security import /tmp/cert.p12 -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN"
           security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
@@ -229,7 +229,7 @@ jobs:
           security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
           security set-keychain-settings -lut 900 "$KEYCHAIN"
           security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
-          echo "$CERT_P12" | base64 --decode > /tmp/cert.p12
+          echo -n "$CERT_P12" | base64 --decode > /tmp/cert.p12
           security import /tmp/cert.p12 -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN"
           security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
@@ -283,7 +283,7 @@ jobs:
           SCRYER_EMBED_UI_DIR: ${{ github.workspace }}\scryer-web-out
           SCRYER_SMG_REGISTRATION_SECRET: ${{ secrets.SMG_REGISTRATION_SECRET }}
           SCRYER_SMG_GRAPHQL_URL: https://smg.scryer.media/graphql
-          RUSTFLAGS: -C target-cpu=haswell -C linker=lld-link
+          RUSTFLAGS: -C target-cpu=haswell -C linker=rust-lld
         run: cargo build -p scryer --release --locked
       - name: Create README.txt
         shell: pwsh
@@ -377,7 +377,7 @@ jobs:
           SCRYER_EMBED_UI_DIR: ${{ github.workspace }}\scryer-web-out
           SCRYER_SMG_REGISTRATION_SECRET: ${{ secrets.SMG_REGISTRATION_SECRET }}
           SCRYER_SMG_GRAPHQL_URL: https://smg.scryer.media/graphql
-          RUSTFLAGS: -C target-cpu=cortex-a76 -C linker=lld-link
+          RUSTFLAGS: -C target-cpu=cortex-a76 -C linker=rust-lld
         run: cargo build -p scryer --release --locked
       - name: Create README.txt
         shell: pwsh
