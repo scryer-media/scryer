@@ -21,10 +21,10 @@ Scryer monitors your media library, tracks wanted movies and TV shows, manages q
 ## Features
 
 - **Movies, TV, and anime in one place** — no need to run separate apps for each media type
-- **Automated acquisition** — searches your indexers, selects the best available release, and imports it into your library
+- **Automated media management** — searches your indexers, evaluates available releases against your quality preferences, and organizes them into your library
 - **Quality upgrades** — configurable quality profiles with scoring rules; automatically replaces files when a better version appears
 - **Subtitles** — finds and downloads matching subtitles from OpenSubtitles, with automatic timing correction
-- **Anime franchise movies** — tracks movies that belong between anime seasons and places them in the right watch order for Plex and Jellyfin
+- **Anime franchise movies** — tracks interstitial movies that belong between anime seasons and organizes them alongside the parent series in your library
 - **Metadata** — artwork, episode data, and cross-referenced anime IDs (TVDB, TMDB, MAL, AniList, AniDB) fetched automatically
 - **File organization** — renames and sorts files into clean folder structures that work with Plex, Jellyfin, and Emby
 - **Post-processing** — run custom scripts after imports, with full release metadata available
