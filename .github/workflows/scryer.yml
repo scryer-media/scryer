@@ -149,6 +149,8 @@ jobs:
         with:
           name: scryer-web-out-${{ github.run_id }}
           path: scryer-web-out
+      - name: Install system dependencies
+        run: brew install nasm
       - name: Build release binary (macOS arm64)
         env:
           SCRYER_EMBED_UI_DIR: ${{ github.workspace }}/scryer-web-out
@@ -185,6 +187,8 @@ jobs:
         with:
           name: scryer-web-out-${{ github.run_id }}
           path: scryer-web-out
+      - name: Install system dependencies
+        run: brew install nasm
       - name: Build release binary (macOS x86_64)
         env:
           SCRYER_EMBED_UI_DIR: ${{ github.workspace }}/scryer-web-out
