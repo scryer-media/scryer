@@ -160,6 +160,24 @@ jobs:
           SCRYER_SMG_GRAPHQL_URL: https://smg.scryer.media/graphql
           RUSTFLAGS: -C target-cpu=apple-m1 --cfg aes_armv8 --cfg chacha20_force_neon
         run: cargo build -p scryer --release --locked
+      - name: Codesign binary
+        env:
+          CERT_P12: ${{ secrets.APPLE_SIGNING_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_SIGNING_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN="build.keychain-db"
+          KEYCHAIN_PASS="ci-ephemeral"
+          security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 900 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
+          echo "$CERT_P12" | base64 --decode > /tmp/cert.p12
+          security import /tmp/cert.p12 -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          codesign --sign "Scryer Media Signing" --identifier media.scryer.app --force target/release/scryer
+          codesign --verify --verbose target/release/scryer
+          rm /tmp/cert.p12
+          security delete-keychain "$KEYCHAIN"
       - name: Package tarball
         run: tar -czf scryer-darwin-arm64.tar.gz -C target/release scryer
       - name: Upload release package
@@ -199,6 +217,24 @@ jobs:
           SCRYER_SMG_GRAPHQL_URL: https://smg.scryer.media/graphql
           RUSTFLAGS: -C target-cpu=haswell
         run: cargo build -p scryer --release --locked
+      - name: Codesign binary
+        env:
+          CERT_P12: ${{ secrets.APPLE_SIGNING_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_SIGNING_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN="build.keychain-db"
+          KEYCHAIN_PASS="ci-ephemeral"
+          security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 900 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
+          echo "$CERT_P12" | base64 --decode > /tmp/cert.p12
+          security import /tmp/cert.p12 -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          codesign --sign "Scryer Media Signing" --identifier media.scryer.app --force target/release/scryer
+          codesign --verify --verbose target/release/scryer
+          rm /tmp/cert.p12
+          security delete-keychain "$KEYCHAIN"
       - name: Package tarball
         run: tar -czf scryer-darwin-x86_64.tar.gz -C target/release scryer
       - name: Upload release package
@@ -529,3 +565,7 @@ jobs:
             git commit -m "scryer ${VERSION}"
             git push origin HEAD:main
           fi
+      - name: Trigger marketing site rebuild
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh api repos/scryer-media/web/dispatches -f event_type=release-published
