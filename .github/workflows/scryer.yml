@@ -378,6 +378,7 @@ jobs:
           SCRYER_SMG_REGISTRATION_SECRET: ${{ secrets.SMG_REGISTRATION_SECRET }}
           SCRYER_SMG_GRAPHQL_URL: https://smg.scryer.media/graphql
           RUSTFLAGS: -C target-cpu=cortex-a76 -C linker=rust-lld
+          CC: clang-cl
         run: cargo build -p scryer --release --locked
       - name: Create README.txt
         shell: pwsh
