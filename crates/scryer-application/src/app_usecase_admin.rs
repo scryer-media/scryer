@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(unix)]
 fn to_u64<T: Into<u64>>(value: T) -> u64 {
     value.into()
 }
@@ -109,6 +110,7 @@ impl AppUseCase {
                 continue; // skip duplicate mount points
             }
 
+            #[cfg(unix)]
             if let Some(stat) = statvfs_path(&path) {
                 let total = to_u64(stat.f_blocks) * to_u64(stat.f_frsize);
                 let free = to_u64(stat.f_bavail) * to_u64(stat.f_frsize);
@@ -122,6 +124,14 @@ impl AppUseCase {
                 });
             } else {
                 tracing::warn!(path = path.as_str(), "failed to query disk space");
+            }
+            #[cfg(not(unix))]
+            {
+                tracing::debug!(
+                    path = path.as_str(),
+                    "disk space reporting not available on this platform"
+                );
+                let _ = (&path, &label);
             }
         }
 

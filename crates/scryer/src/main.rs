@@ -9,7 +9,7 @@ mod splash;
 mod ui_assets;
 
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::Router;
@@ -67,11 +67,16 @@ struct AuthModeConfig {
 
 #[tokio::main]
 async fn main() {
-    // Handle CLI subcommands before any startup work
-    if let Some(arg) = std::env::args().nth(1) {
+    // Phase 1: Extract --data-dir from args before subcommand dispatch.
+    let mut args: Vec<String> = std::env::args().collect();
+    let data_dir_override = extract_data_dir(&mut args);
+
+    // Phase 2: Handle CLI subcommands before any startup work.
+    // args[0] is the binary name; subcommand (if any) is args[1].
+    if let Some(arg) = args.get(1) {
         match arg.as_str() {
             "init" => {
-                init::run_init(std::env::args().collect());
+                init::run_init(args);
                 return;
             }
             "--generate-key" => {
@@ -85,19 +90,26 @@ async fn main() {
             }
             other => {
                 eprintln!("unknown argument: {other}");
-                eprintln!("usage: scryer [init | --generate-key | --version]");
+                eprintln!("usage: scryer [--data-dir <path>] [init | --generate-key | --version]");
                 std::process::exit(1);
             }
         }
     }
 
-    load_env_file();
+    let data_dir = resolve_data_dir(data_dir_override.as_deref());
+
+    load_env_file(Some(&data_dir));
 
     // Install ring as the default rustls crypto provider (needed for TLS support)
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let db_path = std::env::var("SCRYER_DB_PATH")
-        .unwrap_or_else(|_| "sqlite://file::memory:?mode=memory&cache=shared".to_string());
+    let db_path = std::env::var("SCRYER_DB_PATH").unwrap_or_else(|_| {
+        let db_file = data_dir.join("scryer.db");
+        if let Some(parent) = db_file.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        format!("sqlite://{}", db_file.display())
+    });
     let jwt_issuer = std::env::var("SCRYER_JWT_ISSUER").unwrap_or_else(|_| "scryer".to_string());
     let jwt_access_ttl_seconds = parse_env_u64("SCRYER_JWT_ACCESS_TTL_SECONDS", 86_400);
     let migration_mode = parse_migration_mode(std::env::var("SCRYER_DB_MIGRATION_MODE").ok());
@@ -217,10 +229,9 @@ async fn main() {
                 shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(5)));
             });
             tracing::info!("scryer service listening on {addr} with TLS");
-            tracing::info!(
-                "open the web UI at https://{addr}{}",
-                startup_base_path.ui_root()
-            );
+            let url = format!("https://{addr}{}", startup_base_path.ui_root());
+            tracing::info!("open the web UI at {url}");
+            maybe_open_browser(&url);
             if let Err(error) = axum_server::bind_rustls(addr, rustls_config)
                 .handle(handle)
                 .serve(splash_app.into_make_service())
@@ -241,10 +252,9 @@ async fn main() {
                 "scryer service listening on {}",
                 listener.local_addr().expect("bound addr")
             );
-            tracing::info!(
-                "open the web UI at http://{addr}{}",
-                startup_base_path.ui_root()
-            );
+            let url = format!("http://{addr}{}", startup_base_path.ui_root());
+            tracing::info!("open the web UI at {url}");
+            maybe_open_browser(&url);
             if let Err(error) = axum::serve(listener, splash_app)
                 .with_graceful_shutdown(shutdown_signal(shutdown_token.clone()))
                 .await
@@ -886,10 +896,47 @@ async fn shutdown_signal(token: CancellationToken) {
     });
 }
 
-fn load_env_file() {
+/// Extract `--data-dir <path>` or `--data-dir=<path>` from the arg list,
+/// removing those elements so the remaining args are clean for subcommand dispatch.
+fn extract_data_dir(args: &mut Vec<String>) -> Option<PathBuf> {
+    let mut i = 1; // skip binary name
+    while i < args.len() {
+        if args[i] == "--data-dir" {
+            args.remove(i);
+            if i < args.len() {
+                return Some(PathBuf::from(args.remove(i)));
+            }
+            eprintln!("--data-dir requires a path argument");
+            std::process::exit(1);
+        } else if let Some(value) = args[i].strip_prefix("--data-dir=") {
+            let path = PathBuf::from(value);
+            args.remove(i);
+            return Some(path);
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+/// Resolve the data directory from CLI flag or platform default.
+///
+/// Priority: `--data-dir` flag > platform default via `directories` crate.
+/// The env var `SCRYER_DB_PATH` can still override the *database path* specifically,
+/// but the data directory itself is resolved here.
+fn resolve_data_dir(cli_override: Option<&Path>) -> PathBuf {
+    if let Some(dir) = cli_override {
+        return dir.to_path_buf();
+    }
+    directories::ProjectDirs::from("", "", "scryer")
+        .map(|p| p.data_dir().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn load_env_file(data_dir: Option<&Path>) {
     // Load in reverse priority order: dotenvy skips vars already set, so the
     // last file loaded has lowest priority.  Load the crate-local file first
-    // (higher priority), then the repo-root file (lower priority / template).
+    // (highest priority), then cwd .env, then data-dir .env (lowest priority).
     let candidates = ["crates/scryer/.env", ".env"];
     let mut loaded = false;
     for candidate in candidates {
@@ -898,8 +945,37 @@ fn load_env_file() {
             loaded = true;
         }
     }
+    // Also load .env from the data directory (lowest priority).
+    if let Some(dir) = data_dir {
+        let env_path = dir.join(".env");
+        if env_path.exists() {
+            let _ = dotenvy::from_path(env_path);
+            loaded = true;
+        }
+    }
     if !loaded {
         let _ = dotenvy::dotenv();
+    }
+}
+
+/// Open the user's default browser when running natively (not in Docker).
+/// Controlled by `SCRYER_OPEN_BROWSER` env var: "false" disables, default is auto-detect.
+fn maybe_open_browser(url: &str) {
+    // Respect explicit opt-out.
+    if let Ok(val) = std::env::var("SCRYER_OPEN_BROWSER")
+        && matches!(
+            val.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        )
+    {
+        return;
+    }
+    // Skip in containers (Docker sets /.dockerenv).
+    if Path::new("/.dockerenv").exists() {
+        return;
+    }
+    if let Err(err) = open::that(url) {
+        tracing::debug!(error = %err, "could not open browser");
     }
 }
 

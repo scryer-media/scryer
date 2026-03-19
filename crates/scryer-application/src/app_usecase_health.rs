@@ -2,6 +2,7 @@ use super::*;
 use std::collections::HashSet;
 use tracing::warn;
 
+#[cfg(unix)]
 fn to_u64<T: Into<u64>>(value: T) -> u64 {
     value.into()
 }
@@ -171,6 +172,7 @@ impl AppUseCase {
                 continue;
             }
 
+            #[cfg(unix)]
             if let Some(stat) = statvfs_path(&path) {
                 let free = to_u64(stat.f_bavail) * to_u64(stat.f_frsize);
                 let mb_100 = 100 * 1024 * 1024;

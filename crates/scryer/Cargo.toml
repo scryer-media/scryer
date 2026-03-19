@@ -29,6 +29,8 @@ flate2 = "1"
 percent-encoding = "2"
 toml = { workspace = true }
 metrics-exporter-prometheus = "0.16"
+directories = "6"
+open = "5"
 
 [dev-dependencies]
 scryer-rules = { path = "../scryer-rules" }
