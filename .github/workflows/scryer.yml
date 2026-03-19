@@ -78,6 +78,7 @@ jobs:
           SCRYER_EMBED_UI_DIR: ${{ github.workspace }}/scryer-web-out
           SCRYER_SMG_REGISTRATION_SECRET: ${{ secrets.SMG_REGISTRATION_SECRET }}
           SCRYER_SMG_GRAPHQL_URL: https://smg.scryer.media/graphql
+          RUSTFLAGS: -C target-cpu=haswell
         run: mold -run cargo build -p scryer --release --locked --target x86_64-unknown-linux-musl
       - name: Package tarball
         run: tar -czf scryer-linux-x86_64.tar.gz -C target/x86_64-unknown-linux-musl/release scryer
@@ -118,6 +119,7 @@ jobs:
           SCRYER_EMBED_UI_DIR: ${{ github.workspace }}/scryer-web-out
           SCRYER_SMG_REGISTRATION_SECRET: ${{ secrets.SMG_REGISTRATION_SECRET }}
           SCRYER_SMG_GRAPHQL_URL: https://smg.scryer.media/graphql
+          RUSTFLAGS: --cfg aes_armv8 --cfg chacha20_force_neon
         run: mold -run cargo build -p scryer --release --locked --target aarch64-unknown-linux-musl
       - name: Package tarball
         run: tar -czf scryer-linux-arm64.tar.gz -C target/aarch64-unknown-linux-musl/release scryer
@@ -156,6 +158,7 @@ jobs:
           SCRYER_EMBED_UI_DIR: ${{ github.workspace }}/scryer-web-out
           SCRYER_SMG_REGISTRATION_SECRET: ${{ secrets.SMG_REGISTRATION_SECRET }}
           SCRYER_SMG_GRAPHQL_URL: https://smg.scryer.media/graphql
+          RUSTFLAGS: -C target-cpu=apple-m1 --cfg aes_armv8 --cfg chacha20_force_neon
         run: cargo build -p scryer --release --locked
       - name: Package tarball
         run: tar -czf scryer-darwin-arm64.tar.gz -C target/release scryer
@@ -194,6 +197,7 @@ jobs:
           SCRYER_EMBED_UI_DIR: ${{ github.workspace }}/scryer-web-out
           SCRYER_SMG_REGISTRATION_SECRET: ${{ secrets.SMG_REGISTRATION_SECRET }}
           SCRYER_SMG_GRAPHQL_URL: https://smg.scryer.media/graphql
+          RUSTFLAGS: -C target-cpu=haswell
         run: cargo build -p scryer --release --locked
       - name: Package tarball
         run: tar -czf scryer-darwin-x86_64.tar.gz -C target/release scryer
