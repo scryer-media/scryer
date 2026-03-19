@@ -16,6 +16,10 @@
 
 ---
 
+<p align="center">
+  <img src="docs/img/scryer-overview.webp" alt="scryer overview" width="800"/>
+</p>
+
 Scryer monitors your media library, tracks wanted movies and TV shows, manages quality upgrades, renames and organizes files, and fetches subtitles — all from a single lightweight application.
 
 ## Features
