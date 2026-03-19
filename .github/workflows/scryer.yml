@@ -664,6 +664,17 @@ jobs:
             git push origin HEAD:main
           fi
       - name: Trigger marketing site rebuild
+        continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh api repos/scryer-media/web/dispatches -f event_type=release-published
+          WEB_TOKEN: ${{ secrets.WEB_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$WEB_TOKEN" ]; then
+            echo "WEB_DISPATCH_TOKEN not set; skipping site rebuild."
+            exit 0
+          fi
+          git clone "https://${WEB_TOKEN}@github.com/scryer-media/web.git" web-repo
+          cd web-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "133935777+NZBMan@users.noreply.github.com"
+          git commit --allow-empty -m "rebuild: ${{ github.ref_name }}"
+          git push origin HEAD:main

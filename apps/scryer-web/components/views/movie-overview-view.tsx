@@ -39,6 +39,7 @@ import { OverviewBackLink } from "@/components/views/overview-back-link";
 import { SubtitleSearchModal } from "@/components/views/subtitle-search-modal";
 import { blacklistSubtitleMutation } from "@/lib/graphql/mutations";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { TitlePoster } from "@/components/title-poster";
 
 const imdbLogoUrl = `${import.meta.env.BASE_URL}media-sites/imdb.svg`;
 const tmdbLogoUrl = `${import.meta.env.BASE_URL}media-sites/tmdb.svg`;
@@ -491,9 +492,10 @@ export function MovieOverviewView({
         <CardContent className="relative p-4">
           <div className="flex flex-col gap-4 sm:flex-row sm:gap-5">
             <div className="mx-auto shrink-0 sm:mx-0">
-              {posterUrl ? (
-                <img
+              {(posterUrl || title.posterSourceUrl) ? (
+                <TitlePoster
                   src={posterUrl}
+                  sourceSrc={title.posterSourceUrl}
                   alt={title.name}
                   className="block h-auto w-32 rounded-lg object-cover shadow-lg sm:w-[180px]"
                 />

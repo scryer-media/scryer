@@ -293,9 +293,18 @@ pub(crate) async fn apply_local_image_urls(
     for title in titles {
         if let Some(url) = local_urls.get(&title.id) {
             match kind {
-                TitleImageKind::Poster => title.poster_url = Some(url.clone()),
-                TitleImageKind::Banner => title.banner_url = Some(url.clone()),
-                TitleImageKind::Fanart => title.background_url = Some(url.clone()),
+                TitleImageKind::Poster => {
+                    title.poster_source_url = title.poster_url.take();
+                    title.poster_url = Some(url.clone());
+                }
+                TitleImageKind::Banner => {
+                    title.banner_source_url = title.banner_url.take();
+                    title.banner_url = Some(url.clone());
+                }
+                TitleImageKind::Fanart => {
+                    title.background_source_url = title.background_url.take();
+                    title.background_url = Some(url.clone());
+                }
             }
         }
     }

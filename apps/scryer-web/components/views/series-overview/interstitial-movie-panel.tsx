@@ -1,6 +1,7 @@
 import { ExternalLink } from "lucide-react";
 import type { InterstitialMovieMetadata } from "@/components/containers/series-overview-container";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
+import { TitlePoster } from "@/components/title-poster";
 import { getImdbUrl, getTvdbMovieUrl, formatRuntimeFromMinutes } from "./helpers";
 
 type InterstitialMoviePanelProps = {
@@ -20,7 +21,7 @@ export function InterstitialMoviePanel({ movie, hasFile, monitored }: Interstiti
     <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
       <div className="shrink-0">
         {posterUrl ? (
-          <img
+          <TitlePoster
             src={posterUrl}
             alt={movie.name}
             className="h-auto w-28 rounded-lg object-cover shadow-md sm:w-[140px]"

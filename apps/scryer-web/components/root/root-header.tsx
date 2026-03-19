@@ -20,6 +20,7 @@ import {
   viewFromFacet,
 } from "@/lib/facets/helpers";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
+import { TitlePoster } from "@/components/title-poster";
 import { useSearchContext } from "@/lib/context/search-context";
 import { cn } from "@/lib/utils";
 import { AddToCatalogDialog, EMPTY_SEARCH_RESULT } from "@/components/root/add-to-catalog-dialog";
@@ -160,9 +161,10 @@ export const RootHeader = React.memo(function RootHeader({
           >
             <div className="mb-2 flex min-h-20 items-start gap-3">
               <div className="h-20 w-14 flex-none overflow-hidden rounded-md border border-border bg-muted">
-                {posterUrl ? (
-                  <img
+                {(posterUrl || title.posterSourceUrl) ? (
+                  <TitlePoster
                     src={posterUrl}
+                    sourceSrc={title.posterSourceUrl}
                     alt={t("media.posterAlt", { name: title.name })}
                     className="h-full w-full object-cover"
                     loading="lazy"
@@ -263,7 +265,7 @@ export const RootHeader = React.memo(function RootHeader({
               <div className="flex min-h-20 gap-3">
                 <div className="h-20 w-14 flex-none overflow-hidden rounded-md border border-border bg-muted">
                   {posterUrl ? (
-                    <img
+                    <TitlePoster
                       src={posterUrl}
                       alt={t("media.posterAlt", { name: result.name })}
                       className="h-full w-full object-cover"

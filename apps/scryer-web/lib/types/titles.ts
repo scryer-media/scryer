@@ -17,8 +17,11 @@ export type TitleRecord = {
   sizeBytes?: number | null;
   contentStatus?: string | null;
   posterUrl?: string | null;
+  posterSourceUrl?: string | null;
   bannerUrl?: string | null;
+  bannerSourceUrl?: string | null;
   backgroundUrl?: string | null;
+  backgroundSourceUrl?: string | null;
 };
 
 export type RootFolderOption = {

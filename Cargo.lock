@@ -4147,7 +4147,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scryer"
-version = "0.9.10"
+version = "0.9.11"
 dependencies = [
  "async-graphql",
  "async-graphql-axum",
@@ -4186,7 +4186,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-application"
-version = "0.9.10"
+version = "0.9.11"
 dependencies = [
  "alass-core",
  "argon2",
@@ -4219,7 +4219,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-domain"
-version = "0.9.10"
+version = "0.9.11"
 dependencies = [
  "chrono",
  "serde",
@@ -4229,7 +4229,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure"
-version = "0.9.10"
+version = "0.9.11"
 dependencies = [
  "async-trait",
  "base64",
@@ -4265,7 +4265,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface"
-version = "0.9.10"
+version = "0.9.11"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -4281,7 +4281,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-mediainfo"
-version = "0.9.10"
+version = "0.9.11"
 dependencies = [
  "bytes",
  "matroska-demuxer",
@@ -4296,7 +4296,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-mock-apis"
-version = "0.9.10"
+version = "0.9.11"
 dependencies = [
  "axum",
  "serde",
@@ -4308,7 +4308,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-plugins"
-version = "0.9.10"
+version = "0.9.11"
 dependencies = [
  "async-trait",
  "base64",
@@ -4328,11 +4328,11 @@ dependencies = [
 
 [[package]]
 name = "scryer-release-parser"
-version = "0.9.10"
+version = "0.9.11"
 
 [[package]]
 name = "scryer-rules"
-version = "0.9.10"
+version = "0.9.11"
 dependencies = [
  "regorus",
  "serde",
@@ -6961,18 +6961,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.42"
+version = "0.8.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2578b716f8a7a858b7f02d5bd870c14bf4ddbbcf3a4c05414ba6503640505e3"
+checksum = "5c5030500cb2d66bdfbb4ebc9563be6ce7005a4b5d0f26be0c523870fe372ca6"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.42"
+version = "0.8.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e6cc098ea4d3bd6246687de65af3f920c430e236bee1e3bf2e441463f08a02f"
+checksum = "a5f86989a046a79640b9d8867c823349a139367bda96549794fcc3313ce91f4e"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -19,6 +19,7 @@ import { Loader2, Search } from "lucide-react";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
+import { TitlePoster } from "@/components/title-poster";
 
 export type CutoffUnmetItem = {
   id: string;
@@ -148,7 +149,7 @@ export function CutoffUnmetView({ state }: { state: CutoffUnmetViewState }) {
                     <div className="flex items-start gap-3">
                       <div className="shrink-0">
                         {posterUrl ? (
-                          <img
+                          <TitlePoster
                             src={posterUrl}
                             alt={item.name}
                             className="h-20 w-14 rounded object-cover"
@@ -209,7 +210,7 @@ export function CutoffUnmetView({ state }: { state: CutoffUnmetViewState }) {
                     <TableRow key={item.id}>
                       <TableCell>
                         {posterUrl ? (
-                          <img
+                          <TitlePoster
                             src={posterUrl}
                             alt={item.name}
                             className="h-8 w-6 rounded object-cover"

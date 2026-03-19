@@ -103,13 +103,14 @@ async fn main() {
     // Install ring as the default rustls crypto provider (needed for TLS support)
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let db_path = std::env::var("SCRYER_DB_PATH").unwrap_or_else(|_| {
-        let db_file = data_dir.join("scryer.db");
-        if let Some(parent) = db_file.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        format!("sqlite://{}", db_file.display())
-    });
+    let db_path = std::env::var("SCRYER_DB_PATH")
+        .unwrap_or_else(|_| format!("sqlite://{}", data_dir.join("scryer.db").display()));
+    // Ensure the database directory exists regardless of how db_path was resolved.
+    if let Some(path) = db_path.strip_prefix("sqlite://")
+        && let Some(parent) = std::path::Path::new(path).parent()
+    {
+        let _ = std::fs::create_dir_all(parent);
+    }
     let jwt_issuer = std::env::var("SCRYER_JWT_ISSUER").unwrap_or_else(|_| "scryer".to_string());
     let jwt_access_ttl_seconds = parse_env_u64("SCRYER_JWT_ACCESS_TTL_SECONDS", 86_400);
     let migration_mode = parse_migration_mode(std::env::var("SCRYER_DB_MIGRATION_MODE").ok());

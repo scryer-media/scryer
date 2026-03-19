@@ -8,6 +8,7 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from "@/components/ui/hover-card";
+import { TitlePoster } from "@/components/title-poster";
 import { SearchResultBuckets } from "@/components/common/release-search-results";
 import {
   TableBody,
@@ -270,9 +271,10 @@ export function TitleTable({
               aria-label={t("media.posterAlt", { name: item.name })}
             >
               <div data-ui="poster-thumb" className="h-20 w-14 overflow-hidden rounded border border-border bg-muted">
-                {posterThumbUrl ? (
-                  <img
+                {(posterThumbUrl || item.posterSourceUrl) ? (
+                  <TitlePoster
                     src={posterThumbUrl}
+                    sourceSrc={item.posterSourceUrl}
                     alt={t("media.posterAlt", { name: item.name })}
                     className="h-full w-full object-cover"
                     loading="lazy"

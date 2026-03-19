@@ -11,6 +11,7 @@ import type { ViewId } from "@/components/root/types";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import type { Release, TitleRecord } from "@/lib/types";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
+import { TitlePoster } from "@/components/title-poster";
 import {
   Table,
   TableBody,
@@ -244,7 +245,7 @@ export function AddTitleForm({
                     <div className="flex min-h-20 gap-3">
                       <div className="h-20 w-14 flex-none overflow-hidden rounded-md border border-border bg-muted">
                         {result.posterUrl ? (
-                          <img
+                          <TitlePoster
                             src={result.posterUrl}
                             alt={t("media.posterAlt", { name: result.name })}
                             className="h-full w-full object-cover"

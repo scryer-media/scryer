@@ -12,8 +12,11 @@ export const titleDetailQuery = `query TitleDetail($id: String!) {
     year
     overview
     posterUrl
+    posterSourceUrl
     bannerUrl
+    bannerSourceUrl
     backgroundUrl
+    backgroundSourceUrl
     sortTitle
     slug
     imdbId
@@ -131,8 +134,11 @@ export const titleOverviewInitQuery = `query TitleOverviewInit($id: String!, $bl
     year
     overview
     posterUrl
+    posterSourceUrl
     bannerUrl
+    bannerSourceUrl
     backgroundUrl
+    backgroundSourceUrl
     sortTitle
     slug
     imdbId
@@ -484,6 +490,7 @@ export const titlesQuery = `query Titles($facet: String, $query: String) {
     tags
     imdbId
     posterUrl
+    posterSourceUrl
     qualityTier
     sizeBytes
     contentStatus

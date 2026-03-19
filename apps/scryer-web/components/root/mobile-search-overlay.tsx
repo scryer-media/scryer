@@ -15,6 +15,7 @@ import {
 } from "@/lib/facets/helpers";
 import { useSearchContext } from "@/lib/context/search-context";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
+import { TitlePoster } from "@/components/title-poster";
 import { AddToCatalogDialog, EMPTY_SEARCH_RESULT } from "@/components/root/add-to-catalog-dialog";
 
 type MobileSearchOverlayProps = {
@@ -121,9 +122,10 @@ export function MobileSearchOverlay({
         >
           <div className="flex min-h-[44px] items-center gap-3">
             <div className="h-16 w-11 flex-none overflow-hidden rounded-md border border-border bg-muted">
-              {posterUrl ? (
-                <img
+              {(posterUrl || title.posterSourceUrl) ? (
+                <TitlePoster
                   src={posterUrl}
+                  sourceSrc={title.posterSourceUrl}
                   alt={t("media.posterAlt", { name: title.name })}
                   className="h-full w-full object-cover"
                   loading="lazy"
@@ -158,7 +160,7 @@ export function MobileSearchOverlay({
           <div className="flex min-h-[44px] items-center gap-3">
             <div className="h-16 w-11 flex-none overflow-hidden rounded-md border border-border bg-muted">
               {posterUrl ? (
-                <img
+                <TitlePoster
                   src={posterUrl}
                   alt={t("media.posterAlt", { name: result.name })}
                   className="h-full w-full object-cover"

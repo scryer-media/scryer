@@ -7,6 +7,7 @@ import { useClient } from "urql";
 import type { Release } from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { TitlePoster } from "@/components/title-poster";
 import { searchForEpisodeQuery } from "@/lib/graphql/queries";
 import { queueExistingMutation } from "@/lib/graphql/mutations";
 import type {
@@ -372,9 +373,10 @@ export function SeriesOverviewView({
         <CardContent className="relative p-4">
           <div className="flex flex-col gap-4 sm:flex-row sm:gap-5">
             <div className="mx-auto shrink-0 sm:mx-0">
-              {title.posterUrl ? (
-                <img
+              {(title.posterUrl || title.posterSourceUrl) ? (
+                <TitlePoster
                   src={title.posterUrl}
+                  sourceSrc={title.posterSourceUrl}
                   alt={title.name}
                   className="block h-auto w-32 rounded-lg object-cover shadow-lg sm:w-[180px]"
                 />

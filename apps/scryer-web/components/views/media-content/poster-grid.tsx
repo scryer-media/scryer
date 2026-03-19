@@ -7,6 +7,7 @@ import type { TitleRecord } from "@/lib/types";
 import type { ParsedQualityProfile } from "@/lib/types/quality-profiles";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
+import { TitlePoster } from "@/components/title-poster";
 
 const QP_TAG_PREFIX = "scryer:quality-profile:";
 
@@ -164,9 +165,10 @@ function PosterCard({
             aria-label={title.name}
           >
             <div className="relative aspect-[2/3]">
-              {posterUrl ? (
-                <img
+              {(posterUrl || title.posterSourceUrl) ? (
+                <TitlePoster
                   src={posterUrl}
+                  sourceSrc={title.posterSourceUrl}
                   alt={t("media.posterAlt", { name: title.name })}
                   className="h-full w-full object-cover"
                   loading="lazy"

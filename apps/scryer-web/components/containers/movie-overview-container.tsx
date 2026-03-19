@@ -50,6 +50,7 @@ export type TitleDetail = {
   year: number | null;
   overview: string | null;
   posterUrl: string | null;
+  posterSourceUrl: string | null;
   bannerUrl: string | null;
   backgroundUrl: string | null;
   sortTitle: string | null;

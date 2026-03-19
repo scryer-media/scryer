@@ -19,6 +19,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useTranslate } from "@/lib/context/translate-context";
 import { defaultMonitorTypeForFacet, sectionLabelForFacet } from "@/lib/facets/helpers";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
+import { TitlePoster } from "@/components/title-poster";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import type { Facet } from "@/lib/types";
 import type {
@@ -155,7 +156,7 @@ export function AddToCatalogDialog({
           <div className="flex gap-3">
             <div className="h-20 w-14 flex-none overflow-hidden rounded-md border border-border bg-muted">
               {posterUrl ? (
-                <img
+                <TitlePoster
                   src={posterUrl}
                   alt={t("media.posterAlt", { name: result.name })}
                   className="h-full w-full object-cover"
