@@ -266,13 +266,22 @@ jobs:
           name: scryer-web-out-${{ github.run_id }}
           path: scryer-web-out
       - name: Install NASM
-        run: choco install nasm -y
+        shell: pwsh
+        run: |
+          $url = "https://www.nasm.us/pub/nasm/releasebuilds/3.01/win64/nasm-3.01-win64.zip"
+          Invoke-WebRequest $url -OutFile nasm.zip
+          Expand-Archive nasm.zip -DestinationPath C:\nasm
+          $dir = (Get-ChildItem C:\nasm -Directory | Select-Object -First 1).FullName
+          echo "$dir" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - name: Exclude build dir from Windows Defender
+        shell: pwsh
+        run: Add-MpPreference -ExclusionPath "${{ github.workspace }}"
       - name: Build release binary (Windows x86_64)
         env:
           SCRYER_EMBED_UI_DIR: ${{ github.workspace }}\scryer-web-out
           SCRYER_SMG_REGISTRATION_SECRET: ${{ secrets.SMG_REGISTRATION_SECRET }}
           SCRYER_SMG_GRAPHQL_URL: https://smg.scryer.media/graphql
-          RUSTFLAGS: -C target-cpu=haswell
+          RUSTFLAGS: -C target-cpu=haswell -C linker=lld-link
         run: cargo build -p scryer --release --locked
       - name: Create README.txt
         shell: pwsh
@@ -294,17 +303,11 @@ jobs:
           Encryption Key
           --------------
           Scryer encrypts passwords and API keys stored in its database.
-          On first run an encryption key is auto-generated and saved in
-          the database. If you want to manage the key yourself (recommended
-          for backups), generate one and set it as an environment variable
-          before the first run:
+          On first run an encryption key is auto-generated and stored
+          securely by Windows. No manual key management is needed.
 
-              scryer.exe --generate-key
-              set SCRYER_ENCRYPTION_KEY=<paste the output>
-              scryer.exe
-
-          Keep this key safe. Without it, encrypted settings cannot be
-          recovered if you move or recreate the database.
+          To override the key (advanced), set the environment variable
+          SCRYER_ENCRYPTION_KEY before starting scryer.
 
           Running as a Windows Service (NSSM)
           ------------------------------------
@@ -327,7 +330,6 @@ jobs:
 
           Environment Variables
           ---------------------
-          SCRYER_ENCRYPTION_KEY   Encryption key for sensitive settings
           SCRYER_MOVIES_PATH      Movies directory
           SCRYER_SERIES_PATH      Series directory
           SCRYER_BIND             Listen address (default: 127.0.0.1:8080)
