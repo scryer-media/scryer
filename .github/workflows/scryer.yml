@@ -131,8 +131,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  rust-build-macos-arm:
-    name: rust-build-macos-arm
+  rust-build-macos:
+    name: rust-build-macos
     runs-on: macos-26
     timeout-minutes: 45
     needs: [web]
@@ -143,6 +143,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: "1.94"
+          targets: x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: false
@@ -160,64 +161,14 @@ jobs:
           SCRYER_SMG_GRAPHQL_URL: https://smg.scryer.media/graphql
           RUSTFLAGS: -C target-cpu=apple-m1 --cfg aes_armv8 --cfg chacha20_force_neon
         run: cargo build -p scryer --release --locked
-      - name: Codesign binary
-        env:
-          CERT_P12: ${{ secrets.APPLE_SIGNING_CERT_P12 }}
-          CERT_PASSWORD: ${{ secrets.APPLE_SIGNING_CERT_PASSWORD }}
-        run: |
-          KEYCHAIN="build.keychain-db"
-          KEYCHAIN_PASS="ci-ephemeral"
-          security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
-          security set-keychain-settings -lut 900 "$KEYCHAIN"
-          security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
-          echo "$CERT_P12" | base64 --decode > /tmp/cert.p12
-          security import /tmp/cert.p12 -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN"
-          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
-          codesign --sign "Scryer Media Signing" --identifier media.scryer.app --force target/release/scryer
-          codesign --verify --verbose target/release/scryer
-          rm /tmp/cert.p12
-          security delete-keychain "$KEYCHAIN"
-      - name: Package tarball
-        run: tar -czf scryer-darwin-arm64.tar.gz -C target/release scryer
-      - name: Upload release package
-        uses: actions/upload-artifact@v7
-        with:
-          name: scryer-darwin-arm64-${{ github.run_id }}
-          path: scryer-darwin-arm64.tar.gz
-          if-no-files-found: error
-          retention-days: 14
-
-  rust-build-macos-intel:
-    name: rust-build-macos-intel
-    runs-on: macos-26-intel
-    timeout-minutes: 45
-    needs: [web]
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@v1
-        with:
-          toolchain: "1.94"
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: false
-      - name: Download embedded web artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: scryer-web-out-${{ github.run_id }}
-          path: scryer-web-out
-      - name: Install system dependencies
-        run: brew install nasm
       - name: Build release binary (macOS x86_64)
         env:
           SCRYER_EMBED_UI_DIR: ${{ github.workspace }}/scryer-web-out
           SCRYER_SMG_REGISTRATION_SECRET: ${{ secrets.SMG_REGISTRATION_SECRET }}
           SCRYER_SMG_GRAPHQL_URL: https://smg.scryer.media/graphql
           RUSTFLAGS: -C target-cpu=haswell
-        run: cargo build -p scryer --release --locked
-      - name: Codesign binary
+        run: cargo build -p scryer --release --locked --target x86_64-apple-darwin
+      - name: Setup codesigning keychain
         env:
           CERT_P12: ${{ secrets.APPLE_SIGNING_CERT_P12 }}
           CERT_PASSWORD: ${{ secrets.APPLE_SIGNING_CERT_PASSWORD }}
@@ -231,13 +182,29 @@ jobs:
           security import /tmp/cert.p12 -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN"
           security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+      - name: Codesign binaries
+        run: |
           codesign --sign "Scryer Media Signing" --identifier media.scryer.app --force target/release/scryer
           codesign --verify --verbose target/release/scryer
-          rm /tmp/cert.p12
-          security delete-keychain "$KEYCHAIN"
-      - name: Package tarball
-        run: tar -czf scryer-darwin-x86_64.tar.gz -C target/release scryer
-      - name: Upload release package
+          codesign --sign "Scryer Media Signing" --identifier media.scryer.app --force target/x86_64-apple-darwin/release/scryer
+          codesign --verify --verbose target/x86_64-apple-darwin/release/scryer
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          rm -f /tmp/cert.p12
+          security delete-keychain build.keychain-db 2>/dev/null || true
+      - name: Package tarballs
+        run: |
+          tar -czf scryer-darwin-arm64.tar.gz -C target/release scryer
+          tar -czf scryer-darwin-x86_64.tar.gz -C target/x86_64-apple-darwin/release scryer
+      - name: Upload arm64 package
+        uses: actions/upload-artifact@v7
+        with:
+          name: scryer-darwin-arm64-${{ github.run_id }}
+          path: scryer-darwin-arm64.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload x86_64 package
         uses: actions/upload-artifact@v7
         with:
           name: scryer-darwin-x86_64-${{ github.run_id }}
@@ -444,7 +411,7 @@ jobs:
     name: publish-release
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    needs: [rust-build, rust-build-arm, rust-build-macos-arm, rust-build-macos-intel, rust-build-windows, rust-check]
+    needs: [rust-build, rust-build-arm, rust-build-macos, rust-build-windows, rust-check]
     permissions:
       contents: write
     if: ${{ github.ref_type == 'tag' && startsWith(github.ref_name, 'scryer-v') }}
