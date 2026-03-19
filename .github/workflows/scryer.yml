@@ -349,6 +349,100 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  rust-build-windows-arm:
+    name: rust-build-windows-arm
+    runs-on: windows-11-arm
+    timeout-minutes: 45
+    needs: [web]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.94"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: false
+      - name: Download embedded web artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: scryer-web-out-${{ github.run_id }}
+          path: scryer-web-out
+      - name: Exclude build dir from Windows Defender
+        shell: pwsh
+        run: Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+      - name: Build release binary (Windows arm64)
+        env:
+          SCRYER_EMBED_UI_DIR: ${{ github.workspace }}\scryer-web-out
+          SCRYER_SMG_REGISTRATION_SECRET: ${{ secrets.SMG_REGISTRATION_SECRET }}
+          SCRYER_SMG_GRAPHQL_URL: https://smg.scryer.media/graphql
+          RUSTFLAGS: -C linker=lld-link
+        run: cargo build -p scryer --release --locked
+      - name: Create README.txt
+        shell: pwsh
+        run: |
+          @"
+          scryer for Windows
+          ==================
+
+          Quick Start
+          -----------
+          1. Double-click scryer.exe (or run it from a terminal).
+          2. Open http://localhost:8080 in your browser.
+
+          Data is stored in %LOCALAPPDATA%\scryer by default. To use a
+          different location, pass --data-dir:
+
+              scryer.exe --data-dir C:\scryer-data
+
+          Encryption Key
+          --------------
+          Scryer encrypts passwords and API keys stored in its database.
+          On first run an encryption key is auto-generated and stored
+          securely by Windows. No manual key management is needed.
+
+          To override the key (advanced), set the environment variable
+          SCRYER_ENCRYPTION_KEY before starting scryer.
+
+          Running as a Windows Service (NSSM)
+          ------------------------------------
+          NSSM (https://nssm.cc) lets you run scryer as a background
+          service that starts automatically with Windows.
+
+          1. Download nssm and extract it somewhere on your PATH.
+          2. Open an elevated (Administrator) terminal and run:
+
+              nssm install scryer "C:\path\to\scryer.exe"
+              nssm set scryer AppDirectory "C:\path\to"
+              nssm set scryer AppParameters "--data-dir C:\scryer-data"
+              nssm set scryer Start SERVICE_AUTO_START
+              nssm start scryer
+
+          To remove the service later:
+
+              nssm stop scryer
+              nssm remove scryer confirm
+
+          Environment Variables
+          ---------------------
+          SCRYER_MOVIES_PATH      Movies directory
+          SCRYER_SERIES_PATH      Series directory
+          SCRYER_BIND             Listen address (default: 127.0.0.1:8080)
+          SCRYER_OPEN_BROWSER     Set to "false" to disable auto-open
+          SCRYER_DB_PATH          Override database path (advanced)
+          "@ | Set-Content -Path README.txt -Encoding UTF8
+      - name: Package zip
+        shell: pwsh
+        run: Compress-Archive -Path target\release\scryer.exe,README.txt -DestinationPath scryer-windows-arm64.zip
+      - name: Upload release package
+        uses: actions/upload-artifact@v7
+        with:
+          name: scryer-windows-arm64-${{ github.run_id }}
+          path: scryer-windows-arm64.zip
+          if-no-files-found: error
+          retention-days: 14
+
   rust-check:
     name: rust-check
     runs-on: ubuntu-24.04
@@ -446,7 +540,7 @@ jobs:
     name: publish-release
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    needs: [rust-build, rust-build-arm, rust-build-macos-arm, rust-build-macos-intel, rust-build-windows, rust-check]
+    needs: [rust-build, rust-build-arm, rust-build-macos-arm, rust-build-macos-intel, rust-build-windows, rust-build-windows-arm, rust-check]
     permissions:
       contents: write
     if: ${{ github.ref_type == 'tag' && startsWith(github.ref_name, 'scryer-v') }}
