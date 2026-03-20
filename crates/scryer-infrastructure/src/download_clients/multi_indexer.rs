@@ -16,10 +16,115 @@ use tracing::{info, warn};
 #[derive(Clone, Debug)]
 struct SearchStrategy {
     query: String,
-    imdb_id: Option<String>,
-    tvdb_id: Option<String>,
-    anidb_id: Option<String>,
+    ids: HashMap<String, String>,
+    season: Option<u32>,
+    episode: Option<u32>,
+    absolute_episode: Option<u32>,
     label: String,
+}
+
+fn preferred_anime_alias_query(query: &str, tagged_aliases: &[scryer_domain::TaggedAlias]) -> Option<String> {
+    let canonical = strip_query_context(query);
+    if canonical.is_empty() {
+        tracing::debug!(
+            original_query = %query,
+            tagged_alias_count = tagged_aliases.len(),
+            "anime alias selection skipped: canonical query is empty"
+        );
+        return None;
+    }
+
+    let alias_candidates: Vec<(String, String, bool, bool)> = tagged_aliases
+        .iter()
+        .map(|alias| {
+            let trimmed = alias.name.trim().to_string();
+            let language_matches = alias.language.eq_ignore_ascii_case("jpn");
+            let romanized = is_romanized_alias(&alias.name);
+            (trimmed, alias.language.clone(), language_matches, romanized)
+        })
+        .collect();
+
+    tracing::debug!(
+        original_query = %query,
+        canonical_query = %canonical,
+        alias_candidates = ?alias_candidates,
+        "anime alias selection candidates"
+    );
+
+    let selected = alias_candidates
+        .iter()
+        .find(|(name, _, language_matches, romanized)| {
+            !name.is_empty() && *language_matches && *romanized && !canonical.eq_ignore_ascii_case(name)
+        })
+        .map(|(name, _, _, _)| name.clone());
+
+    tracing::debug!(
+        original_query = %query,
+        canonical_query = %canonical,
+        selected_alias = ?selected,
+        "anime alias selection result"
+    );
+
+    selected
+}
+
+
+fn strip_query_context(query: &str) -> &str {
+    let tokens: Vec<&str> = query.split_whitespace().collect();
+    if tokens.is_empty() {
+        return query.trim();
+    }
+
+    let mut start = tokens.len();
+    for index in (0..tokens.len()).rev() {
+        if looks_like_context_token(tokens[index]) {
+            start = index;
+        } else if start != tokens.len() {
+            break;
+        }
+    }
+
+    if start == tokens.len() {
+        query.trim()
+    } else {
+        query[..query.rfind(tokens[start]).unwrap_or(query.len())].trim()
+    }
+}
+
+fn looks_like_context_token(token: &str) -> bool {
+    let trimmed = token.trim_matches(|ch: char| !ch.is_ascii_alphanumeric());
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let upper = trimmed.to_ascii_uppercase();
+    if upper == "OVA" || upper == "SPECIAL" {
+        return true;
+    }
+
+    if upper.starts_with('S') {
+        let rest = &upper[1..];
+        if rest.chars().all(|ch| ch.is_ascii_digit()) {
+            return true;
+        }
+        if let Some((season_part, episode_part)) = rest.split_once('E') {
+            return !season_part.is_empty()
+                && !episode_part.is_empty()
+                && season_part.chars().all(|ch| ch.is_ascii_digit())
+                && episode_part.chars().all(|ch| ch.is_ascii_digit());
+        }
+    }
+
+    trimmed.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn is_romanized_alias(alias: &str) -> bool {
+    let trimmed = alias.trim();
+    !trimmed.is_empty()
+        && trimmed.chars().all(|ch| {
+            ch.is_ascii_alphanumeric()
+                || matches!(ch, ' ' | '-' | '_' | ':' | ';' | ',' | '.' | '\'' | '&' | '!' | '?')
+        })
 }
 
 /// Per-indexer rate limiter tracking the last request time.
@@ -210,10 +315,9 @@ impl IndexerClient for MultiIndexerSearchClient {
     async fn search(
         &self,
         query: String,
-        imdb_id: Option<String>,
-        tvdb_id: Option<String>,
-        anidb_id: Option<String>,
+        ids: HashMap<String, String>,
         category: Option<String>,
+        facet: Option<String>,
         newznab_categories: Option<Vec<String>>,
         indexer_routing: Option<IndexerRoutingPlan>,
         mode: SearchMode,
@@ -224,7 +328,7 @@ impl IndexerClient for MultiIndexerSearchClient {
     ) -> AppResult<IndexerSearchResponse> {
         let is_rss_request = Self::is_rss_sync_request(
             &query,
-            imdb_id.is_some() || tvdb_id.is_some() || anidb_id.is_some(),
+            !ids.is_empty(),
             category
                 .as_ref()
                 .is_some_and(|value| !value.trim().is_empty())
@@ -296,32 +400,30 @@ impl IndexerClient for MultiIndexerSearchClient {
             "dispatching search to indexers"
         );
 
-        // Determine the search facet from available IDs and category hints
-        let facet = infer_facet(&anidb_id, &tvdb_id, &imdb_id, &category);
+        let facet = match facet.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+            Some("movie") | Some("series") | Some("anime") => facet.unwrap(),
+            Some(other) => {
+                return Err(AppError::Validation(format!(
+                    "unsupported search facet: {other}"
+                )));
+            }
+            None if is_rss_request => "series".to_string(),
+            None => {
+                return Err(AppError::Validation("search facet is required".to_string()));
+            }
+        };
 
         tracing::debug!(
             %facet,
-            ?anidb_id,
-            ?tvdb_id,
-            ?imdb_id,
             ?category,
+            ?ids,
             ?season,
             ?episode,
+            ?absolute_episode,
             %query,
             "search context"
         );
-
-        // Build the well-known ID map for strategy dispatch
-        let mut available_ids: HashMap<String, String> = HashMap::new();
-        if let Some(ref id) = imdb_id {
-            available_ids.insert("imdb_id".into(), id.clone());
-        }
-        if let Some(ref id) = tvdb_id {
-            available_ids.insert("tvdb_id".into(), id.clone());
-        }
-        if let Some(ref id) = anidb_id {
-            available_ids.insert("anidb_id".into(), id.clone());
-        }
+        let available_ids = ids;
 
         // Spawn parallel searches across enabled indexers, applying per-indexer routing
         let mut set = tokio::task::JoinSet::new();
@@ -381,14 +483,11 @@ impl IndexerClient for MultiIndexerSearchClient {
             // - Indexers that have the facet but only for ID-based search (deduplicates_aliases)
             //   are skipped when none of their supported IDs are available — freetext on
             //   AnimeTosho for "The Matrix" is pointless when there's no anidb_id.
-            let has_facet_entry = caps.has_facet(facet);
+            let has_facet_entry = caps.has_facet(&facet);
             let has_declared_facets = !caps.supported_ids.is_empty();
             let skip_no_facet = !has_facet_entry && has_declared_facets;
             let skip_no_matching_id = has_facet_entry && caps.deduplicates_aliases && {
-                let id_types = caps.id_types_for_facet(facet);
-                !id_types
-                    .iter()
-                    .any(|id_type| available_ids.contains_key(id_type.as_str()))
+                filter_ids_for_types(&available_ids, caps.id_types_for_facet(&facet)).is_empty()
             };
             if !is_rss_request && (skip_no_facet || skip_no_matching_id) {
                 info!(
@@ -433,6 +532,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 let rate_limit_seconds = config.rate_limit_seconds;
                 let stats_tracker = self.stats_tracker.clone();
                 let backoff_tracker = self.backoff_tracker.clone();
+                let facet = facet.clone();
 
                 set.spawn(async move {
                     let results = cell
@@ -443,7 +543,19 @@ impl IndexerClient for MultiIndexerSearchClient {
                             let start = std::time::Instant::now();
                             match tokio::time::timeout(
                                 std::time::Duration::from_secs(30),
-                                client.search(query, None, None, None, category, per_indexer_categories, None, mode, season, episode, None, tagged_aliases),
+                                client.search(
+                                    query,
+                                    HashMap::new(),
+                                    category,
+                                    Some(facet),
+                                    per_indexer_categories,
+                                    None,
+                                    mode,
+                                    season,
+                                    episode,
+                                    absolute_episode,
+                                    tagged_aliases,
+                                ),
                             ).await {
                                 Ok(Ok(response)) => {
                                     info!(indexer = indexer_name.as_str(), count = response.results.len(), "RSS feed cached");
@@ -489,26 +601,74 @@ impl IndexerClient for MultiIndexerSearchClient {
 
             let mut strategies: Vec<SearchStrategy> = build_strategies(&StrategyParams {
                 query: &query,
-                facet,
+                facet: &facet,
                 ids: &available_ids,
-                caps: &caps,
                 season,
                 episode,
                 absolute_episode,
+                caps: &caps,
                 is_alias_query: false,
             });
+
+            tracing::debug!(
+                indexer = config.name.as_str(),
+                facet = %facet,
+                query = %query,
+                tagged_aliases = ?tagged_aliases,
+                strategy_labels = ?strategies.iter().map(|strategy| strategy.label.clone()).collect::<Vec<_>>(),
+                "built primary indexer strategies"
+            );
+
+            if facet == "anime"
+                && let Some(alias_query) = preferred_anime_alias_query(&query, &tagged_aliases)
+            {
+                let alias_strategies = build_strategies(&StrategyParams {
+                    query: &alias_query,
+                    facet: &facet,
+                    ids: &available_ids,
+                    season,
+                    episode,
+                    absolute_episode,
+                    caps: &caps,
+                    is_alias_query: true,
+                });
+
+                tracing::debug!(
+                    indexer = config.name.as_str(),
+                    facet = %facet,
+                    canonical_query = %query,
+                    alias_query = %alias_query,
+                    tagged_aliases = ?tagged_aliases,
+                    alias_strategy_labels = ?alias_strategies.iter().map(|strategy| strategy.label.clone()).collect::<Vec<_>>(),
+                    provider_deduplicates_aliases = caps.deduplicates_aliases,
+                    "built anime alias strategies"
+                );
+
+                strategies.extend(alias_strategies);
+            } else if facet == "anime" {
+                tracing::debug!(
+                    indexer = config.name.as_str(),
+                    facet = %facet,
+                    canonical_query = %query,
+                    tagged_aliases = ?tagged_aliases,
+                    provider_deduplicates_aliases = caps.deduplicates_aliases,
+                    "no anime alias strategies were added"
+                );
+            }
 
             // Skip freetext strategies when ID-based strategies are available and
             // the indexer has API limits or deduplicates aliases (freetext without
             // the constraining ID returns broad, unrelated results).
-            if (has_api_limit || caps.deduplicates_aliases) && strategies.len() > 1 {
-                let has_id_strategy = strategies
-                    .iter()
-                    .any(|s| s.label != "freetext" && s.label != "fallback");
+            if (has_api_limit || caps.deduplicates_aliases) && strategies.len() > 1 && facet != "anime" {
+                let has_id_strategy = strategies.iter().any(|s| !s.ids.is_empty());
                 if has_id_strategy {
                     strategies.retain(|s| s.label != "freetext");
                 }
             }
+
+            self.rate_limiter
+                .acquire(&config.id, config.rate_limit_seconds, mode)
+                .await;
 
             for strategy in strategies {
                 let client = client.clone();
@@ -517,30 +677,24 @@ impl IndexerClient for MultiIndexerSearchClient {
                 let tagged_aliases = tagged_aliases.clone();
                 let indexer_id = config.id.clone();
                 let indexer_name = config.name.clone();
-                let rate_limiter = self.rate_limiter.clone();
-                let rate_limit_seconds = config.rate_limit_seconds;
                 let strategy_label = strategy.label.clone();
+                let facet = facet.clone();
 
                 set.spawn(async move {
-                    rate_limiter
-                        .acquire(&indexer_id, rate_limit_seconds, mode)
-                        .await;
-
                     let start = std::time::Instant::now();
                     let result = tokio::time::timeout(
                         std::time::Duration::from_secs(30),
                         client.search(
                             strategy.query,
-                            strategy.imdb_id,
-                            strategy.tvdb_id,
-                            strategy.anidb_id,
+                            strategy.ids,
                             category,
+                            Some(facet),
                             per_indexer_categories,
                             None,
                             mode,
-                            season,
-                            episode,
-                            absolute_episode,
+                            strategy.season,
+                            strategy.episode,
+                            strategy.absolute_episode,
                             tagged_aliases,
                         ),
                     )
@@ -644,7 +798,15 @@ impl IndexerClient for MultiIndexerSearchClient {
         if !query.is_empty() {
             let expected = scryer_release_parser::parse_release_metadata(&query);
             if !expected.normalized_title.is_empty() {
-                let expected_title = normalize_for_comparison(&expected.normalized_title);
+                let mut expected_titles = vec![normalize_for_comparison(&expected.normalized_title)];
+                expected_titles.extend(
+                    tagged_aliases
+                        .iter()
+                        .map(|alias| normalize_for_comparison(&alias.name))
+                        .filter(|alias| !alias.is_empty()),
+                );
+                let mut seen_titles = HashSet::new();
+                expected_titles.retain(|title| seen_titles.insert(title.clone()));
                 let before = all_results.len();
                 all_results.retain(|r| {
                     let Some(ref parsed) = r.parsed_release_metadata else {
@@ -656,12 +818,14 @@ impl IndexerClient for MultiIndexerSearchClient {
 
                     // Always check title
                     let release_title = normalize_for_comparison(&parsed.normalized_title);
-                    let title_ok = expected_title.contains(&release_title)
-                        || release_title.contains(&expected_title);
+                    let title_ok = expected_titles.iter().any(|expected_title| {
+                        expected_title.contains(&release_title)
+                            || release_title.contains(expected_title)
+                    });
                     if !title_ok {
                         tracing::debug!(
                             query = %query,
-                            expected = %expected.normalized_title,
+                            expected = ?expected_titles,
                             got = %parsed.normalized_title,
                             "title guard: title mismatch"
                         );
@@ -731,87 +895,74 @@ struct StrategyParams<'a> {
     query: &'a str,
     facet: &'a str,
     ids: &'a HashMap<String, String>,
-    caps: &'a scryer_domain::IndexerProviderCapabilities,
     season: Option<u32>,
     episode: Option<u32>,
     absolute_episode: Option<u32>,
+    caps: &'a scryer_domain::IndexerProviderCapabilities,
     is_alias_query: bool,
 }
 
-/// The `facet` parameter is the current search facet ("movies", "series", "anime",
-/// "anime_movies"). The orchestrator only builds ID strategies for facets the
-/// indexer declares in `supported_ids`.
+/// The `facet` parameter is the current search facet ("movie", "series", "anime").
+/// The orchestrator only builds ID strategies for facets the indexer declares
+/// in `supported_ids`.
 fn build_strategies(p: &StrategyParams<'_>) -> Vec<SearchStrategy> {
     let query = p.query;
     let facet = p.facet;
     let ids = p.ids;
-    let caps = p.caps;
     let season = p.season;
     let episode = p.episode;
     let absolute_episode = p.absolute_episode;
+    let caps = p.caps;
     let is_alias_query = p.is_alias_query;
     // Alias queries skip indexers that deduplicate aliases internally
     if is_alias_query && caps.deduplicates_aliases {
+        tracing::debug!(
+            facet = %facet,
+            query = %query,
+            provider_deduplicates_aliases = caps.deduplicates_aliases,
+            "skipping alias strategies because provider deduplicates aliases"
+        );
         return vec![];
     }
 
     let mut strategies = Vec::with_capacity(4);
 
-    // ID-based strategies: match well-known ID names from the plugin's
-    // supported_ids against the available IDs from the search query.
-    let id_types = caps.id_types_for_facet(facet);
-    if !id_types.is_empty() && !is_alias_query {
-        for id_type in id_types {
-            if let Some(id_val) = ids.get(id_type.as_str()) {
-                // For anidb, pass a season/episode filter as query text.
-                // AnimeTosho uses q= as a substring filter alongside aid=.
-                let strat_query = if id_type == "anidb_id" {
-                    match (season, episode) {
-                        (Some(s), Some(e)) => format!("S{s:0>2}E{e:0>2}"),
-                        (Some(s), None) => format!("S{s}"),
-                        _ => String::new(),
-                    }
-                } else {
-                    String::new()
-                };
-
+    let filtered_ids = filter_ids_for_types(ids, caps.id_types_for_facet(facet));
+    if !filtered_ids.is_empty() && !is_alias_query {
+        if facet == "anime" {
+            if let Some(absolute_episode) = absolute_episode {
                 strategies.push(SearchStrategy {
-                    query: strat_query,
-                    imdb_id: if id_type == "imdb_id" {
-                        Some(id_val.clone())
-                    } else {
-                        None
-                    },
-                    tvdb_id: if id_type == "tvdb_id" {
-                        Some(id_val.clone())
-                    } else {
-                        None
-                    },
-                    anidb_id: if id_type == "anidb_id" {
-                        Some(id_val.clone())
-                    } else {
-                        None
-                    },
-                    label: id_type.clone(),
+                    query: query.to_string(),
+                    ids: filtered_ids.clone(),
+                    season: None,
+                    episode: None,
+                    absolute_episode: Some(absolute_episode),
+                    label: "ids_abs".into(),
                 });
-                break; // one ID strategy per facet is sufficient
+            }
+
+            if episode.is_some() {
+                strategies.push(SearchStrategy {
+                    query: query.to_string(),
+                    ids: filtered_ids.clone(),
+                    season,
+                    episode,
+                    absolute_episode: None,
+                    label: "ids_sxex".into(),
+                });
             }
         }
-    }
 
-    // Anime absolute-episode strategy: when we have an absolute episode number,
-    // add a second strategy that searches by absolute number instead of SXXEXX.
-    if facet == "anime"
-        && !is_alias_query
-        && let Some(abs) = absolute_episode
-    {
-        strategies.push(SearchStrategy {
-            query: abs.to_string(),
-            imdb_id: None,
-            tvdb_id: None,
-            anidb_id: ids.get("anidb_id").cloned(),
-            label: "anime_absolute".into(),
-        });
+        if strategies.is_empty() {
+            strategies.push(SearchStrategy {
+                query: query.to_string(),
+                ids: filtered_ids,
+                season,
+                episode,
+                absolute_episode,
+                label: "ids".into(),
+            });
+        }
     }
 
     // Freetext strategy: skip if indexer has no capability for this facet at all.
@@ -822,10 +973,15 @@ fn build_strategies(p: &StrategyParams<'_>) -> Vec<SearchStrategy> {
     if caps.query_param.is_some() && !query.is_empty() && !skip_no_facet {
         strategies.push(SearchStrategy {
             query: query.to_string(),
-            imdb_id: None,
-            tvdb_id: None,
-            anidb_id: None,
-            label: "freetext".into(),
+            ids: HashMap::new(),
+            season,
+            episode,
+            absolute_episode: None,
+            label: if is_alias_query {
+                "freetext_alias".into()
+            } else {
+                "freetext".into()
+            },
         });
     }
 
@@ -833,9 +989,10 @@ fn build_strategies(p: &StrategyParams<'_>) -> Vec<SearchStrategy> {
     if strategies.is_empty() {
         strategies.push(SearchStrategy {
             query: query.to_string(),
-            imdb_id: ids.get("imdb_id").cloned(),
-            tvdb_id: ids.get("tvdb_id").cloned(),
-            anidb_id: ids.get("anidb_id").cloned(),
+            ids: ids.clone(),
+            season,
+            episode,
+            absolute_episode,
             label: "fallback".into(),
         });
     }
@@ -843,39 +1000,21 @@ fn build_strategies(p: &StrategyParams<'_>) -> Vec<SearchStrategy> {
     strategies
 }
 
-/// Determine the search facet from the category hint and available IDs.
-/// Category is the primary signal (set by the facet handler or acquisition layer).
-/// IDs are only used as fallback when no category is provided.
-fn infer_facet(
-    anidb_id: &Option<String>,
-    tvdb_id: &Option<String>,
-    imdb_id: &Option<String>,
-    category: &Option<String>,
-) -> &'static str {
-    // Category hint is the authoritative signal from the caller
-    if let Some(cat) = category {
-        let lower = cat.trim().to_ascii_lowercase();
-        if lower.contains("anime") {
-            return "anime";
-        }
-        if lower.contains("movie") {
-            return "movie";
-        }
-        if lower.contains("tv") || lower.contains("series") {
-            return "series";
-        }
+fn filter_ids_for_types(
+    ids: &HashMap<String, String>,
+    supported_types: &[String],
+) -> HashMap<String, String> {
+    if supported_types.is_empty() {
+        return HashMap::new();
     }
-    // Fallback: infer from available IDs
-    if anidb_id.is_some() {
-        return "anime";
-    }
-    if imdb_id.is_some() && tvdb_id.is_none() {
-        return "movie";
-    }
-    if tvdb_id.is_some() {
-        return "series";
-    }
-    "series"
+
+    let supported_types: HashSet<&str> = supported_types.iter().map(String::as_str).collect();
+    ids.iter()
+        .filter(|(id_type, value)| {
+            supported_types.contains(id_type.as_str()) && !value.trim().is_empty()
+        })
+        .map(|(id_type, value)| (id_type.clone(), value.clone()))
+        .collect()
 }
 
 /// Normalize a title for substring comparison: lowercase, alpha-only, no spaces.
@@ -971,10 +1110,9 @@ mod tests {
         async fn search(
             &self,
             _query: String,
-            _imdb_id: Option<String>,
-            _tvdb_id: Option<String>,
-            _anidb_id: Option<String>,
+            _ids: HashMap<String, String>,
             _category: Option<String>,
+            _facet: Option<String>,
             _newznab_categories: Option<Vec<String>>,
             _indexer_routing: Option<IndexerRoutingPlan>,
             _mode: SearchMode,
@@ -1071,8 +1209,7 @@ mod tests {
         let response = client
             .search(
                 String::new(),
-                None,
-                None,
+                HashMap::new(),
                 None,
                 None,
                 None,
@@ -1088,5 +1225,117 @@ mod tests {
 
         assert!(response.results.is_empty());
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn anime_strategies_try_abs_and_sxex_in_parallel() {
+        let caps = IndexerProviderCapabilities {
+            rss: false,
+            supported_ids: HashMap::from([("anime".into(), vec!["anidb_id".into()])]),
+            deduplicates_aliases: false,
+            season_param: Some("s".into()),
+            episode_param: Some("ep".into()),
+            query_param: Some("q".into()),
+            search: true,
+            imdb_search: false,
+            tvdb_search: false,
+            anidb_search: true,
+        };
+
+        let ids = HashMap::from([("anidb_id".to_string(), "18886".to_string())]);
+        let strategies = build_strategies(&StrategyParams {
+            query: "Frieren: Beyond Journey's End S02E05",
+            facet: "anime",
+            ids: &ids,
+            season: Some(2),
+            episode: Some(5),
+            absolute_episode: Some(33),
+            caps: &caps,
+            is_alias_query: false,
+        });
+
+        assert_eq!(strategies.len(), 3);
+
+        assert_eq!(strategies[0].label, "ids_abs");
+        assert_eq!(strategies[0].season, None);
+        assert_eq!(strategies[0].episode, None);
+        assert_eq!(strategies[0].absolute_episode, Some(33));
+
+        assert_eq!(strategies[1].label, "ids_sxex");
+        assert_eq!(strategies[1].season, Some(2));
+        assert_eq!(strategies[1].episode, Some(5));
+        assert_eq!(strategies[1].absolute_episode, None);
+
+        assert_eq!(strategies[2].label, "freetext");
+        assert_eq!(strategies[2].season, Some(2));
+        assert_eq!(strategies[2].episode, Some(5));
+        assert_eq!(strategies[2].absolute_episode, None);
+    }
+
+    #[test]
+    fn preferred_anime_alias_query_strips_episode_context() {
+        let alias = preferred_anime_alias_query(
+            "Frieren: Beyond Journey's End S02E05",
+            &[scryer_domain::TaggedAlias {
+                name: "Sousou no Frieren".into(),
+                language: "jpn".into(),
+            }],
+        );
+
+        assert_eq!(alias.as_deref(), Some("Sousou no Frieren"));
+    }
+
+    #[test]
+    fn preferred_anime_alias_query_skips_canonical_alias_and_uses_distinct_romanized_alias() {
+        let alias = preferred_anime_alias_query(
+            "Frieren: Beyond Journey's End S02E05",
+            &[
+                scryer_domain::TaggedAlias {
+                    name: "Frieren: Beyond Journey's End".into(),
+                    language: "jpn".into(),
+                },
+                scryer_domain::TaggedAlias {
+                    name: "Sousou no Frieren".into(),
+                    language: "jpn".into(),
+                },
+            ],
+        );
+
+        assert_eq!(alias.as_deref(), Some("Sousou no Frieren"));
+    }
+
+    #[test]
+    fn anime_alias_strategy_is_freetext_only_and_skips_ids() {
+        let caps = IndexerProviderCapabilities {
+            rss: false,
+            supported_ids: HashMap::from([("anime".into(), vec!["tvdb_id".into()])]),
+            deduplicates_aliases: false,
+            season_param: Some("season".into()),
+            episode_param: Some("ep".into()),
+            query_param: Some("q".into()),
+            search: true,
+            imdb_search: false,
+            tvdb_search: true,
+            anidb_search: false,
+        };
+
+        let ids = HashMap::from([("tvdb_id".to_string(), "424536".to_string())]);
+        let strategies = build_strategies(&StrategyParams {
+            query: "Sousou no Frieren",
+            facet: "anime",
+            ids: &ids,
+            season: Some(2),
+            episode: Some(5),
+            absolute_episode: Some(33),
+            caps: &caps,
+            is_alias_query: true,
+        });
+
+        assert_eq!(strategies.len(), 1);
+        assert_eq!(strategies[0].label, "freetext_alias");
+        assert!(strategies[0].ids.is_empty());
+        assert_eq!(strategies[0].season, Some(2));
+        assert_eq!(strategies[0].episode, Some(5));
+        assert_eq!(strategies[0].absolute_episode, None);
     }
 }

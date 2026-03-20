@@ -324,12 +324,11 @@ pub struct PluginNotificationResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginSearchRequest {
     pub query: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub imdb_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tvdb_id: Option<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub ids: HashMap<String, String>,
+    /// Explicit normalized media facet from the caller (movie, series, anime).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub anidb_id: Option<String>,
+    pub facet: Option<String>,
     /// Semantic category hint from the caller (e.g. "movie", "tv", "anime").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
@@ -344,6 +343,8 @@ pub struct PluginSearchRequest {
     pub season: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub episode: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub absolute_episode: Option<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tagged_aliases: Vec<TaggedAlias>,
 }
@@ -483,14 +484,14 @@ mod tests {
     fn search_request_round_trip() {
         let req = PluginSearchRequest {
             query: "Dune".to_string(),
-            imdb_id: Some("tt15239678".to_string()),
-            tvdb_id: None,
-            anidb_id: None,
+            ids: HashMap::from([("imdb_id".to_string(), "tt15239678".to_string())]),
+            facet: Some("movie".to_string()),
             category: Some("movie".to_string()),
             categories: vec!["2000".to_string()],
             limit: 1000,
             season: None,
             episode: None,
+            absolute_episode: None,
             tagged_aliases: vec![TaggedAlias {
                 name: "Suna no Wakusei".to_string(),
                 language: "jpn".to_string(),
@@ -499,8 +500,9 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         let parsed: PluginSearchRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.query, "Dune");
-        assert_eq!(parsed.imdb_id, Some("tt15239678".to_string()));
-        assert!(parsed.tvdb_id.is_none());
+        assert_eq!(parsed.ids.get("imdb_id"), Some(&"tt15239678".to_string()));
+        assert_eq!(parsed.facet, Some("movie".to_string()));
+        assert!(parsed.ids.get("tvdb_id").is_none());
         assert_eq!(parsed.tagged_aliases.len(), 1);
     }
 

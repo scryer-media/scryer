@@ -146,10 +146,9 @@ impl AppUseCase {
             .indexer_client
             .search(
                 String::new(), // empty query = RSS feed
-                None,
-                None,
-                None,
+                HashMap::new(),
                 None, // no category filter
+                None, // no facet hint
                 None,
                 None, // no routing filter
                 SearchMode::Auto,

@@ -70,8 +70,7 @@ async fn test_indexer_search() {
     let results = client
         .search(
             "Dune Part Two".to_string(),
-            None,
-            None,
+            std::collections::HashMap::new(),
             None,
             None,
             None,
@@ -80,6 +79,7 @@ async fn test_indexer_search() {
             None,
             None,
             None,
+            vec![],
         )
         .await
         .unwrap()

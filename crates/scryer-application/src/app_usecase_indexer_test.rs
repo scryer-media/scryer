@@ -66,8 +66,7 @@ impl AppUseCase {
         client
             .search(
                 String::new(), // empty query
-                None,
-                None,
+                std::collections::HashMap::new(),
                 None,
                 None,
                 None,

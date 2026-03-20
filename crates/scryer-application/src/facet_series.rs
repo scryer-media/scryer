@@ -114,6 +114,15 @@ impl FacetHandler for SeriesFacetHandler {
         language: &str,
     ) -> AppResult<HydrationResult> {
         let series = gateway.get_series(tvdb_id, language).await?;
+        tracing::debug!(
+            facet = self.facet_id(),
+            tvdb_id,
+            language,
+            alias_count = series.aliases.len(),
+            tagged_alias_count = series.tagged_aliases.len(),
+            tagged_aliases = ?series.tagged_aliases,
+            "series facet hydration received metadata from gateway"
+        );
         Ok(series_to_hydration_result(series, language))
     }
 

@@ -665,6 +665,14 @@ impl AppUseCase {
             .await
         {
             Ok(result) => {
+                tracing::debug!(
+                    title_id = %title.id,
+                    tvdb_id,
+                    language,
+                    tagged_alias_count = result.metadata_update.tagged_aliases.len(),
+                    tagged_aliases = ?result.metadata_update.tagged_aliases,
+                    "title hydration result before persistence"
+                );
                 let hydrated = self.apply_hydration_result(title, result).await;
                 if hydrated.metadata_fetched_at.is_some() {
                     self.emit_hydration_completed(&hydrated).await;
@@ -771,7 +779,15 @@ impl AppUseCase {
             .update_title_hydrated_metadata(&title.id, metadata_update)
             .await
         {
-            Ok(updated) => updated,
+            Ok(updated) => {
+                tracing::debug!(
+                    title_id = %updated.id,
+                    tagged_alias_count = updated.tagged_aliases.len(),
+                    tagged_aliases = ?updated.tagged_aliases,
+                    "title hydration persisted metadata"
+                );
+                updated
+            }
             Err(err) => {
                 warn!(
                     title_id = %title.id,

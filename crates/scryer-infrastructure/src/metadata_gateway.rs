@@ -925,7 +925,7 @@ const MOVIE_FIELD_SELECTION: &str = "\
 
 const SERIES_FIELD_SELECTION: &str = "\
     tvdb_id name sort_name slug status year first_aired overview network \
-    runtime_minutes poster_url country genres aliases artworks { kind url } \
+    runtime_minutes poster_url country genres aliases tagged_aliases { name language } artworks { kind url } \
     seasons { tvdb_id number label episode_type } \
     episodes { tvdb_id episode_number season_number name aired runtime_minutes \
                is_filler is_recap overview absolute_number } \
@@ -953,6 +953,18 @@ fn build_bulk_mixed_query(movie_ids: &[i64], series_ids: &[i64], language: &str)
     }
     q.push_str("}\n");
     q
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_bulk_mixed_query;
+
+    #[test]
+    fn bulk_series_query_requests_tagged_aliases() {
+        let query = build_bulk_mixed_query(&[], &[424536], "eng");
+
+        assert!(query.contains("tagged_aliases { name language }"));
+    }
 }
 
 #[derive(Deserialize)]
@@ -1073,7 +1085,7 @@ struct ArtworkItem {
     url: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct TaggedAliasItem {
     name: String,
     language: String,
@@ -1360,6 +1372,15 @@ impl MetadataGateway for MetadataGatewayClient {
             .execute_graphql_apq(GET_SERIES_QUERY, &self.series_hash, variables)
             .await?;
         let s = data.series.series;
+
+        debug!(
+            tvdb_id = s.tvdb_id,
+            language,
+            alias_count = s.aliases.len(),
+            tagged_alias_count = s.tagged_aliases.len(),
+            tagged_aliases = ?s.tagged_aliases,
+            "metadata gateway get_series decoded response"
+        );
 
         Ok(SeriesMetadata {
             tvdb_id: s.tvdb_id,

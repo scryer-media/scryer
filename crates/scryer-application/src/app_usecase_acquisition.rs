@@ -819,6 +819,8 @@ async fn process_single_wanted_item(
                     tvdb_id.clone(),
                     anidb_id.clone(),
                     Some(category.clone()),
+                    super::app_usecase_discovery::search_facet_for_media_facet(&title.facet)
+                        .map(str::to_string),
                     &title.tags,
                     "background_acquisition_season_pack",
                     SearchMode::Auto,
@@ -1044,6 +1046,8 @@ async fn process_single_wanted_item(
             tvdb_id,
             anidb_id,
             Some(category.clone()),
+            super::app_usecase_discovery::search_facet_for_media_facet(&title.facet)
+                .map(str::to_string),
             &title.tags,
             "background_acquisition",
             SearchMode::Auto,

@@ -927,8 +927,7 @@ pub mod test_nulls {
         async fn search(
             &self,
             _: String,
-            _: Option<String>,
-            _: Option<String>,
+            _: std::collections::HashMap<String, String>,
             _: Option<String>,
             _: Option<String>,
             _: Option<Vec<String>>,

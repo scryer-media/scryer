@@ -2,6 +2,7 @@ use super::*;
 use crate::quality_profile::ScoringSource;
 use scryer_domain::TaggedAlias;
 use serde_json::Value;
+use std::collections::HashMap;
 use tokio::task::JoinSet;
 use tracing::{info, warn};
 
@@ -16,6 +17,31 @@ fn source_kind_matches_preference(result: &IndexerSearchResult, preferred: &str)
 }
 
 const INDEXER_ROUTING_KEY: &str = "indexer.routing";
+
+pub(crate) fn search_facet_for_media_facet(facet: &MediaFacet) -> Option<&'static str> {
+    match facet {
+        MediaFacet::Movie => Some("movie"),
+        MediaFacet::Tv => Some("series"),
+        MediaFacet::Anime => Some("anime"),
+        MediaFacet::Other => None,
+    }
+}
+
+fn parse_search_facet(facet: Option<String>) -> Option<String> {
+    let facet = facet?.trim().to_ascii_lowercase();
+    match facet.as_str() {
+        "movie" | "series" | "anime" => Some(facet),
+        _ => None,
+    }
+}
+
+fn activity_media_label(facet: Option<&str>) -> &'static str {
+    match facet {
+        Some("series") => "series",
+        Some("anime") => "anime",
+        _ => "movie",
+    }
+}
 
 pub(crate) fn extract_http_status_from_message(message: &str) -> Option<u16> {
     let marker = "status ";
@@ -95,6 +121,7 @@ impl AppUseCase {
         tvdb_id: Option<String>,
         anidb_id: Option<String>,
         category: Option<String>,
+        facet: Option<String>,
         title_tags: &[String],
         caller_label: &str,
         mode: SearchMode,
@@ -142,12 +169,22 @@ impl AppUseCase {
         };
 
         let mut set = JoinSet::new();
+        let mut ids = HashMap::new();
+        if let Some(imdb_id) = imdb_id.clone() {
+            ids.insert("imdb_id".to_string(), imdb_id);
+        }
+        if let Some(tvdb_id) = tvdb_id.clone() {
+            ids.insert("tvdb_id".to_string(), tvdb_id);
+        }
+        if let Some(anidb_id) = anidb_id.clone() {
+            ids.insert("anidb_id".to_string(), anidb_id);
+        }
+
         for query in effective_queries {
             let indexer_client = self.services.indexer_client.clone();
-            let imdb_id = imdb_id.clone();
-            let tvdb_id = tvdb_id.clone();
-            let anidb_id = anidb_id.clone();
+            let ids = ids.clone();
             let category = category.clone();
+            let facet = facet.clone();
             let indexer_routing = indexer_routing.clone();
             let tagged_aliases = tagged_aliases.to_vec();
 
@@ -155,10 +192,9 @@ impl AppUseCase {
                 indexer_client
                     .search(
                         query,
-                        imdb_id,
-                        tvdb_id,
-                        anidb_id,
-                        category,
+                        ids,
+                        category.clone(),
+                        facet,
                         None,
                         indexer_routing,
                         mode,
@@ -575,6 +611,7 @@ impl AppUseCase {
         tvdb_id: Option<String>,
         anidb_id: Option<String>,
         category: Option<String>,
+        facet: Option<String>,
         season: Option<u32>,
         episode: Option<u32>,
         absolute_episode: Option<u32>,
@@ -586,6 +623,7 @@ impl AppUseCase {
             tvdb_id,
             anidb_id,
             category,
+            facet,
             &[],
             &actor.id,
             SearchMode::Interactive,
@@ -613,9 +651,7 @@ impl AppUseCase {
         let normalized_imdb_id = normalize_imdb_id(imdb_id);
         let normalized_tvdb_id = normalize_numeric_id(tvdb_id);
         let normalized_anidb_id = normalize_numeric_id(anidb_id);
-        let normalized_category = category
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
+        let normalized_category = parse_search_facet(category);
 
         if normalized_query.is_empty()
             && normalized_tvdb_id.is_none()
@@ -642,6 +678,7 @@ impl AppUseCase {
                 normalized_tvdb_id.clone(),
                 normalized_anidb_id.clone(),
                 normalized_category.clone(),
+                normalized_category.clone(),
                 None,
                 None,
                 None,
@@ -657,16 +694,7 @@ impl AppUseCase {
                 display_source = format!("imdb:{imdb_id}");
             }
         }
-        let activity_media_label = normalized_category
-            .as_deref()
-            .map(
-                |category| match category.trim().to_ascii_lowercase().as_str() {
-                    "series" | "tv" => "series",
-                    "anime" => "anime",
-                    _ => "movie",
-                },
-            )
-            .unwrap_or("movie");
+        let activity_media_label = activity_media_label(normalized_category.as_deref());
 
         let results = results?;
 
@@ -722,9 +750,7 @@ impl AppUseCase {
         let normalized_imdb_id = normalize_imdb_id(imdb_id);
         let normalized_anidb_id = normalize_numeric_id(anidb_id);
         let normalized_tvdb_id = normalize_numeric_id(tvdb_id);
-        let normalized_category = category
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
+        let normalized_category = parse_search_facet(category);
 
         let season_digits: String = season
             .chars()
@@ -761,6 +787,7 @@ impl AppUseCase {
                 normalized_tvdb_id.clone(),
                 normalized_anidb_id.clone(),
                 normalized_category.clone(),
+                normalized_category.clone(),
                 Some(season_num as u32),
                 Some(episode_num as u32),
                 absolute_episode,
@@ -768,14 +795,7 @@ impl AppUseCase {
             )
             .await?;
 
-        let activity_media_label = normalized_category
-            .as_deref()
-            .map(|value| match value.trim().to_ascii_lowercase().as_str() {
-                "series" | "tv" => "series",
-                "anime" => "anime",
-                _ => "movie",
-            })
-            .unwrap_or("movie");
+        let activity_media_label = activity_media_label(normalized_category.as_deref());
 
         let _ = self
             .services
@@ -816,6 +836,14 @@ impl AppUseCase {
             .await?
             .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
 
+        tracing::debug!(
+            title_id = title_id.as_str(),
+            tagged_alias_count = title.tagged_aliases.len(),
+            tagged_aliases = ?title.tagged_aliases,
+            external_ids = ?title.external_ids,
+            "interactive title search loaded title"
+        );
+
         let imdb_id = normalize_imdb_id(title.imdb_id);
         let tvdb_id = normalize_numeric_id(
             crate::app_usecase_acquisition::tvdb_id_from_external_ids(&title.external_ids),
@@ -828,6 +856,7 @@ impl AppUseCase {
             .get(&title.facet)
             .map(|h| h.search_category().to_string())
             .unwrap_or_else(|| "movie".to_string());
+        let facet = search_facet_for_media_facet(&title.facet).map(str::to_string);
 
         let query = title.name.trim().to_string();
         if query.is_empty() && imdb_id.is_none() && tvdb_id.is_none() && anidb_id.is_none() {
@@ -852,6 +881,7 @@ impl AppUseCase {
                 tvdb_id,
                 anidb_id,
                 Some(category.clone()),
+                facet,
                 None,
                 None,
                 None,
@@ -898,6 +928,14 @@ impl AppUseCase {
             .await?
             .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
 
+        tracing::debug!(
+            title_id = title_id.as_str(),
+            tagged_alias_count = title.tagged_aliases.len(),
+            tagged_aliases = ?title.tagged_aliases,
+            external_ids = ?title.external_ids,
+            "interactive episode search loaded title"
+        );
+
         let season = season.trim().to_string();
         let episode = episode.trim().to_string();
         if season.is_empty() || episode.is_empty() {
@@ -933,6 +971,7 @@ impl AppUseCase {
             .get(&title.facet)
             .map(|h| h.search_category().to_string())
             .unwrap_or_else(|| "series".to_string());
+        let facet = search_facet_for_media_facet(&title.facet).map(str::to_string);
 
         // Resolve episode-specific anidb_id from anibridge (e.g. Bleach S17E08 → 15449)
         let anidb_id = if let Some(ref tvdb) = tvdb_id {
@@ -997,6 +1036,7 @@ impl AppUseCase {
                 tvdb_id,
                 anidb_id,
                 Some(category.clone()),
+                facet,
                 Some(season_num as u32),
                 Some(episode_num as u32),
                 absolute_episode,

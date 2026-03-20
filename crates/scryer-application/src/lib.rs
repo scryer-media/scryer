@@ -1195,10 +1195,9 @@ pub trait IndexerClient: Send + Sync {
     async fn search(
         &self,
         query: String,
-        imdb_id: Option<String>,
-        tvdb_id: Option<String>,
-        anidb_id: Option<String>,
+        ids: std::collections::HashMap<String, String>,
         category: Option<String>,
+        facet: Option<String>,
         newznab_categories: Option<Vec<String>>,
         indexer_routing: Option<IndexerRoutingPlan>,
         mode: SearchMode,
@@ -2189,10 +2188,9 @@ mod tests {
         async fn search(
             &self,
             query: String,
-            imdb_id: Option<String>,
-            tvdb_id: Option<String>,
-            _anidb_id: Option<String>,
+            ids: std::collections::HashMap<String, String>,
             category: Option<String>,
+            _facet: Option<String>,
             _newznab_categories: Option<Vec<String>>,
             _indexer_routing: Option<IndexerRoutingPlan>,
             _mode: SearchMode,
@@ -2201,10 +2199,10 @@ mod tests {
             _absolute_episode: Option<u32>,
             _tagged_aliases: Vec<TaggedAlias>,
         ) -> AppResult<IndexerSearchResponse> {
-            if let Some(tvdb) = tvdb_id {
+            if let Some(tvdb) = ids.get("tvdb_id") {
                 tracing::info!(tvdb_id = %tvdb, category = ?category, "mock nzbgeek search");
             }
-            if let Some(imdb) = imdb_id {
+            if let Some(imdb) = ids.get("imdb_id") {
                 tracing::info!(imdb_id = %imdb, category = ?category, "mock nzbgeek search");
             }
             Ok(IndexerSearchResponse {

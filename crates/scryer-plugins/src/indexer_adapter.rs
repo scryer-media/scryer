@@ -1,27 +1,34 @@
-use std::sync::{Arc, Mutex};
-
 use async_trait::async_trait;
 use scryer_application::{
     AppError, AppResult, DownloadSourceKind, IndexerClient, IndexerRoutingPlan,
     IndexerSearchResponse, IndexerSearchResult, SearchMode,
 };
+use scryer_domain::IndexerConfig;
 use scryer_domain::TaggedAlias;
 use tracing::warn;
 
+use crate::loader::{apply_allowed_hosts, build_plugin, parse_config_json_entries};
 use crate::types::{PluginDescriptor, PluginSearchRequest, PluginSearchResponse};
 
 pub struct WasmIndexerClient {
-    plugin: Arc<Mutex<extism::Plugin>>,
+    wasm_bytes: Vec<u8>,
     descriptor: PluginDescriptor,
     indexer_name: String,
+    config: IndexerConfig,
 }
 
 impl WasmIndexerClient {
-    pub fn new(plugin: extism::Plugin, descriptor: PluginDescriptor, indexer_name: String) -> Self {
+    pub fn new(
+        wasm_bytes: Vec<u8>,
+        descriptor: PluginDescriptor,
+        indexer_name: String,
+        config: IndexerConfig,
+    ) -> Self {
         Self {
-            plugin: Arc::new(Mutex::new(plugin)),
+            wasm_bytes,
             descriptor,
             indexer_name,
+            config,
         }
     }
 }
@@ -31,28 +38,27 @@ impl IndexerClient for WasmIndexerClient {
     async fn search(
         &self,
         query: String,
-        imdb_id: Option<String>,
-        tvdb_id: Option<String>,
-        anidb_id: Option<String>,
+        ids: std::collections::HashMap<String, String>,
         category: Option<String>,
+        facet: Option<String>,
         newznab_categories: Option<Vec<String>>,
         _indexer_routing: Option<IndexerRoutingPlan>,
         _mode: SearchMode,
         season: Option<u32>,
         episode: Option<u32>,
-        _absolute_episode: Option<u32>,
+        absolute_episode: Option<u32>,
         tagged_aliases: Vec<TaggedAlias>,
     ) -> AppResult<IndexerSearchResponse> {
         let request = PluginSearchRequest {
             query,
-            imdb_id,
-            tvdb_id,
-            anidb_id,
+            ids,
+            facet,
             category,
             categories: newznab_categories.unwrap_or_default(),
             limit: 1000,
             season,
             episode,
+            absolute_episode,
             tagged_aliases,
         };
 
@@ -64,16 +70,45 @@ impl IndexerClient for WasmIndexerClient {
 
         let plugin_name = self.descriptor.name.clone();
         let indexer_name = self.indexer_name.clone();
-
-        // Plugin::call takes &mut self, so we use spawn_blocking + Arc<Mutex>
-        // to avoid blocking the async runtime. The Arc clone is cheap and
-        // satisfies spawn_blocking's 'static + Send requirements.
-        let plugin = Arc::clone(&self.plugin);
+        let indexer_name_for_spawn = indexer_name.clone();
+        let descriptor = self.descriptor.clone();
+        let wasm_bytes = self.wasm_bytes.clone();
+        let config = self.config.clone();
         let output = tokio::task::spawn_blocking(move || {
-            let mut guard = plugin
-                .lock()
-                .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
-            guard
+            let mut manifest = extism::Manifest::new([extism::Wasm::data(wasm_bytes)]);
+            manifest = apply_allowed_hosts(
+                manifest,
+                &descriptor,
+                Some(&config.base_url),
+                config.config_json.as_deref(),
+            );
+            manifest = manifest.with_timeout(std::time::Duration::from_secs(30));
+            manifest = manifest.with_config_key("base_url", &config.base_url);
+            if let Some(ref api_key) = config.api_key_encrypted {
+                manifest = manifest.with_config_key("api_key", api_key);
+            }
+
+            if let Some(ref json_str) = config.config_json {
+                match parse_config_json_entries(json_str) {
+                    Ok(map) => {
+                        for (key, value) in &map {
+                            manifest = manifest.with_config_key(key, value);
+                        }
+                    }
+                    Err(error) => {
+                        warn!(
+                            indexer = indexer_name_for_spawn.as_str(),
+                            error = %error,
+                            "failed to parse config_json; extra config keys will not be injected"
+                        );
+                    }
+                }
+            }
+
+            let mut plugin = build_plugin(manifest)
+                .map_err(|e| AppError::Repository(format!("failed to instantiate WASM plugin: {e}")))?;
+
+            plugin
                 .call::<&str, String>("search", &input)
                 .map_err(|e| AppError::Repository(format!("plugin search() failed: {e}")))
         })

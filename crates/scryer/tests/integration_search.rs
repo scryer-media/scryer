@@ -2,6 +2,7 @@
 
 mod common;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use wiremock::matchers::{method, path, query_param};
@@ -38,6 +39,20 @@ fn new_nzbgeek_client(uri: &str) -> Arc<dyn IndexerClient> {
         .expect("should create nzbgeek WASM client")
 }
 
+fn search_ids(imdb_id: Option<&str>, tvdb_id: Option<&str>, anidb_id: Option<&str>) -> HashMap<String, String> {
+    let mut ids = HashMap::new();
+    if let Some(imdb_id) = imdb_id {
+        ids.insert("imdb_id".to_string(), imdb_id.to_string());
+    }
+    if let Some(tvdb_id) = tvdb_id {
+        ids.insert("tvdb_id".to_string(), tvdb_id.to_string());
+    }
+    if let Some(anidb_id) = anidb_id {
+        ids.insert("anidb_id".to_string(), anidb_id.to_string());
+    }
+    ids
+}
+
 // ---------------------------------------------------------------------------
 // Movie search
 // ---------------------------------------------------------------------------
@@ -57,9 +72,8 @@ async fn nzbgeek_search_movie_by_category() {
     let results = new_nzbgeek_client(&ctx.nzbgeek_server.uri())
         .search(
             "Test Movie".to_string(),
-            Some("tt1234567".to_string()),
-            None,
-            None,
+            search_ids(Some("tt1234567"), None, None),
+            Some("movie".to_string()),
             Some("movie".to_string()),
             None,
             None,
@@ -116,9 +130,8 @@ async fn nzbgeek_search_movie_extracts_size() {
     let results = new_nzbgeek_client(&ctx.nzbgeek_server.uri())
         .search(
             "Test".to_string(),
-            None,
-            None,
-            None,
+            search_ids(None, None, None),
+            Some("movie".to_string()),
             Some("movie".to_string()),
             None,
             None,
@@ -153,9 +166,8 @@ async fn nzbgeek_search_movie_extracts_download_url() {
     let results = new_nzbgeek_client(&ctx.nzbgeek_server.uri())
         .search(
             "Test".to_string(),
-            None,
-            None,
-            None,
+            search_ids(None, None, None),
+            Some("movie".to_string()),
             Some("movie".to_string()),
             None,
             None,
@@ -198,9 +210,8 @@ async fn nzbgeek_search_tv_by_category() {
     let results = new_nzbgeek_client(&ctx.nzbgeek_server.uri())
         .search(
             "Test Show".to_string(),
-            None,
-            Some("345678".to_string()),
-            None,
+            search_ids(None, Some("345678"), None),
+            Some("tv".to_string()),
             Some("tv".to_string()),
             None,
             None,
@@ -233,9 +244,8 @@ async fn nzbgeek_search_tv_by_anime_category() {
     let results = new_nzbgeek_client(&ctx.nzbgeek_server.uri())
         .search(
             "Anime Title".to_string(),
-            None,
-            Some("999".to_string()),
-            None,
+            search_ids(None, Some("999"), None),
+            Some("anime".to_string()),
             Some("anime".to_string()),
             None,
             None,
@@ -269,9 +279,8 @@ async fn nzbgeek_search_tv_by_series_category() {
     let results = new_nzbgeek_client(&ctx.nzbgeek_server.uri())
         .search(
             "Series Title".to_string(),
-            None,
-            Some("123".to_string()),
-            None,
+            search_ids(None, Some("123"), None),
+            Some("series".to_string()),
             Some("series".to_string()),
             None,
             None,
@@ -306,10 +315,9 @@ async fn nzbgeek_search_infers_movie_from_imdb_id() {
     let results = new_nzbgeek_client(&ctx.nzbgeek_server.uri())
         .search(
             "Test".to_string(),
-            Some("tt1234567".to_string()),
-            None,
-            None,
+            search_ids(Some("tt1234567"), None, None),
             None, // no category
+            None,
             None,
             None,
             SearchMode::Interactive,
@@ -342,10 +350,9 @@ async fn nzbgeek_search_infers_tvsearch_from_tvdb_id() {
     let results = new_nzbgeek_client(&ctx.nzbgeek_server.uri())
         .search(
             "Test".to_string(),
-            None,
-            Some("345678".to_string()),
-            None,
+            search_ids(None, Some("345678"), None),
             None, // no category
+            None,
             None,
             None,
             SearchMode::Interactive,
@@ -379,8 +386,7 @@ async fn nzbgeek_search_generic_without_ids() {
     let results = new_nzbgeek_client(&ctx.nzbgeek_server.uri())
         .search(
             "Test".to_string(),
-            None,
-            None,
+            search_ids(None, None, None),
             None,
             None,
             None,
@@ -418,9 +424,8 @@ async fn nzbgeek_search_empty_results() {
     let results = new_nzbgeek_client(&ctx.nzbgeek_server.uri())
         .search(
             "Nonexistent".to_string(),
-            None,
-            None,
-            None,
+            search_ids(None, None, None),
+            Some("movie".to_string()),
             Some("movie".to_string()),
             None,
             None,
@@ -453,9 +458,8 @@ async fn nzbgeek_search_single_item_response() {
     let results = new_nzbgeek_client(&ctx.nzbgeek_server.uri())
         .search(
             "Test".to_string(),
-            None,
-            None,
-            None,
+            search_ids(None, None, None),
+            Some("movie".to_string()),
             Some("movie".to_string()),
             None,
             None,
@@ -507,8 +511,7 @@ async fn nzbgeek_search_no_api_key_fails() {
     let results = client
         .search(
             "Test".to_string(),
-            None,
-            None,
+            search_ids(None, None, None),
             None,
             None,
             None,
@@ -536,9 +539,8 @@ async fn nzbgeek_search_http_error() {
     let results = new_nzbgeek_client(&ctx.nzbgeek_server.uri())
         .search(
             "Test".to_string(),
-            None,
-            None,
-            None,
+            search_ids(None, None, None),
+            Some("movie".to_string()),
             Some("movie".to_string()),
             None,
             None,
@@ -569,9 +571,8 @@ async fn nzbgeek_search_rate_limited() {
     let results = new_nzbgeek_client(&ctx.nzbgeek_server.uri())
         .search(
             "Test".to_string(),
-            None,
-            None,
-            None,
+            search_ids(None, None, None),
+            Some("movie".to_string()),
             Some("movie".to_string()),
             None,
             None,
@@ -612,9 +613,8 @@ async fn nzbgeek_search_server_error_fallback() {
     let results = new_nzbgeek_client(&ctx.nzbgeek_server.uri())
         .search(
             "Test Movie".to_string(),
-            Some("tt1234567".to_string()),
-            None,
-            None,
+            search_ids(Some("tt1234567"), None, None),
+            Some("movie".to_string()),
             Some("movie".to_string()),
             None,
             None,
@@ -642,8 +642,7 @@ async fn nzbgeek_search_empty_query_and_no_ids_fails() {
     let results = client
         .search(
             "".to_string(), // empty query
-            None,
-            None,
+            search_ids(None, None, None),
             None,
             None,
             None,
@@ -682,9 +681,8 @@ async fn nzbgeek_search_extracts_metadata_attributes() {
     let results = new_nzbgeek_client(&ctx.nzbgeek_server.uri())
         .search(
             "Test".to_string(),
-            None,
-            None,
-            None,
+            search_ids(None, None, None),
+            Some("movie".to_string()),
             Some("movie".to_string()),
             None,
             None,

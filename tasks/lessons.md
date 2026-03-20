@@ -4,6 +4,7 @@
 - **Never question the user's environment state.** When they say something is broken, the code is freshly built and the environment is clean. Go straight to debugging the code.
 - **Never suggest restarts/rebuilds as a fix.** The user runs `stack-restart.sh` on every Rust change. Assume this is done.
 - **Don't assume you know better than the user about their environment.** If they say the container was rebuilt, it was rebuilt.
+- **Treat Cargo concurrency limits as repo-scoped, not workspace-shell-scoped, when this shell contains multiple independent repos.** Avoid concurrent Cargo work inside the same Rust repo, but do not block unrelated repo work when the user confirms the active jobs are in a different project.
 
 ## Destructive Actions
 - **NEVER execute destructive actions on live services without explicit permission.** This includes deleting downloads, killing processes, dropping data, etc.
@@ -32,6 +33,8 @@
 
 ## Indexer Search Contracts
 - **Do not bake alias language or script policy into core search query construction.** Core should pass canonical title plus tagged alias context through to indexer plugins, and plugins should decide whether to prefer romanized Japanese, Korean aliases, or other provider-specific naming conventions.
+- **Pass an explicit normalized facet through the plugin search contract.** Plugins should get `movie` / `series` / `anime` directly instead of reverse-engineering semantics from category strings or host-side ID heuristics.
+- **Pass IDs through the host/plugin boundary as a filtered map, not fixed `imdb_id` / `tvdb_id` / `anidb_id` slots.** The host may filter to supported IDs for a strategy, but provider-specific query shaping from those IDs belongs inside the plugin.
 - **When the user asks for logging via `RUST_LOG`, do not add plugin config fields or descriptor changes.** Prefer existing runtime log filtering and keep observability changes out of the plugin contract unless the user explicitly asks for new config surface.
 
 ## urql / Frontend Caching

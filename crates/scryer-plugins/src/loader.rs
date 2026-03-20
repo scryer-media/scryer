@@ -309,55 +309,13 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
         let provider = config.provider_type.trim().to_ascii_lowercase();
         let loaded = self.plugins.get(&provider)?;
 
-        let mut manifest = Manifest::new([extism::Wasm::data(loaded.wasm_bytes.clone())]);
-        manifest = apply_allowed_hosts(
-            manifest,
-            &loaded.descriptor,
-            Some(&config.base_url),
-            config.config_json.as_deref(),
+        let client = WasmIndexerClient::new(
+            loaded.wasm_bytes.clone(),
+            loaded.descriptor.clone(),
+            config.name.clone(),
+            config.clone(),
         );
-        manifest = manifest.with_timeout(std::time::Duration::from_secs(30));
-
-        // Inject standard config values the plugin can read via config::get()
-        manifest = manifest.with_config_key("base_url", &config.base_url);
-        if let Some(ref api_key) = config.api_key_encrypted {
-            manifest = manifest.with_config_key("api_key", api_key);
-        }
-
-        // Inject any additional key-value pairs from config_json
-        if let Some(ref json_str) = config.config_json {
-            match parse_config_json_entries(json_str) {
-                Ok(map) => {
-                    for (k, v) in &map {
-                        manifest = manifest.with_config_key(k, v);
-                    }
-                }
-                Err(error) => {
-                    warn!(
-                        indexer = config.name.as_str(),
-                        error = %error,
-                        "failed to parse config_json; extra config keys will not be injected"
-                    );
-                }
-            }
-        }
-
-        match build_plugin(manifest) {
-            Ok(plugin) => {
-                let client =
-                    WasmIndexerClient::new(plugin, loaded.descriptor.clone(), config.name.clone());
-                Some(Arc::new(client))
-            }
-            Err(e) => {
-                warn!(
-                    provider_type = provider.as_str(),
-                    indexer = config.name.as_str(),
-                    error = %e,
-                    "failed to instantiate WASM plugin for indexer"
-                );
-                None
-            }
-        }
+        Some(Arc::new(client))
     }
 }
 
@@ -978,7 +936,7 @@ mod tests {
     }
 }
 
-fn parse_config_json_entries(json_str: &str) -> Result<HashMap<String, String>, String> {
+pub(crate) fn parse_config_json_entries(json_str: &str) -> Result<HashMap<String, String>, String> {
     let parsed: serde_json::Value =
         serde_json::from_str(json_str).map_err(|error| error.to_string())?;
     let object = parsed
@@ -1010,7 +968,7 @@ fn parse_config_json_entries(json_str: &str) -> Result<HashMap<String, String>, 
 /// 3. Hostnames from `config_json` values that parse as URLs (notification plugins).
 ///
 /// If the resulting set is empty, no hosts are allowed (plugin has no network access).
-fn apply_allowed_hosts(
+pub(crate) fn apply_allowed_hosts(
     mut manifest: Manifest,
     descriptor: &PluginDescriptor,
     base_url: Option<&str>,
@@ -1065,7 +1023,7 @@ fn host_from_url(url: &str) -> Option<String> {
     if host.is_empty() { None } else { Some(host) }
 }
 
-fn build_plugin(manifest: Manifest) -> Result<extism::Plugin, extism::Error> {
+pub(crate) fn build_plugin(manifest: Manifest) -> Result<extism::Plugin, extism::Error> {
     extism::PluginBuilder::new(manifest)
         .with_wasi(true)
         .with_http_response_headers(true)

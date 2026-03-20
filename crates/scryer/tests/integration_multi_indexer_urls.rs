@@ -387,10 +387,12 @@ async fn multi_indexer_url_trace_season_pack() {
         .indexer_client
         .search(
             "Demon Slayer S02".into(), // title + S02 for freetext matching
-            None,                      // imdb_id
-            Some("348545".into()),     // tvdb_id
-            Some("1535".into()),       // anidb_id
+            std::collections::HashMap::from([
+                ("tvdb_id".to_string(), "348545".to_string()),
+                ("anidb_id".to_string(), "1535".to_string()),
+            ]),
             Some("anime".into()),      // category
+            Some("anime".into()),      // facet
             None,                      // newznab_categories
             None,                      // indexer_routing
             SearchMode::Auto,
