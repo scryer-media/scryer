@@ -9,7 +9,7 @@ mod common;
 use std::sync::Arc;
 
 use scryer_application::{
-    AppServices, AppUseCase, FacetRegistry, IndexerClient, IndexerPluginProvider, JwtAuthConfig,
+    AppServices, AppUseCase, FacetRegistry, IndexerPluginProvider, JwtAuthConfig,
     MovieFacetHandler, SearchMode, SeriesFacetHandler,
 };
 use scryer_domain::{Entitlement, User};
@@ -397,6 +397,7 @@ async fn multi_indexer_url_trace_season_pack() {
             Some(2), // season
             None,    // episode=None → season pack
             None,    // absolute_episode
+            vec![],
         )
         .await
         .expect("search should succeed");

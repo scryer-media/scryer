@@ -826,7 +826,7 @@ async fn process_single_wanted_item(
                     Some(season_num),
                     None, // episode=None signals a season pack search
                     None, // no absolute episode for season packs
-                    &title.aliases,
+                    &title.tagged_aliases,
                 )
                 .await
                 .unwrap_or_default();
@@ -1051,7 +1051,7 @@ async fn process_single_wanted_item(
             search_season,
             search_episode,
             absolute_episode,
-            &title.aliases,
+            &title.tagged_aliases,
         )
         .await
     {
@@ -1666,18 +1666,6 @@ fn build_search_queries(
                 };
                 queries.push(query);
             }
-            // Add alias-based queries for broader search coverage
-            for alias in &title.aliases {
-                if !alias.is_empty() {
-                    let query = if let Some(year) = title.year {
-                        format!("{} {}", alias, year)
-                    } else {
-                        alias.clone()
-                    };
-                    queries.push(query);
-                }
-            }
-            // Dedup queries (alias may duplicate the primary name)
             let mut seen = std::collections::HashSet::new();
             queries.retain(|q| seen.insert(q.to_ascii_lowercase()));
             if queries.is_empty() && imdb_id.is_some() {
@@ -1723,24 +1711,6 @@ fn build_search_queries(
                         "{} S{:0>2}E{:0>2}",
                         title.name, season_num, episode_num
                     ));
-
-                    // For anime: add the Japanese romanized name so *nab indexers
-                    // find releases titled "Kimetsu no Yaiba S01E01" when our
-                    // primary title is "Demon Slayer". Only use romanized names
-                    // (Latin characters), not kanji/kana.
-                    if title.facet == scryer_domain::MediaFacet::Anime {
-                        for alias in &title.tagged_aliases {
-                            if alias.language == "jpn"
-                                && !alias.name.is_empty()
-                                && alias.name.chars().all(|c| c <= '\u{FF}' || c.is_ascii())
-                            {
-                                queries.push(format!(
-                                    "{} S{:0>2}E{:0>2}",
-                                    alias.name, season_num, episode_num
-                                ));
-                            }
-                        }
-                    }
                 }
 
                 // For anime season 0 (specials/OVAs): use title-based search
@@ -1818,16 +1788,6 @@ fn build_search_queries(
                     title.name.clone()
                 };
                 queries.push(query);
-            }
-            for alias in &title.aliases {
-                if !alias.is_empty() {
-                    let query = if let Some(year) = title.year {
-                        format!("{} {}", alias, year)
-                    } else {
-                        alias.clone()
-                    };
-                    queries.push(query);
-                }
             }
             let mut seen = std::collections::HashSet::new();
             queries.retain(|q| seen.insert(q.to_ascii_lowercase()));

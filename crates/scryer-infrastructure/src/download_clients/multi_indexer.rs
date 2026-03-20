@@ -220,6 +220,7 @@ impl IndexerClient for MultiIndexerSearchClient {
         season: Option<u32>,
         episode: Option<u32>,
         absolute_episode: Option<u32>,
+        tagged_aliases: Vec<scryer_domain::TaggedAlias>,
     ) -> AppResult<IndexerSearchResponse> {
         let is_rss_request = Self::is_rss_sync_request(
             &query,
@@ -425,6 +426,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 let query = query.clone();
                 let category = category.clone();
                 let per_indexer_categories = per_indexer_categories.clone();
+                let tagged_aliases = tagged_aliases.clone();
                 let indexer_id = config.id.clone();
                 let indexer_name = config.name.clone();
                 let rate_limiter = self.rate_limiter.clone();
@@ -441,7 +443,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                             let start = std::time::Instant::now();
                             match tokio::time::timeout(
                                 std::time::Duration::from_secs(30),
-                                client.search(query, None, None, None, category, per_indexer_categories, None, mode, season, episode, None),
+                                client.search(query, None, None, None, category, per_indexer_categories, None, mode, season, episode, None, tagged_aliases),
                             ).await {
                                 Ok(Ok(response)) => {
                                     info!(indexer = indexer_name.as_str(), count = response.results.len(), "RSS feed cached");
@@ -512,6 +514,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 let client = client.clone();
                 let category = category.clone();
                 let per_indexer_categories = per_indexer_categories.clone();
+                let tagged_aliases = tagged_aliases.clone();
                 let indexer_id = config.id.clone();
                 let indexer_name = config.name.clone();
                 let rate_limiter = self.rate_limiter.clone();
@@ -538,6 +541,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                             season,
                             episode,
                             absolute_episode,
+                            tagged_aliases,
                         ),
                     )
                     .await;
@@ -977,6 +981,7 @@ mod tests {
             _season: Option<u32>,
             _episode: Option<u32>,
             _absolute_episode: Option<u32>,
+            _tagged_aliases: Vec<scryer_domain::TaggedAlias>,
         ) -> AppResult<IndexerSearchResponse> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(IndexerSearchResponse {
@@ -1076,6 +1081,7 @@ mod tests {
                 None,
                 None,
                 None,
+                vec![],
             )
             .await
             .expect("rss sync search should succeed");

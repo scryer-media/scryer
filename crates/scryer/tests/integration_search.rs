@@ -67,6 +67,7 @@ async fn nzbgeek_search_movie_by_category() {
             None,
             None,
             None, // absolute_episode
+            vec![],
         )
         .await
         .expect("search should succeed")
@@ -125,6 +126,7 @@ async fn nzbgeek_search_movie_extracts_size() {
             None,
             None,
             None, // absolute_episode
+            vec![],
         )
         .await
         .unwrap()
@@ -161,6 +163,7 @@ async fn nzbgeek_search_movie_extracts_download_url() {
             None,
             None,
             None, // absolute_episode
+            vec![],
         )
         .await
         .unwrap()
@@ -205,6 +208,7 @@ async fn nzbgeek_search_tv_by_category() {
             None,
             None,
             None, // absolute_episode
+            vec![],
         )
         .await
         .expect("TV search should succeed")
@@ -239,6 +243,7 @@ async fn nzbgeek_search_tv_by_anime_category() {
             None,
             None,
             None, // absolute_episode
+            vec![],
         )
         .await;
 
@@ -274,6 +279,7 @@ async fn nzbgeek_search_tv_by_series_category() {
             None,
             None,
             None, // absolute_episode
+            vec![],
         )
         .await;
 
@@ -310,6 +316,7 @@ async fn nzbgeek_search_infers_movie_from_imdb_id() {
             None,
             None,
             None, // absolute_episode
+            vec![],
         )
         .await;
 
@@ -345,6 +352,7 @@ async fn nzbgeek_search_infers_tvsearch_from_tvdb_id() {
             None,
             None,
             None, // absolute_episode
+            vec![],
         )
         .await;
 
@@ -381,6 +389,7 @@ async fn nzbgeek_search_generic_without_ids() {
             None,
             None,
             None, // absolute_episode
+            vec![],
         )
         .await;
 
@@ -419,6 +428,7 @@ async fn nzbgeek_search_empty_results() {
             None,
             None,
             None, // absolute_episode
+            vec![],
         )
         .await
         .expect("empty search should succeed")
@@ -453,6 +463,7 @@ async fn nzbgeek_search_single_item_response() {
             None,
             None,
             None, // absolute_episode
+            vec![],
         )
         .await
         .expect("single-item response should parse correctly")
@@ -506,6 +517,7 @@ async fn nzbgeek_search_no_api_key_fails() {
             None,
             None,
             None, // absolute_episode
+            vec![],
         )
         .await;
 
@@ -534,6 +546,7 @@ async fn nzbgeek_search_http_error() {
             None,
             None,
             None, // absolute_episode
+            vec![],
         )
         .await;
 
@@ -566,6 +579,7 @@ async fn nzbgeek_search_rate_limited() {
             None,
             None,
             None, // absolute_episode
+            vec![],
         )
         .await;
 
@@ -608,6 +622,7 @@ async fn nzbgeek_search_server_error_fallback() {
             None,
             None,
             None, // absolute_episode
+            vec![],
         )
         .await;
 
@@ -637,6 +652,7 @@ async fn nzbgeek_search_empty_query_and_no_ids_fails() {
             None,
             None,
             None, // absolute_episode
+            vec![],
         )
         .await;
 
@@ -676,6 +692,7 @@ async fn nzbgeek_search_extracts_metadata_attributes() {
             None,
             None,
             None, // absolute_episode
+            vec![],
         )
         .await
         .unwrap()

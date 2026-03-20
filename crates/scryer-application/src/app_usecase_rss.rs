@@ -156,6 +156,7 @@ impl AppUseCase {
                 None,
                 None,
                 None,
+                vec![],
             )
             .await;
 

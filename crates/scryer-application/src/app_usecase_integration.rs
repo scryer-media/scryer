@@ -844,7 +844,7 @@ pub async fn start_download_queue_poller(
         }
     };
 
-    // TODO: revert this aggressive queue polling cadence after PP diagnostics are complete.
+    tracing::info!("download queue poller started (2s interval)");
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
     loop {
         tokio::select! {

@@ -30,6 +30,10 @@
 ## Search Scoring
 - **Validate persona promises against real release examples before shipping scoring tweaks.** If the UI says remux is an Audiophile concern, Balanced/Efficient/Compatible should not still reward remux-heavy anime releases through hidden defaults or oversized file bonuses.
 
+## Indexer Search Contracts
+- **Do not bake alias language or script policy into core search query construction.** Core should pass canonical title plus tagged alias context through to indexer plugins, and plugins should decide whether to prefer romanized Japanese, Korean aliases, or other provider-specific naming conventions.
+- **When the user asks for logging via `RUST_LOG`, do not add plugin config fields or descriptor changes.** Prefer existing runtime log filtering and keep observability changes out of the plugin contract unless the user explicitly asks for new config surface.
+
 ## urql / Frontend Caching
 - `cacheExchange` was removed from all urql clients — the network layer handles caching naturally.
 - Don't add per-query `requestPolicy` overrides; the exchange-level removal is the correct fix.

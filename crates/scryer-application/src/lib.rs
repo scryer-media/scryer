@@ -58,7 +58,7 @@ use scryer_domain::{
     DownloadQueueItem, DownloadQueueState, Entitlement, Episode, EventType, ExternalId,
     HistoryEvent, Id, ImportFileResult, ImportRecord, ImportResult, IndexerConfig, MediaFacet,
     NewDownloadClientConfig, NewIndexerConfig, NewTitle, PluginInstallation, PolicyInput,
-    PolicyOutput, RuleSet, Title, TitleHistoryEventType, TitleHistoryRecord, User,
+    PolicyOutput, RuleSet, TaggedAlias, Title, TitleHistoryEventType, TitleHistoryRecord, User,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -1205,6 +1205,7 @@ pub trait IndexerClient: Send + Sync {
         season: Option<u32>,
         episode: Option<u32>,
         absolute_episode: Option<u32>,
+        tagged_aliases: Vec<TaggedAlias>,
     ) -> AppResult<IndexerSearchResponse>;
 }
 
@@ -2198,6 +2199,7 @@ mod tests {
             _season: Option<u32>,
             _episode: Option<u32>,
             _absolute_episode: Option<u32>,
+            _tagged_aliases: Vec<TaggedAlias>,
         ) -> AppResult<IndexerSearchResponse> {
             if let Some(tvdb) = tvdb_id {
                 tracing::info!(tvdb_id = %tvdb, category = ?category, "mock nzbgeek search");

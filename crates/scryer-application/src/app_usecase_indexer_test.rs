@@ -76,6 +76,7 @@ impl AppUseCase {
                 None,
                 None,
                 None,
+                vec![],
             )
             .await
             .map_err(|e| AppError::Repository(format!("indexer connection test failed: {e}")))?;

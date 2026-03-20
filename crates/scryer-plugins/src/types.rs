@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 pub use scryer_domain::IndexerProviderCapabilities as IndexerCapabilities;
-pub use scryer_domain::{ConfigFieldDef, ConfigFieldOption};
+pub use scryer_domain::{ConfigFieldDef, ConfigFieldOption, TaggedAlias};
 use serde::{Deserialize, Serialize};
 
 /// Returned by a plugin's `describe()` export.
@@ -344,6 +344,8 @@ pub struct PluginSearchRequest {
     pub season: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub episode: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tagged_aliases: Vec<TaggedAlias>,
 }
 
 /// Returned by a plugin's `search()` export.
@@ -489,12 +491,17 @@ mod tests {
             limit: 1000,
             season: None,
             episode: None,
+            tagged_aliases: vec![TaggedAlias {
+                name: "Suna no Wakusei".to_string(),
+                language: "jpn".to_string(),
+            }],
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: PluginSearchRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.query, "Dune");
         assert_eq!(parsed.imdb_id, Some("tt15239678".to_string()));
         assert!(parsed.tvdb_id.is_none());
+        assert_eq!(parsed.tagged_aliases.len(), 1);
     }
 
     #[test]

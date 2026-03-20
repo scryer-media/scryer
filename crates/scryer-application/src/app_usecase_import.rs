@@ -157,7 +157,7 @@ pub async fn try_import_completed_downloads(
 
     let mut processed_ids: HashSet<String> = HashSet::new();
 
-    tracing::debug!(
+    tracing::info!(
         count = completed_items.len(),
         items = %completed_items.iter().map(|i| format!("{}({})", i.title_name, i.download_client_item_id)).collect::<Vec<_>>().join(", "),
         "import: found completed items to evaluate"
@@ -194,7 +194,7 @@ pub async fn try_import_completed_downloads(
             .await
         {
             Ok(true) => {
-                tracing::debug!(
+                tracing::info!(
                     source_ref = %source_ref,
                     title = %item.title_name,
                     "import: skipping already-imported download"
@@ -216,7 +216,7 @@ pub async fn try_import_completed_downloads(
         {
             Some(cd) => cd,
             None => {
-                tracing::debug!(
+                tracing::info!(
                     source_ref = %source_ref,
                     title = %item.title_name,
                     "import: no matching CompletedDownload from client history (item may still be processing or status != Completed)"
@@ -227,7 +227,7 @@ pub async fn try_import_completed_downloads(
 
         // Skip if dest_dir is empty
         if completed.dest_dir.is_empty() {
-            tracing::debug!(
+            tracing::info!(
                 source_ref = %source_ref,
                 title = %item.title_name,
                 "import: skipping download with empty dest_dir"
@@ -263,7 +263,7 @@ pub async fn try_import_completed_downloads(
                     patched
                 }
                 Ok(None) => {
-                    tracing::debug!(
+                    tracing::info!(
                         source_ref = %source_ref,
                         title = %item.title_name,
                         client_type = %completed.client_type,

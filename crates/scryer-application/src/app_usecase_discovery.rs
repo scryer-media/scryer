@@ -1,5 +1,6 @@
 use super::*;
 use crate::quality_profile::ScoringSource;
+use scryer_domain::TaggedAlias;
 use serde_json::Value;
 use tokio::task::JoinSet;
 use tracing::{info, warn};
@@ -101,7 +102,7 @@ impl AppUseCase {
         season: Option<u32>,
         episode: Option<u32>,
         absolute_episode: Option<u32>,
-        aliases: &[String],
+        tagged_aliases: &[TaggedAlias],
     ) -> AppResult<Vec<IndexerSearchResult>> {
         let quality_profile = self
             .resolve_quality_profile(
@@ -148,6 +149,7 @@ impl AppUseCase {
             let anidb_id = anidb_id.clone();
             let category = category.clone();
             let indexer_routing = indexer_routing.clone();
+            let tagged_aliases = tagged_aliases.to_vec();
 
             set.spawn(async move {
                 indexer_client
@@ -163,6 +165,7 @@ impl AppUseCase {
                         season,
                         episode,
                         absolute_episode,
+                        tagged_aliases,
                     )
                     .await
             });
@@ -208,9 +211,9 @@ impl AppUseCase {
         let is_freetext_search = imdb_id.is_none() && tvdb_id.is_none() && anidb_id.is_none();
         if is_freetext_search && let Some(ref hint) = title_hint {
             let hint_normalized = crate::app_usecase_rss::normalize_for_matching(hint);
-            let alias_hints: Vec<String> = aliases
+            let alias_hints: Vec<String> = tagged_aliases
                 .iter()
-                .map(|a| crate::app_usecase_rss::normalize_for_matching(a))
+                .map(|alias| crate::app_usecase_rss::normalize_for_matching(&alias.name))
                 .filter(|h| !h.is_empty())
                 .collect();
             if !hint_normalized.is_empty() {
@@ -575,7 +578,7 @@ impl AppUseCase {
         season: Option<u32>,
         episode: Option<u32>,
         absolute_episode: Option<u32>,
-        aliases: &[String],
+        tagged_aliases: &[TaggedAlias],
     ) -> AppResult<Vec<IndexerSearchResult>> {
         self.search_and_score_releases(
             queries,
@@ -590,7 +593,7 @@ impl AppUseCase {
             season,
             episode,
             absolute_episode,
-            aliases,
+            tagged_aliases,
         )
         .await
     }
@@ -852,7 +855,7 @@ impl AppUseCase {
                 None,
                 None,
                 None,
-                &title.aliases,
+                &title.tagged_aliases,
             )
             .await?;
 
@@ -997,7 +1000,7 @@ impl AppUseCase {
                 Some(season_num as u32),
                 Some(episode_num as u32),
                 absolute_episode,
-                &title.aliases,
+                &title.tagged_aliases,
             )
             .await?;
 

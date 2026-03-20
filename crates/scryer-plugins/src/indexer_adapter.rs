@@ -5,6 +5,7 @@ use scryer_application::{
     AppError, AppResult, DownloadSourceKind, IndexerClient, IndexerRoutingPlan,
     IndexerSearchResponse, IndexerSearchResult, SearchMode,
 };
+use scryer_domain::TaggedAlias;
 use tracing::warn;
 
 use crate::types::{PluginDescriptor, PluginSearchRequest, PluginSearchResponse};
@@ -40,6 +41,7 @@ impl IndexerClient for WasmIndexerClient {
         season: Option<u32>,
         episode: Option<u32>,
         _absolute_episode: Option<u32>,
+        tagged_aliases: Vec<TaggedAlias>,
     ) -> AppResult<IndexerSearchResponse> {
         let request = PluginSearchRequest {
             query,
@@ -51,6 +53,7 @@ impl IndexerClient for WasmIndexerClient {
             limit: 1000,
             season,
             episode,
+            tagged_aliases,
         };
 
         let input = serde_json::to_string(&request).map_err(|e| {
