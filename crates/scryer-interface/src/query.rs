@@ -664,6 +664,45 @@ impl QueryRoot {
         Ok(from_system_health(health))
     }
 
+    async fn recycled_items(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default = 500)] limit: i32,
+        #[graphql(default = 0)] offset: i32,
+    ) -> GqlResult<RecycledItemsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let all = app
+            .list_recycled_items(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        let total_count = all.len() as i32;
+        let limit = limit.clamp(1, 500) as usize;
+        let offset = offset.max(0) as usize;
+        let items = all
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(|entry| {
+                let file_name = std::path::Path::new(&entry.manifest.original_path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                RecycledItemPayload {
+                    id: entry.entry_id,
+                    original_path: entry.manifest.original_path,
+                    file_name,
+                    size_bytes: entry.manifest.size_bytes as i64,
+                    title_id: entry.manifest.title_id,
+                    reason: entry.manifest.reason,
+                    recycled_at: entry.manifest.recycled_at,
+                    media_root: entry.media_root,
+                }
+            })
+            .collect();
+        Ok(RecycledItemsPayload { items, total_count })
+    }
+
     async fn health_checks(&self, ctx: &Context<'_>) -> GqlResult<Vec<HealthCheckPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;

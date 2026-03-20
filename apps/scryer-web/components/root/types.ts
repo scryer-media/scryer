@@ -12,7 +12,8 @@ export type SettingsSection =
   | "plugins"
   | "notifications"
   | "post-processing"
-  | "subtitles";
+  | "subtitles"
+  | "recycleBin";
 export type ContentSettingsSection = "overview" | "settings" | "general" | "quality" | "renaming" | "routing";
 
 export type Translate = (

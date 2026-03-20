@@ -449,6 +449,20 @@ export const upgradePluginMutation = `mutation UpgradePlugin($input: UpgradePlug
   }
 }`;
 
+// ── Recycle Bin ─────────────────────────────────────────────────────────
+
+export const restoreRecycledItemMutation = `mutation RestoreRecycledItem($id: String!) {
+  restoreRecycledItem(id: $id)
+}`;
+
+export const deleteRecycledItemMutation = `mutation DeleteRecycledItem($id: String!) {
+  deleteRecycledItem(id: $id)
+}`;
+
+export const emptyRecycleBinMutation = `mutation EmptyRecycleBin {
+  emptyRecycleBin
+}`;
+
 // ── Notifications ────────────────────────────────────────────────────────
 
 export const createNotificationChannelMutation = `mutation CreateNotificationChannel($input: CreateNotificationChannelInput!) {

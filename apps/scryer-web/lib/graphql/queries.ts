@@ -1163,6 +1163,22 @@ export const pluginsQuery = `query Plugins {
   }
 }`;
 
+export const recycledItemsQuery = `query RecycledItems($limit: Int, $offset: Int) {
+  recycledItems(limit: $limit, offset: $offset) {
+    items {
+      id
+      originalPath
+      fileName
+      sizeBytes
+      titleId
+      reason
+      recycledAt
+      mediaRoot
+    }
+    totalCount
+  }
+}`;
+
 export const ruleSetsQuery = `query RuleSets {
   ruleSets {
     id

@@ -118,6 +118,11 @@ const settingsEntries: Array<{
     label: (t) => t("settings.subtitles"),
     requiredEntitlement: "manage_config",
   },
+  {
+    id: "recycleBin",
+    label: (t) => t("settings.recycleBin"),
+    requiredEntitlement: "manage_config",
+  },
 ];
 
 const MEDIA_SETTINGS_SUB_PAGES: Array<{ id: ContentSettingsSection; labelKey: string }> = [

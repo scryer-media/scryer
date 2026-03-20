@@ -7,6 +7,7 @@ mod library;
 mod notifications;
 mod plugins;
 mod post_processing;
+mod recycle_bin;
 mod rules;
 mod settings;
 mod subtitle;
@@ -33,4 +34,5 @@ pub struct MutationRoot(
     external_import::ExternalImportMutations,
     post_processing::PostProcessingMutations,
     subtitle::SubtitleMutations,
+    recycle_bin::RecycleBinMutations,
 );

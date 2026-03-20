@@ -29,6 +29,16 @@ pub struct RecycleResult {
     pub manifest_path: PathBuf,
 }
 
+/// A recycle bin entry for listing purposes.
+#[derive(Debug, Clone)]
+pub struct RecycleEntry {
+    /// Directory name, e.g. "20260307_120015437_abc123".
+    pub entry_id: String,
+    pub manifest: RecycleManifest,
+    /// Which media root this entry belongs to.
+    pub media_root: String,
+}
+
 /// Move a file to the recycle bin instead of deleting it.
 ///
 /// If the recycle bin is disabled, deletes the file directly (preserving current behaviour)
@@ -265,6 +275,199 @@ pub async fn purge_expired(config: &RecycleBinConfig) -> AppResult<u32> {
 
     if purged > 0 {
         info!(purged, "purged expired recycle bin entries");
+    }
+
+    Ok(purged)
+}
+
+/// Purge all recycle bin entries that belong to a specific title.
+///
+/// Called during title deletion to clean up orphaned entries.
+/// Returns the count of purged entries.
+pub async fn purge_for_title(config: &RecycleBinConfig, title_id: &str) -> AppResult<u32> {
+    if !config.enabled || !config.base_path.exists() {
+        return Ok(0);
+    }
+
+    let mut purged = 0u32;
+
+    let mut entries = tokio::fs::read_dir(&config.base_path).await.map_err(|e| {
+        AppError::Repository(format!(
+            "failed to read recycle bin directory {}: {}",
+            config.base_path.display(),
+            e
+        ))
+    })?;
+
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| AppError::Repository(format!("failed to read recycle bin entry: {}", e)))?
+    {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let manifest_path = path.join("manifest.json");
+        if !manifest_path.exists() {
+            continue;
+        }
+
+        let manifest_bytes = match tokio::fs::read(&manifest_path).await {
+            Ok(b) => b,
+            Err(e) => {
+                warn!(path = %manifest_path.display(), error = %e, "failed to read recycle manifest, skipping");
+                continue;
+            }
+        };
+
+        let manifest: RecycleManifest = match serde_json::from_slice(&manifest_bytes) {
+            Ok(m) => m,
+            Err(e) => {
+                warn!(path = %manifest_path.display(), error = %e, "failed to parse recycle manifest, skipping");
+                continue;
+            }
+        };
+
+        if manifest.title_id.as_deref() == Some(title_id) {
+            if let Err(e) = tokio::fs::remove_dir_all(&path).await {
+                warn!(path = %path.display(), error = %e, "failed to purge recycle entry for deleted title");
+            } else {
+                purged += 1;
+            }
+        }
+    }
+
+    if purged > 0 {
+        info!(purged, title_id, "purged recycle bin entries for deleted title");
+    }
+
+    Ok(purged)
+}
+
+/// List all entries in a recycle bin directory.
+pub async fn list_entries(config: &RecycleBinConfig, media_root: &str) -> AppResult<Vec<RecycleEntry>> {
+    if !config.enabled || !config.base_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut results = Vec::new();
+
+    let mut entries = tokio::fs::read_dir(&config.base_path).await.map_err(|e| {
+        AppError::Repository(format!(
+            "failed to read recycle bin directory {}: {}",
+            config.base_path.display(),
+            e
+        ))
+    })?;
+
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| AppError::Repository(format!("failed to read recycle bin entry: {}", e)))?
+    {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let manifest_path = path.join("manifest.json");
+        if !manifest_path.exists() {
+            continue;
+        }
+
+        let manifest_bytes = match tokio::fs::read(&manifest_path).await {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+
+        let manifest: RecycleManifest = match serde_json::from_slice(&manifest_bytes) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        let entry_id = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        results.push(RecycleEntry {
+            entry_id,
+            manifest,
+            media_root: media_root.to_string(),
+        });
+    }
+
+    results.sort_by(|a, b| b.manifest.recycled_at.cmp(&a.manifest.recycled_at));
+    Ok(results)
+}
+
+/// Look up a specific recycle bin entry by its directory name.
+pub async fn find_entry(
+    config: &RecycleBinConfig,
+    entry_id: &str,
+) -> AppResult<Option<(PathBuf, RecycleManifest)>> {
+    if !config.enabled || !config.base_path.exists() {
+        return Ok(None);
+    }
+
+    let entry_dir = config.base_path.join(entry_id);
+    if !entry_dir.is_dir() {
+        return Ok(None);
+    }
+
+    let manifest_path = entry_dir.join("manifest.json");
+    if !manifest_path.exists() {
+        return Ok(None);
+    }
+
+    let manifest_bytes = tokio::fs::read(&manifest_path).await.map_err(|e| {
+        AppError::Repository(format!("failed to read recycle manifest {}: {}", manifest_path.display(), e))
+    })?;
+
+    let manifest: RecycleManifest = serde_json::from_slice(&manifest_bytes).map_err(|e| {
+        AppError::Repository(format!("failed to parse recycle manifest {}: {}", manifest_path.display(), e))
+    })?;
+
+    Ok(Some((entry_dir, manifest)))
+}
+
+/// Purge ALL recycle bin entries regardless of age.
+pub async fn purge_all(config: &RecycleBinConfig) -> AppResult<u32> {
+    if !config.enabled || !config.base_path.exists() {
+        return Ok(0);
+    }
+
+    let mut purged = 0u32;
+
+    let mut entries = tokio::fs::read_dir(&config.base_path).await.map_err(|e| {
+        AppError::Repository(format!(
+            "failed to read recycle bin directory {}: {}",
+            config.base_path.display(),
+            e
+        ))
+    })?;
+
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| AppError::Repository(format!("failed to read recycle bin entry: {}", e)))?
+    {
+        let path = entry.path();
+        if !path.is_dir() || !path.join("manifest.json").exists() {
+            continue;
+        }
+
+        if let Err(e) = tokio::fs::remove_dir_all(&path).await {
+            warn!(path = %path.display(), error = %e, "failed to purge recycle entry");
+        } else {
+            purged += 1;
+        }
+    }
+
+    if purged > 0 {
+        info!(purged, "emptied recycle bin");
     }
 
     Ok(purged)
@@ -523,5 +726,43 @@ mod tests {
         assert_eq!(purged, 1);
         assert!(!old_dir.exists(), "expired entry should be purged");
         assert!(new_dir.exists(), "fresh entry should survive");
+    }
+
+    #[tokio::test]
+    async fn test_purge_for_title_removes_matching_only() {
+        let tmp = TempDir::new().unwrap();
+        let recycle_dir = tmp.path().join("recycle");
+        tokio::fs::create_dir_all(&recycle_dir).await.unwrap();
+
+        let match_dir = recycle_dir.join("20260307_120000000_aaa111");
+        tokio::fs::create_dir_all(&match_dir).await.unwrap();
+        let match_manifest = RecycleManifest {
+            recycled_at: Utc::now().to_rfc3339(),
+            original_path: "/media/movies/Movie/Movie.mkv".to_string(),
+            size_bytes: 1024,
+            title_id: Some("title-123".to_string()),
+            reason: "upgrade_replaced".to_string(),
+        };
+        tokio::fs::write(match_dir.join("manifest.json"), serde_json::to_string(&match_manifest).unwrap()).await.unwrap();
+        tokio::fs::write(match_dir.join("Movie.mkv"), b"data").await.unwrap();
+
+        let other_dir = recycle_dir.join("20260307_120000000_bbb222");
+        tokio::fs::create_dir_all(&other_dir).await.unwrap();
+        let other_manifest = RecycleManifest {
+            recycled_at: Utc::now().to_rfc3339(),
+            original_path: "/media/movies/Other/Other.mkv".to_string(),
+            size_bytes: 2048,
+            title_id: Some("title-456".to_string()),
+            reason: "file_deleted".to_string(),
+        };
+        tokio::fs::write(other_dir.join("manifest.json"), serde_json::to_string(&other_manifest).unwrap()).await.unwrap();
+        tokio::fs::write(other_dir.join("Other.mkv"), b"other").await.unwrap();
+
+        let config = test_config(&recycle_dir);
+        let purged = purge_for_title(&config, "title-123").await.unwrap();
+
+        assert_eq!(purged, 1);
+        assert!(!match_dir.exists(), "matching title entry should be purged");
+        assert!(other_dir.exists(), "different title entry should survive");
     }
 }

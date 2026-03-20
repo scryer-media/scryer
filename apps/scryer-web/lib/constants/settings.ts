@@ -91,6 +91,8 @@ export const SETTINGS_SECTION_PATH_TO_ID: Record<string, SettingsSection> = {
   notifications: "notifications",
   "post-processing": "post-processing",
   subtitles: "subtitles",
+  "recycle-bin": "recycleBin",
+  recycleBin: "recycleBin",
 };
 
 export const CONTENT_SECTION_PATH_TO_ID: Record<string, ContentSettingsSection> = {

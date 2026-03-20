@@ -1436,6 +1436,26 @@ pub struct HousekeepingReportPayload {
     pub ran_at: String,
 }
 
+// ── Recycle Bin ────────────────────────────────────────────────────────────
+
+#[derive(SimpleObject, Clone)]
+pub struct RecycledItemPayload {
+    pub id: String,
+    pub original_path: String,
+    pub file_name: String,
+    pub size_bytes: i64,
+    pub title_id: Option<String>,
+    pub reason: String,
+    pub recycled_at: String,
+    pub media_root: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct RecycledItemsPayload {
+    pub items: Vec<RecycledItemPayload>,
+    pub total_count: i32,
+}
+
 #[derive(SimpleObject, Clone)]
 pub struct SetupStatusPayload {
     pub setup_complete: bool,

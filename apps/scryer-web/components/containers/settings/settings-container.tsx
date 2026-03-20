@@ -14,6 +14,7 @@ import { SettingsPluginsContainer } from "@/components/containers/settings/setti
 import { SettingsNotificationsContainer } from "@/components/containers/settings/settings-notifications-container";
 import { SettingsPostProcessingContainer } from "@/components/containers/settings/settings-post-processing-container";
 import { SettingsSubtitlesContainer } from "@/components/containers/settings/settings-subtitles-container";
+import { SettingsRecycleBinContainer } from "@/components/containers/settings/settings-recycle-bin-container";
 import type { SettingsSection } from "@/components/root/types";
 import type { LocaleCode, LanguageOption } from "@/lib/i18n";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -66,6 +67,8 @@ export const SettingsContainer = memo(function SettingsContainer({
                   ? t("settings.postProcessing")
                 : settingsSection === "subtitles"
                   ? t("settings.subtitles")
+                : settingsSection === "recycleBin"
+                  ? t("settings.recycleBin")
                 : settingsSection === "delayProfiles"
                   ? t("settings.delayProfiles")
                     : t("settings.qualityProfiles"),
@@ -103,6 +106,8 @@ export const SettingsContainer = memo(function SettingsContainer({
           <SettingsPostProcessingContainer />
         ) : settingsSection === "subtitles" ? (
           <SettingsSubtitlesContainer />
+        ) : settingsSection === "recycleBin" ? (
+          <SettingsRecycleBinContainer />
         ) : settingsSection === "delayProfiles" ? (
           <SettingsDelayProfilesContainer />
         ) : (

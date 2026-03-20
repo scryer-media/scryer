@@ -1909,6 +1909,25 @@ impl AppUseCase {
             }
         }
 
+        // Purge recycle bin entries that belonged to this title.
+        if let Some(media_root) = crate::recycle_bin::media_root_for_title(self, &title).await {
+            let config =
+                crate::recycle_bin::resolve_recycle_config(self, Some(&media_root)).await;
+            match crate::recycle_bin::purge_for_title(&config, id).await {
+                Ok(n) if n > 0 => info!(
+                    purged = n,
+                    title_id = %id,
+                    "purged recycle bin entries for deleted title"
+                ),
+                Err(e) => warn!(
+                    error = %e,
+                    title_id = %id,
+                    "failed to purge recycle entries for deleted title"
+                ),
+                _ => {}
+            }
+        }
+
         let queued_submission_keys = match self
             .services
             .download_submissions

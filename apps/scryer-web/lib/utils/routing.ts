@@ -20,6 +20,7 @@ export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
   notifications: "notifications",
   "post-processing": "post-processing",
   subtitles: "subtitles",
+  recycleBin: "recycle-bin",
 };
 
 export const CONTENT_SECTION_PATH: Record<ContentSettingsSection, string> = {

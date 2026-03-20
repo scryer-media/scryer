@@ -1554,6 +1554,19 @@ const en: LocaleDictionary = {
   "convenience.preferDualAudioLabel": "Prefer dual audio",
   "convenience.preferDualAudioHelp":
     "Boost releases that contain multiple audio tracks. Creates a managed rule visible in Settings > Rules.",
+
+  // Recycle Bin
+  "settings.recycleBin": "Recycle Bin",
+  "settings.recycleBinSection": "Manage recycled media files",
+  "settings.recycleBinEmpty": "The recycle bin is empty.",
+  "settings.recycleBinRestore": "Restore",
+  "settings.recycleBinDelete": "Delete",
+  "settings.recycleBinEmptyAll": "Empty Recycle Bin",
+  "settings.recycleBinEmptyConfirm": "Permanently delete all {count} items in the recycle bin? This cannot be undone.",
+  "settings.recycleBinDeleteConfirm": "Permanently delete this file? This cannot be undone.",
+  "status.recycleBinRestored": "File restored to {path}.",
+  "status.recycleBinDeleted": "File permanently deleted.",
+  "status.recycleBinEmptied": "Recycle bin emptied ({count} items removed).",
 };
 
 export default en;
