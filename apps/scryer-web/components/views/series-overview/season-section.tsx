@@ -93,7 +93,6 @@ export function SeasonSection({
   expandedEpisodeRows,
   episodeActiveTab,
   mediaFilesByEpisode,
-  subtitleDownloads,
   releaseBlocklistEntries,
   searchResultsByEpisode,
   searchLoadingByEpisode,
@@ -193,40 +192,6 @@ export function SeasonSection({
       ) : null}
     </>
   ), [t]);
-
-  const renderSubtitleBadges = React.useCallback(
-    (episodeFiles: EpisodeMediaFile[]) => {
-      const fileIds = new Set(episodeFiles.map((f) => f.id));
-      const embedded = new Set<string>();
-      const downloaded = new Set<string>();
-      for (const f of episodeFiles) {
-        for (const lang of f.subtitleLanguages ?? []) {
-          embedded.add(lang);
-        }
-      }
-      for (const dl of subtitleDownloads ?? []) {
-        if (fileIds.has(dl.mediaFileId)) {
-          downloaded.add(dl.language);
-        }
-      }
-      if (embedded.size === 0 && downloaded.size === 0) return null;
-      return (
-        <>
-          {[...embedded].map((lang) => (
-            <span key={`emb-${lang}`} className="rounded bg-emerald-500/15 px-1 py-0.5 text-[10px] text-emerald-700 dark:text-emerald-300">
-              {lang}
-            </span>
-          ))}
-          {[...downloaded].filter((l) => !embedded.has(l)).map((lang) => (
-            <span key={`dl-${lang}`} className="rounded bg-blue-500/15 px-1 py-0.5 text-[10px] text-blue-700 dark:text-blue-300">
-              {lang}
-            </span>
-          ))}
-        </>
-      );
-    },
-    [subtitleDownloads],
-  );
 
   const renderEpisodeQualityBadge = React.useCallback(
     (episode: CollectionEpisode, episodeFiles: EpisodeMediaFile[]) => {
@@ -548,7 +513,6 @@ export function SeasonSection({
                                 </button>
                                 <div className="flex shrink-0 items-center gap-1">
                                   {renderEpisodeQualityBadge(episode, episodeFiles)}
-                                  {renderSubtitleBadges(episodeFiles)}
                                 </div>
                               </div>
                               <div className="mt-2 flex flex-wrap gap-2">
@@ -707,7 +671,6 @@ export function SeasonSection({
                               <TableCell className="text-center">
                                 <div className="inline-flex items-center gap-1">
                                   {renderEpisodeQualityBadge(episode, episodeFiles)}
-                                  {renderSubtitleBadges(episodeFiles)}
                                 </div>
                               </TableCell>
                               <TableCell className="text-right">
