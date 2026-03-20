@@ -7,6 +7,7 @@ export type ActivityEvent = {
   message: string;
   actorUserId?: string | null;
   titleId?: string | null;
+  facet?: string | null;
   occurredAt?: string | null;
 };
 

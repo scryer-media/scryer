@@ -78,8 +78,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     view === "movies" || view === "series" || view === "anime";
   const shouldLoadCatalogTitles =
     isMediaView && contentSettingsSection === "overview";
-  const shouldLoadMediaSettings =
-    isMediaView && contentSettingsSection !== "routing";
+  const shouldLoadMediaSettings = isMediaView;
 
   const {
     titleNameForQueue,
@@ -159,7 +158,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   } = useMediaSettings({
     activeQualityScopeId,
     view,
-    contentSettingsSection,
   });
 
   const contentSettingsLabel =
@@ -302,6 +300,16 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     }
     void refreshTitles();
   }, [catalogChangeSignal, refreshTitles, shouldLoadCatalogTitles]);
+
+  // Refresh the title list when hydration completes for a title in this facet.
+  const HYDRATION_KINDS = React.useMemo(
+    () => new Set(["metadata_hydration_completed"]),
+    [],
+  );
+  useActivitySubscription(HYDRATION_KINDS, refreshTitles, {
+    facet: activeFacet,
+    pause: !shouldLoadCatalogTitles,
+  });
 
   const onAddSubmit = React.useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
@@ -799,6 +807,17 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     ],
   );
 
+  // Load media settings once per view/scope change (subscription handles live updates).
+  // Deferred pattern: StrictMode unmount/remount cancels the stale call.
+  React.useEffect(() => {
+    if (!shouldLoadMediaSettings) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      if (!cancelled) void refreshMediaSettings();
+    }, 0);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [shouldLoadMediaSettings, refreshMediaSettings]);
+
   React.useEffect(() => {
     if (!isMediaView) {
       return;
@@ -811,9 +830,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
 
     if (shouldLoadCatalogTitles) {
       void refreshTitles();
-    }
-    if (shouldLoadMediaSettings) {
-      void refreshMediaSettings();
     }
     if (isRoutingSection) {
       let cancelled = false;
@@ -863,12 +879,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     hydrateDownloadClientRouting,
     hydrateIndexerRouting,
     isMediaView,
-    refreshMediaSettings,
     refreshRuleSets,
     refreshTitles,
     setGlobalStatus,
     shouldLoadCatalogTitles,
-    shouldLoadMediaSettings,
     t,
     view,
   ]);

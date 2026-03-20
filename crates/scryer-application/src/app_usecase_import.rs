@@ -127,6 +127,7 @@ pub async fn try_import_completed_downloads(
                 .record_activity_event(
                     Some(actor.id.clone()),
                     None,
+                    None,
                     ActivityKind::SystemNotice,
                     format!(
                         "{} stale import(s) recovered as failed — check import history",
@@ -585,6 +586,7 @@ async fn run_import(
             app.services
                 .record_activity_event(
                     Some(actor.id.clone()),
+                    None,
                     None,
                     ActivityKind::SystemNotice,
                     unmatched_msg,
@@ -1119,6 +1121,7 @@ async fn import_movie_download(
                     .record_activity_event_with_notification(
                         Some(actor.id.clone()),
                         Some(title.id.clone()),
+                        None,
                         ActivityKind::MovieDownloaded,
                         event_message,
                         ActivitySeverity::Success,
@@ -1598,6 +1601,7 @@ async fn import_interstitial_movie_download(
             .record_activity_event_with_notification(
                 Some(actor.id.clone()),
                 Some(title.id.clone()),
+                None,
                 ActivityKind::MovieDownloaded,
                 event_message,
                 ActivitySeverity::Success,
@@ -1825,6 +1829,7 @@ async fn import_series_download(
                 .record_activity_event_with_notification(
                     Some(actor.id.clone()),
                     Some(title.id.clone()),
+                    None,
                     ActivityKind::SeriesEpisodeImported,
                     event_message,
                     ActivitySeverity::Success,
@@ -2997,6 +3002,7 @@ pub async fn execute_manual_import(
             .record_activity_event_with_notification(
                 Some(actor.id.clone()),
                 Some(title.id.clone()),
+                None,
                 ActivityKind::SeriesEpisodeImported,
                 event_message,
                 ActivitySeverity::Success,

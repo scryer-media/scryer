@@ -93,6 +93,7 @@ impl AppUseCase {
             .record_activity_event(
                 Some(actor.id.clone()),
                 title_id,
+                None,
                 kind,
                 message,
                 severity,

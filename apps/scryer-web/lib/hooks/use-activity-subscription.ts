@@ -17,7 +17,12 @@ import type { ActivityEvent } from "@/lib/types";
 export function useActivitySubscription(
   kinds: ReadonlySet<string>,
   onMatch: () => void,
-  options?: { debounceMs?: number; titleId?: string | null },
+  options?: {
+    debounceMs?: number;
+    titleId?: string | null;
+    facet?: string | null;
+    pause?: boolean;
+  },
 ) {
   const onMatchRef = useRef(onMatch);
   useEffect(() => {
@@ -30,7 +35,11 @@ export function useActivitySubscription(
   const titleIdRef = useRef(options?.titleId);
   titleIdRef.current = options?.titleId;
 
-  const debounceMs = options?.debounceMs ?? 2000;
+  const facetRef = useRef(options?.facet);
+  facetRef.current = options?.facet;
+
+  const debounceMs = options?.debounceMs ?? 500;
+  const pause = options?.pause ?? false;
 
   const unsubRef = useRef<(() => void) | null>(null);
   const teardownTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -38,6 +47,23 @@ export function useActivitySubscription(
   const processedIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
+    if (pause) {
+      // Tear down any existing subscription when paused.
+      if (teardownTimer.current) {
+        clearTimeout(teardownTimer.current);
+        teardownTimer.current = null;
+      }
+      if (debounceTimer.current) {
+        clearTimeout(debounceTimer.current);
+        debounceTimer.current = null;
+      }
+      if (unsubRef.current) {
+        unsubRef.current();
+        unsubRef.current = null;
+      }
+      return;
+    }
+
     // StrictMode re-run: cancel the pending teardown, subscription is still alive
     if (teardownTimer.current) {
       clearTimeout(teardownTimer.current);
@@ -68,6 +94,9 @@ export function useActivitySubscription(
 
             const filterTitleId = titleIdRef.current;
             if (filterTitleId && activity.titleId !== filterTitleId) continue;
+
+            const filterFacet = facetRef.current;
+            if (filterFacet && activity.facet !== filterFacet) continue;
 
             if (kindsRef.current.has(activity.kind)) {
               matched = true;
@@ -104,5 +133,5 @@ export function useActivitySubscription(
         processedIds.current.clear();
       }, 200);
     };
-  }, [debounceMs]);
+  }, [debounceMs, pause]);
 }

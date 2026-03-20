@@ -124,6 +124,7 @@ impl SettingsMutations {
             .record_activity_event(
                 Some(actor.id.clone()),
                 None,
+                None,
                 scryer_application::ActivityKind::SettingSaved,
                 format!(
                     "settings saved in scope '{scope}' ({})",
@@ -254,6 +255,7 @@ impl SettingsMutations {
             .services
             .record_activity_event(
                 Some(actor.id.clone()),
+                None,
                 None,
                 scryer_application::ActivityKind::SettingSaved,
                 format!("quality profile '{profile_id}' deleted"),

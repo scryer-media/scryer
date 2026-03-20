@@ -275,6 +275,7 @@ pub struct ActivityEventPayload {
     pub channels: Vec<String>,
     pub actor_user_id: Option<String>,
     pub title_id: Option<String>,
+    pub facet: Option<String>,
     pub message: String,
     pub occurred_at: String,
 }

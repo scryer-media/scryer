@@ -684,6 +684,7 @@ export const activitySubscriptionQuery = `subscription ActivityStream {
     channels
     actorUserId
     titleId
+    facet
     message
     occurredAt
   }

@@ -31,7 +31,7 @@ import {
   RENAME_TEMPLATE_GLOBAL_KEYS,
   RENAME_TEMPLATE_KEY,
 } from "@/lib/constants/settings";
-import type { ContentSettingsSection, ViewId } from "@/components/root/types";
+import type { ViewId } from "@/components/root/types";
 import type { SearchableQualityProfileBody } from "@/lib/utils/media-content";
 import type { ParsedQualityProfileEntry } from "@/lib/types/quality-profiles";
 import {
@@ -50,7 +50,6 @@ import { useSettingsSubscription } from "@/lib/hooks/use-settings-subscription";
 type UseMediaSettingsArgs = {
   activeQualityScopeId: ViewCategoryId;
   view: ViewId;
-  contentSettingsSection: ContentSettingsSection;
 };
 
 export type UseMediaSettingsResult = {
@@ -151,46 +150,42 @@ const PLEXMATCH_WRITE_KEYS: Partial<Record<ViewCategoryId, string>> = {
 function buildMediaSettingsInitVariables(
   activeQualityScopeId: ViewCategoryId,
   view: ViewId,
-  contentSettingsSection: ContentSettingsSection,
 ) {
-  const isOverviewSection = contentSettingsSection === "overview";
   const mediaKeyNames: string[] = [];
   const systemKeyNames = [QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY];
   const categoryKeyNames = [QUALITY_PROFILE_ID_KEY];
 
-  if (!isOverviewSection) {
-    if (view === "movies") {
-      mediaKeyNames.push(MOVIE_FOLDER_KEY);
-    } else if (view === "series") {
-      mediaKeyNames.push(SERIES_FOLDER_KEY);
-    }
+  if (view === "movies") {
+    mediaKeyNames.push(MOVIE_FOLDER_KEY);
+  } else if (view === "series") {
+    mediaKeyNames.push(SERIES_FOLDER_KEY);
+  }
 
-    systemKeyNames.push(
-      RENAME_TEMPLATE_GLOBAL_KEYS[activeQualityScopeId],
-      RENAME_COLLISION_POLICY_GLOBAL_KEY,
-      RENAME_MISSING_METADATA_POLICY_GLOBAL_KEY,
-      NFO_WRITE_KEYS[activeQualityScopeId],
-    );
+  systemKeyNames.push(
+    RENAME_TEMPLATE_GLOBAL_KEYS[activeQualityScopeId],
+    RENAME_COLLISION_POLICY_GLOBAL_KEY,
+    RENAME_MISSING_METADATA_POLICY_GLOBAL_KEY,
+    NFO_WRITE_KEYS[activeQualityScopeId],
+  );
 
-    const plexmatchKey = PLEXMATCH_WRITE_KEYS[activeQualityScopeId];
-    if (plexmatchKey) {
-      systemKeyNames.push(plexmatchKey);
-    }
+  const plexmatchKey = PLEXMATCH_WRITE_KEYS[activeQualityScopeId];
+  if (plexmatchKey) {
+    systemKeyNames.push(plexmatchKey);
+  }
 
+  categoryKeyNames.push(
+    RENAME_TEMPLATE_KEY,
+    RENAME_COLLISION_POLICY_KEY,
+    RENAME_MISSING_METADATA_POLICY_KEY,
+  );
+
+  if (activeQualityScopeId === "anime") {
     categoryKeyNames.push(
-      RENAME_TEMPLATE_KEY,
-      RENAME_COLLISION_POLICY_KEY,
-      RENAME_MISSING_METADATA_POLICY_KEY,
+      ANIME_FILLER_POLICY_KEY,
+      ANIME_RECAP_POLICY_KEY,
+      ANIME_MONITOR_SPECIALS_KEY,
+      ANIME_INTER_SEASON_MOVIES_KEY,
     );
-
-    if (activeQualityScopeId === "anime") {
-      categoryKeyNames.push(
-        ANIME_FILLER_POLICY_KEY,
-        ANIME_RECAP_POLICY_KEY,
-        ANIME_MONITOR_SPECIALS_KEY,
-        ANIME_INTER_SEASON_MOVIES_KEY,
-      );
-    }
   }
 
   const facet = viewToFacet[view] ?? "movie";
@@ -207,7 +202,6 @@ function buildMediaSettingsInitVariables(
 export function useMediaSettings({
   activeQualityScopeId,
   view,
-  contentSettingsSection,
 }: UseMediaSettingsArgs): UseMediaSettingsResult {
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
@@ -732,7 +726,6 @@ export function useMediaSettings({
       const variables = buildMediaSettingsInitVariables(
         activeQualityScopeId,
         view,
-        contentSettingsSection,
       );
       const { data, error } = await client
         .query(mediaSettingsInitQuery, variables)
@@ -759,7 +752,6 @@ export function useMediaSettings({
     activeQualityScopeId,
     applyMediaSettingsFromPayload,
     client,
-    contentSettingsSection,
     setGlobalStatus,
     t,
     view,

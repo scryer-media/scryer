@@ -380,12 +380,17 @@ impl AppServices {
         &self,
         actor_user_id: Option<String>,
         title_id: Option<String>,
+        facet: Option<String>,
         kind: ActivityKind,
         message: String,
         severity: ActivitySeverity,
         channels: Vec<ActivityChannel>,
     ) -> AppResult<()> {
-        let event = ActivityEvent::new(kind, actor_user_id, title_id, message, severity, channels);
+        let mut event =
+            ActivityEvent::new(kind, actor_user_id, title_id, message, severity, channels);
+        if let Some(f) = facet {
+            event = event.with_facet(f);
+        }
         self.activity_stream.push(event.clone()).await;
         let _ = self.activity_event_broadcast.send(event);
         Ok(())
@@ -395,14 +400,19 @@ impl AppServices {
         &self,
         actor_user_id: Option<String>,
         title_id: Option<String>,
+        facet: Option<String>,
         kind: ActivityKind,
         message: String,
         severity: ActivitySeverity,
         channels: Vec<ActivityChannel>,
         envelope: crate::activity::NotificationEnvelope,
     ) -> AppResult<()> {
-        let event = ActivityEvent::new(kind, actor_user_id, title_id, message, severity, channels)
-            .with_notification(envelope);
+        let mut event =
+            ActivityEvent::new(kind, actor_user_id, title_id, message, severity, channels)
+                .with_notification(envelope);
+        if let Some(f) = facet {
+            event = event.with_facet(f);
+        }
         self.activity_stream.push(event.clone()).await;
         let _ = self.activity_event_broadcast.send(event);
         Ok(())

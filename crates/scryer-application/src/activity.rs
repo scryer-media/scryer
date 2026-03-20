@@ -113,6 +113,7 @@ pub struct ActivityEvent {
     pub channels: Vec<ActivityChannel>,
     pub actor_user_id: Option<String>,
     pub title_id: Option<String>,
+    pub facet: Option<String>,
     pub message: String,
     pub occurred_at: DateTime<Utc>,
     pub notification: Option<NotificationEnvelope>,
@@ -134,6 +135,7 @@ impl ActivityEvent {
             channels,
             actor_user_id,
             title_id,
+            facet: None,
             message,
             occurred_at: Utc::now(),
             notification: None,
@@ -154,6 +156,11 @@ impl ActivityEvent {
             ActivitySeverity::Info,
             vec![ActivityChannel::WebUi],
         )
+    }
+
+    pub fn with_facet(mut self, facet: String) -> Self {
+        self.facet = Some(facet);
+        self
     }
 
     pub fn with_notification(mut self, envelope: NotificationEnvelope) -> Self {

@@ -993,6 +993,7 @@ impl AppUseCase {
                         .record_activity_event_with_notification(
                             None,
                             Some(title.id.clone()),
+                            None,
                             ActivityKind::MovieDownloaded,
                             format!(
                                 "RSS sync grabbed: {} (score: {})",

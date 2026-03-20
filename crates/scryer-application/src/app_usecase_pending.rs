@@ -523,6 +523,7 @@ impl AppUseCase {
                         .record_activity_event_with_notification(
                             None,
                             Some(title.id.clone()),
+                            None,
                             ActivityKind::MovieDownloaded,
                             format!(
                                 "Pending release grabbed: {} (score: {})",

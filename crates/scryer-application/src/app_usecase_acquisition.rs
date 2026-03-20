@@ -492,6 +492,7 @@ async fn check_grabbed_for_failures(app: &AppUseCase, dl_snapshot: &DownloadClie
                 .record_activity_event(
                     None,
                     Some(item.title_id.clone()),
+                    None,
                     ActivityKind::AcquisitionDownloadFailed,
                     format!(
                         "download failed for '{}', re-queuing for search",
@@ -954,6 +955,7 @@ async fn process_single_wanted_item(
                                 .record_activity_event_with_notification(
                                     None,
                                     Some(title.id.clone()),
+                                    None,
                                     ActivityKind::AcquisitionCandidateAccepted,
                                     format!(
                                         "season pack grabbed: {} S{:0>2} '{}' (score: {})",
@@ -1076,6 +1078,7 @@ async fn process_single_wanted_item(
         .record_activity_event(
             None,
             Some(title.id.clone()),
+            None,
             ActivityKind::AcquisitionSearchCompleted,
             format!("{} results for '{}'", results.len(), title.name),
             ActivitySeverity::Info,
@@ -1295,6 +1298,7 @@ async fn process_single_wanted_item(
             .record_activity_event(
                 None,
                 Some(title.id.clone()),
+                None,
                 ActivityKind::AcquisitionCandidateRejected,
                 format!("{}: '{}' ({})", decision.code(), best.title, title.name),
                 ActivitySeverity::Info,
@@ -1325,6 +1329,7 @@ async fn process_single_wanted_item(
             .record_activity_event_with_notification(
                 None,
                 Some(title.id.clone()),
+                None,
                 ActivityKind::AcquisitionCandidateAccepted,
                 format!(
                     "'{}' score={} delta={} ({})",
@@ -1568,6 +1573,7 @@ async fn process_single_wanted_item(
                 .record_activity_event_with_notification(
                     None,
                     Some(title.id.clone()),
+                    None,
                     ActivityKind::MovieDownloaded,
                     format!("auto-grabbed: {} (score: {})", best.title, candidate_score),
                     ActivitySeverity::Success,
@@ -1601,6 +1607,7 @@ async fn process_single_wanted_item(
                 .record_activity_event(
                     None,
                     Some(title.id.clone()),
+                    None,
                     ActivityKind::AcquisitionDownloadFailed,
                     format!("download failed for '{}': {}", title.name, err),
                     ActivitySeverity::Error,

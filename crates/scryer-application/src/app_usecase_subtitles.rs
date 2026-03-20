@@ -539,6 +539,7 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
                             .record_activity_event(
                                 None,
                                 Some(title.id.clone()),
+                                None,
                                 crate::ActivityKind::SubtitleDownloaded,
                                 event_msg,
                                 crate::ActivitySeverity::Success,
@@ -562,6 +563,7 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
                             .record_activity_event(
                                 None,
                                 Some(title.id.clone()),
+                                None,
                                 crate::ActivityKind::SubtitleSearchFailed,
                                 event_msg,
                                 crate::ActivitySeverity::Warning,

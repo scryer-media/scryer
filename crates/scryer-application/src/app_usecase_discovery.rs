@@ -708,6 +708,7 @@ impl AppUseCase {
             .record_activity_event(
                 Some(actor.id.clone()),
                 None,
+                None,
                 ActivityKind::MovieFetched,
                 format!(
                     "{} searched: {} ({} results)",
@@ -802,6 +803,7 @@ impl AppUseCase {
             .record_activity_event(
                 Some(actor.id.clone()),
                 None,
+                None,
                 ActivityKind::MovieFetched,
                 format!(
                     "{} searched: {} S{:0>2}E{:0>2} ({} results)",
@@ -835,14 +837,6 @@ impl AppUseCase {
             .get_by_id(&title_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
-
-        tracing::debug!(
-            title_id = title_id.as_str(),
-            tagged_alias_count = title.tagged_aliases.len(),
-            tagged_aliases = ?title.tagged_aliases,
-            external_ids = ?title.external_ids,
-            "interactive title search loaded title"
-        );
 
         let imdb_id = normalize_imdb_id(title.imdb_id);
         let tvdb_id = normalize_numeric_id(
@@ -894,6 +888,7 @@ impl AppUseCase {
             .record_activity_event(
                 Some(actor.id.clone()),
                 None,
+                None,
                 ActivityKind::MovieFetched,
                 format!(
                     "{} searched: {} ({} results)",
@@ -927,14 +922,6 @@ impl AppUseCase {
             .get_by_id(&title_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
-
-        tracing::debug!(
-            title_id = title_id.as_str(),
-            tagged_alias_count = title.tagged_aliases.len(),
-            tagged_aliases = ?title.tagged_aliases,
-            external_ids = ?title.external_ids,
-            "interactive episode search loaded title"
-        );
 
         let season = season.trim().to_string();
         let episode = episode.trim().to_string();
@@ -1048,6 +1035,7 @@ impl AppUseCase {
             .services
             .record_activity_event(
                 Some(actor.id.clone()),
+                None,
                 None,
                 ActivityKind::MovieFetched,
                 format!(

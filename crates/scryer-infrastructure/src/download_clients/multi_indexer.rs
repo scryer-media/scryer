@@ -26,11 +26,6 @@ struct SearchStrategy {
 fn preferred_anime_alias_query(query: &str, tagged_aliases: &[scryer_domain::TaggedAlias]) -> Option<String> {
     let canonical = strip_query_context(query);
     if canonical.is_empty() {
-        tracing::debug!(
-            original_query = %query,
-            tagged_alias_count = tagged_aliases.len(),
-            "anime alias selection skipped: canonical query is empty"
-        );
         return None;
     }
 
@@ -44,26 +39,12 @@ fn preferred_anime_alias_query(query: &str, tagged_aliases: &[scryer_domain::Tag
         })
         .collect();
 
-    tracing::debug!(
-        original_query = %query,
-        canonical_query = %canonical,
-        alias_candidates = ?alias_candidates,
-        "anime alias selection candidates"
-    );
-
     let selected = alias_candidates
         .iter()
         .find(|(name, _, language_matches, romanized)| {
             !name.is_empty() && *language_matches && *romanized && !canonical.eq_ignore_ascii_case(name)
         })
         .map(|(name, _, _, _)| name.clone());
-
-    tracing::debug!(
-        original_query = %query,
-        canonical_query = %canonical,
-        selected_alias = ?selected,
-        "anime alias selection result"
-    );
 
     selected
 }
@@ -610,15 +591,6 @@ impl IndexerClient for MultiIndexerSearchClient {
                 is_alias_query: false,
             });
 
-            tracing::debug!(
-                indexer = config.name.as_str(),
-                facet = %facet,
-                query = %query,
-                tagged_aliases = ?tagged_aliases,
-                strategy_labels = ?strategies.iter().map(|strategy| strategy.label.clone()).collect::<Vec<_>>(),
-                "built primary indexer strategies"
-            );
-
             if facet == "anime"
                 && let Some(alias_query) = preferred_anime_alias_query(&query, &tagged_aliases)
             {
@@ -633,27 +605,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                     is_alias_query: true,
                 });
 
-                tracing::debug!(
-                    indexer = config.name.as_str(),
-                    facet = %facet,
-                    canonical_query = %query,
-                    alias_query = %alias_query,
-                    tagged_aliases = ?tagged_aliases,
-                    alias_strategy_labels = ?alias_strategies.iter().map(|strategy| strategy.label.clone()).collect::<Vec<_>>(),
-                    provider_deduplicates_aliases = caps.deduplicates_aliases,
-                    "built anime alias strategies"
-                );
-
                 strategies.extend(alias_strategies);
-            } else if facet == "anime" {
-                tracing::debug!(
-                    indexer = config.name.as_str(),
-                    facet = %facet,
-                    canonical_query = %query,
-                    tagged_aliases = ?tagged_aliases,
-                    provider_deduplicates_aliases = caps.deduplicates_aliases,
-                    "no anime alias strategies were added"
-                );
             }
 
             // Skip freetext strategies when ID-based strategies are available and
@@ -916,12 +868,6 @@ fn build_strategies(p: &StrategyParams<'_>) -> Vec<SearchStrategy> {
     let is_alias_query = p.is_alias_query;
     // Alias queries skip indexers that deduplicate aliases internally
     if is_alias_query && caps.deduplicates_aliases {
-        tracing::debug!(
-            facet = %facet,
-            query = %query,
-            provider_deduplicates_aliases = caps.deduplicates_aliases,
-            "skipping alias strategies because provider deduplicates aliases"
-        );
         return vec![];
     }
 

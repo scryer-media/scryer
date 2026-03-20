@@ -18,21 +18,26 @@ export function useBackendRestarting() {
   useEffect(() => {
     if (!serviceRestarting) return;
 
+    let timeoutId: ReturnType<typeof setTimeout>;
     const healthUrl = getHealthUrl();
-    const intervalId = window.setInterval(async () => {
+
+    async function poll() {
       try {
         const response = await fetch(healthUrl);
         const data = await response.json();
         if (data.status === "ok") {
           setServiceRestarting(false);
           window.location.reload();
+          return;
         }
       } catch {
         // Backend is still booting; keep polling.
       }
-    }, 1000);
+      timeoutId = setTimeout(poll, 2000);
+    }
 
-    return () => window.clearInterval(intervalId);
+    timeoutId = setTimeout(poll, 2000);
+    return () => clearTimeout(timeoutId);
   }, [serviceRestarting]);
 
   return {

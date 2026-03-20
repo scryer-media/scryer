@@ -604,6 +604,7 @@ pub(crate) fn from_activity_event(event: ActivityEvent) -> ActivityEventPayload 
             .collect(),
         actor_user_id: event.actor_user_id,
         title_id: event.title_id,
+        facet: event.facet,
         message: event.message,
         occurred_at: event.occurred_at.to_rfc3339(),
     }

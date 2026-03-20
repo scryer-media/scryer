@@ -98,6 +98,7 @@ export function normalizeActivityEvent(input: Partial<ActivityEvent>): ActivityE
     channels: normalizedChannels.length ? normalizedChannels : ["web_ui", "toast"],
     actorUserId: input.actorUserId ?? null,
     titleId: input.titleId ?? null,
+    facet: input.facet ?? null,
     message: input.message ?? "",
     occurredAt: input.occurredAt ?? new Date().toISOString(),
   };

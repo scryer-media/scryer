@@ -204,6 +204,7 @@ pub async fn execute_upgrade(
                     .record_activity_event_with_notification(
                         None,
                         Some(title.id.clone()),
+                        None,
                         ActivityKind::FileUpgraded,
                         message,
                         ActivitySeverity::Success,

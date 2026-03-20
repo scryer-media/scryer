@@ -313,6 +313,7 @@ pub(crate) async fn reject_imported_file(
         .record_activity_event(
             actor_user_id.map(str::to_owned),
             Some(title.id.clone()),
+            None,
             ActivityKind::ImportRejected,
             format!(
                 "Rejected import for '{}': {}{}",

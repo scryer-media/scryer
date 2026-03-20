@@ -459,6 +459,7 @@ async fn log_run_activity(ctx: &PostProcessingContext, run: &PostProcessingScrip
         .record_activity_event(
             ctx.actor_id.clone(),
             Some(ctx.title_id.clone()),
+            None,
             ActivityKind::PostProcessingCompleted,
             message,
             severity,

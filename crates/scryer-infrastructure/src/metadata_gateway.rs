@@ -1373,15 +1373,6 @@ impl MetadataGateway for MetadataGatewayClient {
             .await?;
         let s = data.series.series;
 
-        debug!(
-            tvdb_id = s.tvdb_id,
-            language,
-            alias_count = s.aliases.len(),
-            tagged_alias_count = s.tagged_aliases.len(),
-            tagged_aliases = ?s.tagged_aliases,
-            "metadata gateway get_series decoded response"
-        );
-
         Ok(SeriesMetadata {
             tvdb_id: s.tvdb_id,
             name: s.name,
