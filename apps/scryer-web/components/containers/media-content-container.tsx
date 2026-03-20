@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useActivitySubscription } from "@/lib/hooks/use-activity-subscription";
 import { MediaContentView } from "@/components/views/media-content-view";
 import {
   addTitleMutation,

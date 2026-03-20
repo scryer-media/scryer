@@ -387,7 +387,7 @@ export function SeriesOverviewView({
               )}
             </div>
 
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 flex flex-col">
               <h1 className="text-xl font-bold text-foreground sm:text-2xl">
                 {title.name}
                 {title.year ? (
@@ -446,7 +446,7 @@ export function SeriesOverviewView({
                 Added {formatDate(title.createdAt)}
               </p>
 
-              <div className="mt-3 flex flex-wrap items-center gap-3">
+              <div className="mt-auto flex flex-wrap items-center gap-3 pt-3">
                 {(() => { const e = title.externalIds.find((e) => e.source === "imdb"); return e ? (
                   <a
                     href={e.value.startsWith("tt") ? `https://www.imdb.com/title/${e.value}` : `https://www.imdb.com/find?q=${encodeURIComponent(e.value)}&s=tt`}

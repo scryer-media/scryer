@@ -652,13 +652,19 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             };
             match client.list_completed_downloads().await {
                 Ok(mut items) => {
+                    tracing::info!(
+                        client = %config.name,
+                        client_type = %config.client_type,
+                        count = items.len(),
+                        "completed downloads from client"
+                    );
                     for item in &mut items {
                         item.client_id = config.id.clone();
                     }
                     all_items.extend(items);
                 }
                 Err(error) => {
-                    tracing::warn!(client_id = %config.id, error = %error, "failed to list completed downloads");
+                    tracing::warn!(client_id = %config.id, client = %config.name, error = %error, "failed to list completed downloads");
                 }
             }
         }

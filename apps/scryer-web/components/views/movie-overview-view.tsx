@@ -506,7 +506,7 @@ export function MovieOverviewView({
               )}
             </div>
 
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 flex flex-col">
               <h1 className="text-xl font-bold text-foreground sm:text-2xl">
                 {title.name}
                 {year ? (
@@ -628,7 +628,7 @@ export function MovieOverviewView({
                 <p className="mt-4 text-sm leading-relaxed text-foreground/70">{overview}</p>
               ) : null}
 
-              <div className="mt-3 flex flex-wrap gap-3 text-sm">
+              <div className="mt-auto flex flex-wrap gap-3 pt-3 text-sm">
                 {imdbId ? (
                   <a
                     href={

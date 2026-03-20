@@ -344,16 +344,38 @@ pub(crate) async fn apply_dev_seed(app: &AppUseCase, db: &SqliteServices) -> Res
             .await
             .map_err(|e| format!("dev seed: failed to list indexer configs: {e}"))?;
 
-        let already_exists = existing.iter().any(|c| {
+        let existing_config = existing.iter().find(|c| {
             c.provider_type.eq_ignore_ascii_case(&provider_type)
                 && normalize_base_url(&c.base_url) == normalized_base
         });
 
-        if already_exists {
+        if let Some(existing_config) = existing_config {
+            app.update_indexer_config(
+                &actor,
+                &existing_config.id,
+                Some(seed_indexer.name.clone()),
+                None,
+                Some(seed_indexer.base_url.trim_end_matches('/').to_string()),
+                seed_indexer.api_key.clone(),
+                seed_indexer.rate_limit_seconds,
+                seed_indexer.rate_limit_burst,
+                Some(seed_indexer.enabled),
+                None,
+                None,
+                None,
+            )
+            .await
+            .map_err(|e| {
+                format!(
+                    "dev seed: failed to update indexer '{}': {e}",
+                    seed_indexer.name
+                )
+            })?;
+
             tracing::info!(
                 name = %seed_indexer.name,
                 provider = %provider_type,
-                "dev seed: indexer already exists, skipping"
+                "dev seed: updated existing indexer"
             );
             continue;
         }

@@ -9,7 +9,7 @@ use scryer_application::{
 };
 use scryer_domain::{DownloadQueueItem, DownloadQueueState};
 use serde_json::{Value, json};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use super::{
     extract_f64_value, extract_i64_value, is_http_url, parse_duration_seconds,
@@ -892,12 +892,18 @@ impl DownloadClient for NzbgetDownloadClient {
         let entries = extract_result_array(result, "History").unwrap_or_default();
         let cutoff_ts = Utc::now().timestamp() - (7 * 24 * 60 * 60);
 
+        info!(
+            total_history_entries = entries.len(),
+            "nzbget: fetched history for completed downloads"
+        );
+
         Ok(entries
             .into_iter()
             .filter_map(|entry| {
                 let entry = entry.as_object()?;
                 let nzb_id = extract_i64_value(entry.get("NZBID").or_else(|| entry.get("nzbId")))
                     .filter(|value| *value > 0)?;
+                let name = history_entry_name(entry);
                 let status = entry
                     .get("Status")
                     .or_else(|| entry.get("status"))
@@ -906,6 +912,7 @@ impl DownloadClient for NzbgetDownloadClient {
                 let status_upper = status.to_ascii_uppercase();
 
                 if !status_upper.starts_with("SUCCESS") {
+                    info!(nzb_id, name = name.as_str(), status, "nzbget: skipping non-SUCCESS history entry");
                     return None;
                 }
 
@@ -913,7 +920,6 @@ impl DownloadClient for NzbgetDownloadClient {
                 // Even when top-level Status is SUCCESS, individual stages may
                 // indicate problems that make the download unusable.
                 if let Some(reason) = check_history_stage_failure(entry) {
-                    let name = history_entry_name(entry);
                     warn!(
                         nzb_id,
                         name = name.as_str(),
@@ -928,22 +934,23 @@ impl DownloadClient for NzbgetDownloadClient {
                 if let Some(ts) = history_ts
                     && ts < cutoff_ts
                 {
+                    info!(nzb_id, name = name.as_str(), "nzbget: skipping history entry older than 7 days");
                     return None;
                 }
 
-                // FinalDir is where files end up after NZBGet's move step;
-                // DestDir may point to a now-empty intermediate directory.
+                // Prefer FinalDir (post-move location) over DestDir, mirroring Sonarr.
                 let dest_dir = entry
                     .get("FinalDir")
-                    .or_else(|| entry.get("finalDir"))
-                    .or_else(|| entry.get("DestDir"))
-                    .or_else(|| entry.get("destDir"))
                     .and_then(Value::as_str)
                     .filter(|v| !v.is_empty())
+                    .or_else(|| {
+                        entry.get("DestDir").and_then(Value::as_str).filter(|v| !v.is_empty())
+                    })
                     .unwrap_or("")
                     .to_string();
 
                 if dest_dir.is_empty() {
+                    info!(nzb_id, name = name.as_str(), "nzbget: skipping history entry with empty dest_dir");
                     return None;
                 }
 

@@ -43,7 +43,7 @@ pub(crate) async fn list_titles_query(
         sql.push_str(" WHERE ");
         sql.push_str(&where_clauses.join(" AND "));
     }
-    sql.push_str(" ORDER BY LOWER(COALESCE(NULLIF(sort_title, ''), name)) ASC, name ASC, id ASC");
+    sql.push_str(" ORDER BY LOWER(name) ASC, id ASC");
 
     let mut statement = sqlx::query(&sql);
 
