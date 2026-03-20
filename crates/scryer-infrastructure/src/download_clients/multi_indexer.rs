@@ -42,7 +42,7 @@ fn preferred_anime_alias_query(
         })
         .collect();
 
-    let selected = alias_candidates
+    alias_candidates
         .iter()
         .find(|(name, _, language_matches, romanized)| {
             !name.is_empty()
@@ -50,9 +50,7 @@ fn preferred_anime_alias_query(
                 && *romanized
                 && !canonical.eq_ignore_ascii_case(name)
         })
-        .map(|(name, _, _, _)| name.clone());
-
-    selected
+        .map(|(name, _, _, _)| name.clone())
 }
 
 fn strip_query_context(query: &str) -> &str {
@@ -88,8 +86,7 @@ fn looks_like_context_token(token: &str) -> bool {
         return true;
     }
 
-    if upper.starts_with('S') {
-        let rest = &upper[1..];
+    if let Some(rest) = upper.strip_prefix('S') {
         if rest.chars().all(|ch| ch.is_ascii_digit()) {
             return true;
         }
