@@ -20,8 +20,7 @@ impl AppUseCase {
                 .ok()
                 .flatten()
                 .unwrap_or_else(|| default.to_string());
-            let config =
-                crate::recycle_bin::resolve_recycle_config(self, Some(&media_root)).await;
+            let config = crate::recycle_bin::resolve_recycle_config(self, Some(&media_root)).await;
             configs.push((media_root, config));
         }
         configs
@@ -121,7 +120,9 @@ impl AppUseCase {
         for (media_root, config) in self.resolve_all_recycle_configs().await {
             match crate::recycle_bin::list_entries(&config, &media_root).await {
                 Ok(entries) => all_entries.extend(entries),
-                Err(e) => info!(error = %e, media_root = %media_root, "failed to list recycle entries"),
+                Err(e) => {
+                    info!(error = %e, media_root = %media_root, "failed to list recycle entries")
+                }
             }
         }
 
@@ -190,17 +191,16 @@ impl AppUseCase {
     }
 
     /// Empty all recycle bins across all media roots.
-    pub async fn empty_recycle_bin(
-        &self,
-        actor: &scryer_domain::User,
-    ) -> AppResult<u32> {
+    pub async fn empty_recycle_bin(&self, actor: &scryer_domain::User) -> AppResult<u32> {
         require(actor, &scryer_domain::Entitlement::ManageConfig)?;
 
         let mut total = 0u32;
         for (media_root, config) in self.resolve_all_recycle_configs().await {
             match crate::recycle_bin::purge_all(&config).await {
                 Ok(n) => total += n,
-                Err(e) => info!(error = %e, media_root = %media_root, "failed to empty recycle bin"),
+                Err(e) => {
+                    info!(error = %e, media_root = %media_root, "failed to empty recycle bin")
+                }
             }
         }
         Ok(total)

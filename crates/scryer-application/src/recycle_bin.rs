@@ -340,14 +340,20 @@ pub async fn purge_for_title(config: &RecycleBinConfig, title_id: &str) -> AppRe
     }
 
     if purged > 0 {
-        info!(purged, title_id, "purged recycle bin entries for deleted title");
+        info!(
+            purged,
+            title_id, "purged recycle bin entries for deleted title"
+        );
     }
 
     Ok(purged)
 }
 
 /// List all entries in a recycle bin directory.
-pub async fn list_entries(config: &RecycleBinConfig, media_root: &str) -> AppResult<Vec<RecycleEntry>> {
+pub async fn list_entries(
+    config: &RecycleBinConfig,
+    media_root: &str,
+) -> AppResult<Vec<RecycleEntry>> {
     if !config.enabled || !config.base_path.exists() {
         return Ok(Vec::new());
     }
@@ -423,11 +429,19 @@ pub async fn find_entry(
     }
 
     let manifest_bytes = tokio::fs::read(&manifest_path).await.map_err(|e| {
-        AppError::Repository(format!("failed to read recycle manifest {}: {}", manifest_path.display(), e))
+        AppError::Repository(format!(
+            "failed to read recycle manifest {}: {}",
+            manifest_path.display(),
+            e
+        ))
     })?;
 
     let manifest: RecycleManifest = serde_json::from_slice(&manifest_bytes).map_err(|e| {
-        AppError::Repository(format!("failed to parse recycle manifest {}: {}", manifest_path.display(), e))
+        AppError::Repository(format!(
+            "failed to parse recycle manifest {}: {}",
+            manifest_path.display(),
+            e
+        ))
     })?;
 
     Ok(Some((entry_dir, manifest)))
@@ -743,8 +757,15 @@ mod tests {
             title_id: Some("title-123".to_string()),
             reason: "upgrade_replaced".to_string(),
         };
-        tokio::fs::write(match_dir.join("manifest.json"), serde_json::to_string(&match_manifest).unwrap()).await.unwrap();
-        tokio::fs::write(match_dir.join("Movie.mkv"), b"data").await.unwrap();
+        tokio::fs::write(
+            match_dir.join("manifest.json"),
+            serde_json::to_string(&match_manifest).unwrap(),
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(match_dir.join("Movie.mkv"), b"data")
+            .await
+            .unwrap();
 
         let other_dir = recycle_dir.join("20260307_120000000_bbb222");
         tokio::fs::create_dir_all(&other_dir).await.unwrap();
@@ -755,8 +776,15 @@ mod tests {
             title_id: Some("title-456".to_string()),
             reason: "file_deleted".to_string(),
         };
-        tokio::fs::write(other_dir.join("manifest.json"), serde_json::to_string(&other_manifest).unwrap()).await.unwrap();
-        tokio::fs::write(other_dir.join("Other.mkv"), b"other").await.unwrap();
+        tokio::fs::write(
+            other_dir.join("manifest.json"),
+            serde_json::to_string(&other_manifest).unwrap(),
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(other_dir.join("Other.mkv"), b"other")
+            .await
+            .unwrap();
 
         let config = test_config(&recycle_dir);
         let purged = purge_for_title(&config, "title-123").await.unwrap();

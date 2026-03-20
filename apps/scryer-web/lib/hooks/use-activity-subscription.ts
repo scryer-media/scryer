@@ -25,18 +25,15 @@ export function useActivitySubscription(
   },
 ) {
   const onMatchRef = useRef(onMatch);
+  const kindsRef = useRef(kinds);
+  const titleIdRef = useRef(options?.titleId);
+  const facetRef = useRef(options?.facet);
   useEffect(() => {
     onMatchRef.current = onMatch;
+    kindsRef.current = kinds;
+    titleIdRef.current = options?.titleId;
+    facetRef.current = options?.facet;
   });
-
-  const kindsRef = useRef(kinds);
-  kindsRef.current = kinds;
-
-  const titleIdRef = useRef(options?.titleId);
-  titleIdRef.current = options?.titleId;
-
-  const facetRef = useRef(options?.facet);
-  facetRef.current = options?.facet;
 
   const debounceMs = options?.debounceMs ?? 500;
   const pause = options?.pause ?? false;
@@ -121,6 +118,7 @@ export function useActivitySubscription(
 
     unsubRef.current = unsubscribe;
 
+    const ids = processedIds.current;
     return () => {
       teardownTimer.current = setTimeout(() => {
         teardownTimer.current = null;
@@ -130,7 +128,7 @@ export function useActivitySubscription(
           clearTimeout(debounceTimer.current);
           debounceTimer.current = null;
         }
-        processedIds.current.clear();
+        ids.clear();
       }, 200);
     };
   }, [debounceMs, pause]);
