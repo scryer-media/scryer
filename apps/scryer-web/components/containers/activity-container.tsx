@@ -1,20 +1,18 @@
 
-import { memo, useCallback, useEffect, useState } from "react";
-import { useClient, useMutation } from "urql";
+import { memo, useCallback, useState } from "react";
+import { useMutation } from "urql";
 
 import { ActivityView } from "@/components/views/activity-view";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import {
   triggerImportMutation,
-  retryImportMutation,
   pauseDownloadMutation,
   resumeDownloadMutation,
   deleteDownloadMutation,
 } from "@/lib/graphql/mutations";
-import { importHistoryQuery } from "@/lib/graphql/queries";
 import { useDownloadQueue } from "@/lib/hooks/use-download-queue";
-import type { DownloadQueueItem, ImportRecord } from "@/lib/types";
+import type { DownloadQueueItem } from "@/lib/types";
 
 const HISTORY_STATES = new Set(["completed", "failed", "import_pending", "importpending"]);
 type QueueMode = "scryer" | "all" | "history";
@@ -22,7 +20,6 @@ type QueueMode = "scryer" | "all" | "history";
 export const ActivityContainer = memo(function ActivityContainer() {
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
-  const client = useClient();
   const [, executeTriggerImport] = useMutation(triggerImportMutation);
   const [, executePauseDownload] = useMutation(pauseDownloadMutation);
   const [, executeResumeDownload] = useMutation(resumeDownloadMutation);
@@ -34,24 +31,6 @@ export const ActivityContainer = memo(function ActivityContainer() {
     includeAllActivity: queueMode !== "scryer",
     includeHistoryOnly: queueMode === "history",
   });
-
-  const [importHistory, setImportHistory] = useState<ImportRecord[]>([]);
-  const [importHistoryLoading, setImportHistoryLoading] = useState(false);
-
-  const refreshImportHistory = useCallback(async () => {
-    setImportHistoryLoading(true);
-    try {
-      const { data, error } = await client.query(importHistoryQuery, {
-        limit: 50,
-      }).toPromise();
-      if (error) throw error;
-      setImportHistory(data?.importHistory ?? []);
-    } catch {
-      // silently fail — import history is non-critical
-    } finally {
-      setImportHistoryLoading(false);
-    }
-  }, [client]);
 
   const requestManualImport = useCallback(
     async (item: DownloadQueueItem) => {
@@ -125,10 +104,6 @@ export const ActivityContainer = memo(function ActivityContainer() {
     [refreshQueue, executeDeleteDownload, setGlobalStatus, t],
   );
 
-  useEffect(() => {
-    void refreshImportHistory();
-  }, [refreshImportHistory]);
-
   return (
     <ActivityView
       state={{
@@ -142,23 +117,6 @@ export const ActivityContainer = memo(function ActivityContainer() {
         requestDelete,
         queueMode,
         setQueueMode,
-        importHistory,
-        importHistoryLoading,
-        refreshImportHistory,
-        retryImport: async (importId: string, password?: string) => {
-          try {
-            const { error } = await client
-              .mutation(retryImportMutation, {
-                input: { importId, password: password || null },
-              })
-              .toPromise();
-            if (error) throw error;
-            setGlobalStatus(t("importHistory.retrySuccess"));
-            void refreshImportHistory();
-          } catch (err) {
-            setGlobalStatus(err instanceof Error ? err.message : t("status.apiError"));
-          }
-        },
       }}
     />
   );

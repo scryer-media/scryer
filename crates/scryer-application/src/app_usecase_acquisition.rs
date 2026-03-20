@@ -826,6 +826,7 @@ async fn process_single_wanted_item(
                     Some(season_num),
                     None, // episode=None signals a season pack search
                     None, // no absolute episode for season packs
+                    &title.aliases,
                 )
                 .await
                 .unwrap_or_default();
@@ -1050,6 +1051,7 @@ async fn process_single_wanted_item(
             search_season,
             search_episode,
             absolute_episode,
+            &title.aliases,
         )
         .await
     {

@@ -220,9 +220,17 @@ impl AppUseCase {
         )
         .await?;
         repo.seed_builtin(
+            "dognzb",
+            "DogNZB Indexer",
+            "DogNZB-specific Newznab indexer with rating, genre, and comment metadata",
+            "0.1.0",
+            "dognzb",
+        )
+        .await?;
+        repo.seed_builtin(
             "newznab",
             "Newznab Indexer",
-            "Generic Newznab protocol indexer for DogNZB and other compatible services",
+            "Generic Newznab protocol indexer for compatible services",
             "0.1.0",
             "newznab",
         )

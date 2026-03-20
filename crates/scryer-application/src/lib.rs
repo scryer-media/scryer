@@ -145,6 +145,37 @@ const SETTINGS_SCOPE_SYSTEM: &str = "system";
 const SETTINGS_SCOPE_MEDIA: &str = "media";
 const INHERIT_QUALITY_PROFILE_VALUE: &str = "__inherit__";
 const NATIVE_DOWNLOAD_CLIENT_TYPES: [&str; 4] = ["nzbget", "sabnzbd", "qbittorrent", "weaver"];
+
+/// Return the accepted input kinds for a download client type, checking
+/// the plugin provider first (WASM plugins), then falling back to known
+/// native client capabilities.
+///
+/// An empty vec means the client has not declared any capabilities and
+/// will not receive any downloads.
+pub fn accepted_inputs_for_client(
+    client_type: &str,
+    plugin_provider: Option<&Arc<dyn DownloadClientPluginProvider>>,
+) -> Vec<String> {
+    if let Some(provider) = plugin_provider {
+        let inputs = provider.accepted_inputs_for_provider(client_type);
+        if !inputs.is_empty() {
+            return inputs;
+        }
+    }
+    native_accepted_inputs(client_type).to_vec()
+}
+
+/// Native client capabilities. Returns the accepted input kinds for
+/// built-in download client types.
+fn native_accepted_inputs(client_type: &str) -> Vec<String> {
+    match client_type.trim().to_ascii_lowercase().as_str() {
+        "nzbget" => vec!["nzb".to_string(), "nzb_url".to_string()],
+        "sabnzbd" => vec!["nzb".to_string(), "nzb_url".to_string()],
+        "weaver" => vec!["nzb".to_string()],
+        "qbittorrent" => vec!["torrent_file".to_string(), "magnet_uri".to_string()],
+        _ => vec![],
+    }
+}
 const INDEXER_PROVIDER_NZBGEEK: &str = "nzbgeek";
 
 #[derive(Debug, thiserror::Error)]

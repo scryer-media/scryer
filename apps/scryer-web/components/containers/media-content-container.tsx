@@ -273,7 +273,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       const { data, error } = await client
         .query(titlesQuery, {
           facet: activeFacet,
-          query: titleFilter || undefined,
         })
         .toPromise();
       if (error) throw error;
@@ -291,7 +290,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     activeFacet,
     client,
     t,
-    titleFilter,
     setMonitoredTitles,
     setTitleLoading,
     setTitleStatus,
@@ -950,7 +948,11 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           refreshTitles,
           titleLoading,
           titleStatus,
-          monitoredTitles,
+          monitoredTitles: titleFilter
+            ? monitoredTitles.filter((t) =>
+                t.name.toLowerCase().includes(titleFilter.toLowerCase()),
+              )
+            : monitoredTitles,
           queueExisting,
           toggleTitleMonitored,
           runInteractiveSearchForTitle,

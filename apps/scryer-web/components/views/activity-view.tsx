@@ -1,8 +1,6 @@
 
 import {
   ArrowDownToLine,
-  ChevronDown,
-  ChevronRight,
   Loader2,
   Pause,
   Play,
@@ -28,8 +26,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { DownloadQueueItem, ImportRecord } from "@/lib/types";
-import { ImportHistoryView } from "@/components/views/import-history-view";
+import type { DownloadQueueItem } from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
 
@@ -46,10 +43,6 @@ type ActivityViewState = {
   requestDelete: (item: DownloadQueueItem) => Promise<void>;
   queueMode: QueueMode;
   setQueueMode: (queueMode: QueueMode) => void;
-  importHistory: ImportRecord[];
-  importHistoryLoading: boolean;
-  refreshImportHistory: () => Promise<void>;
-  retryImport?: (importId: string, password?: string) => Promise<void>;
 };
 
 const queueStateClasses: Record<string, string> = {
@@ -195,9 +188,6 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
     requestDelete,
     queueMode,
     setQueueMode,
-    importHistory,
-    importHistoryLoading,
-    refreshImportHistory,
   } = state;
   const [manualImportingId, setManualImportingId] = useState<string | null>(null);
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
@@ -205,7 +195,6 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
   const [deleteInProgress, setDeleteInProgress] = useState(false);
   const [rowActionBusy, setRowActionBusy] = useState<Record<string, true>>({});
   const rowActionBusyRef = useRef<Record<string, true>>({});
-  const [importHistoryExpanded, setImportHistoryExpanded] = useState(false);
 
   const setRowBusy = useCallback((rowId: string, busy: boolean) => {
     rowActionBusyRef.current = busy
@@ -727,32 +716,6 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
         </CardContent>
       </Card>
 
-      {/* Import History Section */}
-      <div className="mt-6">
-        <button
-          type="button"
-          className="mb-2 flex items-center gap-2 text-left"
-          onClick={() => setImportHistoryExpanded((prev) => !prev)}
-        >
-          {importHistoryExpanded ? (
-            <ChevronDown className="h-4 w-4 text-muted-foreground" />
-          ) : (
-            <ChevronRight className="h-4 w-4 text-muted-foreground" />
-          )}
-          <span className="text-sm font-semibold">{t("importHistory.title")}</span>
-          <span className="text-xs text-muted-foreground">({importHistory.length})</span>
-        </button>
-        {importHistoryExpanded ? (
-          <ImportHistoryView
-            compact
-            records={importHistory}
-            loading={importHistoryLoading}
-            error={null}
-            onRefresh={() => void refreshImportHistory()}
-            onRetry={state.retryImport}
-          />
-        ) : null}
-      </div>
     </>
   );
 }

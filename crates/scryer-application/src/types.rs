@@ -240,6 +240,9 @@ pub struct DownloadGrabResult {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DownloadSourceKind {
+    /// Direct NZB file upload (binary content sent to the download client).
+    NzbFile,
+    /// URL to an NZB that the download client fetches itself.
     NzbUrl,
     TorrentFile,
     MagnetUri,
@@ -248,6 +251,7 @@ pub enum DownloadSourceKind {
 impl DownloadSourceKind {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::NzbFile => "nzb",
             Self::NzbUrl => "nzb_url",
             Self::TorrentFile => "torrent_file",
             Self::MagnetUri => "magnet_uri",
@@ -256,7 +260,8 @@ impl DownloadSourceKind {
 
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "nzb" | "nzb_url" => Some(Self::NzbUrl),
+            "nzb" | "nzb_file" => Some(Self::NzbFile),
+            "nzb_url" => Some(Self::NzbUrl),
             "torrent" | "torrent_file" => Some(Self::TorrentFile),
             "magnet" | "magnet_uri" => Some(Self::MagnetUri),
             _ => None,

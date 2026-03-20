@@ -37,6 +37,9 @@ export function useDownloadQueue({
   // Track whether the initial HTTP query has completed so the WS subscription
   // doesn't race with it and overwrite the authoritative query data.
   const [initialFetchDone, setInitialFetchDone] = useState(false);
+  const initialFetchDoneRef = useRef(false);
+  // Keep ref in sync for use in refreshQueue without adding it as a dep
+  initialFetchDoneRef.current = initialFetchDone;
 
   // --- WS subscription via graphql-ws ---
   // Deferred-cleanup pattern to survive React StrictMode's fake unmount/remount.
@@ -82,7 +85,27 @@ export function useDownloadQueue({
             | DownloadQueueItem[]
             | undefined;
           if (items) {
-            setQueueItems(items);
+            // Merge: the subscription only carries live jobs from the
+            // download client — it does NOT include terminal/historical
+            // items (completed, failed, import_pending). Preserve those
+            // from the existing state so the table doesn't flash empty.
+            const TERMINAL_STATES = new Set([
+              "completed",
+              "failed",
+              "import_pending",
+              "importpending",
+            ]);
+            setQueueItems((prev) => {
+              const liveIds = new Set(
+                items.map((i) => i.downloadClientItemId),
+              );
+              const kept = prev.filter(
+                (p) =>
+                  TERMINAL_STATES.has(p.state.toLowerCase()) &&
+                  !liveIds.has(p.downloadClientItemId),
+              );
+              return [...items, ...kept];
+            });
             setQueueError(null);
             setLastRefreshedAt(new Date());
             if (pollingRef.current) {
@@ -113,6 +136,12 @@ export function useDownloadQueue({
   }, [includeAllActivity, includeHistoryOnly, initialFetchDone]);
 
   // --- Query fetch (initial load + manual refresh) ---
+  // The query is authoritative — it returns enriched data with import status,
+  // submission linkage, and history items that the WS subscription doesn't carry.
+  // To avoid wiping live socket data that may be fresher for active downloads,
+  // we merge: query items win for terminal states (completed, failed,
+  // import_pending) and the socket's version wins for active states if the
+  // subscription is already running.
   const refreshQueue = useCallback(async () => {
     setQueueLoading(true);
     try {
@@ -123,7 +152,42 @@ export function useDownloadQueue({
         })
         .toPromise();
       if (error) throw error;
-      setQueueItems(data?.downloadQueue || []);
+      const queryItems = data?.downloadQueue || [];
+      // If the subscription isn't active yet (initial load), full replace.
+      // Once the subscription is running, merge so we don't clobber live data.
+      if (!initialFetchDoneRef.current) {
+        setQueueItems(queryItems);
+      } else {
+        setQueueItems((prev) => {
+          // Build a map of query items keyed by downloadClientItemId
+          const queryMap = new Map(
+            queryItems.map((i: DownloadQueueItem) => [
+              i.downloadClientItemId,
+              i,
+            ]),
+          );
+          // Keep existing active items that the query didn't return
+          // (subscription may have fresher live data)
+          const ACTIVE_STATES = new Set([
+            "downloading",
+            "queued",
+            "paused",
+            "verifying",
+            "repairing",
+            "extracting",
+          ]);
+          const merged = [...queryItems];
+          for (const item of prev) {
+            if (
+              ACTIVE_STATES.has(item.state.toLowerCase()) &&
+              !queryMap.has(item.downloadClientItemId)
+            ) {
+              merged.push(item);
+            }
+          }
+          return merged;
+        });
+      }
       setQueueError(null);
       setLastRefreshedAt(new Date());
     } catch (error) {

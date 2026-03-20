@@ -6,7 +6,7 @@ use tracing::{info, warn};
 
 fn source_kind_matches_preference(result: &IndexerSearchResult, preferred: &str) -> bool {
     match result.source_kind {
-        Some(DownloadSourceKind::NzbUrl) => preferred == "nzb",
+        Some(DownloadSourceKind::NzbFile | DownloadSourceKind::NzbUrl) => preferred == "nzb",
         Some(DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri) => {
             preferred == "torrent"
         }
@@ -101,6 +101,7 @@ impl AppUseCase {
         season: Option<u32>,
         episode: Option<u32>,
         absolute_episode: Option<u32>,
+        aliases: &[String],
     ) -> AppResult<Vec<IndexerSearchResult>> {
         let quality_profile = self
             .resolve_quality_profile(
@@ -198,16 +199,26 @@ impl AppUseCase {
             }
         }
 
-        // Filter out results whose title doesn't match any of the search queries.
-        // This prevents RSS feeds (which return their entire recent feed) from
-        // polluting results with unrelated releases.
-        if let Some(ref hint) = title_hint {
+        // Filter out results whose title doesn't match any of the search queries
+        // or known aliases. This prevents RSS feeds (which return their entire
+        // recent feed) from polluting results with unrelated releases.
+        //
+        // Only apply for freetext searches — when searching by external ID
+        // (IMDB, TVDB, AniDB) we trust the indexer's categorization.
+        let is_freetext_search = imdb_id.is_none() && tvdb_id.is_none() && anidb_id.is_none();
+        if is_freetext_search && let Some(ref hint) = title_hint {
             let hint_normalized = crate::app_usecase_rss::normalize_for_matching(hint);
+            let alias_hints: Vec<String> = aliases
+                .iter()
+                .map(|a| crate::app_usecase_rss::normalize_for_matching(a))
+                .filter(|h| !h.is_empty())
+                .collect();
             if !hint_normalized.is_empty() {
                 let before = raw_results.len();
                 raw_results.retain(|r| {
-                    crate::app_usecase_rss::normalize_for_matching(&r.title)
-                        .contains(&hint_normalized)
+                    let normalized = crate::app_usecase_rss::normalize_for_matching(&r.title);
+                    normalized.contains(&hint_normalized)
+                        || alias_hints.iter().any(|ah| normalized.contains(ah))
                 });
                 let filtered = before - raw_results.len();
                 if filtered > 0 {
@@ -216,6 +227,7 @@ impl AppUseCase {
                         after = raw_results.len(),
                         filtered,
                         title_hint = hint.as_str(),
+                        alias_count = alias_hints.len(),
                         "filtered non-matching releases from search results"
                     );
                 }
@@ -255,8 +267,8 @@ impl AppUseCase {
             .collect();
 
         // Determine which source kinds (NZB, torrent) the user can actually use
-        // based on their enabled download clients, and which kind is preferred
-        // (lowest client_priority wins). Done early so we can filter before parsing.
+        // based on their enabled download clients' declared capabilities, and
+        // which kind is preferred (lowest client_priority wins).
         let (has_usenet_client, has_torrent_client, preferred_source_kind) = {
             let clients = self
                 .services
@@ -265,20 +277,22 @@ impl AppUseCase {
                 .await
                 .unwrap_or_default();
             let enabled: Vec<_> = clients.iter().filter(|c| c.is_enabled).collect();
-            let has_usenet = enabled
+            let plugin_provider = self.services.download_client_plugin_provider.as_ref();
+            let client_accepts = |c: &&scryer_domain::DownloadClientConfig, kind: &str| {
+                let inputs = crate::accepted_inputs_for_client(&c.client_type, plugin_provider);
+                inputs
+                    .iter()
+                    .any(|i| DownloadSourceKind::parse(i).is_some_and(|k| k.as_str() == kind))
+            };
+            let has_usenet = enabled.iter().any(|c| client_accepts(c, "nzb_url"));
+            let has_torrent = enabled
                 .iter()
-                .any(|c| matches!(c.client_type.as_str(), "nzbget" | "sabnzbd"));
-            let has_torrent = enabled.iter().any(|c| {
-                matches!(
-                    c.client_type.as_str(),
-                    "qbittorrent" | "transmission" | "deluge" | "rtorrent"
-                )
-            });
+                .any(|c| client_accepts(c, "torrent_file") || client_accepts(c, "magnet_uri"));
             let preferred = enabled
                 .iter()
                 .min_by_key(|c| c.client_priority)
                 .map(|c| {
-                    if matches!(c.client_type.as_str(), "nzbget" | "sabnzbd") {
+                    if client_accepts(c, "nzb_url") {
                         "nzb"
                     } else {
                         "torrent"
@@ -290,7 +304,7 @@ impl AppUseCase {
 
         // Filter out results with no compatible download client before expensive parsing/scoring.
         raw_results.retain(|r| match r.source_kind {
-            Some(DownloadSourceKind::NzbUrl) => has_usenet_client,
+            Some(DownloadSourceKind::NzbFile | DownloadSourceKind::NzbUrl) => has_usenet_client,
             Some(DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri) => {
                 has_torrent_client
             }
@@ -561,6 +575,7 @@ impl AppUseCase {
         season: Option<u32>,
         episode: Option<u32>,
         absolute_episode: Option<u32>,
+        aliases: &[String],
     ) -> AppResult<Vec<IndexerSearchResult>> {
         self.search_and_score_releases(
             queries,
@@ -575,6 +590,7 @@ impl AppUseCase {
             season,
             episode,
             absolute_episode,
+            aliases,
         )
         .await
     }
@@ -626,6 +642,7 @@ impl AppUseCase {
                 None,
                 None,
                 None,
+                &[],
             )
             .await;
 
@@ -744,6 +761,7 @@ impl AppUseCase {
                 Some(season_num as u32),
                 Some(episode_num as u32),
                 absolute_episode,
+                &[],
             )
             .await?;
 
@@ -834,6 +852,7 @@ impl AppUseCase {
                 None,
                 None,
                 None,
+                &title.aliases,
             )
             .await?;
 
@@ -978,6 +997,7 @@ impl AppUseCase {
                 Some(season_num as u32),
                 Some(episode_num as u32),
                 absolute_episode,
+                &title.aliases,
             )
             .await?;
 

@@ -326,10 +326,12 @@ export const RootHeader = React.memo(function RootHeader({
             className="shrink-0"
             style={{ fontFamily: "var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif" }}
           >
-            <ScryerLogo />
-            <span data-slot="brand-wordmark" className="ml-3 hidden text-2xl font-bold tracking-tight text-foreground sm:inline">
-              Scryer
-            </span>
+            <div className="flex flex-col items-center">
+              <ScryerLogo />
+              <span data-slot="brand-wordmark" className="hidden text-3xl font-bold tracking-tight text-foreground sm:block">
+                Scryer
+              </span>
+            </div>
           </div>
           <form
             className="relative ml-auto flex w-full min-w-0 items-center gap-3"

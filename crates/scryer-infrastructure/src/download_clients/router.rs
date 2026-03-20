@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use scryer_application::{
     AppError, AppResult, DownloadClient, DownloadClientAddRequest, DownloadClientConfigRepository,
     DownloadClientPluginProvider, DownloadGrabResult, DownloadSourceKind, SettingsRepository,
+    accepted_inputs_for_client,
 };
 use scryer_domain::{DownloadClientConfig, DownloadQueueItem, MediaFacet};
 use tracing::warn;
@@ -82,7 +83,8 @@ impl PrioritizedDownloadClientRouter {
 
     fn source_kind_label(kind: DownloadSourceKind) -> &'static str {
         match kind {
-            DownloadSourceKind::NzbUrl => "NZB",
+            DownloadSourceKind::NzbFile => "NZB file",
+            DownloadSourceKind::NzbUrl => "NZB URL",
             DownloadSourceKind::TorrentFile => "torrent file",
             DownloadSourceKind::MagnetUri => "magnet",
         }
@@ -93,22 +95,14 @@ impl PrioritizedDownloadClientRouter {
         source_kind: DownloadSourceKind,
         plugin_provider: Option<&Arc<dyn DownloadClientPluginProvider>>,
     ) -> bool {
-        let client_type = config.client_type.trim().to_ascii_lowercase();
-        match client_type.as_str() {
-            "nzbget" | "sabnzbd" | "weaver" => source_kind == DownloadSourceKind::NzbUrl,
-            _ => {
-                let accepted_inputs = plugin_provider
-                    .map(|provider| provider.accepted_inputs_for_provider(&config.client_type))
-                    .unwrap_or_default();
-                if accepted_inputs.is_empty() {
-                    return true;
-                }
-                accepted_inputs.iter().any(|input| {
-                    DownloadSourceKind::parse(input)
-                        .is_some_and(|accepted_kind| accepted_kind == source_kind)
-                })
-            }
+        let accepted_inputs = accepted_inputs_for_client(&config.client_type, plugin_provider);
+        if accepted_inputs.is_empty() {
+            return false;
         }
+        accepted_inputs.iter().any(|input| {
+            DownloadSourceKind::parse(input)
+                .is_some_and(|accepted_kind| accepted_kind == source_kind)
+        })
     }
 
     fn routing_entry_enabled(config: &serde_json::Value) -> bool {
@@ -1022,7 +1016,7 @@ mod tests {
         let secondary = Arc::new(MockDownloadClient::default());
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: Vec::new(),
+                accepted_inputs: vec!["nzb_url".to_string()],
                 clients: vec![
                     ("primary".to_string(), primary.clone()),
                     ("secondary".to_string(), secondary.clone()),
@@ -1081,7 +1075,7 @@ mod tests {
         let secondary = Arc::new(MockDownloadClient::default());
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: Vec::new(),
+                accepted_inputs: vec!["nzb_url".to_string()],
                 clients: vec![
                     ("primary".to_string(), primary.clone()),
                     ("secondary".to_string(), secondary.clone()),
@@ -1169,7 +1163,7 @@ mod tests {
         let secondary = Arc::new(MockDownloadClient::default());
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: Vec::new(),
+                accepted_inputs: vec!["nzb_url".to_string()],
                 clients: vec![("secondary".to_string(), secondary.clone())],
             });
         let router = PrioritizedDownloadClientRouter::new(
@@ -1346,7 +1340,7 @@ mod tests {
             }),
             fallback.clone(),
             Some(Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: Vec::new(),
+                accepted_inputs: vec!["nzb_url".to_string()],
                 clients: vec![(
                     "primary".to_string(),
                     Arc::new(MockDownloadClient::default()),
@@ -1403,7 +1397,7 @@ mod tests {
 
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: Vec::new(),
+                accepted_inputs: vec!["nzb_url".to_string()],
                 clients: vec![
                     ("nzb".to_string(), nzb_client.clone()),
                     ("sab".to_string(), sab_client.clone()),
@@ -1452,7 +1446,7 @@ mod tests {
 
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: Vec::new(),
+                accepted_inputs: vec!["nzb_url".to_string()],
                 clients: vec![
                     ("nzb".to_string(), nzb_client.clone()),
                     ("sab".to_string(), sab_client.clone()),

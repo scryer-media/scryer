@@ -444,6 +444,7 @@ async fn bootstrap_application(
     };
     let initial_provider = external_provider
         .with_builtin(scryer_plugins::builtins::NZBGEEK_WASM)
+        .with_builtin(scryer_plugins::builtins::DOGNZB_WASM)
         .with_builtin(scryer_plugins::builtins::NEWZNAB_WASM);
     let dynamic_provider = scryer_plugins::DynamicPluginProvider::new(initial_provider);
     let plugin_provider: Arc<dyn IndexerPluginProvider> = Arc::new(dynamic_provider);
@@ -611,27 +612,27 @@ async fn bootstrap_application(
             move || log_buf_subscribe.subscribe(),
         )),
     );
-    // Use push-based WebSocket subscription for weaver; fall back to HTTP
-    // polling for NZBGet/SABnzbd.
-    match resolve_weaver_ws_url(&app_use_case).await {
-        Some((ws_url, api_key)) => {
-            tracing::info!(
-                url = ws_url.as_str(),
-                "using weaver subscription bridge for download queue"
-            );
-            tokio::spawn(start_weaver_subscription_bridge(
-                app_use_case.clone(),
-                shutdown_token.child_token(),
-                ws_url,
-                api_key,
-            ));
-        }
-        None => {
-            tokio::spawn(start_download_queue_poller(
-                app_use_case.clone(),
-                shutdown_token.child_token(),
-            ));
-        }
+    // Always run the download queue poller — it queries ALL enabled download
+    // clients (NZBGet, SABnzbd, Weaver, plugins) and triggers imports for
+    // completed downloads from any of them.
+    tokio::spawn(start_download_queue_poller(
+        app_use_case.clone(),
+        shutdown_token.child_token(),
+    ));
+    // Additionally start the Weaver WebSocket subscription bridge for
+    // real-time UI updates (progress, state changes) when Weaver is
+    // configured. The poller still handles import detection for all clients.
+    if let Some((ws_url, api_key)) = resolve_weaver_ws_url(&app_use_case).await {
+        tracing::info!(
+            url = ws_url.as_str(),
+            "using weaver subscription bridge for real-time download queue updates"
+        );
+        tokio::spawn(start_weaver_subscription_bridge(
+            app_use_case.clone(),
+            shutdown_token.child_token(),
+            ws_url,
+            api_key,
+        ));
     }
     tokio::spawn(start_background_acquisition_poller(
         app_use_case.clone(),
