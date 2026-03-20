@@ -39,7 +39,11 @@ fn new_nzbgeek_client(uri: &str) -> Arc<dyn IndexerClient> {
         .expect("should create nzbgeek WASM client")
 }
 
-fn search_ids(imdb_id: Option<&str>, tvdb_id: Option<&str>, anidb_id: Option<&str>) -> HashMap<String, String> {
+fn search_ids(
+    imdb_id: Option<&str>,
+    tvdb_id: Option<&str>,
+    anidb_id: Option<&str>,
+) -> HashMap<String, String> {
     let mut ids = HashMap::new();
     if let Some(imdb_id) = imdb_id {
         ids.insert("imdb_id".to_string(), imdb_id.to_string());

@@ -391,10 +391,10 @@ async fn multi_indexer_url_trace_season_pack() {
                 ("tvdb_id".to_string(), "348545".to_string()),
                 ("anidb_id".to_string(), "1535".to_string()),
             ]),
-            Some("anime".into()),      // category
-            Some("anime".into()),      // facet
-            None,                      // newznab_categories
-            None,                      // indexer_routing
+            Some("anime".into()), // category
+            Some("anime".into()), // facet
+            None,                 // newznab_categories
+            None,                 // indexer_routing
             SearchMode::Auto,
             Some(2), // season
             None,    // episode=None → season pack

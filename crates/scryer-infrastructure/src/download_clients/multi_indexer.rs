@@ -23,7 +23,10 @@ struct SearchStrategy {
     label: String,
 }
 
-fn preferred_anime_alias_query(query: &str, tagged_aliases: &[scryer_domain::TaggedAlias]) -> Option<String> {
+fn preferred_anime_alias_query(
+    query: &str,
+    tagged_aliases: &[scryer_domain::TaggedAlias],
+) -> Option<String> {
     let canonical = strip_query_context(query);
     if canonical.is_empty() {
         return None;
@@ -42,13 +45,15 @@ fn preferred_anime_alias_query(query: &str, tagged_aliases: &[scryer_domain::Tag
     let selected = alias_candidates
         .iter()
         .find(|(name, _, language_matches, romanized)| {
-            !name.is_empty() && *language_matches && *romanized && !canonical.eq_ignore_ascii_case(name)
+            !name.is_empty()
+                && *language_matches
+                && *romanized
+                && !canonical.eq_ignore_ascii_case(name)
         })
         .map(|(name, _, _, _)| name.clone());
 
     selected
 }
-
 
 fn strip_query_context(query: &str) -> &str {
     let tokens: Vec<&str> = query.split_whitespace().collect();
@@ -104,7 +109,10 @@ fn is_romanized_alias(alias: &str) -> bool {
     !trimmed.is_empty()
         && trimmed.chars().all(|ch| {
             ch.is_ascii_alphanumeric()
-                || matches!(ch, ' ' | '-' | '_' | ':' | ';' | ',' | '.' | '\'' | '&' | '!' | '?')
+                || matches!(
+                    ch,
+                    ' ' | '-' | '_' | ':' | ';' | ',' | '.' | '\'' | '&' | '!' | '?'
+                )
         })
 }
 
@@ -381,7 +389,11 @@ impl IndexerClient for MultiIndexerSearchClient {
             "dispatching search to indexers"
         );
 
-        let facet = match facet.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        let facet = match facet
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             Some("movie") | Some("series") | Some("anime") => facet.unwrap(),
             Some(other) => {
                 return Err(AppError::Validation(format!(
@@ -611,7 +623,10 @@ impl IndexerClient for MultiIndexerSearchClient {
             // Skip freetext strategies when ID-based strategies are available and
             // the indexer has API limits or deduplicates aliases (freetext without
             // the constraining ID returns broad, unrelated results).
-            if (has_api_limit || caps.deduplicates_aliases) && strategies.len() > 1 && facet != "anime" {
+            if (has_api_limit || caps.deduplicates_aliases)
+                && strategies.len() > 1
+                && facet != "anime"
+            {
                 let has_id_strategy = strategies.iter().any(|s| !s.ids.is_empty());
                 if has_id_strategy {
                     strategies.retain(|s| s.label != "freetext");
@@ -750,7 +765,8 @@ impl IndexerClient for MultiIndexerSearchClient {
         if !query.is_empty() {
             let expected = scryer_release_parser::parse_release_metadata(&query);
             if !expected.normalized_title.is_empty() {
-                let mut expected_titles = vec![normalize_for_comparison(&expected.normalized_title)];
+                let mut expected_titles =
+                    vec![normalize_for_comparison(&expected.normalized_title)];
                 expected_titles.extend(
                     tagged_aliases
                         .iter()

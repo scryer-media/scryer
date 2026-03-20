@@ -105,8 +105,9 @@ impl IndexerClient for WasmIndexerClient {
                 }
             }
 
-            let mut plugin = build_plugin(manifest)
-                .map_err(|e| AppError::Repository(format!("failed to instantiate WASM plugin: {e}")))?;
+            let mut plugin = build_plugin(manifest).map_err(|e| {
+                AppError::Repository(format!("failed to instantiate WASM plugin: {e}"))
+            })?;
 
             plugin
                 .call::<&str, String>("search", &input)

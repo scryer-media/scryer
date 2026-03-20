@@ -8,11 +8,7 @@ pub struct RecycleBinMutations;
 #[Object]
 impl RecycleBinMutations {
     /// Restore a recycled item back to its original path on disk.
-    async fn restore_recycled_item(
-        &self,
-        ctx: &Context<'_>,
-        id: String,
-    ) -> GqlResult<bool> {
+    async fn restore_recycled_item(&self, ctx: &Context<'_>, id: String) -> GqlResult<bool> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         app.restore_recycled_item(&actor, &id)
@@ -21,11 +17,7 @@ impl RecycleBinMutations {
     }
 
     /// Permanently delete a single recycled item.
-    async fn delete_recycled_item(
-        &self,
-        ctx: &Context<'_>,
-        id: String,
-    ) -> GqlResult<bool> {
+    async fn delete_recycled_item(&self, ctx: &Context<'_>, id: String) -> GqlResult<bool> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         app.delete_recycled_item(&actor, &id)

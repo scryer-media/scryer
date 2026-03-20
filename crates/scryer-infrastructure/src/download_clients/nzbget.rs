@@ -912,7 +912,12 @@ impl DownloadClient for NzbgetDownloadClient {
                 let status_upper = status.to_ascii_uppercase();
 
                 if !status_upper.starts_with("SUCCESS") {
-                    info!(nzb_id, name = name.as_str(), status, "nzbget: skipping non-SUCCESS history entry");
+                    info!(
+                        nzb_id,
+                        name = name.as_str(),
+                        status,
+                        "nzbget: skipping non-SUCCESS history entry"
+                    );
                     return None;
                 }
 
@@ -934,7 +939,11 @@ impl DownloadClient for NzbgetDownloadClient {
                 if let Some(ts) = history_ts
                     && ts < cutoff_ts
                 {
-                    info!(nzb_id, name = name.as_str(), "nzbget: skipping history entry older than 7 days");
+                    info!(
+                        nzb_id,
+                        name = name.as_str(),
+                        "nzbget: skipping history entry older than 7 days"
+                    );
                     return None;
                 }
 
@@ -944,13 +953,20 @@ impl DownloadClient for NzbgetDownloadClient {
                     .and_then(Value::as_str)
                     .filter(|v| !v.is_empty())
                     .or_else(|| {
-                        entry.get("DestDir").and_then(Value::as_str).filter(|v| !v.is_empty())
+                        entry
+                            .get("DestDir")
+                            .and_then(Value::as_str)
+                            .filter(|v| !v.is_empty())
                     })
                     .unwrap_or("")
                     .to_string();
 
                 if dest_dir.is_empty() {
-                    info!(nzb_id, name = name.as_str(), "nzbget: skipping history entry with empty dest_dir");
+                    info!(
+                        nzb_id,
+                        name = name.as_str(),
+                        "nzbget: skipping history entry with empty dest_dir"
+                    );
                     return None;
                 }
 
