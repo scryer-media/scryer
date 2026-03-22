@@ -44,21 +44,20 @@ services:
     working_dir: /workspace
     depends_on:
       - nzbget
+      - sabnzbd
+      - weaver
     env_file:
       - crates/scryer/.env
     environment:
       SCRYER_BIND: 0.0.0.0:8080
-      SCRYER_DB_PATH: "sqlite://file::memory:?mode=memory&cache=shared"
+      SCRYER_METRICS: "true"
       SCRYER_WEB_UI_URL: http://nodejs:3000
-      SCRYER_CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://0.0.0.0:3000,http://host.docker.internal:3000,http://nodejs:3000
       SCRYER_AUTH_ENABLED: "false"
-      SCRYER_METADATA_GATEWAY_GRAPHQL_URL: https://smg.scryer.media/graphql
-      SCRYER_NZBGET_URL: http://nzbget:6789/
       SCRYER_MOVIES_PATH: /media/movies
       SCRYER_SERIES_PATH: /media/series
-      SCRYER_TITLE_IMAGE_AVIF_SPEED: "10"
-      SCRYER_TITLE_IMAGE_AVIF_QUALITY: "60"
       SCRYER_SMG_REGISTRATION_SECRET: ${SCRYER_SMG_REGISTRATION_SECRET}
+      SCRYER_DEV_SEED_FILE: ${SCRYER_DEV_SEED_FILE-./crates/scryer/dev-seed.toml}
+      SCRYER_DEV_SEED_TITLES_FILE: ${SCRYER_DEV_SEED_TITLES_FILE-./crates/scryer/dev-seed-titles.toml}
       RUST_LOG: "info,scryer_infrastructure::metadata_gateway=debug,extism=debug"
     command: >
       sh -c '
@@ -73,6 +72,7 @@ services:
       - ./tmp/scryer-config:/config
       - ./tmp/scryer-data:/data
       - ./tmp/scryer-media:/media
+      - /Volumes/Media/Anime:/media/anime:ro
       - ./tmp/nzbget-downloads:/nzbget-downloads
       - ./tmp/sabnzbd-downloads:/sabnzbd-downloads
       - ./tmp/weaver-downloads:/weaver-downloads
@@ -88,7 +88,6 @@ services:
       - scryer-node_modules:/app/node_modules
     environment:
       SCRYER_GRAPHQL_URL: /graphql
-      SCRYER_METADATA_GATEWAY_GRAPHQL_URL: https://smg.scryer.media/graphql
     command: >
       sh -c '
         set -eu
@@ -119,6 +118,36 @@ services:
     ports:
       - "3000:80"
 
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: scryer-prometheus
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - scryer-prometheus-data:/prometheus
+    ports:
+      - "9091:9090"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: scryer-grafana
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - scryer-grafana-data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+
 networks:
   default:
     name: scryer-dev
@@ -128,3 +157,5 @@ volumes:
   scryer-rust-target:
   scryer-cargo-registry:
   scryer-cargo-git:
+  scryer-prometheus-data:
+  scryer-grafana-data:

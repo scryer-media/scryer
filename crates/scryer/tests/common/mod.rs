@@ -127,7 +127,7 @@ impl TestContext {
         let mut registry = FacetRegistry::new();
         registry.register(Arc::new(MovieFacetHandler));
         registry.register(Arc::new(SeriesFacetHandler::new(
-            scryer_domain::MediaFacet::Tv,
+            scryer_domain::MediaFacet::Series,
         )));
         registry.register(Arc::new(SeriesFacetHandler::new(
             scryer_domain::MediaFacet::Anime,

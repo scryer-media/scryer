@@ -15,10 +15,7 @@ const LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY: &str = "nzbget.client_routing";
 const DOWNLOAD_CLIENT_ROUTING_SCOPE_IDS: [&str; 3] = ["movie", "series", "anime"];
 
 fn should_seed_download_client_routing(client_type: &str) -> bool {
-    matches!(
-        client_type.trim().to_ascii_lowercase().as_str(),
-        "nzbget" | "sabnzbd" | "weaver"
-    )
+    matches!(client_type, "nzbget" | "sabnzbd" | "weaver")
 }
 
 fn parse_download_client_routing_priority(raw_priority: &Value) -> Option<i64> {
@@ -38,7 +35,7 @@ fn next_download_client_routing_priority(routing_by_client: &Map<String, Value>)
 
     match max_explicit_priority {
         Some(max_priority) => max_priority + 1,
-        None => i64::try_from(routing_by_client.len()).unwrap_or(0) + 1,
+        None => routing_by_client.len() as i64 + 1,
     }
 }
 
@@ -406,7 +403,7 @@ impl ConfigMutations {
                     })?,
                     client_priority: 0,
                     is_enabled: true,
-                    status: "unknown".to_string(),
+                    status: scryer_domain::DownloadClientStatus::Healthy,
                     last_error: None,
                     last_seen_at: None,
                     created_at: chrono::Utc::now(),

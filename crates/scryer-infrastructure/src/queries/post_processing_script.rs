@@ -56,10 +56,10 @@ pub(crate) async fn insert_script_query(
     .bind(&script.id)
     .bind(&script.name)
     .bind(&script.description)
-    .bind(&script.script_type)
+    .bind(script.script_type.as_str())
     .bind(&script.script_content)
     .bind(&facets_json)
-    .bind(&script.execution_mode)
+    .bind(script.execution_mode.as_str())
     .bind(script.timeout_secs)
     .bind(script.priority)
     .bind(script.enabled)
@@ -89,10 +89,10 @@ pub(crate) async fn update_script_query(
     )
     .bind(&script.name)
     .bind(&script.description)
-    .bind(&script.script_type)
+    .bind(script.script_type.as_str())
     .bind(&script.script_content)
     .bind(&facets_json)
-    .bind(&script.execution_mode)
+    .bind(script.execution_mode.as_str())
     .bind(script.timeout_secs)
     .bind(script.priority)
     .bind(script.enabled)
@@ -155,7 +155,7 @@ pub(crate) async fn record_run_query(
     .bind(&run.title_name)
     .bind(&run.facet)
     .bind(&run.file_path)
-    .bind(&run.status)
+    .bind(run.status.as_str())
     .bind(run.exit_code)
     .bind(&run.stdout_tail)
     .bind(&run.stderr_tail)
@@ -256,15 +256,23 @@ fn row_to_script(row: &sqlx::sqlite::SqliteRow) -> AppResult<PostProcessingScrip
             .try_get("description")
             .map_err(|e| AppError::Repository(e.to_string()))?,
         script_type: row
-            .try_get("script_type")
-            .map_err(|e| AppError::Repository(e.to_string()))?,
+            .try_get::<String, _>("script_type")
+            .map_err(|e| AppError::Repository(e.to_string()))
+            .and_then(|s| {
+                scryer_domain::ScriptType::parse(&s)
+                    .ok_or_else(|| AppError::Repository(format!("invalid script_type: {s}")))
+            })?,
         script_content: row
             .try_get("script_content")
             .map_err(|e| AppError::Repository(e.to_string()))?,
         applied_facets,
         execution_mode: row
-            .try_get("execution_mode")
-            .map_err(|e| AppError::Repository(e.to_string()))?,
+            .try_get::<String, _>("execution_mode")
+            .map_err(|e| AppError::Repository(e.to_string()))
+            .and_then(|s| {
+                scryer_domain::ExecutionMode::parse(&s)
+                    .ok_or_else(|| AppError::Repository(format!("invalid execution_mode: {s}")))
+            })?,
         timeout_secs: row
             .try_get("timeout_secs")
             .map_err(|e| AppError::Repository(e.to_string()))?,
@@ -301,9 +309,13 @@ fn row_to_run(row: &sqlx::sqlite::SqliteRow) -> AppResult<PostProcessingScriptRu
         file_path: row
             .try_get("file_path")
             .map_err(|e| AppError::Repository(e.to_string()))?,
-        status: row
-            .try_get("status")
-            .map_err(|e| AppError::Repository(e.to_string()))?,
+        status: {
+            let s: String = row
+                .try_get("status")
+                .map_err(|e| AppError::Repository(e.to_string()))?;
+            scryer_domain::ScriptRunStatus::parse(&s)
+                .unwrap_or(scryer_domain::ScriptRunStatus::Failed)
+        },
         exit_code: row
             .try_get("exit_code")
             .map_err(|e| AppError::Repository(e.to_string()))?,

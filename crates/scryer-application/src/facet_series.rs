@@ -28,19 +28,11 @@ impl FacetHandler for SeriesFacetHandler {
     }
 
     fn facet_id(&self) -> &str {
-        match self.media_facet {
-            MediaFacet::Tv => "tv",
-            MediaFacet::Anime => "anime",
-            _ => "tv",
-        }
+        self.media_facet.as_str()
     }
 
     fn download_category(&self) -> &str {
-        match self.media_facet {
-            MediaFacet::Tv => "tv",
-            MediaFacet::Anime => "anime",
-            _ => "tv",
-        }
+        self.media_facet.as_str()
     }
 
     fn library_path_key(&self) -> &str {

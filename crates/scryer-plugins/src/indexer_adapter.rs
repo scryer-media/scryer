@@ -5,16 +5,26 @@ use scryer_application::{
 };
 use scryer_domain::IndexerConfig;
 use scryer_domain::TaggedAlias;
-use tracing::warn;
+use std::sync::Arc;
+use tracing::{info, warn};
 
 use crate::loader::{apply_allowed_hosts, build_plugin, parse_config_json_entries};
 use crate::types::{PluginDescriptor, PluginSearchRequest, PluginSearchResponse};
 
+/// Wrapper to allow `extism::Plugin` inside `Send + Sync` structs.
+///
+/// `extism::Plugin` is `!Send` because wasmtime internals use `!Send` types.
+/// This is safe because we only access the plugin through a `Mutex` inside
+/// `spawn_blocking`, ensuring single-threaded exclusive access.
+struct SendPlugin(extism::Plugin);
+
+// SAFETY: Access is serialized via Mutex and confined to spawn_blocking tasks.
+unsafe impl Send for SendPlugin {}
+
 pub struct WasmIndexerClient {
-    wasm_bytes: Vec<u8>,
     descriptor: PluginDescriptor,
     indexer_name: String,
-    config: IndexerConfig,
+    plugin: Arc<std::sync::Mutex<SendPlugin>>,
 }
 
 impl WasmIndexerClient {
@@ -23,14 +33,66 @@ impl WasmIndexerClient {
         descriptor: PluginDescriptor,
         indexer_name: String,
         config: IndexerConfig,
-    ) -> Self {
-        Self {
-            wasm_bytes,
+    ) -> Result<Self, AppError> {
+        let manifest = build_manifest(&wasm_bytes, &descriptor, &indexer_name, &config);
+        let plugin = build_plugin(manifest).map_err(|e| {
+            AppError::Repository(format!(
+                "failed to compile WASM plugin for {}: {e}",
+                indexer_name
+            ))
+        })?;
+
+        info!(
+            indexer = indexer_name.as_str(),
+            plugin = descriptor.name.as_str(),
+            "WASM plugin compiled and cached"
+        );
+
+        Ok(Self {
             descriptor,
             indexer_name,
-            config,
+            plugin: Arc::new(std::sync::Mutex::new(SendPlugin(plugin))),
+        })
+    }
+}
+
+fn build_manifest(
+    wasm_bytes: &[u8],
+    descriptor: &PluginDescriptor,
+    indexer_name: &str,
+    config: &IndexerConfig,
+) -> extism::Manifest {
+    let mut manifest = extism::Manifest::new([extism::Wasm::data(wasm_bytes.to_vec())]);
+    manifest = apply_allowed_hosts(
+        manifest,
+        descriptor,
+        Some(&config.base_url),
+        config.config_json.as_deref(),
+    );
+    manifest = manifest.with_timeout(std::time::Duration::from_secs(30));
+    manifest = manifest.with_config_key("base_url", &config.base_url);
+    if let Some(ref api_key) = config.api_key_encrypted {
+        manifest = manifest.with_config_key("api_key", api_key);
+    }
+
+    if let Some(ref json_str) = config.config_json {
+        match parse_config_json_entries(json_str) {
+            Ok(map) => {
+                for (key, value) in &map {
+                    manifest = manifest.with_config_key(key, value);
+                }
+            }
+            Err(error) => {
+                warn!(
+                    indexer = indexer_name,
+                    error = %error,
+                    "failed to parse config_json; extra config keys will not be injected"
+                );
+            }
         }
     }
+
+    manifest
 }
 
 #[async_trait]
@@ -70,56 +132,36 @@ impl IndexerClient for WasmIndexerClient {
 
         let plugin_name = self.descriptor.name.clone();
         let indexer_name = self.indexer_name.clone();
-        let indexer_name_for_spawn = indexer_name.clone();
-        let descriptor = self.descriptor.clone();
-        let wasm_bytes = self.wasm_bytes.clone();
-        let config = self.config.clone();
+        let plugin = Arc::clone(&self.plugin);
+
         let output = tokio::task::spawn_blocking(move || {
-            let mut manifest = extism::Manifest::new([extism::Wasm::data(wasm_bytes)]);
-            manifest = apply_allowed_hosts(
-                manifest,
-                &descriptor,
-                Some(&config.base_url),
-                config.config_json.as_deref(),
-            );
-            manifest = manifest.with_timeout(std::time::Duration::from_secs(30));
-            manifest = manifest.with_config_key("base_url", &config.base_url);
-            if let Some(ref api_key) = config.api_key_encrypted {
-                manifest = manifest.with_config_key("api_key", api_key);
-            }
+            let mut guard = plugin
+                .lock()
+                .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
 
-            if let Some(ref json_str) = config.config_json {
-                match parse_config_json_entries(json_str) {
-                    Ok(map) => {
-                        for (key, value) in &map {
-                            manifest = manifest.with_config_key(key, value);
-                        }
-                    }
-                    Err(error) => {
-                        warn!(
-                            indexer = indexer_name_for_spawn.as_str(),
-                            error = %error,
-                            "failed to parse config_json; extra config keys will not be injected"
-                        );
-                    }
-                }
-            }
-
-            let mut plugin = build_plugin(manifest).map_err(|e| {
-                AppError::Repository(format!("failed to instantiate WASM plugin: {e}"))
-            })?;
-
-            plugin
+            let start = std::time::Instant::now();
+            let result = guard
+                .0
                 .call::<&str, String>("search", &input)
-                .map_err(|e| AppError::Repository(format!("plugin search() failed: {e}")))
+                .map_err(|e| AppError::Repository(format!("plugin search() failed: {e}")));
+            let elapsed = start.elapsed();
+
+            tracing::debug!(
+                plugin = plugin_name.as_str(),
+                indexer = indexer_name.as_str(),
+                elapsed_ms = elapsed.as_millis() as u64,
+                "WASM plugin search call completed"
+            );
+
+            result
         })
         .await
         .map_err(|e| AppError::Repository(format!("plugin task panicked: {e}")))??;
 
         let response: PluginSearchResponse = serde_json::from_str(&output).map_err(|e| {
             warn!(
-                plugin = plugin_name.as_str(),
-                indexer = indexer_name.as_str(),
+                plugin = self.descriptor.name.as_str(),
+                indexer = self.indexer_name.as_str(),
                 error = %e,
                 "plugin returned invalid search response JSON"
             );

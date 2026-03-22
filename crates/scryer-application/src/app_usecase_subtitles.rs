@@ -129,7 +129,7 @@ async fn run_subtitle_search_for_file(
         .await?
         .ok_or_else(|| crate::AppError::NotFound("media file not found".into()))?;
 
-    let is_series = title.facet == scryer_domain::MediaFacet::Tv
+    let is_series = title.facet == scryer_domain::MediaFacet::Series
         || title.facet == scryer_domain::MediaFacet::Anime;
     let min_score: i32 = if is_series {
         app.read_setting_string_value("subtitles.minimum_score_series", None)
@@ -357,7 +357,7 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
                 continue;
             }
 
-            let is_series = title.facet == scryer_domain::MediaFacet::Tv
+            let is_series = title.facet == scryer_domain::MediaFacet::Series
                 || title.facet == scryer_domain::MediaFacet::Anime;
             let min_score = if is_series {
                 min_score_series

@@ -138,6 +138,7 @@ const fr: LocaleDictionary = {
   "settings.rootFoldersEmpty": "Aucun dossier racine configuré. Ajoutez au moins un chemin.",
   "settings.rootFoldersHelp": "Les dossiers racine sont les répertoires principaux où les médias sont stockés. Le dossier étoilé est celui par défaut pour les nouveaux titres.",
   "settings.rootFolderAdd": "Ajouter un dossier racine",
+  "settings.rootFolderEdit": "Modifier le dossier racine",
   "settings.rootFolderAddPlaceholder": "/media/movies",
   "settings.rootFolderSetDefault": "Définir par défaut",
   "settings.libraryScanTitle": "Analyse de la bibliothèque",

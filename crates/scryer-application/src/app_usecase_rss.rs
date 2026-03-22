@@ -137,8 +137,39 @@ impl AppUseCase {
 
         if lookup.is_empty() {
             info!("RSS sync: no monitored titles, skipping");
+            metrics::counter!("scryer_rss_sync_total").increment(1);
+            metrics::histogram!("scryer_rss_sync_duration_seconds")
+                .record(sync_start.elapsed().as_secs_f64());
             return Ok(RssSyncReport::default());
         }
+
+        // Collect Newznab categories from indexer routing config across all facets.
+        // These tell Newznab plugins which categories to fetch in RSS mode.
+        let rss_categories = {
+            let mut cats: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for scope in &["movie", "series", "anime"] {
+                if let Some(plan) = self.resolve_indexer_routing(Some(scope)).await {
+                    for entry in plan.entries.values() {
+                        if entry.enabled {
+                            for cat in &entry.categories {
+                                cats.insert(cat.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            if cats.is_empty() {
+                None
+            } else {
+                let sorted: Vec<String> = {
+                    let mut v: Vec<_> = cats.into_iter().collect();
+                    v.sort();
+                    v
+                };
+                info!(categories = ?sorted, "RSS sync: resolved categories from routing config");
+                Some(sorted)
+            }
+        };
 
         // Fetch RSS feed (empty query = latest releases) from all indexers
         let rss_results = self
@@ -149,7 +180,7 @@ impl AppUseCase {
                 HashMap::new(),
                 None, // no category filter
                 None, // no facet hint
-                None,
+                rss_categories,
                 None, // no routing filter
                 SearchMode::Auto,
                 None,
@@ -163,12 +194,18 @@ impl AppUseCase {
             Ok(r) => r,
             Err(err) => {
                 warn!(error = %err, "RSS sync: failed to fetch RSS feed from indexers");
+                metrics::counter!("scryer_rss_sync_total").increment(1);
+                metrics::histogram!("scryer_rss_sync_duration_seconds")
+                    .record(sync_start.elapsed().as_secs_f64());
                 return Ok(RssSyncReport::default());
             }
         };
 
         if response.results.is_empty() {
             info!("RSS sync: no results from indexers");
+            metrics::counter!("scryer_rss_sync_total").increment(1);
+            metrics::histogram!("scryer_rss_sync_duration_seconds")
+                .record(sync_start.elapsed().as_secs_f64());
             return Ok(RssSyncReport::default());
         }
 
@@ -214,6 +251,9 @@ impl AppUseCase {
         );
 
         if new_results.is_empty() {
+            metrics::counter!("scryer_rss_sync_total").increment(1);
+            metrics::histogram!("scryer_rss_sync_duration_seconds")
+                .record(sync_start.elapsed().as_secs_f64());
             return Ok(RssSyncReport::default());
         }
 
@@ -290,7 +330,7 @@ impl AppUseCase {
                 let Some(wanted) = wanted else {
                     continue;
                 };
-                if wanted.status == "grabbed" && wanted.current_score.is_some() {
+                if wanted.status == WantedStatus::Grabbed && wanted.current_score.is_some() {
                     // Already grabbed — only proceed if upgrade is possible
                 }
                 self.process_rss_title_releases(
@@ -451,7 +491,7 @@ impl AppUseCase {
                 _ => continue, // Not wanted
             };
 
-            if wanted.status != "wanted" && wanted.status != "grabbed" {
+            if wanted.status != WantedStatus::Wanted && wanted.status != WantedStatus::Grabbed {
                 continue;
             }
 
@@ -766,7 +806,7 @@ impl AppUseCase {
             return;
         }
 
-        let thresholds = AcquisitionThresholds::default();
+        let thresholds = AcquisitionThresholds::for_persona(&profile.criteria.scoring_persona);
         let decision = evaluate_upgrade(
             candidate_score,
             wanted.current_score,

@@ -1,6 +1,6 @@
 use chrono::Utc;
 use scryer_application::{AppError, AppResult, DownloadSubmission, ReleaseDownloadAttemptOutcome};
-use scryer_domain::{Id, ImportRecord};
+use scryer_domain::{Id, ImportRecord, ImportStatus, ImportType};
 use sqlx::Row;
 use sqlx::SqlitePool;
 
@@ -156,7 +156,8 @@ pub(crate) async fn create_import_request_query(
 ) -> AppResult<String> {
     let id = Id::new().0;
     let now = Utc::now().to_rfc3339();
-    let rename_plan_json = if import_type.starts_with("rename_") {
+    let is_rename = ImportType::parse(&import_type).is_some_and(|t| t.is_rename());
+    let rename_plan_json = if is_rename {
         Some(payload_json.clone())
     } else {
         None
@@ -179,7 +180,7 @@ pub(crate) async fn create_import_request_query(
     .bind(&source_system)
     .bind(&source_ref)
     .bind(&import_type)
-    .bind("queued")
+    .bind(ImportStatus::Pending.as_str())
     .bind(&payload_json)
     .bind(&rename_plan_json)
     .bind(Option::<String>::None)
@@ -239,12 +240,19 @@ pub(crate) async fn get_import_by_id_query(
             source_ref: row
                 .try_get("source_ref")
                 .map_err(|e| AppError::Repository(e.to_string()))?,
-            import_type: row
-                .try_get("import_type")
-                .map_err(|e| AppError::Repository(e.to_string()))?,
-            status: row
-                .try_get("status")
-                .map_err(|e| AppError::Repository(e.to_string()))?,
+            import_type: {
+                let s: String = row
+                    .try_get("import_type")
+                    .map_err(|e| AppError::Repository(e.to_string()))?;
+                ImportType::parse(&s)
+                    .ok_or_else(|| AppError::Repository(format!("unknown import_type: {s}")))?
+            },
+            status: {
+                let s: String = row
+                    .try_get("status")
+                    .map_err(|e| AppError::Repository(e.to_string()))?;
+                ImportStatus::parse(&s).unwrap_or_default()
+            },
             payload_json: row
                 .try_get("payload_json")
                 .map_err(|e| AppError::Repository(e.to_string()))?,
@@ -298,12 +306,19 @@ pub(crate) async fn get_import_by_source_ref_query(
             source_ref: row
                 .try_get("source_ref")
                 .map_err(|e| AppError::Repository(e.to_string()))?,
-            import_type: row
-                .try_get("import_type")
-                .map_err(|e| AppError::Repository(e.to_string()))?,
-            status: row
-                .try_get("status")
-                .map_err(|e| AppError::Repository(e.to_string()))?,
+            import_type: {
+                let s: String = row
+                    .try_get("import_type")
+                    .map_err(|e| AppError::Repository(e.to_string()))?;
+                ImportType::parse(&s)
+                    .ok_or_else(|| AppError::Repository(format!("unknown import_type: {s}")))?
+            },
+            status: {
+                let s: String = row
+                    .try_get("status")
+                    .map_err(|e| AppError::Repository(e.to_string()))?;
+                ImportStatus::parse(&s).unwrap_or_default()
+            },
             payload_json: row
                 .try_get("payload_json")
                 .map_err(|e| AppError::Repository(e.to_string()))?,
@@ -334,7 +349,7 @@ pub(crate) async fn update_import_status_query(
     result_json: Option<String>,
 ) -> AppResult<()> {
     let now = Utc::now().to_rfc3339();
-    let is_terminal = matches!(status, "completed" | "failed" | "skipped");
+    let is_terminal = ImportStatus::parse(status).is_some_and(|s| s.is_terminal());
 
     sqlx::query(
         "UPDATE imports
@@ -392,7 +407,7 @@ pub(crate) async fn list_pending_imports_query(pool: &SqlitePool) -> AppResult<V
                 payload_json, result_json, started_at, finished_at,
                 created_at, updated_at
          FROM imports
-         WHERE status IN ('queued', 'processing')
+         WHERE status IN ('queued', 'pending', 'running', 'processing')
          ORDER BY created_at ASC",
     )
     .fetch_all(pool)
@@ -411,12 +426,19 @@ pub(crate) async fn list_pending_imports_query(pool: &SqlitePool) -> AppResult<V
             source_ref: row
                 .try_get("source_ref")
                 .map_err(|e| AppError::Repository(e.to_string()))?,
-            import_type: row
-                .try_get("import_type")
-                .map_err(|e| AppError::Repository(e.to_string()))?,
-            status: row
-                .try_get("status")
-                .map_err(|e| AppError::Repository(e.to_string()))?,
+            import_type: {
+                let s: String = row
+                    .try_get("import_type")
+                    .map_err(|e| AppError::Repository(e.to_string()))?;
+                ImportType::parse(&s)
+                    .ok_or_else(|| AppError::Repository(format!("unknown import_type: {s}")))?
+            },
+            status: {
+                let s: String = row
+                    .try_get("status")
+                    .map_err(|e| AppError::Repository(e.to_string()))?;
+                ImportStatus::parse(&s).unwrap_or_default()
+            },
             payload_json: row
                 .try_get("payload_json")
                 .map_err(|e| AppError::Repository(e.to_string()))?,
@@ -471,12 +493,19 @@ pub(crate) async fn list_imports_query(
             source_ref: row
                 .try_get("source_ref")
                 .map_err(|e| AppError::Repository(e.to_string()))?,
-            import_type: row
-                .try_get("import_type")
-                .map_err(|e| AppError::Repository(e.to_string()))?,
-            status: row
-                .try_get("status")
-                .map_err(|e| AppError::Repository(e.to_string()))?,
+            import_type: {
+                let s: String = row
+                    .try_get("import_type")
+                    .map_err(|e| AppError::Repository(e.to_string()))?;
+                ImportType::parse(&s)
+                    .ok_or_else(|| AppError::Repository(format!("unknown import_type: {s}")))?
+            },
+            status: {
+                let s: String = row
+                    .try_get("status")
+                    .map_err(|e| AppError::Repository(e.to_string()))?;
+                ImportStatus::parse(&s).unwrap_or_default()
+            },
             payload_json: row
                 .try_get("payload_json")
                 .map_err(|e| AppError::Repository(e.to_string()))?,

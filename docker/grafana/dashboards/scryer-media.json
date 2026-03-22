@@ -1,0 +1,323 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "title": "Scryer",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false
+    },
+    {
+      "title": "Indexer Queries",
+      "description": "Indexer search queries grouped by indexer, status, and search mode",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 1 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "increase(scryer_indexer_queries_total[5m])", "legendFormat": "{{indexer}} {{status}} ({{mode}})" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "title": "Indexer Query Duration",
+      "description": "Indexer query latency percentiles (p50, p95, p99)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 1 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "scryer_indexer_query_duration_seconds{quantile=\"0.95\"}", "legendFormat": "p95 {{indexer}} ({{mode}})" },
+        { "expr": "scryer_indexer_query_duration_seconds{quantile=\"0.5\"}", "legendFormat": "p50 {{indexer}} ({{mode}})" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 5 } } }
+    },
+    {
+      "title": "Indexer Results",
+      "description": "Total search results returned per indexer and search mode",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 1 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "increase(scryer_indexer_query_results_total[5m])", "legendFormat": "{{indexer}} ({{mode}})" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "title": "Grabs",
+      "description": "Releases grabbed from indexers for download",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 9 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "increase(scryer_grabs_total[5m]) or vector(0)", "legendFormat": "{{indexer}} ({{facet}})" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "title": "Imports",
+      "description": "Completed download import outcomes by decision and facet",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 9 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "increase(scryer_imports_total[5m])", "legendFormat": "{{decision}} ({{facet}})" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "title": "Import Duration",
+      "description": "Import processing latency percentiles",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 9 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "scryer_import_duration_seconds{quantile=\"0.95\"}", "legendFormat": "p95 ({{facet}})" },
+        { "expr": "scryer_import_duration_seconds{quantile=\"0.5\"}", "legendFormat": "p50 ({{facet}})" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 5 } } }
+    },
+    {
+      "title": "Download Queue",
+      "description": "Current download queue item counts by state",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 17 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "scryer_download_queue_items", "legendFormat": "{{state}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } } }
+    },
+    {
+      "title": "RSS Sync",
+      "description": "RSS feed sync activity — releases fetched, matched, and grabbed",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 17 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "increase(scryer_rss_sync_total[5m])", "legendFormat": "syncs" },
+        { "expr": "increase(scryer_rss_releases_fetched_total[5m])", "legendFormat": "fetched" },
+        { "expr": "increase(scryer_rss_releases_matched_total[5m])", "legendFormat": "matched" },
+        { "expr": "increase(scryer_rss_releases_grabbed_total[5m])", "legendFormat": "grabbed" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "title": "Scheduler Tasks",
+      "description": "Background task execution counts and errors",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 17 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "increase(scryer_task_runs_total[5m])", "legendFormat": "{{task}} runs" },
+        { "expr": "increase(scryer_task_errors_total[5m])", "legendFormat": "{{task}} errors" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 10 } },
+        "overrides": [
+          { "matcher": { "id": "byRegexp", "options": ".*errors" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+        ]
+      }
+    },
+    {
+      "title": "Task Duration",
+      "description": "Background task execution latency (p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 25 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "scryer_task_duration_seconds{quantile=\"0.95\"}", "legendFormat": "p95 {{task}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "Task Panics",
+      "description": "Total caught panics in background tasks",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 25 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "sum(scryer_task_panics_total) or vector(0)", "legendFormat": "panics" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Weaver",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 },
+      "collapsed": false
+    },
+    {
+      "title": "Pipeline Status",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 30 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "weaver_pipeline_paused", "legendFormat": "paused" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "Running", "color": "green" }, "1": { "text": "Paused", "color": "orange" } } }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Jobs by Status",
+      "type": "bargauge",
+      "gridPos": { "h": 8, "w": 8, "x": 4, "y": 30 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "weaver_pipeline_jobs", "legendFormat": "{{status}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "title": "Download Throughput",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 30 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "rate(weaver_pipeline_bytes_downloaded_total[1m])", "legendFormat": "download" },
+        { "expr": "rate(weaver_pipeline_bytes_decoded_total[1m])", "legendFormat": "decode" },
+        { "expr": "rate(weaver_pipeline_bytes_committed_total[1m])", "legendFormat": "commit" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "title": "Segments",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 38 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "rate(weaver_pipeline_segments_downloaded_total[1m])", "legendFormat": "downloaded" },
+        { "expr": "rate(weaver_pipeline_segments_decoded_total[1m])", "legendFormat": "decoded" },
+        { "expr": "rate(weaver_pipeline_segments_committed_total[1m])", "legendFormat": "committed" },
+        { "expr": "rate(weaver_pipeline_segments_retried_total[1m])", "legendFormat": "retried" },
+        { "expr": "rate(weaver_pipeline_segments_failed_permanent_total[1m])", "legendFormat": "failed" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "title": "Errors",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 38 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "rate(weaver_pipeline_articles_not_found_total[1m])", "legendFormat": "articles not found" },
+        { "expr": "rate(weaver_pipeline_decode_errors_total[1m])", "legendFormat": "decode errors" },
+        { "expr": "rate(weaver_pipeline_crc_errors_total[1m])", "legendFormat": "CRC errors" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "title": "Bandwidth Cap",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 38 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "weaver_bandwidth_cap_used_bytes / weaver_bandwidth_cap_limit_bytes * 100", "legendFormat": "cap usage %" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "red", "value": 90 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Download Speed",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 46 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "weaver_pipeline_current_download_speed_bytes_per_second", "legendFormat": "download speed" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "title": "Queue Depths",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 46 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "weaver_pipeline_download_queue_depth", "legendFormat": "download queue" },
+        { "expr": "weaver_pipeline_decode_pending", "legendFormat": "decode pending" },
+        { "expr": "weaver_pipeline_commit_pending", "legendFormat": "commit pending" },
+        { "expr": "weaver_pipeline_recovery_queue_depth", "legendFormat": "recovery queue" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } } }
+    },
+    {
+      "title": "Active Workers & Disk Latency",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 46 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "weaver_pipeline_verify_active", "legendFormat": "verify workers" },
+        { "expr": "weaver_pipeline_repair_active", "legendFormat": "repair workers" },
+        { "expr": "weaver_pipeline_extract_active", "legendFormat": "extract workers" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "title": "Write Buffer",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 54 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "weaver_pipeline_write_buffered_bytes", "legendFormat": "buffered bytes" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "title": "Disk Write Latency",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 54 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "weaver_pipeline_disk_write_latency_microseconds", "legendFormat": "write latency" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "\u00b5s", "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "title": "Throughput Rates",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 54 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "weaver_pipeline_articles_per_second", "legendFormat": "articles/sec" },
+        { "expr": "weaver_pipeline_decode_rate_mebibytes_per_second", "legendFormat": "decode MiB/s" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["scryer", "weaver", "media"],
+  "templating": { "list": [] },
+  "time": { "from": "now-3h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Scryer Media",
+  "uid": "scryer-media-overview"
+}

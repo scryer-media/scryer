@@ -138,6 +138,7 @@ const en: LocaleDictionary = {
   "settings.rootFoldersEmpty": "No root folders configured. Add at least one path.",
   "settings.rootFoldersHelp": "Root folders are the top-level directories where media is stored. The starred folder is the default for new titles.",
   "settings.rootFolderAdd": "Add root folder",
+  "settings.rootFolderEdit": "Edit root folder",
   "settings.rootFolderAddPlaceholder": "/media/movies",
   "settings.rootFolderSetDefault": "Set as default",
   "settings.libraryScanTitle": "Library scan",

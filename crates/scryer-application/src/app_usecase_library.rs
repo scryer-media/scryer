@@ -92,6 +92,25 @@ fn strip_year_suffix(folder: &str) -> (String, Option<u32>) {
     (folder.to_string(), None)
 }
 
+async fn list_child_directories(root: &Path) -> AppResult<Vec<PathBuf>> {
+    let mut dirs = Vec::new();
+    let mut entries = tokio::fs::read_dir(root).await.map_err(|err| {
+        AppError::Repository(format!(
+            "failed to read directory {}: {err}",
+            root.display()
+        ))
+    })?;
+    while let Some(entry) = entries.next_entry().await.map_err(|err| {
+        AppError::Repository(format!("failed to read entry in {}: {err}", root.display()))
+    })? {
+        if entry.metadata().await.map(|m| m.is_dir()).unwrap_or(false) {
+            dirs.push(entry.path());
+        }
+    }
+    dirs.sort();
+    Ok(dirs)
+}
+
 impl AppUseCase {
     pub async fn preview_rename_for_title(
         &self,
@@ -366,9 +385,8 @@ impl AppUseCase {
 
         let path_key = match facet {
             MediaFacet::Movie => "movies.path",
-            MediaFacet::Tv => "series.path",
+            MediaFacet::Series => "series.path",
             MediaFacet::Anime => "anime.path",
-            MediaFacet::Other => "series.path",
         };
 
         let Some(library_path) = self
@@ -380,10 +398,25 @@ impl AppUseCase {
             )));
         };
 
+        match facet {
+            MediaFacet::Movie => self.scan_library_movies(actor, &facet, &library_path).await,
+            MediaFacet::Series | MediaFacet::Anime => {
+                self.scan_library_series(actor, &facet, &library_path).await
+            }
+        }
+    }
+
+    /// Movie library scan: each video file is a potential title.
+    async fn scan_library_movies(
+        &self,
+        actor: &User,
+        facet: &MediaFacet,
+        library_path: &str,
+    ) -> AppResult<LibraryScanSummary> {
         let files = self
             .services
             .library_scanner
-            .scan_library(&library_path)
+            .scan_library(library_path)
             .await?;
         let existing_titles = self.services.titles.list(Some(facet.clone()), None).await?;
         let mut existing_titles_by_name: HashMap<String, Title> = HashMap::new();
@@ -416,7 +449,7 @@ impl AppUseCase {
                 {
                     existing
                 } else {
-                    let (fallback_query, _) = extract_library_query(&file.path, &library_path);
+                    let (fallback_query, _) = extract_library_query(&file.path, library_path);
                     let name = nfo_meta
                         .as_ref()
                         .and_then(|m| m.title.clone())
@@ -463,19 +496,18 @@ impl AppUseCase {
             }
 
             // --- Normal path: search metadata gateway ---
-            // Use NFO title/year if available, otherwise folder/filename heuristics.
             let (query, year_hint) = if let Some(ref meta) = nfo_meta {
                 let title_str = meta
                     .title
                     .clone()
-                    .unwrap_or_else(|| extract_library_query(&file.path, &library_path).0);
+                    .unwrap_or_else(|| extract_library_query(&file.path, library_path).0);
                 let year = meta
                     .year
                     .map(|y| y as u32)
-                    .or_else(|| extract_library_query(&file.path, &library_path).1);
+                    .or_else(|| extract_library_query(&file.path, library_path).1);
                 (title_str, year)
             } else {
-                extract_library_query(&file.path, &library_path)
+                extract_library_query(&file.path, library_path)
             };
 
             if query.is_empty() {
@@ -483,14 +515,10 @@ impl AppUseCase {
                 continue;
             }
 
-            let metadata_type = match facet {
-                MediaFacet::Movie => METADATA_TYPE_MOVIE,
-                _ => "series",
-            };
             let results = self
                 .services
                 .metadata_gateway
-                .search_tvdb(&query, metadata_type)
+                .search_tvdb(&query, METADATA_TYPE_MOVIE)
                 .await?;
 
             let Some(selected) = select_best_match(&results, year_hint) else {
@@ -538,7 +566,222 @@ impl AppUseCase {
             imported = summary.imported,
             skipped = summary.skipped,
             unmatched = summary.unmatched,
-            "library scan completed"
+            "movie library scan completed"
+        );
+
+        Ok(summary)
+    }
+
+    /// Series/anime library scan: each top-level folder is a potential title.
+    /// Episode file linking is handled separately by `scan_title_library()` after
+    /// hydration populates Episode records.
+    async fn scan_library_series(
+        &self,
+        actor: &User,
+        facet: &MediaFacet,
+        library_path: &str,
+    ) -> AppResult<LibraryScanSummary> {
+        let root = Path::new(library_path);
+        if !root.is_dir() {
+            return Err(AppError::Validation(format!(
+                "library path is not a directory: {library_path}"
+            )));
+        }
+
+        let folders = list_child_directories(root).await?;
+
+        let existing_titles = self.services.titles.list(Some(facet.clone()), None).await?;
+        let mut existing_titles_by_name: HashMap<String, Title> = HashMap::new();
+        let mut existing_titles_by_tvdb_id: HashMap<String, Title> = HashMap::new();
+
+        for title in &existing_titles {
+            existing_titles_by_name.insert(normalize_title_key(&title.name), title.clone());
+            for external_id in &title.external_ids {
+                if external_id.source.eq_ignore_ascii_case("tvdb") {
+                    existing_titles_by_tvdb_id.insert(external_id.value.clone(), title.clone());
+                }
+            }
+        }
+
+        let mut summary = LibraryScanSummary::default();
+
+        for folder in &folders {
+            summary.scanned += 1;
+
+            let folder_name = match folder.file_name().and_then(|n| n.to_str()) {
+                Some(name) => name.to_string(),
+                None => {
+                    summary.skipped += 1;
+                    continue;
+                }
+            };
+
+            // Try tvshow.nfo for series-level metadata.
+            let nfo_path = folder.join("tvshow.nfo");
+            let nfo_meta = if nfo_path.is_file() {
+                std::fs::read_to_string(&nfo_path)
+                    .ok()
+                    .map(|content| parse_nfo(&content))
+            } else {
+                None
+            };
+
+            // --- Fast path: tvshow.nfo provides a TVDB ID ---
+            if let Some(tvdb_id) = nfo_meta.as_ref().and_then(|m| m.tvdb_id.as_deref()) {
+                if existing_titles_by_tvdb_id.contains_key(tvdb_id) {
+                    summary.skipped += 1;
+                    continue;
+                }
+
+                // Also skip if we already know this title by name.
+                let name = nfo_meta
+                    .as_ref()
+                    .and_then(|m| m.title.clone())
+                    .unwrap_or_else(|| folder_name.clone());
+                let name_key = normalize_title_key(&name);
+                if existing_titles_by_name.contains_key(&name_key) {
+                    summary.skipped += 1;
+                    continue;
+                }
+
+                let mut external_ids = vec![ExternalId {
+                    source: "tvdb".into(),
+                    value: tvdb_id.to_string(),
+                }];
+                if let Some(ref imdb) = nfo_meta.as_ref().and_then(|m| m.imdb_id.clone()) {
+                    external_ids.push(ExternalId {
+                        source: "imdb".into(),
+                        value: imdb.clone(),
+                    });
+                }
+                if let Some(ref tmdb) = nfo_meta.as_ref().and_then(|m| m.tmdb_id.clone()) {
+                    external_ids.push(ExternalId {
+                        source: "tmdb".into(),
+                        value: tmdb.clone(),
+                    });
+                }
+
+                let new_title = NewTitle {
+                    name,
+                    facet: facet.clone(),
+                    monitored: true,
+                    tags: vec![],
+                    external_ids,
+                    min_availability: None,
+                    ..Default::default()
+                };
+
+                match self.add_title(actor, new_title).await {
+                    Ok(created) => {
+                        let key = normalize_title_key(&created.name);
+                        existing_titles_by_name.insert(key, created.clone());
+                        existing_titles_by_tvdb_id.insert(tvdb_id.to_string(), created);
+                        summary.imported += 1;
+                    }
+                    Err(error) => {
+                        warn!(
+                            folder = %folder_name,
+                            tvdb_id = %tvdb_id,
+                            error = %error,
+                            "series scan: failed to create title from NFO"
+                        );
+                        summary.unmatched += 1;
+                    }
+                }
+                continue;
+            }
+
+            // --- Slow path: search metadata gateway by folder name ---
+            let clean_name = normalize_folder_name(&folder_name);
+            let (query, year_hint) = strip_year_suffix(&clean_name);
+            let query = query.trim().to_string();
+
+            if query.is_empty() {
+                summary.skipped += 1;
+                continue;
+            }
+
+            let name_key = normalize_title_key(&query);
+            if existing_titles_by_name.contains_key(&name_key) {
+                summary.skipped += 1;
+                continue;
+            }
+
+            let results = match self
+                .services
+                .metadata_gateway
+                .search_tvdb(&query, "series")
+                .await
+            {
+                Ok(r) => r,
+                Err(error) => {
+                    warn!(
+                        folder = %folder_name,
+                        query = %query,
+                        error = %error,
+                        "series scan: metadata search failed"
+                    );
+                    summary.unmatched += 1;
+                    continue;
+                }
+            };
+
+            let Some(selected) = select_best_match(&results, year_hint) else {
+                info!(
+                    folder = %folder_name,
+                    query = %query,
+                    "series scan: no metadata match"
+                );
+                summary.unmatched += 1;
+                continue;
+            };
+
+            // Check if the matched TVDB ID is already tracked.
+            if existing_titles_by_tvdb_id.contains_key(&selected.tvdb_id) {
+                summary.skipped += 1;
+                continue;
+            }
+
+            let new_title = NewTitle {
+                name: selected.name.clone(),
+                facet: facet.clone(),
+                monitored: true,
+                tags: vec![],
+                external_ids: vec![ExternalId {
+                    source: "tvdb".into(),
+                    value: selected.tvdb_id.clone(),
+                }],
+                min_availability: None,
+                ..Default::default()
+            };
+
+            match self.add_title(actor, new_title).await {
+                Ok(created) => {
+                    let key = normalize_title_key(&created.name);
+                    existing_titles_by_name.insert(key, created.clone());
+                    existing_titles_by_tvdb_id.insert(selected.tvdb_id.clone(), created);
+                    summary.imported += 1;
+                }
+                Err(error) => {
+                    warn!(
+                        folder = %folder_name,
+                        tvdb_id = %selected.tvdb_id,
+                        error = %error,
+                        "series scan: failed to create title from search"
+                    );
+                    summary.unmatched += 1;
+                }
+            }
+        }
+
+        info!(
+            path = %library_path,
+            facet = facet.as_str(),
+            folders = folders.len(),
+            imported = summary.imported,
+            skipped = summary.skipped,
+            unmatched = summary.unmatched,
+            "series library scan completed"
         );
 
         Ok(summary)
@@ -881,7 +1124,7 @@ impl AppUseCase {
         let collection = Collection {
             id: Id::new().0,
             title_id: title.id.clone(),
-            collection_type: "movie".to_string(),
+            collection_type: CollectionType::Movie,
             collection_index: next_collection_index.to_string(),
             label: quality_label,
             ordered_path: Some(file.path.clone()),
@@ -1400,46 +1643,46 @@ pub(crate) fn build_series_rename_plan_item(
 
     // For interstitial collections (anime franchise movies in Season 00),
     // use the stored season/episode from interstitial_season_episode and the movie name.
-    let (season, episode, episode_title_override) = if collection.collection_type == "interstitial"
-    {
-        if let Some(ref se) = collection.interstitial_season_episode {
-            // Parse "S00E03" → season "0", episode "3"
-            let (s, e) = se
-                .strip_prefix('S')
-                .and_then(|rest| rest.split_once('E'))
-                .map(|(s, e)| {
-                    (
-                        s.trim_start_matches('0').to_string(),
-                        e.trim_start_matches('0').to_string(),
-                    )
-                })
-                .unwrap_or_else(|| ("0".to_string(), "1".to_string()));
-            let movie_name = collection
-                .interstitial_movie
-                .as_ref()
-                .map(|m| m.name.clone())
-                .unwrap_or_default();
-            (s, e, Some(movie_name))
-        } else {
-            ("0".to_string(), "1".to_string(), None)
-        }
-    } else {
-        // Season from collection_index, episode from collection's first_episode_number,
-        // falling back to parsed release metadata.
-        let season = collection.collection_index.clone();
-        let episode = collection
-            .first_episode_number
-            .clone()
-            .or_else(|| {
-                parsed
-                    .episode
+    let (season, episode, episode_title_override) =
+        if collection.collection_type == CollectionType::Interstitial {
+            if let Some(ref se) = collection.interstitial_season_episode {
+                // Parse "S00E03" → season "0", episode "3"
+                let (s, e) = se
+                    .strip_prefix('S')
+                    .and_then(|rest| rest.split_once('E'))
+                    .map(|(s, e)| {
+                        (
+                            s.trim_start_matches('0').to_string(),
+                            e.trim_start_matches('0').to_string(),
+                        )
+                    })
+                    .unwrap_or_else(|| ("0".to_string(), "1".to_string()));
+                let movie_name = collection
+                    .interstitial_movie
                     .as_ref()
-                    .and_then(|ep| ep.episode_numbers.first())
-                    .map(|n| n.to_string())
-            })
-            .unwrap_or_default();
-        (season, episode, None)
-    };
+                    .map(|m| m.name.clone())
+                    .unwrap_or_default();
+                (s, e, Some(movie_name))
+            } else {
+                ("0".to_string(), "1".to_string(), None)
+            }
+        } else {
+            // Season from collection_index, episode from collection's first_episode_number,
+            // falling back to parsed release metadata.
+            let season = collection.collection_index.clone();
+            let episode = collection
+                .first_episode_number
+                .clone()
+                .or_else(|| {
+                    parsed
+                        .episode
+                        .as_ref()
+                        .and_then(|ep| ep.episode_numbers.first())
+                        .map(|n| n.to_string())
+                })
+                .unwrap_or_default();
+            (season, episode, None)
+        };
 
     let mut tokens = BTreeMap::new();
     tokens.insert("title".to_string(), title_token.clone());

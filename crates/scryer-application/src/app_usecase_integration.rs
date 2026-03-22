@@ -698,7 +698,7 @@ impl AppUseCase {
             config_json,
             client_priority,
             is_enabled: input.is_enabled,
-            status: "idle".to_string(),
+            status: scryer_domain::DownloadClientStatus::Healthy,
             last_error: None,
             last_seen_at: None,
             created_at: Utc::now(),
@@ -921,15 +921,11 @@ fn dedupe_download_queue_items(items: Vec<DownloadQueueItem>) -> Vec<DownloadQue
 }
 
 fn download_queue_item_key(item: &DownloadQueueItem) -> String {
-    if item.client_type.trim().is_empty() && item.download_client_item_id.trim().is_empty() {
+    if item.client_type.is_empty() && item.download_client_item_id.is_empty() {
         return item.id.clone();
     }
 
-    format!(
-        "{}:{}",
-        item.client_type.trim().to_ascii_lowercase(),
-        item.download_client_item_id.trim()
-    )
+    format!("{}:{}", item.client_type, item.download_client_item_id)
 }
 
 fn merge_download_queue_item(existing: &mut DownloadQueueItem, incoming: DownloadQueueItem) {
@@ -980,7 +976,7 @@ fn merge_download_queue_item(existing: &mut DownloadQueueItem, incoming: Downloa
         existing.attention_reason = incoming.attention_reason.clone();
     }
     if incoming.import_status.is_some() {
-        existing.import_status = incoming.import_status.clone();
+        existing.import_status = incoming.import_status;
     }
     if incoming.import_error_message.is_some() {
         existing.import_error_message = incoming.import_error_message.clone();

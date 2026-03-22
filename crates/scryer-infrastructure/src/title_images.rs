@@ -703,10 +703,7 @@ fn scaled_height(source_width: u32, source_height: u32, target_width: u32) -> u3
     if target_width >= source_width {
         source_height
     } else {
-        ((source_height as u64 * target_width as u64) / source_width as u64)
-            .max(1)
-            .try_into()
-            .unwrap_or(source_height)
+        ((source_height as u64 * target_width as u64) / source_width as u64).max(1) as u32
     }
 }
 

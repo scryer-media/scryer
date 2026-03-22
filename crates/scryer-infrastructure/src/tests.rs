@@ -5,7 +5,7 @@ use scryer_application::{
     TitleImageStorageMode, TitleImageVariantRecord, TitleRepository, UserRepository,
 };
 use scryer_domain::{
-    Collection, Entitlement, Episode, InterstitialMovieMetadata, MediaFacet, Title,
+    Collection, CollectionType, Entitlement, Episode, InterstitialMovieMetadata, MediaFacet, Title,
 };
 use sqlx::sqlite::SqlitePoolOptions;
 
@@ -616,7 +616,7 @@ async fn sqlite_show_queries_roundtrip() {
     let title = Title {
         id: "title-show-1".into(),
         name: "Sample Show".into(),
-        facet: MediaFacet::Tv,
+        facet: MediaFacet::Series,
         monitored: true,
         tags: vec![],
         external_ids: vec![],
@@ -656,7 +656,7 @@ async fn sqlite_show_queries_roundtrip() {
     let collection = Collection {
         id: "collection-show-1".into(),
         title_id: title.id.clone(),
-        collection_type: "season".into(),
+        collection_type: CollectionType::Season,
         collection_index: "1".into(),
         label: Some("Season One".into()),
         ordered_path: None,
@@ -728,7 +728,7 @@ async fn sqlite_show_queries_roundtrip() {
         id: "episode-show-1".into(),
         title_id: title.id.clone(),
         collection_id: Some(collection.id.clone()),
-        episode_type: "episode".into(),
+        episode_type: scryer_domain::EpisodeType::Standard,
         episode_number: Some("1".into()),
         season_number: Some("1".into()),
         episode_label: Some("Pilot".into()),
@@ -741,6 +741,7 @@ async fn sqlite_show_queries_roundtrip() {
         is_recap: false,
         absolute_number: None,
         overview: Some("The pilot episode.".into()),
+        tvdb_id: None,
         monitored: true,
         created_at: Utc::now(),
     };
@@ -810,7 +811,7 @@ async fn sqlite_show_queries_roundtrip() {
         <SqliteServices as scryer_application::ShowRepository>::update_collection(
             &services,
             &collection.id,
-            Some("arc".into()),
+            Some(CollectionType::Arc),
             Some("1.1".into()),
             Some("Arc One".into()),
             Some("arc/season".into()),
@@ -820,7 +821,7 @@ async fn sqlite_show_queries_roundtrip() {
         )
         .await
         .expect("update collection");
-    assert_eq!(updated_collection.collection_type, "arc");
+    assert_eq!(updated_collection.collection_type, CollectionType::Arc);
     assert_eq!(updated_collection.collection_index, "1.1");
     assert_eq!(updated_collection.label, Some("Arc One".into()));
     assert_eq!(updated_collection.ordered_path, Some("arc/season".into()));
@@ -829,7 +830,7 @@ async fn sqlite_show_queries_roundtrip() {
     let updated_episode = <SqliteServices as scryer_application::ShowRepository>::update_episode(
         &services,
         &episode.id,
-        Some("special".into()),
+        Some(scryer_domain::EpisodeType::Special),
         Some("E1".into()),
         Some("2".into()),
         Some("Special".into()),
@@ -841,10 +842,14 @@ async fn sqlite_show_queries_roundtrip() {
         None,
         Some(collection.id.clone()),
         Some("Updated overview".into()),
+        Some("349232".into()),
     )
     .await
     .expect("update episode");
-    assert_eq!(updated_episode.episode_type, "special");
+    assert_eq!(
+        updated_episode.episode_type,
+        scryer_domain::EpisodeType::Special
+    );
     assert_eq!(updated_episode.episode_number, Some("E1".into()));
     assert_eq!(updated_episode.season_number, Some("2".into()));
     assert_eq!(updated_episode.episode_label, Some("Special".into()));

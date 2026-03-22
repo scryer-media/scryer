@@ -99,22 +99,15 @@ impl PrioritizedDownloadClientRouter {
         if accepted_inputs.is_empty() {
             return false;
         }
-        accepted_inputs.iter().any(|input| {
-            DownloadSourceKind::parse(input)
-                .is_some_and(|accepted_kind| accepted_kind == source_kind)
+        accepted_inputs.iter().any(|&accepted_kind| {
+            // NzbFile and NzbUrl are interchangeable — scryer fetches the URL
+            // and sends the file content, so any NZB-capable client handles both.
+            match (accepted_kind, source_kind) {
+                (DownloadSourceKind::NzbFile, DownloadSourceKind::NzbUrl)
+                | (DownloadSourceKind::NzbUrl, DownloadSourceKind::NzbFile) => true,
+                _ => accepted_kind == source_kind,
+            }
         })
-    }
-
-    fn routing_entry_enabled(config: &serde_json::Value) -> bool {
-        match config.get("enabled") {
-            Some(serde_json::Value::Bool(enabled)) => *enabled,
-            Some(serde_json::Value::String(enabled)) => !matches!(
-                enabled.trim().to_ascii_lowercase().as_str(),
-                "false" | "0" | "no"
-            ),
-            Some(serde_json::Value::Number(number)) => number.as_i64() != Some(0),
-            _ => true,
-        }
     }
 
     fn read_trimmed_string(raw_value: Option<&serde_json::Value>) -> Option<String> {
@@ -146,7 +139,7 @@ impl PrioritizedDownloadClientRouter {
 
     fn parse_routing_entry(config: &serde_json::Value) -> DownloadClientRoutingEntry {
         DownloadClientRoutingEntry {
-            enabled: Self::routing_entry_enabled(config),
+            enabled: Self::read_bool(config.get("enabled"), true),
             category: Self::read_trimmed_string(config.get("category")),
             recent_queue_priority: Self::read_trimmed_string(
                 config
@@ -177,13 +170,8 @@ impl PrioritizedDownloadClientRouter {
         }
     }
 
-    fn facet_scope_id(facet: &MediaFacet) -> Option<&'static str> {
-        match facet {
-            MediaFacet::Movie => Some("movie"),
-            MediaFacet::Tv => Some("series"),
-            MediaFacet::Anime => Some("anime"),
-            MediaFacet::Other => None,
-        }
+    fn facet_scope_id(facet: &MediaFacet) -> &'static str {
+        facet.as_str()
     }
 
     async fn get_download_client_routing_json(&self, scope_id: &str) -> AppResult<Option<String>> {
@@ -211,12 +199,7 @@ impl PrioritizedDownloadClientRouter {
     /// Return enabled clients ordered by per-facet routing priority.
     /// Falls back to global `client_priority` if the facet has no routing config.
     async fn list_clients_for_facet(&self, facet: &MediaFacet) -> AppResult<FacetClientSelection> {
-        let Some(scope_id) = Self::facet_scope_id(facet) else {
-            return Ok(FacetClientSelection {
-                clients: self.list_enabled_clients_by_priority().await?,
-                all_disabled_for_facet: false,
-            });
-        };
+        let scope_id = Self::facet_scope_id(facet);
 
         let routing_json = self.get_download_client_routing_json(scope_id).await?;
 
@@ -239,7 +222,7 @@ impl PrioritizedDownloadClientRouter {
                     clients.retain(|client| {
                         routing_object
                             .get(&client.id)
-                            .map(Self::routing_entry_enabled)
+                            .map(|entry| Self::read_bool(entry.get("enabled"), true))
                             .unwrap_or(true)
                     });
                     all_disabled_for_facet = any_globally_enabled && clients.is_empty();
@@ -274,9 +257,7 @@ impl PrioritizedDownloadClientRouter {
         facet: &MediaFacet,
         client_id: &str,
     ) -> AppResult<Option<DownloadClientRoutingEntry>> {
-        let Some(scope_id) = Self::facet_scope_id(facet) else {
-            return Ok(None);
-        };
+        let scope_id = Self::facet_scope_id(facet);
 
         let Some(raw_json) = self.get_download_client_routing_json(scope_id).await? else {
             return Ok(None);
@@ -335,8 +316,7 @@ impl PrioritizedDownloadClientRouter {
             return Ok(client);
         }
 
-        let client_type = config.client_type.trim().to_ascii_lowercase();
-        match client_type.as_str() {
+        match config.client_type.as_str() {
             "nzbget" => {
                 let parsed_config = parse_download_client_config_json(&config.config_json)?;
                 let base_url = resolve_download_client_base_url(config, &parsed_config)
@@ -547,7 +527,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 Ok(result) => {
                     return Ok(DownloadGrabResult {
                         job_id: result.job_id,
-                        client_type: config.client_type.trim().to_ascii_lowercase(),
+                        client_type: config.client_type.clone(),
                     });
                 }
                 Err(error) => {
@@ -652,7 +632,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             };
             match client.list_completed_downloads().await {
                 Ok(mut items) => {
-                    tracing::info!(
+                    tracing::debug!(
                         client = %config.name,
                         client_type = %config.client_type,
                         count = items.len(),
@@ -885,7 +865,7 @@ mod tests {
             base_url: Some("http://localhost".to_string()),
             config_json: "{}".to_string(),
             is_enabled: true,
-            status: "healthy".to_string(),
+            status: scryer_domain::DownloadClientStatus::Healthy,
             last_error: None,
             last_seen_at: None,
             client_priority: priority,

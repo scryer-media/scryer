@@ -446,7 +446,10 @@ mod tests {
         let desc: PluginDescriptor = serde_json::from_str(json).unwrap();
         assert_eq!(desc.config_fields.len(), 2);
         assert_eq!(desc.config_fields[0].key, "endpoint_path");
-        assert_eq!(desc.config_fields[0].field_type, "string");
+        assert_eq!(
+            desc.config_fields[0].field_type,
+            scryer_domain::ConfigFieldType::String
+        );
         assert!(desc.config_fields[0].required);
         assert_eq!(desc.config_fields[0].default_value.as_deref(), Some("/api"));
         assert_eq!(
@@ -454,7 +457,10 @@ mod tests {
             Some("Custom API endpoint path")
         );
         assert_eq!(desc.config_fields[1].key, "auth_mode");
-        assert_eq!(desc.config_fields[1].field_type, "select");
+        assert_eq!(
+            desc.config_fields[1].field_type,
+            scryer_domain::ConfigFieldType::Select
+        );
         assert_eq!(desc.config_fields[1].options.len(), 2);
         assert_eq!(desc.config_fields[1].options[0].value, "basic");
         assert_eq!(desc.config_fields[1].options[1].label, "Bearer Token");

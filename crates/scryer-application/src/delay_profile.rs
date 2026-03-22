@@ -44,12 +44,7 @@ pub fn resolve_delay_profile<'a>(
     title_tags: &[String],
     facet: &MediaFacet,
 ) -> Option<&'a DelayProfile> {
-    let facet_str = match facet {
-        MediaFacet::Movie => "movie",
-        MediaFacet::Tv => "tv",
-        MediaFacet::Anime => "anime",
-        MediaFacet::Other => "other",
-    };
+    let facet_str = facet.as_str();
 
     let mut sorted: Vec<&DelayProfile> = profiles.iter().filter(|p| p.enabled).collect();
     sorted.sort_by_key(|p| p.priority);
@@ -127,7 +122,7 @@ mod tests {
     #[test]
     fn priority_ordering() {
         let profiles = vec![make_profile("low", 100, 12), make_profile("high", 10, 6)];
-        let result = resolve_delay_profile(&profiles, &[], &MediaFacet::Tv);
+        let result = resolve_delay_profile(&profiles, &[], &MediaFacet::Series);
         assert_eq!(result.unwrap().id, "high");
     }
 
@@ -136,7 +131,7 @@ mod tests {
         let mut profile = make_profile("movies-only", 10, 6);
         profile.applies_to_facets = vec!["movie".to_string()];
         let profiles = vec![profile];
-        let result = resolve_delay_profile(&profiles, &[], &MediaFacet::Tv);
+        let result = resolve_delay_profile(&profiles, &[], &MediaFacet::Series);
         assert!(result.is_none());
     }
 

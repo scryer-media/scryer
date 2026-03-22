@@ -1,6 +1,9 @@
 use crate::{ActivityChannel, ActivityKind, ActivitySeverity, AppUseCase};
 use chrono::Utc;
-use scryer_domain::{Id, MediaFacet, PostProcessingScript, PostProcessingScriptRun};
+use scryer_domain::{
+    ExecutionMode, Id, MediaFacet, PostProcessingScript, PostProcessingScriptRun, ScriptRunStatus,
+    ScriptType,
+};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -42,12 +45,7 @@ pub fn spawn_post_processing(ctx: PostProcessingContext) {
 /// which makes it suitable for integration tests that need deterministic
 /// results.
 pub async fn run_post_processing(ctx: PostProcessingContext) -> crate::AppResult<()> {
-    let facet_str = match ctx.facet {
-        MediaFacet::Movie => "movie",
-        MediaFacet::Tv => "tv",
-        MediaFacet::Anime => "anime",
-        MediaFacet::Other => return Ok(()),
-    };
+    let facet_str = ctx.facet.as_str();
 
     let scripts = ctx
         .app
@@ -68,13 +66,13 @@ pub async fn run_post_processing(ctx: PostProcessingContext) -> crate::AppResult
     // Partition by execution mode.
     let mut blocking: Vec<&PostProcessingScript> = scripts
         .iter()
-        .filter(|s| s.execution_mode == "blocking")
+        .filter(|s| s.execution_mode == ExecutionMode::Blocking)
         .collect();
     blocking.sort_by_key(|s| s.priority);
 
     let fire_and_forget: Vec<&PostProcessingScript> = scripts
         .iter()
-        .filter(|s| s.execution_mode == "fire_and_forget")
+        .filter(|s| s.execution_mode == ExecutionMode::FireAndForget)
         .collect();
 
     // Run blocking scripts sequentially in priority order.
@@ -150,9 +148,9 @@ async fn execute_script(
     let run_id = Id::new().0;
     let started_at = Utc::now().to_rfc3339();
 
-    let command = match script.script_type.as_str() {
-        "file" => format!("exec {}", shell_escape(&script.script_content)),
-        _ => script.script_content.clone(),
+    let command = match script.script_type {
+        ScriptType::File => format!("exec {}", shell_escape(&script.script_content)),
+        ScriptType::Inline => script.script_content.clone(),
     };
 
     let cwd = ctx
@@ -224,7 +222,7 @@ async fn execute_script(
                 title_name: Some(ctx.title_name.clone()),
                 facet: Some(facet_str.to_string()),
                 file_path: Some(ctx.dest_path.to_string_lossy().to_string()),
-                status: "failed".to_string(),
+                status: ScriptRunStatus::Failed,
                 exit_code: None,
                 stdout_tail: None,
                 stderr_tail: if script.debug {
@@ -277,9 +275,9 @@ async fn execute_script(
                     facet: Some(facet_str.to_string()),
                     file_path: Some(ctx.dest_path.to_string_lossy().to_string()),
                     status: if status.success() {
-                        "success".to_string()
+                        ScriptRunStatus::Success
                     } else {
-                        "failed".to_string()
+                        ScriptRunStatus::Failed
                     },
                     exit_code: status.code(),
                     stdout_tail: Some(last_bytes_utf8(&stdout_bytes, 4096)),
@@ -301,7 +299,7 @@ async fn execute_script(
                     title_name: Some(ctx.title_name.clone()),
                     facet: Some(facet_str.to_string()),
                     file_path: Some(ctx.dest_path.to_string_lossy().to_string()),
-                    status: "failed".to_string(),
+                    status: ScriptRunStatus::Failed,
                     exit_code: None,
                     stdout_tail: None,
                     stderr_tail: Some(format!("I/O error: {err}")),
@@ -332,7 +330,7 @@ async fn execute_script(
                     title_name: Some(ctx.title_name.clone()),
                     facet: Some(facet_str.to_string()),
                     file_path: Some(ctx.dest_path.to_string_lossy().to_string()),
-                    status: "timeout".to_string(),
+                    status: ScriptRunStatus::Timeout,
                     exit_code: None,
                     stdout_tail: Some(last_bytes_utf8(&stdout_bytes, 4096)),
                     stderr_tail: Some(last_bytes_utf8(&stderr_bytes, 4096)),
@@ -358,9 +356,9 @@ async fn execute_script(
                     facet: Some(facet_str.to_string()),
                     file_path: Some(ctx.dest_path.to_string_lossy().to_string()),
                     status: if status.success() {
-                        "success".to_string()
+                        ScriptRunStatus::Success
                     } else {
-                        "failed".to_string()
+                        ScriptRunStatus::Failed
                     },
                     exit_code: status.code(),
                     stdout_tail: None,
@@ -382,7 +380,7 @@ async fn execute_script(
                     title_name: Some(ctx.title_name.clone()),
                     facet: Some(facet_str.to_string()),
                     file_path: Some(ctx.dest_path.to_string_lossy().to_string()),
-                    status: "failed".to_string(),
+                    status: ScriptRunStatus::Failed,
                     exit_code: None,
                     stdout_tail: None,
                     stderr_tail: None,
@@ -410,7 +408,7 @@ async fn execute_script(
                     title_name: Some(ctx.title_name.clone()),
                     facet: Some(facet_str.to_string()),
                     file_path: Some(ctx.dest_path.to_string_lossy().to_string()),
-                    status: "timeout".to_string(),
+                    status: ScriptRunStatus::Timeout,
                     exit_code: None,
                     stdout_tail: None,
                     stderr_tail: None,
@@ -425,15 +423,15 @@ async fn execute_script(
 }
 
 async fn log_run_activity(ctx: &PostProcessingContext, run: &PostProcessingScriptRun) {
-    let (severity, message) = match run.status.as_str() {
-        "success" => (
+    let (severity, message) = match run.status {
+        ScriptRunStatus::Success => (
             ActivitySeverity::Success,
             format!(
                 "Post-processing '{}' succeeded for '{}'",
                 run.script_name, ctx.title_name
             ),
         ),
-        "timeout" => (
+        ScriptRunStatus::Timeout => (
             ActivitySeverity::Warning,
             format!(
                 "Post-processing '{}' timed out for '{}'",

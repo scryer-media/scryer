@@ -71,7 +71,7 @@ fn reject_when_candidate_score_equal() {
 #[test]
 fn accept_same_tier_upgrade_with_sufficient_delta() {
     let now = Utc::now();
-    // delta = 200, same_tier_min_delta = 120 → accept
+    // delta = 200, same_tier_min_delta = 200 (Balanced) → accept
     assert_eq!(
         evaluate_upgrade(1200, Some(1000), true, None, &now, &t()),
         UpgradeDecision::AcceptUpgrade
@@ -81,7 +81,7 @@ fn accept_same_tier_upgrade_with_sufficient_delta() {
 #[test]
 fn reject_same_tier_upgrade_with_insufficient_delta() {
     let now = Utc::now();
-    // delta = 50, same_tier_min_delta = 120 → reject
+    // delta = 50, same_tier_min_delta = 200 (Balanced) → reject
     assert_eq!(
         evaluate_upgrade(1050, Some(1000), true, None, &now, &t()),
         UpgradeDecision::RejectInsufficientDelta
@@ -178,7 +178,7 @@ fn custom_thresholds_short_cooldown() {
 fn movie_schedule_no_baseline() {
     let now = Utc::now();
     let schedule = compute_search_schedule("movie", None, "primary", &now);
-    assert_eq!(schedule.search_phase, "primary");
+    assert_eq!(schedule.search_phase, SearchPhase::Primary);
 }
 
 #[test]
@@ -186,7 +186,7 @@ fn movie_schedule_before_pre_release() {
     let now = Utc::now();
     let baseline = (now + Duration::days(30)).to_rfc3339();
     let schedule = compute_search_schedule("movie", Some(&baseline), "primary", &now);
-    assert_eq!(schedule.search_phase, "pre_release");
+    assert_eq!(schedule.search_phase, SearchPhase::PreRelease);
 }
 
 #[test]
@@ -194,7 +194,7 @@ fn movie_schedule_in_pre_release_window() {
     let now = Utc::now();
     let baseline = (now + Duration::hours(12)).to_rfc3339();
     let schedule = compute_search_schedule("movie", Some(&baseline), "primary", &now);
-    assert_eq!(schedule.search_phase, "pre_release");
+    assert_eq!(schedule.search_phase, SearchPhase::PreRelease);
 }
 
 #[test]
@@ -202,7 +202,7 @@ fn movie_schedule_primary_phase() {
     let now = Utc::now();
     let baseline = (now - Duration::hours(1)).to_rfc3339();
     let schedule = compute_search_schedule("movie", Some(&baseline), "primary", &now);
-    assert_eq!(schedule.search_phase, "primary");
+    assert_eq!(schedule.search_phase, SearchPhase::Primary);
 }
 
 #[test]
@@ -210,7 +210,7 @@ fn movie_schedule_secondary_phase() {
     let now = Utc::now();
     let baseline = (now - Duration::days(10)).to_rfc3339();
     let schedule = compute_search_schedule("movie", Some(&baseline), "primary", &now);
-    assert_eq!(schedule.search_phase, "secondary");
+    assert_eq!(schedule.search_phase, SearchPhase::Secondary);
 }
 
 #[test]
@@ -218,15 +218,15 @@ fn movie_schedule_long_tail_phase() {
     let now = Utc::now();
     let baseline = (now - Duration::days(60)).to_rfc3339();
     let schedule = compute_search_schedule("movie", Some(&baseline), "primary", &now);
-    assert_eq!(schedule.search_phase, "long_tail");
+    assert_eq!(schedule.search_phase, SearchPhase::LongTail);
 }
 
 #[test]
-fn movie_schedule_paused_phase() {
+fn movie_schedule_old_release_stays_long_tail() {
     let now = Utc::now();
     let baseline = (now - Duration::days(200)).to_rfc3339();
     let schedule = compute_search_schedule("movie", Some(&baseline), "primary", &now);
-    assert_eq!(schedule.search_phase, "paused");
+    assert_eq!(schedule.search_phase, SearchPhase::LongTail);
 }
 
 // ── compute_search_schedule: episode ──────────────────────────────────────
@@ -235,7 +235,7 @@ fn movie_schedule_paused_phase() {
 fn episode_schedule_no_baseline() {
     let now = Utc::now();
     let schedule = compute_search_schedule("episode", None, "primary", &now);
-    assert_eq!(schedule.search_phase, "primary");
+    assert_eq!(schedule.search_phase, SearchPhase::Primary);
 }
 
 #[test]
@@ -243,7 +243,7 @@ fn episode_schedule_before_pre_air() {
     let now = Utc::now();
     let baseline = (now + Duration::days(7)).to_rfc3339();
     let schedule = compute_search_schedule("episode", Some(&baseline), "primary", &now);
-    assert_eq!(schedule.search_phase, "pre_air");
+    assert_eq!(schedule.search_phase, SearchPhase::PreAir);
 }
 
 #[test]
@@ -251,7 +251,7 @@ fn episode_schedule_in_pre_air_window() {
     let now = Utc::now();
     let baseline = (now + Duration::hours(3)).to_rfc3339();
     let schedule = compute_search_schedule("episode", Some(&baseline), "primary", &now);
-    assert_eq!(schedule.search_phase, "pre_air");
+    assert_eq!(schedule.search_phase, SearchPhase::PreAir);
 }
 
 #[test]
@@ -259,7 +259,7 @@ fn episode_schedule_primary_phase() {
     let now = Utc::now();
     let baseline = (now - Duration::hours(1)).to_rfc3339();
     let schedule = compute_search_schedule("episode", Some(&baseline), "primary", &now);
-    assert_eq!(schedule.search_phase, "primary");
+    assert_eq!(schedule.search_phase, SearchPhase::Primary);
 }
 
 #[test]
@@ -267,7 +267,7 @@ fn episode_schedule_secondary_phase() {
     let now = Utc::now();
     let baseline = (now - Duration::days(5)).to_rfc3339();
     let schedule = compute_search_schedule("episode", Some(&baseline), "primary", &now);
-    assert_eq!(schedule.search_phase, "secondary");
+    assert_eq!(schedule.search_phase, SearchPhase::Secondary);
 }
 
 #[test]
@@ -275,15 +275,15 @@ fn episode_schedule_long_tail_phase() {
     let now = Utc::now();
     let baseline = (now - Duration::days(30)).to_rfc3339();
     let schedule = compute_search_schedule("episode", Some(&baseline), "primary", &now);
-    assert_eq!(schedule.search_phase, "long_tail");
+    assert_eq!(schedule.search_phase, SearchPhase::LongTail);
 }
 
 #[test]
-fn episode_schedule_paused_phase() {
+fn episode_schedule_old_airing_stays_long_tail() {
     let now = Utc::now();
     let baseline = (now - Duration::days(150)).to_rfc3339();
     let schedule = compute_search_schedule("episode", Some(&baseline), "primary", &now);
-    assert_eq!(schedule.search_phase, "paused");
+    assert_eq!(schedule.search_phase, SearchPhase::LongTail);
 }
 
 // ── unknown media type defaults to episode schedule ───────────────────────
@@ -293,5 +293,5 @@ fn unknown_media_type_uses_episode_schedule() {
     let now = Utc::now();
     let baseline = (now - Duration::hours(1)).to_rfc3339();
     let schedule = compute_search_schedule("unknown", Some(&baseline), "primary", &now);
-    assert_eq!(schedule.search_phase, "primary");
+    assert_eq!(schedule.search_phase, SearchPhase::Primary);
 }

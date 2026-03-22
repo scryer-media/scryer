@@ -9,7 +9,7 @@ use scryer_application::{
 };
 use scryer_domain::{DownloadQueueItem, DownloadQueueState};
 use serde_json::{Value, json};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
 use super::{
     extract_f64_value, extract_i64_value, is_http_url, parse_duration_seconds,
@@ -912,7 +912,7 @@ impl DownloadClient for NzbgetDownloadClient {
                 let status_upper = status.to_ascii_uppercase();
 
                 if !status_upper.starts_with("SUCCESS") {
-                    info!(
+                    debug!(
                         nzb_id,
                         name = name.as_str(),
                         status,
@@ -939,7 +939,7 @@ impl DownloadClient for NzbgetDownloadClient {
                 if let Some(ts) = history_ts
                     && ts < cutoff_ts
                 {
-                    info!(
+                    trace!(
                         nzb_id,
                         name = name.as_str(),
                         "nzbget: skipping history entry older than 7 days"
@@ -962,7 +962,7 @@ impl DownloadClient for NzbgetDownloadClient {
                     .to_string();
 
                 if dest_dir.is_empty() {
-                    info!(
+                    debug!(
                         nzb_id,
                         name = name.as_str(),
                         "nzbget: skipping history entry with empty dest_dir"
@@ -1010,6 +1010,13 @@ impl DownloadClient for NzbgetDownloadClient {
 
                 let completed_at =
                     history_ts.map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now));
+
+                // Only return entries submitted by scryer (have *scryer_title_id parameter).
+                // Non-scryer downloads are not importable and just create log noise.
+                let is_scryer = parameters.iter().any(|(k, _)| k == "*scryer_title_id");
+                if !is_scryer {
+                    return None;
+                }
 
                 Some(scryer_domain::CompletedDownload {
                     client_type: "nzbget".to_string(),

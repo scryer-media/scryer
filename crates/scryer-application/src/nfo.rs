@@ -195,8 +195,13 @@ pub(crate) fn render_episode_nfo(title: &Title, episode: &Episode) -> String {
         }
     }
 
-    // Episode-level uniqueid: use the series TVDB ID (episodes don't have their own)
-    if let Some(eid) = title
+    // Episode-level uniqueid: prefer the episode's own TVDB ID, fall back to series TVDB ID
+    if let Some(tvdb_id) = &episode.tvdb_id {
+        out.push_str(&format!(
+            "  <uniqueid type=\"tvdb\" default=\"true\">{}</uniqueid>\n",
+            xml_escape(tvdb_id)
+        ));
+    } else if let Some(eid) = title
         .external_ids
         .iter()
         .find(|e| e.source.eq_ignore_ascii_case("tvdb"))
@@ -551,7 +556,7 @@ mod tests {
             id: "e1".into(),
             title_id: "t1".into(),
             collection_id: None,
-            episode_type: "standard".into(),
+            episode_type: scryer_domain::EpisodeType::Standard,
             episode_number: Some("1".into()),
             season_number: Some("1".into()),
             episode_label: None,
@@ -564,6 +569,7 @@ mod tests {
             is_recap: false,
             absolute_number: None,
             overview: Some("A high school chemistry teacher gets a diagnosis.".into()),
+            tvdb_id: Some("349232".into()),
             monitored: true,
             created_at: Utc::now(),
         }
@@ -825,7 +831,7 @@ mod tests {
     #[test]
     fn render_tvshow() {
         let mut title = make_title();
-        title.facet = MediaFacet::Tv;
+        title.facet = MediaFacet::Series;
         title.network = Some("HBO".into());
         let xml = render_tvshow_nfo(&title);
         assert!(xml.contains("<tvshow>"));
@@ -846,7 +852,8 @@ mod tests {
         assert!(xml.contains("<plot>A high school chemistry"));
         assert!(xml.contains("<aired>2008-01-20</aired>"));
         assert!(xml.contains("<runtime>58</runtime>"));
-        assert!(xml.contains("<uniqueid type=\"tvdb\" default=\"true\">12345</uniqueid>"));
+        // Episode's own TVDB ID takes precedence over series TVDB ID
+        assert!(xml.contains("<uniqueid type=\"tvdb\" default=\"true\">349232</uniqueid>"));
         assert!(xml.contains("</episodedetails>"));
     }
 
@@ -873,7 +880,7 @@ mod tests {
     #[test]
     fn round_trip_tvshow() {
         let mut title = make_title();
-        title.facet = MediaFacet::Tv;
+        title.facet = MediaFacet::Series;
         let xml = render_tvshow_nfo(&title);
         let parsed = parse_nfo(&xml);
         assert_eq!(parsed.tvdb_id, Some("12345".into()));
@@ -896,7 +903,7 @@ mod tests {
     fn render_plexmatch_minimal() {
         let mut title = make_title();
         title.name = "Minimal Show".into();
-        title.facet = MediaFacet::Tv;
+        title.facet = MediaFacet::Series;
         title.year = None;
         title.imdb_id = None;
         title.external_ids = vec![];

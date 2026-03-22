@@ -327,7 +327,7 @@ async fn graphql_scan_title_library() {
     let title = Title {
         id: Id::new().0,
         name: "Scan Show".to_string(),
-        facet: MediaFacet::Tv,
+        facet: MediaFacet::Series,
         monitored: true,
         tags: vec![format!(
             "scryer:root-folder:{}",
@@ -368,7 +368,7 @@ async fn graphql_scan_title_library() {
     let collection = Collection {
         id: Id::new().0,
         title_id: title.id.clone(),
-        collection_type: "season".to_string(),
+        collection_type: scryer_domain::CollectionType::Season,
         collection_index: "1".to_string(),
         label: Some("Season 1".to_string()),
         ordered_path: None,
@@ -391,7 +391,7 @@ async fn graphql_scan_title_library() {
         id: Id::new().0,
         title_id: title.id.clone(),
         collection_id: Some(collection.id.clone()),
-        episode_type: "standard".to_string(),
+        episode_type: scryer_domain::EpisodeType::Standard,
         episode_number: Some("1".to_string()),
         season_number: Some("1".to_string()),
         episode_label: Some("S01E01".to_string()),
@@ -404,6 +404,7 @@ async fn graphql_scan_title_library() {
         is_recap: false,
         absolute_number: None,
         overview: None,
+        tvdb_id: None,
         monitored: true,
         created_at: chrono::Utc::now(),
     };
@@ -507,7 +508,7 @@ async fn graphql_delete_title_cleans_title_workflow_state() {
             last_search_at: None,
             search_count: 0,
             baseline_date: None,
-            status: "queued".to_string(),
+            status: scryer_application::WantedStatus::Wanted,
             grabbed_release: None,
             current_score: None,
             created_at: "2026-03-12T00:00:00Z".to_string(),

@@ -172,7 +172,7 @@ impl AppUseCase {
             };
 
             // Skip if already grabbed or completed
-            if wanted.status == "grabbed" || wanted.status == "completed" {
+            if wanted.status == WantedStatus::Grabbed || wanted.status == WantedStatus::Completed {
                 for pr in &releases {
                     let _ = self
                         .services
@@ -332,12 +332,7 @@ impl AppUseCase {
         }
 
         // Check upgrade decision
-        let category = match title.facet {
-            scryer_domain::MediaFacet::Movie => "movie",
-            scryer_domain::MediaFacet::Tv => "series",
-            scryer_domain::MediaFacet::Anime => "anime",
-            _ => "other",
-        };
+        let category = title.facet.as_str();
         let tvdb_id = title
             .external_ids
             .iter()
@@ -363,7 +358,7 @@ impl AppUseCase {
             return Ok(false);
         }
 
-        let thresholds = AcquisitionThresholds::default();
+        let thresholds = AcquisitionThresholds::for_persona(&profile.criteria.scoring_persona);
         let decision = crate::acquisition_policy::evaluate_upgrade(
             pr.release_score,
             wanted.current_score,

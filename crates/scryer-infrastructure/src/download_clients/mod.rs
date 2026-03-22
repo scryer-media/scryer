@@ -80,18 +80,17 @@ fn resolve_download_client_base_url(
     } else {
         value.push_str("http://");
     }
-    value.push_str(host.trim());
+    value.push_str(&host);
 
-    if let Some(port_value) = port {
-        let port_trimmed = port_value.trim();
-        if !port_trimmed.is_empty() {
-            value.push(':');
-            value.push_str(port_trimmed);
-        }
+    if let Some(port_value) = port
+        && !port_value.is_empty()
+    {
+        value.push(':');
+        value.push_str(&port_value);
     }
 
     if let Some(path_value) = url_base {
-        let normalized_path = path_value.trim().trim_start_matches('/');
+        let normalized_path = path_value.trim_start_matches('/');
         if !normalized_path.is_empty() {
             value.push('/');
             value.push_str(normalized_path);

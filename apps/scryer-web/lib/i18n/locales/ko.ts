@@ -140,6 +140,7 @@ const ko: LocaleDictionary = {
   "settings.rootFoldersHelp":
     "루트 폴더는 미디어가 저장되는 최상위 디렉토리입니다. 별표가 표시된 폴더가 새 타이틀의 기본 폴더입니다.",
   "settings.rootFolderAdd": "루트 폴더 추가",
+  "settings.rootFolderEdit": "루트 폴더 편집",
   "settings.rootFolderAddPlaceholder": "/media/movies",
   "settings.rootFolderSetDefault": "기본값으로 설정",
   "settings.libraryScanTitle": "라이브러리 스캔",

@@ -136,6 +136,7 @@ const pt_BR: LocaleDictionary = {
   "settings.rootFoldersHelp":
     "As pastas raiz são os diretórios de nível superior onde a mídia é armazenada. A pasta com estrela é a padrão para novos títulos.",
   "settings.rootFolderAdd": "Adicionar pasta raiz",
+  "settings.rootFolderEdit": "Editar pasta raiz",
   "settings.rootFolderAddPlaceholder": "/media/movies",
   "settings.rootFolderSetDefault": "Definir como padrão",
   "settings.libraryScanTitle": "Verificação da biblioteca",

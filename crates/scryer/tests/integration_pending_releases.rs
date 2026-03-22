@@ -66,7 +66,7 @@ async fn seed_title(ctx: &TestContext, id: &str) {
 async fn seed_wanted_item(
     ctx: &TestContext,
     title_id: &str,
-    status: &str,
+    status: scryer_application::WantedStatus,
 ) -> scryer_application::WantedItem {
     let item = scryer_application::WantedItem {
         id: scryer_domain::Id::new().0,
@@ -81,7 +81,7 @@ async fn seed_wanted_item(
         last_search_at: None,
         search_count: 0,
         baseline_date: None,
-        status: status.to_string(),
+        status,
         grabbed_release: None,
         current_score: None,
         created_at: Utc::now().to_rfc3339(),
@@ -136,7 +136,7 @@ async fn list_pending_releases_returns_only_waiting() {
     let app = app_with_pending(&ctx);
 
     seed_title(&ctx, "title-1").await;
-    let wi = seed_wanted_item(&ctx, "title-1", "wanted").await;
+    let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Wanted).await;
     seed_pending_release(&ctx, &wi.id, "title-1", 500, 6, "waiting").await;
     seed_pending_release(&ctx, &wi.id, "title-1", 300, 6, "grabbed").await;
     seed_pending_release(&ctx, &wi.id, "title-1", 200, 6, "dismissed").await;
@@ -152,7 +152,7 @@ async fn list_wanted_items_does_not_duplicate_movies_across_syncs() {
     let app = app_with_pending(&ctx);
 
     seed_title(&ctx, "title-1").await;
-    seed_wanted_item(&ctx, "title-1", "wanted").await;
+    seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Wanted).await;
 
     let (first_items, first_total) = app
         .list_wanted_items(None, None, None, 50, 0)
@@ -181,7 +181,7 @@ async fn dismiss_sets_status_to_dismissed() {
     let app = app_with_pending(&ctx);
 
     seed_title(&ctx, "title-1").await;
-    let wi = seed_wanted_item(&ctx, "title-1", "wanted").await;
+    let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Wanted).await;
     let pr = seed_pending_release(&ctx, &wi.id, "title-1", 500, 6, "waiting").await;
 
     let result = app.dismiss_pending_release(&pr.id).await.expect("dismiss");
@@ -214,7 +214,7 @@ async fn dismiss_non_waiting_returns_error() {
     let app = app_with_pending(&ctx);
 
     seed_title(&ctx, "title-1").await;
-    let wi = seed_wanted_item(&ctx, "title-1", "wanted").await;
+    let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Wanted).await;
     let pr = seed_pending_release(&ctx, &wi.id, "title-1", 500, 6, "grabbed").await;
 
     let err = app.dismiss_pending_release(&pr.id).await.unwrap_err();
@@ -243,7 +243,7 @@ async fn force_grab_non_waiting_returns_error() {
     let app = app_with_pending(&ctx);
 
     seed_title(&ctx, "title-1").await;
-    let wi = seed_wanted_item(&ctx, "title-1", "wanted").await;
+    let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Wanted).await;
     let pr = seed_pending_release(&ctx, &wi.id, "title-1", 500, 6, "dismissed").await;
 
     let err = app.force_grab_pending_release(&pr.id).await.unwrap_err();
@@ -260,7 +260,7 @@ async fn process_expired_skips_when_none_expired() {
     let app = app_with_pending(&ctx);
 
     seed_title(&ctx, "title-1").await;
-    let wi = seed_wanted_item(&ctx, "title-1", "wanted").await;
+    let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Wanted).await;
     // delay_until is 6 hours from now — not expired
     seed_pending_release(&ctx, &wi.id, "title-1", 500, 6, "waiting").await;
 
@@ -278,7 +278,7 @@ async fn process_expired_marks_expired_when_wanted_item_gone() {
 
     // Create pending release referencing a wanted item, then delete the wanted item
     seed_title(&ctx, "title-1").await;
-    let wi = seed_wanted_item(&ctx, "title-1", "wanted").await;
+    let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Wanted).await;
     let pr = seed_pending_release(&ctx, &wi.id, "title-1", 500, -1, "waiting").await;
     // Delete the wanted item
     ctx.db
@@ -303,7 +303,7 @@ async fn process_expired_supersedes_when_already_grabbed() {
     let app = app_with_pending(&ctx);
 
     seed_title(&ctx, "title-1").await;
-    let wi = seed_wanted_item(&ctx, "title-1", "grabbed").await;
+    let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Grabbed).await;
     let pr = seed_pending_release(&ctx, &wi.id, "title-1", 500, -1, "waiting").await;
 
     let count = app

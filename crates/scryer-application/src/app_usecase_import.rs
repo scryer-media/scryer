@@ -6,9 +6,9 @@ use crate::{
 };
 use chrono::Utc;
 use scryer_domain::{
-    Collection, CompletedDownload, DownloadQueueItem, DownloadQueueState, Entitlement, EventType,
-    Id, ImportDecision, ImportResult, ImportSkipReason, MediaFacet, NotificationEventType, User,
-    is_video_file,
+    Collection, CollectionType, CompletedDownload, DownloadQueueItem, DownloadQueueState,
+    Entitlement, EventType, Id, ImportDecision, ImportResult, ImportSkipReason, ImportStatus,
+    ImportType, MediaFacet, NotificationEventType, User, is_video_file,
 };
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -50,10 +50,11 @@ pub async fn retry_failed_import(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("import {import_id}")))?;
 
-    if record.status != "failed" {
+    if record.status != ImportStatus::Failed {
         return Err(AppError::Validation(format!(
             "import {} has status '{}', only failed imports can be retried",
-            import_id, record.status
+            import_id,
+            record.status.as_str()
         )));
     }
 
@@ -62,7 +63,7 @@ pub async fn retry_failed_import(
 
     // Reset to processing
     app.services
-        .update_import_status_and_notify(import_id, "processing", None)
+        .update_import_status_and_notify(import_id, ImportStatus::Processing, None)
         .await?;
 
     let started_at = Utc::now();
@@ -90,7 +91,7 @@ pub async fn retry_failed_import(
             let result_json = serde_json::to_string(&result).ok();
             let _ = app
                 .services
-                .update_import_status_and_notify(import_id, "failed", result_json)
+                .update_import_status_and_notify(import_id, ImportStatus::Failed, result_json)
                 .await;
             Ok(result)
         }
@@ -148,7 +149,7 @@ pub async fn try_import_completed_downloads(
         .iter()
         .filter(|item| item.state == DownloadQueueState::Completed)
         .filter(|item| {
-            item.import_status.is_none() || item.import_status.as_deref() == Some("failed")
+            item.import_status.is_none() || item.import_status == Some(ImportStatus::Failed)
         })
         .collect();
 
@@ -195,7 +196,7 @@ pub async fn try_import_completed_downloads(
             .await
         {
             Ok(true) => {
-                tracing::info!(
+                tracing::debug!(
                     source_ref = %source_ref,
                     title = %item.title_name,
                     "import: skipping already-imported download"
@@ -217,7 +218,7 @@ pub async fn try_import_completed_downloads(
         {
             Some(cd) => cd,
             None => {
-                tracing::info!(
+                tracing::debug!(
                     source_ref = %source_ref,
                     title = %item.title_name,
                     "import: no matching CompletedDownload from client history (item may still be processing or status != Completed)"
@@ -264,7 +265,7 @@ pub async fn try_import_completed_downloads(
                     patched
                 }
                 Ok(None) => {
-                    tracing::info!(
+                    tracing::debug!(
                         source_ref = %source_ref,
                         title = %item.title_name,
                         client_type = %completed.client_type,
@@ -300,7 +301,7 @@ pub async fn try_import_completed_downloads(
             Ok(result) => {
                 if matches!(
                     result.decision,
-                    ImportDecision::Failed | ImportDecision::Rejected | ImportDecision::Unmatched
+                    ImportDecision::Failed | ImportDecision::Rejected
                 ) {
                     tracing::warn!(
                         decision = ?result.decision,
@@ -308,6 +309,14 @@ pub async fn try_import_completed_downloads(
                         error_message = ?result.error_message,
                         source_path = %result.source_path,
                         "import failed for {}",
+                        completed.name
+                    );
+                } else if matches!(result.decision, ImportDecision::Unmatched) {
+                    tracing::debug!(
+                        decision = ?result.decision,
+                        error_message = ?result.error_message,
+                        source_path = %result.source_path,
+                        "import unmatched for {}",
                         completed.name
                     );
                 } else {
@@ -379,7 +388,7 @@ fn facet_for_completed_download(completed: &CompletedDownload) -> Option<MediaFa
         .as_deref()
     {
         Some("movie") => Some(MediaFacet::Movie),
-        Some("tv") | Some("series") => Some(MediaFacet::Tv),
+        Some("tv") | Some("series") => Some(MediaFacet::Series),
         Some("anime") => Some(MediaFacet::Anime),
         _ => None,
     }
@@ -444,9 +453,9 @@ pub async fn import_completed_download(
             .and_then(|f| app.facet_registry.all().find(|h| h.facet_id() == f))
             .is_some_and(|h| h.has_episodes());
         if is_episode {
-            "tv_download"
+            ImportType::TvDownload
         } else {
-            "movie_download"
+            ImportType::MovieDownload
         }
     };
     let import_id = app
@@ -455,14 +464,45 @@ pub async fn import_completed_download(
         .queue_import_request(
             completed.client_type.clone(),
             source_ref.clone(),
-            import_type.to_string(),
+            import_type.as_str().to_string(),
             serde_json::to_string(completed).unwrap_or_default(),
         )
         .await?;
 
+    // If the source directory no longer exists, the files were already moved
+    // by a previous import (possibly under a different source_ref). Mark as
+    // skipped so the poller never retries this entry.
+    let source_path = std::path::Path::new(&completed.dest_dir);
+    if !source_path.exists() {
+        tracing::debug!(
+            source_ref,
+            dest_dir = %completed.dest_dir,
+            "import: source directory no longer exists, no files to import"
+        );
+        let result = ImportResult {
+            import_id: import_id.to_string(),
+            decision: ImportDecision::Skipped,
+            skip_reason: Some(ImportSkipReason::NoVideoFiles),
+            title_id: None,
+            source_path: completed.dest_dir.clone(),
+            dest_path: None,
+            file_size_bytes: None,
+            link_type: None,
+            error_message: None,
+            started_at,
+            completed_at: Utc::now(),
+        };
+        let result_json = serde_json::to_string(&result).ok();
+        let _ = app
+            .services
+            .update_import_status_and_notify(&import_id, ImportStatus::Skipped, result_json)
+            .await;
+        return Ok(result);
+    }
+
     // Mark as processing
     app.services
-        .update_import_status_and_notify(&import_id, "processing", None)
+        .update_import_status_and_notify(&import_id, ImportStatus::Processing, None)
         .await?;
 
     // From here on, any error must update the import record to "failed" rather than
@@ -491,7 +531,7 @@ pub async fn import_completed_download(
             let result_json = serde_json::to_string(&result).ok();
             let _ = app
                 .services
-                .update_import_status_and_notify(&import_id, "failed", result_json)
+                .update_import_status_and_notify(&import_id, ImportStatus::Failed, result_json)
                 .await;
             Ok(result)
         }
@@ -565,7 +605,7 @@ async fn run_import(
             };
             let result_json = serde_json::to_string(&result).ok();
             app.services
-                .update_import_status_and_notify(import_id, "failed", result_json)
+                .update_import_status_and_notify(import_id, ImportStatus::Skipped, result_json)
                 .await?;
 
             let unmatched_msg = format!(
@@ -602,7 +642,7 @@ async fn run_import(
     // Validate supported facets
     if !matches!(
         title.facet,
-        MediaFacet::Movie | MediaFacet::Tv | MediaFacet::Anime
+        MediaFacet::Movie | MediaFacet::Series | MediaFacet::Anime
     ) {
         let result = ImportResult {
             import_id: import_id.to_string(),
@@ -622,14 +662,14 @@ async fn run_import(
         };
         let result_json = serde_json::to_string(&result).ok();
         app.services
-            .update_import_status_and_notify(import_id, "skipped", result_json)
+            .update_import_status_and_notify(import_id, ImportStatus::Skipped, result_json)
             .await?;
         return Ok(result);
     }
 
     // 3. FIND VIDEO FILES (extract archives first if needed)
     let dest_dir = Path::new(&completed.dest_dir);
-    let is_series = matches!(title.facet, MediaFacet::Tv | MediaFacet::Anime);
+    let is_series = matches!(title.facet, MediaFacet::Series | MediaFacet::Anime);
     let extracted_dir =
         crate::archive_extractor::extract_archives_if_needed(dest_dir, archive_password).await?;
     let effective_dir = extracted_dir.as_deref().unwrap_or(dest_dir);
@@ -638,7 +678,7 @@ async fn run_import(
     if video_files.is_empty() {
         let result = ImportResult {
             import_id: import_id.to_string(),
-            decision: ImportDecision::Failed,
+            decision: ImportDecision::Skipped,
             skip_reason: Some(ImportSkipReason::NoVideoFiles),
             title_id: Some(title.id.clone()),
             source_path: completed.dest_dir.clone(),
@@ -651,7 +691,7 @@ async fn run_import(
         };
         let result_json = serde_json::to_string(&result).ok();
         app.services
-            .update_import_status_and_notify(import_id, "failed", result_json)
+            .update_import_status_and_notify(import_id, ImportStatus::Skipped, result_json)
             .await?;
         return Ok(result);
     }
@@ -796,7 +836,7 @@ async fn import_movie_download(
         };
         let result_json = serde_json::to_string(&result).ok();
         app.services
-            .update_import_status_and_notify(import_id, "skipped", result_json)
+            .update_import_status_and_notify(import_id, ImportStatus::Skipped, result_json)
             .await?;
         return Ok(result);
     }
@@ -866,7 +906,11 @@ async fn import_movie_download(
                         mark_wanted_completed(app, &title.id, None, None).await;
                         let result_json = serde_json::to_string(&result).ok();
                         app.services
-                            .update_import_status_and_notify(import_id, "completed", result_json)
+                            .update_import_status_and_notify(
+                                import_id,
+                                ImportStatus::Completed,
+                                result_json,
+                            )
                             .await?;
                         return Ok(result);
                     }
@@ -886,7 +930,11 @@ async fn import_movie_download(
                         };
                         let result_json = serde_json::to_string(&result).ok();
                         app.services
-                            .update_import_status_and_notify(import_id, "failed", result_json)
+                            .update_import_status_and_notify(
+                                import_id,
+                                ImportStatus::Skipped,
+                                result_json,
+                            )
                             .await?;
                         return Ok(result);
                     }
@@ -951,7 +999,7 @@ async fn import_movie_download(
             };
             let result_json = serde_json::to_string(&result).ok();
             app.services
-                .update_import_status_and_notify(import_id, "failed", result_json)
+                .update_import_status_and_notify(import_id, ImportStatus::Skipped, result_json)
                 .await?;
             Ok(result)
         }
@@ -977,6 +1025,16 @@ async fn import_movie_download(
                 }
             }
 
+            // Compute acquisition score with mediainfo rescore
+            let acq_score = crate::post_download_gate::compute_acquisition_score(
+                &parsed,
+                &accepted,
+                &quality_profile,
+                title,
+                file_result.size_bytes as i64,
+                !existing_files.is_empty(),
+            );
+
             // Record media file with rich metadata
             let media_file_input = crate::InsertMediaFileInput {
                 title_id: title.id.clone(),
@@ -990,6 +1048,7 @@ async fn import_movie_download(
                 video_codec_parsed: parsed.video_codec.clone(),
                 audio_codec_parsed: parsed.audio.clone(),
                 original_file_path: Some(source_video.to_string_lossy().to_string()),
+                acquisition_score: Some(acq_score),
                 ..Default::default()
             };
             match app
@@ -1021,7 +1080,7 @@ async fn import_movie_download(
             let collection = Collection {
                 id: Id::new().0,
                 title_id: title.id.clone(),
-                collection_type: "movie".to_string(),
+                collection_type: CollectionType::Movie,
                 collection_index: "1".to_string(),
                 label: parsed.quality.clone(),
                 ordered_path: Some(dest_path.to_string_lossy().to_string()),
@@ -1085,7 +1144,7 @@ async fn import_movie_download(
             };
             let result_json = serde_json::to_string(&result).ok();
             app.services
-                .update_import_status_and_notify(import_id, "completed", result_json)
+                .update_import_status_and_notify(import_id, ImportStatus::Completed, result_json)
                 .await?;
 
             // Emit events
@@ -1174,7 +1233,7 @@ async fn import_interstitial_movie_download(
             };
             let result_json = serde_json::to_string(&result).ok();
             app.services
-                .update_import_status_and_notify(import_id, "failed", result_json)
+                .update_import_status_and_notify(import_id, ImportStatus::Skipped, result_json)
                 .await?;
             return Ok(result);
         }
@@ -1198,7 +1257,7 @@ async fn import_interstitial_movie_download(
             };
             let result_json = serde_json::to_string(&result).ok();
             app.services
-                .update_import_status_and_notify(import_id, "failed", result_json)
+                .update_import_status_and_notify(import_id, ImportStatus::Skipped, result_json)
                 .await?;
             return Ok(result);
         }
@@ -1327,7 +1386,11 @@ async fn import_interstitial_movie_download(
                         };
                         let result_json = serde_json::to_string(&result).ok();
                         app.services
-                            .update_import_status_and_notify(import_id, "completed", result_json)
+                            .update_import_status_and_notify(
+                                import_id,
+                                ImportStatus::Completed,
+                                result_json,
+                            )
                             .await?;
                         return Ok(result);
                     }
@@ -1347,7 +1410,11 @@ async fn import_interstitial_movie_download(
                         };
                         let result_json = serde_json::to_string(&result).ok();
                         app.services
-                            .update_import_status_and_notify(import_id, "failed", result_json)
+                            .update_import_status_and_notify(
+                                import_id,
+                                ImportStatus::Skipped,
+                                result_json,
+                            )
                             .await?;
                         return Ok(result);
                     }
@@ -1377,7 +1444,7 @@ async fn import_interstitial_movie_download(
                 };
                 let result_json = serde_json::to_string(&result).ok();
                 app.services
-                    .update_import_status_and_notify(import_id, "skipped", result_json)
+                    .update_import_status_and_notify(import_id, ImportStatus::Skipped, result_json)
                     .await?;
                 return Ok(result);
             }
@@ -1441,11 +1508,20 @@ async fn import_interstitial_movie_download(
             };
             let result_json = serde_json::to_string(&result).ok();
             app.services
-                .update_import_status_and_notify(import_id, "failed", result_json)
+                .update_import_status_and_notify(import_id, ImportStatus::Skipped, result_json)
                 .await?;
             return Ok(result);
         }
         crate::post_download_gate::ImportedFileGateDecision::Accepted(accepted) => {
+            let acq_score = crate::post_download_gate::compute_acquisition_score(
+                &parsed,
+                &accepted,
+                &quality_profile,
+                title,
+                file_result.size_bytes as i64,
+                !collection_files.is_empty(),
+            );
+
             // Persist media analysis from the gate
             if let Ok(file_id) = app
                 .services
@@ -1462,6 +1538,7 @@ async fn import_interstitial_movie_download(
                     video_codec_parsed: parsed.video_codec.clone(),
                     audio_codec_parsed: parsed.audio.clone(),
                     original_file_path: Some(source_video.to_string_lossy().to_string()),
+                    acquisition_score: Some(acq_score),
                     ..Default::default()
                 })
                 .await
@@ -1566,7 +1643,7 @@ async fn import_interstitial_movie_download(
     };
     let result_json = serde_json::to_string(&result).ok();
     app.services
-        .update_import_status_and_notify(import_id, "completed", result_json)
+        .update_import_status_and_notify(import_id, ImportStatus::Completed, result_json)
         .await?;
 
     // Emit activity event
@@ -1755,15 +1832,19 @@ async fn import_series_download(
     }
 
     let (decision, status, skip_reason) = if imported_count > 0 {
-        (ImportDecision::Imported, "completed", None)
+        (ImportDecision::Imported, ImportStatus::Completed, None)
+    } else if failed_count > 0 {
+        (ImportDecision::Failed, ImportStatus::Failed, None)
     } else if rejected_count > 0 {
         (
             ImportDecision::Rejected,
-            "failed",
+            ImportStatus::Failed,
             last_rejection_skip_reason,
         )
     } else {
-        (ImportDecision::Failed, "failed", None)
+        // All files skipped (no parseable episode info, already imported, etc.)
+        // — this is a permanent condition, not worth retrying.
+        (ImportDecision::Skipped, ImportStatus::Skipped, None)
     };
 
     let error_message = if failed_count > 0 || skipped_count > 0 || rejected_count > 0 {
@@ -2089,6 +2170,18 @@ async fn import_single_episode_file(
         }
     }
 
+    let has_existing = existing_files
+        .iter()
+        .any(|file| file.file_path == existing_dest_path.as_str());
+    let acq_score = crate::post_download_gate::compute_acquisition_score(
+        &parsed,
+        &accepted,
+        quality_profile,
+        title,
+        file_result.size_bytes as i64,
+        has_existing,
+    );
+
     let media_file_input = crate::InsertMediaFileInput {
         title_id: title.id.clone(),
         file_path: dest_path.to_string_lossy().to_string(),
@@ -2101,6 +2194,7 @@ async fn import_single_episode_file(
         video_codec_parsed: parsed.video_codec.clone(),
         audio_codec_parsed: parsed.audio.clone(),
         original_file_path: Some(source_video.to_string_lossy().to_string()),
+        acquisition_score: Some(acq_score),
         ..Default::default()
     };
     let media_file_id = app

@@ -54,11 +54,12 @@ use chrono::{Duration, Utc};
 use rand_core::OsRng;
 use ring::digest as ring_digest;
 use scryer_domain::{
-    BlocklistEntry, CalendarEpisode, Collection, CompletedDownload, DownloadClientConfig,
-    DownloadQueueItem, DownloadQueueState, Entitlement, Episode, EventType, ExternalId,
-    HistoryEvent, Id, ImportFileResult, ImportRecord, ImportResult, IndexerConfig, MediaFacet,
-    NewDownloadClientConfig, NewIndexerConfig, NewTitle, PluginInstallation, PolicyInput,
-    PolicyOutput, RuleSet, TaggedAlias, Title, TitleHistoryEventType, TitleHistoryRecord, User,
+    BlocklistEntry, CalendarEpisode, Collection, CollectionType, CompletedDownload,
+    DownloadClientConfig, DownloadQueueItem, DownloadQueueState, Entitlement, Episode, EventType,
+    ExternalId, HistoryEvent, Id, ImportFileResult, ImportRecord, ImportResult, ImportStatus,
+    IndexerConfig, MediaFacet, NewDownloadClientConfig, NewIndexerConfig, NewTitle,
+    PluginInstallation, PolicyInput, PolicyOutput, RuleSet, TaggedAlias, Title,
+    TitleHistoryEventType, TitleHistoryRecord, User,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -138,7 +139,7 @@ pub use types::{
     ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature, SystemHealth, TitleImageBlob,
     TitleImageKind, TitleImageReplacement, TitleImageStorageMode, TitleImageSyncTask,
     TitleImageVariantRecord, TitleMediaFile, TitleMediaSizeSummary, TitleMetadataUpdate,
-    TitleReleaseBlocklistEntry, WantedItem,
+    TitleReleaseBlocklistEntry, WantedItem, WantedStatus,
 };
 
 const SETTINGS_SCOPE_SYSTEM: &str = "system";
@@ -155,24 +156,28 @@ const NATIVE_DOWNLOAD_CLIENT_TYPES: [&str; 4] = ["nzbget", "sabnzbd", "qbittorre
 pub fn accepted_inputs_for_client(
     client_type: &str,
     plugin_provider: Option<&Arc<dyn DownloadClientPluginProvider>>,
-) -> Vec<String> {
+) -> Vec<DownloadSourceKind> {
     if let Some(provider) = plugin_provider {
         let inputs = provider.accepted_inputs_for_provider(client_type);
         if !inputs.is_empty() {
-            return inputs;
+            return inputs
+                .iter()
+                .filter_map(|s| DownloadSourceKind::parse(s))
+                .collect();
         }
     }
-    native_accepted_inputs(client_type).to_vec()
+    native_accepted_inputs(client_type)
 }
 
 /// Native client capabilities. Returns the accepted input kinds for
 /// built-in download client types.
-fn native_accepted_inputs(client_type: &str) -> Vec<String> {
-    match client_type.trim().to_ascii_lowercase().as_str() {
-        "nzbget" => vec!["nzb".to_string(), "nzb_url".to_string()],
-        "sabnzbd" => vec!["nzb".to_string(), "nzb_url".to_string()],
-        "weaver" => vec!["nzb".to_string()],
-        "qbittorrent" => vec!["torrent_file".to_string(), "magnet_uri".to_string()],
+fn native_accepted_inputs(client_type: &str) -> Vec<DownloadSourceKind> {
+    match client_type {
+        "nzbget" | "sabnzbd" | "weaver" => vec![DownloadSourceKind::NzbFile],
+        "qbittorrent" => vec![
+            DownloadSourceKind::TorrentFile,
+            DownloadSourceKind::MagnetUri,
+        ],
         _ => vec![],
     }
 }
@@ -421,13 +426,15 @@ impl AppServices {
     pub async fn update_import_status_and_notify(
         &self,
         import_id: &str,
-        status: &str,
+        status: ImportStatus,
         result_json: Option<String>,
     ) -> AppResult<()> {
         self.imports
             .update_import_status(import_id, status, result_json.clone())
             .await?;
-        let _ = self.import_history_broadcast.send(());
+        if matches!(status, ImportStatus::Completed | ImportStatus::Failed) {
+            let _ = self.import_history_broadcast.send(());
+        }
 
         // Dual-write: emit title history event from import result
         if let Some(ref json) = result_json
@@ -435,9 +442,9 @@ impl AppServices {
             && let Some(ref title_id) = result.title_id
         {
             let event_type = match status {
-                "completed" => TitleHistoryEventType::Imported,
-                "failed" => TitleHistoryEventType::ImportFailed,
-                "skipped" => TitleHistoryEventType::ImportSkipped,
+                ImportStatus::Completed => TitleHistoryEventType::Imported,
+                ImportStatus::Failed => TitleHistoryEventType::ImportFailed,
+                ImportStatus::Skipped => TitleHistoryEventType::ImportSkipped,
                 _ => return Ok(()),
             };
             let mut data = std::collections::HashMap::new();
@@ -553,7 +560,7 @@ pub trait ShowRepository: Send + Sync {
     async fn update_collection(
         &self,
         collection_id: &str,
-        collection_type: Option<String>,
+        collection_type: Option<CollectionType>,
         collection_index: Option<String>,
         label: Option<String>,
         ordered_path: Option<String>,
@@ -578,7 +585,7 @@ pub trait ShowRepository: Send + Sync {
     async fn update_episode(
         &self,
         episode_id: &str,
-        episode_type: Option<String>,
+        episode_type: Option<scryer_domain::EpisodeType>,
         episode_number: Option<String>,
         season_number: Option<String>,
         episode_label: Option<String>,
@@ -590,6 +597,7 @@ pub trait ShowRepository: Send + Sync {
         monitored: Option<bool>,
         collection_id: Option<String>,
         overview: Option<String>,
+        tvdb_id: Option<String>,
     ) -> AppResult<Episode>;
     async fn delete_episode(&self, episode_id: &str) -> AppResult<()>;
     async fn find_episode_by_title_and_numbers(
@@ -822,7 +830,7 @@ pub trait ImportRepository: Send + Sync {
     async fn update_import_status(
         &self,
         import_id: &str,
-        status: &str,
+        status: ImportStatus,
         result_json: Option<String>,
     ) -> AppResult<()>;
 
@@ -959,6 +967,9 @@ pub trait WantedItemRepository: Send + Sync {
         episode_id: Option<&str>,
     ) -> AppResult<Option<WantedItem>>;
     async fn delete_wanted_items_for_title(&self, title_id: &str) -> AppResult<()>;
+    /// Reset `next_search_at` to now for wanted items that have been searched
+    /// but never found a viable candidate (`current_score IS NULL`).
+    async fn reset_fruitless_wanted_items(&self, now: &str) -> AppResult<u64>;
     async fn insert_release_decision(&self, decision: &ReleaseDecision) -> AppResult<String>;
     async fn get_wanted_item_by_id(&self, id: &str) -> AppResult<Option<WantedItem>>;
     async fn list_wanted_items(
@@ -1933,7 +1944,7 @@ mod tests {
         async fn update_collection(
             &self,
             collection_id: &str,
-            collection_type: Option<String>,
+            collection_type: Option<CollectionType>,
             collection_index: Option<String>,
             label: Option<String>,
             ordered_path: Option<String>,
@@ -2036,7 +2047,7 @@ mod tests {
         async fn update_episode(
             &self,
             episode_id: &str,
-            episode_type: Option<String>,
+            episode_type: Option<scryer_domain::EpisodeType>,
             episode_number: Option<String>,
             season_number: Option<String>,
             episode_label: Option<String>,
@@ -2048,6 +2059,7 @@ mod tests {
             monitored: Option<bool>,
             collection_id: Option<String>,
             overview: Option<String>,
+            tvdb_id: Option<String>,
         ) -> AppResult<Episode> {
             let mut episodes = self.episodes.lock().await;
             let item = episodes
@@ -2090,6 +2102,9 @@ mod tests {
             }
             if let Some(value) = overview {
                 item.overview = Some(value);
+            }
+            if let Some(value) = tvdb_id {
+                item.tvdb_id = Some(value);
             }
 
             Ok(item.clone())
@@ -2148,11 +2163,11 @@ mod tests {
                     .iter()
                     .filter(|c| c.title_id == *tid)
                     .filter(|c| {
-                        c.collection_type.eq_ignore_ascii_case("movie") || c.collection_index == "0"
+                        c.collection_type == CollectionType::Movie || c.collection_index == "0"
                     })
                     .min_by(|left, right| {
                         let left_key = (
-                            !left.collection_type.eq_ignore_ascii_case("movie"),
+                            left.collection_type != CollectionType::Movie,
                             left.ordered_path
                                 .as_deref()
                                 .map_or(true, |path| path.trim().is_empty()),
@@ -2160,7 +2175,7 @@ mod tests {
                             left.collection_index.clone(),
                         );
                         let right_key = (
-                            !right.collection_type.eq_ignore_ascii_case("movie"),
+                            right.collection_type != CollectionType::Movie,
                             right
                                 .ordered_path
                                 .as_deref()
@@ -2788,7 +2803,7 @@ mod tests {
         let mut registry = FacetRegistry::new();
         registry.register(Arc::new(MovieFacetHandler));
         registry.register(Arc::new(SeriesFacetHandler::new(
-            scryer_domain::MediaFacet::Tv,
+            scryer_domain::MediaFacet::Series,
         )));
         registry.register(Arc::new(SeriesFacetHandler::new(
             scryer_domain::MediaFacet::Anime,
@@ -2842,7 +2857,7 @@ mod tests {
         let mut registry = FacetRegistry::new();
         registry.register(Arc::new(MovieFacetHandler));
         registry.register(Arc::new(SeriesFacetHandler::new(
-            scryer_domain::MediaFacet::Tv,
+            scryer_domain::MediaFacet::Series,
         )));
         registry.register(Arc::new(SeriesFacetHandler::new(
             scryer_domain::MediaFacet::Anime,
@@ -2868,7 +2883,7 @@ mod tests {
                 &user,
                 NewTitle {
                     name: "Show One".into(),
-                    facet: MediaFacet::Tv,
+                    facet: MediaFacet::Series,
                     monitored: true,
                     tags: vec![],
                     external_ids: vec![],
@@ -2910,7 +2925,7 @@ mod tests {
             &user,
             NewTitle {
                 name: "Show B".into(),
-                facet: MediaFacet::Tv,
+                facet: MediaFacet::Series,
                 monitored: true,
                 tags: vec![],
                 external_ids: vec![],
@@ -2923,11 +2938,11 @@ mod tests {
         .expect("create tv");
 
         let tvs = app
-            .list_titles(&user, Some(MediaFacet::Tv), None)
+            .list_titles(&user, Some(MediaFacet::Series), None)
             .await
             .expect("list titles");
 
-        assert!(tvs.iter().all(|item| item.facet == MediaFacet::Tv));
+        assert!(tvs.iter().all(|item| item.facet == MediaFacet::Series));
     }
 
     #[tokio::test]
@@ -3299,7 +3314,7 @@ mod tests {
                 &user,
                 NewTitle {
                     name: "The Odes".into(),
-                    facet: MediaFacet::Tv,
+                    facet: MediaFacet::Series,
                     monitored: true,
                     tags: vec![],
                     external_ids: vec![],
@@ -3330,7 +3345,7 @@ mod tests {
                 &user,
                 title.id.clone(),
                 Some(collection.id.clone()),
-                "episode".into(),
+                "standard".into(),
                 Some("1".into()),
                 Some("1".into()),
                 Some("Pilot".into()),
@@ -3518,7 +3533,7 @@ mod tests {
             .expect("list collections");
         let interstitial = collections
             .iter()
-            .find(|collection| collection.collection_type == "interstitial")
+            .find(|collection| collection.collection_type == CollectionType::Interstitial)
             .expect("interstitial collection should exist");
         assert_eq!(interstitial.collection_index, "1.1");
         assert_eq!(
@@ -3634,7 +3649,7 @@ mod tests {
         assert!(
             collections
                 .iter()
-                .all(|collection| collection.collection_type != "interstitial"),
+                .all(|collection| collection.collection_type != CollectionType::Interstitial),
             "unexpected interstitial collection created"
         );
     }
@@ -3773,7 +3788,7 @@ mod tests {
             .expect("list collections");
         let specials = collections
             .iter()
-            .find(|collection| collection.collection_type == "specials")
+            .find(|collection| collection.collection_type == CollectionType::Specials)
             .expect("specials collection should exist");
         assert!(!specials.monitored);
         assert_eq!(specials.specials_movies.len(), 1);
@@ -3784,7 +3799,7 @@ mod tests {
 
         let interstitial = collections
             .iter()
-            .find(|collection| collection.collection_type == "interstitial")
+            .find(|collection| collection.collection_type == CollectionType::Interstitial)
             .expect("ordered movie collection should exist");
         assert!(interstitial.monitored);
         assert_eq!(
@@ -3804,7 +3819,7 @@ mod tests {
                 &user,
                 NewTitle {
                     name: "Read Collection".into(),
-                    facet: MediaFacet::Tv,
+                    facet: MediaFacet::Series,
                     monitored: true,
                     tags: vec![],
                     external_ids: vec![],
@@ -3848,7 +3863,7 @@ mod tests {
                 &user,
                 NewTitle {
                     name: "Read Episode".into(),
-                    facet: MediaFacet::Tv,
+                    facet: MediaFacet::Series,
                     monitored: true,
                     tags: vec![],
                     external_ids: vec![],
@@ -3879,7 +3894,7 @@ mod tests {
                 &user,
                 title.id.clone(),
                 Some(collection.id.clone()),
-                "episode".into(),
+                "standard".into(),
                 Some("1".into()),
                 Some("1".into()),
                 Some("Pilot".into()),
@@ -3910,7 +3925,7 @@ mod tests {
                 &user,
                 NewTitle {
                     name: "Collection Delete".into(),
-                    facet: MediaFacet::Tv,
+                    facet: MediaFacet::Series,
                     monitored: true,
                     tags: vec![],
                     external_ids: vec![],
@@ -3955,7 +3970,7 @@ mod tests {
                 &user,
                 NewTitle {
                     name: "Episode Delete".into(),
-                    facet: MediaFacet::Tv,
+                    facet: MediaFacet::Series,
                     monitored: true,
                     tags: vec![],
                     external_ids: vec![],
@@ -3986,7 +4001,7 @@ mod tests {
                 &user,
                 title.id.clone(),
                 Some(collection.id.clone()),
-                "episode".into(),
+                "standard".into(),
                 Some("1".into()),
                 Some("1".into()),
                 Some("Pilot".into()),
@@ -4018,7 +4033,7 @@ mod tests {
                 &user,
                 NewTitle {
                     name: "Update Collection".into(),
-                    facet: MediaFacet::Tv,
+                    facet: MediaFacet::Series,
                     monitored: true,
                     tags: vec![],
                     external_ids: vec![],
@@ -4059,7 +4074,7 @@ mod tests {
             .await
             .expect("update collection");
 
-        assert_eq!(updated.collection_type, "arc");
+        assert_eq!(updated.collection_type, CollectionType::Arc);
         assert_eq!(updated.label, Some("Arc One".into()));
         assert_eq!(updated.ordered_path, Some("arc-one".into()));
         assert_eq!(updated.last_episode_number, Some("13".into()));
@@ -4074,7 +4089,7 @@ mod tests {
                 &user,
                 NewTitle {
                     name: "Update Episode".into(),
-                    facet: MediaFacet::Tv,
+                    facet: MediaFacet::Series,
                     monitored: true,
                     tags: vec![],
                     external_ids: vec![],
@@ -4105,7 +4120,7 @@ mod tests {
                 &user,
                 title.id.clone(),
                 Some(collection.id.clone()),
-                "episode".into(),
+                "standard".into(),
                 Some("1".into()),
                 Some("1".into()),
                 Some("Pilot".into()),
@@ -4138,7 +4153,7 @@ mod tests {
             .await
             .expect("update episode");
 
-        assert_eq!(updated.episode_type, "special");
+        assert_eq!(updated.episode_type, scryer_domain::EpisodeType::Special);
         assert_eq!(updated.episode_number, Some("E01".into()));
         assert_eq!(updated.title, Some("Pilot Updated".into()));
         assert_eq!(updated.air_date, Some("2026-01-01".into()));

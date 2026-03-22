@@ -97,15 +97,6 @@ fn parse_download_client_routing_map(
         .cloned()
 }
 
-fn scope_id_for_facet(facet: &MediaFacet) -> Option<&'static str> {
-    match facet {
-        MediaFacet::Movie => Some("movie"),
-        MediaFacet::Tv => Some("series"),
-        MediaFacet::Anime => Some("anime"),
-        MediaFacet::Other => None,
-    }
-}
-
 fn release_is_recent_for_queue_priority(baseline_date: Option<&str>) -> bool {
     let Some(baseline_date) = baseline_date else {
         return false;
@@ -391,9 +382,7 @@ impl AppUseCase {
         facet: &MediaFacet,
         client_id: &str,
     ) -> AppResult<Option<DownloadClientRoutingEntry>> {
-        let Some(scope_id) = scope_id_for_facet(facet) else {
-            return Ok(None);
-        };
+        let scope_id = facet.as_str();
 
         let Some(raw_json) = self.read_download_client_routing_value(scope_id).await? else {
             return Ok(None);
@@ -849,12 +838,12 @@ impl AppUseCase {
             .list_collections_for_title(&title.id)
             .await
             .unwrap_or_default();
-        let existing_collection_map: std::collections::HashMap<(String, String), String> =
+        let existing_collection_map: std::collections::HashMap<(CollectionType, String), String> =
             existing_collections
                 .iter()
                 .map(|c| {
                     (
-                        (c.collection_type.clone(), c.collection_index.clone()),
+                        (c.collection_type, c.collection_index.clone()),
                         c.id.clone(),
                     )
                 })
@@ -937,13 +926,13 @@ impl AppUseCase {
             let season_monitored = seasons_with_episodes.contains(&season.number)
                 && should_monitor_season(&monitor_type, season.number, monitor_specials);
             let collection_type = if season.number == 0 && title.facet == MediaFacet::Anime {
-                "specials".to_string()
+                CollectionType::Specials
             } else {
-                "season".to_string()
+                CollectionType::Season
             };
             let collection_index = season.number.to_string();
             if let Some(existing_id) =
-                existing_collection_map.get(&(collection_type.clone(), collection_index.clone()))
+                existing_collection_map.get(&(collection_type, collection_index.clone()))
             {
                 // Update language-sensitive label if it changed
                 if !season.label.is_empty()
@@ -1083,7 +1072,7 @@ impl AppUseCase {
 
                     // Reuse existing interstitial collection if one already exists.
                     if let Some(existing_id) = existing_collection_map
-                        .get(&("interstitial".to_string(), narrative_order.clone()))
+                        .get(&(CollectionType::Interstitial, narrative_order.clone()))
                     {
                         // Update language-sensitive label if it changed
                         if !label.is_empty()
@@ -1149,7 +1138,7 @@ impl AppUseCase {
                     let collection = Collection {
                         id: Id::new().0,
                         title_id: title.id.clone(),
-                        collection_type: "interstitial".to_string(),
+                        collection_type: CollectionType::Interstitial,
                         collection_index: narrative_order.clone(),
                         label: Some(label.clone()),
                         ordered_path: None,
@@ -1331,7 +1320,13 @@ impl AppUseCase {
                 // Only update if the new data differs from existing
                 let title_changed = new_title.as_deref() != existing.title.as_deref();
                 let overview_changed = new_overview.as_deref() != existing.overview.as_deref();
-                if title_changed || overview_changed {
+                let new_tvdb_id = if ep.tvdb_id > 0 {
+                    Some(ep.tvdb_id.to_string())
+                } else {
+                    None
+                };
+                let tvdb_id_changed = new_tvdb_id.as_deref() != existing.tvdb_id.as_deref();
+                if title_changed || overview_changed || tvdb_id_changed {
                     let _ = self
                         .services
                         .shows
@@ -1353,6 +1348,7 @@ impl AppUseCase {
                             None,
                             None,
                             if overview_changed { new_overview } else { None },
+                            if tvdb_id_changed { new_tvdb_id } else { None },
                         )
                         .await;
                 }
@@ -1387,6 +1383,11 @@ impl AppUseCase {
                     None
                 } else {
                     Some(ep.overview.clone())
+                },
+                tvdb_id: if ep.tvdb_id > 0 {
+                    Some(ep.tvdb_id.to_string())
+                } else {
+                    None
                 },
                 monitored: episode_monitored,
                 created_at: Utc::now(),
@@ -1718,13 +1719,7 @@ impl AppUseCase {
     /// Resolve the per-facet fallback category used when the selected client
     /// does not declare an explicit routing category.
     pub(crate) async fn derive_download_category(&self, facet: &MediaFacet) -> String {
-        let Some(scope_id) = scope_id_for_facet(facet) else {
-            return self
-                .facet_registry
-                .get(facet)
-                .map(|h| h.download_category().to_string())
-                .unwrap_or_else(|| "other".to_string());
-        };
+        let scope_id = facet.as_str();
 
         if let Ok(Some(configured)) = self
             .read_setting_string_value(DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY, Some(scope_id))
@@ -1858,6 +1853,7 @@ impl AppUseCase {
                 None,
                 None,
                 Some(monitored),
+                None,
                 None,
                 None,
             )
@@ -2276,6 +2272,10 @@ impl AppUseCase {
         if collection_type.trim().is_empty() {
             return Err(AppError::Validation("collection type is required".into()));
         }
+        let parsed_type = CollectionType::parse(collection_type.trim().to_lowercase().as_str())
+            .ok_or_else(|| {
+                AppError::Validation(format!("unknown collection type: {}", collection_type))
+            })?;
         if collection_index.trim().is_empty() {
             return Err(AppError::Validation("collection index is required".into()));
         }
@@ -2285,7 +2285,7 @@ impl AppUseCase {
         let collection = Collection {
             id: Id::new().0,
             title_id,
-            collection_type: collection_type.trim().to_lowercase(),
+            collection_type: parsed_type,
             collection_index: collection_index.trim().to_string(),
             label: normalize_show_text_opt(label),
             ordered_path: normalize_show_text_opt(ordered_path),
@@ -2349,6 +2349,13 @@ impl AppUseCase {
                 "collection type cannot be empty".into(),
             ));
         }
+        let parsed_type = collection_type
+            .map(|raw| {
+                CollectionType::parse(raw.trim().to_lowercase().as_str()).ok_or_else(|| {
+                    AppError::Validation(format!("unknown collection type: {}", raw))
+                })
+            })
+            .transpose()?;
 
         if let Some(raw) = &collection_index
             && raw.trim().is_empty()
@@ -2363,7 +2370,7 @@ impl AppUseCase {
             .shows
             .update_collection(
                 &collection_id,
-                collection_type.map(|value| value.trim().to_lowercase()),
+                parsed_type,
                 collection_index.map(|value| value.trim().to_string()),
                 normalize_show_text_opt(label),
                 normalize_show_text_opt(ordered_path),
@@ -2409,13 +2416,19 @@ impl AppUseCase {
             return Err(AppError::Validation("episode type is required".into()));
         }
 
+        let parsed_episode_type =
+            scryer_domain::EpisodeType::parse(episode_type.trim().to_lowercase().as_str())
+                .ok_or_else(|| {
+                    AppError::Validation(format!("unknown episode type: {}", episode_type))
+                })?;
+
         self.validate_title_exists(&title_id).await?;
 
         let episode = Episode {
             id: Id::new().0,
             title_id,
             collection_id,
-            episode_type: episode_type.trim().to_lowercase(),
+            episode_type: parsed_episode_type,
             episode_number: normalize_show_text_opt(episode_number),
             season_number: normalize_show_text_opt(season_number),
             episode_label: normalize_show_text_opt(episode_label),
@@ -2428,6 +2441,7 @@ impl AppUseCase {
             is_recap: false,
             absolute_number: None,
             overview: None,
+            tvdb_id: None,
             monitored: true,
             created_at: Utc::now(),
         };
@@ -2488,12 +2502,19 @@ impl AppUseCase {
             return Err(AppError::Validation("episode type cannot be empty".into()));
         }
 
+        let parsed_episode_type = episode_type
+            .map(|value| {
+                scryer_domain::EpisodeType::parse(value.trim().to_lowercase().as_str())
+                    .ok_or_else(|| AppError::Validation(format!("unknown episode type: {}", value)))
+            })
+            .transpose()?;
+
         let episode = self
             .services
             .shows
             .update_episode(
                 &episode_id,
-                episode_type.map(|value| value.trim().to_lowercase()),
+                parsed_episode_type,
                 normalize_show_text_opt(episode_number),
                 normalize_show_text_opt(season_number),
                 normalize_show_text_opt(episode_label),
@@ -2505,6 +2526,7 @@ impl AppUseCase {
                 monitored,
                 collection_id,
                 overview,
+                None,
             )
             .await?;
 
@@ -2716,17 +2738,18 @@ fn derive_episode_type(
     season_number: i32,
     season_episode_type: Option<&str>,
     anime_media_type: Option<&str>,
-) -> String {
+) -> scryer_domain::EpisodeType {
+    use scryer_domain::EpisodeType;
     if season_number == 0 {
         return match anime_media_type {
-            Some("OVA") => "ova".to_string(),
-            Some("ONA") => "ona".to_string(),
-            _ => "special".to_string(),
+            Some("OVA") => EpisodeType::Ova,
+            Some("ONA") => EpisodeType::Ona,
+            _ => EpisodeType::Special,
         };
     }
     match season_episode_type {
-        Some("alternate") => "alternate".to_string(),
-        _ => "standard".to_string(),
+        Some("alternate") => EpisodeType::Alternate,
+        _ => EpisodeType::Standard,
     }
 }
 
@@ -2826,9 +2849,7 @@ pub async fn start_background_hydration_loop(
             for title in batch {
                 match title.facet {
                     MediaFacet::Movie => movie_titles.push(title),
-                    MediaFacet::Tv | MediaFacet::Anime | MediaFacet::Other => {
-                        series_titles.push(title)
-                    }
+                    MediaFacet::Series | MediaFacet::Anime => series_titles.push(title),
                 }
             }
 

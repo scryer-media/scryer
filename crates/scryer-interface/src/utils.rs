@@ -5,19 +5,13 @@ use scryer_domain::{Entitlement, ExternalId, MediaFacet, NewTitle};
 use crate::types::AddTitleInput;
 
 pub(crate) fn parse_facet(raw: Option<String>) -> Option<MediaFacet> {
-    raw.and_then(|value| match value.to_lowercase().as_str() {
-        "movie" => Some(MediaFacet::Movie),
-        "tv" => Some(MediaFacet::Tv),
-        "anime" => Some(MediaFacet::Anime),
-        "other" => Some(MediaFacet::Other),
-        _ => None,
-    })
+    raw.and_then(|value| MediaFacet::parse(&value))
 }
 
 pub(crate) fn map_add_input(input: AddTitleInput) -> NewTitle {
     NewTitle {
         name: input.name,
-        facet: parse_facet(Some(input.facet)).unwrap_or(MediaFacet::Other),
+        facet: parse_facet(Some(input.facet)).unwrap_or_default(),
         monitored: input.monitored,
         tags: input.tags,
         external_ids: input
@@ -102,7 +96,7 @@ mod tests {
     #[test]
     fn parse_facet_known_values_are_mapped() {
         assert_eq!(parse_facet(Some("movie".into())), Some(MediaFacet::Movie));
-        assert_eq!(parse_facet(Some("TV".into())), Some(MediaFacet::Tv));
+        assert_eq!(parse_facet(Some("TV".into())), Some(MediaFacet::Series));
         assert_eq!(parse_facet(Some("anime".into())), Some(MediaFacet::Anime));
     }
 

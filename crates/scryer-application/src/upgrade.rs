@@ -11,7 +11,9 @@ use crate::activity::{ActivityChannel, ActivityKind, ActivitySeverity};
 use crate::recycle_bin::{self, RecycleBinConfig, RecycleManifest};
 use crate::release_parser::ParsedReleaseMetadata;
 use crate::types::TitleMediaFile;
-use crate::{AppError, AppResult, AppUseCase, InsertMediaFileInput};
+use crate::{
+    AppError, AppResult, AppUseCase, InsertMediaFileInput, ReleaseDownloadAttemptOutcome,
+};
 use scryer_domain::{CompletedDownload, NotificationEventType, Title, User};
 
 /// Result of a successful upgrade operation.
@@ -33,7 +35,7 @@ pub enum UpgradeResult {
 /// so that we never lose both copies.
 pub async fn execute_upgrade(
     app: &AppUseCase,
-    actor: &User,
+    _actor: &User,
     title: &Title,
     existing_file: &TitleMediaFile,
     source_path: &std::path::Path,
@@ -48,14 +50,113 @@ pub async fn execute_upgrade(
     recycle_config: &RecycleBinConfig,
 ) -> AppResult<UpgradeResult> {
     let old_path = PathBuf::from(&existing_file.file_path);
+
+    // 1. Probe source file in-place BEFORE any file moves.
+    let source_size = std::fs::metadata(source_path)
+        .map(|m| m.len() as i64)
+        .unwrap_or(0);
+
+    let gate_result = crate::post_download_gate::probe_and_validate(
+        app,
+        title,
+        parsed,
+        quality_profile,
+        source_path,
+        source_size,
+        true,
+        Some(old_score),
+        is_filler,
+    )
+    .await;
+
+    // 2. If probe rejects, bail immediately with zero file moves.
+    let accepted = match gate_result {
+        crate::post_download_gate::ImportedFileGateDecision::Rejected(rejection) => {
+            tracing::info!(
+                title = %title.name,
+                reason = %rejection.message,
+                "upgrade probe rejected source file — no files moved"
+            );
+            // Record failed attempt + blocklist so this release isn't re-downloaded.
+            let _ = app
+                .services
+                .release_attempts
+                .record_release_attempt(
+                    Some(title.id.clone()),
+                    crate::normalize_release_attempt_hint(None),
+                    crate::normalize_release_attempt_title(Some(&completed.name)),
+                    ReleaseDownloadAttemptOutcome::Failed,
+                    Some(rejection.message.clone()),
+                    None,
+                )
+                .await;
+            return Ok(UpgradeResult::Rejected(rejection));
+        }
+        crate::post_download_gate::ImportedFileGateDecision::Accepted(accepted) => accepted,
+    };
+
+    // 3. Rescore from mediainfo: merge detected values into parsed metadata and re-evaluate.
+    let (rescored_parsed, rescore_changes) =
+        crate::post_download_gate::rescore_from_mediainfo(parsed, &accepted);
+    let original_candidate_score = new_score;
+    let final_score = if rescore_changes.is_empty() {
+        new_score
+    } else {
+        let category = crate::post_download_gate::facet_to_category_hint(&title.facet);
+        let decision = crate::post_download_gate::build_import_profile_decision(
+            quality_profile,
+            &rescored_parsed,
+            category,
+            title.runtime_minutes,
+            Some(source_size),
+            true,
+        );
+        let rescored = decision.preference_score;
+        tracing::info!(
+            title = %title.name,
+            original_score = original_candidate_score,
+            rescored = rescored,
+            changes = ?rescore_changes,
+            "mediainfo rescore applied"
+        );
+        rescored
+    };
+
+    // If rescored score no longer beats the existing file, abort upgrade.
+    if final_score <= old_score {
+        tracing::info!(
+            title = %title.name,
+            original_score = original_candidate_score,
+            rescored = final_score,
+            old_score,
+            "mediainfo rescore eliminated upgrade advantage — aborting"
+        );
+        return Ok(UpgradeResult::Rejected(
+            crate::post_download_gate::ImportedFileRejection {
+                message: format!(
+                    "mediainfo rescore reduced score from {} to {} (existing: {})",
+                    original_candidate_score, final_score, old_score
+                ),
+                recycle_reason: "rescore_eliminated_advantage",
+                skip_reason: None,
+                blocking_rule_codes: Vec::new(),
+            },
+        ));
+    }
+
     let scoring_log = format!(
-        "upgrade {} → {} (delta {})",
+        "upgrade {} → {} (delta {}){}",
         old_score,
-        new_score,
-        new_score - old_score
+        final_score,
+        final_score - old_score,
+        if rescore_changes.is_empty() {
+            String::new()
+        } else {
+            format!("; rescore: {}", rescore_changes.join(", "))
+        }
     );
 
-    // 1. Recycle the old file
+    // 3. Recycle the old file
     let manifest = RecycleManifest {
         recycled_at: chrono::Utc::now().to_rfc3339(),
         original_path: existing_file.file_path.clone(),
@@ -65,7 +166,7 @@ pub async fn execute_upgrade(
     };
     let recycle_result = recycle_bin::recycle_file(recycle_config, &old_path, manifest).await?;
 
-    // 2. Import the new file
+    // 4. Import the new file
     let import_result = app
         .services
         .file_importer
@@ -75,7 +176,6 @@ pub async fn execute_upgrade(
     let file_result = match import_result {
         Ok(r) => r,
         Err(err) => {
-            // 3. Restore old file on failure
             tracing::error!(
                 error = %err,
                 old_path = %old_path.display(),
@@ -89,138 +189,108 @@ pub async fn execute_upgrade(
         }
     };
 
-    match crate::post_download_gate::evaluate_imported_file_gate(
-        app,
-        title,
-        parsed,
-        quality_profile,
-        dest_path,
-        file_result.size_bytes as i64,
-        true,
-        Some(old_score),
-        is_filler,
-    )
-    .await
+    // 5. Delete old media_files record
+    let old_file_id = existing_file.id.clone();
+    let old_episode_id = existing_file.episode_id.clone();
+    if let Err(err) = app
+        .services
+        .media_files
+        .delete_media_file(&old_file_id)
+        .await
     {
-        crate::post_download_gate::ImportedFileGateDecision::Rejected(rejection) => {
-            crate::post_download_gate::reject_imported_file(
-                app,
-                Some(&actor.id),
-                title,
-                &completed.name,
-                dest_path,
-                target_episode_ids,
-                &rejection,
-            )
-            .await;
-            restore_old_file(&recycle_result, &old_path).await;
-            Ok(UpgradeResult::Rejected(rejection))
+        tracing::warn!(error = %err, file_id = %old_file_id, "failed to delete old media file record during upgrade");
+    }
+
+    // 6. Insert new record with rich schema
+    let media_file_input = InsertMediaFileInput {
+        title_id: title.id.clone(),
+        file_path: dest_path.to_string_lossy().to_string(),
+        size_bytes: file_result.size_bytes as i64,
+        quality_label: parsed.quality.clone(),
+        scene_name: Some(parsed.raw_title.clone()),
+        release_group: parsed.release_group.clone(),
+        source_type: parsed.source.clone(),
+        resolution: parsed.quality.clone(),
+        video_codec_parsed: parsed.video_codec.clone(),
+        audio_codec_parsed: parsed.audio.clone(),
+        original_file_path: Some(source_path.to_string_lossy().to_string()),
+        acquisition_score: Some(final_score),
+        scoring_log: Some(scoring_log.clone()),
+        ..Default::default()
+    };
+    let new_file_id = app
+        .services
+        .media_files
+        .insert_media_file(&media_file_input)
+        .await?;
+    crate::post_download_gate::persist_media_analysis_result(
+        &app.services.media_files,
+        &new_file_id,
+        &accepted,
+    )
+    .await;
+
+    // 7. Re-link episode mappings.
+    if target_episode_ids.is_empty() {
+        if let Some(ref episode_id) = old_episode_id {
+            let _ = app
+                .services
+                .media_files
+                .link_file_to_episode(&new_file_id, episode_id)
+                .await;
         }
-        crate::post_download_gate::ImportedFileGateDecision::Accepted(accepted) => {
-            // 4. Delete old media_files record
-            let old_file_id = existing_file.id.clone();
-            let old_episode_id = existing_file.episode_id.clone();
-            if let Err(err) = app
+    } else {
+        for episode_id in target_episode_ids {
+            let _ = app
                 .services
                 .media_files
-                .delete_media_file(&old_file_id)
-                .await
-            {
-                tracing::warn!(error = %err, file_id = %old_file_id, "failed to delete old media file record during upgrade");
-            }
-
-            // 5. Insert new record with rich schema
-            let media_file_input = InsertMediaFileInput {
-                title_id: title.id.clone(),
-                file_path: dest_path.to_string_lossy().to_string(),
-                size_bytes: file_result.size_bytes as i64,
-                quality_label: parsed.quality.clone(),
-                scene_name: Some(parsed.raw_title.clone()),
-                release_group: parsed.release_group.clone(),
-                source_type: parsed.source.clone(),
-                resolution: parsed.quality.clone(),
-                video_codec_parsed: parsed.video_codec.clone(),
-                audio_codec_parsed: parsed.audio.clone(),
-                original_file_path: Some(source_path.to_string_lossy().to_string()),
-                acquisition_score: Some(new_score),
-                scoring_log: Some(scoring_log.clone()),
-                ..Default::default()
-            };
-            let new_file_id = app
-                .services
-                .media_files
-                .insert_media_file(&media_file_input)
-                .await?;
-            crate::post_download_gate::persist_media_analysis_result(
-                &app.services.media_files,
-                &new_file_id,
-                &accepted,
-            )
-            .await;
-
-            // 6. Re-link episode mappings.
-            if target_episode_ids.is_empty() {
-                if let Some(ref episode_id) = old_episode_id {
-                    let _ = app
-                        .services
-                        .media_files
-                        .link_file_to_episode(&new_file_id, episode_id)
-                        .await;
-                }
-            } else {
-                for episode_id in target_episode_ids {
-                    let _ = app
-                        .services
-                        .media_files
-                        .link_file_to_episode(&new_file_id, episode_id)
-                        .await;
-                }
-            }
-
-            // 7. Record activity event
-            let message = format!(
-                "Upgraded file for '{}': score {} → {} (delta +{})",
-                title.name,
-                old_score,
-                new_score,
-                new_score - old_score
-            );
-            {
-                let mut meta = HashMap::new();
-                meta.insert("title_name".to_string(), serde_json::json!(title.name));
-                meta.insert("old_score".to_string(), serde_json::json!(old_score));
-                meta.insert("new_score".to_string(), serde_json::json!(new_score));
-                if let Some(ref poster) = title.poster_url {
-                    meta.insert("poster_url".to_string(), serde_json::json!(poster));
-                }
-                let envelope = crate::activity::NotificationEnvelope {
-                    event_type: NotificationEventType::Upgrade,
-                    title: format!("Upgraded: {}", title.name),
-                    body: message.clone(),
-                    facet: Some(format!("{:?}", title.facet).to_lowercase()),
-                    metadata: meta,
-                };
-                app.services
-                    .record_activity_event_with_notification(
-                        None,
-                        Some(title.id.clone()),
-                        None,
-                        ActivityKind::FileUpgraded,
-                        message,
-                        ActivitySeverity::Success,
-                        vec![ActivityChannel::WebUi, ActivityChannel::Toast],
-                        envelope,
-                    )
-                    .await?;
-            }
-
-            Ok(UpgradeResult::Upgraded(UpgradeOutcome {
-                old_score,
-                new_score,
-                new_file_id,
-            }))
+                .link_file_to_episode(&new_file_id, episode_id)
+                .await;
         }
     }
+
+    // 8. Record activity event
+    let message = format!(
+        "Upgraded file for '{}': score {} → {} (delta +{})",
+        title.name,
+        old_score,
+        final_score,
+        final_score - old_score
+    );
+    {
+        let mut meta = HashMap::new();
+        meta.insert("title_name".to_string(), serde_json::json!(title.name));
+        meta.insert("old_score".to_string(), serde_json::json!(old_score));
+        meta.insert("new_score".to_string(), serde_json::json!(final_score));
+        if let Some(ref poster) = title.poster_url {
+            meta.insert("poster_url".to_string(), serde_json::json!(poster));
+        }
+        let envelope = crate::activity::NotificationEnvelope {
+            event_type: NotificationEventType::Upgrade,
+            title: format!("Upgraded: {}", title.name),
+            body: message.clone(),
+            facet: Some(format!("{:?}", title.facet).to_lowercase()),
+            metadata: meta,
+        };
+        app.services
+            .record_activity_event_with_notification(
+                None,
+                Some(title.id.clone()),
+                None,
+                ActivityKind::FileUpgraded,
+                message,
+                ActivitySeverity::Success,
+                vec![ActivityChannel::WebUi, ActivityChannel::Toast],
+                envelope,
+            )
+            .await?;
+    }
+
+    Ok(UpgradeResult::Upgraded(UpgradeOutcome {
+        old_score,
+        new_score: final_score,
+        new_file_id,
+    }))
 }
 
 async fn restore_old_file(

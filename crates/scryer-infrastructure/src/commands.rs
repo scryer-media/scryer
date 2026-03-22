@@ -18,8 +18,8 @@ use scryer_application::{
     ReleaseDownloadAttemptOutcome, TitleMediaSizeSummary, TitleMetadataUpdate, WantedItem,
 };
 use scryer_domain::{
-    BlocklistEntry, CalendarEpisode, Collection, DownloadClientConfig, Episode, HistoryEvent,
-    ImportRecord, IndexerConfig, MediaFacet, PluginInstallation, RuleSet, Title,
+    BlocklistEntry, CalendarEpisode, Collection, CollectionType, DownloadClientConfig, Episode,
+    HistoryEvent, ImportRecord, IndexerConfig, MediaFacet, PluginInstallation, RuleSet, Title,
     TitleHistoryRecord, User,
 };
 use sqlx::SqlitePool;
@@ -84,7 +84,7 @@ pub(crate) enum DbCommand {
     },
     UpdateCollection {
         collection_id: String,
-        collection_type: Option<String>,
+        collection_type: Option<CollectionType>,
         collection_index: Option<String>,
         label: Option<String>,
         ordered_path: Option<String>,
@@ -117,7 +117,7 @@ pub(crate) enum DbCommand {
     },
     UpdateEpisode {
         episode_id: String,
-        episode_type: Option<String>,
+        episode_type: Option<scryer_domain::EpisodeType>,
         episode_number: Option<String>,
         season_number: Option<String>,
         episode_label: Option<String>,
@@ -129,6 +129,7 @@ pub(crate) enum DbCommand {
         monitored: Option<bool>,
         collection_id: Option<String>,
         overview: Option<String>,
+        tvdb_id: Option<String>,
         reply: Sender<AppResult<Episode>>,
     },
     DeleteCollection {
@@ -494,6 +495,10 @@ pub(crate) enum DbCommand {
     DeleteWantedItemsForTitle {
         title_id: String,
         reply: Sender<AppResult<()>>,
+    },
+    ResetFruitlessWantedItems {
+        now: String,
+        reply: Sender<AppResult<u64>>,
     },
     InsertReleaseDecision {
         decision: ReleaseDecision,
@@ -969,6 +974,7 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     monitored,
                     collection_id,
                     overview,
+                    tvdb_id,
                     reply,
                 } => {
                     let _ = reply.send(
@@ -987,6 +993,7 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                             monitored,
                             collection_id,
                             overview,
+                            tvdb_id,
                         )
                         .await,
                     );
@@ -1663,6 +1670,12 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                         .await,
                     );
                 }
+                DbCommand::ResetFruitlessWantedItems { now, reply } => {
+                    let _ = reply.send(
+                        crate::queries::wanted::reset_fruitless_wanted_items_query(&pool, &now)
+                            .await,
+                    );
+                }
                 DbCommand::InsertReleaseDecision { decision, reply } => {
                     let _ = reply.send(
                         crate::queries::wanted::insert_release_decision_query(&pool, &decision)
@@ -2270,7 +2283,8 @@ fn th_row_to_record(row: th_queries::TitleHistoryRow) -> TitleHistoryRecord {
         title_id: row.title_id,
         episode_id: row.episode_id,
         collection_id: row.collection_id,
-        event_type: row.event_type,
+        event_type: scryer_domain::HistoryEventType::parse(&row.event_type)
+            .unwrap_or(scryer_domain::HistoryEventType::Grabbed),
         source_title: row.source_title,
         quality: row.quality,
         download_id: row.download_id,

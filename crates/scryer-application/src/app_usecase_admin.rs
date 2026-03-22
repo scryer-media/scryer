@@ -16,7 +16,7 @@ impl AppUseCase {
         let mut titles_movie = 0usize;
         let mut titles_tv = 0usize;
         let mut titles_anime = 0usize;
-        let mut titles_other = 0usize;
+        let titles_other = 0usize;
         let mut monitored_titles = 0usize;
         let mut recent_event_preview = Vec::with_capacity(std::cmp::min(3, recent_events.len()));
 
@@ -27,9 +27,8 @@ impl AppUseCase {
 
             match title.facet {
                 MediaFacet::Movie => titles_movie += 1,
-                MediaFacet::Tv => titles_tv += 1,
+                MediaFacet::Series => titles_tv += 1,
                 MediaFacet::Anime => titles_anime += 1,
-                MediaFacet::Other => titles_other += 1,
             }
         }
 

@@ -51,7 +51,10 @@ impl AppUseCase {
 
         let errored: Vec<_> = enabled
             .iter()
-            .filter(|c| c.status == "error" || c.status == "failed")
+            .filter(|c| {
+                c.status == scryer_domain::DownloadClientStatus::Error
+                    || c.status == scryer_domain::DownloadClientStatus::Failed
+            })
             .collect();
         if !errored.is_empty() {
             let names: Vec<&str> = errored.iter().map(|c| c.name.as_str()).collect();

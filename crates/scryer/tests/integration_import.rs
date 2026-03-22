@@ -99,7 +99,7 @@ async fn add_series_title(ctx: &TestContext, id: &str, name: &str, media_root: &
     let title = Title {
         id: id.to_string(),
         name: name.to_string(),
-        facet: MediaFacet::Tv,
+        facet: MediaFacet::Series,
         monitored: true,
         tags: vec![format!("scryer:root-folder:{}", media_root)],
         external_ids: vec![],
@@ -153,7 +153,7 @@ fn copy_fixture(dest_dir: &Path, fixture_name: &str, dest_name: &str) -> PathBuf
 async fn seed_movie_wanted_item(
     ctx: &TestContext,
     title_id: &str,
-    status: &str,
+    status: scryer_application::WantedStatus,
     current_score: Option<i32>,
 ) -> scryer_application::WantedItem {
     let item = scryer_application::WantedItem {
@@ -169,7 +169,7 @@ async fn seed_movie_wanted_item(
         last_search_at: None,
         search_count: 0,
         baseline_date: None,
-        status: status.to_string(),
+        status,
         grabbed_release: None,
         current_score,
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -186,7 +186,7 @@ async fn seed_series_episode(ctx: &TestContext, title: &Title) -> Episode {
     let collection = Collection {
         id: Id::new().0,
         title_id: title.id.clone(),
-        collection_type: "season".to_string(),
+        collection_type: scryer_domain::CollectionType::Season,
         collection_index: "1".to_string(),
         label: Some("Season 1".to_string()),
         ordered_path: None,
@@ -208,7 +208,7 @@ async fn seed_series_episode(ctx: &TestContext, title: &Title) -> Episode {
         id: Id::new().0,
         title_id: title.id.clone(),
         collection_id: Some(collection.id.clone()),
-        episode_type: "standard".to_string(),
+        episode_type: scryer_domain::EpisodeType::Standard,
         episode_number: Some("1".to_string()),
         season_number: Some("1".to_string()),
         episode_label: Some("S01E01".to_string()),
@@ -221,6 +221,7 @@ async fn seed_series_episode(ctx: &TestContext, title: &Title) -> Episode {
         is_recap: false,
         absolute_number: None,
         overview: None,
+        tvdb_id: None,
         monitored: true,
         created_at: chrono::Utc::now(),
     };
@@ -235,7 +236,7 @@ async fn seed_episode_wanted_item(
     ctx: &TestContext,
     title: &Title,
     episode: &Episode,
-    status: &str,
+    status: scryer_application::WantedStatus,
 ) -> scryer_application::WantedItem {
     let item = scryer_application::WantedItem {
         id: Id::new().0,
@@ -250,7 +251,7 @@ async fn seed_episode_wanted_item(
         last_search_at: None,
         search_count: 0,
         baseline_date: None,
-        status: status.to_string(),
+        status,
         grabbed_release: None,
         current_score: None,
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -322,7 +323,7 @@ async fn import_deduplicates_completed_imports() {
         .expect("queue_import_request");
     app.services
         .imports
-        .update_import_status(&import_id, "completed", None)
+        .update_import_status(&import_id, scryer_domain::ImportStatus::Completed, None)
         .await
         .expect("update_import_status");
 
@@ -357,12 +358,19 @@ async fn import_returns_unmatched_when_title_not_found() {
     let app = app_with_real_imports(&ctx);
     let user = ctx.app.find_or_create_default_user().await.unwrap();
 
+    let source_dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        source_dir.path().join("Unknown.Movie.2024.mkv"),
+        b"fake video",
+    )
+    .expect("write");
+
     let completed = CompletedDownload {
         client_type: "nzbget".to_string(),
         client_id: "test-client".to_string(),
         download_client_item_id: "dl-no-title".to_string(),
         name: "Unknown.Movie.2024".to_string(),
-        dest_dir: "/tmp/wherever".to_string(),
+        dest_dir: source_dir.path().to_str().unwrap().to_string(),
         category: None,
         size_bytes: None,
         completed_at: None,
@@ -414,7 +422,7 @@ async fn import_fails_when_no_video_files_in_dest_dir() {
         .await
         .expect("import_completed_download");
 
-    assert_eq!(result.decision, ImportDecision::Failed);
+    assert_eq!(result.decision, ImportDecision::Skipped);
     assert_eq!(result.skip_reason, Some(ImportSkipReason::NoVideoFiles));
 }
 
@@ -543,7 +551,13 @@ async fn import_movie_rejected_by_post_download_rule_recycles_file_and_blocklist
         dest_root.path().to_str().unwrap(),
     )
     .await;
-    let wanted = seed_movie_wanted_item(&ctx, &title.id, "grabbed", None).await;
+    let wanted = seed_movie_wanted_item(
+        &ctx,
+        &title.id,
+        scryer_application::WantedStatus::Grabbed,
+        None,
+    )
+    .await;
 
     install_rule(
         &app,
@@ -597,7 +611,10 @@ score_entry["too_few_chapters"] := scryer.block_score() if {
         .expect("get wanted")
         .expect("wanted item");
     assert_eq!(updated_wanted.id, wanted.id);
-    assert_eq!(updated_wanted.status, "wanted");
+    assert_eq!(
+        updated_wanted.status,
+        scryer_application::WantedStatus::Wanted
+    );
 
     let failures = ctx
         .db
@@ -634,7 +651,13 @@ async fn import_series_rejected_by_post_download_rule_resets_episode_wanted_item
     )
     .await;
     let episode = seed_series_episode(&ctx, &title).await;
-    let wanted = seed_episode_wanted_item(&ctx, &title, &episode, "grabbed").await;
+    let wanted = seed_episode_wanted_item(
+        &ctx,
+        &title,
+        &episode,
+        scryer_application::WantedStatus::Grabbed,
+    )
+    .await;
 
     install_rule(
         &app,
@@ -647,7 +670,7 @@ score_entry["too_few_chapters"] := scryer.block_score() if {
     input.file.num_chapters < 2
 }
 "#,
-        vec![MediaFacet::Tv],
+        vec![MediaFacet::Series],
     )
     .await;
 
@@ -683,7 +706,10 @@ score_entry["too_few_chapters"] := scryer.block_score() if {
         .expect("get wanted")
         .expect("wanted item");
     assert_eq!(updated_wanted.id, wanted.id);
-    assert_eq!(updated_wanted.status, "wanted");
+    assert_eq!(
+        updated_wanted.status,
+        scryer_application::WantedStatus::Wanted
+    );
 }
 
 #[tokio::test]
@@ -754,7 +780,13 @@ async fn import_upgrade_rejected_by_post_download_rule_restores_prior_file() {
         dest_root.path().to_str().unwrap(),
     )
     .await;
-    let _wanted = seed_movie_wanted_item(&ctx, &title.id, "grabbed", Some(100)).await;
+    let _wanted = seed_movie_wanted_item(
+        &ctx,
+        &title.id,
+        scryer_application::WantedStatus::Grabbed,
+        Some(100),
+    )
+    .await;
 
     let old_path = dest_root
         .path()

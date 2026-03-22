@@ -15,29 +15,29 @@ pub async fn start_background_poster_loop(
     app: AppUseCase,
     token: tokio_util::sync::CancellationToken,
 ) {
-    start_background_image_loop(app, token, TitleImageKind::Poster, "poster").await
+    start_background_image_loop(app, token, TitleImageKind::Poster).await
 }
 
 pub async fn start_background_banner_loop(
     app: AppUseCase,
     token: tokio_util::sync::CancellationToken,
 ) {
-    start_background_image_loop(app, token, TitleImageKind::Banner, "banner").await
+    start_background_image_loop(app, token, TitleImageKind::Banner).await
 }
 
 pub async fn start_background_fanart_loop(
     app: AppUseCase,
     token: tokio_util::sync::CancellationToken,
 ) {
-    start_background_image_loop(app, token, TitleImageKind::Fanart, "fanart").await
+    start_background_image_loop(app, token, TitleImageKind::Fanart).await
 }
 
 async fn start_background_image_loop(
     app: AppUseCase,
     token: tokio_util::sync::CancellationToken,
     kind: TitleImageKind,
-    label: &'static str,
 ) {
+    let label = kind.as_str();
     let wake: Arc<Notify> = match kind {
         TitleImageKind::Poster => app.services.poster_wake.clone(),
         TitleImageKind::Banner => app.services.banner_wake.clone(),

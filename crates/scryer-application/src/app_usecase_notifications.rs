@@ -42,11 +42,8 @@ impl AppUseCase {
                 "channel name must not be empty".into(),
             ));
         }
-        if channel_type.trim().is_empty() {
-            return Err(AppError::Validation(
-                "channel_type must not be empty".into(),
-            ));
-        }
+        let channel_type = scryer_domain::ChannelType::parse(channel_type.trim())
+            .ok_or_else(|| AppError::Validation(format!("unknown channel type: {channel_type}")))?;
 
         let now = Utc::now();
         let config = NotificationChannelConfig {
@@ -127,7 +124,7 @@ impl AppUseCase {
         let client = provider.client_for_channel(&channel).ok_or_else(|| {
             AppError::NotFound(format!(
                 "no notification plugin for channel type '{}'",
-                channel.channel_type
+                channel.channel_type.as_str()
             ))
         })?;
 
@@ -162,11 +159,9 @@ impl AppUseCase {
     ) -> AppResult<NotificationSubscription> {
         crate::require(actor, &scryer_domain::Entitlement::ManageConfig)?;
 
-        if NotificationEventType::parse(&event_type).is_none() {
-            return Err(AppError::Validation(format!(
-                "unknown notification event type: {event_type}"
-            )));
-        }
+        let parsed_event_type = NotificationEventType::parse(&event_type).ok_or_else(|| {
+            AppError::Validation(format!("unknown notification event type: {event_type}"))
+        })?;
 
         // Validate channel exists
         let ch_repo = self.notification_channels()?;
@@ -179,7 +174,7 @@ impl AppUseCase {
         let sub = NotificationSubscription {
             id: Id::new().0,
             channel_id,
-            event_type,
+            event_type: parsed_event_type,
             scope,
             scope_id,
             is_enabled,
@@ -211,12 +206,10 @@ impl AppUseCase {
             .ok_or_else(|| AppError::NotFound(format!("notification subscription {id}")))?;
 
         if let Some(et) = event_type {
-            if NotificationEventType::parse(&et).is_none() {
-                return Err(AppError::Validation(format!(
-                    "unknown notification event type: {et}"
-                )));
-            }
-            sub.event_type = et;
+            let parsed = NotificationEventType::parse(&et).ok_or_else(|| {
+                AppError::Validation(format!("unknown notification event type: {et}"))
+            })?;
+            sub.event_type = parsed;
         }
         if let Some(s) = scope {
             sub.scope = s;

@@ -3,7 +3,7 @@ use async_graphql::{Context, Error, Object, Result as GqlResult};
 use chrono::Utc;
 use scryer_application::TitleHistoryFilter;
 use scryer_application::{RenamePlan, parse_release_metadata};
-use scryer_domain::{MediaFacet, PolicyInput, TitleHistoryEventType};
+use scryer_domain::{ImportType, MediaFacet, PolicyInput, TitleHistoryEventType};
 use serde_json::json;
 
 use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_error};
@@ -227,11 +227,11 @@ impl QueryRoot {
                 &actor,
                 PolicyInput {
                     title_id: input.title_id,
-                    facet: parse_facet(Some(input.facet))
-                        .unwrap_or(scryer_domain::MediaFacet::Other),
+                    facet: parse_facet(Some(input.facet)).unwrap_or_default(),
                     has_existing_file: input.has_existing_file,
                     candidate_quality: input.candidate_quality,
-                    requested_mode: input.requested_mode,
+                    requested_mode: scryer_domain::RequestedMode::parse(&input.requested_mode)
+                        .unwrap_or_default(),
                     release_title: None,
                     quality_profile_id: None,
                     category: None,
@@ -1508,7 +1508,7 @@ async fn record_rename_preview_audit(
         .create_import_request(
             "scryer_rename".to_string(),
             source_ref,
-            "rename_plan_preview".to_string(),
+            ImportType::RenamePreview.as_str().to_string(),
             payload_json,
         )
         .await?;

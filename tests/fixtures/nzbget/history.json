@@ -31,7 +31,10 @@
       "MaxPostTime": 1706745600,
       "HistoryTime": 1706832000,
       "MarkStatus": "NONE",
-      "Parameters": []
+      "Parameters": [
+        {"Name": "*scryer_title_id", "Value": "test-title-id"},
+        {"Name": "*scryer_facet", "Value": "movie"}
+      ]
     },
     {
       "NZBID": 998,

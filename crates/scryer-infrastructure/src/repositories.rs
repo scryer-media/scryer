@@ -14,10 +14,10 @@ use scryer_application::{
     TitleRepository, UserRepository, WantedItem, WantedItemRepository,
 };
 use scryer_domain::{
-    BlocklistEntry, CalendarEpisode, Collection, DownloadClientConfig, Entitlement, Episode,
-    HistoryEvent, ImportRecord, IndexerConfig, MediaFacet, NotificationChannelConfig,
-    NotificationSubscription, PluginInstallation, PostProcessingScript, PostProcessingScriptRun,
-    RuleSet, Title, TitleHistoryEventType, TitleHistoryRecord, User,
+    BlocklistEntry, CalendarEpisode, Collection, CollectionType, DownloadClientConfig, Entitlement,
+    Episode, HistoryEvent, ImportRecord, ImportStatus, IndexerConfig, MediaFacet,
+    NotificationChannelConfig, NotificationSubscription, PluginInstallation, PostProcessingScript,
+    PostProcessingScriptRun, RuleSet, Title, TitleHistoryEventType, TitleHistoryRecord, User,
 };
 use tokio::sync::oneshot;
 
@@ -259,7 +259,7 @@ impl ShowRepository for SqliteServices {
     async fn update_collection(
         &self,
         collection_id: &str,
-        collection_type: Option<String>,
+        collection_type: Option<CollectionType>,
         collection_index: Option<String>,
         label: Option<String>,
         ordered_path: Option<String>,
@@ -393,7 +393,7 @@ impl ShowRepository for SqliteServices {
     async fn update_episode(
         &self,
         episode_id: &str,
-        episode_type: Option<String>,
+        episode_type: Option<scryer_domain::EpisodeType>,
         episode_number: Option<String>,
         season_number: Option<String>,
         episode_label: Option<String>,
@@ -405,6 +405,7 @@ impl ShowRepository for SqliteServices {
         monitored: Option<bool>,
         collection_id: Option<String>,
         overview: Option<String>,
+        tvdb_id: Option<String>,
     ) -> AppResult<Episode> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
@@ -422,6 +423,7 @@ impl ShowRepository for SqliteServices {
                 monitored,
                 collection_id,
                 overview,
+                tvdb_id,
                 reply: reply_tx,
             })
             .await
@@ -977,7 +979,7 @@ impl ImportRepository for SqliteServices {
     async fn update_import_status(
         &self,
         import_id: &str,
-        status: &str,
+        status: ImportStatus,
         result_json: Option<String>,
     ) -> AppResult<()> {
         self.update_import_status(import_id, status, result_json)
@@ -997,7 +999,10 @@ impl ImportRepository for SqliteServices {
             .get_import_by_source_ref(source_system, source_ref)
             .await?
         {
-            Some(record) => Ok(matches!(record.status.as_str(), "completed" | "skipped")),
+            Some(record) => Ok(matches!(
+                record.status,
+                ImportStatus::Completed | ImportStatus::Skipped
+            )),
             None => Ok(false),
         }
     }
@@ -1121,6 +1126,10 @@ impl WantedItemRepository for SqliteServices {
 
     async fn delete_wanted_items_for_title(&self, title_id: &str) -> AppResult<()> {
         self.delete_wanted_items_for_title(title_id).await
+    }
+
+    async fn reset_fruitless_wanted_items(&self, now: &str) -> AppResult<u64> {
+        self.reset_fruitless_wanted_items(now).await
     }
 
     async fn insert_release_decision(&self, decision: &ReleaseDecision) -> AppResult<String> {

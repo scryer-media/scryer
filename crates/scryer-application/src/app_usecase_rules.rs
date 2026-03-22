@@ -556,7 +556,7 @@ pub struct ConvenienceBoolSetting {
 fn scope_to_facets(scope: &str) -> Vec<MediaFacet> {
     match scope {
         "movie" => vec![MediaFacet::Movie],
-        "series" | "tv" => vec![MediaFacet::Tv],
+        "series" | "tv" => vec![MediaFacet::Series],
         "anime" => vec![MediaFacet::Anime],
         _ => vec![], // global = all facets (empty means all)
     }

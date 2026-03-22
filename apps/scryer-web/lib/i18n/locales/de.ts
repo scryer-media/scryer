@@ -138,6 +138,7 @@ const de: LocaleDictionary = {
   "settings.rootFoldersEmpty": "Keine Stammordner konfiguriert. Füge mindestens einen Pfad hinzu.",
   "settings.rootFoldersHelp": "Stammordner sind die obersten Verzeichnisse, in denen Medien gespeichert werden. Der markierte Ordner ist der Standard für neue Titel.",
   "settings.rootFolderAdd": "Stammordner hinzufügen",
+  "settings.rootFolderEdit": "Stammordner bearbeiten",
   "settings.rootFolderAddPlaceholder": "/media/movies",
   "settings.rootFolderSetDefault": "Als Standard festlegen",
   "settings.libraryScanTitle": "Bibliothek scannen",

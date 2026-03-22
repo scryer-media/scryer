@@ -38,7 +38,7 @@ async fn create_and_list_channels() {
         .await
         .expect("create channel");
     assert_eq!(ch.name, "Discord");
-    assert_eq!(ch.channel_type, "webhook");
+    assert_eq!(ch.channel_type, scryer_domain::ChannelType::Webhook);
     assert!(ch.is_enabled);
 
     let channels = app.list_notification_channels(&user).await.expect("list");
@@ -189,7 +189,7 @@ async fn create_and_list_subscriptions() {
         .expect("create subscription");
 
     assert_eq!(sub.channel_id, ch.id);
-    assert_eq!(sub.event_type, "grab");
+    assert_eq!(sub.event_type, scryer_domain::NotificationEventType::Grab);
     assert!(sub.is_enabled);
 
     let subs = app.list_notification_subscriptions(&user).await.unwrap();
@@ -231,7 +231,10 @@ async fn update_subscription() {
         .await
         .unwrap();
 
-    assert_eq!(updated.event_type, "download");
+    assert_eq!(
+        updated.event_type,
+        scryer_domain::NotificationEventType::Download
+    );
     assert!(!updated.is_enabled);
 }
 

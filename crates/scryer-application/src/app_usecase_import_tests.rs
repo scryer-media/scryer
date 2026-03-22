@@ -200,27 +200,27 @@ fn pick_largest_file_returns_biggest() {
 
 #[test]
 fn use_season_folders_true_when_tag_absent() {
-    let title = test_title(MediaFacet::Tv);
+    let title = test_title(MediaFacet::Series);
     assert!(use_season_folders(&title));
 }
 
 #[test]
 fn use_season_folders_true_when_tag_enabled() {
-    let mut title = test_title(MediaFacet::Tv);
+    let mut title = test_title(MediaFacet::Series);
     title.tags = vec!["scryer:season-folder:enabled".to_string()];
     assert!(use_season_folders(&title));
 }
 
 #[test]
 fn use_season_folders_false_when_tag_disabled() {
-    let mut title = test_title(MediaFacet::Tv);
+    let mut title = test_title(MediaFacet::Series);
     title.tags = vec!["scryer:season-folder:disabled".to_string()];
     assert!(!use_season_folders(&title));
 }
 
 #[test]
 fn use_season_folders_false_case_insensitive() {
-    let mut title = test_title(MediaFacet::Tv);
+    let mut title = test_title(MediaFacet::Series);
     title.tags = vec!["scryer:season-folder:DISABLED".to_string()];
     assert!(!use_season_folders(&title));
 }
@@ -256,7 +256,7 @@ fn build_rename_tokens_episode_is_empty_for_movie() {
 
 #[test]
 fn build_rename_tokens_episode_metadata_for_series() {
-    let title = test_title(MediaFacet::Tv);
+    let title = test_title(MediaFacet::Series);
     let parsed = crate::parse_release_metadata("Show.S02E05.720p.HDTV.mkv");
     let tokens = build_rename_tokens(&title, &parsed, "mkv");
     assert_eq!(tokens.get("season").map(String::as_str), Some("2"));
@@ -372,7 +372,6 @@ fn missing_audio_languages_empty_actual_returns_all_required() {
 #[test]
 fn facet_to_category_hint_values() {
     assert_eq!(facet_to_category_hint(&MediaFacet::Movie), "movie");
-    assert_eq!(facet_to_category_hint(&MediaFacet::Tv), "tv");
+    assert_eq!(facet_to_category_hint(&MediaFacet::Series), "series");
     assert_eq!(facet_to_category_hint(&MediaFacet::Anime), "anime");
-    assert_eq!(facet_to_category_hint(&MediaFacet::Other), "other");
 }

@@ -18,7 +18,10 @@ pub(crate) async fn upsert_wanted_item_query(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(collection_id) WHERE collection_id IS NOT NULL DO UPDATE SET
             search_phase = excluded.search_phase,
-            next_search_at = excluded.next_search_at,
+            next_search_at = CASE
+                WHEN wanted_items.search_count > 0 THEN wanted_items.next_search_at
+                ELSE excluded.next_search_at
+            END,
             baseline_date = excluded.baseline_date,
             status = CASE
                 WHEN wanted_items.status IN ('completed', 'paused') AND excluded.status = 'wanted'
@@ -34,7 +37,10 @@ pub(crate) async fn upsert_wanted_item_query(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(title_id, episode_id) DO UPDATE SET
             search_phase = excluded.search_phase,
-            next_search_at = excluded.next_search_at,
+            next_search_at = CASE
+                WHEN wanted_items.search_count > 0 THEN wanted_items.next_search_at
+                ELSE excluded.next_search_at
+            END,
             baseline_date = excluded.baseline_date,
             status = CASE
                 WHEN wanted_items.status IN ('completed', 'paused') AND excluded.status = 'wanted'
@@ -50,7 +56,10 @@ pub(crate) async fn upsert_wanted_item_query(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(title_id) WHERE episode_id IS NULL AND collection_id IS NULL DO UPDATE SET
             search_phase = excluded.search_phase,
-            next_search_at = excluded.next_search_at,
+            next_search_at = CASE
+                WHEN wanted_items.search_count > 0 THEN wanted_items.next_search_at
+                ELSE excluded.next_search_at
+            END,
             baseline_date = excluded.baseline_date,
             status = CASE
                 WHEN wanted_items.status IN ('completed', 'paused') AND excluded.status = 'wanted'
@@ -71,7 +80,7 @@ pub(crate) async fn upsert_wanted_item_query(
         .bind(&item.last_search_at)
         .bind(item.search_count)
         .bind(&item.baseline_date)
-        .bind(&item.status)
+        .bind(item.status.as_str())
         .bind(&item.grabbed_release)
         .bind(item.current_score)
         .bind(&now)
@@ -110,6 +119,29 @@ pub(crate) async fn list_due_wanted_items_query(
         out.push(row_to_wanted_item(row)?);
     }
     Ok(out)
+}
+
+/// Reset `next_search_at` to now for wanted items that have been searched
+/// but never found a viable candidate. This recovers from scenarios where a
+/// bug caused searches to return 0 results and items got rescheduled far out.
+pub(crate) async fn reset_fruitless_wanted_items_query(
+    pool: &SqlitePool,
+    now: &str,
+) -> AppResult<u64> {
+    let result = sqlx::query(
+        "UPDATE wanted_items
+         SET next_search_at = ?, updated_at = ?
+         WHERE status = 'wanted'
+           AND search_count > 0
+           AND current_score IS NULL",
+    )
+    .bind(now)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(result.rows_affected())
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -446,9 +478,12 @@ fn row_to_wanted_item(row: &SqliteRow) -> AppResult<WantedItem> {
             .try_get("search_count")
             .map_err(|e| AppError::Repository(e.to_string()))?,
         baseline_date: row.try_get("baseline_date").unwrap_or(None),
-        status: row
-            .try_get("status")
-            .map_err(|e| AppError::Repository(e.to_string()))?,
+        status: {
+            let s: String = row
+                .try_get("status")
+                .map_err(|e| AppError::Repository(e.to_string()))?;
+            scryer_application::WantedStatus::parse(&s).unwrap_or_default()
+        },
         grabbed_release: row.try_get("grabbed_release").unwrap_or(None),
         current_score: row.try_get("current_score").unwrap_or(None),
         created_at: row

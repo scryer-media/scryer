@@ -140,6 +140,7 @@ const ja: LocaleDictionary = {
   "settings.rootFoldersHelp":
     "ルートフォルダはメディアが保存される最上位ディレクトリです。スター付きのフォルダが新しいタイトルのデフォルトです。",
   "settings.rootFolderAdd": "ルートフォルダを追加",
+  "settings.rootFolderEdit": "ルートフォルダを編集",
   "settings.rootFolderAddPlaceholder": "/media/movies",
   "settings.rootFolderSetDefault": "デフォルトに設定",
   "settings.libraryScanTitle": "ライブラリスキャン",

@@ -1,6 +1,7 @@
 use async_graphql::{Context, Error, Object, Result as GqlResult};
 use chrono::Utc;
 use scryer_application::RenameApplyResult;
+use scryer_domain::ImportType;
 use serde_json::json;
 use std::collections::HashSet;
 use std::sync::{LazyLock, Mutex};
@@ -84,7 +85,7 @@ async fn record_rename_apply_audit(
         .create_import_request(
             "scryer_rename".to_string(),
             source_ref,
-            "rename_apply_result".to_string(),
+            ImportType::RenameApplyResult.as_str().to_string(),
             payload_json,
         )
         .await?;
@@ -143,12 +144,7 @@ impl LibraryMutations {
         } = input;
         let facet = parse_facet(Some(facet))
             .ok_or_else(|| Error::new("invalid facet for applyMediaRename"))?;
-        let facet_name = match facet {
-            scryer_domain::MediaFacet::Movie => "movie",
-            scryer_domain::MediaFacet::Tv => "tv",
-            scryer_domain::MediaFacet::Anime => "anime",
-            scryer_domain::MediaFacet::Other => "other",
-        };
+        let facet_name = facet.as_str();
         let idempotency_key = claim_rename_idempotency_key("apply_media_rename", idempotency_key)?;
 
         let result = app
@@ -201,12 +197,7 @@ impl LibraryMutations {
         } = input;
         let facet = parse_facet(Some(facet))
             .ok_or_else(|| Error::new("invalid facet for applyMediaRenameBulk"))?;
-        let facet_name = match facet {
-            scryer_domain::MediaFacet::Movie => "movie",
-            scryer_domain::MediaFacet::Tv => "tv",
-            scryer_domain::MediaFacet::Anime => "anime",
-            scryer_domain::MediaFacet::Other => "other",
-        };
+        let facet_name = facet.as_str();
         let idempotency_key =
             claim_rename_idempotency_key("apply_media_rename_bulk", idempotency_key)?;
 

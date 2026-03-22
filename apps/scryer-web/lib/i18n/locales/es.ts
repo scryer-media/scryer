@@ -136,6 +136,7 @@ const es: LocaleDictionary = {
   "settings.rootFoldersHelp":
     "Las carpetas raíz son los directorios de nivel superior donde se almacenan los medios. La carpeta con estrella es la predeterminada para nuevos títulos.",
   "settings.rootFolderAdd": "Añadir carpeta raíz",
+  "settings.rootFolderEdit": "Editar carpeta raíz",
   "settings.rootFolderAddPlaceholder": "/media/movies",
   "settings.rootFolderSetDefault": "Establecer como predeterminada",
   "settings.libraryScanTitle": "Escaneo de biblioteca",

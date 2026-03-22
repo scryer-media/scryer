@@ -96,12 +96,12 @@ impl AppUseCase {
             collection_id: None,
             season_number: None,
             media_type: "movie".to_string(),
-            search_phase: schedule.search_phase,
+            search_phase: schedule.search_phase.to_string(),
             next_search_at: Some(next_search_at),
             last_search_at: None,
             search_count: 0,
             baseline_date,
-            status: "wanted".to_string(),
+            status: WantedStatus::Wanted,
             grabbed_release: None,
             current_score: None,
             created_at: now.to_rfc3339(),
@@ -205,12 +205,12 @@ impl AppUseCase {
                     collection_id: None,
                     season_number: episode.season_number.clone(),
                     media_type: "episode".to_string(),
-                    search_phase: schedule.search_phase,
+                    search_phase: schedule.search_phase.to_string(),
                     next_search_at: Some(next_search_at),
                     last_search_at: None,
                     search_count: 0,
                     baseline_date,
-                    status: "wanted".to_string(),
+                    status: WantedStatus::Wanted,
                     grabbed_release: None,
                     current_score: None,
                     created_at: now.to_rfc3339(),
@@ -231,7 +231,9 @@ impl AppUseCase {
         // Generate wanted items for interstitial anime movies (franchise movies stored in Season 00)
         if title.facet == scryer_domain::MediaFacet::Anime {
             for collection in &collections {
-                if collection.collection_type != "interstitial" || !collection.monitored {
+                if collection.collection_type != CollectionType::Interstitial
+                    || !collection.monitored
+                {
                     continue;
                 }
                 // Skip if already has a file on disk
@@ -297,12 +299,12 @@ impl AppUseCase {
                     collection_id: Some(collection.id.clone()),
                     season_number: Some("0".to_string()),
                     media_type: "interstitial_movie".to_string(),
-                    search_phase: schedule.search_phase,
+                    search_phase: schedule.search_phase.to_string(),
                     next_search_at: Some(next_search_at),
                     last_search_at: None,
                     search_count: 0,
                     baseline_date,
-                    status: "wanted".to_string(),
+                    status: WantedStatus::Wanted,
                     grabbed_release: None,
                     current_score: None,
                     created_at: now.to_rfc3339(),
@@ -620,11 +622,7 @@ async fn process_due_wanted_items(app: &AppUseCase) {
             &now,
         );
 
-        let new_status = if schedule.search_phase == "paused" {
-            "paused"
-        } else {
-            "wanted"
-        };
+        let new_status = "wanted";
 
         let _ = app
             .services
@@ -820,8 +818,7 @@ async fn process_single_wanted_item(
                     tvdb_id.clone(),
                     anidb_id.clone(),
                     Some(category.clone()),
-                    super::app_usecase_discovery::search_facet_for_media_facet(&title.facet)
-                        .map(str::to_string),
+                    Some(title.facet.as_str().to_string()),
                     &title.tags,
                     "background_acquisition_season_pack",
                     SearchMode::Auto,
@@ -1048,8 +1045,7 @@ async fn process_single_wanted_item(
             tvdb_id,
             anidb_id,
             Some(category.clone()),
-            super::app_usecase_discovery::search_facet_for_media_facet(&title.facet)
-                .map(str::to_string),
+            Some(title.facet.as_str().to_string()),
             &title.tags,
             "background_acquisition",
             SearchMode::Auto,
@@ -1252,7 +1248,7 @@ async fn process_single_wanted_item(
     }
 
     // Evaluate upgrade decision
-    let thresholds = AcquisitionThresholds::default();
+    let thresholds = AcquisitionThresholds::for_persona(&profile.criteria.scoring_persona);
     let decision = evaluate_upgrade(
         candidate_score,
         item.current_score,
@@ -1731,7 +1727,7 @@ fn build_search_queries(
                         queries.push(format!("{} {}", title.name, label));
                     }
                     if episode_num > 0 {
-                        if ep.episode_type == "ova" {
+                        if ep.episode_type == scryer_domain::EpisodeType::Ova {
                             queries.push(format!("{} OVA {:0>2}", title.name, episode_num));
                         } else {
                             queries.push(format!("{} Special {:0>2}", title.name, episode_num));
@@ -2089,7 +2085,7 @@ impl AppUseCase {
             .get_wanted_item_for_title(&title.id, None)
             .await?
         {
-            if item.status == "grabbed" {
+            if item.status == WantedStatus::Grabbed {
                 return Ok(0);
             }
 
@@ -2118,12 +2114,12 @@ impl AppUseCase {
             collection_id: None,
             season_number: None,
             media_type: "movie".to_string(),
-            search_phase: schedule.search_phase,
+            search_phase: schedule.search_phase.to_string(),
             next_search_at: Some(next_search_at),
             last_search_at: None,
             search_count: 0,
             baseline_date,
-            status: "wanted".to_string(),
+            status: WantedStatus::Wanted,
             grabbed_release: None,
             current_score: None,
             created_at: now.to_rfc3339(),
@@ -2180,7 +2176,7 @@ impl AppUseCase {
                     .get_wanted_item_for_title(&title.id, Some(&episode.id))
                     .await?
                 {
-                    if item.status == "grabbed" {
+                    if item.status == WantedStatus::Grabbed {
                         continue;
                     }
 
@@ -2211,12 +2207,12 @@ impl AppUseCase {
                     collection_id: None,
                     season_number: episode.season_number.clone(),
                     media_type: "episode".to_string(),
-                    search_phase: schedule.search_phase,
+                    search_phase: schedule.search_phase.to_string(),
                     next_search_at: Some(next_search_at.clone()),
                     last_search_at: None,
                     search_count: 0,
                     baseline_date,
-                    status: "wanted".to_string(),
+                    status: WantedStatus::Wanted,
                     grabbed_release: None,
                     current_score: None,
                     created_at: now.to_rfc3339(),
@@ -2253,6 +2249,25 @@ pub async fn start_background_acquisition_poller(
         warn!(error = %err, "initial wanted state sync failed");
     }
 
+    // Reset items that were searched but never found anything. This recovers
+    // from scenarios where a bug (e.g. broken capability filter) caused searches
+    // to return 0 results and items got rescheduled far into the future.
+    let now_str = Utc::now().to_rfc3339();
+    match app
+        .services
+        .wanted_items
+        .reset_fruitless_wanted_items(&now_str)
+        .await
+    {
+        Ok(count) if count > 0 => {
+            info!(count, "reset fruitless wanted items to search immediately");
+        }
+        Err(err) => {
+            warn!(error = %err, "failed to reset fruitless wanted items");
+        }
+        _ => {}
+    }
+
     // Run initial health checks after a short delay to let services initialize
     {
         let app = app.clone();
@@ -2285,6 +2300,29 @@ pub async fn start_background_acquisition_poller(
 
     let wake = app.services.acquisition_wake.clone();
 
+    /// Run a scheduled task inside a spawned task to isolate panics.
+    /// If the task panics, the error is logged and the scheduler loop continues.
+    async fn run_task(
+        task_name: &'static str,
+        fut: impl std::future::Future<Output = ()> + Send + 'static,
+    ) {
+        let t = std::time::Instant::now();
+        match tokio::spawn(fut).await {
+            Ok(()) => {}
+            Err(e) => {
+                tracing::error!(
+                    task = task_name,
+                    error = %e,
+                    "CRITICAL: scheduled task panicked — scheduler continues but this task failed"
+                );
+                metrics::counter!("scryer_task_panics_total", "task" => task_name).increment(1);
+            }
+        }
+        metrics::counter!("scryer_task_runs_total", "task" => task_name).increment(1);
+        metrics::histogram!("scryer_task_duration_seconds", "task" => task_name)
+            .record(t.elapsed().as_secs_f64());
+    }
+
     loop {
         tokio::select! {
             _ = token.cancelled() => {
@@ -2292,110 +2330,110 @@ pub async fn start_background_acquisition_poller(
                 break;
             }
             _ = wake.notified() => {
-                let t = std::time::Instant::now();
-                process_due_wanted_items(&app).await;
-                metrics::counter!("scryer_task_runs_total", "task" => "wanted_items").increment(1);
-                metrics::histogram!("scryer_task_duration_seconds", "task" => "wanted_items").record(t.elapsed().as_secs_f64());
+                let app = app.clone();
+                run_task("wanted_items", async move {
+                    process_due_wanted_items(&app).await;
+                }).await;
             }
             _ = poll_interval.tick() => {
-                let t = std::time::Instant::now();
-                process_due_wanted_items(&app).await;
-                metrics::counter!("scryer_task_runs_total", "task" => "wanted_items").increment(1);
-                metrics::histogram!("scryer_task_duration_seconds", "task" => "wanted_items").record(t.elapsed().as_secs_f64());
+                let app = app.clone();
+                run_task("wanted_items", async move {
+                    process_due_wanted_items(&app).await;
+                }).await;
             }
             _ = sync_interval.tick() => {
-                let t = std::time::Instant::now();
-                if let Err(err) = app.sync_wanted_state().await {
-                    warn!(error = %err, "periodic wanted state sync failed");
-                    metrics::counter!("scryer_task_errors_total", "task" => "sync_state").increment(1);
-                }
-                metrics::counter!("scryer_task_runs_total", "task" => "sync_state").increment(1);
-                metrics::histogram!("scryer_task_duration_seconds", "task" => "sync_state").record(t.elapsed().as_secs_f64());
+                let app = app.clone();
+                run_task("sync_state", async move {
+                    if let Err(err) = app.sync_wanted_state().await {
+                        warn!(error = %err, "periodic wanted state sync failed");
+                        metrics::counter!("scryer_task_errors_total", "task" => "sync_state").increment(1);
+                    }
+                }).await;
             }
             _ = metadata_refresh_interval.tick() => {
-                let t = std::time::Instant::now();
-                info!("starting periodic metadata refresh for monitored series");
-                app.refresh_monitored_series_metadata().await;
-                metrics::counter!("scryer_task_runs_total", "task" => "metadata_refresh").increment(1);
-                metrics::histogram!("scryer_task_duration_seconds", "task" => "metadata_refresh").record(t.elapsed().as_secs_f64());
+                let app = app.clone();
+                run_task("metadata_refresh", async move {
+                    info!("starting periodic metadata refresh for monitored series");
+                    app.refresh_monitored_series_metadata().await;
+                }).await;
             }
             _ = registry_refresh_interval.tick() => {
-                let t = std::time::Instant::now();
-                info!("refreshing plugin registry");
-                if let Err(e) = app.refresh_plugin_registry_internal().await {
-                    warn!(error = %e, "periodic plugin registry refresh failed");
-                    metrics::counter!("scryer_task_errors_total", "task" => "registry_refresh").increment(1);
-                }
-                metrics::counter!("scryer_task_runs_total", "task" => "registry_refresh").increment(1);
-                metrics::histogram!("scryer_task_duration_seconds", "task" => "registry_refresh").record(t.elapsed().as_secs_f64());
+                let app = app.clone();
+                run_task("registry_refresh", async move {
+                    info!("refreshing plugin registry");
+                    if let Err(e) = app.refresh_plugin_registry_internal().await {
+                        warn!(error = %e, "periodic plugin registry refresh failed");
+                        metrics::counter!("scryer_task_errors_total", "task" => "registry_refresh").increment(1);
+                    }
+                }).await;
             }
             _ = health_check_interval.tick() => {
-                let t = std::time::Instant::now();
-                let results = app.run_health_checks().await;
-                *app.services.health_check_results.write().await = results;
-                info!("periodic health checks completed");
-                metrics::counter!("scryer_task_runs_total", "task" => "health_check").increment(1);
-                metrics::histogram!("scryer_task_duration_seconds", "task" => "health_check").record(t.elapsed().as_secs_f64());
+                let app = app.clone();
+                run_task("health_check", async move {
+                    let results = app.run_health_checks().await;
+                    *app.services.health_check_results.write().await = results;
+                    info!("periodic health checks completed");
+                }).await;
             }
             _ = housekeeping_interval.tick() => {
-                let t = std::time::Instant::now();
-                match app.run_housekeeping().await {
-                    Ok(report) => info!(
-                        orphaned_media_files = report.orphaned_media_files,
-                        stale_release_decisions = report.stale_release_decisions,
-                        stale_release_attempts = report.stale_release_attempts,
-                        expired_event_outboxes = report.expired_event_outboxes,
-                        stale_history_events = report.stale_history_events,
-                        "periodic housekeeping completed"
-                    ),
-                    Err(e) => {
-                        warn!(error = %e, "periodic housekeeping failed");
-                        metrics::counter!("scryer_task_errors_total", "task" => "housekeeping").increment(1);
+                let app = app.clone();
+                run_task("housekeeping", async move {
+                    match app.run_housekeeping().await {
+                        Ok(report) => info!(
+                            orphaned_media_files = report.orphaned_media_files,
+                            stale_release_decisions = report.stale_release_decisions,
+                            stale_release_attempts = report.stale_release_attempts,
+                            expired_event_outboxes = report.expired_event_outboxes,
+                            stale_history_events = report.stale_history_events,
+                            "periodic housekeeping completed"
+                        ),
+                        Err(e) => {
+                            warn!(error = %e, "periodic housekeeping failed");
+                            metrics::counter!("scryer_task_errors_total", "task" => "housekeeping").increment(1);
+                        }
                     }
-                }
-                if let Err(e) = app.auto_backup_if_due().await {
-                    warn!(error = %e, "auto-backup failed");
-                }
-                metrics::counter!("scryer_task_runs_total", "task" => "housekeeping").increment(1);
-                metrics::histogram!("scryer_task_duration_seconds", "task" => "housekeeping").record(t.elapsed().as_secs_f64());
+                    if let Err(e) = app.auto_backup_if_due().await {
+                        warn!(error = %e, "auto-backup failed");
+                    }
+                }).await;
             }
             _ = pending_release_interval.tick() => {
-                let t = std::time::Instant::now();
-                match app.process_expired_pending_releases().await {
-                    Ok(grabbed) => {
-                        if grabbed > 0 {
-                            info!(grabbed, "pending release processor: grabbed expired releases");
+                let app = app.clone();
+                run_task("pending_releases", async move {
+                    match app.process_expired_pending_releases().await {
+                        Ok(grabbed) => {
+                            if grabbed > 0 {
+                                info!(grabbed, "pending release processor: grabbed expired releases");
+                            }
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "pending release processor failed");
+                            metrics::counter!("scryer_task_errors_total", "task" => "pending_releases").increment(1);
                         }
                     }
-                    Err(e) => {
-                        warn!(error = %e, "pending release processor failed");
-                        metrics::counter!("scryer_task_errors_total", "task" => "pending_releases").increment(1);
-                    }
-                }
-                metrics::counter!("scryer_task_runs_total", "task" => "pending_releases").increment(1);
-                metrics::histogram!("scryer_task_duration_seconds", "task" => "pending_releases").record(t.elapsed().as_secs_f64());
+                }).await;
             }
             _ = rss_sync_interval.tick() => {
-                let t = std::time::Instant::now();
-                match app.run_rss_sync().await {
-                    Ok(report) => {
-                        if report.releases_fetched > 0 || report.releases_grabbed > 0 || report.releases_held > 0 {
-                            info!(
-                                fetched = report.releases_fetched,
-                                matched = report.releases_matched,
-                                grabbed = report.releases_grabbed,
-                                held = report.releases_held,
-                                "periodic RSS sync completed"
-                            );
+                let app = app.clone();
+                run_task("rss_sync", async move {
+                    match app.run_rss_sync().await {
+                        Ok(report) => {
+                            if report.releases_fetched > 0 || report.releases_grabbed > 0 || report.releases_held > 0 {
+                                info!(
+                                    fetched = report.releases_fetched,
+                                    matched = report.releases_matched,
+                                    grabbed = report.releases_grabbed,
+                                    held = report.releases_held,
+                                    "periodic RSS sync completed"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "periodic RSS sync failed");
+                            metrics::counter!("scryer_task_errors_total", "task" => "rss_sync").increment(1);
                         }
                     }
-                    Err(e) => {
-                        warn!(error = %e, "periodic RSS sync failed");
-                        metrics::counter!("scryer_task_errors_total", "task" => "rss_sync").increment(1);
-                    }
-                }
-                metrics::counter!("scryer_task_runs_total", "task" => "rss_sync").increment(1);
-                metrics::histogram!("scryer_task_duration_seconds", "task" => "rss_sync").record(t.elapsed().as_secs_f64());
+                }).await;
             }
         }
     }

@@ -5,7 +5,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 COMPOSE_FILE="${SCRYER_DOCKER_COMPOSE_FILE:-$REPO_DIR/docker-compose.dev.yml}"
 COMPOSE_ORCHESTRATION_SERVICE="${SCRYER_DOCKER_STACK_NAME:-scryer-dev}"
-SCRYER_DOCKER_RESTART_SERVICES="${SCRYER_DOCKER_RESTART_SERVICES:-nzbget sabnzbd scryer nodejs proxy}"
+SCRYER_DOCKER_RESTART_SERVICES="${SCRYER_DOCKER_RESTART_SERVICES:-nzbget sabnzbd weaver scryer nodejs proxy prometheus grafana}"
+NO_SEED=false
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --no-seed) NO_SEED=true; shift ;;
+    *) break ;;
+  esac
+done
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "docker is required to run this command." >&2
@@ -41,6 +49,11 @@ fi
 
 "${compose_cmd[@]}" stop "${services[@]}"
 "${compose_cmd[@]}" rm -f "${services[@]}"
+
+if [ "$NO_SEED" = true ]; then
+  export SCRYER_DEV_SEED_FILE=""
+  export SCRYER_DEV_SEED_TITLES_FILE=""
+fi
 
 up_args=("${compose_cmd[@]}" up -d --build --no-deps)
 up_args+=("${services[@]}")

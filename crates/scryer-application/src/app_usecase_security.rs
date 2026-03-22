@@ -74,7 +74,7 @@ impl AppUseCase {
     }
 
     pub fn token_lifetime(&self) -> i64 {
-        i64::try_from(self.auth.access_ttl_seconds).unwrap_or(86_400)
+        self.auth.access_ttl_seconds as i64
     }
 
     pub fn issue_access_token(&self, actor: &User) -> AppResult<String> {

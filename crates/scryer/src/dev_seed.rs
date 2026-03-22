@@ -215,7 +215,7 @@ async fn ensure_seeded_movie_import(
     let file_path_string = file_path.to_string_lossy().into_owned();
     let has_movie_collection = existing_collections
         .iter()
-        .any(|collection| collection.collection_type.eq_ignore_ascii_case("movie"));
+        .any(|collection| collection.collection_type == scryer_domain::CollectionType::Movie);
     let existing_media_files = app
         .services
         .media_files
@@ -538,7 +538,7 @@ async fn apply_title_seed(
 
     let sections: Vec<(MediaFacet, &[SeedTitle])> = vec![
         (MediaFacet::Movie, &config.movies),
-        (MediaFacet::Tv, &config.series),
+        (MediaFacet::Series, &config.series),
         (MediaFacet::Anime, &config.anime),
     ];
 

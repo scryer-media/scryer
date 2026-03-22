@@ -464,7 +464,7 @@ fn efficient_weights() -> ScoringWeights {
         source_webrip: 120,
         source_hdtv: 40,
 
-        video_codec_high: 80,
+        video_codec_high: 150,
         video_codec_mid: 30,
         x265_non4k_penalty: 100, // bonus, not penalty
 

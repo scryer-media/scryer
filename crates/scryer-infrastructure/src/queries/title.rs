@@ -1,6 +1,7 @@
 use scryer_application::{AppError, AppResult, PrimaryCollectionSummary, TitleMetadataUpdate};
 use scryer_domain::{
-    CalendarEpisode, Collection, Episode, ExternalId, InterstitialMovieMetadata, MediaFacet, Title,
+    CalendarEpisode, Collection, CollectionType, Episode, ExternalId, InterstitialMovieMetadata,
+    MediaFacet, Title,
 };
 use serde_json;
 use sqlx::{Row, SqlitePool};
@@ -16,12 +17,7 @@ const TITLE_COLUMNS: &str = "id, name, facet, monitored, tags, external_ids, cre
     metadata_language, metadata_fetched_at, min_availability, digital_release_date, folder_path, tagged_aliases_json";
 
 fn parse_facet(raw: &str) -> MediaFacet {
-    match raw.to_lowercase().as_str() {
-        "movie" => MediaFacet::Movie,
-        "tv" => MediaFacet::Tv,
-        "anime" => MediaFacet::Anime,
-        _ => MediaFacet::Other,
-    }
+    MediaFacet::parse(raw).unwrap_or_default()
 }
 
 pub(crate) async fn list_titles_query(
@@ -48,7 +44,7 @@ pub(crate) async fn list_titles_query(
     let mut statement = sqlx::query(&sql);
 
     if let Some(selected_facet) = facet {
-        statement = statement.bind(format!("{:?}", selected_facet).to_lowercase());
+        statement = statement.bind(selected_facet.as_str());
     }
     if let Some(search) = query {
         statement = statement.bind(format!("%{}%", search.to_lowercase()));
@@ -287,12 +283,15 @@ pub(crate) async fn list_primary_collection_summaries_query(
 
     let mut candidates = rows
         .into_iter()
-        .map(|row| SummaryCandidate {
-            title_id: row.get("title_id"),
-            collection_type: row.get("collection_type"),
-            collection_index: row.get("collection_index"),
-            label: row.get("label"),
-            ordered_path: row.get("ordered_path"),
+        .map(|row| {
+            let raw_type: String = row.get("collection_type");
+            SummaryCandidate {
+                title_id: row.get("title_id"),
+                collection_type: CollectionType::parse(&raw_type).unwrap_or_default(),
+                collection_index: row.get("collection_index"),
+                label: row.get("label"),
+                ordered_path: row.get("ordered_path"),
+            }
         })
         .collect::<Vec<_>>();
     candidates.sort_by_key(summary_candidate_sort_key);
@@ -320,15 +319,14 @@ pub(crate) async fn list_primary_collection_summaries_query(
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SummaryCandidate {
     title_id: String,
-    collection_type: String,
+    collection_type: CollectionType,
     collection_index: String,
     label: Option<String>,
     ordered_path: Option<String>,
 }
 
 fn summary_candidate_should_include(candidate: &SummaryCandidate) -> bool {
-    let normalized_type = candidate.collection_type.trim().to_ascii_lowercase();
-    if normalized_type == "movie" {
+    if candidate.collection_type == CollectionType::Movie {
         return true;
     }
     candidate.collection_index.trim() == "0"
@@ -337,10 +335,7 @@ fn summary_candidate_should_include(candidate: &SummaryCandidate) -> bool {
 fn summary_candidate_sort_key(candidate: &SummaryCandidate) -> (String, bool, bool, u32, String) {
     (
         candidate.title_id.clone(),
-        !candidate
-            .collection_type
-            .trim()
-            .eq_ignore_ascii_case("movie"),
+        candidate.collection_type != CollectionType::Movie,
         candidate
             .ordered_path
             .as_deref()
@@ -402,7 +397,7 @@ pub(crate) async fn create_collection_query(
     )
     .bind(&collection.id)
     .bind(&collection.title_id)
-    .bind(&collection.collection_type)
+    .bind(collection.collection_type.as_str())
     .bind(&collection.collection_index)
     .bind(&collection.label)
     .bind(&collection.ordered_path)
@@ -562,7 +557,7 @@ pub(crate) async fn create_collection_query(
 pub(crate) async fn update_collection_query(
     pool: &SqlitePool,
     collection_id: &str,
-    collection_type: Option<String>,
+    collection_type: Option<CollectionType>,
     collection_index: Option<String>,
     label: Option<String>,
     ordered_path: Option<String>,
@@ -605,7 +600,7 @@ pub(crate) async fn update_collection_query(
 
     let mut statement = sqlx::query(&sql);
     if let Some(collection_type) = collection_type {
-        statement = statement.bind(collection_type);
+        statement = statement.bind(collection_type.as_str().to_string());
     }
     if let Some(collection_index) = collection_index {
         statement = statement.bind(collection_index);
@@ -648,7 +643,7 @@ pub(crate) async fn list_episodes_for_collection_query(
     let rows = sqlx::query(
         "SELECT id, title_id, collection_id, episode_type, episode_number, season_number,
                 episode_label, title, air_date, duration_seconds, has_multi_audio,
-                has_subtitle, is_filler, is_recap, absolute_number, overview, monitored, created_at
+                has_subtitle, is_filler, is_recap, absolute_number, overview, tvdb_id, monitored, created_at
          FROM episodes WHERE collection_id = ? ORDER BY episode_number ASC, id ASC",
     )
     .bind(collection_id)
@@ -670,7 +665,7 @@ pub(crate) async fn get_episode_by_id_query(
     let row = sqlx::query(
         "SELECT id, title_id, collection_id, episode_type, episode_number, season_number,
                 episode_label, title, air_date, duration_seconds, has_multi_audio,
-                has_subtitle, is_filler, is_recap, absolute_number, overview, monitored, created_at
+                has_subtitle, is_filler, is_recap, absolute_number, overview, tvdb_id, monitored, created_at
          FROM episodes WHERE id = ?",
     )
     .bind(episode_id)
@@ -688,7 +683,7 @@ pub(crate) async fn get_episode_by_id_query(
 pub(crate) async fn update_episode_query(
     pool: &SqlitePool,
     episode_id: &str,
-    episode_type: Option<String>,
+    episode_type: Option<scryer_domain::EpisodeType>,
     episode_number: Option<String>,
     season_number: Option<String>,
     episode_label: Option<String>,
@@ -700,6 +695,7 @@ pub(crate) async fn update_episode_query(
     monitored: Option<bool>,
     collection_id: Option<String>,
     overview: Option<String>,
+    tvdb_id: Option<String>,
 ) -> AppResult<Episode> {
     let mut assignments = Vec::new();
     if episode_type.is_some() {
@@ -738,6 +734,9 @@ pub(crate) async fn update_episode_query(
     if overview.is_some() {
         assignments.push("overview = ?");
     }
+    if tvdb_id.is_some() {
+        assignments.push("tvdb_id = ?");
+    }
 
     if assignments.is_empty() {
         return Err(AppError::Validation(
@@ -751,7 +750,7 @@ pub(crate) async fn update_episode_query(
 
     let mut statement = sqlx::query(&sql);
     if let Some(episode_type) = episode_type {
-        statement = statement.bind(episode_type);
+        statement = statement.bind(episode_type.as_str());
     }
     if let Some(episode_number) = episode_number {
         statement = statement.bind(episode_number);
@@ -786,6 +785,9 @@ pub(crate) async fn update_episode_query(
     if let Some(overview) = overview {
         statement = statement.bind(overview);
     }
+    if let Some(tvdb_id) = tvdb_id {
+        statement = statement.bind(tvdb_id);
+    }
     statement = statement.bind(episode_id);
 
     let result = statement
@@ -810,13 +812,13 @@ pub(crate) async fn create_episode_query(
         "INSERT INTO episodes
          (id, title_id, collection_id, episode_type, episode_number, season_number,
           episode_label, title, air_date, duration_seconds, has_multi_audio,
-          has_subtitle, is_filler, is_recap, absolute_number, overview, monitored, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          has_subtitle, is_filler, is_recap, absolute_number, overview, tvdb_id, monitored, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&episode.id)
     .bind(&episode.title_id)
     .bind(&episode.collection_id)
-    .bind(&episode.episode_type)
+    .bind(episode.episode_type.as_str())
     .bind(&episode.episode_number)
     .bind(&episode.season_number)
     .bind(&episode.episode_label)
@@ -833,6 +835,7 @@ pub(crate) async fn create_episode_query(
     .bind(if episode.is_recap { 1_i64 } else { 0_i64 })
     .bind(&episode.absolute_number)
     .bind(&episode.overview)
+    .bind(&episode.tvdb_id)
     .bind(if episode.monitored { 1_i64 } else { 0_i64 })
     .bind(episode.created_at.to_rfc3339())
     .execute(pool)
@@ -882,8 +885,8 @@ pub(crate) async fn find_episode_by_title_and_numbers_query(
     let row = sqlx::query(
         "SELECT e.id, e.title_id, e.collection_id, e.episode_type, e.episode_number,
                 e.season_number, e.episode_label, e.title, e.air_date, e.duration_seconds,
-                e.has_multi_audio, e.has_subtitle, e.is_filler, e.absolute_number,
-                e.overview, e.monitored, e.created_at
+                e.has_multi_audio, e.has_subtitle, e.is_filler, e.is_recap, e.absolute_number,
+                e.overview, e.tvdb_id, e.monitored, e.created_at
          FROM episodes e
          INNER JOIN collections c ON c.id = e.collection_id
          WHERE e.title_id = ?
@@ -912,8 +915,8 @@ pub(crate) async fn find_episode_by_title_and_absolute_number_query(
     let row = sqlx::query(
         "SELECT e.id, e.title_id, e.collection_id, e.episode_type, e.episode_number,
                 e.season_number, e.episode_label, e.title, e.air_date, e.duration_seconds,
-                e.has_multi_audio, e.has_subtitle, e.is_filler, e.absolute_number,
-                e.overview, e.monitored, e.created_at
+                e.has_multi_audio, e.has_subtitle, e.is_filler, e.is_recap, e.absolute_number,
+                e.overview, e.tvdb_id, e.monitored, e.created_at
          FROM episodes e
          WHERE e.title_id = ?
            AND e.absolute_number = ?
@@ -1004,9 +1007,10 @@ fn row_to_collection(row: &sqlx::sqlite::SqliteRow) -> AppResult<Collection> {
     let title_id: String = row
         .try_get("title_id")
         .map_err(|err| AppError::Repository(err.to_string()))?;
-    let collection_type: String = row
-        .try_get("collection_type")
+    let collection_type_raw: String = row
+        .try_get::<String, _>("collection_type")
         .map_err(|err| AppError::Repository(err.to_string()))?;
+    let collection_type = CollectionType::parse(&collection_type_raw).unwrap_or_default();
     let collection_index: String = row
         .try_get("collection_index")
         .map_err(|err| AppError::Repository(err.to_string()))?;
@@ -1140,9 +1144,10 @@ fn row_to_episode(row: &sqlx::sqlite::SqliteRow) -> AppResult<Episode> {
     let collection_id: Option<String> = row
         .try_get("collection_id")
         .map_err(|err| AppError::Repository(err.to_string()))?;
-    let episode_type: String = row
-        .try_get("episode_type")
+    let episode_type_raw: String = row
+        .try_get::<String, _>("episode_type")
         .map_err(|err| AppError::Repository(err.to_string()))?;
+    let episode_type = scryer_domain::EpisodeType::parse(&episode_type_raw).unwrap_or_default();
     let episode_number: Option<String> = row
         .try_get("episode_number")
         .map_err(|err| AppError::Repository(err.to_string()))?;
@@ -1171,6 +1176,7 @@ fn row_to_episode(row: &sqlx::sqlite::SqliteRow) -> AppResult<Episode> {
     let is_recap: i64 = row.try_get("is_recap").unwrap_or(0);
     let absolute_number: Option<String> = row.try_get("absolute_number").unwrap_or(None);
     let overview: Option<String> = row.try_get("overview").unwrap_or(None);
+    let tvdb_id: Option<String> = row.try_get("tvdb_id").unwrap_or(None);
     let monitored: i64 = row
         .try_get("monitored")
         .map_err(|err| AppError::Repository(err.to_string()))?;
@@ -1195,6 +1201,7 @@ fn row_to_episode(row: &sqlx::sqlite::SqliteRow) -> AppResult<Episode> {
         is_recap: is_recap != 0,
         absolute_number,
         overview,
+        tvdb_id,
         monitored: monitored != 0,
         created_at: parse_utc_datetime(&created_at_raw)?,
     })
@@ -1220,7 +1227,7 @@ pub(crate) async fn create_title_query(pool: &SqlitePool, title: &Title) -> AppR
     )
     .bind(&title.id)
     .bind(&title.name)
-    .bind(format!("{:?}", title.facet).to_lowercase())
+    .bind(title.facet.as_str())
     .bind(if title.monitored { 1_i64 } else { 0_i64 })
     .bind(&tags_json)
     .bind(&ext_json)
@@ -1318,7 +1325,7 @@ pub(crate) async fn update_title_metadata_query(
         statement = statement.bind(normalized.to_string());
     }
     if let Some(facet) = facet {
-        statement = statement.bind(format!("{:?}", facet).to_lowercase());
+        statement = statement.bind(facet.as_str());
     }
     if let Some(tags_json) = tags_json {
         statement = statement.bind(tags_json);
@@ -1489,20 +1496,21 @@ pub(crate) async fn delete_title_query(pool: &SqlitePool, id: &str) -> AppResult
 #[cfg(test)]
 mod tests {
     use super::{SummaryCandidate, summary_candidate_sort_key};
+    use scryer_domain::CollectionType;
 
     #[test]
     fn movie_collection_wins_over_index_zero_fallback() {
         let mut candidates = [
             SummaryCandidate {
                 title_id: "title-1".to_string(),
-                collection_type: "season".to_string(),
+                collection_type: CollectionType::Season,
                 collection_index: "0".to_string(),
                 label: Some("Specials".to_string()),
                 ordered_path: None,
             },
             SummaryCandidate {
                 title_id: "title-1".to_string(),
-                collection_type: "movie".to_string(),
+                collection_type: CollectionType::Movie,
                 collection_index: "1".to_string(),
                 label: Some("1080P".to_string()),
                 ordered_path: Some("/media/movies/Movie/Movie.1080P.mkv".to_string()),
@@ -1510,7 +1518,7 @@ mod tests {
         ];
         candidates.sort_by_key(summary_candidate_sort_key);
 
-        assert_eq!(candidates[0].collection_type, "movie");
+        assert_eq!(candidates[0].collection_type, CollectionType::Movie);
         assert_eq!(candidates[0].label.as_deref(), Some("1080P"));
     }
 
@@ -1519,14 +1527,14 @@ mod tests {
         let mut candidates = [
             SummaryCandidate {
                 title_id: "title-1".to_string(),
-                collection_type: "movie".to_string(),
+                collection_type: CollectionType::Movie,
                 collection_index: "2".to_string(),
                 label: Some("2160P".to_string()),
                 ordered_path: None,
             },
             SummaryCandidate {
                 title_id: "title-1".to_string(),
-                collection_type: "movie".to_string(),
+                collection_type: CollectionType::Movie,
                 collection_index: "1".to_string(),
                 label: Some("1080P".to_string()),
                 ordered_path: Some("/media/movies/Movie/Movie.1080P.mkv".to_string()),

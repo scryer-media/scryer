@@ -17,9 +17,11 @@ fn row_to_channel(
     let name: String = row
         .try_get("name")
         .map_err(|e| AppError::Repository(e.to_string()))?;
-    let channel_type: String = row
+    let channel_type_str: String = row
         .try_get("channel_type")
         .map_err(|e| AppError::Repository(e.to_string()))?;
+    let channel_type = scryer_domain::ChannelType::parse(&channel_type_str)
+        .ok_or_else(|| AppError::Repository(format!("unknown channel_type: {channel_type_str}")))?;
     let config_json_raw: String = row
         .try_get("config_json")
         .map_err(|e| AppError::Repository(e.to_string()))?;
@@ -112,7 +114,7 @@ pub(crate) async fn create_notification_channel_query(
     )
     .bind(&config.id)
     .bind(&config.name)
-    .bind(&config.channel_type)
+    .bind(config.channel_type.as_str())
     .bind(&stored_config)
     .bind(if config.is_enabled { 1_i64 } else { 0_i64 })
     .bind(config.created_at.to_rfc3339())

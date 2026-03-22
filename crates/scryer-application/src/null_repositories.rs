@@ -2,7 +2,7 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use scryer_domain::ImportFileResult;
-use scryer_domain::ImportRecord;
+use scryer_domain::{ImportRecord, ImportStatus};
 
 use scryer_domain::RuleSet;
 
@@ -45,7 +45,12 @@ impl ImportRepository for NullImportRepository {
     async fn get_import_by_source_ref(&self, _: &str, _: &str) -> AppResult<Option<ImportRecord>> {
         Ok(None)
     }
-    async fn update_import_status(&self, _: &str, _: &str, _: Option<String>) -> AppResult<()> {
+    async fn update_import_status(
+        &self,
+        _: &str,
+        _: ImportStatus,
+        _: Option<String>,
+    ) -> AppResult<()> {
         Ok(())
     }
     async fn recover_stale_processing_imports(&self, _stale_seconds: i64) -> AppResult<u64> {
@@ -220,6 +225,9 @@ impl WantedItemRepository for NullWantedItemRepository {
     }
     async fn delete_wanted_items_for_title(&self, _title_id: &str) -> AppResult<()> {
         Ok(())
+    }
+    async fn reset_fruitless_wanted_items(&self, _now: &str) -> AppResult<u64> {
+        Ok(0)
     }
     async fn insert_release_decision(&self, _decision: &ReleaseDecision) -> AppResult<String> {
         Err(AppError::Repository(
@@ -795,7 +803,7 @@ pub mod test_nulls {
         async fn update_collection(
             &self,
             _: &str,
-            _: Option<String>,
+            _: Option<scryer_domain::CollectionType>,
             _: Option<String>,
             _: Option<String>,
             _: Option<String>,
@@ -830,7 +838,7 @@ pub mod test_nulls {
         async fn update_episode(
             &self,
             _: &str,
-            _: Option<String>,
+            _: Option<scryer_domain::EpisodeType>,
             _: Option<String>,
             _: Option<String>,
             _: Option<String>,
@@ -840,6 +848,7 @@ pub mod test_nulls {
             _: Option<bool>,
             _: Option<bool>,
             _: Option<bool>,
+            _: Option<String>,
             _: Option<String>,
             _: Option<String>,
         ) -> AppResult<Episode> {

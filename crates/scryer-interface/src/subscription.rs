@@ -356,14 +356,10 @@ fn dedupe_download_queue_items(
     let mut deduped = Vec::with_capacity(items.len());
 
     for item in items {
-        let key = if item.client_type.trim().is_empty() && item.download_client_item_id.is_empty() {
+        let key = if item.client_type.is_empty() && item.download_client_item_id.is_empty() {
             item.id.clone()
         } else {
-            format!(
-                "{}:{}",
-                item.client_type.trim().to_ascii_lowercase(),
-                item.download_client_item_id.trim()
-            )
+            format!("{}:{}", item.client_type, item.download_client_item_id)
         };
 
         if seen.insert(key) {

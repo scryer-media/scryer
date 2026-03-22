@@ -1,10 +1,12 @@
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 
+use crate::scoring_weights::ScoringPersona;
+
 /// Flat polling interval for movies without a baseline date.
-const MOVIE_FALLBACK_INTERVAL_HOURS: i64 = 12;
+const MOVIE_FALLBACK_INTERVAL_HOURS: i64 = 6;
 
 /// Flat polling interval for episodes without a baseline date.
-const EPISODE_FALLBACK_INTERVAL_HOURS: i64 = 24;
+const EPISODE_FALLBACK_INTERVAL_HOURS: i64 = 6;
 
 /// Configurable thresholds for the acquisition upgrade policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,11 +19,32 @@ pub struct AcquisitionThresholds {
 
 impl Default for AcquisitionThresholds {
     fn default() -> Self {
-        Self {
-            upgrade_cooldown_hours: 24,
-            same_tier_min_delta: 120,
-            cross_tier_min_delta: 30,
-            forced_upgrade_delta_bypass: 400,
+        Self::for_persona(&ScoringPersona::Balanced)
+    }
+}
+
+impl AcquisitionThresholds {
+    /// Build thresholds tuned to the given scoring persona.
+    pub fn for_persona(persona: &ScoringPersona) -> Self {
+        match persona {
+            ScoringPersona::Audiophile => Self {
+                upgrade_cooldown_hours: 12,
+                same_tier_min_delta: 50,
+                cross_tier_min_delta: 20,
+                forced_upgrade_delta_bypass: 200,
+            },
+            ScoringPersona::Balanced | ScoringPersona::Compatible => Self {
+                upgrade_cooldown_hours: 24,
+                same_tier_min_delta: 200,
+                cross_tier_min_delta: 30,
+                forced_upgrade_delta_bypass: 400,
+            },
+            ScoringPersona::Efficient => Self {
+                upgrade_cooldown_hours: 24,
+                same_tier_min_delta: 150,
+                cross_tier_min_delta: 40,
+                forced_upgrade_delta_bypass: 500,
+            },
         }
     }
 }
@@ -99,10 +122,51 @@ pub fn evaluate_upgrade(
     UpgradeDecision::RejectInsufficientDelta
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchPhase {
+    PreAir,
+    PreRelease,
+    Primary,
+    Secondary,
+    LongTail,
+}
+
+impl SearchPhase {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::PreAir => "pre_air",
+            Self::PreRelease => "pre_release",
+            Self::Primary => "primary",
+            Self::Secondary => "secondary",
+            Self::LongTail => "long_tail",
+        }
+    }
+}
+
+impl std::fmt::Display for SearchPhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for SearchPhase {
+    type Err = std::convert::Infallible;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.trim().to_ascii_lowercase().as_str() {
+            "pre_air" => Self::PreAir,
+            "pre_release" => Self::PreRelease,
+            "secondary" => Self::Secondary,
+            "long_tail" => Self::LongTail,
+            _ => Self::Primary,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SearchSchedule {
     pub next_search_at: String,
-    pub search_phase: String,
+    pub search_phase: SearchPhase,
 }
 
 /// Compute the next search schedule based on media type, baseline date, and current phase.
@@ -140,7 +204,7 @@ fn compute_movie_schedule(
     let Some(baseline) = baseline else {
         return SearchSchedule {
             next_search_at: (*now + Duration::hours(MOVIE_FALLBACK_INTERVAL_HOURS)).to_rfc3339(),
-            search_phase: "primary".to_string(),
+            search_phase: SearchPhase::Primary,
         };
     };
 
@@ -148,40 +212,32 @@ fn compute_movie_schedule(
     // pre_release: baseline -24h to baseline, every 60m
     // primary: baseline to +7d, every 15m
     // secondary: +7d to +30d, every 2h
-    // long_tail: +30d to +180d, every 12h
+    // long_tail: >30d, every 6h (runs forever, no paused phase)
 
     let pre_release_start = baseline - Duration::hours(24);
     let primary_end = baseline + Duration::days(7);
     let secondary_end = baseline + Duration::days(30);
-    let long_tail_end = baseline + Duration::days(180);
 
     if *now < pre_release_start {
-        // Not yet in any phase — schedule for pre_release start
         return SearchSchedule {
             next_search_at: pre_release_start.to_rfc3339(),
-            search_phase: "pre_release".to_string(),
+            search_phase: SearchPhase::PreRelease,
         };
     }
 
-    // Determine current effective phase based on time
     let (phase, interval) = if *now < baseline {
-        ("pre_release", Duration::minutes(60))
+        (SearchPhase::PreRelease, Duration::minutes(60))
     } else if *now < primary_end {
-        ("primary", Duration::minutes(15))
+        (SearchPhase::Primary, Duration::minutes(15))
     } else if *now < secondary_end {
-        ("secondary", Duration::hours(2))
-    } else if *now < long_tail_end {
-        ("long_tail", Duration::hours(12))
+        (SearchPhase::Secondary, Duration::hours(2))
     } else {
-        return SearchSchedule {
-            next_search_at: (*now + Duration::hours(24)).to_rfc3339(),
-            search_phase: "paused".to_string(),
-        };
+        (SearchPhase::LongTail, Duration::hours(6))
     };
 
     SearchSchedule {
         next_search_at: (*now + interval).to_rfc3339(),
-        search_phase: phase.to_string(),
+        search_phase: phase,
     }
 }
 
@@ -193,46 +249,40 @@ fn compute_episode_schedule(
     let Some(baseline) = baseline else {
         return SearchSchedule {
             next_search_at: (*now + Duration::hours(EPISODE_FALLBACK_INTERVAL_HOURS)).to_rfc3339(),
-            search_phase: "primary".to_string(),
+            search_phase: SearchPhase::Primary,
         };
     };
 
     // Episode phases:
     // pre_air: air -6h to air, every 30m
-    // primary: air to +72h, every 10m
-    // secondary: +72h to +21d, every 2h
-    // long_tail: +21d to +120d, every 12h
+    // primary: air to +48h, every 15m
+    // secondary: +48h to +14d, every 1h
+    // long_tail: >14d, every 6h (runs forever, no paused phase)
 
     let pre_air_start = baseline - Duration::hours(6);
-    let primary_end = baseline + Duration::hours(72);
-    let secondary_end = baseline + Duration::days(21);
-    let long_tail_end = baseline + Duration::days(120);
+    let primary_end = baseline + Duration::hours(48);
+    let secondary_end = baseline + Duration::days(14);
 
     if *now < pre_air_start {
         return SearchSchedule {
             next_search_at: pre_air_start.to_rfc3339(),
-            search_phase: "pre_air".to_string(),
+            search_phase: SearchPhase::PreAir,
         };
     }
 
     let (phase, interval) = if *now < baseline {
-        ("pre_air", Duration::minutes(30))
+        (SearchPhase::PreAir, Duration::minutes(30))
     } else if *now < primary_end {
-        ("primary", Duration::minutes(10))
+        (SearchPhase::Primary, Duration::minutes(15))
     } else if *now < secondary_end {
-        ("secondary", Duration::hours(2))
-    } else if *now < long_tail_end {
-        ("long_tail", Duration::hours(12))
+        (SearchPhase::Secondary, Duration::hours(1))
     } else {
-        return SearchSchedule {
-            next_search_at: (*now + Duration::hours(24)).to_rfc3339(),
-            search_phase: "paused".to_string(),
-        };
+        (SearchPhase::LongTail, Duration::hours(6))
     };
 
     SearchSchedule {
         next_search_at: (*now + interval).to_rfc3339(),
-        search_phase: phase.to_string(),
+        search_phase: phase,
     }
 }
 
@@ -308,7 +358,7 @@ mod tests {
         let now = Utc::now();
         let baseline = (now + Duration::days(7)).to_rfc3339();
         let schedule = compute_search_schedule("movie", Some(&baseline), "primary", &now);
-        assert_eq!(schedule.search_phase, "pre_release");
+        assert_eq!(schedule.search_phase, SearchPhase::PreRelease);
     }
 
     #[test]
@@ -316,14 +366,64 @@ mod tests {
         let now = Utc::now();
         let baseline = (now - Duration::hours(1)).to_rfc3339();
         let schedule = compute_search_schedule("episode", Some(&baseline), "primary", &now);
-        assert_eq!(schedule.search_phase, "primary");
+        assert_eq!(schedule.search_phase, SearchPhase::Primary);
     }
 
     #[test]
     fn test_episode_schedule_no_baseline() {
         let now = Utc::now();
         let schedule = compute_search_schedule("episode", None, "primary", &now);
-        assert_eq!(schedule.search_phase, "primary");
+        assert_eq!(schedule.search_phase, SearchPhase::Primary);
+    }
+
+    #[test]
+    fn test_audiophile_thresholds_are_aggressive() {
+        let t = AcquisitionThresholds::for_persona(&ScoringPersona::Audiophile);
+        assert_eq!(t.same_tier_min_delta, 50);
+        assert_eq!(t.cross_tier_min_delta, 20);
+        assert_eq!(t.upgrade_cooldown_hours, 12);
+        assert_eq!(t.forced_upgrade_delta_bypass, 200);
+    }
+
+    #[test]
+    fn test_balanced_thresholds_are_conservative() {
+        let t = AcquisitionThresholds::for_persona(&ScoringPersona::Balanced);
+        assert_eq!(t.same_tier_min_delta, 200);
+        assert_eq!(t.cross_tier_min_delta, 30);
+        assert_eq!(t.upgrade_cooldown_hours, 24);
+    }
+
+    #[test]
+    fn test_efficient_thresholds_moderate() {
+        let t = AcquisitionThresholds::for_persona(&ScoringPersona::Efficient);
+        assert_eq!(t.same_tier_min_delta, 150);
+        assert_eq!(t.cross_tier_min_delta, 40);
+        assert_eq!(t.forced_upgrade_delta_bypass, 500);
+    }
+
+    #[test]
+    fn test_compatible_matches_balanced() {
+        let balanced = AcquisitionThresholds::for_persona(&ScoringPersona::Balanced);
+        let compatible = AcquisitionThresholds::for_persona(&ScoringPersona::Compatible);
+        assert_eq!(balanced, compatible);
+    }
+
+    #[test]
+    fn test_audiophile_accepts_small_same_tier_delta() {
+        let now = Utc::now();
+        let thresholds = AcquisitionThresholds::for_persona(&ScoringPersona::Audiophile);
+        // 60pt delta: audiophile accepts (threshold 50), balanced would reject (threshold 200)
+        let decision = evaluate_upgrade(1060, Some(1000), true, None, &now, &thresholds);
+        assert_eq!(decision, UpgradeDecision::AcceptUpgrade);
+    }
+
+    #[test]
+    fn test_balanced_rejects_small_same_tier_delta() {
+        let now = Utc::now();
+        let thresholds = AcquisitionThresholds::for_persona(&ScoringPersona::Balanced);
+        // 60pt delta: balanced rejects (threshold 200)
+        let decision = evaluate_upgrade(1060, Some(1000), true, None, &now, &thresholds);
+        assert_eq!(decision, UpgradeDecision::RejectInsufficientDelta);
     }
 }
 

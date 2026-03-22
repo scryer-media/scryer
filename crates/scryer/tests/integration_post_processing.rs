@@ -22,12 +22,7 @@ async fn create_script(
     timeout_secs: i64,
     debug: bool,
 ) {
-    let facet_str = match facet {
-        MediaFacet::Movie => "movie",
-        MediaFacet::Tv => "tv",
-        MediaFacet::Anime => "anime",
-        MediaFacet::Other => return,
-    };
+    let facet_str = facet.as_str();
     let script = PostProcessingScript {
         id: format!(
             "pp-test-{}",
@@ -38,10 +33,10 @@ async fn create_script(
         ),
         name: format!("Test script for {facet_str}"),
         description: String::new(),
-        script_type: "inline".to_string(),
+        script_type: scryer_domain::ScriptType::Inline,
         script_content: command.to_string(),
         applied_facets: vec![facet_str.to_string()],
-        execution_mode: "blocking".to_string(),
+        execution_mode: scryer_domain::ExecutionMode::Blocking,
         timeout_secs,
         priority: 0,
         enabled: true,
@@ -260,7 +255,7 @@ async fn script_working_directory_is_file_parent() {
 #[tokio::test]
 async fn series_facet_uses_series_script() {
     let ctx = TestContext::new().await;
-    create_script(&ctx, MediaFacet::Tv, "true", 300, false).await;
+    create_script(&ctx, MediaFacet::Series, "true", 300, false).await;
 
     let dest_dir = tempfile::tempdir().expect("tempdir");
     let dest_file = dest_dir.path().join("Show.S01E01.1080p.mkv");
@@ -271,7 +266,7 @@ async fn series_facet_uses_series_script() {
         actor_id: None,
         title_id: "title-series-pp".to_string(),
         title_name: "Test Show".to_string(),
-        facet: MediaFacet::Tv,
+        facet: MediaFacet::Series,
         dest_path: dest_file,
         year: None,
         imdb_id: None,
@@ -320,34 +315,6 @@ async fn anime_facet_uses_anime_script() {
         .expect("should have activity event");
     assert_eq!(event.severity, ActivitySeverity::Success);
     assert!(event.message.contains("Test Anime"));
-}
-
-/// Other facet skips immediately — no script lookup, no activity event.
-#[tokio::test]
-async fn other_facet_is_noop() {
-    let ctx = TestContext::new().await;
-
-    let dest_dir = tempfile::tempdir().expect("tempdir");
-    let dest_file = dest_dir.path().join("file.mkv");
-    std::fs::write(&dest_file, b"fake").expect("write");
-
-    let pp_ctx = PostProcessingContext {
-        app: ctx.app.clone(),
-        actor_id: None,
-        title_id: "title-other".to_string(),
-        title_name: "Other".to_string(),
-        facet: MediaFacet::Other,
-        dest_path: dest_file,
-        year: None,
-        imdb_id: None,
-        tvdb_id: None,
-        season: None,
-        episode: None,
-        quality: None,
-    };
-    run_post_processing(pp_ctx).await.expect("run");
-
-    assert!(last_post_processing_event(&ctx.app).await.is_none());
 }
 
 /// A script that references an invalid binary records a failure.

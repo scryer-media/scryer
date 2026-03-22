@@ -138,6 +138,7 @@ const it: LocaleDictionary = {
   "settings.rootFoldersEmpty": "Nessuna cartella radice configurata. Aggiungi almeno un percorso.",
   "settings.rootFoldersHelp": "Le cartelle radice sono le directory principali in cui vengono archiviati i media. La cartella con la stella è quella predefinita per i nuovi titoli.",
   "settings.rootFolderAdd": "Aggiungi cartella radice",
+  "settings.rootFolderEdit": "Modifica cartella radice",
   "settings.rootFolderAddPlaceholder": "/media/movies",
   "settings.rootFolderSetDefault": "Imposta come predefinita",
   "settings.libraryScanTitle": "Scansione libreria",

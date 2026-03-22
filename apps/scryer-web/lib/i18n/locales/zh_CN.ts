@@ -140,6 +140,7 @@ const zh_CN: LocaleDictionary = {
   "settings.rootFoldersHelp":
     "根文件夹是存储媒体的顶级目录。标星的文件夹是新标题的默认文件夹。",
   "settings.rootFolderAdd": "添加根文件夹",
+  "settings.rootFolderEdit": "编辑根文件夹",
   "settings.rootFolderAddPlaceholder": "/media/movies",
   "settings.rootFolderSetDefault": "设为默认",
   "settings.libraryScanTitle": "媒体库扫描",

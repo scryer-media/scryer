@@ -30,9 +30,27 @@ impl Default for Id {
 pub enum MediaFacet {
     #[default]
     Movie,
-    Tv,
+    Series,
     Anime,
-    Other,
+}
+
+impl MediaFacet {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Movie => "movie",
+            Self::Series => "series",
+            Self::Anime => "anime",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "movie" => Some(Self::Movie),
+            "series" | "tv" => Some(Self::Series),
+            "anime" => Some(Self::Anime),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -129,11 +147,51 @@ pub struct InterstitialMovieMetadata {
     pub movie_anidb_id: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollectionType {
+    #[default]
+    Season,
+    Movie,
+    Arc,
+    Interstitial,
+    Specials,
+}
+
+impl CollectionType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Season => "season",
+            Self::Movie => "movie",
+            Self::Arc => "arc",
+            Self::Interstitial => "interstitial",
+            Self::Specials => "specials",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "season" => Some(Self::Season),
+            "movie" => Some(Self::Movie),
+            "arc" => Some(Self::Arc),
+            "interstitial" => Some(Self::Interstitial),
+            "specials" => Some(Self::Specials),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for CollectionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Collection {
     pub id: String,
     pub title_id: String,
-    pub collection_type: String,
+    pub collection_type: CollectionType,
     pub collection_index: String,
     pub label: Option<String>,
     pub ordered_path: Option<String>,
@@ -148,12 +206,49 @@ pub struct Collection {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EpisodeType {
+    #[default]
+    Standard,
+    Special,
+    Official,
+    Ova,
+    Ona,
+    Alternate,
+}
+
+impl EpisodeType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Special => "special",
+            Self::Official => "official",
+            Self::Ova => "ova",
+            Self::Ona => "ona",
+            Self::Alternate => "alternate",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "standard" => Some(Self::Standard),
+            "special" => Some(Self::Special),
+            "official" => Some(Self::Official),
+            "ova" => Some(Self::Ova),
+            "ona" => Some(Self::Ona),
+            "alternate" => Some(Self::Alternate),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Episode {
     pub id: String,
     pub title_id: String,
     pub collection_id: Option<String>,
-    pub episode_type: String,
+    pub episode_type: EpisodeType,
     pub episode_number: Option<String>,
     pub season_number: Option<String>,
     pub episode_label: Option<String>,
@@ -166,6 +261,7 @@ pub struct Episode {
     pub is_recap: bool,
     pub absolute_number: Option<String>,
     pub overview: Option<String>,
+    pub tvdb_id: Option<String>,
     pub monitored: bool,
     pub created_at: DateTime<Utc>,
 }
@@ -217,6 +313,34 @@ pub struct NewIndexerConfig {
     pub config_json: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DownloadClientStatus {
+    #[default]
+    Healthy,
+    Error,
+    Failed,
+}
+
+impl DownloadClientStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Healthy => "healthy",
+            Self::Error => "error",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "healthy" => Some(Self::Healthy),
+            "error" => Some(Self::Error),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DownloadClientConfig {
     pub id: String,
@@ -226,7 +350,7 @@ pub struct DownloadClientConfig {
     pub config_json: String,
     pub client_priority: i64,
     pub is_enabled: bool,
-    pub status: String,
+    pub status: DownloadClientStatus,
     pub last_error: Option<String>,
     pub last_seen_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
@@ -275,7 +399,7 @@ pub struct DownloadQueueItem {
     pub attention_required: bool,
     pub attention_reason: Option<String>,
     pub download_client_item_id: String,
-    pub import_status: Option<String>,
+    pub import_status: Option<ImportStatus>,
     pub import_error_message: Option<String>,
     pub imported_at: Option<String>,
     pub is_scryer_origin: bool,
@@ -324,10 +448,12 @@ pub struct CompletedDownload {
     pub parameters: Vec<(String, String)>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImportStatus {
-    Queued,
+    #[default]
+    Pending,
+    Running,
     Processing,
     Completed,
     Failed,
@@ -335,14 +461,89 @@ pub enum ImportStatus {
 }
 
 impl ImportStatus {
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
-            Self::Queued => "queued",
+            Self::Pending => "pending",
+            Self::Running => "running",
             Self::Processing => "processing",
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Skipped => "skipped",
         }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "running" => Some(Self::Running),
+            "processing" => Some(Self::Processing),
+            "completed" => Some(Self::Completed),
+            "failed" => Some(Self::Failed),
+            "skipped" => Some(Self::Skipped),
+            _ => None,
+        }
+    }
+
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Skipped)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportType {
+    MovieDownload,
+    TvDownload,
+    RenamePreview,
+    RenameApplyTitle,
+    RenameApplyFacet,
+    RenameApplyResult,
+    RenameIoFailed,
+    RenameMove,
+    RenameStalePlan,
+}
+
+impl ImportType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MovieDownload => "movie_download",
+            Self::TvDownload => "tv_download",
+            Self::RenamePreview => "rename_preview",
+            Self::RenameApplyTitle => "rename_apply_title",
+            Self::RenameApplyFacet => "rename_apply_facet",
+            Self::RenameApplyResult => "rename_apply_result",
+            Self::RenameIoFailed => "rename_io_failed",
+            Self::RenameMove => "rename_move",
+            Self::RenameStalePlan => "rename_stale_plan",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "movie_download" => Some(Self::MovieDownload),
+            "tv_download" => Some(Self::TvDownload),
+            "rename_preview" => Some(Self::RenamePreview),
+            "rename_apply_title" => Some(Self::RenameApplyTitle),
+            "rename_apply_facet" => Some(Self::RenameApplyFacet),
+            "rename_apply_result" => Some(Self::RenameApplyResult),
+            "rename_io_failed" => Some(Self::RenameIoFailed),
+            "rename_move" => Some(Self::RenameMove),
+            "rename_stale_plan" => Some(Self::RenameStalePlan),
+            _ => None,
+        }
+    }
+
+    pub fn is_rename(self) -> bool {
+        matches!(
+            self,
+            Self::RenamePreview
+                | Self::RenameApplyTitle
+                | Self::RenameApplyFacet
+                | Self::RenameApplyResult
+                | Self::RenameIoFailed
+                | Self::RenameMove
+                | Self::RenameStalePlan
+        )
     }
 }
 
@@ -436,8 +637,8 @@ pub struct ImportRecord {
     pub id: String,
     pub source_system: String,
     pub source_ref: String,
-    pub import_type: String,
-    pub status: String,
+    pub import_type: ImportType,
+    pub status: ImportStatus,
     pub payload_json: String,
     pub result_json: Option<String>,
     pub started_at: Option<String>,
@@ -515,13 +716,40 @@ impl std::fmt::Display for TitleHistoryEventType {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoryEventType {
+    Grabbed,
+    Completed,
+    Deleted,
+}
+
+impl HistoryEventType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Grabbed => "grabbed",
+            Self::Completed => "completed",
+            Self::Deleted => "deleted",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "grabbed" => Some(Self::Grabbed),
+            "completed" => Some(Self::Completed),
+            "deleted" => Some(Self::Deleted),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TitleHistoryRecord {
     pub id: String,
     pub title_id: String,
     pub episode_id: Option<String>,
     pub collection_id: Option<String>,
-    pub event_type: String,
+    pub event_type: HistoryEventType,
     pub source_title: Option<String>,
     pub quality: Option<String>,
     pub download_id: Option<String>,
@@ -615,13 +843,38 @@ pub enum EventType {
     Error,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestedMode {
+    #[default]
+    Automatic,
+    Manual,
+}
+
+impl RequestedMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Automatic => "automatic",
+            Self::Manual => "manual",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "automatic" => Some(Self::Automatic),
+            "manual" => Some(Self::Manual),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PolicyInput {
     pub title_id: String,
     pub facet: MediaFacet,
     pub has_existing_file: bool,
     pub candidate_quality: Option<String>,
-    pub requested_mode: String,
+    pub requested_mode: RequestedMode,
     pub release_title: Option<String>,
     pub quality_profile_id: Option<String>,
     pub category: Option<String>,
@@ -847,6 +1100,40 @@ impl IndexerProviderCapabilities {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigFieldType {
+    #[default]
+    String,
+    Password,
+    Bool,
+    Select,
+    Number,
+}
+
+impl ConfigFieldType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::String => "string",
+            Self::Password => "password",
+            Self::Bool => "bool",
+            Self::Select => "select",
+            Self::Number => "number",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "string" => Some(Self::String),
+            "password" => Some(Self::Password),
+            "bool" => Some(Self::Bool),
+            "select" => Some(Self::Select),
+            "number" => Some(Self::Number),
+            _ => None,
+        }
+    }
+}
+
 /// Describes a single configuration field a plugin expects.
 /// Used by the plugin system to advertise what config keys are needed,
 /// and by the frontend to render dynamic form fields.
@@ -858,7 +1145,7 @@ pub struct ConfigFieldDef {
     /// Human-readable label for the form field.
     pub label: String,
     /// Field type: "string", "password", "bool", "select", "number".
-    pub field_type: String,
+    pub field_type: ConfigFieldType,
     #[serde(default)]
     pub required: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -879,11 +1166,32 @@ pub struct ConfigFieldOption {
 
 // ── Notification types ──────────────────────────────────────────────
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelType {
+    Webhook,
+}
+
+impl ChannelType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Webhook => "webhook",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "webhook" => Some(Self::Webhook),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NotificationChannelConfig {
     pub id: String,
     pub name: String,
-    pub channel_type: String,
+    pub channel_type: ChannelType,
     pub config_json: String,
     pub is_enabled: bool,
     pub created_at: DateTime<Utc>,
@@ -893,7 +1201,7 @@ pub struct NotificationChannelConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NewNotificationChannelConfig {
     pub name: String,
-    pub channel_type: String,
+    pub channel_type: ChannelType,
     pub config_json: String,
     pub is_enabled: bool,
 }
@@ -902,7 +1210,7 @@ pub struct NewNotificationChannelConfig {
 pub struct NotificationSubscription {
     pub id: String,
     pub channel_id: String,
-    pub event_type: String,
+    pub event_type: NotificationEventType,
     pub scope: String,
     pub scope_id: Option<String>,
     pub is_enabled: bool,
@@ -913,7 +1221,7 @@ pub struct NotificationSubscription {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NewNotificationSubscription {
     pub channel_id: String,
-    pub event_type: String,
+    pub event_type: NotificationEventType,
     pub scope: String,
     pub scope_id: Option<String>,
     pub is_enabled: bool,
@@ -1009,21 +1317,98 @@ impl std::str::FromStr for NotificationEventType {
 
 // ── Post-Processing Scripts ──────────────────────────────────────────────────
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScriptType {
+    #[default]
+    Inline,
+    File,
+}
+
+impl ScriptType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Inline => "inline",
+            Self::File => "file",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "inline" => Some(Self::Inline),
+            "file" => Some(Self::File),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionMode {
+    #[default]
+    Blocking,
+    FireAndForget,
+}
+
+impl ExecutionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Blocking => "blocking",
+            Self::FireAndForget => "fire_and_forget",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "blocking" => Some(Self::Blocking),
+            "fire_and_forget" => Some(Self::FireAndForget),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PostProcessingScript {
     pub id: String,
     pub name: String,
     pub description: String,
-    pub script_type: String,         // "inline" | "file"
-    pub script_content: String,      // shell command or file path
-    pub applied_facets: Vec<String>, // ["movie", "tv", "anime"]
-    pub execution_mode: String,      // "blocking" | "fire_and_forget"
+    pub script_type: ScriptType,
+    pub script_content: String,
+    pub applied_facets: Vec<String>,
+    pub execution_mode: ExecutionMode,
     pub timeout_secs: i64,
     pub priority: i32,
     pub enabled: bool,
-    pub debug: bool, // capture stdout/stderr when true
+    pub debug: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScriptRunStatus {
+    Success,
+    Failed,
+    Timeout,
+}
+
+impl ScriptRunStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Failed => "failed",
+            Self::Timeout => "timeout",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "success" => Some(Self::Success),
+            "failed" => Some(Self::Failed),
+            "timeout" => Some(Self::Timeout),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1035,7 +1420,7 @@ pub struct PostProcessingScriptRun {
     pub title_name: Option<String>,
     pub facet: Option<String>,
     pub file_path: Option<String>,
-    pub status: String,
+    pub status: ScriptRunStatus,
     pub exit_code: Option<i32>,
     pub stdout_tail: Option<String>,
     pub stderr_tail: Option<String>,

@@ -3,7 +3,7 @@ use scryer_application::{
     ReleaseDownloadFailureSignature, TitleReleaseBlocklistEntry,
 };
 use scryer_domain::{
-    BlocklistEntry, DownloadClientConfig, Episode, ImportRecord, TitleHistoryRecord,
+    BlocklistEntry, DownloadClientConfig, Episode, ImportRecord, ImportStatus, TitleHistoryRecord,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -690,14 +690,14 @@ impl SqliteServices {
     pub async fn update_import_status(
         &self,
         import_id: &str,
-        status: &str,
+        status: ImportStatus,
         result_json: Option<String>,
     ) -> AppResult<()> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
             .send(DbCommand::UpdateImportStatus {
                 import_id: import_id.to_string(),
-                status: status.to_string(),
+                status: status.as_str().to_string(),
                 result_json,
                 reply: reply_tx,
             })
@@ -1011,6 +1011,21 @@ impl SqliteServices {
             .send(DbCommand::GetWantedItemForTitle {
                 title_id: title_id.to_string(),
                 episode_id: episode_id.map(str::to_string),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn reset_fruitless_wanted_items(&self, now: &str) -> AppResult<u64> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::ResetFruitlessWantedItems {
+                now: now.to_string(),
                 reply: reply_tx,
             })
             .await

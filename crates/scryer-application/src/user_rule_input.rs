@@ -8,6 +8,7 @@ pub(crate) struct ReleaseRuntimeInfo<'a> {
     pub thumbs_up: Option<i32>,
     pub thumbs_down: Option<i32>,
     pub extra: Option<&'a HashMap<String, serde_json::Value>>,
+    pub indexer_languages: Option<&'a [String]>,
 }
 
 pub(crate) struct RuleContextInfo<'a> {
@@ -38,6 +39,21 @@ pub(crate) fn build_rule_input(
         .any(|tag| tag.eq_ignore_ascii_case("anime"))
         || category.eq_ignore_ascii_case("anime");
 
+    // Merge indexer-reported languages (e.g. NZBGeek "English") into the
+    // title-parsed set so that convenience rules like required_audio_languages
+    // see them.  Normalize full names → ISO 639-2 codes to match the parser.
+    let mut languages_audio = parsed.languages_audio.clone();
+    if let Some(indexer_langs) = release_runtime.indexer_languages {
+        for raw in indexer_langs {
+            let upper = raw.trim().to_ascii_uppercase();
+            if let Some(code) = scryer_release_parser::normalize_language_token(&upper)
+                && !languages_audio.contains(&code.to_string())
+            {
+                languages_audio.push(code.to_string());
+            }
+        }
+    }
+
     UserRuleInput {
         release: ReleaseDoc {
             raw_title: parsed.raw_title.clone(),
@@ -47,7 +63,7 @@ pub(crate) fn build_rule_input(
             audio: parsed.audio.clone(),
             audio_codecs: parsed.audio_codecs.clone(),
             audio_channels: parsed.audio_channels.clone(),
-            languages_audio: parsed.languages_audio.clone(),
+            languages_audio,
             languages_subtitles: parsed.languages_subtitles.clone(),
             is_dual_audio: parsed.is_dual_audio,
             is_atmos: parsed.is_atmos,
@@ -141,6 +157,7 @@ pub(crate) fn build_search_rule_input(
             thumbs_up: result.thumbs_up,
             thumbs_down: result.thumbs_down,
             extra: Some(&result.extra),
+            indexer_languages: result.nzbgeek_languages.as_deref(),
         },
         RuleContextInfo {
             title_id: None,
@@ -315,6 +332,7 @@ mod tests {
                 thumbs_up: None,
                 thumbs_down: None,
                 extra: None,
+                indexer_languages: None,
             },
             RuleContextInfo {
                 title_id: Some("title-1"),
@@ -334,5 +352,81 @@ mod tests {
         assert_eq!(value["context"]["existing_score"], 900);
         assert_eq!(value["file"]["num_chapters"], 0);
         assert_eq!(value["file"]["audio_streams"][0]["codec"], "aac");
+    }
+
+    #[test]
+    fn indexer_languages_merged_into_languages_audio() {
+        let input = build_rule_input(
+            &test_parsed(),
+            &test_profile(),
+            &test_decision(),
+            ReleaseRuntimeInfo {
+                size_bytes: None,
+                published_at: None,
+                thumbs_up: None,
+                thumbs_down: None,
+                extra: None,
+                indexer_languages: Some(&["English".to_string(), "French".to_string()]),
+            },
+            RuleContextInfo {
+                title_id: None,
+                category: Some("movie"),
+                title_tags: &[],
+                has_existing_file: false,
+                existing_score: None,
+                search_mode: "auto",
+                runtime_minutes: None,
+                is_filler: false,
+            },
+            None,
+        );
+
+        let langs = &input.release.languages_audio;
+        assert!(
+            langs.contains(&"eng".to_string()),
+            "should contain eng from indexer"
+        );
+        assert!(
+            langs.contains(&"fra".to_string()),
+            "should contain fra from indexer"
+        );
+    }
+
+    #[test]
+    fn indexer_languages_deduplicates_with_parsed() {
+        // The test title parses no languages, but let's verify dedup with a title that does
+        let parsed = crate::parse_release_metadata("Test.Movie.2024.FRENCH.2160p.WEB-DL");
+        let input = build_rule_input(
+            &parsed,
+            &test_profile(),
+            &test_decision(),
+            ReleaseRuntimeInfo {
+                size_bytes: None,
+                published_at: None,
+                thumbs_up: None,
+                thumbs_down: None,
+                extra: None,
+                indexer_languages: Some(&["French".to_string()]),
+            },
+            RuleContextInfo {
+                title_id: None,
+                category: Some("movie"),
+                title_tags: &[],
+                has_existing_file: false,
+                existing_score: None,
+                search_mode: "auto",
+                runtime_minutes: None,
+                is_filler: false,
+            },
+            None,
+        );
+
+        let fra_count = input
+            .release
+            .languages_audio
+            .iter()
+            .filter(|l| *l == "fra")
+            .count();
+        assert_eq!(fra_count, 1, "French should not be duplicated");
     }
 }

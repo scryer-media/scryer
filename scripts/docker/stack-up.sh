@@ -6,7 +6,7 @@ REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 COMPOSE_FILE="${SCRYER_DOCKER_COMPOSE_FILE:-$REPO_DIR/docker-compose.dev.yml}"
 COMPOSE_ORCHESTRATION_SERVICE="${SCRYER_DOCKER_STACK_NAME:-scryer-dev}"
 SCRYER_DOCKER_RESTART_SERVICES="${SCRYER_DOCKER_RESTART_SERVICES:-scryer nodejs proxy}"
-SCRYER_DOCKER_INFRA_SERVICES="${SCRYER_DOCKER_INFRA_SERVICES:-nzbget sabnzbd weaver}"
+SCRYER_DOCKER_INFRA_SERVICES="${SCRYER_DOCKER_INFRA_SERVICES:-nzbget sabnzbd weaver prometheus grafana}"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "docker is required to run this command." >&2

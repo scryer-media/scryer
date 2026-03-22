@@ -13,7 +13,7 @@ impl AppUseCase {
             reason_codes.push("existing_file_present".to_string());
         }
 
-        let score = if input.requested_mode == "manual" {
+        let score = if input.requested_mode == scryer_domain::RequestedMode::Manual {
             100.0
         } else {
             80.0
@@ -25,7 +25,8 @@ impl AppUseCase {
             reason_codes,
             explanation: format!(
                 "policy evaluation for title {} in {} mode",
-                input.title_id, input.requested_mode
+                input.title_id,
+                input.requested_mode.as_str()
             ),
             scoring_log: vec![],
         })

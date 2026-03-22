@@ -208,7 +208,7 @@ mod tests {
             config_json: config_json.to_string(),
             client_priority: 1,
             is_enabled: true,
-            status: "unknown".to_string(),
+            status: scryer_domain::DownloadClientStatus::Healthy,
             last_error: None,
             last_seen_at: None,
             created_at: Utc::now(),
@@ -559,6 +559,12 @@ impl DownloadClient for WeaverDownloadClient {
                     .and_then(Value::as_f64)
                     .and_then(|ms| DateTime::from_timestamp_millis(ms as i64))
                     .or_else(|| Some(Utc::now()));
+
+                // Only return jobs submitted by scryer (have *scryer_title_id metadata).
+                let is_scryer = parameters.iter().any(|(k, _)| k == "*scryer_title_id");
+                if !is_scryer {
+                    return None;
+                }
 
                 Some(CompletedDownload {
                     client_type: "weaver".to_string(),

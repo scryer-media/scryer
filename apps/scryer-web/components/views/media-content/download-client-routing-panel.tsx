@@ -163,7 +163,7 @@ const DOWNLOAD_CLIENT_TYPE_OPTIONS: DownloadClientTypeOption[] = [
   },
   {
     value: "weaver",
-    iconSrc: "download-clients/weaver.webp",
+    iconSrc: "download-clients/weaver.svg",
     icon: WeaverIcon,
   },
   {

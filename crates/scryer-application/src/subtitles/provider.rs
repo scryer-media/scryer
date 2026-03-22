@@ -420,7 +420,7 @@ impl SubtitleProvider for OpenSubtitlesProvider {
 
         let resp = req
             .json(&serde_json::json!({
-                "file_id": provider_file_id.parse::<i64>().unwrap_or(0),
+                "file_id": provider_file_id.parse::<i64>().expect("provider_file_id was constructed from i64"),
             }))
             .send()
             .await

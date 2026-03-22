@@ -22,12 +22,16 @@ impl PostProcessingMutations {
             id: Id::new().0,
             name: input.name,
             description: input.description.unwrap_or_default(),
-            script_type: input.script_type.unwrap_or_else(|| "inline".to_string()),
+            script_type: input
+                .script_type
+                .and_then(|s| scryer_domain::ScriptType::parse(&s))
+                .unwrap_or_default(),
             script_content: input.script_content.unwrap_or_default(),
             applied_facets: input.applied_facets.unwrap_or_default(),
             execution_mode: input
                 .execution_mode
-                .unwrap_or_else(|| "blocking".to_string()),
+                .and_then(|s| scryer_domain::ExecutionMode::parse(&s))
+                .unwrap_or_default(),
             timeout_secs: input.timeout_secs.map(|v| v as i64).unwrap_or(300),
             priority: input.priority.unwrap_or(0),
             enabled: true,
@@ -67,7 +71,10 @@ impl PostProcessingMutations {
         if let Some(description) = input.description {
             script.description = description;
         }
-        if let Some(script_type) = input.script_type {
+        if let Some(script_type) = input
+            .script_type
+            .and_then(|s| scryer_domain::ScriptType::parse(&s))
+        {
             script.script_type = script_type;
         }
         if let Some(script_content) = input.script_content {
@@ -76,7 +83,10 @@ impl PostProcessingMutations {
         if let Some(applied_facets) = input.applied_facets {
             script.applied_facets = applied_facets;
         }
-        if let Some(execution_mode) = input.execution_mode {
+        if let Some(execution_mode) = input
+            .execution_mode
+            .and_then(|s| scryer_domain::ExecutionMode::parse(&s))
+        {
             script.execution_mode = execution_mode;
         }
         if let Some(timeout_secs) = input.timeout_secs {

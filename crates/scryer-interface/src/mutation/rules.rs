@@ -7,12 +7,7 @@ fn parse_facets(input: Option<Vec<String>>) -> Vec<scryer_domain::MediaFacet> {
     input
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|s| match s.to_lowercase().as_str() {
-            "movie" => Some(scryer_domain::MediaFacet::Movie),
-            "tv" => Some(scryer_domain::MediaFacet::Tv),
-            "anime" => Some(scryer_domain::MediaFacet::Anime),
-            _ => None,
-        })
+        .filter_map(|s| scryer_domain::MediaFacet::parse(&s))
         .collect()
 }
 

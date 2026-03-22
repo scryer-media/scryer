@@ -309,13 +309,23 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
         let provider = config.provider_type.trim().to_ascii_lowercase();
         let loaded = self.plugins.get(&provider)?;
 
-        let client = WasmIndexerClient::new(
+        match WasmIndexerClient::new(
             loaded.wasm_bytes.clone(),
             loaded.descriptor.clone(),
             config.name.clone(),
             config.clone(),
-        );
-        Some(Arc::new(client))
+        ) {
+            Ok(client) => Some(Arc::new(client)),
+            Err(e) => {
+                tracing::warn!(
+                    indexer = config.name.as_str(),
+                    provider = provider.as_str(),
+                    error = %e,
+                    "failed to compile WASM plugin, indexer will be unavailable"
+                );
+                None
+            }
+        }
     }
 }
 
@@ -1152,7 +1162,7 @@ impl NotificationPluginProvider for WasmNotificationPluginProvider {
         &self,
         config: &NotificationChannelConfig,
     ) -> Option<Arc<dyn NotificationClient>> {
-        let provider = config.channel_type.trim().to_ascii_lowercase();
+        let provider = config.channel_type.as_str().to_ascii_lowercase();
         let loaded = self.plugins.get(&provider)?;
         Self::create_notification_client(loaded, config)
     }

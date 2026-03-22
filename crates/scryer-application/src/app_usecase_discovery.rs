@@ -18,21 +18,10 @@ fn source_kind_matches_preference(result: &IndexerSearchResult, preferred: &str)
 
 const INDEXER_ROUTING_KEY: &str = "indexer.routing";
 
-pub(crate) fn search_facet_for_media_facet(facet: &MediaFacet) -> Option<&'static str> {
-    match facet {
-        MediaFacet::Movie => Some("movie"),
-        MediaFacet::Tv => Some("series"),
-        MediaFacet::Anime => Some("anime"),
-        MediaFacet::Other => None,
-    }
-}
-
 fn parse_search_facet(facet: Option<String>) -> Option<String> {
-    let facet = facet?.trim().to_ascii_lowercase();
-    match facet.as_str() {
-        "movie" | "series" | "anime" => Some(facet),
-        _ => None,
-    }
+    facet
+        .and_then(|value| MediaFacet::parse(&value))
+        .map(|f| f.as_str().to_string())
 }
 
 fn activity_media_label(facet: Option<&str>) -> &'static str {
@@ -317,21 +306,23 @@ impl AppUseCase {
                 .unwrap_or_default();
             let enabled: Vec<_> = clients.iter().filter(|c| c.is_enabled).collect();
             let plugin_provider = self.services.download_client_plugin_provider.as_ref();
-            let client_accepts = |c: &&scryer_domain::DownloadClientConfig, kind: &str| {
+            let client_accepts = |c: &&scryer_domain::DownloadClientConfig,
+                                  kind: DownloadSourceKind| {
                 let inputs = crate::accepted_inputs_for_client(&c.client_type, plugin_provider);
-                inputs
-                    .iter()
-                    .any(|i| DownloadSourceKind::parse(i).is_some_and(|k| k.as_str() == kind))
+                inputs.contains(&kind)
             };
-            let has_usenet = enabled.iter().any(|c| client_accepts(c, "nzb_url"));
-            let has_torrent = enabled
+            let has_usenet = enabled
                 .iter()
-                .any(|c| client_accepts(c, "torrent_file") || client_accepts(c, "magnet_uri"));
+                .any(|c| client_accepts(c, DownloadSourceKind::NzbFile));
+            let has_torrent = enabled.iter().any(|c| {
+                client_accepts(c, DownloadSourceKind::TorrentFile)
+                    || client_accepts(c, DownloadSourceKind::MagnetUri)
+            });
             let preferred = enabled
                 .iter()
                 .min_by_key(|c| c.client_priority)
                 .map(|c| {
-                    if client_accepts(c, "nzb_url") {
+                    if client_accepts(c, DownloadSourceKind::NzbFile) {
                         "nzb"
                     } else {
                         "torrent"
@@ -850,7 +841,7 @@ impl AppUseCase {
             .get(&title.facet)
             .map(|h| h.search_category().to_string())
             .unwrap_or_else(|| "movie".to_string());
-        let facet = search_facet_for_media_facet(&title.facet).map(str::to_string);
+        let facet = Some(title.facet.as_str().to_string());
 
         let query = title.name.trim().to_string();
         if query.is_empty() && imdb_id.is_none() && tvdb_id.is_none() && anidb_id.is_none() {
@@ -958,7 +949,7 @@ impl AppUseCase {
             .get(&title.facet)
             .map(|h| h.search_category().to_string())
             .unwrap_or_else(|| "series".to_string());
-        let facet = search_facet_for_media_facet(&title.facet).map(str::to_string);
+        let facet = Some(title.facet.as_str().to_string());
 
         // Resolve episode-specific anidb_id from anibridge (e.g. Bleach S17E08 → 15449)
         let anidb_id = if let Some(ref tvdb) = tvdb_id {
@@ -1256,7 +1247,10 @@ impl AppUseCase {
     /// Returns `None` if no routing is configured (caller falls back to
     /// hardcoded defaults). Returns `Some(vec![])` if all indexers are
     /// disabled for this scope (caller should skip search).
-    async fn resolve_indexer_routing(&self, scope_id: Option<&str>) -> Option<IndexerRoutingPlan> {
+    pub(crate) async fn resolve_indexer_routing(
+        &self,
+        scope_id: Option<&str>,
+    ) -> Option<IndexerRoutingPlan> {
         let scope_id = scope_id?;
 
         let raw_json = match self

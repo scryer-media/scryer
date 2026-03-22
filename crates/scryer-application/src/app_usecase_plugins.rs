@@ -960,9 +960,10 @@ impl AppUseCase {
     }
 }
 
-// NZBGeek has a fixed endpoint, but it still needs a user-supplied API key.
+// Builtin indexers with fixed endpoints still need a user-supplied API key,
+// so they should not be auto-created during reconciliation.
 fn should_skip_auto_created_indexer_config(provider_type: &str) -> bool {
-    provider_type.eq_ignore_ascii_case("nzbgeek")
+    provider_type.eq_ignore_ascii_case("nzbgeek") || provider_type.eq_ignore_ascii_case("dognzb")
 }
 
 #[cfg(test)]

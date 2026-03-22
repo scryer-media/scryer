@@ -12,9 +12,11 @@ fn row_to_subscription(row: &sqlx::sqlite::SqliteRow) -> AppResult<NotificationS
     let channel_id: String = row
         .try_get("channel_id")
         .map_err(|e| AppError::Repository(e.to_string()))?;
-    let event_type: String = row
+    let event_type_str: String = row
         .try_get("event_type")
         .map_err(|e| AppError::Repository(e.to_string()))?;
+    let event_type = scryer_domain::NotificationEventType::parse(&event_type_str)
+        .ok_or_else(|| AppError::Repository(format!("unknown event_type: {event_type_str}")))?;
     let scope: String = row
         .try_get("scope")
         .map_err(|e| AppError::Repository(e.to_string()))?;
@@ -99,7 +101,7 @@ pub(crate) async fn create_notification_subscription_query(
     )
     .bind(&sub.id)
     .bind(&sub.channel_id)
-    .bind(&sub.event_type)
+    .bind(sub.event_type.as_str())
     .bind(&sub.scope)
     .bind(&sub.scope_id)
     .bind(if sub.is_enabled { 1_i64 } else { 0_i64 })
@@ -121,7 +123,7 @@ pub(crate) async fn update_notification_subscription_query(
          SET event_type = ?, scope = ?, scope_id = ?, is_enabled = ?, updated_at = ?
          WHERE id = ?",
     )
-    .bind(&sub.event_type)
+    .bind(sub.event_type.as_str())
     .bind(&sub.scope)
     .bind(&sub.scope_id)
     .bind(if sub.is_enabled { 1_i64 } else { 0_i64 })

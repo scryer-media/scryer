@@ -184,7 +184,7 @@ const DOWNLOAD_CLIENT_TYPE_LOGO_OPTIONS: DownloadClientTypeLogoOption[] = [
   },
   {
     value: "weaver",
-    iconSrc: "download-clients/weaver.webp",
+    iconSrc: "download-clients/weaver.svg",
     icon: WeaverIcon,
   },
   {
@@ -427,8 +427,7 @@ export function SettingsDownloadClientsSection({
                   <SelectContent>
                     {downloadClientTypeOptions.map((option) => (
                       <SelectItem key={option.value} value={option.value}>
-                        <DownloadClientTypeLogo typeValue={option.value} />
-                        <span>{option.label}</span>
+                        {option.label}
                       </SelectItem>
                     ))}
                   </SelectContent>

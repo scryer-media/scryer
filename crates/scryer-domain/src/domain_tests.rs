@@ -210,7 +210,8 @@ fn user_with_password_hash_has_all_entitlements() {
 
 #[test]
 fn import_status_as_str() {
-    assert_eq!(ImportStatus::Queued.as_str(), "queued");
+    assert_eq!(ImportStatus::Pending.as_str(), "pending");
+    assert_eq!(ImportStatus::Running.as_str(), "running");
     assert_eq!(ImportStatus::Processing.as_str(), "processing");
     assert_eq!(ImportStatus::Completed.as_str(), "completed");
     assert_eq!(ImportStatus::Failed.as_str(), "failed");

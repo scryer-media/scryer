@@ -354,7 +354,7 @@ async fn bootstrap_application(
     let mut registry = FacetRegistry::new();
     registry.register(Arc::new(MovieFacetHandler));
     registry.register(Arc::new(SeriesFacetHandler::new(
-        scryer_domain::MediaFacet::Tv,
+        scryer_domain::MediaFacet::Series,
     )));
     registry.register(Arc::new(SeriesFacetHandler::new(
         scryer_domain::MediaFacet::Anime,
@@ -1323,7 +1323,7 @@ async fn resolve_weaver_ws_url(app: &AppUseCase) -> Option<(String, Option<Strin
         .filter(|c| c.is_enabled)
         .min_by_key(|c| c.client_priority)?;
 
-    if !primary.client_type.trim().eq_ignore_ascii_case("weaver") {
+    if primary.client_type != "weaver" {
         return None;
     }
 

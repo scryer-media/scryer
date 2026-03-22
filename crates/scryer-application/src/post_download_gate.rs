@@ -29,12 +29,7 @@ pub struct ImportedFileRejection {
 }
 
 pub(crate) fn facet_to_category_hint(facet: &MediaFacet) -> &'static str {
-    match facet {
-        MediaFacet::Movie => "movie",
-        MediaFacet::Tv => "tv",
-        MediaFacet::Anime => "anime",
-        MediaFacet::Other => "other",
-    }
+    facet.as_str()
 }
 
 pub(crate) fn build_import_profile_decision(
@@ -126,7 +121,10 @@ pub(crate) fn missing_audio_languages<'a>(
         .collect()
 }
 
-pub(crate) async fn evaluate_imported_file_gate(
+/// Probe a file at the given path and validate it against the quality profile and user rules.
+/// The file does NOT need to be at its final destination — this can probe a file in-place
+/// at its download location before any move/copy.
+pub(crate) async fn probe_and_validate(
     app: &AppUseCase,
     title: &Title,
     parsed: &crate::ParsedReleaseMetadata,
@@ -200,6 +198,7 @@ pub(crate) async fn evaluate_imported_file_gate(
                 thumbs_up: None,
                 thumbs_down: None,
                 extra: None,
+                indexer_languages: None,
             },
             crate::user_rule_input::RuleContextInfo {
                 title_id: Some(&title.id),
@@ -257,6 +256,311 @@ pub(crate) async fn evaluate_imported_file_gate(
         analysis: Some(build_media_file_analysis(&analysis)),
         scan_error: None,
     }))
+}
+
+/// Merge mediainfo-detected values into a release-name-parsed metadata struct.
+/// Prefers mediainfo when it detects a concrete value that differs from the release name.
+/// Returns the merged metadata and a log of what changed.
+pub(crate) fn rescore_from_mediainfo(
+    parsed: &crate::ParsedReleaseMetadata,
+    acceptance: &ImportedFileAcceptance,
+) -> (crate::ParsedReleaseMetadata, Vec<String>) {
+    let Some(ref analysis) = acceptance.analysis else {
+        return (parsed.clone(), vec![]);
+    };
+
+    let mut merged = parsed.clone();
+    let mut changes = Vec::new();
+
+    // Override resolution from video height
+    if let Some(height) = analysis.video_height {
+        let detected = match height {
+            h if h >= 2100 => Some("2160p"),
+            h if h >= 1000 => Some("1080p"),
+            h if h >= 700 => Some("720p"),
+            h if h >= 480 => Some("480p"),
+            _ => None,
+        };
+        if let Some(detected) = detected
+            && merged.quality.as_deref() != Some(detected)
+        {
+            changes.push(format!(
+                "resolution: {} → {}",
+                merged.quality.as_deref().unwrap_or("?"),
+                detected
+            ));
+            merged.quality = Some(detected.to_string());
+        }
+    }
+
+    // Override video codec (map mediainfo names → release parser names)
+    if let Some(ref mediainfo_codec) = analysis.video_codec {
+        let normalized = normalize_mediainfo_video_codec(mediainfo_codec);
+        if let Some(normalized) = normalized
+            && merged.video_codec.as_deref() != Some(normalized)
+        {
+            changes.push(format!(
+                "video_codec: {} → {}",
+                merged.video_codec.as_deref().unwrap_or("?"),
+                normalized
+            ));
+            merged.video_codec = Some(normalized.to_string());
+        }
+    }
+
+    // Override HDR format
+    if let Some(ref hdr_format) = analysis.video_hdr_format {
+        let hdr_upper = hdr_format.to_ascii_uppercase();
+        if hdr_upper.contains("DOLBY VISION") && !merged.is_dolby_vision {
+            changes.push("hdr: detected Dolby Vision".to_string());
+            merged.is_dolby_vision = true;
+        }
+        if (hdr_upper.contains("HDR10+") || hdr_upper.contains("HDR10PLUS")) && !merged.is_hdr10plus
+        {
+            changes.push("hdr: detected HDR10+".to_string());
+            merged.is_hdr10plus = true;
+        }
+        if hdr_upper.contains("HDR10") && !merged.detected_hdr {
+            changes.push("hdr: detected HDR10".to_string());
+            merged.detected_hdr = true;
+        }
+    }
+
+    // Override audio: iterate all streams to find best codec and max channels.
+    if !analysis.audio_streams.is_empty() {
+        let best_stream = analysis
+            .audio_streams
+            .iter()
+            .max_by_key(|s| audio_codec_rank(s.codec.as_deref().unwrap_or("")));
+
+        if let Some(best) = best_stream
+            && let Some(ref codec) = best.codec
+        {
+            let normalized = normalize_mediainfo_audio_codec(codec);
+            if let Some(normalized) = normalized
+                && merged.audio.as_deref() != Some(normalized)
+            {
+                changes.push(format!(
+                    "audio: {} → {}",
+                    merged.audio.as_deref().unwrap_or("?"),
+                    normalized
+                ));
+                merged.audio = Some(normalized.to_string());
+            }
+        }
+
+        let max_channels = analysis
+            .audio_streams
+            .iter()
+            .filter_map(|s| s.channels)
+            .max();
+        if let Some(channels) = max_channels {
+            let ch_str = format_audio_channels(channels);
+            if merged.audio_channels.as_deref() != Some(&ch_str) {
+                changes.push(format!(
+                    "audio_channels: {} → {}",
+                    merged.audio_channels.as_deref().unwrap_or("?"),
+                    ch_str
+                ));
+                merged.audio_channels = Some(ch_str);
+            }
+        }
+
+        // Detect multi-audio from stream count
+        if analysis.audio_streams.len() > 1 && !merged.is_dual_audio {
+            changes.push("dual_audio: detected multiple audio tracks".to_string());
+            merged.is_dual_audio = true;
+        }
+
+        // Detect Atmos from stream codec names
+        let has_atmos = analysis.audio_streams.iter().any(|s| {
+            s.codec
+                .as_deref()
+                .is_some_and(|c| c.to_ascii_lowercase().contains("atmos"))
+        });
+        if has_atmos && !merged.is_atmos {
+            changes.push("atmos: detected from audio streams".to_string());
+            merged.is_atmos = true;
+        }
+    }
+
+    (merged, changes)
+}
+
+/// Map mediainfo video codec names to release-parser canonical names.
+fn normalize_mediainfo_video_codec(codec: &str) -> Option<&'static str> {
+    match codec.to_ascii_lowercase().as_str() {
+        "hevc" | "h265" | "h.265" | "hvc1" | "hev1" => Some("H.265"),
+        "h264" | "h.264" | "avc" | "avc1" => Some("H.264"),
+        "av1" | "av01" => Some("AV1"),
+        "vp9" => Some("VP9"),
+        "mpeg4" | "mp4v" | "xvid" | "divx" => Some("MPEG-4"),
+        _ => None,
+    }
+}
+
+/// Map mediainfo audio codec names to release-parser canonical names.
+fn normalize_mediainfo_audio_codec(codec: &str) -> Option<&'static str> {
+    let lower = codec.to_ascii_lowercase();
+    if lower.contains("truehd") && lower.contains("atmos") {
+        return Some("TrueHD Atmos");
+    }
+    if lower.contains("truehd") {
+        return Some("TrueHD");
+    }
+    if lower.contains("dts") && lower.contains("atmos") {
+        return Some("DTS:X");
+    }
+    if lower.contains("dts-hd ma") || lower.contains("dts-hd master") {
+        return Some("DTS-HD MA");
+    }
+    if lower.contains("dts-hd") {
+        return Some("DTS-HD");
+    }
+    if lower.contains("dts") {
+        return Some("DTS");
+    }
+    if lower.contains("e-ac-3") || lower.contains("eac3") || lower.contains("dd+") {
+        if lower.contains("atmos") {
+            return Some("EAC3 Atmos");
+        }
+        return Some("EAC3");
+    }
+    if lower.contains("ac-3") || lower.contains("ac3") {
+        return Some("AC3");
+    }
+    if lower.contains("flac") {
+        return Some("FLAC");
+    }
+    if lower.contains("aac") {
+        return Some("AAC");
+    }
+    if lower.contains("mp3") || lower.contains("mpeg audio") {
+        return Some("MP3");
+    }
+    if lower.contains("opus") {
+        return Some("Opus");
+    }
+    if lower.contains("vorbis") {
+        return Some("Vorbis");
+    }
+    if lower.contains("pcm") || lower.contains("lpcm") {
+        return Some("PCM");
+    }
+    None
+}
+
+/// Rank audio codecs for "best track" selection when iterating streams.
+fn audio_codec_rank(codec: &str) -> i32 {
+    let lower = codec.to_ascii_lowercase();
+    if lower.contains("truehd") && lower.contains("atmos") {
+        return 100;
+    }
+    if lower.contains("truehd") {
+        return 90;
+    }
+    if lower.contains("dts") && lower.contains("atmos") {
+        return 95;
+    }
+    if lower.contains("dts-hd ma") || lower.contains("dts-hd master") {
+        return 85;
+    }
+    if lower.contains("flac") {
+        return 80;
+    }
+    if lower.contains("e-ac-3") || lower.contains("eac3") || lower.contains("dd+") {
+        return 70;
+    }
+    if lower.contains("dts-hd") {
+        return 65;
+    }
+    if lower.contains("dts") {
+        return 60;
+    }
+    if lower.contains("ac-3") || lower.contains("ac3") {
+        return 50;
+    }
+    if lower.contains("aac") {
+        return 40;
+    }
+    if lower.contains("opus") {
+        return 40;
+    }
+    if lower.contains("mp3") {
+        return 30;
+    }
+    20
+}
+
+/// Format channel count to standard notation (e.g., 6 → "5.1", 8 → "7.1").
+fn format_audio_channels(channels: i32) -> String {
+    match channels {
+        8 => "7.1".to_string(),
+        7 => "6.1".to_string(),
+        6 => "5.1".to_string(),
+        2 => "2.0".to_string(),
+        1 => "1.0".to_string(),
+        n => format!("{n}.0"),
+    }
+}
+
+/// Compute acquisition score from a gate acceptance, applying mediainfo rescoring.
+/// Returns the final score and the rescored parsed metadata (for logging).
+pub(crate) fn compute_acquisition_score(
+    parsed: &crate::ParsedReleaseMetadata,
+    acceptance: &ImportedFileAcceptance,
+    profile: &crate::QualityProfile,
+    title: &Title,
+    size_bytes: i64,
+    has_existing_file: bool,
+) -> i32 {
+    let (rescored, changes) = rescore_from_mediainfo(parsed, acceptance);
+    let category = facet_to_category_hint(&title.facet);
+    let decision = build_import_profile_decision(
+        profile,
+        &rescored,
+        category,
+        title.runtime_minutes,
+        Some(size_bytes),
+        has_existing_file,
+    );
+    let score = decision.preference_score;
+    if !changes.is_empty() {
+        tracing::debug!(
+            title = %title.name,
+            score,
+            changes = ?changes,
+            "mediainfo rescore applied to acquisition score"
+        );
+    }
+    score
+}
+
+/// Convenience wrapper: probe and validate a file that is already at its final destination.
+/// Used by non-upgrade import paths where the file has already been moved.
+pub(crate) async fn evaluate_imported_file_gate(
+    app: &AppUseCase,
+    title: &Title,
+    parsed: &crate::ParsedReleaseMetadata,
+    quality_profile: &crate::QualityProfile,
+    path: &Path,
+    size_bytes: i64,
+    has_existing_file: bool,
+    existing_score: Option<i32>,
+    is_filler: bool,
+) -> ImportedFileGateDecision {
+    probe_and_validate(
+        app,
+        title,
+        parsed,
+        quality_profile,
+        path,
+        size_bytes,
+        has_existing_file,
+        existing_score,
+        is_filler,
+    )
+    .await
 }
 
 pub(crate) async fn persist_media_analysis_result(

@@ -176,6 +176,34 @@ pub struct TitleMediaFile {
     pub release_hash: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WantedStatus {
+    #[default]
+    Wanted,
+    Grabbed,
+    Completed,
+}
+
+impl WantedStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Wanted => "wanted",
+            Self::Grabbed => "grabbed",
+            Self::Completed => "completed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "wanted" => Some(Self::Wanted),
+            "grabbed" => Some(Self::Grabbed),
+            "completed" => Some(Self::Completed),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct WantedItem {
     pub id: String,
@@ -190,7 +218,7 @@ pub struct WantedItem {
     pub last_search_at: Option<String>,
     pub search_count: i64,
     pub baseline_date: Option<String>,
-    pub status: String,
+    pub status: WantedStatus,
     pub grabbed_release: Option<String>,
     pub current_score: Option<i32>,
     pub created_at: String,

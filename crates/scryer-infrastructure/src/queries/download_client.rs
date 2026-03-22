@@ -32,9 +32,10 @@ fn row_to_download_client_config(
     let is_enabled: i64 = row
         .try_get("is_enabled")
         .map_err(|err| AppError::Repository(err.to_string()))?;
-    let status: String = row
+    let status_str: String = row
         .try_get("status")
         .map_err(|err| AppError::Repository(err.to_string()))?;
+    let status = scryer_domain::DownloadClientStatus::parse(&status_str).unwrap_or_default();
     let last_error: Option<String> = row
         .try_get("last_error")
         .map_err(|err| AppError::Repository(err.to_string()))?;
@@ -158,7 +159,7 @@ pub(crate) async fn create_download_client_config_query(
     .bind(&config.base_url)
     .bind(&stored_config_json)
     .bind(if config.is_enabled { 1_i64 } else { 0_i64 })
-    .bind(&config.status)
+    .bind(config.status.as_str())
     .bind(config.client_priority)
     .bind(&config.last_error)
     .bind(

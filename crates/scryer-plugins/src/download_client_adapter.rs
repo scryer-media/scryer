@@ -237,13 +237,7 @@ impl DownloadClient for WasmDownloadClient {
             title: PluginDownloadTitle {
                 title_id: Some(request.title.id.clone()),
                 title_name: request.title.name.clone(),
-                media_facet: match request.title.facet {
-                    scryer_domain::MediaFacet::Movie => "movie",
-                    scryer_domain::MediaFacet::Tv => "tv",
-                    scryer_domain::MediaFacet::Anime => "anime",
-                    scryer_domain::MediaFacet::Other => "other",
-                }
-                .to_string(),
+                media_facet: request.title.facet.as_str().to_string(),
                 tags: request.title.tags.clone(),
             },
             routing: PluginDownloadRouting {

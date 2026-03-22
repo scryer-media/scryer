@@ -103,7 +103,7 @@ fn dedupe_keep_order(mut values: Vec<String>) -> Vec<String> {
     out
 }
 
-fn normalize_language_token(token: &str) -> Option<&'static str> {
+pub fn normalize_language_token(token: &str) -> Option<&'static str> {
     match token {
         "EN" | "ENG" | "ENGLISH" => Some("eng"),
         "EN-GB" => Some("eng"),

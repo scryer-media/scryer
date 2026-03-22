@@ -1,5 +1,5 @@
 import * as React from "react";
-import { FolderOpen, Trash2 } from "lucide-react";
+import { FolderOpen, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -28,6 +28,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
 }: MediaLibrarySettingsPanelProps) {
   const t = useTranslate();
   const [browserOpen, setBrowserOpen] = React.useState(false);
+  const [editingIndex, setEditingIndex] = React.useState<number | null>(null);
   const sortedFolders = React.useMemo(
     () => rootFolders
       .map((rf, i) => ({ rf, originalIndex: i }))
@@ -43,6 +44,16 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
     onSaveRootFolders([...rootFolders, { path: trimmed, isDefault: isFirst }]);
   };
 
+  const handleEditPath = (index: number, path: string) => {
+    const trimmed = path.trim();
+    if (!trimmed) return;
+    if (rootFolders.some((rf, i) => rf.path === trimmed && i !== index)) return;
+    const next = rootFolders.map((rf, i) =>
+      i === index ? { ...rf, path: trimmed } : rf,
+    );
+    onSaveRootFolders(next);
+  };
+
   const handleRemovePath = (index: number) => {
     const next = rootFolders.filter((_, i) => i !== index);
     if (next.length > 0 && !next.some((rf) => rf.isDefault)) {
@@ -55,6 +66,32 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
     const next = rootFolders.map((rf, i) => ({ ...rf, isDefault: i === index }));
     onSaveRootFolders(next);
   };
+
+  const openAdd = () => {
+    setEditingIndex(null);
+    setBrowserOpen(true);
+  };
+
+  const openEdit = (index: number) => {
+    setEditingIndex(index);
+    setBrowserOpen(true);
+  };
+
+  const handleBrowserSelect = (path: string) => {
+    if (editingIndex !== null) {
+      handleEditPath(editingIndex, path);
+    } else {
+      handleAddPath(path);
+    }
+  };
+
+  const browserInitialPath = editingIndex !== null
+    ? rootFolders[editingIndex]?.path ?? "/"
+    : "/";
+
+  const browserTitle = editingIndex !== null
+    ? t("settings.rootFolderEdit")
+    : t("settings.rootFolderAdd");
 
   return (
     <>
@@ -91,6 +128,17 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                   type="button"
                   variant="ghost"
                   size="icon"
+                  className="h-8 w-8 shrink-0"
+                  onClick={() => openEdit(index)}
+                  disabled={loading}
+                  aria-label={t("label.edit")}
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
                   className="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
                   onClick={() => handleRemovePath(index)}
                   disabled={loading}
@@ -104,7 +152,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
           <Button
             type="button"
             variant="outline"
-            onClick={() => setBrowserOpen(true)}
+            onClick={openAdd}
             disabled={loading}
           >
             <FolderOpen className="mr-1.5 h-4 w-4" />
@@ -146,8 +194,9 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
       <FolderBrowserDialog
         open={browserOpen}
         onOpenChange={setBrowserOpen}
-        onSelect={handleAddPath}
-        title={t("settings.rootFolderAdd")}
+        onSelect={handleBrowserSelect}
+        initialPath={browserInitialPath}
+        title={browserTitle}
       />
     </>
   );
