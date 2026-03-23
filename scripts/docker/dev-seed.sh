@@ -33,45 +33,46 @@ fi
 PAYLOAD_FILE=$(mktemp)
 trap 'rm -f "$PAYLOAD_FILE"' EXIT
 
-jq '{
+# Write the jq filter to a file to avoid shell quoting issues across jq versions.
+
+JQ_FILTER=$(mktemp)
+cat > "$JQ_FILTER" << 'JQEOF'
+{
   "query": (
     def escape: gsub("\\\\"; "\\\\\\\\") | gsub("\""; "\\\"") | gsub("\n"; "\\n");
 
-    # Indexers
     ([.indexers // [] | to_entries[] | .key as $i | .value |
       "idx\($i): createIndexerConfig(input: { name: \"\(.name | escape)\", providerType: \"\(.providerType)\", baseUrl: \"\(.baseUrl | escape)\", apiKey: \"\(.apiKey | escape)\", isEnabled: \(.enabled) }) { id name }"
     ] | join("\n")) as $indexers |
 
-    # Download clients
     ([.downloadClients // [] | to_entries[] | .key as $i | .value |
       (.config | tojson | escape) as $configJson |
       "dc\($i): createDownloadClientConfig(input: { name: \"\(.name | escape)\", clientType: \"\(.clientType)\", baseUrl: \"\(.baseUrl | escape)\", configJson: \"\($configJson)\" }) { id name }"
     ] | join("\n")) as $clients |
 
-    # Settings
     ([.settings // [] | to_entries[] | .key as $i | .value |
       (if .scopeId then ", scopeId: \"\(.scopeId)\"" else "" end) as $scopeId |
       "s\($i): saveAdminSettings(input: { scope: \"\(.scope)\"\($scopeId), items: [{ keyName: \"\(.key)\", value: \"\(.value | escape)\" }] }) { scope }"
     ] | join("\n")) as $settings |
 
-    # Titles — movies
     ([.titles.movies // [] | to_entries[] | .key as $i | .value |
       "m\($i): addTitle(input: { name: \"\(.name | escape)\", facet: \"movie\", monitored: false, tags: [], externalIds: [{ source: \"tvdb\", value: \"\(.tvdbId)\" }] }) { title { id } }"
     ] | join("\n")) as $movies |
 
-    # Titles — series
     ([.titles.series // [] | to_entries[] | .key as $i | .value |
       "se\($i): addTitle(input: { name: \"\(.name | escape)\", facet: \"series\", monitored: false, tags: [], externalIds: [{ source: \"tvdb\", value: \"\(.tvdbId)\" }] }) { title { id } }"
     ] | join("\n")) as $series |
 
-    # Titles — anime
     ([.titles.anime // [] | to_entries[] | .key as $i | .value |
       "a\($i): addTitle(input: { name: \"\(.name | escape)\", facet: \"anime\", monitored: false, tags: [], externalIds: [{ source: \"tvdb\", value: \"\(.tvdbId)\" }] }) { title { id } }"
     ] | join("\n")) as $anime |
 
     "mutation Seed {\n\($indexers)\n\($clients)\n\($settings)\n\($movies)\n\($series)\n\($anime)\n}"
   )
-}' "$SEED_FILE" > "$PAYLOAD_FILE"
+}
+JQEOF
+jq -f "$JQ_FILTER" "$SEED_FILE" > "$PAYLOAD_FILE"
+rm -f "$JQ_FILTER"
 
 # Count entities for logging
 n_idx=$(jq '.indexers // [] | length' "$SEED_FILE")
