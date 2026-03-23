@@ -442,10 +442,6 @@ export function SeriesOverviewView({
                 </p>
               ) : null}
 
-              <p className="mt-2 text-left text-xs text-muted-foreground/60 sm:text-right">
-                Added {formatDate(title.createdAt)}
-              </p>
-
               <div className="mt-auto flex flex-wrap items-center gap-3 pt-3">
                 {(() => { const e = title.externalIds.find((e) => e.source === "imdb"); return e ? (
                   <a
@@ -523,6 +519,9 @@ export function SeriesOverviewView({
                     ) : null; })()}
                   </>
                 ) : null}
+                <span className="ml-auto text-xs text-muted-foreground/60">
+                  Added {formatDate(title.createdAt)}
+                </span>
               </div>
             </div>
           </div>

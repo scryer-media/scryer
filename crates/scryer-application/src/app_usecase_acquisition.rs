@@ -330,8 +330,10 @@ impl AppUseCase {
 pub(crate) struct DownloadClientSnapshot {
     /// Lowercase title names of items currently queued or downloading.
     active_titles: std::collections::HashSet<String>,
-    /// Failed history items keyed by lowercase title name.
-    failed_titles: std::collections::HashMap<String, FailedDownloadSnapshot>,
+    /// Failed history items keyed by download client job ID (NZBGet NZBID,
+    /// SABnzbd nzo_id, Weaver job UUID). Matched against `download_submissions`
+    /// table to find which scryer title a failed download belongs to.
+    failed_by_download_id: std::collections::HashMap<String, FailedDownloadSnapshot>,
 }
 
 #[derive(Clone, Debug)]
@@ -344,7 +346,7 @@ pub(crate) struct FailedDownloadSnapshot {
 impl DownloadClientSnapshot {
     pub(crate) async fn fetch(app: &AppUseCase) -> Self {
         let mut active_titles = std::collections::HashSet::new();
-        let mut failed_titles = std::collections::HashMap::new();
+        let mut failed_by_download_id = std::collections::HashMap::new();
 
         // Fetch current queue
         if let Ok(queue) = app.services.download_client.list_queue().await {
@@ -366,7 +368,8 @@ impl DownloadClientSnapshot {
             }
         }
 
-        // Fetch recent history
+        // Fetch recent history — key by download client job ID (works across all
+        // clients: NZBGet, SABnzbd, Weaver).
         if let Ok(history) = app.services.download_client.list_history().await {
             for item in &history {
                 if item.state == DownloadQueueState::Failed
@@ -375,8 +378,8 @@ impl DownloadClientSnapshot {
                     let reason_upper = reason.to_ascii_uppercase();
                     if reason_upper == "HEALTH" || reason_upper == "PAR" || reason_upper == "UNPACK"
                     {
-                        failed_titles.insert(
-                            item.title_name.to_ascii_lowercase(),
+                        failed_by_download_id.insert(
+                            item.download_client_item_id.clone(),
                             FailedDownloadSnapshot {
                                 reason: reason_upper,
                                 download_client_item_id: item.download_client_item_id.clone(),
@@ -386,9 +389,9 @@ impl DownloadClientSnapshot {
                     }
                 }
             }
-            if !failed_titles.is_empty() {
+            if !failed_by_download_id.is_empty() {
                 info!(
-                    failed_count = failed_titles.len(),
+                    failed_count = failed_by_download_id.len(),
                     "download client snapshot: failed history items (health/par/unpack)"
                 );
             }
@@ -396,7 +399,7 @@ impl DownloadClientSnapshot {
 
         Self {
             active_titles,
-            failed_titles,
+            failed_by_download_id,
         }
     }
 
@@ -406,10 +409,13 @@ impl DownloadClientSnapshot {
             .contains(&release_title.to_ascii_lowercase())
     }
 
-    /// If a release with this title failed in history with a blocklist-worthy
-    /// reason, returns the failure reason (e.g. "HEALTH").
-    pub(crate) fn failed_item(&self, release_title: &str) -> Option<&FailedDownloadSnapshot> {
-        self.failed_titles.get(&release_title.to_ascii_lowercase())
+    /// If a download with this job ID failed in history with a blocklist-worthy
+    /// reason, returns the failure snapshot.
+    pub(crate) fn failed_item(
+        &self,
+        download_client_item_id: &str,
+    ) -> Option<&FailedDownloadSnapshot> {
+        self.failed_by_download_id.get(download_client_item_id)
     }
 }
 
@@ -438,18 +444,31 @@ async fn check_grabbed_for_failures(app: &AppUseCase, dl_snapshot: &DownloadClie
     let now_str = now.to_rfc3339();
 
     for item in &grabbed_items {
-        // Extract the grabbed release title from the stored JSON
+        // Extract the grabbed release title from the stored JSON (for logging/blocklist)
         let release_title = item
             .grabbed_release
             .as_deref()
             .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
-            .and_then(|v| v.get("title").and_then(|t| t.as_str().map(String::from)));
+            .and_then(|v| v.get("title").and_then(|t| t.as_str().map(String::from)))
+            .unwrap_or_default();
 
-        let Some(release_title) = release_title else {
-            continue;
-        };
+        // Look up the download submission to find the download client job ID.
+        // Match by job ID (works across all clients) instead of title name
+        // (which gets sanitized differently by each client).
+        let submissions = app
+            .services
+            .download_submissions
+            .list_for_title(&item.title_id)
+            .await
+            .unwrap_or_default();
 
-        if let Some(failed_item) = dl_snapshot.failed_item(&release_title) {
+        let failed = submissions.iter().find_map(|sub| {
+            dl_snapshot
+                .failed_item(&sub.download_client_item_id)
+                .map(|f| (f, sub.source_title.clone()))
+        });
+
+        if let Some((failed_item, _source_title)) = failed {
             warn!(
                 title_id = item.title_id.as_str(),
                 release = release_title.as_str(),
@@ -472,6 +491,24 @@ async fn check_grabbed_for_failures(app: &AppUseCase, dl_snapshot: &DownloadClie
                     Some(format!("download client failure: {}", failed_item.reason)),
                     None,
                 )
+                .await;
+
+            // Add to persistent blocklist (user-visible, prevents re-grab)
+            let _ = app
+                .services
+                .blocklist_repo
+                .add(&NewBlocklistEntry {
+                    title_id: item.title_id.clone(),
+                    source_title: Some(release_title.clone()),
+                    source_hint: None,
+                    quality: None,
+                    download_id: Some(failed_item.download_client_item_id.clone()),
+                    reason: Some(format!(
+                        "download client failure: {}",
+                        failed_item.reason
+                    )),
+                    data: Default::default(),
+                })
                 .await;
 
             // Re-queue for immediate re-search
@@ -532,6 +569,12 @@ async fn process_due_wanted_items(app: &AppUseCase) {
     let now = Utc::now();
     let now_str = now.to_rfc3339();
 
+    // Always check for download failures first — this resets failed items
+    // to status=wanted with next_search_at=NOW so they appear in the due
+    // list fetched immediately after.
+    let dl_snapshot = DownloadClientSnapshot::fetch(app).await;
+    check_grabbed_for_failures(app, &dl_snapshot).await;
+
     let due_items = match app
         .services
         .wanted_items
@@ -559,12 +602,6 @@ async fn process_due_wanted_items(app: &AppUseCase) {
     }
 
     info!(count = due_items.len(), "processing due wanted items");
-
-    // Snapshot the download client state once for the entire cycle.
-    let dl_snapshot = DownloadClientSnapshot::fetch(app).await;
-
-    // Check grabbed items for download failures and re-queue them
-    check_grabbed_for_failures(app, &dl_snapshot).await;
 
     // Track URLs already submitted this cycle to avoid sending the same NZB
     // multiple times (e.g. a season pack matching several episode wanted items).
@@ -1140,41 +1177,6 @@ async fn process_single_wanted_item(
                 release = candidate.title.as_str(),
                 "skipping release already active in download client queue"
             );
-            continue;
-        }
-
-        if let Some(failed_item) = dl_snapshot.failed_item(&candidate.title) {
-            warn!(
-                title = title.name.as_str(),
-                release = candidate.title.as_str(),
-                reason = failed_item.reason.as_str(),
-                "release failed in download client history, adding to blocklist"
-            );
-
-            let hint = normalize_release_attempt_hint(
-                candidate
-                    .download_url
-                    .as_deref()
-                    .or(candidate.link.as_deref()),
-            );
-            let rel_title = normalize_release_attempt_title(Some(&candidate.title));
-            let password =
-                normalize_release_password(candidate.nzbgeek_password_protected.as_deref());
-
-            let _ = app
-                .services
-                .release_attempts
-                .record_release_attempt(
-                    Some(title.id.clone()),
-                    hint,
-                    rel_title,
-                    ReleaseDownloadAttemptOutcome::Failed,
-                    Some(format!("download client failure: {}", failed_item.reason)),
-                    password,
-                )
-                .await;
-
-            skipped_for_failed = true;
             continue;
         }
 

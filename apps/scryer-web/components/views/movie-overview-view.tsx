@@ -677,9 +677,10 @@ export function MovieOverviewView({
                       <span className="font-mono text-card-foreground">{e.value}</span>
                     </div>
                   ))}
+                <span className="ml-auto text-xs text-muted-foreground/60">
+                  Added {formatDate(title.createdAt)}
+                </span>
               </div>
-
-              <p className="mt-2 text-left text-xs text-muted-foreground/60 sm:text-right">Added {formatDate(title.createdAt)}</p>
             </div>
           </div>
         </CardContent>

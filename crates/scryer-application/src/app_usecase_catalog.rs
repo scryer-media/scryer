@@ -1816,6 +1816,42 @@ impl AppUseCase {
             .shows
             .set_collection_episodes_monitored(collection_id, monitored)
             .await?;
+
+        // Auto-monitor the parent title + immediate wanted sync
+        if monitored {
+            if let Ok(Some(title)) = self
+                .services
+                .titles
+                .get_by_id(&collection.title_id)
+                .await
+            {
+                if !title.monitored {
+                    let _ = self
+                        .services
+                        .titles
+                        .update_monitored(&title.id, true)
+                        .await;
+                    tracing::info!(
+                        title_id = %title.id,
+                        title_name = %title.name,
+                        "auto-monitored title because a collection was monitored"
+                    );
+                }
+
+                let now = Utc::now();
+                if let Some(handler) = self.facet_registry.get(&title.facet) {
+                    if handler.has_episodes() {
+                        // Re-fetch title in case monitoring was just updated
+                        if let Ok(Some(title)) =
+                            self.services.titles.get_by_id(&title.id).await
+                        {
+                            self.sync_wanted_series_inner(&title, &now, true).await;
+                        }
+                    }
+                }
+            }
+        }
+
         self.services
             .record_event(
                 Some(actor.id.clone()),
@@ -1858,6 +1894,64 @@ impl AppUseCase {
                 None,
             )
             .await?;
+
+        // When monitoring an episode, ensure the parent title and collection are
+        // also monitored — matching Sonarr behavior where monitoring any item
+        // implies the title should be monitored.
+        if monitored {
+            if let Ok(Some(title)) = self.services.titles.get_by_id(&episode.title_id).await {
+                if !title.monitored {
+                    let _ = self.services.titles.update_monitored(&title.id, true).await;
+                    tracing::info!(
+                        title_id = %title.id,
+                        title_name = %title.name,
+                        "auto-monitored title because an episode was monitored"
+                    );
+                }
+            }
+
+            if let Some(ref collection_id) = episode.collection_id {
+                if let Ok(Some(collection)) = self
+                    .services
+                    .shows
+                    .get_collection_by_id(collection_id)
+                    .await
+                {
+                    if !collection.monitored {
+                        let _ = self
+                            .services
+                            .shows
+                            .update_collection(
+                                collection_id,
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                                Some(true),
+                            )
+                            .await;
+                        tracing::info!(
+                            collection_id = %collection_id,
+                            "auto-monitored collection because an episode was monitored"
+                        );
+                    }
+                }
+            }
+
+            // Immediately sync wanted items for this title so the episode
+            // appears on the wanted page without waiting for the hourly sync.
+            if let Ok(Some(title)) = self.services.titles.get_by_id(&episode.title_id).await {
+                let now = Utc::now();
+                if let Some(handler) = self.facet_registry.get(&title.facet) {
+                    if handler.has_episodes() {
+                        self.sync_wanted_series_inner(&title, &now, true).await;
+                    }
+                }
+            }
+        }
+
         self.services
             .record_event(
                 Some(actor.id.clone()),

@@ -50,12 +50,12 @@ fi
 "${compose_cmd[@]}" stop "${services[@]}"
 "${compose_cmd[@]}" rm -f "${services[@]}"
 
-if [ "$NO_SEED" = true ]; then
-  export SCRYER_DEV_SEED_FILE=""
-  export SCRYER_DEV_SEED_TITLES_FILE=""
-fi
-
 up_args=("${compose_cmd[@]}" up -d --build --no-deps)
 up_args+=("${services[@]}")
 
 "${up_args[@]}"
+
+# Run the seed sidecar after services are up (unless --no-seed)
+if [ "$NO_SEED" = false ] && [ -f "$REPO_DIR/dev-seed.json" ]; then
+  "${compose_cmd[@]}" --profile seed up -d seed
+fi

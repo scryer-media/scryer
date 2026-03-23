@@ -1,0 +1,129 @@
+{
+  "indexers": [
+    {
+      "name": "Home NZBGeek",
+      "providerType": "nzbgeek",
+      "baseUrl": "https://api.nzbgeek.info",
+      "apiKey": "YOUR_API_KEY_HERE",
+      "enabled": true
+    },
+    {
+      "name": "DogNZB",
+      "providerType": "dognzb",
+      "baseUrl": "https://api.dognzb.cr",
+      "apiKey": "YOUR_API_KEY_HERE",
+      "enabled": false
+    }
+  ],
+  "downloadClients": [
+    {
+      "name": "Home NZBGet",
+      "clientType": "nzbget",
+      "baseUrl": "http://scryer-nzbget:6789/",
+      "config": {
+        "host": "scryer-nzbget",
+        "port": "6789",
+        "use_ssl": false,
+        "url_base": "",
+        "username": "scryer",
+        "password": "",
+        "client_priority": "2",
+        "remove_completed": false,
+        "remove_failed": false,
+        "client_type": "nzbget",
+        "enabled": false
+      }
+    },
+    {
+      "name": "Home SABnzbd",
+      "clientType": "sabnzbd",
+      "baseUrl": "http://scryer-sabnzbd:8080",
+      "config": {
+        "api_key": "YOUR_API_KEY_HERE",
+        "client_priority": "1",
+        "remove_completed": false,
+        "remove_failed": false,
+        "client_type": "sabnzbd"
+      }
+    }
+  ],
+  "settings": [
+    {
+      "scope": "media",
+      "key": "movies.path",
+      "value": "/media/movies"
+    },
+    {
+      "scope": "media",
+      "key": "series.path",
+      "value": "/media/series"
+    },
+    {
+      "scope": "media",
+      "key": "anime.path",
+      "value": "/media/anime"
+    },
+    {
+      "scope": "system",
+      "key": "download_client.routing",
+      "scopeId": "movie",
+      "value": "{\"home-nzbget\": {\"category\": \"Movies\", \"recentQueuePriority\": \"normal\", \"olderQueuePriority\": \"normal\", \"removeCompleted\": false, \"removeFailed\": false, \"priority\": 1}}"
+    },
+    {
+      "scope": "system",
+      "key": "download_client.routing",
+      "scopeId": "series",
+      "value": "{\"home-nzbget\": {\"category\": \"Movies\", \"recentQueuePriority\": \"normal\", \"olderQueuePriority\": \"normal\", \"removeCompleted\": false, \"removeFailed\": false, \"priority\": 1}}"
+    },
+    {
+      "scope": "system",
+      "key": "download_client.routing",
+      "scopeId": "anime",
+      "value": "{\"home-nzbget\": {\"category\": \"Movies\", \"recentQueuePriority\": \"normal\", \"olderQueuePriority\": \"normal\", \"removeCompleted\": false, \"removeFailed\": false, \"priority\": 1}}"
+    }
+  ],
+  "titles": {
+    "movies": [
+      {
+        "tvdbId": 190,
+        "name": "The Shawshank Redemption"
+      },
+      {
+        "tvdbId": 275,
+        "name": "The Godfather"
+      },
+      {
+        "tvdbId": 780,
+        "name": "The Godfather Part II"
+      }
+    ],
+    "series": [
+      {
+        "tvdbId": 81189,
+        "name": "Breaking Bad"
+      },
+      {
+        "tvdbId": 121361,
+        "name": "Game of Thrones"
+      },
+      {
+        "tvdbId": 280619,
+        "name": "The Expanse"
+      }
+    ],
+    "anime": [
+      {
+        "tvdbId": 267440,
+        "name": "Attack on Titan"
+      },
+      {
+        "tvdbId": 81797,
+        "name": "One Piece"
+      },
+      {
+        "tvdbId": 85249,
+        "name": "Fullmetal Alchemist: Brotherhood"
+      }
+    ]
+  }
+}

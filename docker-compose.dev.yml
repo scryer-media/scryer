@@ -56,8 +56,6 @@ services:
       SCRYER_MOVIES_PATH: /media/movies
       SCRYER_SERIES_PATH: /media/series
       SCRYER_SMG_REGISTRATION_SECRET: ${SCRYER_SMG_REGISTRATION_SECRET}
-      SCRYER_DEV_SEED_FILE: ${SCRYER_DEV_SEED_FILE-./crates/scryer/dev-seed.toml}
-      SCRYER_DEV_SEED_TITLES_FILE: ${SCRYER_DEV_SEED_TITLES_FILE-./crates/scryer/dev-seed-titles.toml}
       RUST_LOG: "info,scryer_infrastructure::metadata_gateway=debug,extism=debug"
     command: >
       sh -c '
@@ -147,6 +145,20 @@ services:
       - scryer-grafana-data:/var/lib/grafana
     ports:
       - "3001:3000"
+
+  seed:
+    image: alpine:latest
+    container_name: scryer-seed
+    depends_on:
+      - scryer
+    volumes:
+      - ./scripts/docker/dev-seed.sh:/seed.sh:ro
+      - ./dev-seed.json:/seed.json:ro
+    entrypoint: ["sh", "-c", "apk add --no-cache curl jq >/dev/null 2>&1 && sh /seed.sh /seed.json"]
+    environment:
+      SCRYER_URL: http://scryer:8080
+    restart: "no"
+    profiles: ["seed"]
 
 networks:
   default:

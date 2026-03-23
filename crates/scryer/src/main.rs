@@ -1,6 +1,5 @@
 mod admin_routes;
 mod base_path;
-mod dev_seed;
 mod init;
 mod log_buffer;
 mod middleware;
@@ -670,9 +669,6 @@ async fn bootstrap_application(
         tracing::warn!(error = %error, "failed to seed indexer configs from environment");
     }
 
-    if let Err(error) = dev_seed::apply_dev_seed(&app_use_case, &db).await {
-        tracing::warn!(error = %error, "failed to apply dev seed file");
-    }
     if auth_mode.used_legacy_dev_auto_login {
         tracing::warn!(
             "SCRYER_DEV_AUTO_LOGIN is deprecated; use SCRYER_AUTH_ENABLED=false instead"

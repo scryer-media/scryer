@@ -17,5 +17,4 @@ tmp
 *.sqlite-*
 *.db
 *.db-*
-crates/scryer/dev-seed.toml
-crates/scryer/dev-seed-titles.toml
+dev-seed.json
