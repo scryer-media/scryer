@@ -37,7 +37,7 @@ impl WeaverDownloadClient {
     pub fn from_config(config: &DownloadClientConfig) -> AppResult<Self> {
         let parsed_config = parse_download_client_config_json(&config.config_json)?;
         let base_url =
-            resolve_download_client_base_url(config, &parsed_config).ok_or_else(|| {
+            resolve_download_client_base_url(&parsed_config).ok_or_else(|| {
                 AppError::Validation(format!(
                     "download client {} has no valid base URL",
                     config.id
@@ -168,7 +168,7 @@ mod tests {
             id: "dc-weaver".to_string(),
             name: "Weaver".to_string(),
             client_type: "weaver".to_string(),
-            base_url: base_url.map(str::to_string),
+            
             config_json: config_json.to_string(),
             client_priority: 1,
             is_enabled: true,

@@ -749,7 +749,6 @@ pub struct DeleteIndexerConfigInput {
 pub struct CreateDownloadClientConfigInput {
     pub name: String,
     pub client_type: String,
-    pub base_url: Option<String>,
     pub config_json: String,
     pub is_enabled: Option<bool>,
 }
@@ -759,7 +758,6 @@ pub struct UpdateDownloadClientConfigInput {
     pub id: String,
     pub name: Option<String>,
     pub client_type: Option<String>,
-    pub base_url: Option<String>,
     pub config_json: Option<String>,
     pub is_enabled: Option<bool>,
 }
@@ -777,7 +775,6 @@ pub struct ReorderDownloadClientConfigsInput {
 #[derive(InputObject)]
 pub struct TestDownloadClientConnectionInput {
     pub client_type: String,
-    pub base_url: String,
     pub config_json: String,
 }
 

@@ -51,6 +51,16 @@ fn normalize_source_webrip() {
 }
 
 #[test]
+fn normalize_source_brdisk_maps_to_bluray() {
+    assert_eq!(normalize_source(Some("BRDISK")), Some("BLURAY".to_string()));
+}
+
+#[test]
+fn normalize_source_rawhd_maps_to_hdtv_family() {
+    assert_eq!(normalize_source(Some("RAWHD")), Some("HDTV".to_string()));
+}
+
+#[test]
 fn normalize_source_none() {
     assert_eq!(normalize_source(None), None);
 }
@@ -242,6 +252,19 @@ fn source_blocklist_blocks() {
     assert!(
         d.block_codes
             .contains(&"source_in_profile_blocklist".to_string())
+    );
+}
+
+#[test]
+fn low_quality_theatrical_sources_block_by_default() {
+    let profile = QualityProfile::default();
+    let w = balanced_weights();
+    let release = parse_release_metadata("Movie.Name.2024.HQCAM.x264");
+    let d = evaluate_against_profile(&profile, &release, false, &w);
+    assert!(!d.allowed);
+    assert!(
+        d.block_codes
+            .contains(&"source_low_quality_theatrical".to_string())
     );
 }
 

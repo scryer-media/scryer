@@ -252,11 +252,12 @@ pub(crate) fn from_provider_type(
 pub(crate) fn from_download_client_config(
     config: DownloadClientConfig,
 ) -> DownloadClientConfigPayload {
+    let base_url = scryer_infrastructure::resolve_base_url_from_config_json(&config.config_json);
     DownloadClientConfigPayload {
         id: config.id,
         name: config.name,
         client_type: config.client_type,
-        base_url: config.base_url,
+        base_url,
         config_json: config.config_json,
         is_enabled: config.is_enabled,
         status: config.status.as_str().to_string(),

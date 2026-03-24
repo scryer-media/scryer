@@ -1,3 +1,4 @@
 pub use scryer_release_parser::{
-    ParsedEpisodeMetadata, ParsedReleaseMetadata, parse_release_metadata,
+    ParsedEpisodeMetadata, ParsedEpisodeReleaseType, ParsedReleaseMetadata, ParsedSpecialKind,
+    parse_release_metadata,
 };

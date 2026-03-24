@@ -130,18 +130,12 @@ export function SettingsDownloadClientsContainer() {
       clientType: normalizeDownloadClientType(downloadClientDraft.clientType),
       host: downloadClientDraft.host.trim(),
       port: downloadClientDraft.port.trim(),
-      baseUrl: buildDownloadClientBaseUrl(downloadClientDraft),
       configJson: buildDownloadClientConfigJson(downloadClientDraft),
       isEnabled: downloadClientDraft.isEnabled,
     };
 
     if (!payload.name || !payload.host) {
       const message = t("settings.downloadClientValidation");
-      setGlobalStatus(message);
-      return;
-    }
-    if (!payload.baseUrl) {
-      const message = t("settings.downloadClientBaseUrlRequired");
       setGlobalStatus(message);
       return;
     }
@@ -155,7 +149,6 @@ export function SettingsDownloadClientsContainer() {
           {
             input: {
               clientType: payload.clientType,
-              baseUrl: payload.baseUrl,
               configJson: payload.configJson,
             },
           },
@@ -178,7 +171,6 @@ export function SettingsDownloadClientsContainer() {
             id: editingDownloadClientId,
             name: payload.name,
             clientType: payload.clientType,
-            baseUrl: payload.baseUrl,
             configJson: payload.configJson,
             isEnabled: payload.isEnabled,
           },
@@ -192,7 +184,6 @@ export function SettingsDownloadClientsContainer() {
             input: {
               name: payload.name,
               clientType: payload.clientType,
-              baseUrl: payload.baseUrl,
               configJson: payload.configJson,
               isEnabled: payload.isEnabled,
             },

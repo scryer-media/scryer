@@ -30,6 +30,8 @@ services:
   weaver:
     image: ghcr.io/scryer-media/weaver:latest
     container_name: scryer-weaver
+    environment:
+      RUST_LOG: info
     ports:
       - "9090:9090"
     volumes:
@@ -56,7 +58,8 @@ services:
       SCRYER_MOVIES_PATH: /media/movies
       SCRYER_SERIES_PATH: /media/series
       SCRYER_SMG_REGISTRATION_SECRET: ${SCRYER_SMG_REGISTRATION_SECRET}
-      RUST_LOG: "info,scryer_infrastructure::metadata_gateway=debug,extism=debug"
+      #RUST_LOG: "info,scryer_infrastructure::metadata_gateway=debug,extism=debug"
+      #RUST_LOG: "info"
     command: >
       sh -c '
         set -eu

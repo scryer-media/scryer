@@ -4,3 +4,4 @@ version = "0.9.14"
 edition.workspace = true
 
 [dependencies]
+chrono = { workspace = true }

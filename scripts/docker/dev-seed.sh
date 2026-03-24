@@ -48,9 +48,8 @@ cat > "$JQ_FILTER" << 'JQEOF'
 
     ([.downloadClients // [] | to_entries[] | .key as $i | .value |
       (.config | tojson | escape) as $configJson |
-      (if .baseUrl then "baseUrl: \"\(.baseUrl | escape)\", " else "" end) as $baseUrlArg |
       (if .enabled == false then "isEnabled: false, " elif .enabled == true then "isEnabled: true, " else "" end) as $enabledArg |
-      "dc\($i): createDownloadClientConfig(input: { name: \"\(.name | escape)\", clientType: \"\(.clientType)\", \($baseUrlArg)\($enabledArg)configJson: \"\($configJson)\" }) { id name }"
+      "dc\($i): createDownloadClientConfig(input: { name: \"\(.name | escape)\", clientType: \"\(.clientType)\", \($enabledArg)configJson: \"\($configJson)\" }) { id name }"
     ] | join("\n")) as $clients |
 
     ([.settings // [] | to_entries[] | .key as $i | .value |

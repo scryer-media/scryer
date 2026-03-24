@@ -7,6 +7,38 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { DownloadClientDraft, DownloadClientTypeOption } from "@/lib/types/download-clients";
 import { buildWeaverApiKeyUrl } from "@/lib/utils/download-clients";
 
+const DOWNLOAD_CLIENT_TYPE_ICON_SRC_BY_VALUE: Record<string, string> = {
+  nzbget: "/download-clients/nzbget.svg",
+  sabnzbd: "/download-clients/sabnzbd.svg",
+  weaver: "/download-clients/weaver.webp",
+  qbittorrent: "/download-clients/qbittorrent.svg",
+};
+
+function DownloadClientTypeOptionContent({
+  typeValue,
+  label,
+}: {
+  typeValue: string;
+  label: string;
+}) {
+  const normalizedTypeValue = typeValue.trim().toLowerCase();
+  const iconSrc = DOWNLOAD_CLIENT_TYPE_ICON_SRC_BY_VALUE[normalizedTypeValue];
+
+  return (
+    <span className="inline-flex min-w-0 items-center gap-2">
+      {iconSrc ? (
+        <img
+          src={iconSrc}
+          alt=""
+          aria-hidden="true"
+          className="h-4 w-4 shrink-0 object-contain"
+        />
+      ) : null}
+      <span className="truncate">{label}</span>
+    </span>
+  );
+}
+
 interface SetupDownloadClientViewProps {
   t: (key: string) => string;
   draft: DownloadClientDraft;
@@ -41,6 +73,10 @@ export function SetupDownloadClientView({
   const showApiKey = draft.clientType === "sabnzbd" || draft.clientType === "weaver";
   const showCredentials = draft.clientType === "nzbget" || draft.clientType === "qbittorrent";
   const weaverApiKeyUrl = draft.clientType === "weaver" ? buildWeaverApiKeyUrl(draft) : "";
+  const normalizedClientType = draft.clientType.trim().toLowerCase();
+  const selectedDownloadClientLabel =
+    downloadClientTypeOptions.find((option) => option.value === normalizedClientType)?.label ??
+    (draft.clientType.trim() || "Download client");
   const canTest = draft.name.trim().length > 0 && draft.host.trim().length > 0;
   const canProceed = saved;
 
@@ -63,11 +99,25 @@ export function SetupDownloadClientView({
         <div className="space-y-2">
           <Label>{t("label.type")}</Label>
           <Select value={draft.clientType} onValueChange={(v) => onDraftChange({ clientType: v })}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectTrigger>
+              <SelectValue aria-label={selectedDownloadClientLabel}>
+                <DownloadClientTypeOptionContent
+                  typeValue={draft.clientType}
+                  label={selectedDownloadClientLabel}
+                />
+              </SelectValue>
+            </SelectTrigger>
             <SelectContent>
               {downloadClientTypeOptions.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
+                <SelectItem
+                  key={option.value}
+                  value={option.value}
+                  textValue={option.label}
+                >
+                  <DownloadClientTypeOptionContent
+                    typeValue={option.value}
+                    label={option.label}
+                  />
                 </SelectItem>
               ))}
             </SelectContent>

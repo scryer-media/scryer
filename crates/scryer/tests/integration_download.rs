@@ -693,12 +693,28 @@ async fn nzbget_endpoint_strips_trailing_slash() {
 
 /// Build a minimal enabled DownloadClientConfig pointing at `base_url`.
 fn router_config(id: &str, base_url: &str, priority: i64, enabled: bool) -> DownloadClientConfig {
+    // Extract host:port from base_url for config_json.
+    let stripped = base_url
+        .trim_start_matches("http://")
+        .trim_start_matches("https://")
+        .trim_end_matches('/');
+    let (host, port) = stripped
+        .rsplit_once(':')
+        .unwrap_or((stripped, ""));
+    let config_json = serde_json::json!({
+        "host": host,
+        "port": port,
+        "use_ssl": base_url.starts_with("https"),
+        "username": "scryer",
+        "password": "",
+        "client_type": "nzbget",
+    })
+    .to_string();
     DownloadClientConfig {
         id: id.to_string(),
         name: format!("test-{id}"),
         client_type: "nzbget".to_string(),
-        base_url: Some(base_url.to_string()),
-        config_json: "{}".to_string(),
+        config_json,
         client_priority: priority,
         is_enabled: enabled,
         status: scryer_domain::DownloadClientStatus::Healthy,
@@ -847,7 +863,6 @@ async fn router_skips_client_with_invalid_config() {
         id: "bad".to_string(),
         name: "bad-client".to_string(),
         client_type: "sabnzbd".to_string(),
-        base_url: Some(ctx.nzbget_server.uri()),
         config_json: "{}".to_string(),
         client_priority: 1,
         is_enabled: true,
@@ -885,7 +900,6 @@ async fn router_skips_client_missing_base_url() {
         id: "no-url".to_string(),
         name: "no-url-client".to_string(),
         client_type: "nzbget".to_string(),
-        base_url: None,
         config_json: "{}".to_string(),
         client_priority: 1,
         is_enabled: true,

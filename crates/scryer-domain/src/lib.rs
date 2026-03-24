@@ -346,7 +346,6 @@ pub struct DownloadClientConfig {
     pub id: String,
     pub name: String,
     pub client_type: String,
-    pub base_url: Option<String>,
     pub config_json: String,
     pub client_priority: i64,
     pub is_enabled: bool,
@@ -361,7 +360,6 @@ pub struct DownloadClientConfig {
 pub struct NewDownloadClientConfig {
     pub name: String,
     pub client_type: String,
-    pub base_url: Option<String>,
     pub config_json: String,
     pub client_priority: i64,
     pub is_enabled: bool,

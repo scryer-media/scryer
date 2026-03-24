@@ -236,7 +236,6 @@ impl ConfigMutations {
                 NewDownloadClientConfig {
                     name: input.name,
                     client_type: input.client_type,
-                    base_url: input.base_url,
                     config_json: input.config_json,
                     client_priority: 0,
                     is_enabled: input.is_enabled.unwrap_or(true),
@@ -266,7 +265,6 @@ impl ConfigMutations {
                 &input.id,
                 input.name,
                 input.client_type,
-                input.base_url,
                 input.config_json,
                 input.is_enabled,
             )
@@ -319,11 +317,6 @@ impl ConfigMutations {
 
         let client_type = input.client_type.trim().to_lowercase();
 
-        let base_url = input.base_url.trim().to_string();
-        if base_url.is_empty() {
-            return Err(Error::new("base_url is required"));
-        }
-
         let config_json = input.config_json.trim().to_string();
         let config: Value = if config_json.is_empty() {
             json!({})
@@ -331,6 +324,9 @@ impl ConfigMutations {
             serde_json::from_str(&config_json)
                 .map_err(|error| Error::new(format!("invalid client config_json: {error}")))?
         };
+
+        let base_url = scryer_infrastructure::resolve_base_url_from_config_json(&config_json)
+            .ok_or_else(|| Error::new("cannot compute base URL from config — host is required"))?;
 
         match client_type.as_str() {
             "nzbget" => {
@@ -398,7 +394,6 @@ impl ConfigMutations {
                     id: "test-download-client".to_string(),
                     name: "Test Download Client".to_string(),
                     client_type: client_type.clone(),
-                    base_url: Some(base_url),
                     config_json: serde_json::to_string(&config).map_err(|error| {
                         Error::new(format!("invalid client config_json: {error}"))
                     })?,

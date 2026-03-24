@@ -16,6 +16,13 @@ pub use sabnzbd::SabnzbdDownloadClient;
 pub use weaver::WeaverDownloadClient;
 pub use weaver_subscription::start_weaver_subscription_bridge;
 
+/// Compute a base URL from host/port/use_ssl/url_base in a config_json string.
+/// Public for use by the GraphQL mapper layer.
+pub fn resolve_base_url_from_config_json(config_json: &str) -> Option<String> {
+    let parsed = parse_download_client_config_json(config_json).ok()?;
+    resolve_download_client_base_url(&parsed)
+}
+
 fn parse_download_client_config_json(raw: &str) -> AppResult<Value> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -58,17 +65,8 @@ fn read_config_bool(config: &Value, keys: &[&str], default_value: bool) -> bool 
     default_value
 }
 
-fn resolve_download_client_base_url(
-    config: &DownloadClientConfig,
-    json_config: &Value,
-) -> Option<String> {
-    if let Some(value) = config.base_url.as_deref() {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
-        }
-    }
-
+/// Build a base URL from config_json component parts (host, port, use_ssl, url_base).
+pub fn resolve_download_client_base_url(json_config: &Value) -> Option<String> {
     let host = read_config_string(json_config, &["host"])?;
     let port = read_config_string(json_config, &["port"]);
     let use_ssl = read_config_bool(json_config, &["use_ssl", "useSsl"], false);

@@ -20,9 +20,6 @@ fn row_to_download_client_config(
     let client_type: String = row
         .try_get("client_type")
         .map_err(|err| AppError::Repository(err.to_string()))?;
-    let base_url: Option<String> = row
-        .try_get("base_url")
-        .map_err(|err| AppError::Repository(err.to_string()))?;
     let config_json_raw: String = row
         .try_get("config_json")
         .map_err(|err| AppError::Repository(err.to_string()))?;
@@ -65,7 +62,6 @@ fn row_to_download_client_config(
         id,
         name,
         client_type,
-        base_url,
         config_json,
         client_priority,
         is_enabled: is_enabled != 0,
@@ -149,14 +145,13 @@ pub(crate) async fn create_download_client_config_query(
 
     sqlx::query(
         "INSERT INTO download_clients
-            (id, name, client_type, base_url, config_json, is_enabled, status,
+            (id, name, client_type, config_json, is_enabled, status,
              client_priority, last_error, last_seen_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&config.id)
     .bind(&config.name)
     .bind(&config.client_type)
-    .bind(&config.base_url)
     .bind(&stored_config_json)
     .bind(if config.is_enabled { 1_i64 } else { 0_i64 })
     .bind(config.status.as_str())

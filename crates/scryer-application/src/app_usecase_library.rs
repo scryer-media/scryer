@@ -26,6 +26,11 @@ const DEFAULT_MISSING_METADATA_POLICY: RenameMissingMetadataPolicy =
 ///    Day One (2024)"` → year 2024, query `"A Quiet Place Day One"`).
 /// 2. Fall back to parsing the file stem when the file is at the root level.
 fn extract_library_query(path: &str, library_root: &str) -> (String, Option<u32>) {
+    let (queries, year) = extract_library_queries(path, library_root);
+    (queries.into_iter().next().unwrap_or_default(), year)
+}
+
+fn extract_library_queries(path: &str, library_root: &str) -> (Vec<String>, Option<u32>) {
     // Normalise paths for comparison (strip trailing slash)
     let root = library_root.trim_end_matches('/');
 
@@ -40,7 +45,7 @@ fn extract_library_query(path: &str, library_root: &str) -> (String, Option<u32>
             let clean = normalize_folder_name(folder_name);
             let (title, year) = strip_year_suffix(&clean);
             if !title.trim().is_empty() {
-                return (title.trim().to_string(), year);
+                return (vec![title.trim().to_string()], year);
             }
         }
     }
@@ -51,7 +56,14 @@ fn extract_library_query(path: &str, library_root: &str) -> (String, Option<u32>
         .and_then(|s| s.to_str())
         .unwrap_or_default();
     let parsed = parse_release_metadata(stem);
-    (parsed.normalized_title.clone(), parsed.year)
+    let mut queries = if parsed.normalized_title_variants.is_empty() {
+        vec![parsed.normalized_title.clone()]
+    } else {
+        parsed.normalized_title_variants.clone()
+    };
+    queries.retain(|query| !query.trim().is_empty());
+    queries.dedup();
+    (queries, parsed.year)
 }
 
 /// Normalizes a folder name by replacing non-breaking spaces and other Unicode
@@ -421,12 +433,23 @@ impl AppUseCase {
         let existing_titles = self.services.titles.list(Some(facet.clone()), None).await?;
         let mut existing_titles_by_name: HashMap<String, Title> = HashMap::new();
         let mut existing_titles_by_tvdb_id: HashMap<String, Title> = HashMap::new();
+        let mut existing_titles_by_imdb_id: HashMap<String, Title> = HashMap::new();
+        let mut existing_titles_by_tmdb_id: HashMap<String, Title> = HashMap::new();
 
         for title in &existing_titles {
             existing_titles_by_name.insert(normalize_title_key(&title.name), title.clone());
+            for alias in &title.aliases {
+                existing_titles_by_name.insert(normalize_title_key(alias), title.clone());
+            }
             for external_id in &title.external_ids {
                 if external_id.source.eq_ignore_ascii_case("tvdb") {
                     existing_titles_by_tvdb_id.insert(external_id.value.clone(), title.clone());
+                } else if external_id.source.eq_ignore_ascii_case("imdb")
+                    && let Some(imdb_id) = crate::normalize::normalize_imdb_id(&external_id.value)
+                {
+                    existing_titles_by_imdb_id.insert(imdb_id, title.clone());
+                } else if external_id.source.eq_ignore_ascii_case("tmdb") {
+                    existing_titles_by_tmdb_id.insert(external_id.value.clone(), title.clone());
                 }
             }
         }
@@ -435,6 +458,12 @@ impl AppUseCase {
 
         for file in files {
             summary.scanned += 1;
+            let parsed_release = parse_release_metadata(
+                Path::new(&file.path)
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or(file.display_name.as_str()),
+            );
 
             // Parse companion NFO sidecar if present (non-fatal).
             let nfo_meta = file
@@ -510,18 +539,74 @@ impl AppUseCase {
                 extract_library_query(&file.path, library_path)
             };
 
+            if let Some(parsed_imdb_id) = parsed_release
+                .imdb_id
+                .as_deref()
+                .and_then(crate::normalize::normalize_imdb_id)
+                && let Some(existing) = existing_titles_by_imdb_id.get(&parsed_imdb_id).cloned()
+            {
+                summary.matched += 1;
+                self.track_movie_file_in_collection(&existing, &file, &mut summary)
+                    .await;
+                continue;
+            }
+
+            if let Some(parsed_tmdb_id) = parsed_release.tmdb_id.map(|id| id.to_string())
+                && let Some(existing) = existing_titles_by_tmdb_id.get(&parsed_tmdb_id).cloned()
+            {
+                summary.matched += 1;
+                self.track_movie_file_in_collection(&existing, &file, &mut summary)
+                    .await;
+                continue;
+            }
+
+            let (query_variants, _) = extract_library_queries(&file.path, library_path);
+            if let Some(existing) = query_variants.iter().find_map(|candidate| {
+                let normalized = normalize_title_key(candidate);
+                existing_titles_by_name
+                    .get(&normalized)
+                    .filter(|title| {
+                        year_hint.is_none()
+                            || title.year.map(|value| value as u32) == year_hint
+                            || title.year.is_none()
+                    })
+                    .cloned()
+            }) {
+                summary.matched += 1;
+                self.track_movie_file_in_collection(&existing, &file, &mut summary)
+                    .await;
+                continue;
+            }
+
             if query.is_empty() {
                 summary.skipped += 1;
                 continue;
             }
 
-            let results = self
-                .services
-                .metadata_gateway
-                .search_tvdb(&query, METADATA_TYPE_MOVIE)
-                .await?;
+            let mut selected = None;
+            for candidate in query_variants
+                .into_iter()
+                .chain(std::iter::once(query.clone()))
+                .fold(Vec::<String>::new(), |mut acc, value| {
+                    if !value.trim().is_empty() && !acc.iter().any(|existing| existing == &value) {
+                        acc.push(value);
+                    }
+                    acc
+                })
+            {
+                let results = self
+                    .services
+                    .metadata_gateway
+                    .search_tvdb(&candidate, METADATA_TYPE_MOVIE)
+                    .await?;
 
-            let Some(selected) = select_best_match(&results, year_hint) else {
+                if let Some(best) = select_best_match(&results, year_hint) {
+                    selected = Some(best.clone());
+                    break;
+                }
+            }
+
+            let Some(selected) = selected else {
                 summary.unmatched += 1;
                 continue;
             };
@@ -1861,4 +1946,36 @@ fn split_title_and_year_hint(raw_title: &str) -> (String, Option<String>) {
     }
 
     (trimmed.to_string(), None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_library_queries_uses_movie_title_variants_for_root_files() {
+        let (queries, year) = extract_library_queries(
+            "/library/Mon.Cousin.A.K.A.My.Cousin.2020.1080p.BluRay.mkv",
+            "/library",
+        );
+
+        assert_eq!(year, Some(2020));
+        assert_eq!(
+            queries,
+            vec![
+                "MON COUSIN AKA MY COUSIN".to_string(),
+                "MON COUSIN".to_string(),
+                "MY COUSIN".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn extract_library_queries_prefers_parent_folder_for_nested_movie() {
+        let (queries, year) =
+            extract_library_queries("/library/My Cousin (2020)/movie.mkv", "/library");
+
+        assert_eq!(queries, vec!["My Cousin".to_string()]);
+        assert_eq!(year, Some(2020));
+    }
 }

@@ -427,7 +427,6 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
         .mutation(testDownloadClientConnectionMutation, {
           input: {
             clientType: dcDraft.clientType,
-            baseUrl: buildDownloadClientBaseUrl(dcDraft),
             configJson: buildDownloadClientConfigJson(dcDraft),
           },
         })
@@ -455,7 +454,6 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
           input: {
             name: dcDraft.name.trim(),
             clientType: dcDraft.clientType,
-            baseUrl: buildDownloadClientBaseUrl(dcDraft),
             configJson: buildDownloadClientConfigJson(dcDraft),
             isEnabled: true,
           },
@@ -479,7 +477,6 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
         .mutation(testDownloadClientConnectionMutation, {
           input: {
             clientType: dcDraft.clientType,
-            baseUrl: buildDownloadClientBaseUrl(dcDraft),
             configJson: buildDownloadClientConfigJson(dcDraft),
           },
         })

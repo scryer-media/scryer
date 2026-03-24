@@ -1,6 +1,6 @@
 use super::*;
 use crate::post_download_gate::{facet_to_category_hint, missing_audio_languages};
-use scryer_domain::{MediaFacet, Title};
+use scryer_domain::{ExternalId, MediaFacet, Title};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -45,6 +45,28 @@ fn test_title(facet: MediaFacet) -> Title {
 
 fn test_parsed() -> crate::ParsedReleaseMetadata {
     crate::parse_release_metadata("Test.Movie.2024.1080p.WEB-DL.DDP5.1.H.264-Group")
+}
+
+fn test_movie_title_with_aliases_and_ids(
+    id: &str,
+    name: &str,
+    year: Option<i32>,
+    aliases: Vec<&str>,
+    external_ids: Vec<(&str, &str)>,
+) -> Title {
+    let mut title = test_title(MediaFacet::Movie);
+    title.id = id.to_string();
+    title.name = name.to_string();
+    title.year = year;
+    title.aliases = aliases.into_iter().map(str::to_string).collect();
+    title.external_ids = external_ids
+        .into_iter()
+        .map(|(source, value)| ExternalId {
+            source: source.to_string(),
+            value: value.to_string(),
+        })
+        .collect();
+    title
 }
 
 // ── has_scryer_origin ─────────────────────────────────────────────────────────
@@ -136,6 +158,56 @@ fn normalize_imdb_id_empty() {
 #[test]
 fn normalize_imdb_id_no_digits() {
     assert_eq!(normalize_imdb_id("abcdef"), None);
+}
+
+// ── movie title resolution ───────────────────────────────────────────────────
+
+#[test]
+fn find_monitored_movie_title_from_release_matches_alias_variant() {
+    let titles = vec![test_movie_title_with_aliases_and_ids(
+        "movie-1",
+        "My Cousin",
+        Some(2020),
+        vec!["Mon Cousin"],
+        vec![],
+    )];
+
+    let parsed =
+        crate::parse_release_metadata("Mon.Cousin.A.K.A.My.Cousin.2020.1080p.BluRay.x264-GRP");
+
+    let matched = find_monitored_movie_title_from_release(&titles, &parsed)
+        .expect("movie should resolve through alias/title variants");
+
+    assert_eq!(matched.id, "movie-1");
+}
+
+#[test]
+fn find_monitored_movie_title_from_release_prefers_imdb_id() {
+    let titles = vec![
+        test_movie_title_with_aliases_and_ids(
+            "movie-1",
+            "Dune",
+            Some(1984),
+            vec![],
+            vec![("imdb", "tt0087182")],
+        ),
+        test_movie_title_with_aliases_and_ids(
+            "movie-2",
+            "Dune",
+            Some(2021),
+            vec![],
+            vec![("imdb", "tt1160419"), ("tmdb", "438631")],
+        ),
+    ];
+
+    let parsed = crate::parse_release_metadata(
+        "Dune.2021.{tmdb-438631}.[tt1160419].1080p.BluRay.x264-GRP",
+    );
+
+    let matched = find_monitored_movie_title_from_release(&titles, &parsed)
+        .expect("movie should resolve by embedded IDs");
+
+    assert_eq!(matched.id, "movie-2");
 }
 
 // ── is_sample_file ────────────────────────────────────────────────────────────

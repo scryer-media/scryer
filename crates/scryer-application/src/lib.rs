@@ -134,7 +134,10 @@ pub use quality_profile::{
     apply_age_scoring, apply_size_scoring_for_category, default_quality_profile_1080p_for_search,
     default_quality_profile_for_search, evaluate_against_profile, parse_profile_catalog_from_json,
 };
-pub use release_parser::{ParsedEpisodeMetadata, ParsedReleaseMetadata, parse_release_metadata};
+pub use release_parser::{
+    ParsedEpisodeMetadata, ParsedEpisodeReleaseType, ParsedReleaseMetadata, ParsedSpecialKind,
+    parse_release_metadata,
+};
 pub use scoring_weights::{
     ScoringOverrides, ScoringPersona, ScoringWeights, build_weights, build_weights_for_category,
 };
@@ -2592,9 +2595,6 @@ mod tests {
             if let Some(client_type) = client_type {
                 item.client_type = client_type;
             }
-            if let Some(base_url) = base_url {
-                item.base_url = Some(base_url);
-            }
             if let Some(config_json) = config_json {
                 item.config_json = config_json;
             }
@@ -3309,7 +3309,6 @@ mod tests {
             NewDownloadClientConfig {
                 name: "SABnzbd".to_string(),
                 client_type: "sabnzbd".to_string(),
-                base_url: None,
                 config_json: "{}".to_string(),
                 client_priority: 1,
                 is_enabled: true,

@@ -23,7 +23,11 @@ pub fn build_release_dedup_key(parsed: &ParsedReleaseMetadata) -> String {
         .to_ascii_lowercase();
 
     let episode_key = if let Some(ref ep) = parsed.episode {
-        if let Some(season) = ep.season {
+        if let Some(air_date) = ep.air_date {
+            format!("air{}", air_date.format("%Y-%m-%d"))
+        } else if ep.release_type == crate::ParsedEpisodeReleaseType::SeasonPack {
+            format!("s{}pack", ep.season.unwrap_or(0))
+        } else if let Some(season) = ep.season {
             let eps = ep
                 .episode_numbers
                 .iter()
@@ -31,6 +35,24 @@ pub fn build_release_dedup_key(parsed: &ParsedReleaseMetadata) -> String {
                 .collect::<Vec<_>>()
                 .join(",");
             format!("s{season}e{eps}")
+        } else if !ep.special_absolute_episode_numbers.is_empty() {
+            format!(
+                "special{}",
+                ep.special_absolute_episode_numbers
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        } else if !ep.absolute_episode_numbers.is_empty() {
+            format!(
+                "abs{}",
+                ep.absolute_episode_numbers
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
         } else if let Some(abs) = ep.absolute_episode {
             format!("abs{abs}")
         } else {

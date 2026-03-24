@@ -21,7 +21,8 @@ mod tests;
 
 pub use download_clients::{
     MultiIndexerSearchClient, NzbgetDownloadClient, PrioritizedDownloadClientRouter,
-    SabnzbdDownloadClient, WeaverDownloadClient, start_weaver_subscription_bridge,
+    SabnzbdDownloadClient, WeaverDownloadClient, resolve_base_url_from_config_json,
+    start_weaver_subscription_bridge,
 };
 pub use encryption::EncryptionKey;
 pub use file_importer::FsFileImporter;

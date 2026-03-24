@@ -394,11 +394,15 @@ fn normalize_source(raw: Option<&str>) -> Option<String> {
             source if source == "WEBDL" || source == "WEB" || source == "WEB_DL" => {
                 "WEB-DL".to_string()
             }
+            source if source == "BRDISK" || source == "BDISO" || source == "BDMV" => {
+                "BLURAY".to_string()
+            }
             source
                 if source == "BLURAY" || source == "BLU" || source == "BD" || source == "UHD" =>
             {
                 "BLURAY".to_string()
             }
+            source if source == "RAWHD" => "HDTV".to_string(),
             source => source,
         },
     )
@@ -542,7 +546,14 @@ pub fn evaluate_against_profile(
     // ── Source ───────────────────────────────────────────────────────────────
     match normalize_source(release.source.as_deref()) {
         Some(source) => {
-            if !c.source_blocklist.is_empty() && is_in_list(&source, &c.source_blocklist) {
+            let explicitly_allowed = !c.source_allowlist.is_empty() && is_in_list(&source, &c.source_allowlist);
+            if matches!(
+                source.as_str(),
+                "CAM" | "TELESYNC" | "TELECINE" | "DVDSCR" | "WORKPRINT" | "REGIONAL"
+            ) && !explicitly_allowed
+            {
+                d.log("source_low_quality_theatrical", BLOCK_SCORE);
+            } else if !c.source_blocklist.is_empty() && is_in_list(&source, &c.source_blocklist) {
                 d.log("source_in_profile_blocklist", BLOCK_SCORE);
             } else if !c.source_allowlist.is_empty() && !is_in_list(&source, &c.source_allowlist) {
                 d.log("source_not_in_profile_allowlist", BLOCK_SCORE);

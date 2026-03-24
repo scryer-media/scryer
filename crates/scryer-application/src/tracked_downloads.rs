@@ -44,6 +44,9 @@ pub struct TrackedDownload {
     pub match_type: TitleMatchType,
     /// Whether this download is still visible in the client.
     pub is_trackable: bool,
+    /// Whether import() has been called at least once. Prevents check() from
+    /// re-evaluating a post-import ImportBlocked back to ImportPending.
+    pub import_attempted: bool,
 }
 
 impl TrackedDownload {
@@ -129,6 +132,7 @@ impl TrackedDownloadService {
             status: TrackedDownloadStatus::Ok,
             status_messages: Vec::new(),
             client_item,
+            import_attempted: false,
         };
 
         Self::resolve_title(app, &mut td).await;

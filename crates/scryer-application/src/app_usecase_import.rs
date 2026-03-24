@@ -9,7 +9,7 @@ use chrono::Utc;
 use scryer_domain::{
     Collection, CollectionType, CompletedDownload, DownloadQueueItem, DownloadQueueState,
     Entitlement, EventType, Id, ImportDecision, ImportResult, ImportSkipReason, ImportStatus,
-    ImportType, MediaFacet, NotificationEventType, User, is_video_file,
+    ImportType, MediaFacet, NotificationEventType, Title, User, is_video_file,
 };
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -559,6 +559,7 @@ async fn run_import(
 ) -> AppResult<ImportResult> {
     // 2. TITLE MATCHING
     let mut title = None;
+    let parsed_completed_name = parse_release_metadata(&completed.name);
     if let Some(title_id) = extract_parameter(&completed.parameters, "*scryer_title_id") {
         let title_id = title_id.trim();
         if !title_id.is_empty() {
@@ -593,6 +594,11 @@ async fn run_import(
             }
             None => None,
         };
+    }
+
+    if title.is_none() && parsed_completed_name.episode.is_none() {
+        let titles = app.services.titles.list(None, None).await?;
+        title = find_monitored_movie_title_from_release(&titles, &parsed_completed_name);
     }
 
     let title = match title {
@@ -2133,6 +2139,8 @@ async fn import_single_episode_file(
         {
             ep
         }
+        Some(ep) if ep.air_date.is_some() => ep,
+        Some(ep) if ep.release_type == crate::ParsedEpisodeReleaseType::SeasonPack => ep,
         _ => {
             tracing::debug!(
                 file = %source_video.display(),
@@ -2743,13 +2751,62 @@ pub(crate) async fn resolve_target_episodes(
 ) -> Vec<scryer_domain::Episode> {
     let mut episodes = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    let target_season = if ep_meta.special_kind.is_some() || ep_meta.season == Some(0) {
+        "0".to_string()
+    } else {
+        season_str.to_string()
+    };
+
+    if let Some(air_date) = ep_meta.air_date {
+        let air_date_str = air_date.format("%Y-%m-%d").to_string();
+        match app.services.shows.list_collections_for_title(&title.id).await {
+            Ok(collections) => {
+                let mut matches = Vec::new();
+                for collection in collections {
+                    match app.services.shows.list_episodes_for_collection(&collection.id).await {
+                        Ok(collection_episodes) => {
+                            matches.extend(collection_episodes.into_iter().filter(|episode| {
+                                episode.title_id == title.id
+                                    && episode.air_date.as_deref() == Some(air_date_str.as_str())
+                            }));
+                        }
+                        Err(err) => tracing::warn!(error = %err, "daily episode lookup failed during import"),
+                    }
+                }
+
+                matches.sort_by_key(|episode| {
+                    episode
+                        .episode_number
+                        .as_deref()
+                        .and_then(|value| value.parse::<u32>().ok())
+                        .unwrap_or(u32::MAX)
+                });
+
+                if let Some(part) = ep_meta.daily_part {
+                    let part_index = part.saturating_sub(1) as usize;
+                    if let Some(episode) = matches.into_iter().nth(part_index) {
+                        if seen.insert(episode.id.clone()) {
+                            episodes.push(episode);
+                        }
+                    }
+                } else {
+                    for episode in matches {
+                        if seen.insert(episode.id.clone()) {
+                            episodes.push(episode);
+                        }
+                    }
+                }
+            }
+            Err(err) => tracing::warn!(error = %err, "daily collection lookup failed during import"),
+        }
+    }
 
     for episode_number in &ep_meta.episode_numbers {
         let episode_str = episode_number.to_string();
         match app
             .services
             .shows
-            .find_episode_by_title_and_numbers(&title.id, season_str, &episode_str)
+            .find_episode_by_title_and_numbers(&title.id, &target_season, &episode_str)
             .await
         {
             Ok(Some(episode)) => {
@@ -2769,12 +2826,16 @@ pub(crate) async fn resolve_target_episodes(
         }
     }
 
-    if episodes.is_empty() && ep_meta.season.is_some() && ep_meta.episode_numbers.is_empty() {
+    if episodes.is_empty()
+        && ep_meta.season.is_some()
+        && ep_meta.episode_numbers.is_empty()
+        && ep_meta.release_type == crate::ParsedEpisodeReleaseType::SeasonPack
+    {
         match app.services.shows.list_collections_for_title(&title.id).await {
             Ok(collections) => {
                 for collection in collections
                     .into_iter()
-                    .filter(|collection| collection.collection_index == season_str)
+                    .filter(|collection| collection.collection_index == target_season)
                 {
                     match app.services.shows.list_episodes_for_collection(&collection.id).await {
                         Ok(collection_episodes) => {
@@ -2782,7 +2843,8 @@ pub(crate) async fn resolve_target_episodes(
                                 .into_iter()
                                 .filter(|episode| {
                                     episode.title_id == title.id
-                                        && episode.season_number.as_deref() == Some(season_str)
+                                        && episode.season_number.as_deref()
+                                            == Some(target_season.as_str())
                                 })
                                 .collect();
                             collection_episodes.sort_by_key(|episode| {
@@ -2806,11 +2868,39 @@ pub(crate) async fn resolve_target_episodes(
         }
     }
 
+    if episodes.is_empty() && !ep_meta.special_absolute_episode_numbers.is_empty() {
+        for special_number in &ep_meta.special_absolute_episode_numbers {
+            let episode_str = special_number.to_string();
+            match app
+                .services
+                .shows
+                .find_episode_by_title_and_numbers(&title.id, "0", &episode_str)
+                .await
+            {
+                Ok(Some(episode)) => {
+                    if seen.insert(episode.id.clone()) {
+                        episodes.push(episode);
+                    }
+                }
+                Ok(None) => {
+                    tracing::debug!(
+                        title_id = %title.id,
+                        special = %episode_str,
+                        "no matching special episode found during import"
+                    );
+                }
+                Err(err) => tracing::warn!(error = %err, "special episode lookup failed during import"),
+            }
+        }
+    }
+
     if episodes.is_empty()
-        && let Some(absolute_episode) = ep_meta.absolute_episode
+        && (ep_meta.absolute_episode.is_some() || !ep_meta.absolute_episode_numbers.is_empty())
     {
-        let absolute_numbers: Vec<u32> = if ep_meta.episode_numbers.is_empty() {
-            vec![absolute_episode]
+        let absolute_numbers: Vec<u32> = if !ep_meta.absolute_episode_numbers.is_empty() {
+            ep_meta.absolute_episode_numbers.clone()
+        } else if ep_meta.episode_numbers.is_empty() {
+            vec![ep_meta.absolute_episode.unwrap_or_default()]
         } else {
             ep_meta.episode_numbers.clone()
         };
@@ -2987,6 +3077,135 @@ async fn persist_file_import_artifact(
             );
         }
     }
+}
+
+fn normalized_release_title_candidates(parsed: &crate::ParsedReleaseMetadata) -> Vec<String> {
+    let raw_candidates = if parsed.normalized_title_variants.is_empty() {
+        vec![parsed.normalized_title.clone()]
+    } else {
+        parsed.normalized_title_variants.clone()
+    };
+
+    raw_candidates
+        .into_iter()
+        .map(|title| crate::app_usecase_rss::normalize_for_matching(&title))
+        .filter(|title| !title.is_empty())
+        .fold(Vec::<String>::new(), |mut acc, value| {
+            if !acc.iter().any(|existing| existing == &value) {
+                acc.push(value);
+            }
+            acc
+        })
+}
+
+fn title_matches_normalized_candidate(title: &Title, candidate: &str) -> bool {
+    if crate::app_usecase_rss::normalize_for_matching(&title.name) == candidate {
+        return true;
+    }
+
+    title
+        .aliases
+        .iter()
+        .any(|alias| crate::app_usecase_rss::normalize_for_matching(alias) == candidate)
+}
+
+fn find_movie_title_by_external_ids<'a>(
+    titles: &[&'a Title],
+    parsed: &crate::ParsedReleaseMetadata,
+) -> Option<&'a Title> {
+    if let Some(parsed_imdb_id) = parsed.imdb_id.as_deref().and_then(normalize_imdb_id) {
+        let mut matches = titles
+            .iter()
+            .copied()
+            .filter(|title| {
+                title.external_ids.iter().any(|external_id| {
+                    external_id.source.eq_ignore_ascii_case("imdb")
+                        && normalize_imdb_id(&external_id.value).as_deref()
+                            == Some(parsed_imdb_id.as_str())
+                })
+            })
+            .collect::<Vec<_>>();
+        if matches.len() == 1 {
+            return matches.pop();
+        }
+    }
+
+    if let Some(parsed_tmdb_id) = parsed.tmdb_id.map(|id| id.to_string()) {
+        let mut matches = titles
+            .iter()
+            .copied()
+            .filter(|title| {
+                title.external_ids.iter().any(|external_id| {
+                    external_id.source.eq_ignore_ascii_case("tmdb")
+                        && external_id.value.trim() == parsed_tmdb_id
+                })
+            })
+            .collect::<Vec<_>>();
+        if matches.len() == 1 {
+            return matches.pop();
+        }
+    }
+
+    None
+}
+
+fn find_movie_title_by_name<'a>(
+    titles: &[&'a Title],
+    parsed: &crate::ParsedReleaseMetadata,
+) -> Option<&'a Title> {
+    let candidates = normalized_release_title_candidates(parsed);
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let mut year_matches = Vec::<&Title>::new();
+    let mut any_matches = Vec::<&Title>::new();
+
+    for candidate in candidates {
+        for title in titles {
+            if !title_matches_normalized_candidate(title, &candidate) {
+                continue;
+            }
+
+            if !any_matches.iter().any(|existing| existing.id == title.id) {
+                any_matches.push(*title);
+            }
+
+            if let Some(year) = parsed.year
+                && title.year.map(|value| value as u32) == Some(year)
+                && !year_matches.iter().any(|existing| existing.id == title.id)
+            {
+                year_matches.push(*title);
+            }
+        }
+    }
+
+    if year_matches.len() == 1 {
+        return year_matches.into_iter().next();
+    }
+
+    if any_matches.len() == 1 {
+        return any_matches.into_iter().next();
+    }
+
+    year_matches
+        .into_iter()
+        .next()
+        .or_else(|| any_matches.into_iter().next())
+}
+
+fn find_monitored_movie_title_from_release(
+    titles: &[Title],
+    parsed: &crate::ParsedReleaseMetadata,
+) -> Option<Title> {
+    let monitored_movies = titles
+        .iter()
+        .filter(|title| title.monitored && title.facet == MediaFacet::Movie)
+        .collect::<Vec<_>>();
+
+    find_movie_title_by_external_ids(&monitored_movies, parsed)
+        .or_else(|| find_movie_title_by_name(&monitored_movies, parsed))
+        .cloned()
 }
 
 fn normalize_imdb_id(raw_imdb_id: &str) -> Option<String> {

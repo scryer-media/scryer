@@ -38,6 +38,12 @@ pub async fn check(app: &AppUseCase, td: &mut TrackedDownload) {
         return;
     }
 
+    // Don't re-evaluate a post-import block. Import already ran and returned
+    // Skipped/Failed — stay blocked until the user explicitly retries.
+    if td.state == TrackedDownloadState::ImportBlocked && td.import_attempted {
+        return;
+    }
+
     // Validate output path.
     // (For now, we trust the client's dest_dir will be available at import time.
     //  A full ValidatePath check would need the CompletedDownload which requires
@@ -82,6 +88,12 @@ pub async fn check(app: &AppUseCase, td: &mut TrackedDownload) {
     }
 
     // All checks passed — queue for import.
+    tracing::info!(
+        id = %td.id,
+        title_id = ?td.title_id,
+        match_type = ?td.match_type,
+        "check: transitioning to ImportPending"
+    );
     td.state = TrackedDownloadState::ImportPending;
     td.status = TrackedDownloadStatus::Ok;
     td.status_messages.clear();
@@ -105,19 +117,46 @@ pub async fn import(
     td.status_messages.clear();
 
     let Some(completed) = find_completed_download(app, td).await else {
+        tracing::debug!(
+            id = %td.id,
+            item_id = %td.client_item.download_client_item_id,
+            "import: completed download not found in client history, will retry"
+        );
         td.state = TrackedDownloadState::ImportPending;
         return false;
     };
 
+    tracing::info!(
+        id = %td.id,
+        dest_dir = %completed.dest_dir,
+        title_id = ?td.title_id,
+        "import: starting import from completed download"
+    );
+
     let success_before = total_successful_artifacts(app, td).await;
+    td.import_attempted = true;
 
     match import_completed_download(app, actor, &completed).await {
         Ok(result) => {
             let success_after = total_successful_artifacts(app, td).await;
             let files_imported_this_pass = success_after.saturating_sub(success_before) as usize;
+            tracing::info!(
+                id = %td.id,
+                decision = ?result.decision,
+                skip_reason = ?result.skip_reason,
+                error_message = ?result.error_message,
+                files_imported_this_pass,
+                "import: pipeline returned result"
+            );
             apply_import_result(app, td, result, files_imported_this_pass).await
         }
         Err(error) => {
+            tracing::warn!(
+                id = %td.id,
+                error = %error,
+                dest_dir = %completed.dest_dir,
+                "import: pipeline returned error"
+            );
             td.state = TrackedDownloadState::ImportBlocked;
             td.status = TrackedDownloadStatus::Error;
             td.status_messages = vec![format!("Import failed: {error}")];
@@ -218,13 +257,47 @@ async fn find_completed_download(
     app: &AppUseCase,
     td: &TrackedDownload,
 ) -> Option<CompletedDownload> {
-    let completed_downloads = app.services.download_client.list_completed_downloads().await.ok()?;
+    let completed_downloads = match app.services.download_client.list_completed_downloads().await {
+        Ok(downloads) => downloads,
+        Err(error) => {
+            tracing::warn!(error = %error, "find_completed_download: failed to fetch from client");
+            return None;
+        }
+    };
+    tracing::debug!(
+        count = completed_downloads.len(),
+        looking_for = %td.client_item.download_client_item_id,
+        "find_completed_download: searching client history"
+    );
     let completed = completed_downloads.into_iter().find(|completed| {
         completed.client_type == td.client_type
             && completed.download_client_item_id == td.client_item.download_client_item_id
-    })?;
-
-    Some(with_tracked_metadata(td, completed))
+    });
+    match completed {
+        Some(completed) => {
+            if completed.dest_dir.trim().is_empty() {
+                tracing::warn!(id = %td.id, "find_completed_download: matched but dest_dir is empty");
+            }
+            let path = std::path::Path::new(&completed.dest_dir);
+            if !path.as_os_str().is_empty() && !path.exists() {
+                tracing::warn!(
+                    id = %td.id,
+                    dest_dir = %completed.dest_dir,
+                    "find_completed_download: dest_dir does not exist on disk — check volume mounts"
+                );
+            }
+            Some(with_tracked_metadata(td, completed))
+        }
+        None => {
+            tracing::debug!(
+                id = %td.id,
+                item_id = %td.client_item.download_client_item_id,
+                client_type = %td.client_type,
+                "find_completed_download: no matching item in client history"
+            );
+            None
+        }
+    }
 }
 
 fn with_tracked_metadata(
@@ -887,16 +960,38 @@ mod tests {
         episode_number: &str,
         absolute_number: Option<&str>,
     ) -> Episode {
+        build_episode_with_details(
+            id,
+            title_id,
+            collection_id,
+            EpisodeType::Standard,
+            season_number,
+            episode_number,
+            None,
+            absolute_number,
+        )
+    }
+
+    fn build_episode_with_details(
+        id: &str,
+        title_id: &str,
+        collection_id: &str,
+        episode_type: EpisodeType,
+        season_number: &str,
+        episode_number: &str,
+        air_date: Option<&str>,
+        absolute_number: Option<&str>,
+    ) -> Episode {
         Episode {
             id: id.to_string(),
             title_id: title_id.to_string(),
             collection_id: Some(collection_id.to_string()),
-            episode_type: EpisodeType::Standard,
+            episode_type,
             episode_number: Some(episode_number.to_string()),
             season_number: Some(season_number.to_string()),
             episode_label: None,
             title: None,
-            air_date: None,
+            air_date: air_date.map(str::to_string),
             duration_seconds: None,
             has_multi_audio: false,
             has_subtitle: false,
@@ -994,6 +1089,7 @@ mod tests {
             notified_manual_interaction: false,
             match_type: TitleMatchType::Submission,
             is_trackable: true,
+            import_attempted: false,
         }
     }
 
@@ -1104,6 +1200,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn verify_import_resolves_daily_episode_by_air_date() {
+        let title = build_title("title-1", "Series Title", MediaFacet::Series);
+        let collection = build_collection("season-1", "title-1", "1");
+        let episodes = vec![
+            build_episode_with_details(
+                "ep-101",
+                "title-1",
+                "season-1",
+                EpisodeType::Standard,
+                "1",
+                "1",
+                Some("2015-09-07"),
+                None,
+            ),
+            build_episode_with_details(
+                "ep-102",
+                "title-1",
+                "season-1",
+                EpisodeType::Standard,
+                "1",
+                "2",
+                Some("2015-09-08"),
+                None,
+            ),
+        ];
+        let artifacts = vec![build_artifact("dl-1", "ep-101", "Series.Title.2015.09.07.mkv")];
+        let app = build_app(vec![title], vec![collection], episodes, artifacts);
+        let td = build_tracked_download(
+            "title-1",
+            "series",
+            "Series.Title.2015.09.07.Part.1.720p.HULU.WEBRip.AAC2.0.H.264-Sonarr",
+        );
+
+        assert!(verify_import(&app, &td, 0).await);
+    }
+
+    #[tokio::test]
+    async fn verify_import_resolves_special_by_season_zero_number() {
+        let title = build_title("title-1", "Another Anime Show", MediaFacet::Anime);
+        let collection = build_collection("season-0", "title-1", "0");
+        let episodes = vec![build_episode_with_details(
+            "ep-special-1",
+            "title-1",
+            "season-0",
+            EpisodeType::Ova,
+            "0",
+            "1",
+            None,
+            None,
+        )];
+        let artifacts = vec![build_artifact(
+            "dl-1",
+            "ep-special-1",
+            "Another.Anime.Show.S00E01.ova.mkv",
+        )];
+        let app = build_app(vec![title], vec![collection], episodes, artifacts);
+        let td = build_tracked_download(
+            "title-1",
+            "anime",
+            "[DeadFish] Another Anime Show - 01 - OVA [BD][720p][AAC]",
+        );
+
+        assert!(verify_import(&app, &td, 0).await);
+    }
+
+    #[tokio::test]
     async fn verify_import_unresolved_episode_resolution_falls_back_to_successful_pass() {
         let title = build_title("title-1", "Mystery Show", MediaFacet::Series);
         let artifacts = vec![build_artifact_with_result(
@@ -1172,6 +1334,7 @@ mod tests {
             notified_manual_interaction: false,
             match_type: TitleMatchType::Unmatched,
             is_trackable: true,
+            import_attempted: false,
         };
 
         check(&app, &mut td).await;

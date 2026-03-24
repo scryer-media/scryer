@@ -4329,6 +4329,9 @@ dependencies = [
 [[package]]
 name = "scryer-release-parser"
 version = "0.9.14"
+dependencies = [
+ "chrono",
+]
 
 [[package]]
 name = "scryer-rules"

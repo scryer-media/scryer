@@ -72,8 +72,35 @@ struct TitleMatchInfo {
 
 /// Extract the series/movie title portion from a release name by taking
 /// everything before the first recognized quality/episode marker.
+#[cfg(test)]
 fn extract_title_from_release(parsed: &ParsedReleaseMetadata) -> String {
-    normalize_for_matching(&parsed.normalized_title)
+    extract_titles_from_release(parsed)
+        .into_iter()
+        .next()
+        .unwrap_or_default()
+}
+
+fn extract_titles_from_release(parsed: &ParsedReleaseMetadata) -> Vec<String> {
+    let mut titles = if parsed.normalized_title_variants.is_empty() {
+        vec![parsed.normalized_title.clone()]
+    } else {
+        parsed.normalized_title_variants.clone()
+    };
+
+    if titles.is_empty() {
+        titles.push(parsed.normalized_title.clone());
+    }
+
+    titles
+        .into_iter()
+        .map(|title| normalize_for_matching(&title))
+        .filter(|title| !title.is_empty())
+        .fold(Vec::<String>::new(), |mut acc, value| {
+            if !acc.iter().any(|existing| existing == &value) {
+                acc.push(value);
+            }
+            acc
+        })
 }
 
 /// Try to match a parsed release against the title lookup.
@@ -82,39 +109,36 @@ fn match_release_to_title<'a>(
     parsed: &ParsedReleaseMetadata,
     lookup: &'a HashMap<String, Vec<TitleMatchInfo>>,
 ) -> Option<&'a TitleMatchInfo> {
-    let release_title = extract_title_from_release(parsed);
-    if release_title.is_empty() {
-        return None;
-    }
-
-    // Exact match first
-    if let Some(matches) = lookup.get(&release_title) {
-        // If the release has a year, prefer matching title with same year
-        if let Some(year) = parsed.year
-            && let Some(m) = matches.iter().find(|m| m.year == Some(year as i32))
-        {
-            return Some(m);
-        }
-        return matches.first();
-    }
-
-    // Try with year stripped (release "Title 2024" → lookup "title")
-    if let Some(year) = parsed.year {
-        let year_str = format!(" {year}");
-        if let Some(without_year) = release_title.strip_suffix(&year_str)
-            && let Some(matches) = lookup.get(without_year)
-        {
+    for release_title in extract_titles_from_release(parsed) {
+        // Exact match first
+        if let Some(matches) = lookup.get(&release_title) {
+            // If the release has a year, prefer matching title with same year
+            if let Some(year) = parsed.year
+                && let Some(m) = matches.iter().find(|m| m.year == Some(year as i32))
+            {
+                return Some(m);
+            }
             return matches.first();
         }
-    }
 
-    // Try adding year from lookup (lookup has "title 2024", release has "title")
-    for (key, matches) in lookup {
-        for m in matches {
-            if let Some(year) = m.year {
-                let with_year = format!("{release_title} {year}");
-                if *key == with_year {
-                    return Some(m);
+        // Try with year stripped (release "Title 2024" → lookup "title")
+        if let Some(year) = parsed.year {
+            let year_str = format!(" {year}");
+            if let Some(without_year) = release_title.strip_suffix(&year_str)
+                && let Some(matches) = lookup.get(without_year)
+            {
+                return matches.first();
+            }
+        }
+
+        // Try adding year from lookup (lookup has "title 2024", release has "title")
+        for (key, matches) in lookup {
+            for m in matches {
+                if let Some(year) = m.year {
+                    let with_year = format!("{release_title} {year}");
+                    if *key == with_year {
+                        return Some(m);
+                    }
                 }
             }
         }
@@ -1387,6 +1411,39 @@ mod tests {
         assert_eq!(result.unwrap().title_id, "t1");
     }
 
+    #[test]
+    fn match_via_release_aka_title_variant() {
+        let titles = vec![make_title_with_aliases(
+            "t1",
+            "My Cousin",
+            Some(2020),
+            vec!["Mon Cousin"],
+        )];
+        let lookup = build_title_lookup(&titles);
+        let parsed = crate::parse_release_metadata(
+            "Mon.Cousin.A.K.A.My.Cousin.2020.1080p.BluRay.x264-GRP",
+        );
+        let result = match_release_to_title(&parsed, &lookup);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().title_id, "t1");
+    }
+
+    #[test]
+    fn match_via_release_slash_title_variant() {
+        let titles = vec![make_title_with_aliases(
+            "t1",
+            "My Cousin",
+            Some(2020),
+            vec!["Mon Cousin"],
+        )];
+        let lookup = build_title_lookup(&titles);
+        let parsed =
+            crate::parse_release_metadata("Mon Cousin / My Cousin 2020 1080p BluRay x264-GRP");
+        let result = match_release_to_title(&parsed, &lookup);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().title_id, "t1");
+    }
+
     // ── extract_title_from_release ──────────────────────────────────
 
     #[test]
@@ -1394,5 +1451,20 @@ mod tests {
         let parsed = crate::parse_release_metadata("The.Dark.Knight.2008.1080p.BluRay");
         let title = extract_title_from_release(&parsed);
         assert_eq!(title, "the dark knight");
+    }
+
+    #[test]
+    fn extract_title_variants_returns_canonical_then_alternates() {
+        let parsed =
+            crate::parse_release_metadata("Sydney.A.K.A.Hard.Eight.1996.1080p.WEB-DL.H.264");
+        let titles = extract_titles_from_release(&parsed);
+        assert_eq!(
+            titles,
+            vec![
+                "sydney aka hard eight".to_string(),
+                "sydney".to_string(),
+                "hard eight".to_string()
+            ]
+        );
     }
 }

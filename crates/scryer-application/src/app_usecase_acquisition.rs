@@ -967,10 +967,18 @@ async fn process_single_wanted_item(
 
             let title_normalized = crate::app_usecase_rss::normalize_for_matching(&title.name);
             if let Some(best_pack) = pack_results.iter().find(|r| {
+                let parsed = crate::parse_release_metadata(&r.title);
+                let is_pack = parsed.episode.as_ref().is_some_and(|episode| {
+                    episode.release_type == crate::ParsedEpisodeReleaseType::SeasonPack
+                        && episode.season == Some(season_num)
+                        && !episode.is_season_extra
+                });
+
                 r.quality_profile_decision
                     .as_ref()
                     .map(|d| d.allowed)
                     .unwrap_or(false)
+                    && is_pack
                     && crate::app_usecase_rss::normalize_for_matching(&r.title)
                         .contains(&title_normalized)
             }) {

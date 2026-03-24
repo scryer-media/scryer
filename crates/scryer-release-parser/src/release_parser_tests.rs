@@ -90,7 +90,9 @@ fn parse_series_with_dual_in_brackets_and_spaces() {
             season: Some(2),
             episode_numbers: vec![2],
             absolute_episode: None,
+            release_type: ParsedEpisodeReleaseType::SingleEpisode,
             raw: Some("S02E02".to_string()),
+            ..ParsedEpisodeMetadata::default()
         })
     );
 }
@@ -112,7 +114,9 @@ fn parse_series_multi_subs_only() {
             season: Some(2),
             episode_numbers: vec![5],
             absolute_episode: None,
+            release_type: ParsedEpisodeReleaseType::SingleEpisode,
             raw: Some("S02E05".to_string()),
+            ..ParsedEpisodeMetadata::default()
         })
     );
 }
@@ -125,7 +129,7 @@ fn parse_series_vostfr_marks_subtitles() {
     assert_eq!(parsed.languages_subtitles, vec!["fre".to_string()]);
     assert!(parsed.episode.is_some());
     assert_eq!(parsed.video_codec.as_deref(), Some("H.265"));
-    assert_eq!(parsed.source.as_deref(), Some("WEB-DL"));
+    assert_eq!(parsed.source.as_deref(), Some("WEBRip"));
     assert_eq!(parsed.quality.as_deref(), Some("1080p"));
 }
 
@@ -141,7 +145,9 @@ fn parse_series_episode_and_dual() {
             season: Some(2),
             episode_numbers: vec![3],
             absolute_episode: None,
+            release_type: ParsedEpisodeReleaseType::SingleEpisode,
             raw: Some("S02E03".to_string()),
+            ..ParsedEpisodeMetadata::default()
         })
     );
     assert_eq!(parsed.source.as_deref(), Some("WEB-DL"));
@@ -214,6 +220,150 @@ fn parse_movie_release_group_with_hash_bracket() {
 }
 
 #[test]
+fn parse_movie_title_variants_from_aka() {
+    let parsed = parse_release_metadata(
+        "Sydney.A.K.A.Hard.Eight.1996.1080p.AMZN.WEB-DL.DDP2.0.H.264",
+    );
+
+    assert_eq!(parsed.normalized_title, "SYDNEY AKA HARD EIGHT");
+    assert_eq!(
+        parsed.normalized_title_variants,
+        vec![
+            "SYDNEY AKA HARD EIGHT".to_string(),
+            "SYDNEY".to_string(),
+            "HARD EIGHT".to_string()
+        ]
+    );
+}
+
+#[test]
+fn parse_movie_title_variants_from_slash_delimited_titles() {
+    let parsed =
+        parse_release_metadata("Mon Cousin / My Cousin 2020 1080p BluRay x264-GRP");
+
+    assert_eq!(parsed.normalized_title, "MON COUSIN MY COUSIN");
+    assert_eq!(
+        parsed.normalized_title_variants,
+        vec![
+            "MON COUSIN MY COUSIN".to_string(),
+            "MON COUSIN".to_string(),
+            "MY COUSIN".to_string()
+        ]
+    );
+}
+
+#[test]
+fn parse_movie_ids_from_release_title() {
+    let parsed = parse_release_metadata(
+        "Movie.Name.2016.{tmdbid-43074}.[tt0133093].1080p.WEB-DL.H.264",
+    );
+
+    assert_eq!(parsed.tmdb_id, Some(43074));
+    assert_eq!(parsed.imdb_id.as_deref(), Some("tt0133093"));
+}
+
+#[test]
+fn parse_movie_sources_for_radarr_parity() {
+    let webrip = parse_release_metadata("Movie.Name.2024.1080p.WEBRip.H.265");
+    assert_eq!(webrip.source.as_deref(), Some("WEBRip"));
+
+    let brdisk = parse_release_metadata("Movie.Name.1993.BD25.ISO");
+    assert_eq!(brdisk.source.as_deref(), Some("BRDISK"));
+    assert!(brdisk.is_bd_disk);
+
+    let rawhd = parse_release_metadata("Movie.Name.2024.1080p.RAWHD.x264");
+    assert_eq!(rawhd.source.as_deref(), Some("RAWHD"));
+
+    let cam = parse_release_metadata("Movie.Name.2024.HQCAM.x264");
+    assert_eq!(cam.source.as_deref(), Some("CAM"));
+
+    let telesync = parse_release_metadata("Movie.Name.2024.TeleSync.720p.HEVC");
+    assert_eq!(telesync.source.as_deref(), Some("TELESYNC"));
+
+    let telecine = parse_release_metadata("Movie.Name.2024.TC.720p.HEVC");
+    assert_eq!(telecine.source.as_deref(), Some("TELECINE"));
+
+    let dvdscr = parse_release_metadata("Movie.Name.2024.DVDSCR.x264");
+    assert_eq!(dvdscr.source.as_deref(), Some("DVDSCR"));
+
+    let workprint = parse_release_metadata("Movie.Name.2024.WORKPRINT.x264");
+    assert_eq!(workprint.source.as_deref(), Some("WORKPRINT"));
+
+    let regional = parse_release_metadata("Movie.Name.2024.REGIONAL.DVD9");
+    assert_eq!(regional.source.as_deref(), Some("REGIONAL"));
+}
+
+#[test]
+fn parse_movie_editions_for_radarr_parity() {
+    let final_cut = parse_release_metadata("Fake.Movie.Final.Cut.2016.1080p.BluRay.x264");
+    assert_eq!(final_cut.edition.as_deref(), Some("Final Cut"));
+
+    let open_matte = parse_release_metadata("Movie.1997.Open.Matte.1080p.BluRay.x264");
+    assert_eq!(open_matte.edition.as_deref(), Some("Open Matte"));
+
+    let anniversary =
+        parse_release_metadata("Movie.Title.2012.50th.Anniversary.Edition.1080p.BluRay.x264");
+    assert_eq!(anniversary.edition.as_deref(), Some("50TH Anniversary Edition"));
+
+    let rekall = parse_release_metadata(
+        "Movie.Title.1990.Ultimate.Rekall.Edition.1080p.BluRay.AVC.DTS-HD.MA5.1-TWA",
+    );
+    assert_eq!(rekall.edition.as_deref(), Some("Ultimate Rekall Edition"));
+}
+
+#[test]
+fn parse_movie_language_aliases_for_radarr_parity() {
+    let dublado = parse_release_metadata("Movie.Title.1994.Dublado.1080p.XviD-LOL");
+    assert_eq!(dublado.languages_audio, vec!["por".to_string()]);
+
+    let rodubbed = parse_release_metadata("Movie.Title.1994.1080p.XviD.RoDubbed-LOL");
+    assert_eq!(rodubbed.languages_audio, vec!["ron".to_string()]);
+
+    let bg_audio = parse_release_metadata("Movie.Title.1994.BGAUDIO.1080p.XviD-LOL");
+    assert_eq!(bg_audio.languages_audio, vec!["bul".to_string()]);
+
+    let hindi = parse_release_metadata("Movie.Title.1994.Hindi.1080p.XviD-LOL");
+    assert_eq!(hindi.languages_audio, vec!["hin".to_string()]);
+
+    let thai = parse_release_metadata("Movie.Title.1994.Thai.1080p.XviD-LOL");
+    assert_eq!(thai.languages_audio, vec!["tha".to_string()]);
+
+    let korsubs = parse_release_metadata("Movie.Title.2016.1080p.KORSUBS.WEBRip.x264.AAC2.0-RADARR");
+    assert_eq!(korsubs.languages_subtitles, vec!["kor".to_string()]);
+    assert!(korsubs.is_hardcoded_subs);
+}
+
+#[test]
+fn parse_movie_release_group_exceptions_for_radarr_parity() {
+    let qxr = parse_release_metadata(
+        "Movie Name (2003) (2160p BluRay X265 HEVC 10bit HDR AAC 7.1 Tigole) [QxR]",
+    );
+    assert_eq!(qxr.release_group.as_deref(), Some("QxR"));
+
+    let yts = parse_release_metadata("Movie Name (2020) [1080p] [WEBRip] [5.1] [YTS.MX]");
+    assert_eq!(yts.release_group.as_deref(), Some("YTS.MX"));
+
+    let kralimarko =
+        parse_release_metadata("Movie.Name.2018.1080p.Blu-ray.Remux.AVC.DTS-HD.MA.5.1.KRaLiMaRKo");
+    assert_eq!(kralimarko.release_group.as_deref(), Some("KRaLiMaRKo"));
+
+    let hqmux = parse_release_metadata(
+        "Movie.Title.2005.2160p.UHD.BluRay.TrueHD.7.1.Atmos.x265 - HQMUX",
+    );
+    assert_eq!(hqmux.release_group.as_deref(), Some("HQMUX"));
+
+    let datalass = parse_release_metadata(
+        "Movie Name (2017) [2160p REMUX] [HEVC DV HYBRID HDR10+ Dolby TrueHD Atmos 7 1 24-bit Audio English]-DataLass",
+    );
+    assert_eq!(datalass.release_group.as_deref(), Some("DataLass"));
+
+    let zr = parse_release_metadata(
+        "Crappy Anime Movie Name 2017 [-ZR-] [Blu-ray][MKV][h264][1080p][TrueHD 5.1][Dual Audio][Softsubs (-ZR-)]",
+    );
+    assert_eq!(zr.release_group.as_deref(), Some("-ZR-"));
+}
+
+#[test]
 fn parse_multi_not_dual_audio() {
     let parsed =
         parse_release_metadata("Crimson.Horizon.2019.MULTi.VF2.1080p.HDLight.AC-3.5.1.H264-LiGHT");
@@ -265,7 +415,9 @@ fn parse_short_s_season_episode_pattern() {
             season: Some(2),
             episode_numbers: vec![5],
             absolute_episode: None,
+            release_type: ParsedEpisodeReleaseType::SingleEpisode,
             raw: Some("S2 05".to_string()),
+            ..ParsedEpisodeMetadata::default()
         })
     );
 }
@@ -281,7 +433,9 @@ fn parse_x_pattern() {
             season: Some(1),
             episode_numbers: vec![22],
             absolute_episode: None,
+            release_type: ParsedEpisodeReleaseType::SingleEpisode,
             raw: Some("01x22".to_string()),
+            ..ParsedEpisodeMetadata::default()
         })
     );
 }
@@ -296,7 +450,9 @@ fn parse_season_episode_compound() {
             season: Some(2),
             episode_numbers: vec![3, 4, 5],
             absolute_episode: None,
+            release_type: ParsedEpisodeReleaseType::MultiEpisode,
             raw: Some("S02E03E04E05".to_string()),
+            ..ParsedEpisodeMetadata::default()
         })
     );
 }
@@ -310,7 +466,9 @@ fn parse_season_episode_range_in_one_token() {
             season: Some(1),
             episode_numbers: vec![3, 4, 5],
             absolute_episode: None,
+            release_type: ParsedEpisodeReleaseType::MultiEpisode,
             raw: Some("S01E03-05".to_string()),
+            ..ParsedEpisodeMetadata::default()
         })
     );
 }
@@ -324,7 +482,9 @@ fn parse_x_range_and_multi_episode() {
             season: Some(1),
             episode_numbers: vec![3, 4, 5],
             absolute_episode: None,
+            release_type: ParsedEpisodeReleaseType::MultiEpisode,
             raw: Some("01x03-04x05".to_string()),
+            ..ParsedEpisodeMetadata::default()
         })
     );
 }
@@ -338,7 +498,9 @@ fn parse_season_and_delayed_episode_tokens() {
             season: Some(2),
             episode_numbers: vec![3],
             absolute_episode: None,
+            release_type: ParsedEpisodeReleaseType::SingleEpisode,
             raw: Some("S2 EP03".to_string()),
+            ..ParsedEpisodeMetadata::default()
         })
     );
 }
@@ -352,7 +514,9 @@ fn parse_delayed_season_phrase() {
             season: Some(2),
             episode_numbers: vec![3],
             absolute_episode: None,
+            release_type: ParsedEpisodeReleaseType::SingleEpisode,
             raw: Some("S02 EPISODE 03".to_string()),
+            ..ParsedEpisodeMetadata::default()
         })
     );
 }
@@ -366,7 +530,9 @@ fn parse_separated_season_number() {
             season: Some(2),
             episode_numbers: vec![3],
             absolute_episode: None,
+            release_type: ParsedEpisodeReleaseType::SingleEpisode,
             raw: Some("S 2 EP03".to_string()),
+            ..ParsedEpisodeMetadata::default()
         })
     );
 }
@@ -554,7 +720,10 @@ fn parse_netflix_complete_season() {
             season: Some(1),
             episode_numbers: vec![],
             absolute_episode: None,
+            full_season: true,
+            release_type: ParsedEpisodeReleaseType::SeasonPack,
             raw: Some("S01".to_string()),
+            ..ParsedEpisodeMetadata::default()
         })
     );
 }
@@ -581,7 +750,7 @@ fn parse_iplayer_hfr_webdl() {
 fn parse_av1_webrip() {
     let parsed = parse_release_metadata("[Onalrie] Release that Witch-S01E02 [1080p WEBRip AV1]");
     assert_eq!(parsed.quality.as_deref(), Some("1080p"));
-    assert_eq!(parsed.source.as_deref(), Some("WEB-DL"));
+    assert_eq!(parsed.source.as_deref(), Some("WEBRip"));
     assert_eq!(parsed.video_codec.as_deref(), Some("AV1"));
 }
 
@@ -597,6 +766,86 @@ fn parse_atvp_hfr_atmos_dv() {
     assert_eq!(parsed.video_codec.as_deref(), Some("H.265"));
     assert_eq!(parsed.audio.as_deref(), Some("DDP"));
     assert_eq!(parsed.audio_channels.as_deref(), Some("5.1"));
+}
+
+#[test]
+fn parse_daily_iso_with_part() {
+    let parsed = parse_release_metadata(
+        "Series.Title.2015.09.07.Part.2.720p.HULU.WEBRip.AAC2.0.H.264-Sonarr",
+    );
+    let episode = parsed.episode.expect("daily episode metadata");
+    assert_eq!(episode.air_date, chrono::NaiveDate::from_ymd_opt(2015, 9, 7));
+    assert_eq!(episode.daily_part, Some(2));
+    assert_eq!(episode.release_type, ParsedEpisodeReleaseType::SingleEpisode);
+}
+
+#[test]
+fn parse_daily_dmy_when_unambiguous() {
+    let parsed = parse_release_metadata("Series.Title.13.02.2025.1080i.HDTV.MPA2.0.H.264");
+    let episode = parsed.episode.expect("daily episode metadata");
+    assert_eq!(episode.air_date, chrono::NaiveDate::from_ymd_opt(2025, 2, 13));
+}
+
+#[test]
+fn parse_partial_season_release() {
+    let parsed =
+        parse_release_metadata("The.Series.S06.P1.1080p.Blu-Ray.10-Bit.Dual-Audio.TrueHD.x265");
+    let episode = parsed.episode.expect("season pack metadata");
+    assert_eq!(episode.season, Some(6));
+    assert!(episode.is_partial_season);
+    assert_eq!(episode.season_part, Some(1));
+    assert_eq!(episode.release_type, ParsedEpisodeReleaseType::SeasonPack);
+}
+
+#[test]
+fn parse_multi_season_release() {
+    let parsed = parse_release_metadata("Series.Title.S01-S09.1080p.AMZN.WEB-DL.DDP2.0.H.264");
+    let episode = parsed.episode.expect("season pack metadata");
+    assert_eq!(episode.season, Some(1));
+    assert!(episode.is_multi_season);
+    assert_eq!(episode.release_type, ParsedEpisodeReleaseType::SeasonPack);
+}
+
+#[test]
+fn parse_numbered_ova_as_special() {
+    let parsed = parse_release_metadata("[DeadFish] Another Anime Show - 01 - OVA [BD][720p][AAC]");
+    let episode = parsed.episode.expect("special episode metadata");
+    assert_eq!(episode.season, Some(0));
+    assert_eq!(episode.episode_numbers, vec![1]);
+    assert_eq!(
+        episode.special_kind,
+        Some(ParsedSpecialKind::OVA)
+    );
+    assert_eq!(episode.special_absolute_episode_numbers, vec![1]);
+}
+
+#[test]
+fn parse_ncop_without_number_as_special() {
+    let parsed = parse_release_metadata("[sam] Long Series - NCOP [BD 1080p FLAC] [BBC3BC68]");
+    let episode = parsed.episode.expect("special episode metadata");
+    assert_eq!(episode.season, Some(0));
+    assert!(episode.episode_numbers.is_empty());
+    assert_eq!(episode.special_kind, Some(ParsedSpecialKind::NCOP));
+}
+
+#[test]
+fn release_group_repost_suffix_is_ignored() {
+    let parsed = parse_release_metadata(
+        "Series.S01E08.Haunted.Hayride.720p.AMZN.WEBRip.DDP5.1.x264-NTb-postbot",
+    );
+    assert_eq!(parsed.release_group.as_deref(), Some("NTb"));
+}
+
+#[test]
+fn website_prefix_is_removed_before_parsing() {
+    let parsed =
+        parse_release_metadata("[ www.Torrenting.com ] - Series.S03E14.720p.HDTV.X264-DIMENSION");
+    assert_eq!(parsed.release_group.as_deref(), Some("DIMENSION"));
+    assert_eq!(parsed.episode.as_ref().and_then(|ep| ep.season), Some(3));
+    assert_eq!(
+        parsed.normalized_title,
+        "SERIES".to_string()
+    );
 }
 
 #[test]
@@ -1297,7 +1546,7 @@ fn verify_hdrvivid_detection() {
 fn verify_complete_bluray_bd_flag() {
     let p = parse_release_metadata("Yoroi.2025.FRENCH.COMPLETE.BLURAY-HiBOU");
     assert!(p.is_bd_disk);
-    assert_eq!(p.source.as_deref(), Some("BluRay"));
+    assert_eq!(p.source.as_deref(), Some("BRDISK"));
 
     let p = parse_release_metadata("Stolen.Face.1952.COMPLETE.UHD.BLURAY-LWRTD");
     assert!(p.is_bd_disk);
@@ -1589,7 +1838,7 @@ fn tosho_standard_sxxexx() {
         "[EMBER] Kimetsu no Yaiba S04E01 [1080p] [HEVC WEBRip DDP] (Kimetsu no Yaiba: Hashira Geiko-hen)",
     );
     assert_eq!(p.quality.as_deref(), Some("1080p"));
-    assert_eq!(p.source.as_deref(), Some("WEB-DL"));
+    assert_eq!(p.source.as_deref(), Some("WEBRip"));
     assert_eq!(p.video_codec.as_deref(), Some("H.265"));
     assert_eq!(p.audio.as_deref(), Some("DDP"));
     assert_eq!(p.release_group.as_deref(), Some("EMBER"));
@@ -1752,4 +2001,18 @@ fn tosho_galactic_e_range() {
     assert_eq!(ep.absolute_episode, Some(795));
     assert_eq!(ep.episode_numbers[0], 795);
     assert_eq!(*ep.episode_numbers.last().unwrap(), 940);
+}
+
+#[test]
+fn hyphen_delimited_episode_with_title_and_webdl() {
+    let p = parse_release_metadata(
+        "Assassination.Classroom-S02E21-Trust.Time.720p.WEB-DL.",
+    );
+    assert_eq!(p.quality.as_deref(), Some("720p"));
+    assert_eq!(p.source.as_deref(), Some("WEB-DL"));
+    // Release group should NOT be "DL" (WEB-DL is a source, not a group)
+    assert_ne!(p.release_group.as_deref(), Some("DL"));
+    let ep = p.episode.unwrap();
+    assert_eq!(ep.season, Some(2));
+    assert_eq!(ep.episode_numbers, vec![21]);
 }

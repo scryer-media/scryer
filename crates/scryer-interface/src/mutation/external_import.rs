@@ -314,7 +314,6 @@ impl ExternalImportMutations {
                     NewDownloadClientConfig {
                         name: dc.name.clone(),
                         client_type: scryer_type.to_string(),
-                        base_url: Some(base_url),
                         config_json,
                         client_priority: 0,
                         is_enabled: true,

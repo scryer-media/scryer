@@ -534,15 +534,16 @@ impl WasmDownloadClientPluginProvider {
         config: &DownloadClientConfig,
     ) -> Option<Arc<dyn DownloadClient>> {
         let mut manifest = Manifest::new([extism::Wasm::data(loaded.wasm_bytes.clone())]);
+        let computed_base_url = compute_base_url_from_config_json(&config.config_json);
         manifest = apply_allowed_hosts(
             manifest,
             &loaded.descriptor,
-            config.base_url.as_deref(),
+            computed_base_url.as_deref(),
             Some(&config.config_json),
         );
         manifest = manifest.with_timeout(std::time::Duration::from_secs(30));
 
-        if let Some(ref base_url) = config.base_url {
+        if let Some(ref base_url) = computed_base_url {
             manifest = manifest.with_config_key("base_url", base_url);
         }
 
@@ -967,6 +968,42 @@ pub(crate) fn parse_config_json_entries(json_str: &str) -> Result<HashMap<String
     }
 
     Ok(entries)
+}
+
+/// Compute a base URL from host/port/use_ssl/url_base in config_json.
+fn compute_base_url_from_config_json(json_str: &str) -> Option<String> {
+    let parsed: serde_json::Value = serde_json::from_str(json_str).ok()?;
+    let host = parsed.get("host").and_then(|v| v.as_str()).filter(|s| !s.is_empty())?;
+    let port = parsed.get("port").and_then(|v| match v {
+        serde_json::Value::String(s) => Some(s.as_str().to_string()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    });
+    let use_ssl = parsed
+        .get("use_ssl")
+        .or_else(|| parsed.get("useSsl"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let url_base = parsed
+        .get("url_base")
+        .or_else(|| parsed.get("urlBase"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+
+    let protocol = if use_ssl { "https" } else { "http" };
+    let mut url = format!("{protocol}://{host}");
+    if let Some(p) = port.filter(|p| !p.is_empty()) {
+        url.push(':');
+        url.push_str(&p);
+    }
+    if let Some(base) = url_base {
+        let normalized = base.trim_start_matches('/');
+        if !normalized.is_empty() {
+            url.push('/');
+            url.push_str(normalized);
+        }
+    }
+    Some(url)
 }
 
 /// Build the Extism allowed-hosts list for a plugin manifest.

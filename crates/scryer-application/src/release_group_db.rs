@@ -66,9 +66,10 @@ fn source_to_context(source: Option<&str>, is_remux: bool) -> SourceContext {
     if is_remux {
         return SourceContext::Remux;
     }
-    match source {
-        Some("WEB-DL") | Some("WEBRIP") => SourceContext::Web,
-        Some("BLURAY") => SourceContext::BluRay,
+    match source.map(|value| value.trim().to_ascii_uppercase()) {
+        Some(value) if matches!(value.as_str(), "WEB-DL" | "WEBRIP") => SourceContext::Web,
+        Some(value) if matches!(value.as_str(), "BLURAY" | "BRDISK") => SourceContext::BluRay,
+        Some(value) if value == "RAWHD" => SourceContext::Any,
         _ => SourceContext::Any,
     }
 }

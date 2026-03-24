@@ -175,22 +175,22 @@ export type SettingsDownloadClientsSectionProps = {
 const DOWNLOAD_CLIENT_TYPE_LOGO_OPTIONS: DownloadClientTypeLogoOption[] = [
   {
     value: "nzbget",
-    iconSrc: "download-clients/nzbget.svg",
+    iconSrc: "/download-clients/nzbget.svg",
     icon: NzbgetIcon,
   },
   {
     value: "sabnzbd",
-    iconSrc: "download-clients/sabnzbd.svg",
+    iconSrc: "/download-clients/sabnzbd.svg",
     icon: SabnzbdIcon,
   },
   {
     value: "weaver",
-    iconSrc: "download-clients/weaver.webp",
+    iconSrc: "/download-clients/weaver.webp",
     icon: WeaverIcon,
   },
   {
     value: "qbittorrent",
-    iconSrc: "download-clients/qbittorrent.svg",
+    iconSrc: "/download-clients/qbittorrent.svg",
     icon: QBitTorrentIcon,
   },
 ];
@@ -226,6 +226,23 @@ function DownloadClientTypeLogo({
   );
 }
 
+function DownloadClientTypeOptionContent({
+  typeValue,
+  label,
+  className,
+}: {
+  typeValue: string;
+  label: string;
+  className?: string;
+}) {
+  return (
+    <span className={cn("inline-flex min-w-0 items-center gap-2", className)}>
+      <DownloadClientTypeLogo typeValue={typeValue} className="h-4 w-4 shrink-0" />
+      <span className="truncate">{label}</span>
+    </span>
+  );
+}
+
 export function SettingsDownloadClientsSection({
   editingDownloadClientId,
   downloadClientTypeOptions,
@@ -248,8 +265,10 @@ export function SettingsDownloadClientsSection({
   const urlPreview = buildUrlPreview(downloadClientDraft);
   const normalizedClientType = downloadClientDraft.clientType.trim().toLowerCase();
   const configuredClientLabel = downloadClientDraft.clientType.trim();
+  const selectedDownloadClientTypeOption =
+    downloadClientTypeOptions.find((option) => option.value === normalizedClientType);
   const selectedDownloadClientLabel =
-    downloadClientTypeOptions.find((option) => option.value === normalizedClientType)?.label ??
+    selectedDownloadClientTypeOption?.label ??
     (configuredClientLabel || "Download client");
   const hasApiKeyField =
     normalizedClientType === "sabnzbd" || normalizedClientType === "weaver";
@@ -428,12 +447,25 @@ export function SettingsDownloadClientsSection({
                   }}
                 >
                   <SelectTrigger className="w-full">
-                    <SelectValue />
+                    <SelectValue aria-label={selectedDownloadClientLabel}>
+                      <DownloadClientTypeOptionContent
+                        typeValue={downloadClientDraft.clientType}
+                        label={selectedDownloadClientLabel}
+                        className="pr-4"
+                      />
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {downloadClientTypeOptions.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
+                      <SelectItem
+                        key={option.value}
+                        value={option.value}
+                        textValue={option.label}
+                      >
+                        <DownloadClientTypeOptionContent
+                          typeValue={option.value}
+                          label={option.label}
+                        />
                       </SelectItem>
                     ))}
                   </SelectContent>
