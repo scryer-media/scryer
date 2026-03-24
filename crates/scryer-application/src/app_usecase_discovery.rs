@@ -1071,38 +1071,11 @@ pub(crate) fn is_release_blocklisted(
 }
 
 fn normalize_imdb_id(raw: Option<String>) -> Option<String> {
-    let value = raw
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())?;
-
-    if let Some(tt_index) = value.to_ascii_lowercase().find("tt") {
-        let suffix: String = value[tt_index + 2..]
-            .chars()
-            .take_while(|ch| ch.is_ascii_digit())
-            .collect();
-        if !suffix.is_empty() {
-            return Some(format!("tt{suffix}"));
-        }
-    }
-
-    if value.chars().all(|ch| ch.is_ascii_digit()) {
-        Some(format!("tt{value}"))
-    } else {
-        None
-    }
+    raw.as_deref().and_then(crate::normalize::normalize_imdb_id)
 }
 
 fn normalize_numeric_id(raw: Option<String>) -> Option<String> {
-    let value = raw
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())?;
-    let digits: String = value.chars().filter(|ch| ch.is_ascii_digit()).collect();
-
-    if digits.is_empty() {
-        None
-    } else {
-        Some(digits)
-    }
+    raw.as_deref().and_then(crate::normalize::normalize_numeric_id)
 }
 
 impl AppUseCase {

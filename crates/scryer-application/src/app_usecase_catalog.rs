@@ -7,8 +7,8 @@ use std::time::Duration;
 use tokio::fs;
 use tracing::{info, warn};
 
-const DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY: &str = "download_client.routing";
-const LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY: &str = "nzbget.client_routing";
+pub const DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY: &str = "download_client.routing";
+pub const LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY: &str = "nzbget.client_routing";
 const DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY: &str = "download_client.default_category";
 const LEGACY_NZBGET_CATEGORY_SETTING_KEY: &str = "nzbget.category";
 const RECENT_QUEUE_PRIORITY_WINDOW_DAYS: i64 = 14;

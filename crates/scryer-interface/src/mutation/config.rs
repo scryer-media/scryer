@@ -1,4 +1,7 @@
 use async_graphql::{Context, Error, Object, Result as GqlResult};
+use scryer_application::{
+    DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY, LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY,
+};
 use scryer_domain::{Entitlement, NewDownloadClientConfig, NewIndexerConfig};
 use serde_json::{Map, Value, json};
 
@@ -10,8 +13,6 @@ use crate::mappers::{
 use crate::types::*;
 
 const SETTINGS_SCOPE_SYSTEM: &str = "system";
-const DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY: &str = "download_client.routing";
-const LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY: &str = "nzbget.client_routing";
 const DOWNLOAD_CLIENT_ROUTING_SCOPE_IDS: [&str; 3] = ["movie", "series", "anime"];
 
 fn should_seed_download_client_routing(client_type: &str) -> bool {

@@ -61,11 +61,7 @@ impl QualityProfileCriteria {
     /// base `scoring_persona` if no facet-specific override exists.
     pub fn resolve_persona(&self, category: Option<&str>) -> &ScoringPersona {
         if let Some(cat) = category {
-            let key = match cat {
-                "tv" => "series",
-                other => other,
-            };
-            if let Some(persona) = self.facet_persona_overrides.get(key) {
+            if let Some(persona) = self.facet_persona_overrides.get(cat) {
                 return persona;
             }
         }
@@ -870,7 +866,7 @@ fn normalize_media_size_category(category_hint: Option<&str>) -> MediaSizeCatego
 
     match raw.trim().to_ascii_lowercase().as_str() {
         "anime" => MediaSizeCategory::Anime,
-        "tv" | "series" | "show" | "shows" => MediaSizeCategory::Series,
+        "series" => MediaSizeCategory::Series,
         _ => MediaSizeCategory::Movie,
     }
 }

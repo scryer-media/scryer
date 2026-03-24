@@ -193,3 +193,44 @@ pub(crate) fn parse_duration_seconds(raw: &str) -> Option<i64> {
 pub(crate) fn is_http_url(value: &str) -> bool {
     value.starts_with("http://") || value.starts_with("https://")
 }
+
+/// Fetch an NZB file from a URL, validate it looks like XML, and return the raw bytes.
+pub(crate) async fn fetch_nzb_bytes(client: &reqwest::Client, url: &str) -> AppResult<Vec<u8>> {
+    let response = client
+        .get(url)
+        .header("User-Agent", "scryer/0.1")
+        .send()
+        .await
+        .map_err(|err| AppError::Repository(format!("nzb download request failed: {err}")))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.map_err(|err| {
+            AppError::Repository(format!("nzb download response read failed: {err}"))
+        })?;
+        let preview: String = body.chars().take(300).collect();
+        return Err(AppError::Repository(format!(
+            "nzb download failed with status {status}: {preview}"
+        )));
+    }
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|err| AppError::Repository(format!("nzb download body read failed: {err}")))?;
+    if bytes.is_empty() {
+        return Err(AppError::Repository(
+            "nzb download response body was empty".into(),
+        ));
+    }
+
+    let text = String::from_utf8_lossy(&bytes);
+    let trimmed = text.trim_start();
+    if !trimmed.starts_with('<') {
+        return Err(AppError::Repository(
+            "nzb download payload did not look like xml".into(),
+        ));
+    }
+
+    Ok(bytes.to_vec())
+}

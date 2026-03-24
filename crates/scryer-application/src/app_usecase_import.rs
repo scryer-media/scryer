@@ -2633,13 +2633,7 @@ fn extract_parameter(params: &[(String, String)], key: &str) -> Option<String> {
 }
 
 fn normalize_imdb_id(raw_imdb_id: &str) -> Option<String> {
-    let digits: String = raw_imdb_id.chars().filter(|c| c.is_ascii_digit()).collect();
-
-    if digits.is_empty() {
-        return None;
-    }
-
-    Some(format!("tt{}", digits))
+    crate::normalize::normalize_imdb_id(raw_imdb_id)
 }
 
 /// Recursively find all video files under `dir`, optionally filtering out samples.
