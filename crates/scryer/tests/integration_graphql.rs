@@ -531,7 +531,7 @@ async fn graphql_delete_title_cleans_title_workflow_state() {
             release_guid: Some("guid-delete".to_string()),
             added_at: "2026-03-12T00:00:00Z".to_string(),
             delay_until: "2026-03-13T00:00:00Z".to_string(),
-            status: "waiting".to_string(),
+            status: scryer_application::PendingReleaseStatus::Waiting,
             grabbed_at: None,
             source_password: None,
             published_at: None,
