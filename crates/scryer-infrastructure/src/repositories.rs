@@ -1107,6 +1107,37 @@ impl PendingReleaseRepository for SqliteServices {
             .await
     }
 
+    async fn list_standby_pending_releases_for_wanted_item(
+        &self,
+        wanted_item_id: &str,
+    ) -> AppResult<Vec<PendingRelease>> {
+        self.list_standby_pending_releases_for_wanted_item(wanted_item_id)
+            .await
+    }
+
+    async fn delete_standby_pending_releases_for_wanted_item(
+        &self,
+        wanted_item_id: &str,
+    ) -> AppResult<()> {
+        self.delete_standby_pending_releases_for_wanted_item(wanted_item_id)
+            .await
+    }
+
+    async fn list_all_standby_pending_releases(&self) -> AppResult<Vec<PendingRelease>> {
+        self.list_all_standby_pending_releases().await
+    }
+
+    async fn compare_and_set_pending_release_status(
+        &self,
+        id: &str,
+        current_status: &str,
+        next_status: &str,
+        grabbed_at: Option<&str>,
+    ) -> AppResult<bool> {
+        self.compare_and_set_pending_release_status(id, current_status, next_status, grabbed_at)
+            .await
+    }
+
     async fn supersede_pending_releases_for_wanted_item(
         &self,
         wanted_item_id: &str,

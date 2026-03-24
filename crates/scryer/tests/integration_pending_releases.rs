@@ -150,6 +150,72 @@ async fn list_pending_releases_returns_only_waiting() {
 }
 
 #[tokio::test]
+async fn standby_listing_returns_only_standby_rows() {
+    let ctx = TestContext::new().await;
+
+    seed_title(&ctx, "title-1").await;
+    let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Wanted).await;
+    let standby = seed_pending_release(&ctx, &wi.id, "title-1", 500, 0, "standby").await;
+    seed_pending_release(&ctx, &wi.id, "title-1", 300, 6, "waiting").await;
+
+    let pending = ctx
+        .db
+        .list_standby_pending_releases_for_wanted_item(&wi.id)
+        .await
+        .expect("standby list");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].id, standby.id);
+}
+
+#[tokio::test]
+async fn delete_standby_for_wanted_item_leaves_waiting_rows_intact() {
+    let ctx = TestContext::new().await;
+
+    seed_title(&ctx, "title-1").await;
+    let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Wanted).await;
+    let standby = seed_pending_release(&ctx, &wi.id, "title-1", 500, 0, "standby").await;
+    let waiting = seed_pending_release(&ctx, &wi.id, "title-1", 300, 6, "waiting").await;
+
+    ctx.db
+        .delete_standby_pending_releases_for_wanted_item(&wi.id)
+        .await
+        .expect("delete standby");
+
+    assert!(ctx.db.get_pending_release(&standby.id).await.unwrap().is_none());
+    assert_eq!(
+        ctx.db.get_pending_release(&waiting.id).await.unwrap().unwrap().status,
+        "waiting"
+    );
+}
+
+#[tokio::test]
+async fn compare_and_set_pending_release_status_claims_once() {
+    let ctx = TestContext::new().await;
+
+    seed_title(&ctx, "title-1").await;
+    let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Wanted).await;
+    let standby = seed_pending_release(&ctx, &wi.id, "title-1", 500, 0, "standby").await;
+
+    let first = ctx
+        .db
+        .compare_and_set_pending_release_status(&standby.id, "standby", "processing", None)
+        .await
+        .expect("first claim");
+    let second = ctx
+        .db
+        .compare_and_set_pending_release_status(&standby.id, "standby", "processing", None)
+        .await
+        .expect("second claim");
+
+    assert!(first);
+    assert!(!second);
+    assert_eq!(
+        ctx.db.get_pending_release(&standby.id).await.unwrap().unwrap().status,
+        "processing"
+    );
+}
+
+#[tokio::test]
 async fn list_wanted_items_does_not_duplicate_movies_across_syncs() {
     let ctx = TestContext::new().await;
     let app = app_with_pending(&ctx);

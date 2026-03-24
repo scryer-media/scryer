@@ -1483,6 +1483,80 @@ impl SqliteServices {
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
+    pub async fn list_standby_pending_releases_for_wanted_item(
+        &self,
+        wanted_item_id: &str,
+    ) -> AppResult<Vec<scryer_application::PendingRelease>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::ListStandbyPendingReleasesForWantedItem {
+                wanted_item_id: wanted_item_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn delete_standby_pending_releases_for_wanted_item(
+        &self,
+        wanted_item_id: &str,
+    ) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::DeleteStandbyPendingReleasesForWantedItem {
+                wanted_item_id: wanted_item_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn list_all_standby_pending_releases(
+        &self,
+    ) -> AppResult<Vec<scryer_application::PendingRelease>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::ListAllStandbyPendingReleases { reply: reply_tx })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn compare_and_set_pending_release_status(
+        &self,
+        id: &str,
+        current_status: &str,
+        next_status: &str,
+        grabbed_at: Option<&str>,
+    ) -> AppResult<bool> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::CompareAndSetPendingReleaseStatus {
+                id: id.to_string(),
+                current_status: current_status.to_string(),
+                next_status: next_status.to_string(),
+                grabbed_at: grabbed_at.map(str::to_string),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
     pub async fn list_waiting_pending_releases(
         &self,
     ) -> AppResult<Vec<scryer_application::PendingRelease>> {

@@ -7,6 +7,14 @@ use tracing::{info, warn};
 use crate::delay_profile::DelayProfile;
 use crate::types::PendingRelease;
 
+pub(crate) const PENDING_RELEASE_STATUS_WAITING: &str = "waiting";
+pub(crate) const PENDING_RELEASE_STATUS_STANDBY: &str = "standby";
+pub(crate) const PENDING_RELEASE_STATUS_PROCESSING: &str = "processing";
+pub(crate) const PENDING_RELEASE_STATUS_GRABBED: &str = "grabbed";
+pub(crate) const PENDING_RELEASE_STATUS_SUPERSEDED: &str = "superseded";
+pub(crate) const PENDING_RELEASE_STATUS_EXPIRED: &str = "expired";
+pub(crate) const PENDING_RELEASE_STATUS_DISMISSED: &str = "dismissed";
+
 impl AppUseCase {
     /// Load delay profiles from settings.
     pub(crate) async fn load_delay_profiles(&self) -> Vec<DelayProfile> {
@@ -68,7 +76,7 @@ impl AppUseCase {
             release_guid: release_guid.map(str::to_string),
             added_at: now.to_rfc3339(),
             delay_until: delay_until.to_rfc3339(),
-            status: "waiting".to_string(),
+            status: PENDING_RELEASE_STATUS_WAITING.to_string(),
             grabbed_at: None,
             source_password: source_password.map(str::to_string),
             published_at: published_at.map(str::to_string),
@@ -268,7 +276,7 @@ impl AppUseCase {
                 "pending release {id} not found"
             )));
         };
-        if pr.status != "waiting" {
+        if pr.status != PENDING_RELEASE_STATUS_WAITING {
             return Err(AppError::Repository(format!(
                 "pending release {id} is not in waiting status"
             )));
@@ -297,14 +305,14 @@ impl AppUseCase {
                 "pending release {id} not found"
             )));
         };
-        if pr.status != "waiting" {
+        if pr.status != PENDING_RELEASE_STATUS_WAITING {
             return Err(AppError::Repository(format!(
                 "pending release {id} is not in waiting status"
             )));
         }
         self.services
             .pending_releases
-            .update_pending_release_status(id, "dismissed", None)
+            .update_pending_release_status(id, PENDING_RELEASE_STATUS_DISMISSED, None)
             .await?;
         Ok(true)
     }
@@ -424,7 +432,8 @@ impl AppUseCase {
             title = title.name.as_str(),
             release = pr.release_title.as_str(),
             score = pr.release_score,
-            "pending release: grabbing after delay expired"
+            status = pr.status.as_str(),
+            "persisted candidate: grabbing"
         );
 
         let grab_result = self
@@ -509,7 +518,7 @@ impl AppUseCase {
                         None,
                         Some(&now.to_rfc3339()),
                         wanted.search_count,
-                        Some(pr.release_score),
+                        wanted.current_score,
                         Some(&grabbed_json),
                     )
                     .await;

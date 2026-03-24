@@ -89,6 +89,54 @@ pub(crate) async fn list_pending_releases_for_wanted_item_query(
     Ok(out)
 }
 
+pub(crate) async fn list_standby_pending_releases_for_wanted_item_query(
+    pool: &SqlitePool,
+    wanted_item_id: &str,
+) -> AppResult<Vec<PendingRelease>> {
+    let rows: Vec<SqliteRow> = sqlx::query(
+        "SELECT id, wanted_item_id, title_id, release_title, release_url, release_size_bytes,
+                source_kind, release_score, scoring_log_json, indexer_source, release_guid,
+                added_at, delay_until, status, grabbed_at,
+                source_password, published_at, info_hash
+         FROM pending_releases
+         WHERE wanted_item_id = ? AND status = 'standby'
+         ORDER BY release_score DESC, added_at ASC",
+    )
+    .bind(wanted_item_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in &rows {
+        out.push(row_to_pending_release(row)?);
+    }
+    Ok(out)
+}
+
+pub(crate) async fn list_all_standby_pending_releases_query(
+    pool: &SqlitePool,
+) -> AppResult<Vec<PendingRelease>> {
+    let rows: Vec<SqliteRow> = sqlx::query(
+        "SELECT id, wanted_item_id, title_id, release_title, release_url, release_size_bytes,
+                source_kind, release_score, scoring_log_json, indexer_source, release_guid,
+                added_at, delay_until, status, grabbed_at,
+                source_password, published_at, info_hash
+         FROM pending_releases
+         WHERE status = 'standby'
+         ORDER BY wanted_item_id ASC, release_score DESC, added_at ASC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in &rows {
+        out.push(row_to_pending_release(row)?);
+    }
+    Ok(out)
+}
+
 pub(crate) async fn update_pending_release_status_query(
     pool: &SqlitePool,
     id: &str,
@@ -104,6 +152,29 @@ pub(crate) async fn update_pending_release_status_query(
         .map_err(|err| AppError::Repository(err.to_string()))?;
 
     Ok(())
+}
+
+pub(crate) async fn compare_and_set_pending_release_status_query(
+    pool: &SqlitePool,
+    id: &str,
+    current_status: &str,
+    next_status: &str,
+    grabbed_at: Option<&str>,
+) -> AppResult<bool> {
+    let result = sqlx::query(
+        "UPDATE pending_releases
+         SET status = ?, grabbed_at = ?
+         WHERE id = ? AND status = ?",
+    )
+    .bind(next_status)
+    .bind(grabbed_at)
+    .bind(id)
+    .bind(current_status)
+    .execute(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(result.rows_affected() > 0)
 }
 
 pub(crate) async fn supersede_pending_releases_for_wanted_item_query(
@@ -176,6 +247,19 @@ pub(crate) async fn delete_pending_releases_for_title_query(
 ) -> AppResult<()> {
     sqlx::query("DELETE FROM pending_releases WHERE title_id = ?")
         .bind(title_id)
+        .execute(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(())
+}
+
+pub(crate) async fn delete_standby_pending_releases_for_wanted_item_query(
+    pool: &SqlitePool,
+    wanted_item_id: &str,
+) -> AppResult<()> {
+    sqlx::query("DELETE FROM pending_releases WHERE wanted_item_id = ? AND status = 'standby'")
+        .bind(wanted_item_id)
         .execute(pool)
         .await
         .map_err(|err| AppError::Repository(err.to_string()))?;

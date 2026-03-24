@@ -581,6 +581,24 @@ pub(crate) enum DbCommand {
         grabbed_at: Option<String>,
         reply: Sender<AppResult<()>>,
     },
+    ListStandbyPendingReleasesForWantedItem {
+        wanted_item_id: String,
+        reply: Sender<AppResult<Vec<PendingRelease>>>,
+    },
+    DeleteStandbyPendingReleasesForWantedItem {
+        wanted_item_id: String,
+        reply: Sender<AppResult<()>>,
+    },
+    ListAllStandbyPendingReleases {
+        reply: Sender<AppResult<Vec<PendingRelease>>>,
+    },
+    CompareAndSetPendingReleaseStatus {
+        id: String,
+        current_status: String,
+        next_status: String,
+        grabbed_at: Option<String>,
+        reply: Sender<AppResult<bool>>,
+    },
     SupersedePendingReleasesForWantedItem {
         wanted_item_id: String,
         except_id: String,
@@ -1894,6 +1912,56 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                             &pool,
                             &id,
                             &status,
+                            grabbed_at.as_deref(),
+                        )
+                        .await,
+                    );
+                }
+                DbCommand::ListStandbyPendingReleasesForWantedItem {
+                    wanted_item_id,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        crate::queries::pending_releases::list_standby_pending_releases_for_wanted_item_query(
+                            &pool,
+                            &wanted_item_id,
+                        )
+                        .await,
+                    );
+                }
+                DbCommand::DeleteStandbyPendingReleasesForWantedItem {
+                    wanted_item_id,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        crate::queries::pending_releases::delete_standby_pending_releases_for_wanted_item_query(
+                            &pool,
+                            &wanted_item_id,
+                        )
+                        .await,
+                    );
+                }
+                DbCommand::ListAllStandbyPendingReleases { reply } => {
+                    let _ = reply.send(
+                        crate::queries::pending_releases::list_all_standby_pending_releases_query(
+                            &pool,
+                        )
+                        .await,
+                    );
+                }
+                DbCommand::CompareAndSetPendingReleaseStatus {
+                    id,
+                    current_status,
+                    next_status,
+                    grabbed_at,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        crate::queries::pending_releases::compare_and_set_pending_release_status_query(
+                            &pool,
+                            &id,
+                            &current_status,
+                            &next_status,
                             grabbed_at.as_deref(),
                         )
                         .await,

@@ -661,6 +661,27 @@ impl PendingReleaseRepository for NullPendingReleaseRepository {
     ) -> AppResult<()> {
         Ok(())
     }
+    async fn list_standby_pending_releases_for_wanted_item(
+        &self,
+        _: &str,
+    ) -> AppResult<Vec<PendingRelease>> {
+        Ok(vec![])
+    }
+    async fn delete_standby_pending_releases_for_wanted_item(&self, _: &str) -> AppResult<()> {
+        Ok(())
+    }
+    async fn list_all_standby_pending_releases(&self) -> AppResult<Vec<PendingRelease>> {
+        Ok(vec![])
+    }
+    async fn compare_and_set_pending_release_status(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
     async fn supersede_pending_releases_for_wanted_item(&self, _: &str, _: &str) -> AppResult<()> {
         Ok(())
     }

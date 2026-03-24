@@ -1,9 +1,14 @@
 use super::*;
 use crate::acquisition_policy::{AcquisitionThresholds, compute_search_schedule, evaluate_upgrade};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use scryer_domain::NotificationEventType;
 use std::collections::HashMap;
 use tracing::{info, trace, warn};
+
+const FAILED_GRAB_OLD_TITLE_DAYS: i64 = 14;
+const FAILED_GRAB_RESEARCH_COOLDOWN_MINUTES: i64 = 20;
+const MAX_STANDBY_CANDIDATES_PER_WANTED_ITEM: usize = 5;
+const STANDBY_RETENTION_HOURS: i64 = 24;
 
 impl AppUseCase {
     /// Sync the wanted_items table with current monitored state.
@@ -498,7 +503,7 @@ async fn check_grabbed_for_failures(app: &AppUseCase, dl_snapshot: &DownloadClie
                 title_id = item.title_id.as_str(),
                 release = release_title.as_str(),
                 reason = failed_item.reason.as_str(),
-                "grabbed release failed in download client, re-queuing for search"
+                "grabbed release failed in download client"
             );
 
             // Blocklist the failed release
@@ -533,36 +538,63 @@ async fn check_grabbed_for_failures(app: &AppUseCase, dl_snapshot: &DownloadClie
                 })
                 .await;
 
-            // Re-queue for immediate re-search
-            let _ = app
-                .services
-                .wanted_items
-                .update_wanted_item_status(
-                    &item.id,
-                    "wanted",
-                    Some(&now_str),
-                    None,
-                    item.search_count,
-                    item.current_score,
-                    None,
-                )
-                .await;
+            let recovered_from_standby = recover_from_standby_candidates(
+                app,
+                item,
+                &release_title,
+                dl_snapshot,
+                &now,
+            )
+            .await;
 
-            let _ = app
-                .services
-                .record_activity_event(
-                    None,
-                    Some(item.title_id.clone()),
-                    None,
-                    ActivityKind::AcquisitionDownloadFailed,
+            if !recovered_from_standby {
+                let immediate_research = should_research_failed_grab(item, &now);
+                let next_search_at = if immediate_research {
+                    now_str.clone()
+                } else {
+                    (now + Duration::minutes(FAILED_GRAB_RESEARCH_COOLDOWN_MINUTES))
+                        .to_rfc3339()
+                };
+
+                let _ = app
+                    .services
+                    .wanted_items
+                    .update_wanted_item_status(
+                        &item.id,
+                        "wanted",
+                        Some(&next_search_at),
+                        item.last_search_at.as_deref(),
+                        item.search_count,
+                        item.current_score,
+                        None,
+                    )
+                    .await;
+
+                let message = if immediate_research {
                     format!(
-                        "download failed for '{}', re-queuing for search",
+                        "download failed for '{}'; standby exhausted, re-queuing for fresh search",
                         release_title
-                    ),
-                    ActivitySeverity::Warning,
-                    vec![ActivityChannel::WebUi, ActivityChannel::Toast],
-                )
-                .await;
+                    )
+                } else {
+                    format!(
+                        "download failed for '{}'; standby exhausted, deferring reacquisition",
+                        release_title
+                    )
+                };
+
+                let _ = app
+                    .services
+                    .record_activity_event(
+                        None,
+                        Some(item.title_id.clone()),
+                        None,
+                        ActivityKind::AcquisitionDownloadFailed,
+                        message,
+                        ActivitySeverity::Warning,
+                        vec![ActivityChannel::WebUi, ActivityChannel::Toast],
+                    )
+                    .await;
+            }
 
             if let Ok(Some(title)) = app.services.titles.get_by_id(&item.title_id).await
                 && app
@@ -598,6 +630,8 @@ async fn check_grabbed_for_failures(app: &AppUseCase, dl_snapshot: &DownloadClie
 
 /// Process due wanted items: search indexers and auto-grab best releases.
 async fn process_due_wanted_items(app: &AppUseCase) {
+    prune_standby_candidates(app).await;
+
     // Check for download failures first — re-queues failed items with
     // next_search_at=NOW so they appear in the due list below.
     let dl_snapshot = DownloadClientSnapshot::fetch(app).await;
@@ -727,6 +761,83 @@ async fn process_due_wanted_items(app: &AppUseCase) {
                 item.grabbed_release.as_deref(),
             )
             .await;
+    }
+}
+
+async fn prune_standby_candidates(app: &AppUseCase) {
+    let all_standby = app
+        .services
+        .pending_releases
+        .list_all_standby_pending_releases()
+        .await
+        .unwrap_or_default();
+
+    if all_standby.is_empty() {
+        return;
+    }
+
+    let now = Utc::now();
+    let cutoff = now - Duration::hours(STANDBY_RETENTION_HOURS);
+    let mut grouped: std::collections::HashMap<String, Vec<PendingRelease>> =
+        std::collections::HashMap::new();
+    for release in all_standby {
+        grouped
+            .entry(release.wanted_item_id.clone())
+            .or_default()
+            .push(release);
+    }
+
+    for (wanted_item_id, mut releases) in grouped {
+        let wanted = app
+            .services
+            .wanted_items
+            .get_wanted_item_by_id(&wanted_item_id)
+            .await
+            .ok()
+            .flatten();
+
+        let Some(wanted) = wanted else {
+            let _ = app
+                .services
+                .pending_releases
+                .delete_standby_pending_releases_for_wanted_item(&wanted_item_id)
+                .await;
+            continue;
+        };
+
+        if wanted.status != WantedStatus::Grabbed {
+            let _ = app
+                .services
+                .pending_releases
+                .delete_standby_pending_releases_for_wanted_item(&wanted_item_id)
+                .await;
+            continue;
+        }
+
+        releases.sort_by(|left, right| right.added_at.cmp(&left.added_at));
+        for (index, release) in releases.iter().enumerate() {
+            let added_at = crate::quality_profile::parse_published_at(&release.added_at);
+            let is_stale = added_at.is_none_or(|added_at| added_at < cutoff);
+            let is_overflow = index >= MAX_STANDBY_CANDIDATES_PER_WANTED_ITEM;
+            if is_stale || is_overflow {
+                let _ = app
+                    .services
+                    .pending_releases
+                    .update_pending_release_status(
+                        &release.id,
+                        crate::app_usecase_pending::PENDING_RELEASE_STATUS_EXPIRED,
+                        None,
+                    )
+                    .await;
+            }
+        }
+    }
+}
+
+impl AppUseCase {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) async fn run_acquisition_cycle_once(&self) {
+        process_due_wanted_items(self).await;
     }
 }
 
@@ -1375,7 +1486,7 @@ async fn process_single_wanted_item(
 
     let title_norm = crate::app_usecase_rss::normalize_for_matching(&title.name);
 
-    for candidate in &results {
+    for (candidate_index, candidate) in results.iter().enumerate() {
         let is_allowed = candidate
             .quality_profile_decision
             .as_ref()
@@ -1774,6 +1885,22 @@ async fn process_single_wanted_item(
                     )
                     .await;
 
+                    persist_standby_candidates(
+                        app,
+                        item,
+                        &title,
+                        &results,
+                        candidate_index + 1,
+                        now,
+                        &dl_snapshot,
+                        &db_blocklist,
+                        &thresholds,
+                        &existing_files,
+                        min_age_minutes,
+                        &title_norm,
+                    )
+                    .await;
+
                 {
                     let mut grab_meta = HashMap::new();
                     grab_meta.insert("title_name".to_string(), serde_json::json!(title.name));
@@ -1922,6 +2049,327 @@ async fn process_single_wanted_item(
         .await;
 
     Ok(())
+}
+
+async fn recover_from_standby_candidates(
+    app: &AppUseCase,
+    item: &WantedItem,
+    failed_release_title: &str,
+    dl_snapshot: &DownloadClientSnapshot,
+    now: &DateTime<Utc>,
+) -> bool {
+    let standby_releases = app
+        .services
+        .pending_releases
+        .list_standby_pending_releases_for_wanted_item(&item.id)
+        .await
+        .unwrap_or_default();
+
+    for standby in standby_releases {
+        let mut effective_wanted = item.clone();
+        effective_wanted.grabbed_release = None;
+        effective_wanted.last_search_at = None;
+
+        let claimed = app
+            .services
+            .pending_releases
+            .compare_and_set_pending_release_status(
+                &standby.id,
+                crate::app_usecase_pending::PENDING_RELEASE_STATUS_STANDBY,
+                crate::app_usecase_pending::PENDING_RELEASE_STATUS_PROCESSING,
+                None,
+            )
+            .await
+            .unwrap_or(false);
+        if !claimed {
+            continue;
+        }
+
+        if dl_snapshot.is_active(&standby.release_title) {
+            let _ = app
+                .services
+                .pending_releases
+                .update_pending_release_status(
+                    &standby.id,
+                    crate::app_usecase_pending::PENDING_RELEASE_STATUS_EXPIRED,
+                    None,
+                )
+                .await;
+            continue;
+        }
+
+        info!(
+            title_id = item.title_id.as_str(),
+            failed_release = failed_release_title,
+            standby_release = standby.release_title.as_str(),
+            "attempting standby reacquisition"
+        );
+
+        match app.try_grab_pending_release(&effective_wanted, &standby, now).await {
+            Ok(true) => {
+                let grabbed_at = now.to_rfc3339();
+                let _ = app
+                    .services
+                    .pending_releases
+                    .update_pending_release_status(
+                        &standby.id,
+                        crate::app_usecase_pending::PENDING_RELEASE_STATUS_GRABBED,
+                        Some(&grabbed_at),
+                    )
+                    .await;
+
+                let siblings = app
+                    .services
+                    .pending_releases
+                    .list_standby_pending_releases_for_wanted_item(&item.id)
+                    .await
+                    .unwrap_or_default();
+                for sibling in siblings {
+                    if sibling.id == standby.id {
+                        continue;
+                    }
+                    let _ = app
+                        .services
+                        .pending_releases
+                        .update_pending_release_status(
+                            &sibling.id,
+                            crate::app_usecase_pending::PENDING_RELEASE_STATUS_SUPERSEDED,
+                            None,
+                        )
+                        .await;
+                }
+
+                let _ = app
+                    .services
+                    .record_activity_event(
+                        None,
+                        Some(item.title_id.clone()),
+                        None,
+                        ActivityKind::AcquisitionCandidateAccepted,
+                        format!(
+                            "standby reacquisition grabbed '{}' after '{}' failed",
+                            standby.release_title, failed_release_title
+                        ),
+                        ActivitySeverity::Success,
+                        vec![ActivityChannel::WebUi, ActivityChannel::Toast],
+                    )
+                    .await;
+
+                return true;
+            }
+            Ok(false) | Err(_) => {
+                let _ = app
+                    .services
+                    .pending_releases
+                    .update_pending_release_status(
+                        &standby.id,
+                        crate::app_usecase_pending::PENDING_RELEASE_STATUS_EXPIRED,
+                        None,
+                    )
+                    .await;
+            }
+        }
+    }
+
+    false
+}
+
+async fn persist_standby_candidates(
+    app: &AppUseCase,
+    item: &WantedItem,
+    title: &Title,
+    results: &[IndexerSearchResult],
+    start_index: usize,
+    now: &DateTime<Utc>,
+    dl_snapshot: &DownloadClientSnapshot,
+    db_blocklist: &std::collections::HashSet<String>,
+    thresholds: &AcquisitionThresholds,
+    existing_files: &[TitleMediaFile],
+    min_age_minutes: i64,
+    title_norm: &str,
+) {
+    let _ = app
+        .services
+        .pending_releases
+        .delete_standby_pending_releases_for_wanted_item(&item.id)
+        .await;
+
+    let mut persisted = 0usize;
+    let mut seen_source_hints = std::collections::HashSet::new();
+
+    for candidate in results.iter().skip(start_index) {
+        if persisted >= MAX_STANDBY_CANDIDATES_PER_WANTED_ITEM {
+            break;
+        }
+
+        let is_allowed = candidate
+            .quality_profile_decision
+            .as_ref()
+            .map(|decision| decision.allowed)
+            .unwrap_or(false);
+        if !is_allowed {
+            continue;
+        }
+
+        if !crate::app_usecase_rss::normalize_for_matching(&candidate.title).contains(title_norm) {
+            continue;
+        }
+
+        let candidate_score = candidate
+            .quality_profile_decision
+            .as_ref()
+            .map(|decision| decision.preference_score)
+            .unwrap_or(0);
+        if candidate_score < 0 {
+            break;
+        }
+
+        let decision = evaluate_upgrade(
+            candidate_score,
+            item.current_score,
+            true,
+            item.last_search_at.as_deref(),
+            now,
+            thresholds,
+        );
+        if !decision.is_accept() {
+            continue;
+        }
+
+        if dl_snapshot.is_active(&candidate.title) {
+            continue;
+        }
+
+        if db_blocklist.contains(&candidate.title.to_ascii_lowercase()) {
+            continue;
+        }
+
+        if crate::acquisition_policy::should_skip_repack_group_mismatch(
+            candidate,
+            existing_files,
+            item.episode_id.as_deref(),
+        ) {
+            continue;
+        }
+
+        if min_age_minutes > 0
+            && crate::delay_profile::is_usenet_source(candidate.source_kind)
+            && let Some(published) = candidate
+                .published_at
+                .as_deref()
+                .and_then(crate::quality_profile::parse_published_at)
+        {
+            let age = (*now - published).num_minutes();
+            if age < min_age_minutes {
+                continue;
+            }
+        }
+
+        let source_hint = candidate
+            .download_url
+            .clone()
+            .or_else(|| candidate.link.clone());
+        let Some(source_hint_value) = source_hint else {
+            continue;
+        };
+        if !seen_source_hints.insert(source_hint_value.clone()) {
+            continue;
+        }
+
+        let scoring_log_json = candidate.quality_profile_decision.as_ref().and_then(|decision| {
+            serde_json::to_string(
+                &decision
+                    .scoring_log
+                    .iter()
+                    .map(|entry| serde_json::json!({"code": entry.code, "delta": entry.delta}))
+                    .collect::<Vec<_>>(),
+            )
+            .ok()
+        });
+
+        let standby = PendingRelease {
+            id: Id::new().0,
+            wanted_item_id: item.id.clone(),
+            title_id: title.id.clone(),
+            release_title: candidate.title.clone(),
+            release_url: Some(source_hint_value),
+            source_kind: candidate.source_kind,
+            release_size_bytes: candidate.size_bytes,
+            release_score: candidate_score,
+            scoring_log_json,
+            indexer_source: Some(candidate.source.clone()),
+            release_guid: candidate.guid.clone(),
+            added_at: now.to_rfc3339(),
+            delay_until: now.to_rfc3339(),
+            status: crate::app_usecase_pending::PENDING_RELEASE_STATUS_STANDBY.to_string(),
+            grabbed_at: None,
+            source_password: candidate.password_hint.clone(),
+            published_at: candidate.published_at.clone(),
+            info_hash: candidate
+                .extra
+                .get("info_hash")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+        };
+
+        if app
+            .services
+            .pending_releases
+            .insert_pending_release(&standby)
+            .await
+            .is_ok()
+        {
+            persisted += 1;
+        }
+    }
+
+    if persisted > 0 {
+        info!(
+            wanted_item_id = item.id.as_str(),
+            title_id = title.id.as_str(),
+            standby_candidates = persisted,
+            "persisted standby candidates for failed-download recovery"
+        );
+    }
+}
+
+fn should_research_failed_grab(item: &WantedItem, now: &DateTime<Utc>) -> bool {
+    !is_old_failed_grab_title(item, now) && is_last_search_stale(item.last_search_at.as_deref(), now)
+}
+
+fn is_old_failed_grab_title(item: &WantedItem, now: &DateTime<Utc>) -> bool {
+    let Some(baseline_date) = item.baseline_date.as_deref() else {
+        return false;
+    };
+    let Some(parsed_date) = parse_failed_grab_baseline_date(baseline_date) else {
+        return false;
+    };
+    now.date_naive().signed_duration_since(parsed_date).num_days() > FAILED_GRAB_OLD_TITLE_DAYS
+}
+
+fn is_last_search_stale(last_search_at: Option<&str>, now: &DateTime<Utc>) -> bool {
+    let Some(last_search_at) = last_search_at else {
+        return true;
+    };
+    let Some(last_search_at) = crate::quality_profile::parse_published_at(last_search_at) else {
+        return true;
+    };
+    (*now - last_search_at).num_minutes() > FAILED_GRAB_RESEARCH_COOLDOWN_MINUTES
+}
+
+fn parse_failed_grab_baseline_date(raw: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(raw.trim(), "%Y-%m-%d")
+        .ok()
+        .or_else(|| {
+            chrono::DateTime::parse_from_rfc3339(raw)
+                .ok()
+                .map(|value| value.date_naive())
+        })
+        .or_else(|| {
+            chrono::DateTime::parse_from_rfc2822(raw)
+                .ok()
+                .map(|value| value.date_naive())
+        })
 }
 
 struct SearchQueryResult {

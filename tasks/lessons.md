@@ -35,6 +35,9 @@
 - **When reconstructing tracked-download state, preserve a durable import-history fallback until terminal tracked state persistence is proven end-to-end.** Otherwise a completed import can be resurrected after restart and re-enter the workflow incorrectly.
 - **In import verification, completion should be based on expected logical units being satisfied, not on the mere presence of rejected artifacts.** Extra rejected files must not block a fully satisfied download.
 
+## Planning & Type Design
+- **When converting string workflow states, follow the existing serde-enum pattern already used in the codebase instead of inventing new constant-only patterns.** Keep text serialization at the persistence boundary and make the enum authoritative inside Rust.
+
 ## Indexer Search Contracts
 - **Do not bake alias language or script policy into core search query construction.** Core should pass canonical title plus tagged alias context through to indexer plugins, and plugins should decide whether to prefer romanized Japanese, Korean aliases, or other provider-specific naming conventions.
 - **Pass an explicit normalized facet through the plugin search contract.** Plugins should get `movie` / `series` / `anime` directly instead of reverse-engineering semantics from category strings or host-side ID heuristics.

@@ -230,3 +230,59 @@ fn released_malformed_digital_date_falls_back_to_cinema() {
         &now_utc()
     ));
 }
+
+#[test]
+fn old_failed_grab_titles_do_not_research_immediately() {
+    let now = now_utc();
+    let item = WantedItem {
+        id: "wanted-1".to_string(),
+        title_id: "title-1".to_string(),
+        title_name: None,
+        episode_id: None,
+        collection_id: None,
+        season_number: None,
+        media_type: "movie".to_string(),
+        search_phase: "primary".to_string(),
+        next_search_at: None,
+        last_search_at: Some((now - chrono::Duration::minutes(45)).to_rfc3339()),
+        search_count: 1,
+        baseline_date: Some(days_ago(30)),
+        status: WantedStatus::Grabbed,
+        grabbed_release: None,
+        current_score: Some(100),
+        created_at: now.to_rfc3339(),
+        updated_at: now.to_rfc3339(),
+    };
+
+    assert!(is_old_failed_grab_title(&item, &now));
+    assert!(!should_research_failed_grab(&item, &now));
+}
+
+#[test]
+fn fresh_failed_grab_titles_require_stale_last_search() {
+    let now = now_utc();
+    let mut item = WantedItem {
+        id: "wanted-1".to_string(),
+        title_id: "title-1".to_string(),
+        title_name: None,
+        episode_id: None,
+        collection_id: None,
+        season_number: None,
+        media_type: "movie".to_string(),
+        search_phase: "primary".to_string(),
+        next_search_at: None,
+        last_search_at: Some((now - chrono::Duration::minutes(10)).to_rfc3339()),
+        search_count: 1,
+        baseline_date: Some(days_ago(3)),
+        status: WantedStatus::Grabbed,
+        grabbed_release: None,
+        current_score: Some(100),
+        created_at: now.to_rfc3339(),
+        updated_at: now.to_rfc3339(),
+    };
+
+    assert!(!should_research_failed_grab(&item, &now));
+
+    item.last_search_at = Some((now - chrono::Duration::minutes(25)).to_rfc3339());
+    assert!(should_research_failed_grab(&item, &now));
+}
