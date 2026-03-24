@@ -96,7 +96,10 @@ export function SettingsDelayProfilesSection({
               <TableHeader>
                 <TableRow>
                   <TableHead>{t("settings.delayProfileNameLabel")}</TableHead>
-                  <TableHead>{t("settings.delayProfileHoursLabel")}</TableHead>
+                  <TableHead>{t("settings.delayProfileUsenetDelay")}</TableHead>
+                  <TableHead>{t("settings.delayProfileTorrentDelay")}</TableHead>
+                  <TableHead>{t("settings.delayProfilePreferred")}</TableHead>
+                  <TableHead>{t("settings.delayProfileMinAge")}</TableHead>
                   <TableHead>{t("settings.delayProfileBypassLabel")}</TableHead>
                   <TableHead>{t("settings.delayProfileFacetsLabel")}</TableHead>
                   <TableHead>{t("settings.delayProfilePriorityLabel")}</TableHead>
@@ -108,7 +111,10 @@ export function SettingsDelayProfilesSection({
                 {profiles.map((profile) => (
                   <TableRow key={profile.id}>
                     <TableCell className="font-medium">{profile.name}</TableCell>
-                    <TableCell>{profile.delay_hours}h</TableCell>
+                    <TableCell>{profile.usenet_delay_minutes}m</TableCell>
+                    <TableCell>{profile.torrent_delay_minutes}m</TableCell>
+                    <TableCell>{profile.preferred_protocol}</TableCell>
+                    <TableCell>{profile.min_age_minutes > 0 ? `${profile.min_age_minutes}m` : "—"}</TableCell>
                     <TableCell>
                       {profile.bypass_score_threshold != null
                         ? `≥ ${profile.bypass_score_threshold}`
@@ -174,17 +180,68 @@ export function SettingsDelayProfilesSection({
               />
             </div>
 
-            {/* Delay hours */}
+            {/* Protocol delays */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="dp-usenet-delay">{t("settings.delayProfileUsenetDelay")}</Label>
+                <Input
+                  id="dp-usenet-delay"
+                  {...integerInputProps}
+                  value={draft.usenet_delay_minutes}
+                  onChange={(e) => updateField("usenet_delay_minutes", parseIntegerInput(e.target.value))}
+                />
+                <p className="text-muted-foreground text-xs">
+                  {t("settings.delayProfileUsenetDelayHelp")}
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="dp-torrent-delay">{t("settings.delayProfileTorrentDelay")}</Label>
+                <Input
+                  id="dp-torrent-delay"
+                  {...integerInputProps}
+                  value={draft.torrent_delay_minutes}
+                  onChange={(e) => updateField("torrent_delay_minutes", parseIntegerInput(e.target.value))}
+                />
+                <p className="text-muted-foreground text-xs">
+                  {t("settings.delayProfileTorrentDelayHelp")}
+                </p>
+              </div>
+            </div>
+
+            {/* Preferred protocol */}
             <div className="space-y-1.5">
-              <Label htmlFor="dp-hours">{t("settings.delayProfileHoursLabel")}</Label>
+              <Label>{t("settings.delayProfilePreferred")}</Label>
+              <div className="flex gap-4">
+                {(["usenet", "torrent"] as const).map((proto) => (
+                  <label key={proto} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="preferred_protocol"
+                      value={proto}
+                      checked={draft.preferred_protocol === proto}
+                      onChange={() => updateField("preferred_protocol", proto)}
+                      className="accent-primary"
+                    />
+                    {proto === "usenet" ? "Usenet" : "Torrent"}
+                  </label>
+                ))}
+              </div>
+              <p className="text-muted-foreground text-xs">
+                {t("settings.delayProfilePreferredHelp")}
+              </p>
+            </div>
+
+            {/* Minimum age (usenet) */}
+            <div className="space-y-1.5">
+              <Label htmlFor="dp-min-age">{t("settings.delayProfileMinAge")}</Label>
               <Input
-                id="dp-hours"
+                id="dp-min-age"
                 {...integerInputProps}
-                value={draft.delay_hours}
-                onChange={(e) => updateField("delay_hours", parseIntegerInput(e.target.value))}
+                value={draft.min_age_minutes}
+                onChange={(e) => updateField("min_age_minutes", parseIntegerInput(e.target.value))}
               />
               <p className="text-muted-foreground text-xs">
-                {t("settings.delayProfileHoursHelp")}
+                {t("settings.delayProfileMinAgeHelp")}
               </p>
             </div>
 

@@ -396,6 +396,24 @@ impl SqliteServices {
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
+    pub async fn delete_download_submission_by_client_item_id(
+        &self,
+        download_client_item_id: &str,
+    ) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::DeleteDownloadSubmissionByClientItemId {
+                download_client_item_id: download_client_item_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
     #[expect(clippy::too_many_arguments)]
     pub async fn ensure_setting_definition(
         &self,

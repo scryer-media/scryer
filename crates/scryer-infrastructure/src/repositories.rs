@@ -948,6 +948,11 @@ impl DownloadSubmissionRepository for SqliteServices {
     async fn delete_for_title(&self, title_id: &str) -> AppResult<()> {
         self.delete_download_submissions_for_title(title_id).await
     }
+
+    async fn delete_by_client_item_id(&self, download_client_item_id: &str) -> AppResult<()> {
+        self.delete_download_submission_by_client_item_id(download_client_item_id)
+            .await
+    }
 }
 
 #[async_trait]

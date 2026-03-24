@@ -27,7 +27,8 @@ pub struct NzbgetDownloadClient {
 
 #[derive(Clone, Copy)]
 struct NzbgetAppendRequest<'a> {
-    job_id: &'a str,
+    /// JSON-RPC request correlation ID (not the NZBGet queue ID).
+    request_id: &'a str,
     title_name: &'a str,
     nzb_filename: &'a str,
     source_for_payload: &'a str,
@@ -382,7 +383,7 @@ impl NzbgetDownloadClient {
         debug!(
             endpoint = endpoint.as_str(),
             nzb_id = result,
-            job_id = append_request.job_id,
+            job_id = append_request.request_id,
             title = append_request.title_name,
             category = append_request.category,
             auto_category = append_request.use_auto_category,
@@ -741,7 +742,7 @@ impl DownloadClient for NzbgetDownloadClient {
         request: &DownloadClientAddRequest,
     ) -> AppResult<DownloadGrabResult> {
         let title = &request.title;
-        let job_id = scryer_domain::Id::new().0;
+        let request_id = scryer_domain::Id::new().0;
         let source_hint = request
             .source_hint
             .clone()
@@ -814,7 +815,7 @@ impl DownloadClient for NzbgetDownloadClient {
         let use_auto_category = self.append_requires_auto_category().await;
         let queue_priority = nzbget_queue_priority(request.queue_priority.as_deref());
         let append_request = NzbgetAppendRequest {
-            job_id: &job_id,
+            request_id: &request_id,
             title_name: title.name.as_str(),
             nzb_filename: &nzb_filename,
             source_for_payload: &source_for_payload,
@@ -824,7 +825,7 @@ impl DownloadClient for NzbgetDownloadClient {
             use_auto_category,
         };
 
-        match self.send_append_request(&append_request).await {
+        let nzbget_id = match self.send_append_request(&append_request).await {
             Ok(queue_id) => queue_id,
             Err(err) if is_nzbget_invalid_procedure_error(&err) => {
                 let retry_use_auto_category = !append_request.use_auto_category;
@@ -843,8 +844,11 @@ impl DownloadClient for NzbgetDownloadClient {
             Err(err) => return Err(err),
         };
 
+        // Use the NZBGet queue ID (integer) as the job_id so it matches
+        // the NZBID in NZBGet's history — required for failure detection
+        // in check_grabbed_for_failures.
         Ok(DownloadGrabResult {
-            job_id,
+            job_id: nzbget_id.to_string(),
             client_type: "nzbget".to_string(),
         })
     }
@@ -1488,7 +1492,7 @@ fn build_nzbget_append_payload(append_request: &NzbgetAppendRequest<'_>, dupe_mo
         "version": "2.0",
         "method": "append",
         "params": params,
-        "id": append_request.job_id,
+        "id": append_request.request_id,
     })
 }
 
@@ -1625,7 +1629,7 @@ mod tests {
     fn build_append_payload_uses_legacy_signature_for_older_servers() {
         let parameters = vec![json!({"*scryer_title_id": "title-1"})];
         let append_request = NzbgetAppendRequest {
-            job_id: "job-1",
+            request_id: "req-1",
             title_name: "Example",
             nzb_filename: "Example.nzb",
             source_for_payload: "base64-data",
@@ -1649,7 +1653,7 @@ mod tests {
     fn build_append_payload_includes_auto_category_for_newer_servers() {
         let parameters = vec![json!({"*scryer_title_id": "title-1"})];
         let append_request = NzbgetAppendRequest {
-            job_id: "job-1",
+            request_id: "req-1",
             title_name: "Example",
             nzb_filename: "Example.nzb",
             source_for_payload: "base64-data",

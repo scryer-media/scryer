@@ -569,7 +569,7 @@ fn size_scoring_anime_ova_runtime_scales_expectation() {
     let w = balanced_weights();
     let size_3gb = 3 * 1024 * 1024 * 1024_i64;
 
-    // 3 GB for a standard 24-min anime episode → quite large
+    // 3 GB for a standard 24-min anime episode → quite large relative to expected
     let mut d_standard = QualityProfileDecision::new();
     apply_size_scoring_for_category(
         &mut d_standard,
@@ -580,7 +580,7 @@ fn size_scoring_anime_ova_runtime_scales_expectation() {
         &w,
     );
 
-    // 3 GB for a 50-min OVA → more expected
+    // 3 GB for a 50-min OVA → runtime scales the expected size up, so ratio is lower
     let mut d_ova = QualityProfileDecision::new();
     apply_size_scoring_for_category(
         &mut d_ova,
@@ -591,8 +591,8 @@ fn size_scoring_anime_ova_runtime_scales_expectation() {
         &w,
     );
 
-    // OVA should score the same or lower because 3 GB is more "normal" for 50 min
-    assert!(d_ova.release_score <= d_standard.release_score);
+    // OVA should score better (higher) because 3 GB is less of an outlier for 50 min
+    assert!(d_ova.release_score >= d_standard.release_score);
 }
 
 #[test]
@@ -658,14 +658,16 @@ fn large_balanced_anime_remux_gets_size_penalty_without_remux_bonus() {
 
 #[test]
 fn size_plausible_bluray_remux_not_penalized() {
-    // 50 GB for a 2160P Blu-ray Remux movie is normal (expected ~43 GiB)
+    // 65 GB for a 2160P Blu-ray Remux HEVC movie is normal (real: 40-80 GB range)
     let release = parse_release_metadata("Movie.2024.2160p.BluRay.Remux.H.265.DTS-HD");
     let w = balanced_weights();
-    let size_50gb = 50 * 1024 * 1024 * 1024_i64;
+    let size_65gb = 65 * 1024 * 1024 * 1024_i64;
 
     let mut d = QualityProfileDecision::new();
-    apply_size_scoring_for_category(&mut d, &release, Some(size_50gb), None, None, &w);
-    assert!(d.release_score > 0);
+    apply_size_scoring_for_category(&mut d, &release, Some(size_65gb), None, None, &w);
+    // Should not be blocked or excessively penalized
+    assert!(d.allowed);
+    assert!(d.release_score >= 0);
 }
 
 // ── QualityProfileDecision::log ───────────────────────────────────────────

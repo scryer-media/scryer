@@ -50,12 +50,29 @@ fi
 "${compose_cmd[@]}" stop "${services[@]}"
 "${compose_cmd[@]}" rm -f "${services[@]}"
 
+# Clear download and import directories so each restart begins clean
+echo "Cleaning download and import directories..."
+rm -rf "$REPO_DIR/tmp/nzbget-downloads/"*
+rm -rf "$REPO_DIR/tmp/sabnzbd-downloads/"*
+rm -rf "$REPO_DIR/tmp/weaver-downloads/"*
+rm -rf "$REPO_DIR/tmp/weaver/data/intermediate/"*
+rm -rf "$REPO_DIR/tmp/weaver/data/complete/"*
+rm -rf "$REPO_DIR/tmp/scryer-media/"*
+
 up_args=("${compose_cmd[@]}" up -d --build --no-deps)
 up_args+=("${services[@]}")
 
 "${up_args[@]}"
 
-# Run the seed sidecar after services are up (unless --no-seed)
+# Run the seed sidecar after scryer is healthy (unless --no-seed)
 if [ "$NO_SEED" = false ] && [ -f "$REPO_DIR/dev-seed.json" ]; then
+  echo "Waiting for scryer to be ready..."
+  for i in $(seq 1 60); do
+    if curl -sf http://localhost:8080/health >/dev/null 2>&1; then
+      break
+    fi
+    sleep 2
+  done
+  "${compose_cmd[@]}" --profile seed rm -f seed 2>/dev/null || true
   "${compose_cmd[@]}" --profile seed up -d seed
 fi

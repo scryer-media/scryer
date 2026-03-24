@@ -258,6 +258,12 @@ pub struct PendingRelease {
     pub delay_until: String,
     pub status: String,
     pub grabbed_at: Option<String>,
+    /// Password hint for protected NZBs (e.g. NZBGeek password field).
+    pub source_password: Option<String>,
+    /// RFC3339 publish date — used for `is_recent` queue priority calculation.
+    pub published_at: Option<String>,
+    /// Torrent info hash — passed to download client for magnet resolution.
+    pub info_hash: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -411,10 +417,10 @@ pub struct IndexerSearchResult {
     pub published_at: Option<String>,
     pub thumbs_up: Option<i32>,
     pub thumbs_down: Option<i32>,
-    pub nzbgeek_languages: Option<Vec<String>>,
-    pub nzbgeek_subtitles: Option<Vec<String>>,
-    pub nzbgeek_grabs: Option<i64>,
-    pub nzbgeek_password_protected: Option<String>,
+    pub indexer_languages: Option<Vec<String>>,
+    pub indexer_subtitles: Option<Vec<String>>,
+    pub indexer_grabs: Option<i64>,
+    pub password_hint: Option<String>,
     pub parsed_release_metadata: Option<ParsedReleaseMetadata>,
     pub quality_profile_decision: Option<QualityProfileDecision>,
     /// Arbitrary indexer-specific metadata from WASM plugins.

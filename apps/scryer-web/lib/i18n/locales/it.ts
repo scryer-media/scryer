@@ -194,13 +194,22 @@ const it: LocaleDictionary = {
   "settings.delayProfileNameLabel": "Nome",
   "settings.delayProfileNamePlaceholder": "es. Attendi qualità migliore",
   "settings.delayProfileNameRequired": "Il nome del profilo di ritardo è obbligatorio.",
-  "settings.delayProfileHoursLabel": "Ritardo (ore)",
-  "settings.delayProfileHoursHelp":
-    "Per quanto tempo trattenere le release prima di scaricarle. 0 significa download immediato.",
+  "settings.delayProfileUsenetDelay": "Ritardo Usenet (minuti)",
+  "settings.delayProfileUsenetDelayHelp":
+    "Per quanto tempo trattenere le release Usenet prima di acquisirle. 0 = acquisire immediatamente.",
+  "settings.delayProfileTorrentDelay": "Ritardo Torrent (minuti)",
+  "settings.delayProfileTorrentDelayHelp":
+    "Per quanto tempo trattenere le release torrent prima di acquisirle. 0 = acquisire immediatamente.",
+  "settings.delayProfilePreferred": "Protocollo preferito",
+  "settings.delayProfilePreferredHelp":
+    "Il bypass basato sul punteggio si applica solo alle release del protocollo preferito.",
+  "settings.delayProfileMinAge": "Età minima (minuti)",
+  "settings.delayProfileMinAgeHelp":
+    "Solo Usenet. Blocco rigido — le release più recenti vengono trattenute indipendentemente dal punteggio. Impedisce l'acquisizione di NZB incompleti. 0 = disattivato.",
   "settings.delayProfileBypassLabel": "Soglia di bypass punteggio",
   "settings.delayProfileBypassPlaceholder": "Lascia vuoto per non bypassare mai",
   "settings.delayProfileBypassHelp":
-    "Se una release raggiunge o supera questa soglia di punteggio, viene scaricata immediatamente indipendentemente dal ritardo.",
+    "Se una release del protocollo preferito raggiunge o supera questa soglia di punteggio, viene acquisita immediatamente indipendentemente dal ritardo.",
   "settings.delayProfileFacetsLabel": "Si applica a",
   "settings.delayProfileFacetsHelp":
     "A quali tipi di contenuto si applica questo profilo. Lascia tutto deselezionato per tutti i tipi.",

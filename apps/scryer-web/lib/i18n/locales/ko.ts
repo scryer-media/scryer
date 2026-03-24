@@ -194,13 +194,22 @@ const ko: LocaleDictionary = {
   "settings.delayProfileNameLabel": "이름",
   "settings.delayProfileNamePlaceholder": "예: 더 나은 품질 대기",
   "settings.delayProfileNameRequired": "지연 프로필 이름은 필수입니다.",
-  "settings.delayProfileHoursLabel": "지연 (시간)",
-  "settings.delayProfileHoursHelp":
-    "다운로드 전 릴리스를 보류하는 시간입니다. 0은 즉시 다운로드합니다.",
+  "settings.delayProfileUsenetDelay": "Usenet 지연 (분)",
+  "settings.delayProfileUsenetDelayHelp":
+    "Usenet 릴리스를 가져오기 전에 보류하는 시간입니다. 0 = 즉시 가져오기.",
+  "settings.delayProfileTorrentDelay": "Torrent 지연 (분)",
+  "settings.delayProfileTorrentDelayHelp":
+    "Torrent 릴리스를 가져오기 전에 보류하는 시간입니다. 0 = 즉시 가져오기.",
+  "settings.delayProfilePreferred": "선호 프로토콜",
+  "settings.delayProfilePreferredHelp":
+    "점수 기반 바이패스는 선호 프로토콜의 릴리스에만 적용됩니다.",
+  "settings.delayProfileMinAge": "최소 경과 시간 (분)",
+  "settings.delayProfileMinAgeHelp":
+    "Usenet 전용. 하드 게이트 — 이보다 새로운 릴리스는 점수에 관계없이 보류됩니다. 불완전한 NZB 가져오기를 방지합니다. 0 = 비활성화.",
   "settings.delayProfileBypassLabel": "바이패스 점수 임계값",
   "settings.delayProfileBypassPlaceholder": "바이패스하지 않으려면 비워두세요",
   "settings.delayProfileBypassHelp":
-    "릴리스 점수가 이 임계값 이상이면 지연에 관계없이 즉시 다운로드합니다.",
+    "선호 프로토콜의 릴리스 점수가 이 임계값 이상이면 지연에 관계없이 즉시 가져옵니다.",
   "settings.delayProfileFacetsLabel": "적용 대상",
   "settings.delayProfileFacetsHelp":
     "이 프로필이 적용되는 콘텐츠 유형입니다. 모두 선택 해제하면 모든 유형에 적용됩니다.",

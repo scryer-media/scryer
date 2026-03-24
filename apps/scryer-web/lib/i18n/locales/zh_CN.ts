@@ -194,13 +194,22 @@ const zh_CN: LocaleDictionary = {
   "settings.delayProfileNameLabel": "名称",
   "settings.delayProfileNamePlaceholder": "例如：等待更好的质量",
   "settings.delayProfileNameRequired": "延迟配置名称为必填项。",
-  "settings.delayProfileHoursLabel": "延迟（小时）",
-  "settings.delayProfileHoursHelp":
-    "抓取前保留版本的时间。0 表示立即抓取。",
+  "settings.delayProfileUsenetDelay": "Usenet 延迟（分钟）",
+  "settings.delayProfileUsenetDelayHelp":
+    "抓取前保留 Usenet 版本的时间。0 = 立即抓取。",
+  "settings.delayProfileTorrentDelay": "Torrent 延迟（分钟）",
+  "settings.delayProfileTorrentDelayHelp":
+    "抓取前保留 Torrent 版本的时间。0 = 立即抓取。",
+  "settings.delayProfilePreferred": "首选协议",
+  "settings.delayProfilePreferredHelp":
+    "基于分数的跳过仅适用于首选协议的版本。",
+  "settings.delayProfileMinAge": "最小时限（分钟）",
+  "settings.delayProfileMinAgeHelp":
+    "仅限 Usenet。硬性门槛 — 比此更新的版本无论分数如何都将被保留。防止抓取不完整的 NZB。0 = 禁用。",
   "settings.delayProfileBypassLabel": "跳过分数阈值",
   "settings.delayProfileBypassPlaceholder": "留空表示永不跳过",
   "settings.delayProfileBypassHelp":
-    "如果版本分数达到或超过此阈值，则无视延迟立即抓取。",
+    "如果首选协议的版本分数达到或超过此阈值，则无视延迟立即抓取。",
   "settings.delayProfileFacetsLabel": "适用于",
   "settings.delayProfileFacetsHelp":
     "此配置适用的内容类型。全部取消选中则适用于所有类型。",

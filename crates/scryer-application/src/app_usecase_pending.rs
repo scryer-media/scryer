@@ -46,10 +46,13 @@ impl AppUseCase {
         scoring_log_json: Option<String>,
         indexer_source: Option<&str>,
         release_guid: Option<&str>,
-        delay_hours: i64,
+        delay_minutes: i64,
+        source_password: Option<&str>,
+        published_at: Option<&str>,
+        info_hash: Option<&str>,
     ) {
         let now = Utc::now();
-        let delay_until = now + Duration::hours(delay_hours);
+        let delay_until = now + Duration::minutes(delay_minutes);
 
         let pending = PendingRelease {
             id: Id::new().0,
@@ -67,6 +70,9 @@ impl AppUseCase {
             delay_until: delay_until.to_rfc3339(),
             status: "waiting".to_string(),
             grabbed_at: None,
+            source_password: source_password.map(str::to_string),
+            published_at: published_at.map(str::to_string),
+            info_hash: info_hash.map(str::to_string),
         };
 
         // Supersede any existing waiting releases for this wanted item with a lower score
@@ -331,6 +337,20 @@ impl AppUseCase {
             return Ok(false);
         }
 
+        // Check if this release is already active in the download client.
+        // Without this check, the pending processor could retry a release
+        // that's currently downloading (e.g. grabbed via background search
+        // while this pending release was waiting).
+        let dl_snapshot =
+            super::app_usecase_acquisition::DownloadClientSnapshot::fetch(self).await;
+        if dl_snapshot.is_active(&pr.release_title) {
+            info!(
+                release = pr.release_title.as_str(),
+                "pending release: skipping, already active in download client"
+            );
+            return Ok(false);
+        }
+
         // Check upgrade decision
         let category = title.facet.as_str();
         let tvdb_id = title
@@ -388,15 +408,15 @@ impl AppUseCase {
                 source_title.clone(),
                 ReleaseDownloadAttemptOutcome::Pending,
                 None,
-                None,
+                pr.source_password.clone(),
             )
             .await;
 
         let download_cat = self.derive_download_category(&title.facet).await;
         let is_recent = self.is_recent_for_queue_priority(
-            wanted
-                .baseline_date
+            pr.published_at
                 .as_deref()
+                .or(wanted.baseline_date.as_deref())
                 .or(title.first_aired.as_deref())
                 .or(title.digital_release_date.as_deref()),
         );
@@ -416,13 +436,13 @@ impl AppUseCase {
                 source_hint: source_hint.clone(),
                 source_kind,
                 source_title: source_title.clone(),
-                source_password: None,
+                source_password: pr.source_password.clone(),
                 category: Some(download_cat),
                 queue_priority: None,
                 download_directory: None,
                 release_title: Some(pr.release_title.clone()),
                 indexer_name: pr.indexer_source.clone(),
-                info_hash_hint: None,
+                info_hash_hint: pr.info_hash.clone(),
                 seed_goal_ratio: None,
                 seed_goal_seconds: None,
                 is_recent,
@@ -454,7 +474,7 @@ impl AppUseCase {
                         source_title.clone(),
                         ReleaseDownloadAttemptOutcome::Success,
                         None,
-                        None,
+                        pr.source_password.clone(),
                     )
                     .await;
 
@@ -550,7 +570,7 @@ impl AppUseCase {
                         source_title,
                         ReleaseDownloadAttemptOutcome::Failed,
                         Some(err.to_string()),
-                        None,
+                        pr.source_password.clone(),
                     )
                     .await;
 

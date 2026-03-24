@@ -1818,8 +1818,8 @@ impl AppUseCase {
             .await?;
 
         // Auto-monitor the parent title + immediate wanted sync
-        if monitored {
-            if let Ok(Some(title)) = self
+        if monitored
+            && let Ok(Some(title)) = self
                 .services
                 .titles
                 .get_by_id(&collection.title_id)
@@ -1839,8 +1839,8 @@ impl AppUseCase {
                 }
 
                 let now = Utc::now();
-                if let Some(handler) = self.facet_registry.get(&title.facet) {
-                    if handler.has_episodes() {
+                if let Some(handler) = self.facet_registry.get(&title.facet)
+                    && handler.has_episodes() {
                         // Re-fetch title in case monitoring was just updated
                         if let Ok(Some(title)) =
                             self.services.titles.get_by_id(&title.id).await
@@ -1848,9 +1848,7 @@ impl AppUseCase {
                             self.sync_wanted_series_inner(&title, &now, true).await;
                         }
                     }
-                }
             }
-        }
 
         self.services
             .record_event(
@@ -1899,8 +1897,8 @@ impl AppUseCase {
         // also monitored — matching Sonarr behavior where monitoring any item
         // implies the title should be monitored.
         if monitored {
-            if let Ok(Some(title)) = self.services.titles.get_by_id(&episode.title_id).await {
-                if !title.monitored {
+            if let Ok(Some(title)) = self.services.titles.get_by_id(&episode.title_id).await
+                && !title.monitored {
                     let _ = self.services.titles.update_monitored(&title.id, true).await;
                     tracing::info!(
                         title_id = %title.id,
@@ -1908,16 +1906,14 @@ impl AppUseCase {
                         "auto-monitored title because an episode was monitored"
                     );
                 }
-            }
 
-            if let Some(ref collection_id) = episode.collection_id {
-                if let Ok(Some(collection)) = self
+            if let Some(ref collection_id) = episode.collection_id
+                && let Ok(Some(collection)) = self
                     .services
                     .shows
                     .get_collection_by_id(collection_id)
                     .await
-                {
-                    if !collection.monitored {
+                    && !collection.monitored {
                         let _ = self
                             .services
                             .shows
@@ -1937,18 +1933,15 @@ impl AppUseCase {
                             "auto-monitored collection because an episode was monitored"
                         );
                     }
-                }
-            }
 
             // Immediately sync wanted items for this title so the episode
             // appears on the wanted page without waiting for the hourly sync.
             if let Ok(Some(title)) = self.services.titles.get_by_id(&episode.title_id).await {
                 let now = Utc::now();
-                if let Some(handler) = self.facet_registry.get(&title.facet) {
-                    if handler.has_episodes() {
+                if let Some(handler) = self.facet_registry.get(&title.facet)
+                    && handler.has_episodes() {
                         self.sync_wanted_series_inner(&title, &now, true).await;
                     }
-                }
             }
         }
 

@@ -187,13 +187,22 @@ const es: LocaleDictionary = {
   "settings.delayProfileNameLabel": "Nombre",
   "settings.delayProfileNamePlaceholder": "Ej. Esperar mejor calidad",
   "settings.delayProfileNameRequired": "El nombre del perfil de retraso es obligatorio.",
-  "settings.delayProfileHoursLabel": "Retraso (horas)",
-  "settings.delayProfileHoursHelp":
-    "Cuánto tiempo retener los lanzamientos antes de descargar. 0 significa descargar inmediatamente.",
+  "settings.delayProfileUsenetDelay": "Retraso de Usenet (minutos)",
+  "settings.delayProfileUsenetDelayHelp":
+    "Cuánto tiempo retener los lanzamientos de Usenet antes de capturar. 0 = capturar inmediatamente.",
+  "settings.delayProfileTorrentDelay": "Retraso de Torrent (minutos)",
+  "settings.delayProfileTorrentDelayHelp":
+    "Cuánto tiempo retener los lanzamientos de torrent antes de capturar. 0 = capturar inmediatamente.",
+  "settings.delayProfilePreferred": "Protocolo preferido",
+  "settings.delayProfilePreferredHelp":
+    "La omisión basada en puntuación solo se aplica a lanzamientos del protocolo preferido.",
+  "settings.delayProfileMinAge": "Antigüedad mínima (minutos)",
+  "settings.delayProfileMinAgeHelp":
+    "Solo Usenet. Bloqueo estricto — los lanzamientos más recientes se retienen independientemente de la puntuación. Evita capturar NZBs incompletos. 0 = desactivado.",
   "settings.delayProfileBypassLabel": "Umbral de puntuación para omitir",
   "settings.delayProfileBypassPlaceholder": "Dejar vacío para nunca omitir",
   "settings.delayProfileBypassHelp":
-    "Si un lanzamiento alcanza o supera este umbral, descargarlo inmediatamente sin importar el retraso.",
+    "Si un lanzamiento del protocolo preferido alcanza o supera este umbral, capturarlo inmediatamente sin importar el retraso.",
   "settings.delayProfileFacetsLabel": "Se aplica a",
   "settings.delayProfileFacetsHelp":
     "A qué tipos de contenido se aplica este perfil. Deja todos desmarcados para todos los tipos.",

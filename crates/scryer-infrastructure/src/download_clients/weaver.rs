@@ -449,15 +449,15 @@ impl DownloadClient for WeaverDownloadClient {
         }
 
         let query = r#"
-            mutation($nzbBase64: String!, $filename: String, $password: String, $category: String, $metadata: [MetadataInput!]) {
-                submitNzb(nzbBase64: $nzbBase64, filename: $filename, password: $password, category: $category, metadata: $metadata) {
+            mutation($source: NzbSourceInput!, $filename: String, $password: String, $category: String, $metadata: [MetadataInput!]) {
+                submitNzb(source: $source, filename: $filename, password: $password, category: $category, metadata: $metadata) {
                     id name status
                 }
             }
         "#;
 
         let variables = json!({
-            "nzbBase64": nzb_base64,
+            "source": { "nzbBase64": nzb_base64 },
             "filename": nzb_filename,
             "password": password,
             "category": category,

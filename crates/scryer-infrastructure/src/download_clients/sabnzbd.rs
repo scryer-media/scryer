@@ -456,7 +456,18 @@ impl DownloadClient for SabnzbdDownloadClient {
                     .to_string();
 
                 let status = slot.get("status").and_then(Value::as_str).unwrap_or("");
-                let (state, attention_reason) = sabnzbd_history_state(status);
+                let (state, mut attention_reason) = sabnzbd_history_state(status);
+
+                // SABnzbd provides a dedicated fail_message field with the actual
+                // failure detail (e.g. "54 articles were missing"). Use it when the
+                // status line alone didn't produce a reason.
+                if state == DownloadQueueState::Failed && attention_reason.is_none() {
+                    attention_reason = slot
+                        .get("fail_message")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
+                }
 
                 Some(DownloadQueueItem {
                     id: nzo_id.clone(),

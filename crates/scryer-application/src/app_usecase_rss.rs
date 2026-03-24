@@ -127,6 +127,20 @@ impl AppUseCase {
     /// Run a single RSS sync cycle: fetch latest releases from all enabled indexers,
     /// match against monitored titles, score, and grab approved releases.
     pub async fn run_rss_sync(&self) -> AppResult<RssSyncReport> {
+        // Process expired pending releases BEFORE evaluating fresh RSS.
+        // Ensures delayed releases are grabbed before new RSS results
+        // compete for the same wanted item.  Mirrors Sonarr's pattern of
+        // including pending releases in the RSS decision cycle.
+        match self.process_expired_pending_releases().await {
+            Ok(grabbed) if grabbed > 0 => {
+                info!(grabbed, "rss sync: promoted expired pending releases before RSS fetch");
+            }
+            Err(e) => {
+                warn!(error = %e, "rss sync: pending release processing failed, continuing with RSS");
+            }
+            _ => {}
+        }
+
         let now = Utc::now();
         let sync_start = std::time::Instant::now();
         info!("starting RSS sync cycle");
@@ -850,37 +864,84 @@ impl AppUseCase {
             return;
         }
 
-        // Check delay profile — hold release instead of grabbing immediately
+        // Skip repacks from a different release group than the existing file.
+        {
+            let existing_files = self
+                .services
+                .media_files
+                .list_media_files_for_title(&title.id)
+                .await
+                .unwrap_or_default();
+            if crate::acquisition_policy::should_skip_repack_group_mismatch(
+                best,
+                &existing_files,
+                wanted.episode_id.as_deref(),
+            ) {
+                return;
+            }
+        }
+
+        // Check delay profile — hold release instead of grabbing immediately.
+        // Two independent checks:
+        //   1. Min age (hard gate, usenet only, no bypass)
+        //   2. Protocol delay (can be bypassed by score on preferred protocol)
         if let Some(dp) =
             crate::delay_profile::resolve_delay_profile(delay_profiles, &title.tags, &title.facet)
-            && !crate::delay_profile::should_bypass_delay(dp, candidate_score)
         {
-            // Hold release as pending instead of grabbing
-            let scoring_json = best.quality_profile_decision.as_ref().map(|d| {
-                serde_json::to_string(
-                    &d.scoring_log
-                        .iter()
-                        .map(|e| serde_json::json!({"code": e.code, "delta": e.delta}))
-                        .collect::<Vec<_>>(),
+            // 1. Usenet minimum age — hard gate, no bypass.
+            let min_age_hold = if dp.min_age_minutes > 0
+                && crate::delay_profile::is_usenet_source(best.source_kind)
+            {
+                best.published_at
+                    .as_deref()
+                    .and_then(crate::quality_profile::parse_published_at)
+                    .map(|published| (dp.min_age_minutes - (*now - published).num_minutes()).max(0))
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+
+            // 2. Protocol-specific delay — can be bypassed by score on preferred protocol.
+            let protocol_hold = if !dp.should_bypass_delay(best.source_kind, candidate_score) {
+                dp.get_protocol_delay(best.source_kind).max(0)
+            } else {
+                0
+            };
+
+            let effective_delay_minutes = min_age_hold.max(protocol_hold);
+
+            if effective_delay_minutes > 0 {
+                let scoring_json = best.quality_profile_decision.as_ref().map(|d| {
+                    serde_json::to_string(
+                        &d.scoring_log
+                            .iter()
+                            .map(|e| serde_json::json!({"code": e.code, "delta": e.delta}))
+                            .collect::<Vec<_>>(),
+                    )
+                    .unwrap_or_default()
+                });
+                self.insert_pending_release(
+                    wanted,
+                    title,
+                    &best.title,
+                    best.download_url.as_deref().or(best.link.as_deref()),
+                    best.source_kind,
+                    best.size_bytes,
+                    candidate_score,
+                    scoring_json,
+                    Some(best.source.as_str()),
+                    best.guid.as_deref(),
+                    effective_delay_minutes,
+                    best.password_hint.as_deref(),
+                    best.published_at.as_deref(),
+                    best.extra
+                        .get("info_hash")
+                        .and_then(|v| v.as_str()),
                 )
-                .unwrap_or_default()
-            });
-            self.insert_pending_release(
-                wanted,
-                title,
-                &best.title,
-                best.download_url.as_deref().or(best.link.as_deref()),
-                best.source_kind,
-                best.size_bytes,
-                candidate_score,
-                scoring_json,
-                Some(best.source.as_str()),
-                best.guid.as_deref(),
-                dp.delay_hours,
-            )
-            .await;
-            report.releases_held += 1;
-            return;
+                .await;
+                report.releases_held += 1;
+                return;
+            }
         }
 
         // Submit to download client
@@ -896,7 +957,7 @@ impl AppUseCase {
         let source_hint_for_attempt = normalize_release_attempt_hint(source_hint.as_deref());
         let source_title_for_attempt = normalize_release_attempt_title(source_title.as_deref());
         let source_password =
-            normalize_release_password(best.nzbgeek_password_protected.as_deref());
+            normalize_release_password(best.password_hint.as_deref());
 
         let _ = self
             .services

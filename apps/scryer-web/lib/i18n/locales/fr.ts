@@ -194,13 +194,22 @@ const fr: LocaleDictionary = {
   "settings.delayProfileNameLabel": "Nom",
   "settings.delayProfileNamePlaceholder": "ex. Attendre une meilleure qualité",
   "settings.delayProfileNameRequired": "Le nom du profil de délai est requis.",
-  "settings.delayProfileHoursLabel": "Délai (heures)",
-  "settings.delayProfileHoursHelp":
-    "Temps de rétention des versions avant récupération. 0 signifie récupération immédiate.",
+  "settings.delayProfileUsenetDelay": "Délai Usenet (minutes)",
+  "settings.delayProfileUsenetDelayHelp":
+    "Durée de rétention des versions Usenet avant récupération. 0 = récupérer immédiatement.",
+  "settings.delayProfileTorrentDelay": "Délai Torrent (minutes)",
+  "settings.delayProfileTorrentDelayHelp":
+    "Durée de rétention des versions torrent avant récupération. 0 = récupérer immédiatement.",
+  "settings.delayProfilePreferred": "Protocole préféré",
+  "settings.delayProfilePreferredHelp":
+    "Le contournement basé sur le score ne s'applique qu'aux versions du protocole préféré.",
+  "settings.delayProfileMinAge": "Âge minimum (minutes)",
+  "settings.delayProfileMinAgeHelp":
+    "Usenet uniquement. Barrière stricte — les versions plus récentes sont retenues quel que soit le score. Empêche de récupérer des NZB incomplets. 0 = désactivé.",
   "settings.delayProfileBypassLabel": "Seuil de contournement par score",
   "settings.delayProfileBypassPlaceholder": "Laisser vide pour ne jamais contourner",
   "settings.delayProfileBypassHelp":
-    "Si une version atteint ou dépasse ce seuil de score, la récupérer immédiatement quel que soit le délai.",
+    "Si une version du protocole préféré atteint ou dépasse ce seuil de score, la récupérer immédiatement quel que soit le délai.",
   "settings.delayProfileFacetsLabel": "S'applique à",
   "settings.delayProfileFacetsHelp":
     "Types de contenu auxquels ce profil s'applique. Laissez tout décoché pour tous les types.",

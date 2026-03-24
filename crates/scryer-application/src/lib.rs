@@ -91,8 +91,8 @@ pub use app_usecase_title_images::start_background_banner_loop;
 pub use app_usecase_title_images::start_background_fanart_loop;
 pub use app_usecase_title_images::start_background_poster_loop;
 pub use delay_profile::{
-    DELAY_PROFILE_CATALOG_KEY, DelayProfile, parse_delay_profile_catalog, resolve_delay_profile,
-    should_bypass_delay,
+    DELAY_PROFILE_CATALOG_KEY, DelayProfile, is_usenet_source, parse_delay_profile_catalog,
+    resolve_delay_profile,
 };
 pub use facet_handler::{
     FacetHandler, HydrationResult, movie_to_hydration_result, series_to_hydration_result,
@@ -807,6 +807,8 @@ pub trait DownloadSubmissionRepository: Send + Sync {
     async fn list_for_title(&self, title_id: &str) -> AppResult<Vec<DownloadSubmission>>;
 
     async fn delete_for_title(&self, title_id: &str) -> AppResult<()>;
+
+    async fn delete_by_client_item_id(&self, download_client_item_id: &str) -> AppResult<()>;
 }
 
 #[async_trait]
@@ -2241,10 +2243,10 @@ mod tests {
                     published_at: Some("1970-01-01T00:00:00Z".into()),
                     thumbs_up: None,
                     thumbs_down: None,
-                    nzbgeek_languages: None,
-                    nzbgeek_subtitles: None,
-                    nzbgeek_grabs: None,
-                    nzbgeek_password_protected: None,
+                    indexer_languages: None,
+                    indexer_subtitles: None,
+                    indexer_grabs: None,
+                    password_hint: None,
                     parsed_release_metadata: None,
                     quality_profile_decision: None,
                     extra: Default::default(),
@@ -2655,6 +2657,17 @@ mod tests {
                 .lock()
                 .await
                 .retain(|entry| entry.title_id != title_id);
+            Ok(())
+        }
+
+        async fn delete_by_client_item_id(
+            &self,
+            download_client_item_id: &str,
+        ) -> AppResult<()> {
+            self.store
+                .lock()
+                .await
+                .retain(|entry| entry.download_client_item_id != download_client_item_id);
             Ok(())
         }
     }

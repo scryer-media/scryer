@@ -1,3 +1,4 @@
+use crate::DownloadSourceKind;
 use scryer_domain::MediaFacet;
 use serde::{Deserialize, Serialize};
 
@@ -9,8 +10,21 @@ pub struct DelayProfile {
     pub id: String,
     #[serde(default)]
     pub name: String,
+    /// Delay for usenet releases (minutes). 0 = grab immediately.
     #[serde(default)]
-    pub delay_hours: i64,
+    pub usenet_delay_minutes: i64,
+    /// Delay for torrent releases (minutes). 0 = grab immediately.
+    #[serde(default)]
+    pub torrent_delay_minutes: i64,
+    /// Preferred download protocol. Score-based bypass only applies
+    /// when the release matches the preferred protocol.
+    #[serde(default = "default_preferred_protocol")]
+    pub preferred_protocol: String,
+    /// Usenet-only minimum age in minutes. Releases younger than this
+    /// are held as pending regardless of score. 0 = disabled.
+    #[serde(default)]
+    pub min_age_minutes: i64,
+    /// Score threshold to bypass delay for releases on the preferred protocol.
     #[serde(default)]
     pub bypass_score_threshold: Option<i32>,
     #[serde(default)]
@@ -25,6 +39,10 @@ pub struct DelayProfile {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_preferred_protocol() -> String {
+    "usenet".to_string()
 }
 
 pub fn parse_delay_profile_catalog(raw_json: &str) -> Result<Vec<DelayProfile>, serde_json::Error> {
@@ -76,28 +94,65 @@ pub fn resolve_delay_profile<'a>(
     None
 }
 
-/// Determine whether a release should bypass the delay and be grabbed immediately.
-pub fn should_bypass_delay(profile: &DelayProfile, candidate_score: i32) -> bool {
-    if profile.delay_hours <= 0 {
-        return true;
+impl DelayProfile {
+    /// Get the delay in minutes for the given source kind's protocol.
+    pub fn get_protocol_delay(&self, source_kind: Option<DownloadSourceKind>) -> i64 {
+        if is_usenet_source(source_kind) {
+            self.usenet_delay_minutes
+        } else {
+            self.torrent_delay_minutes
+        }
     }
-    if let Some(threshold) = profile.bypass_score_threshold
-        && candidate_score >= threshold
-    {
-        return true;
+
+    /// Whether the release is on the preferred protocol.
+    pub fn is_preferred_protocol(&self, source_kind: Option<DownloadSourceKind>) -> bool {
+        let usenet = is_usenet_source(source_kind);
+        (usenet && self.preferred_protocol == "usenet")
+            || (!usenet && self.preferred_protocol == "torrent")
     }
-    false
+
+    /// Determine whether a release should bypass the protocol delay and be
+    /// grabbed immediately.  Bypass happens when:
+    /// - The protocol delay is 0 (no delay configured for this protocol), OR
+    /// - The release is on the preferred protocol AND meets the score threshold.
+    pub fn should_bypass_delay(
+        &self,
+        source_kind: Option<DownloadSourceKind>,
+        candidate_score: i32,
+    ) -> bool {
+        let delay = self.get_protocol_delay(source_kind);
+        if delay <= 0 {
+            return true;
+        }
+        if let Some(threshold) = self.bypass_score_threshold
+            && candidate_score >= threshold
+            && self.is_preferred_protocol(source_kind)
+        {
+            return true;
+        }
+        false
+    }
+}
+
+pub fn is_usenet_source(source_kind: Option<DownloadSourceKind>) -> bool {
+    matches!(
+        source_kind,
+        Some(DownloadSourceKind::NzbFile | DownloadSourceKind::NzbUrl)
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn make_profile(id: &str, priority: i32, delay_hours: i64) -> DelayProfile {
+    fn make_profile(id: &str, priority: i32, usenet_delay: i64, torrent_delay: i64) -> DelayProfile {
         DelayProfile {
             id: id.to_string(),
             name: id.to_string(),
-            delay_hours,
+            usenet_delay_minutes: usenet_delay,
+            torrent_delay_minutes: torrent_delay,
+            preferred_protocol: "usenet".to_string(),
+            min_age_minutes: 0,
             bypass_score_threshold: None,
             applies_to_facets: vec![],
             tags: vec![],
@@ -114,21 +169,24 @@ mod tests {
 
     #[test]
     fn catch_all_profile_matches() {
-        let profiles = vec![make_profile("default", 100, 6)];
+        let profiles = vec![make_profile("default", 100, 360, 360)];
         let result = resolve_delay_profile(&profiles, &[], &MediaFacet::Movie);
         assert_eq!(result.unwrap().id, "default");
     }
 
     #[test]
     fn priority_ordering() {
-        let profiles = vec![make_profile("low", 100, 12), make_profile("high", 10, 6)];
+        let profiles = vec![
+            make_profile("low", 100, 720, 720),
+            make_profile("high", 10, 360, 360),
+        ];
         let result = resolve_delay_profile(&profiles, &[], &MediaFacet::Series);
         assert_eq!(result.unwrap().id, "high");
     }
 
     #[test]
     fn facet_filter_excludes() {
-        let mut profile = make_profile("movies-only", 10, 6);
+        let mut profile = make_profile("movies-only", 10, 360, 360);
         profile.applies_to_facets = vec!["movie".to_string()];
         let profiles = vec![profile];
         let result = resolve_delay_profile(&profiles, &[], &MediaFacet::Series);
@@ -137,7 +195,7 @@ mod tests {
 
     #[test]
     fn facet_filter_includes() {
-        let mut profile = make_profile("movies-only", 10, 6);
+        let mut profile = make_profile("movies-only", 10, 360, 360);
         profile.applies_to_facets = vec!["movie".to_string()];
         let profiles = vec![profile];
         let result = resolve_delay_profile(&profiles, &[], &MediaFacet::Movie);
@@ -146,9 +204,9 @@ mod tests {
 
     #[test]
     fn tag_filter_matches() {
-        let mut profile = make_profile("tagged", 10, 6);
+        let mut profile = make_profile("tagged", 10, 360, 360);
         profile.tags = vec!["4k".to_string()];
-        let catch_all = make_profile("default", 100, 12);
+        let catch_all = make_profile("default", 100, 720, 720);
         let profiles = vec![profile, catch_all];
 
         let result = resolve_delay_profile(
@@ -161,9 +219,9 @@ mod tests {
 
     #[test]
     fn tag_filter_falls_through_to_catch_all() {
-        let mut profile = make_profile("tagged", 10, 6);
+        let mut profile = make_profile("tagged", 10, 360, 360);
         profile.tags = vec!["4k".to_string()];
-        let catch_all = make_profile("default", 100, 12);
+        let catch_all = make_profile("default", 100, 720, 720);
         let profiles = vec![profile, catch_all];
 
         let result = resolve_delay_profile(&profiles, &["hdr".to_string()], &MediaFacet::Movie);
@@ -172,7 +230,7 @@ mod tests {
 
     #[test]
     fn disabled_profile_skipped() {
-        let mut profile = make_profile("disabled", 10, 6);
+        let mut profile = make_profile("disabled", 10, 360, 360);
         profile.enabled = false;
         let profiles = vec![profile];
         let result = resolve_delay_profile(&profiles, &[], &MediaFacet::Movie);
@@ -180,34 +238,46 @@ mod tests {
     }
 
     #[test]
-    fn bypass_zero_delay() {
-        let profile = make_profile("nodelay", 10, 0);
-        assert!(should_bypass_delay(&profile, 500));
+    fn bypass_zero_usenet_delay() {
+        let profile = make_profile("nodelay", 10, 0, 360);
+        // Usenet delay is 0 → bypass for usenet
+        assert!(profile.should_bypass_delay(Some(DownloadSourceKind::NzbFile), 500));
+        // Torrent delay is 360 → no bypass without sufficient score
+        assert!(!profile.should_bypass_delay(Some(DownloadSourceKind::TorrentFile), 500));
     }
 
     #[test]
-    fn bypass_score_threshold() {
-        let mut profile = make_profile("delayed", 10, 6);
+    fn bypass_score_threshold_preferred_protocol() {
+        let mut profile = make_profile("delayed", 10, 360, 360);
         profile.bypass_score_threshold = Some(2000);
-        assert!(!should_bypass_delay(&profile, 1500));
-        assert!(should_bypass_delay(&profile, 2000));
-        assert!(should_bypass_delay(&profile, 3000));
+        profile.preferred_protocol = "usenet".to_string();
+
+        // Usenet is preferred → bypass at threshold
+        assert!(!profile.should_bypass_delay(Some(DownloadSourceKind::NzbFile), 1500));
+        assert!(profile.should_bypass_delay(Some(DownloadSourceKind::NzbFile), 2000));
+
+        // Torrent is NOT preferred → no bypass even at threshold
+        assert!(!profile.should_bypass_delay(Some(DownloadSourceKind::TorrentFile), 3000));
     }
 
     #[test]
-    fn no_bypass_below_threshold() {
-        let mut profile = make_profile("delayed", 10, 6);
-        profile.bypass_score_threshold = Some(2000);
-        assert!(!should_bypass_delay(&profile, 1999));
+    fn protocol_delay_returns_correct_value() {
+        let profile = make_profile("mixed", 10, 60, 360);
+        assert_eq!(profile.get_protocol_delay(Some(DownloadSourceKind::NzbFile)), 60);
+        assert_eq!(profile.get_protocol_delay(Some(DownloadSourceKind::NzbUrl)), 60);
+        assert_eq!(profile.get_protocol_delay(Some(DownloadSourceKind::TorrentFile)), 360);
+        assert_eq!(profile.get_protocol_delay(Some(DownloadSourceKind::MagnetUri)), 360);
+        assert_eq!(profile.get_protocol_delay(None), 360); // default to torrent
     }
 
     #[test]
     fn parse_catalog_roundtrip() {
-        let profiles = vec![make_profile("test", 10, 6)];
+        let profiles = vec![make_profile("test", 10, 60, 360)];
         let json = serde_json::to_string(&profiles).unwrap();
         let parsed = parse_delay_profile_catalog(&json).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].id, "test");
-        assert_eq!(parsed[0].delay_hours, 6);
+        assert_eq!(parsed[0].usenet_delay_minutes, 60);
+        assert_eq!(parsed[0].torrent_delay_minutes, 360);
     }
 }

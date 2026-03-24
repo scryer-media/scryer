@@ -1,6 +1,7 @@
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 
 use crate::scoring_weights::ScoringPersona;
+use crate::types::{IndexerSearchResult, TitleMediaFile};
 
 /// Flat polling interval for movies without a baseline date.
 const MOVIE_FALLBACK_INTERVAL_HOURS: i64 = 6;
@@ -425,6 +426,45 @@ mod tests {
         let decision = evaluate_upgrade(1060, Some(1000), true, None, &now, &thresholds);
         assert_eq!(decision, UpgradeDecision::RejectInsufficientDelta);
     }
+}
+
+/// Check if a repack candidate's release group matches the existing file's
+/// release group.  Returns `true` if the candidate should be **skipped**.
+///
+/// A REPACK is a re-release by the *same* group to fix their own encode.
+/// Grabbing a different group's repack is a false upgrade — the fix is for
+/// issues you don't have.
+pub fn should_skip_repack_group_mismatch(
+    candidate: &IndexerSearchResult,
+    existing_files: &[TitleMediaFile],
+    episode_id: Option<&str>,
+) -> bool {
+    let meta = match candidate.parsed_release_metadata.as_ref() {
+        Some(m) if m.is_repack => m,
+        _ => return false, // not a repack → no check
+    };
+
+    let candidate_group = match meta.release_group.as_deref() {
+        Some(g) if !g.is_empty() => g,
+        _ => return true, // repack with unknown group → skip
+    };
+
+    // Find existing file for this episode (series) or any file (movie)
+    let existing_file = existing_files.iter().find(|f| match episode_id {
+        Some(eid) => f.episode_id.as_deref() == Some(eid),
+        None => true,
+    });
+
+    let Some(file) = existing_file else {
+        return false; // no existing file → initial grab, allow
+    };
+
+    let existing_group = match file.release_group.as_deref() {
+        Some(g) if !g.is_empty() => g,
+        _ => return true, // existing file has unknown group → skip repack
+    };
+
+    !candidate_group.eq_ignore_ascii_case(existing_group)
 }
 
 #[cfg(test)]

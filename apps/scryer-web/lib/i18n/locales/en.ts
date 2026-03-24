@@ -194,13 +194,22 @@ const en: LocaleDictionary = {
   "settings.delayProfileNameLabel": "Name",
   "settings.delayProfileNamePlaceholder": "e.g. Wait for better quality",
   "settings.delayProfileNameRequired": "Delay profile name is required.",
-  "settings.delayProfileHoursLabel": "Delay (hours)",
-  "settings.delayProfileHoursHelp":
-    "How long to hold releases before grabbing. 0 means grab immediately.",
+  "settings.delayProfileUsenetDelay": "Usenet delay (minutes)",
+  "settings.delayProfileUsenetDelayHelp":
+    "How long to hold usenet releases before grabbing. 0 = grab immediately.",
+  "settings.delayProfileTorrentDelay": "Torrent delay (minutes)",
+  "settings.delayProfileTorrentDelayHelp":
+    "How long to hold torrent releases before grabbing. 0 = grab immediately.",
+  "settings.delayProfilePreferred": "Preferred protocol",
+  "settings.delayProfilePreferredHelp":
+    "Score-based bypass only applies to releases on the preferred protocol.",
+  "settings.delayProfileMinAge": "Minimum age (minutes)",
+  "settings.delayProfileMinAgeHelp":
+    "Usenet only. Hard gate — releases younger than this are held regardless of score. Prevents grabbing incomplete NZBs. 0 = disabled.",
   "settings.delayProfileBypassLabel": "Bypass score threshold",
   "settings.delayProfileBypassPlaceholder": "Leave empty to never bypass",
   "settings.delayProfileBypassHelp":
-    "If a release scores at or above this threshold, grab it immediately regardless of the delay.",
+    "If a release on the preferred protocol scores at or above this threshold, grab it immediately regardless of the delay.",
   "settings.delayProfileFacetsLabel": "Applies to",
   "settings.delayProfileFacetsHelp":
     "Which content types this profile applies to. Leave all unchecked for all types.",

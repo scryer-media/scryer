@@ -210,14 +210,14 @@ impl IndexerClient for WasmIndexerClient {
                     published_at: r.published_at,
                     thumbs_up,
                     thumbs_down,
-                    nzbgeek_languages: if r.languages.is_empty() {
+                    indexer_languages: if r.languages.is_empty() {
                         None
                     } else {
                         Some(r.languages)
                     },
-                    nzbgeek_subtitles: subtitles,
-                    nzbgeek_grabs: r.grabs,
-                    nzbgeek_password_protected: password_protected,
+                    indexer_subtitles: subtitles,
+                    indexer_grabs: r.grabs,
+                    password_hint: password_protected,
                     parsed_release_metadata: None,
                     quality_profile_decision: None,
                     extra: r.extra,

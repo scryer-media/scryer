@@ -533,6 +533,9 @@ async fn graphql_delete_title_cleans_title_workflow_state() {
             delay_until: "2026-03-13T00:00:00Z".to_string(),
             status: "waiting".to_string(),
             grabbed_at: None,
+            source_password: None,
+            published_at: None,
+            info_hash: None,
         })
         .await
         .expect("seed pending release");

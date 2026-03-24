@@ -391,6 +391,10 @@ pub(crate) enum DbCommand {
         title_id: String,
         reply: Sender<AppResult<()>>,
     },
+    DeleteDownloadSubmissionByClientItemId {
+        download_client_item_id: String,
+        reply: Sender<AppResult<()>>,
+    },
     GetImportById {
         id: String,
         reply: Sender<AppResult<Option<ImportRecord>>>,
@@ -1429,6 +1433,18 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 DbCommand::DeleteDownloadSubmissionsForTitle { title_id, reply } => {
                     let _ = reply
                         .send(delete_download_submissions_for_title_query(&pool, &title_id).await);
+                }
+                DbCommand::DeleteDownloadSubmissionByClientItemId {
+                    download_client_item_id,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        delete_download_submission_by_client_item_id_query(
+                            &pool,
+                            &download_client_item_id,
+                        )
+                        .await,
+                    );
                 }
                 DbCommand::CreateImportRequest {
                     source_system,

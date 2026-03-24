@@ -9,7 +9,10 @@ export function buildDelayProfileTemplate(existing: ParsedDelayProfile[]): Delay
   return {
     id: "",
     name: "",
-    delay_hours: 6,
+    usenet_delay_minutes: 0,
+    torrent_delay_minutes: 0,
+    preferred_protocol: "usenet",
+    min_age_minutes: 0,
     bypass_score_threshold: null,
     applies_to_facets: [],
     tags: [],
@@ -46,7 +49,14 @@ function normalizeDelayProfile(raw: Record<string, unknown>): ParsedDelayProfile
   return {
     id: String(raw.id ?? ""),
     name: String(raw.name ?? ""),
-    delay_hours: typeof raw.delay_hours === "number" ? raw.delay_hours : 6,
+    usenet_delay_minutes:
+      typeof raw.usenet_delay_minutes === "number" ? raw.usenet_delay_minutes : 0,
+    torrent_delay_minutes:
+      typeof raw.torrent_delay_minutes === "number" ? raw.torrent_delay_minutes : 0,
+    preferred_protocol:
+      raw.preferred_protocol === "torrent" ? "torrent" : "usenet",
+    min_age_minutes:
+      typeof raw.min_age_minutes === "number" ? raw.min_age_minutes : 0,
     bypass_score_threshold:
       typeof raw.bypass_score_threshold === "number" ? raw.bypass_score_threshold : null,
     applies_to_facets: Array.isArray(raw.applies_to_facets)

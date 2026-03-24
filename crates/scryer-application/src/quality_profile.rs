@@ -823,17 +823,21 @@ pub fn evaluate_against_profile(
 ///
 /// `published_at` is the raw string from the indexer (typically RFC 2822 from RSS).
 /// If parsing fails or the value is `None`, no scoring entry is logged.
+/// Parse a published_at date string in RFC2822, RFC3339, or ISO8601 format.
+pub fn parse_published_at(raw: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc2822(raw)
+        .map(|dt| dt.with_timezone(&Utc))
+        .or_else(|_| DateTime::parse_from_rfc3339(raw).map(|dt| dt.with_timezone(&Utc)))
+        .or_else(|_| raw.parse::<DateTime<Utc>>())
+        .ok()
+}
+
 pub fn apply_age_scoring(decision: &mut QualityProfileDecision, published_at: Option<&str>) {
     let Some(raw) = published_at else {
         return;
     };
 
-    let parsed = DateTime::parse_from_rfc2822(raw)
-        .map(|dt| dt.with_timezone(&Utc))
-        .or_else(|_| DateTime::parse_from_rfc3339(raw).map(|dt| dt.with_timezone(&Utc)))
-        .or_else(|_| raw.parse::<DateTime<Utc>>());
-
-    let Ok(published) = parsed else {
+    let Some(published) = parse_published_at(raw) else {
         return;
     };
 
@@ -871,29 +875,83 @@ fn normalize_media_size_category(category_hint: Option<&str>) -> MediaSizeCatego
     }
 }
 
-fn expected_size_gib_for_quality(quality: Option<&str>, media_category: MediaSizeCategory) -> f64 {
+/// Expected total file bitrate (video + audio + overhead) in Mbps for a given
+/// quality tier and media category.  Calibrated against real library data
+/// (~500 files).  At baseline runtimes (120/45/24 min) the 1080P/720P/480P
+/// values produce expected GiB equivalent to the previous hardcoded table.
+/// 2160P values were intentionally recalibrated upward based on real remux and
+/// WEB-DL sizes (e.g. movie 2160P: old 22 GiB → new ~50 GiB at 120 min).
+fn expected_bitrate_mbps(quality: Option<&str>, media_category: MediaSizeCategory) -> f64 {
     match media_category {
         MediaSizeCategory::Movie => match quality {
-            Some("2160P") => 22.0,
-            Some("1080P") => 8.0,
-            Some("720P") => 3.0,
-            Some("480P") => 1.2,
-            _ => 6.0,
+            Some("2160P") => 57.0,
+            Some("1080P") => 9.1,
+            Some("720P") => 3.4,
+            Some("480P") => 1.4,
+            _ => 6.8,
         },
         MediaSizeCategory::Series => match quality {
-            Some("2160P") => 7.5,
-            Some("1080P") => 2.8,
-            Some("720P") => 1.1,
-            Some("480P") => 0.45,
-            _ => 1.8,
+            Some("2160P") => 22.0,
+            Some("1080P") => 8.5,
+            Some("720P") => 3.3,
+            Some("480P") => 1.4,
+            _ => 5.5,
         },
         MediaSizeCategory::Anime => match quality {
-            Some("2160P") => 4.0,
-            Some("1080P") => 1.5,
-            Some("720P") => 0.6,
-            Some("480P") => 0.25,
-            _ => 1.0,
+            Some("2160P") => 28.0,
+            Some("1080P") => 8.5,
+            Some("720P") => 3.4,
+            Some("480P") => 1.4,
+            _ => 5.7,
         },
+    }
+}
+
+/// Codec efficiency relative to mixed-codec baseline.  A known H.265 release
+/// should be smaller than average; a known H.264 release slightly larger.
+///
+/// Values match the canonical codec strings emitted by `parse_release_metadata`
+/// (`"H.264"`, `"H.265"`, `"AV1"`, `"VP9"`).
+fn codec_efficiency_factor(codec: Option<&str>) -> f64 {
+    match codec {
+        Some("AV1") => 0.50,
+        Some("H.265") => 0.75,
+        Some("VP9") => 0.75,
+        Some("H.264") => 1.10,
+        _ => 1.0,
+    }
+}
+
+/// Source-type multiplier applied to the expected bitrate.  Bluray encodes are
+/// larger than WEB-DL; remuxes larger still.
+fn source_size_factor(
+    source: Option<&str>,
+    is_remux: bool,
+    is_bd_disk: bool,
+    is_anime: bool,
+) -> f64 {
+    let mut factor = 1.0;
+    if matches!(source, Some("BLURAY")) {
+        factor *= 1.35;
+    }
+    if is_remux && !is_anime {
+        factor *= 1.45;
+    }
+    if is_bd_disk {
+        factor *= 1.8;
+    }
+    if matches!(source, Some("WEB-DL") | Some("WEBRIP")) {
+        factor *= 0.8;
+    }
+    factor
+}
+
+/// Default runtime (minutes) assumed when TVDB metadata is unavailable.
+fn default_runtime_minutes(media_category: MediaSizeCategory) -> f64 {
+    match media_category {
+        MediaSizeCategory::Movie => 120.0,
+        MediaSizeCategory::Series => 45.0,
+        MediaSizeCategory::Anime => 24.0,
     }
 }
 
@@ -937,12 +995,15 @@ fn size_ratio_thresholds(media_category: MediaSizeCategory) -> SizeRatioThreshol
     }
 }
 
-/// Apply category-aware size scoring.
+/// Apply category-aware size scoring using a bitrate-based model.
 ///
-/// Movies, series, and anime have different expected payload sizes at the same
-/// quality tier, so thresholds are tuned per category.  When `runtime_minutes`
-/// is provided the baseline expectation is scaled proportionally (e.g. a 3-hour
-/// movie is expected to be ~1.5× the size of a 2-hour movie).
+/// Expected file size is derived from `bitrate × runtime × codec_factor ×
+/// source_factor`.  This makes scoring inherently runtime-aware: a 140-minute
+/// season finale is expected to be ~3× the size of a 45-minute episode at the
+/// same quality/codec/source, without needing a separate runtime multiplier.
+///
+/// When `runtime_minutes` is not available (TVDB metadata missing), category
+/// defaults are used (120 min movies, 45 min series, 24 min anime).
 pub fn apply_size_scoring_for_category(
     decision: &mut QualityProfileDecision,
     release: &ParsedReleaseMetadata,
@@ -964,38 +1025,20 @@ pub fn apply_size_scoring_for_category(
     let quality = normalize_quality(release.quality.as_deref());
     let source = normalize_source(release.source.as_deref());
     let media_category = normalize_media_size_category(category_hint);
+    let is_anime = media_category == MediaSizeCategory::Anime;
 
-    let mut expected_gib = expected_size_gib_for_quality(quality.as_deref(), media_category);
+    let bitrate = expected_bitrate_mbps(quality.as_deref(), media_category);
+    let codec_factor = codec_efficiency_factor(release.video_codec.as_deref());
+    let source_factor =
+        source_size_factor(source.as_deref(), release.is_remux, release.is_bd_disk, is_anime);
 
-    if matches!(source.as_deref(), Some("BLURAY")) {
-        expected_gib *= 1.35;
-    }
-    if release.is_remux && media_category != MediaSizeCategory::Anime {
-        expected_gib *= 1.45;
-    }
-    if release.is_bd_disk {
-        expected_gib *= 1.8;
-    }
-    if matches!(source.as_deref(), Some("WEB-DL") | Some("WEBRIP")) {
-        expected_gib *= 0.8;
-    }
-    // AV1 is dramatically more efficient than H.264/H.265 at the same
-    // visual quality.  A 350 MB AV1 encode of a 24-min 1080p anime episode
-    // is perfectly normal.
-    if matches!(release.video_codec.as_deref(), Some("AV1")) {
-        expected_gib *= 0.25;
-    }
+    let runtime_min = runtime_minutes
+        .filter(|&r| r > 0)
+        .map(|r| r as f64)
+        .unwrap_or_else(|| default_runtime_minutes(media_category));
 
-    if let Some(runtime) = runtime_minutes
-        && runtime > 0
-    {
-        let baseline = match media_category {
-            MediaSizeCategory::Movie => 120.0,
-            MediaSizeCategory::Series => 45.0,
-            MediaSizeCategory::Anime => 24.0,
-        };
-        expected_gib *= (runtime as f64) / baseline;
-    }
+    // bitrate (Mbps) × runtime (seconds) / 8 = megabytes → convert to GiB
+    let expected_gib = bitrate * codec_factor * source_factor * (runtime_min * 60.0) / 8.0 / 1024.0;
 
     let ratio = size_gib / expected_gib.max(0.5);
     let thresholds = size_ratio_thresholds(media_category);

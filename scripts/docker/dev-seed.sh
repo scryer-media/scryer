@@ -14,8 +14,9 @@ echo "seed: waiting for scryer at $SCRYER_URL ..."
 attempts=0
 max_attempts=60
 while [ "$attempts" -lt "$max_attempts" ]; do
-  if curl -sf "$SCRYER_URL/health" >/dev/null 2>&1; then
-    echo "seed: scryer is healthy"
+  HEALTH=$(curl -sf "$SCRYER_URL/health" 2>/dev/null) || true
+  if echo "$HEALTH" | grep -q '"status":"ok"'; then
+    echo "seed: scryer is ready"
     break
   fi
   attempts=$((attempts + 1))
@@ -47,7 +48,9 @@ cat > "$JQ_FILTER" << 'JQEOF'
 
     ([.downloadClients // [] | to_entries[] | .key as $i | .value |
       (.config | tojson | escape) as $configJson |
-      "dc\($i): createDownloadClientConfig(input: { name: \"\(.name | escape)\", clientType: \"\(.clientType)\", baseUrl: \"\(.baseUrl | escape)\", configJson: \"\($configJson)\" }) { id name }"
+      (if .baseUrl then "baseUrl: \"\(.baseUrl | escape)\", " else "" end) as $baseUrlArg |
+      (if .enabled == false then "isEnabled: false, " elif .enabled == true then "isEnabled: true, " else "" end) as $enabledArg |
+      "dc\($i): createDownloadClientConfig(input: { name: \"\(.name | escape)\", clientType: \"\(.clientType)\", \($baseUrlArg)\($enabledArg)configJson: \"\($configJson)\" }) { id name }"
     ] | join("\n")) as $clients |
 
     ([.settings // [] | to_entries[] | .key as $i | .value |

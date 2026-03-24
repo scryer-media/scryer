@@ -194,13 +194,22 @@ const de: LocaleDictionary = {
   "settings.delayProfileNameLabel": "Name",
   "settings.delayProfileNamePlaceholder": "z.B. Auf bessere Qualität warten",
   "settings.delayProfileNameRequired": "Verzögerungsprofilname ist erforderlich.",
-  "settings.delayProfileHoursLabel": "Verzögerung (Stunden)",
-  "settings.delayProfileHoursHelp":
-    "Wie lange Releases gehalten werden, bevor sie abgerufen werden. 0 bedeutet sofortiger Abruf.",
+  "settings.delayProfileUsenetDelay": "Usenet-Verzögerung (Minuten)",
+  "settings.delayProfileUsenetDelayHelp":
+    "Wie lange Usenet-Releases gehalten werden, bevor sie abgerufen werden. 0 = sofort abrufen.",
+  "settings.delayProfileTorrentDelay": "Torrent-Verzögerung (Minuten)",
+  "settings.delayProfileTorrentDelayHelp":
+    "Wie lange Torrent-Releases gehalten werden, bevor sie abgerufen werden. 0 = sofort abrufen.",
+  "settings.delayProfilePreferred": "Bevorzugtes Protokoll",
+  "settings.delayProfilePreferredHelp":
+    "Score-basiertes Umgehen gilt nur für Releases des bevorzugten Protokolls.",
+  "settings.delayProfileMinAge": "Mindestalter (Minuten)",
+  "settings.delayProfileMinAgeHelp":
+    "Nur Usenet. Harte Sperre — Releases, die jünger sind, werden unabhängig vom Score zurückgehalten. Verhindert das Abrufen unvollständiger NZBs. 0 = deaktiviert.",
   "settings.delayProfileBypassLabel": "Bypass-Score-Schwelle",
   "settings.delayProfileBypassPlaceholder": "Leer lassen, um nie zu umgehen",
   "settings.delayProfileBypassHelp":
-    "Wenn ein Release diesen Score erreicht oder überschreitet, wird es sofort abgerufen, unabhängig von der Verzögerung.",
+    "Wenn ein Release des bevorzugten Protokolls diesen Score erreicht oder überschreitet, wird es sofort abgerufen, unabhängig von der Verzögerung.",
   "settings.delayProfileFacetsLabel": "Gilt für",
   "settings.delayProfileFacetsHelp":
     "Für welche Inhaltstypen dieses Profil gilt. Alles deaktiviert lassen für alle Typen.",

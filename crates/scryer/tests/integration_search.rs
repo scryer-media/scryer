@@ -703,9 +703,9 @@ async fn nzbgeek_search_extracts_metadata_attributes() {
     let result = &results[0];
     assert_eq!(result.thumbs_up, Some(42), "thumbsup should be parsed");
     assert_eq!(result.thumbs_down, Some(3), "thumbsdown should be parsed");
-    assert_eq!(result.nzbgeek_grabs, Some(128), "grabs should be parsed");
+    assert_eq!(result.indexer_grabs, Some(128), "grabs should be parsed");
     assert!(
-        result.nzbgeek_languages.is_some(),
+        result.indexer_languages.is_some(),
         "languages should be parsed"
     );
 }

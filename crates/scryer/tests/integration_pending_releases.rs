@@ -97,11 +97,11 @@ async fn seed_pending_release(
     wanted_item_id: &str,
     title_id: &str,
     score: i32,
-    delay_hours: i64,
+    delay_minutes: i64,
     status: &str,
 ) -> scryer_application::PendingRelease {
     let now = Utc::now();
-    let delay_until = now + Duration::hours(delay_hours);
+    let delay_until = now + Duration::minutes(delay_minutes);
     let pr = scryer_application::PendingRelease {
         id: scryer_domain::Id::new().0,
         wanted_item_id: wanted_item_id.to_string(),
@@ -118,6 +118,9 @@ async fn seed_pending_release(
         delay_until: delay_until.to_rfc3339(),
         status: status.to_string(),
         grabbed_at: None,
+        source_password: None,
+        published_at: None,
+        info_hash: None,
     };
     ctx.db
         .insert_pending_release(&pr)

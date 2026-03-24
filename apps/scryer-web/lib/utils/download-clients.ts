@@ -244,13 +244,19 @@ export function buildDownloadClientDraftFromRecord(record: DownloadClientRecord)
   const baseUrlParts = splitBaseUrlForDraft(record.baseUrl);
   const config = parseJsonPayload(record.configJson);
 
+  // Fall back to config JSON fields when baseUrl is absent (e.g. weaver
+  // entries that resolve host/port/ssl from config rather than a full URL).
+  const host = baseUrlParts.host || readConfigStringValue(config, ["host"]);
+  const port = baseUrlParts.port || readConfigStringValue(config, ["port"]);
+  const urlBase = baseUrlParts.urlBase || readConfigStringValue(config, ["url_base", "urlBase"]);
+
   return {
     ...DEFAULT_DOWNLOAD_CLIENT_DRAFT,
     name: record.name,
     clientType: normalizeDownloadClientType(record.clientType),
-    host: baseUrlParts.host,
-    port: baseUrlParts.port,
-    urlBase: baseUrlParts.urlBase,
+    host,
+    port,
+    urlBase,
     isEnabled: record.isEnabled,
     apiKey: readConfigStringValue(config, ["api_key", "apiKey", "apikey"]),
     username: readConfigStringValue(config, ["username"]),

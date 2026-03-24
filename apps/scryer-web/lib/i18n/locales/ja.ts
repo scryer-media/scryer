@@ -194,13 +194,22 @@ const ja: LocaleDictionary = {
   "settings.delayProfileNameLabel": "名前",
   "settings.delayProfileNamePlaceholder": "例: より良い品質を待つ",
   "settings.delayProfileNameRequired": "遅延プロファイル名は必須です。",
-  "settings.delayProfileHoursLabel": "遅延（時間）",
-  "settings.delayProfileHoursHelp":
-    "取得前にリリースを保留する時間です。0は即座に取得します。",
+  "settings.delayProfileUsenetDelay": "Usenet 遅延（分）",
+  "settings.delayProfileUsenetDelayHelp":
+    "Usenet リリースを取得前に保留する時間です。0 = 即座に取得。",
+  "settings.delayProfileTorrentDelay": "Torrent 遅延（分）",
+  "settings.delayProfileTorrentDelayHelp":
+    "Torrent リリースを取得前に保留する時間です。0 = 即座に取得。",
+  "settings.delayProfilePreferred": "優先プロトコル",
+  "settings.delayProfilePreferredHelp":
+    "スコアベースのバイパスは優先プロトコルのリリースにのみ適用されます。",
+  "settings.delayProfileMinAge": "最小経過時間（分）",
+  "settings.delayProfileMinAgeHelp":
+    "Usenet のみ。ハードゲート — これより新しいリリースはスコアに関係なく保留されます。不完全な NZB の取得を防ぎます。0 = 無効。",
   "settings.delayProfileBypassLabel": "バイパススコア閾値",
   "settings.delayProfileBypassPlaceholder": "バイパスしない場合は空欄",
   "settings.delayProfileBypassHelp":
-    "リリーススコアがこの閾値以上の場合、遅延に関係なく即座に取得します。",
+    "優先プロトコルのリリーススコアがこの閾値以上の場合、遅延に関係なく即座に取得します。",
   "settings.delayProfileFacetsLabel": "適用対象",
   "settings.delayProfileFacetsHelp":
     "このプロファイルが適用されるコンテンツタイプです。すべてチェックを外すとすべてのタイプに適用されます。",

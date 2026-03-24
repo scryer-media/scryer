@@ -22,7 +22,7 @@ import {
   uninstallPluginMutation,
 } from "@/lib/graphql/mutations";
 import { QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY } from "@/lib/constants/settings";
-import { DEFAULT_DOWNLOAD_CLIENT_DRAFT } from "@/lib/constants/download-clients";
+import { DEFAULT_DOWNLOAD_CLIENT_DRAFT, DEFAULT_PORT_FOR_CLIENT_TYPE } from "@/lib/constants/download-clients";
 import {
   buildDownloadClientBaseUrl,
   buildDownloadClientConfigJson,
@@ -844,7 +844,16 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
           draft={dcDraft}
           downloadClientTypeOptions={availableDcTypeOptions}
           onDraftChange={(updates) =>
-            setDcDraft((prev) => ({ ...prev, ...updates }))
+            setDcDraft((prev) => {
+              const next = { ...prev, ...updates };
+              if (updates.clientType && updates.clientType !== prev.clientType) {
+                const prevDefault = DEFAULT_PORT_FOR_CLIENT_TYPE[prev.clientType] ?? "8080";
+                if (prev.port === "" || prev.port === prevDefault) {
+                  next.port = DEFAULT_PORT_FOR_CLIENT_TYPE[updates.clientType] ?? "8080";
+                }
+              }
+              return next;
+            })
           }
           onTestConnection={dcSaved ? testDownloadClient : handleDcTestAndSave}
           onNext={() => goToStep(5)}

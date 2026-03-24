@@ -187,13 +187,22 @@ const pt_BR: LocaleDictionary = {
   "settings.delayProfileNameLabel": "Nome",
   "settings.delayProfileNamePlaceholder": "Ex: Esperar melhor qualidade",
   "settings.delayProfileNameRequired": "O nome do perfil de atraso é obrigatório.",
-  "settings.delayProfileHoursLabel": "Atraso (horas)",
-  "settings.delayProfileHoursHelp":
-    "Quanto tempo reter os lançamentos antes de baixar. 0 significa baixar imediatamente.",
+  "settings.delayProfileUsenetDelay": "Atraso Usenet (minutos)",
+  "settings.delayProfileUsenetDelayHelp":
+    "Quanto tempo reter os lançamentos Usenet antes de capturar. 0 = capturar imediatamente.",
+  "settings.delayProfileTorrentDelay": "Atraso Torrent (minutos)",
+  "settings.delayProfileTorrentDelayHelp":
+    "Quanto tempo reter os lançamentos torrent antes de capturar. 0 = capturar imediatamente.",
+  "settings.delayProfilePreferred": "Protocolo preferido",
+  "settings.delayProfilePreferredHelp":
+    "O bypass baseado em pontuação só se aplica a lançamentos do protocolo preferido.",
+  "settings.delayProfileMinAge": "Idade mínima (minutos)",
+  "settings.delayProfileMinAgeHelp":
+    "Somente Usenet. Bloqueio rígido — lançamentos mais recentes são retidos independentemente da pontuação. Evita capturar NZBs incompletos. 0 = desativado.",
   "settings.delayProfileBypassLabel": "Limite de pontuação para ignorar",
   "settings.delayProfileBypassPlaceholder": "Deixe vazio para nunca ignorar",
   "settings.delayProfileBypassHelp":
-    "Se um lançamento atingir ou superar este limite, baixá-lo imediatamente independente do atraso.",
+    "Se um lançamento do protocolo preferido atingir ou superar este limite, capturá-lo imediatamente independente do atraso.",
   "settings.delayProfileFacetsLabel": "Aplica-se a",
   "settings.delayProfileFacetsHelp":
     "A quais tipos de conteúdo este perfil se aplica. Deixe todos desmarcados para todos os tipos.",

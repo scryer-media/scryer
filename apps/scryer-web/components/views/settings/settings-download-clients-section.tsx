@@ -13,6 +13,7 @@ import {
   buildWeaverApiKeyUrl,
   buildUrlPreview,
 } from "@/lib/utils/download-clients";
+import { DEFAULT_PORT_FOR_CLIENT_TYPE } from "@/lib/constants/download-clients";
 import {
   Table,
   TableBody,
@@ -184,7 +185,7 @@ const DOWNLOAD_CLIENT_TYPE_LOGO_OPTIONS: DownloadClientTypeLogoOption[] = [
   },
   {
     value: "weaver",
-    iconSrc: "download-clients/weaver.svg",
+    iconSrc: "download-clients/weaver.webp",
     icon: WeaverIcon,
   },
   {
@@ -414,12 +415,17 @@ export function SettingsDownloadClientsSection({
                 <Label className="mb-2 block">{t("label.type")}</Label>
                 <Select
                   value={downloadClientDraft.clientType}
-                  onValueChange={(value) =>
-                    setDownloadClientDraft((prev: DownloadClientDraft) => ({
-                      ...prev,
-                      clientType: value,
-                    }))
-                  }
+                  onValueChange={(value) => {
+                    setDownloadClientDraft((prev: DownloadClientDraft) => {
+                      const prevDefault = DEFAULT_PORT_FOR_CLIENT_TYPE[prev.clientType] ?? "8080";
+                      const isDefaultPort = prev.port === "" || prev.port === prevDefault;
+                      return {
+                        ...prev,
+                        clientType: value,
+                        port: isDefaultPort ? (DEFAULT_PORT_FOR_CLIENT_TYPE[value] ?? "8080") : prev.port,
+                      };
+                    });
+                  }}
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue />

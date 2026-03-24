@@ -739,6 +739,19 @@ pub(crate) async fn list_download_submissions_for_title_query(
     Ok(out)
 }
 
+pub(crate) async fn delete_download_submission_by_client_item_id_query(
+    pool: &SqlitePool,
+    download_client_item_id: &str,
+) -> AppResult<()> {
+    sqlx::query("DELETE FROM download_submissions WHERE download_client_item_id = ?")
+        .bind(download_client_item_id)
+        .execute(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(())
+}
+
 pub(crate) async fn delete_download_submissions_for_title_query(
     pool: &SqlitePool,
     title_id: &str,

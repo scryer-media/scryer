@@ -604,6 +604,9 @@ impl DownloadSubmissionRepository for NullDownloadSubmissionRepository {
     async fn delete_for_title(&self, _: &str) -> AppResult<()> {
         Ok(())
     }
+    async fn delete_by_client_item_id(&self, _: &str) -> AppResult<()> {
+        Ok(())
+    }
 }
 
 pub struct NullPendingReleaseRepository;

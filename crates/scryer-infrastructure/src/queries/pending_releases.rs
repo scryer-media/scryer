@@ -10,8 +10,9 @@ pub(crate) async fn insert_pending_release_query(
         "INSERT INTO pending_releases
          (id, wanted_item_id, title_id, release_title, release_url, release_size_bytes,
           source_kind, release_score, scoring_log_json, indexer_source, release_guid,
-          added_at, delay_until, status, grabbed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          added_at, delay_until, status, grabbed_at,
+          source_password, published_at, info_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&release.id)
     .bind(&release.wanted_item_id)
@@ -28,6 +29,9 @@ pub(crate) async fn insert_pending_release_query(
     .bind(&release.delay_until)
     .bind(&release.status)
     .bind(&release.grabbed_at)
+    .bind(&release.source_password)
+    .bind(&release.published_at)
+    .bind(&release.info_hash)
     .execute(pool)
     .await
     .map_err(|err| AppError::Repository(err.to_string()))?;
@@ -42,7 +46,8 @@ pub(crate) async fn list_expired_pending_releases_query(
     let rows: Vec<SqliteRow> = sqlx::query(
         "SELECT id, wanted_item_id, title_id, release_title, release_url, release_size_bytes,
                 source_kind, release_score, scoring_log_json, indexer_source, release_guid,
-                added_at, delay_until, status, grabbed_at
+                added_at, delay_until, status, grabbed_at,
+                source_password, published_at, info_hash
          FROM pending_releases
          WHERE status = 'waiting' AND delay_until <= ?
          ORDER BY delay_until ASC",
@@ -66,7 +71,8 @@ pub(crate) async fn list_pending_releases_for_wanted_item_query(
     let rows: Vec<SqliteRow> = sqlx::query(
         "SELECT id, wanted_item_id, title_id, release_title, release_url, release_size_bytes,
                 source_kind, release_score, scoring_log_json, indexer_source, release_guid,
-                added_at, delay_until, status, grabbed_at
+                added_at, delay_until, status, grabbed_at,
+                source_password, published_at, info_hash
          FROM pending_releases
          WHERE wanted_item_id = ? AND status = 'waiting'
          ORDER BY release_score DESC",
@@ -124,7 +130,8 @@ pub(crate) async fn list_waiting_pending_releases_query(
     let rows: Vec<SqliteRow> = sqlx::query(
         "SELECT id, wanted_item_id, title_id, release_title, release_url, release_size_bytes,
                 source_kind, release_score, scoring_log_json, indexer_source, release_guid,
-                added_at, delay_until, status, grabbed_at
+                added_at, delay_until, status, grabbed_at,
+                source_password, published_at, info_hash
          FROM pending_releases
          WHERE status = 'waiting'
          ORDER BY delay_until ASC",
@@ -147,7 +154,8 @@ pub(crate) async fn get_pending_release_query(
     let row = sqlx::query(
         "SELECT id, wanted_item_id, title_id, release_title, release_url, release_size_bytes,
                 source_kind, release_score, scoring_log_json, indexer_source, release_guid,
-                added_at, delay_until, status, grabbed_at
+                added_at, delay_until, status, grabbed_at,
+                source_password, published_at, info_hash
          FROM pending_releases
          WHERE id = ?",
     )
@@ -211,5 +219,8 @@ fn row_to_pending_release(row: &SqliteRow) -> AppResult<PendingRelease> {
             .try_get("status")
             .map_err(|e| AppError::Repository(e.to_string()))?,
         grabbed_at: row.try_get("grabbed_at").unwrap_or(None),
+        source_password: row.try_get("source_password").unwrap_or(None),
+        published_at: row.try_get("published_at").unwrap_or(None),
+        info_hash: row.try_get("info_hash").unwrap_or(None),
     })
 }

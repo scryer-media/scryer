@@ -25,9 +25,11 @@ pub(crate) struct SplashState {
 pub(crate) async fn splash_health_handler(State(state): State<SplashState>) -> Response {
     let status = state.status_rx.borrow().clone();
     match status {
-        BootstrapStatus::Migrating => {
-            Json(serde_json::json!({"status": "migrating"})).into_response()
-        }
+        BootstrapStatus::Migrating => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"status": "migrating"})),
+        )
+            .into_response(),
         BootstrapStatus::Ready(_) => Json(serde_json::json!({"status": "ok"})).into_response(),
         BootstrapStatus::Failed(message) => (
             StatusCode::INTERNAL_SERVER_ERROR,
