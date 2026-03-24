@@ -11,9 +11,7 @@ use crate::activity::{ActivityChannel, ActivityKind, ActivitySeverity};
 use crate::recycle_bin::{self, RecycleBinConfig, RecycleManifest};
 use crate::release_parser::ParsedReleaseMetadata;
 use crate::types::TitleMediaFile;
-use crate::{
-    AppError, AppResult, AppUseCase, InsertMediaFileInput, ReleaseDownloadAttemptOutcome,
-};
+use crate::{AppError, AppResult, AppUseCase, InsertMediaFileInput, ReleaseDownloadAttemptOutcome};
 use scryer_domain::{CompletedDownload, NotificationEventType, Title, User};
 
 /// Result of a successful upgrade operation.

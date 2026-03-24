@@ -133,7 +133,10 @@ impl AppUseCase {
         // including pending releases in the RSS decision cycle.
         match self.process_expired_pending_releases().await {
             Ok(grabbed) if grabbed > 0 => {
-                info!(grabbed, "rss sync: promoted expired pending releases before RSS fetch");
+                info!(
+                    grabbed,
+                    "rss sync: promoted expired pending releases before RSS fetch"
+                );
             }
             Err(e) => {
                 warn!(error = %e, "rss sync: pending release processing failed, continuing with RSS");
@@ -934,9 +937,7 @@ impl AppUseCase {
                     effective_delay_minutes,
                     best.password_hint.as_deref(),
                     best.published_at.as_deref(),
-                    best.extra
-                        .get("info_hash")
-                        .and_then(|v| v.as_str()),
+                    best.extra.get("info_hash").and_then(|v| v.as_str()),
                 )
                 .await;
                 report.releases_held += 1;
@@ -956,8 +957,7 @@ impl AppUseCase {
         let source_title = Some(best.title.clone());
         let source_hint_for_attempt = normalize_release_attempt_hint(source_hint.as_deref());
         let source_title_for_attempt = normalize_release_attempt_title(source_title.as_deref());
-        let source_password =
-            normalize_release_password(best.password_hint.as_deref());
+        let source_password = normalize_release_password(best.password_hint.as_deref());
 
         let _ = self
             .services

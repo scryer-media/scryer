@@ -341,8 +341,7 @@ impl AppUseCase {
         // Without this check, the pending processor could retry a release
         // that's currently downloading (e.g. grabbed via background search
         // while this pending release was waiting).
-        let dl_snapshot =
-            super::app_usecase_acquisition::DownloadClientSnapshot::fetch(self).await;
+        let dl_snapshot = super::app_usecase_acquisition::DownloadClientSnapshot::fetch(self).await;
         if dl_snapshot.is_active(&pr.release_title) {
             info!(
                 release = pr.release_title.as_str(),

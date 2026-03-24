@@ -145,7 +145,12 @@ pub fn is_usenet_source(source_kind: Option<DownloadSourceKind>) -> bool {
 mod tests {
     use super::*;
 
-    fn make_profile(id: &str, priority: i32, usenet_delay: i64, torrent_delay: i64) -> DelayProfile {
+    fn make_profile(
+        id: &str,
+        priority: i32,
+        usenet_delay: i64,
+        torrent_delay: i64,
+    ) -> DelayProfile {
         DelayProfile {
             id: id.to_string(),
             name: id.to_string(),
@@ -263,10 +268,22 @@ mod tests {
     #[test]
     fn protocol_delay_returns_correct_value() {
         let profile = make_profile("mixed", 10, 60, 360);
-        assert_eq!(profile.get_protocol_delay(Some(DownloadSourceKind::NzbFile)), 60);
-        assert_eq!(profile.get_protocol_delay(Some(DownloadSourceKind::NzbUrl)), 60);
-        assert_eq!(profile.get_protocol_delay(Some(DownloadSourceKind::TorrentFile)), 360);
-        assert_eq!(profile.get_protocol_delay(Some(DownloadSourceKind::MagnetUri)), 360);
+        assert_eq!(
+            profile.get_protocol_delay(Some(DownloadSourceKind::NzbFile)),
+            60
+        );
+        assert_eq!(
+            profile.get_protocol_delay(Some(DownloadSourceKind::NzbUrl)),
+            60
+        );
+        assert_eq!(
+            profile.get_protocol_delay(Some(DownloadSourceKind::TorrentFile)),
+            360
+        );
+        assert_eq!(
+            profile.get_protocol_delay(Some(DownloadSourceKind::MagnetUri)),
+            360
+        );
         assert_eq!(profile.get_protocol_delay(None), 360); // default to torrent
     }
 

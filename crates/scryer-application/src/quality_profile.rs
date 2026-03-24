@@ -1029,8 +1029,12 @@ pub fn apply_size_scoring_for_category(
 
     let bitrate = expected_bitrate_mbps(quality.as_deref(), media_category);
     let codec_factor = codec_efficiency_factor(release.video_codec.as_deref());
-    let source_factor =
-        source_size_factor(source.as_deref(), release.is_remux, release.is_bd_disk, is_anime);
+    let source_factor = source_size_factor(
+        source.as_deref(),
+        release.is_remux,
+        release.is_bd_disk,
+        is_anime,
+    );
 
     let runtime_min = runtime_minutes
         .filter(|&r| r > 0)

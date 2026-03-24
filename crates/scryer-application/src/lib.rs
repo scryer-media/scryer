@@ -2660,10 +2660,7 @@ mod tests {
             Ok(())
         }
 
-        async fn delete_by_client_item_id(
-            &self,
-            download_client_item_id: &str,
-        ) -> AppResult<()> {
+        async fn delete_by_client_item_id(&self, download_client_item_id: &str) -> AppResult<()> {
             self.store
                 .lock()
                 .await
