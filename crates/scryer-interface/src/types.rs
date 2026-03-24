@@ -479,6 +479,31 @@ pub struct RetryImportInput {
     pub password: Option<String>,
 }
 
+#[derive(InputObject)]
+pub struct IgnoreTrackedDownloadInput {
+    pub client_type: String,
+    pub download_client_item_id: String,
+}
+
+#[derive(InputObject)]
+pub struct MarkTrackedDownloadFailedInput {
+    pub client_type: String,
+    pub download_client_item_id: String,
+}
+
+#[derive(InputObject)]
+pub struct RetryTrackedDownloadImportInput {
+    pub client_type: String,
+    pub download_client_item_id: String,
+}
+
+#[derive(InputObject)]
+pub struct AssignTrackedDownloadTitleInput {
+    pub client_type: String,
+    pub download_client_item_id: String,
+    pub title_id: String,
+}
+
 #[derive(SimpleObject, Clone)]
 pub struct AddTitleResult {
     pub title: TitlePayload,

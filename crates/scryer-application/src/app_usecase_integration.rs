@@ -360,9 +360,11 @@ impl AppUseCase {
                 .find_by_client_item_id(&item.client_type, &item.download_client_item_id)
                 .await
             {
-                item.is_scryer_origin = true;
-                item.title_id = Some(submission.title_id);
-                item.facet = Some(submission.facet);
+                if !submission.title_id.trim().is_empty() {
+                    item.is_scryer_origin = true;
+                    item.title_id = Some(submission.title_id);
+                    item.facet = Some(submission.facet);
+                }
             }
         }
 
@@ -575,6 +577,108 @@ impl AppUseCase {
         }
 
         crate::app_usecase_import::import_completed_download(self, actor, &completed).await
+    }
+
+    pub async fn ignore_tracked_download(
+        &self,
+        actor: &User,
+        client_type: &str,
+        download_client_item_id: &str,
+    ) -> AppResult<()> {
+        require(actor, &Entitlement::TriggerActions)?;
+        let handle = self
+            .services
+            .tracked_download_handle
+            .as_ref()
+            .ok_or_else(|| AppError::Repository("tracked download service unavailable".into()))?;
+        handle
+            .ignore(crate::tracked_downloads::tracked_download_id(
+                client_type,
+                download_client_item_id,
+            ))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn mark_tracked_download_failed(
+        &self,
+        actor: &User,
+        client_type: &str,
+        download_client_item_id: &str,
+    ) -> AppResult<()> {
+        require(actor, &Entitlement::TriggerActions)?;
+        let handle = self
+            .services
+            .tracked_download_handle
+            .as_ref()
+            .ok_or_else(|| AppError::Repository("tracked download service unavailable".into()))?;
+        handle
+            .mark_failed(crate::tracked_downloads::tracked_download_id(
+                client_type,
+                download_client_item_id,
+            ))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn retry_tracked_download_import(
+        &self,
+        actor: &User,
+        client_type: &str,
+        download_client_item_id: &str,
+    ) -> AppResult<()> {
+        require(actor, &Entitlement::TriggerActions)?;
+        let handle = self
+            .services
+            .tracked_download_handle
+            .as_ref()
+            .ok_or_else(|| AppError::Repository("tracked download service unavailable".into()))?;
+        handle
+            .retry_import(crate::tracked_downloads::tracked_download_id(
+                client_type,
+                download_client_item_id,
+            ))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn assign_tracked_download_title(
+        &self,
+        actor: &User,
+        client_type: &str,
+        download_client_item_id: &str,
+        title_id: &str,
+    ) -> AppResult<()> {
+        require(actor, &Entitlement::TriggerActions)?;
+        let title = self
+            .services
+            .titles
+            .get_by_id(title_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+        self.services
+            .download_submissions
+            .record_submission(DownloadSubmission {
+                title_id: title.id.clone(),
+                facet: title.facet.as_str().to_string(),
+                download_client_type: client_type.to_string(),
+                download_client_item_id: download_client_item_id.to_string(),
+                source_title: Some(title.name.clone()),
+                collection_id: None,
+            })
+            .await?;
+        let handle = self
+            .services
+            .tracked_download_handle
+            .as_ref()
+            .ok_or_else(|| AppError::Repository("tracked download service unavailable".into()))?;
+        handle
+            .assign_title(
+                crate::tracked_downloads::tracked_download_id(client_type, download_client_item_id),
+                title.id,
+            )
+            .await?;
+        Ok(())
     }
 
     pub async fn pause_download_queue_item(
@@ -835,6 +939,7 @@ impl AppUseCase {
 pub async fn start_download_queue_poller(
     app: AppUseCase,
     token: tokio_util::sync::CancellationToken,
+    mut command_rx: tokio::sync::mpsc::Receiver<crate::tracked_downloads::TrackedDownloadCommand>,
 ) {
     use crate::tracked_downloads::{tracked_download_id, TrackedDownloadService};
     use scryer_domain::TrackedDownloadState;
@@ -852,11 +957,22 @@ pub async fn start_download_queue_poller(
 
     tracing::info!("download queue poller started (2s interval, tracked downloads enabled)");
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+    let mut commands_open = true;
     loop {
         tokio::select! {
             _ = token.cancelled() => {
                 tracing::info!("download queue poller shutting down");
                 break;
+            }
+            maybe_command = command_rx.recv(), if commands_open => {
+                match maybe_command {
+                    Some(command) => {
+                        handle_tracked_download_command(&app, &mut tracker, command).await;
+                    }
+                    None => {
+                        commands_open = false;
+                    }
+                }
             }
             _ = interval.tick() => {
                 match app.list_download_queue(&actor, true, false).await {
@@ -874,7 +990,7 @@ pub async fn start_download_queue_poller(
                                     || td.state == TrackedDownloadState::ImportBlocked
                                 {
                                     crate::failed_download_handler::check(td);
-                                    crate::completed_download_handler::check(&app, td);
+                                    crate::completed_download_handler::check(&app, td).await;
                                 }
                             }
                         }
@@ -882,25 +998,31 @@ pub async fn start_download_queue_poller(
                         tracker.update_trackable(&seen_ids);
 
                         // Phase 2: Process — import pending and failed items.
-                        let trackable_ids: Vec<String> = tracker
-                            .get_trackable()
-                            .iter()
-                            .map(|td| td.id.clone())
-                            .collect();
+                        let trackable_ids = tracker.get_trackable_ids();
 
                         for id in &trackable_ids {
+                            let mut terminal_state_to_persist = None;
+
                             if let Some(td) = tracker.find_mut(id) {
+                                if td.state == TrackedDownloadState::ImportPending {
+                                    let transitioned_terminal =
+                                        crate::completed_download_handler::import(&app, &actor, td)
+                                            .await;
+                                    if transitioned_terminal {
+                                        terminal_state_to_persist = Some(td.state);
+                                    }
+                                }
+
                                 if td.state == TrackedDownloadState::FailedPending {
                                     crate::failed_download_handler::process_failed(&app, td).await;
-                                    tracker.persist_terminal_state(&app, id, TrackedDownloadState::Failed).await;
+                                    terminal_state_to_persist = Some(TrackedDownloadState::Failed);
                                 }
                             }
-                        }
 
-                        // Run existing import pipeline (handles the actual file import).
-                        // TrackedDownloads orchestrates when to import; the existing pipeline
-                        // handles how. This will be tightened once import() is fully wired.
-                        crate::app_usecase_import::try_import_completed_downloads(&app, &actor, &items).await;
+                            if let Some(state) = terminal_state_to_persist {
+                                tracker.persist_terminal_state(&app, id, state).await;
+                            }
+                        }
 
                         // Enrich items with tracked state before broadcasting.
                         for item in &mut items {
@@ -946,6 +1068,88 @@ pub async fn start_download_queue_poller(
                     }
                 }
             }
+        }
+    }
+}
+
+async fn handle_tracked_download_command(
+    app: &AppUseCase,
+    tracker: &mut crate::tracked_downloads::TrackedDownloadService,
+    command: crate::tracked_downloads::TrackedDownloadCommand,
+) {
+    use crate::tracked_downloads::TrackedDownloadCommand;
+    use scryer_domain::{TitleMatchType, TrackedDownloadState, TrackedDownloadStatus};
+
+    match command {
+        TrackedDownloadCommand::Ignore { id, reply } => {
+            let result = if let Some(td) = tracker.find_mut(&id) {
+                td.state = TrackedDownloadState::Ignored;
+                td.status = TrackedDownloadStatus::Ok;
+                td.status_messages.clear();
+                tracker
+                    .persist_terminal_state(app, &id, TrackedDownloadState::Ignored)
+                    .await;
+                Ok(())
+            } else {
+                Err(AppError::NotFound(format!("tracked download {id}")))
+            };
+            let _ = reply.send(result);
+        }
+        TrackedDownloadCommand::MarkFailed { id, reply } => {
+            let result = if let Some(td) = tracker.find_mut(&id) {
+                td.state = TrackedDownloadState::FailedPending;
+                crate::failed_download_handler::process_failed(app, td).await;
+                tracker
+                    .persist_terminal_state(app, &id, TrackedDownloadState::Failed)
+                    .await;
+                Ok(())
+            } else {
+                Err(AppError::NotFound(format!("tracked download {id}")))
+            };
+            let _ = reply.send(result);
+        }
+        TrackedDownloadCommand::RetryImport { id, reply } => {
+            let result = if let Some(td) = tracker.find_mut(&id) {
+                td.state = TrackedDownloadState::ImportPending;
+                td.status = TrackedDownloadStatus::Ok;
+                td.status_messages.clear();
+                Ok(())
+            } else {
+                Err(AppError::NotFound(format!("tracked download {id}")))
+            };
+            let _ = reply.send(result);
+        }
+        TrackedDownloadCommand::AssignTitle {
+            id,
+            title_id,
+            reply,
+        } => {
+            let title = match app.services.titles.get_by_id(&title_id).await {
+                Ok(Some(title)) => title,
+                Ok(None) => {
+                    let _ = reply.send(Err(AppError::NotFound(format!("title {title_id}"))));
+                    return;
+                }
+                Err(error) => {
+                    let _ = reply.send(Err(error));
+                    return;
+                }
+            };
+
+            let result = if let Some(td) = tracker.find_mut(&id) {
+                td.title_id = Some(title.id.clone());
+                td.facet = Some(title.facet.as_str().to_string());
+                td.match_type = TitleMatchType::Submission;
+                td.status = TrackedDownloadStatus::Ok;
+                td.status_messages.clear();
+                td.state = TrackedDownloadState::Downloading;
+                crate::failed_download_handler::check(td);
+                crate::completed_download_handler::check(app, td).await;
+                Ok(())
+            } else {
+                Err(AppError::NotFound(format!("tracked download {id}")))
+            };
+            let _ = reply.send(result);
         }
     }
 }

@@ -1,5 +1,6 @@
 use crate::{
     ActivityChannel, ActivityKind, ActivitySeverity, AppError, AppResult, AppUseCase,
+    ImportArtifact,
     app_usecase_post_processing::{PostProcessingContext, spawn_post_processing},
     nfo::{render_episode_nfo, render_movie_nfo, render_plexmatch, render_tvshow_nfo},
     parse_release_metadata, render_rename_template, require,
@@ -251,7 +252,7 @@ pub async fn try_import_completed_downloads(
                 .find_by_client_item_id(&completed.client_type, &completed.download_client_item_id)
                 .await
             {
-                Ok(Some(submission)) => {
+                Ok(Some(submission)) if submission_has_scryer_origin(&submission) => {
                     let mut patched = completed.clone();
                     patched.parameters = vec![
                         ("*scryer_title_id".to_string(), submission.title_id),
@@ -263,6 +264,16 @@ pub async fn try_import_completed_downloads(
                             .push(("*scryer_collection_id".to_string(), coll_id));
                     }
                     patched
+                }
+                Ok(Some(_)) => {
+                    tracing::debug!(
+                        source_ref = %source_ref,
+                        title = %item.title_name,
+                        client_type = %completed.client_type,
+                        "import: ignoring stub download_submissions row without scryer origin metadata"
+                    );
+                    processed_ids.insert(source_ref.clone());
+                    continue;
                 }
                 Ok(None) => {
                     tracing::debug!(
@@ -813,6 +824,19 @@ async fn import_movie_download(
     };
     let verdict = crate::import_checks::run_import_checks(&check_ctx);
     if let crate::import_checks::ImportVerdict::Reject { reason, code } = verdict {
+        persist_file_import_artifact(
+            app,
+            import_id,
+            completed,
+            title.id.as_str(),
+            &source_video,
+            "movie",
+            "rejected",
+            Some(code),
+            None,
+            &[],
+        )
+        .await;
         let skip_reason = Some(match code {
             "duplicate_file" => ImportSkipReason::DuplicateFile,
             "insufficient_disk_space" => ImportSkipReason::DiskFull,
@@ -884,6 +908,19 @@ async fn import_movie_download(
                 .await
                 {
                     Ok(crate::upgrade::UpgradeResult::Upgraded(outcome)) => {
+                        persist_file_import_artifact(
+                            app,
+                            import_id,
+                            completed,
+                            title.id.as_str(),
+                            &source_video,
+                            "movie",
+                            "imported",
+                            Some("upgrade"),
+                            None,
+                            &[],
+                        )
+                        .await;
                         let result = ImportResult {
                             import_id: import_id.to_string(),
                             decision: ImportDecision::Imported,
@@ -915,6 +952,22 @@ async fn import_movie_download(
                         return Ok(result);
                     }
                     Ok(crate::upgrade::UpgradeResult::Rejected(rejection)) => {
+                        persist_file_import_artifact(
+                            app,
+                            import_id,
+                            completed,
+                            title.id.as_str(),
+                            &source_video,
+                            "movie",
+                            "already_present",
+                            rejection
+                                .skip_reason
+                                .as_ref()
+                                .map(ImportSkipReason::as_str),
+                            None,
+                            &[],
+                        )
+                        .await;
                         let result = ImportResult {
                             import_id: import_id.to_string(),
                             decision: ImportDecision::Rejected,
@@ -984,6 +1037,22 @@ async fn import_movie_download(
                 &rejection,
             )
             .await;
+            persist_file_import_artifact(
+                app,
+                import_id,
+                completed,
+                title.id.as_str(),
+                &source_video,
+                "movie",
+                "already_present",
+                rejection
+                    .skip_reason
+                    .as_ref()
+                    .map(ImportSkipReason::as_str),
+                None,
+                &[],
+            )
+            .await;
             let result = ImportResult {
                 import_id: import_id.to_string(),
                 decision: ImportDecision::Rejected,
@@ -1051,7 +1120,7 @@ async fn import_movie_download(
                 acquisition_score: Some(acq_score),
                 ..Default::default()
             };
-            match app
+            let imported_media_file_id = match app
                 .services
                 .media_files
                 .insert_media_file(&media_file_input)
@@ -1065,6 +1134,7 @@ async fn import_movie_download(
                     )
                     .await;
                     maybe_trigger_subtitle_search(app, &title.id, &file_id);
+                    Some(file_id)
                 }
                 Err(err) => {
                     tracing::warn!(
@@ -1073,8 +1143,23 @@ async fn import_movie_download(
                         dest_path = %dest_path.display(),
                         "failed to insert media_files record (import will still succeed)"
                     );
+                    None
                 }
-            }
+            };
+
+            persist_file_import_artifact(
+                app,
+                import_id,
+                completed,
+                title.id.as_str(),
+                &source_video,
+                "movie",
+                "imported",
+                None,
+                imported_media_file_id.as_deref(),
+                &[],
+            )
+            .await;
 
             // Create collection record (so the movie overview UI can show the file)
             let collection = Collection {
@@ -1363,6 +1448,19 @@ async fn import_interstitial_movie_download(
                 .await
                 {
                     Ok(crate::upgrade::UpgradeResult::Upgraded(outcome)) => {
+                        persist_file_import_artifact(
+                            app,
+                            import_id,
+                            completed,
+                            title.id.as_str(),
+                            &source_video,
+                            "movie",
+                            "imported",
+                            Some("upgrade"),
+                            None,
+                            &[],
+                        )
+                        .await;
                         tracing::info!(
                             title = %title.name,
                             movie = %movie.name,
@@ -1395,6 +1493,22 @@ async fn import_interstitial_movie_download(
                         return Ok(result);
                     }
                     Ok(crate::upgrade::UpgradeResult::Rejected(rejection)) => {
+                        persist_file_import_artifact(
+                            app,
+                            import_id,
+                            completed,
+                            title.id.as_str(),
+                            &source_video,
+                            "movie",
+                            "already_present",
+                            rejection
+                                .skip_reason
+                                .as_ref()
+                                .map(ImportSkipReason::as_str),
+                            None,
+                            &[],
+                        )
+                        .await;
                         let result = ImportResult {
                             import_id: import_id.to_string(),
                             decision: ImportDecision::Rejected,
@@ -1427,6 +1541,19 @@ async fn import_interstitial_movie_download(
                 }
             } else {
                 // New file is not better — skip
+                persist_file_import_artifact(
+                    app,
+                    import_id,
+                    completed,
+                    title.id.as_str(),
+                    &source_video,
+                    "movie",
+                    "already_present",
+                    Some("existing_better_or_equal"),
+                    None,
+                    &[],
+                )
+                .await;
                 let result = ImportResult {
                     import_id: import_id.to_string(),
                     decision: ImportDecision::Skipped,
@@ -1493,6 +1620,22 @@ async fn import_interstitial_movie_download(
                 &rejection,
             )
             .await;
+            persist_file_import_artifact(
+                app,
+                import_id,
+                completed,
+                title.id.as_str(),
+                &source_video,
+                "movie",
+                "already_present",
+                rejection
+                    .skip_reason
+                    .as_ref()
+                    .map(ImportSkipReason::as_str),
+                None,
+                &[],
+            )
+            .await;
             let result = ImportResult {
                 import_id: import_id.to_string(),
                 decision: ImportDecision::Rejected,
@@ -1523,7 +1666,7 @@ async fn import_interstitial_movie_download(
             );
 
             // Persist media analysis from the gate
-            if let Ok(file_id) = app
+            let imported_media_file_id = if let Ok(file_id) = app
                 .services
                 .media_files
                 .insert_media_file(&crate::InsertMediaFileInput {
@@ -1550,7 +1693,24 @@ async fn import_interstitial_movie_download(
                 )
                 .await;
                 maybe_trigger_subtitle_search(app, &title.id, &file_id);
-            }
+                Some(file_id)
+            } else {
+                None
+            };
+
+            persist_file_import_artifact(
+                app,
+                import_id,
+                completed,
+                title.id.as_str(),
+                &source_video,
+                "movie",
+                "imported",
+                None,
+                imported_media_file_id.as_deref(),
+                &[],
+            )
+            .await;
         }
     }
 
@@ -1794,6 +1954,7 @@ async fn import_series_download(
             app,
             actor,
             title,
+            import_id,
             &media_root,
             &rename_template,
             &title_folder,
@@ -1938,6 +2099,7 @@ async fn import_single_episode_file(
     app: &AppUseCase,
     actor: &User,
     title: &scryer_domain::Title,
+    import_id: &str,
     media_root: &str,
     rename_template: &str,
     title_folder: &str,
@@ -2036,6 +2198,19 @@ async fn import_single_episode_file(
         crate::import_checks::run_import_checks(&check_ctx)
     {
         tracing::debug!(file = %dest_path.display(), %code, %reason, "skipping episode file");
+        persist_file_import_artifact(
+            app,
+            import_id,
+            completed,
+            title.id.as_str(),
+            source_video,
+            "episode",
+            "rejected",
+            Some(code),
+            None,
+            &target_episodes,
+        )
+        .await;
         return Ok(EpisodeImportOutcome::Skipped);
     }
 
@@ -2081,6 +2256,19 @@ async fn import_single_episode_file(
                 .await
                 {
                     Ok(crate::upgrade::UpgradeResult::Upgraded(outcome)) => {
+                        persist_file_import_artifact(
+                            app,
+                            import_id,
+                            completed,
+                            title.id.as_str(),
+                            source_video,
+                            "episode",
+                            "imported",
+                            Some("upgrade"),
+                            None,
+                            &target_episodes,
+                        )
+                        .await;
                         tracing::info!(
                             title = %title.name,
                             old_score = outcome.old_score,
@@ -2093,6 +2281,22 @@ async fn import_single_episode_file(
                         return Ok(EpisodeImportOutcome::Imported);
                     }
                     Ok(crate::upgrade::UpgradeResult::Rejected(rejection)) => {
+                        persist_file_import_artifact(
+                            app,
+                            import_id,
+                            completed,
+                            title.id.as_str(),
+                            source_video,
+                            "episode",
+                            "already_present",
+                            rejection
+                                .skip_reason
+                                .as_ref()
+                                .map(ImportSkipReason::as_str),
+                            None,
+                            &target_episodes,
+                        )
+                        .await;
                         return Ok(EpisodeImportOutcome::Rejected {
                             message: rejection.message,
                             skip_reason: rejection.skip_reason,
@@ -2146,6 +2350,22 @@ async fn import_single_episode_file(
                 &dest_path,
                 &target_episode_ids,
                 &rejection,
+            )
+            .await;
+            persist_file_import_artifact(
+                app,
+                import_id,
+                completed,
+                title.id.as_str(),
+                source_video,
+                "episode",
+                "already_present",
+                rejection
+                    .skip_reason
+                    .as_ref()
+                    .map(ImportSkipReason::as_str),
+                None,
+                &target_episodes,
             )
             .await;
             return Ok(EpisodeImportOutcome::Rejected {
@@ -2206,6 +2426,19 @@ async fn import_single_episode_file(
         &app.services.media_files,
         &media_file_id,
         &accepted,
+    )
+    .await;
+    persist_file_import_artifact(
+        app,
+        import_id,
+        completed,
+        title.id.as_str(),
+        source_video,
+        "episode",
+        "imported",
+        None,
+        Some(media_file_id.as_str()),
+        &target_episodes,
     )
     .await;
     maybe_trigger_subtitle_search(app, &title.id, &media_file_id);
@@ -2536,26 +2769,75 @@ pub(crate) async fn resolve_target_episodes(
         }
     }
 
+    if episodes.is_empty() && ep_meta.season.is_some() && ep_meta.episode_numbers.is_empty() {
+        match app.services.shows.list_collections_for_title(&title.id).await {
+            Ok(collections) => {
+                for collection in collections
+                    .into_iter()
+                    .filter(|collection| collection.collection_index == season_str)
+                {
+                    match app.services.shows.list_episodes_for_collection(&collection.id).await {
+                        Ok(collection_episodes) => {
+                            let mut collection_episodes: Vec<_> = collection_episodes
+                                .into_iter()
+                                .filter(|episode| {
+                                    episode.title_id == title.id
+                                        && episode.season_number.as_deref() == Some(season_str)
+                                })
+                                .collect();
+                            collection_episodes.sort_by_key(|episode| {
+                                episode
+                                    .episode_number
+                                    .as_deref()
+                                    .and_then(|value| value.parse::<u32>().ok())
+                                    .unwrap_or(u32::MAX)
+                            });
+                            for episode in collection_episodes {
+                                if seen.insert(episode.id.clone()) {
+                                    episodes.push(episode);
+                                }
+                            }
+                        }
+                        Err(err) => tracing::warn!(error = %err, "season episode lookup failed during import"),
+                    }
+                }
+            }
+            Err(err) => tracing::warn!(error = %err, "season collection lookup failed during import"),
+        }
+    }
+
     if episodes.is_empty()
         && let Some(absolute_episode) = ep_meta.absolute_episode
     {
-        let absolute_episode_str = absolute_episode.to_string();
-        match app
-            .services
-            .shows
-            .find_episode_by_title_and_absolute_number(&title.id, &absolute_episode_str)
-            .await
-        {
-            Ok(Some(episode)) => episodes.push(episode),
-            Ok(None) => {
-                tracing::debug!(
-                    title_id = %title.id,
-                    absolute = absolute_episode,
-                    "no matching episode found by absolute number"
-                );
-            }
-            Err(err) => {
-                tracing::warn!(error = %err, "episode absolute lookup failed during import")
+        let absolute_numbers: Vec<u32> = if ep_meta.episode_numbers.is_empty() {
+            vec![absolute_episode]
+        } else {
+            ep_meta.episode_numbers.clone()
+        };
+
+        for absolute_number in absolute_numbers {
+            let absolute_episode_str = absolute_number.to_string();
+            match app
+                .services
+                .shows
+                .find_episode_by_title_and_absolute_number(&title.id, &absolute_episode_str)
+                .await
+            {
+                Ok(Some(episode)) => {
+                    if seen.insert(episode.id.clone()) {
+                        episodes.push(episode);
+                    }
+                }
+                Ok(None) => {
+                    tracing::debug!(
+                        title_id = %title.id,
+                        absolute = absolute_number,
+                        "no matching episode found by absolute number"
+                    );
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "episode absolute lookup failed during import")
+                }
             }
         }
     }
@@ -2625,11 +2907,86 @@ fn has_scryer_origin(params: &[(String, String)]) -> bool {
     params.iter().any(|(k, _)| k == "*scryer_title_id")
 }
 
+fn submission_has_scryer_origin(submission: &crate::DownloadSubmission) -> bool {
+    !submission.title_id.trim().is_empty()
+}
+
 fn extract_parameter(params: &[(String, String)], key: &str) -> Option<String> {
     params
         .iter()
         .find(|(k, _)| k == key)
         .map(|(_, v)| v.clone())
+}
+
+async fn persist_file_import_artifact(
+    app: &AppUseCase,
+    import_id: &str,
+    completed: &CompletedDownload,
+    title_id: &str,
+    source_path: &Path,
+    media_kind: &str,
+    result: &str,
+    reason_code: Option<&str>,
+    imported_media_file_id: Option<&str>,
+    episodes: &[scryer_domain::Episode],
+) {
+    let relative_path = source_path
+        .strip_prefix(&completed.dest_dir)
+        .ok()
+        .map(|path| path.to_string_lossy().to_string())
+        .filter(|path| !path.is_empty());
+    let normalized_file_name = source_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.to_ascii_lowercase())
+        .unwrap_or_else(|| source_path.to_string_lossy().to_ascii_lowercase());
+
+    let episode_rows: Vec<(Option<String>, Option<i32>, Option<i32>)> = if episodes.is_empty() {
+        vec![(None, None, None)]
+    } else {
+        episodes
+            .iter()
+            .map(|episode| {
+                (
+                    Some(episode.id.clone()),
+                    episode.season_number.as_deref().and_then(|value| value.parse().ok()),
+                    episode
+                        .episode_number
+                        .as_deref()
+                        .and_then(|value| value.parse().ok()),
+                )
+            })
+            .collect()
+    };
+
+    for (episode_id, season_number, episode_number) in episode_rows {
+        let artifact = ImportArtifact {
+            id: Id::new().0,
+            source_system: completed.client_type.clone(),
+            source_ref: completed.download_client_item_id.clone(),
+            import_id: Some(import_id.to_string()),
+            relative_path: relative_path.clone(),
+            normalized_file_name: normalized_file_name.clone(),
+            media_kind: media_kind.to_string(),
+            title_id: Some(title_id.to_string()),
+            episode_id,
+            season_number,
+            episode_number,
+            result: result.to_string(),
+            reason_code: reason_code.map(str::to_string),
+            imported_media_file_id: imported_media_file_id.map(str::to_string),
+            created_at: Utc::now(),
+        };
+        if let Err(error) = app.services.import_artifacts.insert_artifact(artifact).await {
+            tracing::warn!(
+                error = %error,
+                import_id,
+                source_ref = %completed.download_client_item_id,
+                file = %source_path.display(),
+                "failed to persist import artifact"
+            );
+        }
+    }
 }
 
 fn normalize_imdb_id(raw_imdb_id: &str) -> Option<String> {

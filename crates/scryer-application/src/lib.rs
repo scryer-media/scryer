@@ -2848,6 +2848,10 @@ mod tests {
             Ok(self.queue_items.lock().await.clone())
         }
 
+        async fn list_history(&self) -> AppResult<Vec<DownloadQueueItem>> {
+            Ok(Vec::new())
+        }
+
         async fn delete_queue_item(&self, id: &str, is_history: bool) -> AppResult<()> {
             self.deleted_items
                 .lock()
@@ -3287,6 +3291,81 @@ mod tests {
                 .iter()
                 .all(|entry| entry.title_id != created.id)
         );
+    }
+
+    #[tokio::test]
+    async fn list_download_queue_does_not_treat_stub_submission_as_origin() {
+        let download_client = Arc::new(StubDownloadClient::default());
+        let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+        let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+        let (app, user) = bootstrap_with_cleanup_tracking(
+            download_client.clone(),
+            download_submissions.clone(),
+            pending_releases,
+        );
+
+        app.create_download_client_config(
+            &user,
+            NewDownloadClientConfig {
+                name: "SABnzbd".to_string(),
+                client_type: "sabnzbd".to_string(),
+                base_url: None,
+                config_json: "{}".to_string(),
+                client_priority: 1,
+                is_enabled: true,
+            },
+        )
+        .await
+        .expect("create download client config");
+
+        download_submissions
+            .record_submission(DownloadSubmission {
+                title_id: String::new(),
+                facet: String::new(),
+                download_client_type: "sabnzbd".to_string(),
+                download_client_item_id: "foreign-stub".to_string(),
+                source_title: Some("Foreign Download".to_string()),
+                collection_id: None,
+            })
+            .await
+            .expect("record stub submission");
+
+        *download_client.queue_items.lock().await = vec![DownloadQueueItem {
+            id: "foreign-stub".to_string(),
+            title_id: None,
+            title_name: "Foreign Download".to_string(),
+            facet: None,
+            client_id: "primary".to_string(),
+            client_name: "Primary".to_string(),
+            client_type: "sabnzbd".to_string(),
+            state: DownloadQueueState::Queued,
+            progress_percent: 0,
+            size_bytes: None,
+            remaining_seconds: None,
+            queued_at: None,
+            last_updated_at: None,
+            attention_required: false,
+            attention_reason: None,
+            download_client_item_id: "foreign-stub".to_string(),
+            import_status: None,
+            import_error_message: None,
+            imported_at: None,
+            is_scryer_origin: false,
+            tracked_state: None,
+            tracked_status: None,
+            tracked_status_messages: Vec::new(),
+            tracked_match_type: None,
+        }];
+
+        let items = app
+            .list_download_queue(&user, true, false)
+            .await
+            .expect("list queue");
+
+        assert_eq!(items.len(), 1);
+        assert!(!items[0].is_scryer_origin);
+        assert!(items[0].title_id.is_none());
+        assert!(items[0].facet.is_none());
     }
 
     #[tokio::test]

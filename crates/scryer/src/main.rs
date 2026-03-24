@@ -22,6 +22,7 @@ use scryer_application::{
     start_background_acquisition_poller, start_background_banner_loop,
     start_background_fanart_loop, start_background_hydration_loop, start_background_poster_loop,
     start_background_subtitle_poller, start_download_queue_poller, start_notification_dispatcher,
+    tracked_downloads::TrackedDownloadHandle,
 };
 use scryer_infrastructure::{
     FileSystemLibraryRenamer, FileSystemLibraryScanner, MetadataGatewayClient, MigrationMode,
@@ -515,6 +516,8 @@ async fn bootstrap_application(
         Arc::new(db.clone()),
         db_path.clone(),
     );
+    let (tracked_download_tx, tracked_download_rx) = tokio::sync::mpsc::channel(64);
+    services.tracked_download_handle = Some(TrackedDownloadHandle::new(tracked_download_tx));
     services.metadata_gateway = metadata_gateway.clone();
 
     // Warm up SMG enrollment so the mTLS client is ready before the first real
@@ -548,6 +551,7 @@ async fn bootstrap_application(
     services.library_renamer = library_renamer;
     services.download_submissions = Arc::new(db.clone());
     services.imports = Arc::new(db.clone());
+    services.import_artifacts = Arc::new(db.clone());
     services.file_importer = Arc::new(scryer_infrastructure::FsFileImporter::new());
     services.media_files = Arc::new(db.clone());
     services.wanted_items = Arc::new(db.clone());
@@ -617,6 +621,7 @@ async fn bootstrap_application(
     tokio::spawn(start_download_queue_poller(
         app_use_case.clone(),
         shutdown_token.child_token(),
+        tracked_download_rx,
     ));
     // Additionally start the Weaver WebSocket subscription bridge for
     // real-time UI updates (progress, state changes) when Weaver is

@@ -1623,6 +1623,17 @@ pub fn parse_series_episode(raw_title: &str) -> Option<ParsedEpisodeMetadata> {
                     },
                 );
 
+                if parse_year(token).is_some()
+                    || parse_quality(token).is_some()
+                    || parse_source(token, next).is_some()
+                    || parse_video(token).0.is_some()
+                    || parse_audio(token, next).is_some()
+                    || is_noise_token(token)
+                    || matches!(token.as_str(), "COMPLETE" | "BATCH" | "PACK")
+                {
+                    continue;
+                }
+
                 return Some(ParsedEpisodeMetadata {
                     season: Some(season),
                     episode_numbers: delayed_episodes,
@@ -1631,10 +1642,9 @@ pub fn parse_series_episode(raw_title: &str) -> Option<ParsedEpisodeMetadata> {
                 });
             }
 
-            pending_season = None;
-            pending_season_raw = None;
             pending_episode_anchor = false;
             pending_episode_anchor_raw = None;
+            continue;
         }
 
         if token == "SEASON" || token == "S" {
@@ -1783,6 +1793,15 @@ pub fn parse_series_episode(raw_title: &str) -> Option<ParsedEpisodeMetadata> {
                 raw: Some(format!("{} ~ {}", prev_abs.1, next_token)),
             });
         }
+    }
+
+    if let Some(season) = pending_season {
+        return Some(ParsedEpisodeMetadata {
+            season: Some(season),
+            episode_numbers: Vec::new(),
+            absolute_episode: None,
+            raw: pending_season_raw,
+        });
     }
 
     pending_absolute.and_then(|(episode, raw)| {

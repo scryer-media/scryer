@@ -548,6 +548,15 @@ fn parse_netflix_complete_season() {
     assert_eq!(parsed.source.as_deref(), Some("WEB-DL"));
     assert_eq!(parsed.audio.as_deref(), Some("AAC"));
     assert_eq!(parsed.audio_channels.as_deref(), Some("2.0"));
+    assert_eq!(
+        parsed.episode,
+        Some(ParsedEpisodeMetadata {
+            season: Some(1),
+            episode_numbers: vec![],
+            absolute_episode: None,
+            raw: Some("S01".to_string()),
+        })
+    );
 }
 
 #[test]

@@ -49,6 +49,7 @@ fi
 
 "${compose_cmd[@]}" stop "${services[@]}"
 "${compose_cmd[@]}" rm -f "${services[@]}"
+"${compose_cmd[@]}" pull --ignore-buildable "${services[@]}"
 
 # Clear download and import directories so each restart begins clean
 echo "Cleaning download and import directories..."

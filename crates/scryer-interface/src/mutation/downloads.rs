@@ -118,6 +118,75 @@ impl DownloadMutations {
         })
     }
 
+    async fn ignore_tracked_download(
+        &self,
+        ctx: &Context<'_>,
+        input: IgnoreTrackedDownloadInput,
+    ) -> GqlResult<bool> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        app.ignore_tracked_download(
+            &actor,
+            &input.client_type,
+            &input.download_client_item_id,
+        )
+        .await
+        .map(|_| true)
+        .map_err(to_gql_error)
+    }
+
+    async fn mark_tracked_download_failed(
+        &self,
+        ctx: &Context<'_>,
+        input: MarkTrackedDownloadFailedInput,
+    ) -> GqlResult<bool> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        app.mark_tracked_download_failed(
+            &actor,
+            &input.client_type,
+            &input.download_client_item_id,
+        )
+        .await
+        .map(|_| true)
+        .map_err(to_gql_error)
+    }
+
+    async fn retry_tracked_download_import(
+        &self,
+        ctx: &Context<'_>,
+        input: RetryTrackedDownloadImportInput,
+    ) -> GqlResult<bool> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        app.retry_tracked_download_import(
+            &actor,
+            &input.client_type,
+            &input.download_client_item_id,
+        )
+        .await
+        .map(|_| true)
+        .map_err(to_gql_error)
+    }
+
+    async fn assign_tracked_download_title(
+        &self,
+        ctx: &Context<'_>,
+        input: AssignTrackedDownloadTitleInput,
+    ) -> GqlResult<bool> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        app.assign_tracked_download_title(
+            &actor,
+            &input.client_type,
+            &input.download_client_item_id,
+            &input.title_id,
+        )
+        .await
+        .map(|_| true)
+        .map_err(to_gql_error)
+    }
+
     async fn execute_manual_import(
         &self,
         ctx: &Context<'_>,
