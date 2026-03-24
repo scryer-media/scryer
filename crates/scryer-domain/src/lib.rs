@@ -381,6 +381,137 @@ pub enum DownloadQueueState {
     Failed,
 }
 
+// ── TrackedDownloads (plan 055) ──────────────────────────────────────────────
+
+/// Scryer's internal workflow state for a download, independent of the
+/// download client's reported status.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TrackedDownloadState {
+    /// Download in progress (queued, downloading, verifying, repairing, extracting).
+    Downloading,
+    /// Client reports completed; scryer validated path + title; queued for import.
+    ImportPending,
+    /// Import actively running.
+    Importing,
+    /// All expected files imported; download can be removed from client.
+    Imported,
+    /// Completed but can't auto-import (title mismatch, bad path, ID-only match).
+    ImportBlocked,
+    /// Client reports failure or encryption detected; queued for failure processing.
+    FailedPending,
+    /// Failure processed; redownload triggered if enabled.
+    Failed,
+    /// User manually dismissed.
+    Ignored,
+}
+
+impl TrackedDownloadState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Downloading => "downloading",
+            Self::ImportPending => "import_pending",
+            Self::Importing => "importing",
+            Self::Imported => "imported",
+            Self::ImportBlocked => "import_blocked",
+            Self::FailedPending => "failed_pending",
+            Self::Failed => "failed",
+            Self::Ignored => "ignored",
+        }
+    }
+
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s {
+            "downloading" => Some(Self::Downloading),
+            "import_pending" => Some(Self::ImportPending),
+            "importing" => Some(Self::Importing),
+            "imported" => Some(Self::Imported),
+            "import_blocked" => Some(Self::ImportBlocked),
+            "failed_pending" => Some(Self::FailedPending),
+            "failed" => Some(Self::Failed),
+            "ignored" => Some(Self::Ignored),
+            _ => None,
+        }
+    }
+
+    /// Terminal states survive restart; non-terminal states are re-derived.
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Imported | Self::Failed | Self::Ignored)
+    }
+}
+
+/// Health/warning overlay orthogonal to state.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TrackedDownloadStatus {
+    #[default]
+    Ok,
+    Warning,
+    Error,
+}
+
+/// Records how a download was matched to a scryer title.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TitleMatchType {
+    /// Direct link via download_submissions (scryer grabbed it).
+    Submission,
+    /// Matched by embedded client parameters (*scryer_title_id).
+    ClientParameter,
+    /// Matched by parsing the release title against library.
+    TitleParse,
+    /// Matched by external ID only (IMDB, TVDB) — ambiguous.
+    IdOnly,
+    /// No match found.
+    #[default]
+    Unmatched,
+}
+
+impl TitleMatchType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Submission => "submission",
+            Self::ClientParameter => "client_parameter",
+            Self::TitleParse => "title_parse",
+            Self::IdOnly => "id_only",
+            Self::Unmatched => "unmatched",
+        }
+    }
+}
+
+/// Per-file import outcome recorded in download_import_artifacts.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportArtifactResult {
+    Imported,
+    AlreadyPresent,
+    Rejected,
+}
+
+impl ImportArtifactResult {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Imported => "imported",
+            Self::AlreadyPresent => "already_present",
+            Self::Rejected => "rejected",
+        }
+    }
+
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s {
+            "imported" => Some(Self::Imported),
+            "already_present" => Some(Self::AlreadyPresent),
+            "rejected" => Some(Self::Rejected),
+            _ => None,
+        }
+    }
+
+    /// Counts toward download completion verification.
+    pub fn counts_as_imported(self) -> bool {
+        matches!(self, Self::Imported | Self::AlreadyPresent)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DownloadQueueItem {
     pub id: String,
@@ -403,6 +534,18 @@ pub struct DownloadQueueItem {
     pub import_error_message: Option<String>,
     pub imported_at: Option<String>,
     pub is_scryer_origin: bool,
+    /// Scryer's tracked workflow state (populated by TrackedDownloadService).
+    #[serde(default)]
+    pub tracked_state: Option<TrackedDownloadState>,
+    /// Tracked status overlay (Ok/Warning/Error).
+    #[serde(default)]
+    pub tracked_status: Option<TrackedDownloadStatus>,
+    /// Human-readable status messages from tracking.
+    #[serde(default)]
+    pub tracked_status_messages: Vec<String>,
+    /// How the title was resolved for tracking.
+    #[serde(default)]
+    pub tracked_match_type: Option<TitleMatchType>,
 }
 
 pub const VIDEO_EXTENSIONS: &[&str] = &[

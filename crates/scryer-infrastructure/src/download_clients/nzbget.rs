@@ -241,43 +241,7 @@ impl NzbgetDownloadClient {
     }
 
     async fn fetch_and_encode_nzb(&self, source_hint: &str) -> AppResult<String> {
-        let response = self
-            .http_client
-            .get(source_hint)
-            .header("User-Agent", "scryer/0.1")
-            .send()
-            .await
-            .map_err(|err| AppError::Repository(format!("nzb download request failed: {err}")))?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.map_err(|err| {
-                AppError::Repository(format!("nzb download response read failed: {err}"))
-            })?;
-            let preview = body.chars().take(300).collect::<String>();
-            return Err(AppError::Repository(format!(
-                "nzb download failed with status {status}: {preview}"
-            )));
-        }
-
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|err| AppError::Repository(format!("nzb download body read failed: {err}")))?;
-        if bytes.is_empty() {
-            return Err(AppError::Repository(
-                "nzb download response body was empty".into(),
-            ));
-        }
-
-        let text = String::from_utf8_lossy(&bytes);
-        let trimmed = text.trim_start();
-        if !trimmed.starts_with('<') {
-            return Err(AppError::Repository(
-                "nzb download payload did not look like xml".into(),
-            ));
-        }
-
+        let bytes = super::fetch_nzb_bytes(&self.http_client, source_hint).await?;
         Ok(general_purpose::STANDARD.encode(bytes))
     }
 
@@ -485,6 +449,10 @@ impl NzbgetDownloadClient {
                     import_error_message: None,
                     imported_at: None,
                     is_scryer_origin: is_scryer,
+            tracked_state: None,
+            tracked_status: None,
+            tracked_status_messages: Vec::new(),
+            tracked_match_type: None,
                 })
             })
             .collect();
@@ -626,6 +594,10 @@ impl NzbgetDownloadClient {
                     import_error_message: None,
                     imported_at: None,
                     is_scryer_origin: is_scryer,
+            tracked_state: None,
+            tracked_status: None,
+            tracked_status_messages: Vec::new(),
+            tracked_match_type: None,
                 });
                 let next_index = items.len() - 1;
                 item_index_by_id.insert(id, next_index);
@@ -729,6 +701,10 @@ impl NzbgetDownloadClient {
                     import_error_message: None,
                     imported_at: None,
                     is_scryer_origin: is_scryer,
+            tracked_state: None,
+            tracked_status: None,
+            tracked_status_messages: Vec::new(),
+            tracked_match_type: None,
                 })
             })
             .collect())

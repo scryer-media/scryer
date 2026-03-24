@@ -764,3 +764,156 @@ pub(crate) async fn delete_download_submissions_for_title_query(
 
     Ok(())
 }
+
+// ── TrackedDownloads (plan 055) ──────────────────────────────────────────────
+
+pub(crate) async fn update_tracked_state_query(
+    pool: &SqlitePool,
+    download_client_type: &str,
+    download_client_item_id: &str,
+    tracked_state: &str,
+) -> AppResult<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE download_submissions
+         SET tracked_state = ?, tracked_state_at = ?
+         WHERE download_client_type = ? AND download_client_item_id = ?",
+    )
+    .bind(tracked_state)
+    .bind(&now)
+    .bind(download_client_type)
+    .bind(download_client_item_id)
+    .execute(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+    Ok(())
+}
+
+pub(crate) async fn get_tracked_state_query(
+    pool: &SqlitePool,
+    download_client_type: &str,
+    download_client_item_id: &str,
+) -> AppResult<Option<String>> {
+    let row = sqlx::query(
+        "SELECT tracked_state FROM download_submissions
+         WHERE download_client_type = ? AND download_client_item_id = ?",
+    )
+    .bind(download_client_type)
+    .bind(download_client_item_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    match row {
+        Some(row) => {
+            let state: Option<String> = row
+                .try_get("tracked_state")
+                .map_err(|err| AppError::Repository(err.to_string()))?;
+            Ok(state)
+        }
+        None => Ok(None),
+    }
+}
+
+pub(crate) async fn insert_import_artifact_query(
+    pool: &SqlitePool,
+    artifact: &scryer_application::ImportArtifact,
+) -> AppResult<()> {
+    sqlx::query(
+        "INSERT INTO download_import_artifacts
+         (id, source_system, source_ref, import_id, relative_path, normalized_file_name,
+          media_kind, title_id, episode_id, season_number, episode_number,
+          result, reason_code, imported_media_file_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&artifact.id)
+    .bind(&artifact.source_system)
+    .bind(&artifact.source_ref)
+    .bind(&artifact.import_id)
+    .bind(&artifact.relative_path)
+    .bind(&artifact.normalized_file_name)
+    .bind(&artifact.media_kind)
+    .bind(&artifact.title_id)
+    .bind(&artifact.episode_id)
+    .bind(artifact.season_number)
+    .bind(artifact.episode_number)
+    .bind(&artifact.result)
+    .bind(&artifact.reason_code)
+    .bind(&artifact.imported_media_file_id)
+    .bind(artifact.created_at.to_rfc3339())
+    .execute(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+    Ok(())
+}
+
+pub(crate) async fn list_import_artifacts_by_source_ref_query(
+    pool: &SqlitePool,
+    source_system: &str,
+    source_ref: &str,
+) -> AppResult<Vec<scryer_application::ImportArtifact>> {
+    let rows = sqlx::query(
+        "SELECT id, source_system, source_ref, import_id, relative_path,
+                normalized_file_name, media_kind, title_id, episode_id,
+                season_number, episode_number, result, reason_code,
+                imported_media_file_id, created_at
+         FROM download_import_artifacts
+         WHERE source_system = ? AND source_ref = ?
+         ORDER BY created_at",
+    )
+    .bind(source_system)
+    .bind(source_ref)
+    .fetch_all(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        out.push(scryer_application::ImportArtifact {
+            id: row.try_get("id").map_err(|e| AppError::Repository(e.to_string()))?,
+            source_system: row.try_get("source_system").map_err(|e| AppError::Repository(e.to_string()))?,
+            source_ref: row.try_get("source_ref").map_err(|e| AppError::Repository(e.to_string()))?,
+            import_id: row.try_get("import_id").map_err(|e| AppError::Repository(e.to_string()))?,
+            relative_path: row.try_get("relative_path").map_err(|e| AppError::Repository(e.to_string()))?,
+            normalized_file_name: row.try_get("normalized_file_name").map_err(|e| AppError::Repository(e.to_string()))?,
+            media_kind: row.try_get("media_kind").map_err(|e| AppError::Repository(e.to_string()))?,
+            title_id: row.try_get("title_id").map_err(|e| AppError::Repository(e.to_string()))?,
+            episode_id: row.try_get("episode_id").map_err(|e| AppError::Repository(e.to_string()))?,
+            season_number: row.try_get("season_number").map_err(|e| AppError::Repository(e.to_string()))?,
+            episode_number: row.try_get("episode_number").map_err(|e| AppError::Repository(e.to_string()))?,
+            result: row.try_get("result").map_err(|e| AppError::Repository(e.to_string()))?,
+            reason_code: row.try_get("reason_code").map_err(|e| AppError::Repository(e.to_string()))?,
+            imported_media_file_id: row.try_get("imported_media_file_id").map_err(|e| AppError::Repository(e.to_string()))?,
+            created_at: {
+                let s: String = row.try_get("created_at").map_err(|e| AppError::Repository(e.to_string()))?;
+                chrono::DateTime::parse_from_rfc3339(&s)
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(|_| chrono::Utc::now())
+            },
+        });
+    }
+    Ok(out)
+}
+
+pub(crate) async fn count_import_artifacts_by_result_query(
+    pool: &SqlitePool,
+    source_system: &str,
+    source_ref: &str,
+    result: &str,
+) -> AppResult<u64> {
+    let row = sqlx::query(
+        "SELECT COUNT(*) as cnt FROM download_import_artifacts
+         WHERE source_system = ? AND source_ref = ? AND result = ?",
+    )
+    .bind(source_system)
+    .bind(source_ref)
+    .bind(result)
+    .fetch_one(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    let count: i64 = row
+        .try_get("cnt")
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+    Ok(count as u64)
+}

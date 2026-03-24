@@ -398,6 +398,10 @@ mod tests {
             import_error_message: None,
             imported_at: None,
             is_scryer_origin,
+            tracked_state: None,
+            tracked_status: None,
+            tracked_status_messages: Vec::new(),
+            tracked_match_type: None,
         }
     }
 

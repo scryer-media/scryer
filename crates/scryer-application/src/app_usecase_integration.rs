@@ -836,6 +836,10 @@ pub async fn start_download_queue_poller(
     app: AppUseCase,
     token: tokio_util::sync::CancellationToken,
 ) {
+    use crate::tracked_downloads::{tracked_download_id, TrackedDownloadService};
+    use scryer_domain::TrackedDownloadState;
+    use std::collections::HashSet;
+
     let actor = match app.find_or_create_default_user().await {
         Ok(actor) => actor,
         Err(error) => {
@@ -844,7 +848,9 @@ pub async fn start_download_queue_poller(
         }
     };
 
-    tracing::info!("download queue poller started (2s interval)");
+    let mut tracker = TrackedDownloadService::new();
+
+    tracing::info!("download queue poller started (2s interval, tracked downloads enabled)");
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
     loop {
         tokio::select! {
@@ -854,11 +860,63 @@ pub async fn start_download_queue_poller(
             }
             _ = interval.tick() => {
                 match app.list_download_queue(&actor, true, false).await {
-                    Ok(items) => {
-                        // Trigger imports for any newly-completed downloads
+                    Ok(mut items) => {
+                        let mut seen_ids = HashSet::new();
+
+                        // Phase 1: Refresh — track each item and run checks.
+                        for item in items.iter() {
+                            let id = tracked_download_id(&item.client_type, &item.download_client_item_id);
+                            seen_ids.insert(id.clone());
+                            tracker.track(&app, item.clone()).await;
+
+                            if let Some(td) = tracker.find_mut(&id) {
+                                if td.state == TrackedDownloadState::Downloading
+                                    || td.state == TrackedDownloadState::ImportBlocked
+                                {
+                                    crate::failed_download_handler::check(td);
+                                    crate::completed_download_handler::check(&app, td);
+                                }
+                            }
+                        }
+
+                        tracker.update_trackable(&seen_ids);
+
+                        // Phase 2: Process — import pending and failed items.
+                        let trackable_ids: Vec<String> = tracker
+                            .get_trackable()
+                            .iter()
+                            .map(|td| td.id.clone())
+                            .collect();
+
+                        for id in &trackable_ids {
+                            if let Some(td) = tracker.find_mut(id) {
+                                if td.state == TrackedDownloadState::FailedPending {
+                                    crate::failed_download_handler::process_failed(&app, td).await;
+                                    tracker.persist_terminal_state(&app, id, TrackedDownloadState::Failed).await;
+                                }
+                            }
+                        }
+
+                        // Run existing import pipeline (handles the actual file import).
+                        // TrackedDownloads orchestrates when to import; the existing pipeline
+                        // handles how. This will be tightened once import() is fully wired.
                         crate::app_usecase_import::try_import_completed_downloads(&app, &actor, &items).await;
 
-                        // Emit download queue gauge by state
+                        // Enrich items with tracked state before broadcasting.
+                        for item in &mut items {
+                            let id = tracked_download_id(&item.client_type, &item.download_client_item_id);
+                            if let Some(td) = tracker.find(&id) {
+                                item.tracked_state = Some(td.state);
+                                item.tracked_status = Some(td.status);
+                                item.tracked_status_messages.clone_from(&td.status_messages);
+                                item.tracked_match_type = Some(td.match_type);
+                                if item.title_id.is_none() && td.title_id.is_some() {
+                                    item.title_id.clone_from(&td.title_id);
+                                }
+                            }
+                        }
+
+                        // Emit download queue gauge by state.
                         let mut counts = [0u64; 9];
                         for item in &items {
                             match item.state {
@@ -1043,6 +1101,10 @@ mod tests {
             import_error_message: None,
             imported_at: None,
             is_scryer_origin: true,
+            tracked_state: None,
+            tracked_status: None,
+            tracked_status_messages: Vec::new(),
+            tracked_match_type: None,
         }
     }
 

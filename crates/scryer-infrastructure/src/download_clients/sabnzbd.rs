@@ -79,44 +79,7 @@ impl SabnzbdDownloadClient {
     }
 
     async fn fetch_nzb(&self, url: &str) -> AppResult<Vec<u8>> {
-        let response = self
-            .http_client
-            .get(url)
-            .header("User-Agent", "scryer/0.1")
-            .send()
-            .await
-            .map_err(|err| AppError::Repository(format!("nzb download request failed: {err}")))?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.map_err(|err| {
-                AppError::Repository(format!("nzb download response read failed: {err}"))
-            })?;
-            let preview = body.chars().take(300).collect::<String>();
-            return Err(AppError::Repository(format!(
-                "nzb download failed with status {status}: {preview}"
-            )));
-        }
-
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|err| AppError::Repository(format!("nzb download body read failed: {err}")))?;
-        if bytes.is_empty() {
-            return Err(AppError::Repository(
-                "nzb download response body was empty".into(),
-            ));
-        }
-
-        let text = String::from_utf8_lossy(&bytes);
-        let trimmed = text.trim_start();
-        if !trimmed.starts_with('<') {
-            return Err(AppError::Repository(
-                "nzb download payload did not look like xml".into(),
-            ));
-        }
-
-        Ok(bytes.to_vec())
+        super::fetch_nzb_bytes(&self.http_client, url).await
     }
 
     pub async fn test_connection(&self) -> AppResult<String> {
@@ -413,6 +376,10 @@ impl DownloadClient for SabnzbdDownloadClient {
                     import_error_message: None,
                     imported_at: None,
                     is_scryer_origin: false,
+            tracked_state: None,
+            tracked_status: None,
+            tracked_status_messages: Vec::new(),
+            tracked_match_type: None,
                 })
             })
             .collect())
@@ -494,6 +461,10 @@ impl DownloadClient for SabnzbdDownloadClient {
                     import_error_message: None,
                     imported_at: None,
                     is_scryer_origin: false,
+            tracked_state: None,
+            tracked_status: None,
+            tracked_status_messages: Vec::new(),
+            tracked_match_type: None,
                 })
             })
             .collect())

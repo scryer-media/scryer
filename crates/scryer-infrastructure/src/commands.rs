@@ -395,6 +395,32 @@ pub(crate) enum DbCommand {
         download_client_item_id: String,
         reply: Sender<AppResult<()>>,
     },
+    UpdateTrackedState {
+        download_client_type: String,
+        download_client_item_id: String,
+        tracked_state: String,
+        reply: Sender<AppResult<()>>,
+    },
+    GetTrackedState {
+        download_client_type: String,
+        download_client_item_id: String,
+        reply: Sender<AppResult<Option<String>>>,
+    },
+    InsertImportArtifact {
+        artifact: scryer_application::ImportArtifact,
+        reply: Sender<AppResult<()>>,
+    },
+    ListImportArtifactsBySourceRef {
+        source_system: String,
+        source_ref: String,
+        reply: Sender<AppResult<Vec<scryer_application::ImportArtifact>>>,
+    },
+    CountImportArtifactsByResult {
+        source_system: String,
+        source_ref: String,
+        result: String,
+        reply: Sender<AppResult<u64>>,
+    },
     GetImportById {
         id: String,
         reply: Sender<AppResult<Option<ImportRecord>>>,
@@ -1442,6 +1468,71 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                         delete_download_submission_by_client_item_id_query(
                             &pool,
                             &download_client_item_id,
+                        )
+                        .await,
+                    );
+                }
+                DbCommand::UpdateTrackedState {
+                    download_client_type,
+                    download_client_item_id,
+                    tracked_state,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        update_tracked_state_query(
+                            &pool,
+                            &download_client_type,
+                            &download_client_item_id,
+                            &tracked_state,
+                        )
+                        .await,
+                    );
+                }
+                DbCommand::GetTrackedState {
+                    download_client_type,
+                    download_client_item_id,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        get_tracked_state_query(
+                            &pool,
+                            &download_client_type,
+                            &download_client_item_id,
+                        )
+                        .await,
+                    );
+                }
+                DbCommand::InsertImportArtifact { artifact, reply } => {
+                    let _ = reply.send(
+                        insert_import_artifact_query(&pool, &artifact).await,
+                    );
+                }
+                DbCommand::ListImportArtifactsBySourceRef {
+                    source_system,
+                    source_ref,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        list_import_artifacts_by_source_ref_query(
+                            &pool,
+                            &source_system,
+                            &source_ref,
+                        )
+                        .await,
+                    );
+                }
+                DbCommand::CountImportArtifactsByResult {
+                    source_system,
+                    source_ref,
+                    result,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        count_import_artifacts_by_result_query(
+                            &pool,
+                            &source_system,
+                            &source_ref,
+                            &result,
                         )
                         .await,
                     );

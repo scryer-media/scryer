@@ -13,8 +13,9 @@ use scryer_domain::{BlocklistEntry, TitleHistoryEventType, TitleHistoryRecord};
 
 use crate::{
     AppError, AppResult, BlocklistRepository, DownloadSubmission, DownloadSubmissionRepository,
-    FileImporter, HousekeepingRepository, ImportRepository, IndexerQueryStats, IndexerStatsTracker,
-    MediaFileRepository, NewBlocklistEntry, NewTitleHistoryEvent, NotificationChannelRepository,
+    FileImporter, HousekeepingRepository, ImportArtifact, ImportArtifactRepository,
+    ImportRepository, IndexerQueryStats, IndexerStatsTracker, MediaFileRepository,
+    NewBlocklistEntry, NewTitleHistoryEvent, NotificationChannelRepository,
     NotificationSubscriptionRepository, PendingRelease, PendingReleaseRepository,
     PluginInstallationRepository, PostProcessingScriptRepository, ReleaseDecision,
     RuleSetRepository, SettingsRepository, SystemInfoProvider, TitleHistoryFilter,
@@ -606,6 +607,27 @@ impl DownloadSubmissionRepository for NullDownloadSubmissionRepository {
     }
     async fn delete_by_client_item_id(&self, _: &str) -> AppResult<()> {
         Ok(())
+    }
+    async fn update_tracked_state(&self, _: &str, _: &str, _: &str) -> AppResult<()> {
+        Ok(())
+    }
+    async fn get_tracked_state(&self, _: &str, _: &str) -> AppResult<Option<String>> {
+        Ok(None)
+    }
+}
+
+pub struct NullImportArtifactRepository;
+
+#[async_trait]
+impl ImportArtifactRepository for NullImportArtifactRepository {
+    async fn insert_artifact(&self, _: ImportArtifact) -> AppResult<()> {
+        Ok(())
+    }
+    async fn list_by_source_ref(&self, _: &str, _: &str) -> AppResult<Vec<ImportArtifact>> {
+        Ok(vec![])
+    }
+    async fn count_by_result(&self, _: &str, _: &str, _: &str) -> AppResult<u64> {
+        Ok(0)
     }
 }
 

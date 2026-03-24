@@ -34,9 +34,13 @@ mod library_rename;
 mod library_scan;
 pub mod managed_rules;
 pub(crate) mod nfo;
+pub(crate) mod normalize;
 mod notification_dispatcher;
 mod null_repositories;
 mod post_download_gate;
+pub mod tracked_downloads;
+pub mod completed_download_handler;
+pub mod failed_download_handler;
 mod quality_profile;
 pub mod recycle_bin;
 pub mod release_dedup;
@@ -50,7 +54,7 @@ mod user_rule_input;
 
 use crate::activity::ActivityStream;
 use async_trait::async_trait;
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use rand_core::OsRng;
 use ring::digest as ring_digest;
 use scryer_domain::{
@@ -75,7 +79,10 @@ pub use activity::{
 };
 pub use app_usecase_acquisition::start_background_acquisition_poller;
 pub use app_usecase_backup::BackupService;
-pub use app_usecase_catalog::start_background_hydration_loop;
+pub use app_usecase_catalog::{
+    start_background_hydration_loop, DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY,
+    LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY,
+};
 pub use app_usecase_import::{
     ManualImportFileMapping, ManualImportFilePreview, ManualImportFileResult, ManualImportPreview,
     execute_manual_import, import_completed_download, preview_manual_import, retry_failed_import,
@@ -268,6 +275,8 @@ pub struct AppServices {
     pub blocklist_repo: Arc<dyn BlocklistRepository>,
     pub rss_seen_guids: Arc<tokio::sync::RwLock<HashSet<String>>>,
     pub subtitle_downloads: Arc<dyn SubtitleDownloadRepository>,
+    pub import_artifacts: Arc<dyn ImportArtifactRepository>,
+    pub tracked_download_handle: Option<tracked_downloads::TrackedDownloadHandle>,
 }
 
 impl AppServices {
@@ -344,6 +353,8 @@ impl AppServices {
             subtitle_downloads: Arc::new(null_repositories::NullSubtitleDownloadRepository),
             health_check_results: Arc::new(tokio::sync::RwLock::new(Vec::new())),
             rss_seen_guids: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
+            import_artifacts: Arc::new(null_repositories::NullImportArtifactRepository),
+            tracked_download_handle: None,
         }
     }
 
@@ -809,6 +820,61 @@ pub trait DownloadSubmissionRepository: Send + Sync {
     async fn delete_for_title(&self, title_id: &str) -> AppResult<()>;
 
     async fn delete_by_client_item_id(&self, download_client_item_id: &str) -> AppResult<()>;
+
+    /// Update the tracked_state column for restart reconstruction.
+    async fn update_tracked_state(
+        &self,
+        download_client_type: &str,
+        download_client_item_id: &str,
+        tracked_state: &str,
+    ) -> AppResult<()>;
+
+    /// Read the tracked_state column for a download.
+    async fn get_tracked_state(
+        &self,
+        download_client_type: &str,
+        download_client_item_id: &str,
+    ) -> AppResult<Option<String>>;
+}
+
+/// Per-file import outcome history for completion verification across passes.
+#[derive(Clone, Debug)]
+pub struct ImportArtifact {
+    pub id: String,
+    pub source_system: String,
+    pub source_ref: String,
+    pub import_id: Option<String>,
+    pub relative_path: Option<String>,
+    pub normalized_file_name: String,
+    pub media_kind: String,
+    pub title_id: Option<String>,
+    pub episode_id: Option<String>,
+    pub season_number: Option<i32>,
+    pub episode_number: Option<i32>,
+    pub result: String,
+    pub reason_code: Option<String>,
+    pub imported_media_file_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[async_trait]
+pub trait ImportArtifactRepository: Send + Sync {
+    async fn insert_artifact(&self, artifact: ImportArtifact) -> AppResult<()>;
+
+    /// List all artifacts for a download, ordered by created_at.
+    async fn list_by_source_ref(
+        &self,
+        source_system: &str,
+        source_ref: &str,
+    ) -> AppResult<Vec<ImportArtifact>>;
+
+    /// Count artifacts with a given result for a download.
+    async fn count_by_result(
+        &self,
+        source_system: &str,
+        source_ref: &str,
+        result: &str,
+    ) -> AppResult<u64>;
 }
 
 #[async_trait]
@@ -2667,6 +2733,14 @@ mod tests {
                 .retain(|entry| entry.download_client_item_id != download_client_item_id);
             Ok(())
         }
+
+        async fn update_tracked_state(&self, _: &str, _: &str, _: &str) -> AppResult<()> {
+            Ok(())
+        }
+
+        async fn get_tracked_state(&self, _: &str, _: &str) -> AppResult<Option<String>> {
+            Ok(None)
+        }
     }
 
     #[derive(Default, Clone)]
@@ -3126,6 +3200,10 @@ mod tests {
                 import_error_message: None,
                 imported_at: None,
                 is_scryer_origin: true,
+            tracked_state: None,
+            tracked_status: None,
+            tracked_status_messages: Vec::new(),
+            tracked_match_type: None,
             },
             DownloadQueueItem {
                 id: "queue-fallback".to_string(),
@@ -3148,6 +3226,10 @@ mod tests {
                 import_error_message: None,
                 imported_at: None,
                 is_scryer_origin: false,
+            tracked_state: None,
+            tracked_status: None,
+            tracked_status_messages: Vec::new(),
+            tracked_match_type: None,
             },
             DownloadQueueItem {
                 id: "queue-unrelated".to_string(),
@@ -3170,6 +3252,10 @@ mod tests {
                 import_error_message: None,
                 imported_at: None,
                 is_scryer_origin: false,
+            tracked_state: None,
+            tracked_status: None,
+            tracked_status_messages: Vec::new(),
+            tracked_match_type: None,
             },
         ];
 

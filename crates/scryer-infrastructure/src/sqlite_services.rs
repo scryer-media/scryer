@@ -414,6 +414,108 @@ impl SqliteServices {
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
+    pub async fn update_tracked_state(
+        &self,
+        download_client_type: &str,
+        download_client_item_id: &str,
+        tracked_state: &str,
+    ) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::UpdateTrackedState {
+                download_client_type: download_client_type.to_string(),
+                download_client_item_id: download_client_item_id.to_string(),
+                tracked_state: tracked_state.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn get_tracked_state(
+        &self,
+        download_client_type: &str,
+        download_client_item_id: &str,
+    ) -> AppResult<Option<String>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::GetTrackedState {
+                download_client_type: download_client_type.to_string(),
+                download_client_item_id: download_client_item_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn insert_import_artifact(
+        &self,
+        artifact: scryer_application::ImportArtifact,
+    ) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::InsertImportArtifact {
+                artifact,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn list_import_artifacts_by_source_ref(
+        &self,
+        source_system: &str,
+        source_ref: &str,
+    ) -> AppResult<Vec<scryer_application::ImportArtifact>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::ListImportArtifactsBySourceRef {
+                source_system: source_system.to_string(),
+                source_ref: source_ref.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn count_import_artifacts_by_result(
+        &self,
+        source_system: &str,
+        source_ref: &str,
+        result: &str,
+    ) -> AppResult<u64> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::CountImportArtifactsByResult {
+                source_system: source_system.to_string(),
+                source_ref: source_ref.to_string(),
+                result: result.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
     #[expect(clippy::too_many_arguments)]
     pub async fn ensure_setting_definition(
         &self,

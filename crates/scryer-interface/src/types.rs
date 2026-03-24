@@ -429,6 +429,10 @@ pub struct DownloadQueueItemPayload {
     pub import_status: Option<String>,
     pub import_error_message: Option<String>,
     pub imported_at: Option<String>,
+    pub tracked_state: Option<String>,
+    pub tracked_status: Option<String>,
+    pub tracked_status_messages: Vec<String>,
+    pub tracked_match_type: Option<String>,
 }
 
 #[derive(SimpleObject, Clone)]

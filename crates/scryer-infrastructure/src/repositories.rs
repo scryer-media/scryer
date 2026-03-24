@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 use scryer_application::{
     AppError, AppResult, BlocklistRepository, DownloadClientConfigRepository, DownloadSubmission,
-    DownloadSubmissionRepository, EventRepository, HousekeepingRepository, ImportRepository,
-    IndexerConfigRepository, InsertMediaFileInput, MediaFileRepository, NewBlocklistEntry,
-    NewTitleHistoryEvent, NotificationChannelRepository, NotificationSubscriptionRepository,
-    PendingRelease, PendingReleaseRepository, PluginInstallationRepository,
-    PostProcessingScriptRepository, PrimaryCollectionSummary,
+    DownloadSubmissionRepository, EventRepository, HousekeepingRepository, ImportArtifact,
+    ImportArtifactRepository, ImportRepository, IndexerConfigRepository, InsertMediaFileInput,
+    MediaFileRepository, NewBlocklistEntry, NewTitleHistoryEvent, NotificationChannelRepository,
+    NotificationSubscriptionRepository, PendingRelease, PendingReleaseRepository,
+    PluginInstallationRepository, PostProcessingScriptRepository, PrimaryCollectionSummary,
     QualityProfile as ApplicationQualityProfile, QualityProfileRepository,
     ReleaseAttemptRepository, ReleaseDecision, ReleaseDownloadAttemptOutcome,
     ReleaseDownloadFailureSignature, RuleSetRepository, SettingsRepository, ShowRepository,
@@ -19,9 +19,21 @@ use scryer_domain::{
     NotificationChannelConfig, NotificationSubscription, PluginInstallation, PostProcessingScript,
     PostProcessingScriptRun, RuleSet, Title, TitleHistoryEventType, TitleHistoryRecord, User,
 };
-use tokio::sync::oneshot;
 
 use crate::sqlite_services::SqliteServices;
+
+macro_rules! db_call {
+    ($self:ident, $cmd:ident { $($field:ident),* $(,)? }) => {{
+        let (reply_tx, reply_rx) = ::tokio::sync::oneshot::channel();
+        $self.sender
+            .send(crate::commands::DbCommand::$cmd { $($field,)* reply: reply_tx })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }};
+}
 
 #[async_trait]
 impl TitleRepository for SqliteServices {
@@ -30,65 +42,21 @@ impl TitleRepository for SqliteServices {
         facet: Option<MediaFacet>,
         query: Option<String>,
     ) -> AppResult<Vec<Title>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ListTitles {
-                facet,
-                query,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, ListTitles { facet, query })
     }
 
     async fn get_by_id(&self, id: &str) -> AppResult<Option<Title>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::GetTitleById {
-                id: id.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let id = id.to_string();
+        db_call!(self, GetTitleById { id })
     }
 
     async fn create(&self, title: Title) -> AppResult<Title> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::CreateTitle {
-                title,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, CreateTitle { title })
     }
 
     async fn update_monitored(&self, id: &str, monitored: bool) -> AppResult<Title> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::UpdateTitleMonitored {
-                id: id.to_string(),
-                monitored,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let id = id.to_string();
+        db_call!(self, UpdateTitleMonitored { id, monitored })
     }
 
     async fn update_metadata(
@@ -105,22 +73,8 @@ impl TitleRepository for SqliteServices {
             ),
             None => None,
         };
-
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::UpdateTitleMetadata {
-                id: id.to_string(),
-                name,
-                facet,
-                tags_json,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let id = id.to_string();
+        db_call!(self, UpdateTitleMetadata { id, name, facet, tags_json })
     }
 
     async fn update_title_hydrated_metadata(
@@ -128,34 +82,13 @@ impl TitleRepository for SqliteServices {
         id: &str,
         metadata: TitleMetadataUpdate,
     ) -> AppResult<Title> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::UpdateTitleHydratedMetadata {
-                id: id.to_string(),
-                metadata,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let id = id.to_string();
+        db_call!(self, UpdateTitleHydratedMetadata { id, metadata })
     }
 
     async fn delete(&self, id: &str) -> AppResult<()> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::DeleteTitle {
-                id: id.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let id = id.to_string();
+        db_call!(self, DeleteTitle { id })
     }
 
     async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()> {
@@ -163,97 +96,37 @@ impl TitleRepository for SqliteServices {
     }
 
     async fn list_unhydrated(&self, limit: usize, language: &str) -> AppResult<Vec<Title>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ListUnhydratedTitles {
-                limit,
-                language: language.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let language = language.to_string();
+        db_call!(self, ListUnhydratedTitles { limit, language })
     }
 
     async fn clear_metadata_language_for_all(&self) -> AppResult<u64> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ClearMetadataLanguageForAll { reply: reply_tx })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, ClearMetadataLanguageForAll {})
     }
 }
 
 #[async_trait]
 impl ShowRepository for SqliteServices {
     async fn list_collections_for_title(&self, title_id: &str) -> AppResult<Vec<Collection>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ListCollectionsForTitle {
-                title_id: title_id.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let title_id = title_id.to_string();
+        db_call!(self, ListCollectionsForTitle { title_id })
     }
 
     async fn list_primary_collection_summaries(
         &self,
         title_ids: &[String],
     ) -> AppResult<Vec<PrimaryCollectionSummary>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ListPrimaryCollectionSummaries {
-                title_ids: title_ids.to_vec(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let title_ids = title_ids.to_vec();
+        db_call!(self, ListPrimaryCollectionSummaries { title_ids })
     }
 
     async fn get_collection_by_id(&self, collection_id: &str) -> AppResult<Option<Collection>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::GetCollectionById {
-                collection_id: collection_id.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let collection_id = collection_id.to_string();
+        db_call!(self, GetCollectionById { collection_id })
     }
 
     async fn create_collection(&self, collection: Collection) -> AppResult<Collection> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::CreateCollection {
-                collection,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, CreateCollection { collection })
     }
 
     async fn update_collection(
@@ -267,25 +140,17 @@ impl ShowRepository for SqliteServices {
         last_episode_number: Option<String>,
         monitored: Option<bool>,
     ) -> AppResult<Collection> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::UpdateCollection {
-                collection_id: collection_id.to_string(),
-                collection_type,
-                collection_index,
-                label,
-                ordered_path,
-                first_episode_number,
-                last_episode_number,
-                monitored,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let collection_id = collection_id.to_string();
+        db_call!(self, UpdateCollection {
+            collection_id,
+            collection_type,
+            collection_index,
+            label,
+            ordered_path,
+            first_episode_number,
+            last_episode_number,
+            monitored,
+        })
     }
 
     async fn update_interstitial_season_episode(
@@ -293,21 +158,8 @@ impl ShowRepository for SqliteServices {
         collection_id: &str,
         season_episode: Option<String>,
     ) -> AppResult<()> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(
-                crate::commands::DbCommand::UpdateInterstitialSeasonEpisode {
-                    collection_id: collection_id.to_string(),
-                    season_episode,
-                    reply: reply_tx,
-                },
-            )
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let collection_id = collection_id.to_string();
+        db_call!(self, UpdateInterstitialSeasonEpisode { collection_id, season_episode })
     }
 
     async fn set_collection_episodes_monitored(
@@ -315,79 +167,27 @@ impl ShowRepository for SqliteServices {
         collection_id: &str,
         monitored: bool,
     ) -> AppResult<()> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::SetCollectionEpisodesMonitored {
-                collection_id: collection_id.to_string(),
-                monitored,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let collection_id = collection_id.to_string();
+        db_call!(self, SetCollectionEpisodesMonitored { collection_id, monitored })
     }
 
     async fn delete_collection(&self, collection_id: &str) -> AppResult<()> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::DeleteCollection {
-                collection_id: collection_id.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let collection_id = collection_id.to_string();
+        db_call!(self, DeleteCollection { collection_id })
     }
 
     async fn list_episodes_for_collection(&self, collection_id: &str) -> AppResult<Vec<Episode>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ListEpisodesForCollection {
-                collection_id: collection_id.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let collection_id = collection_id.to_string();
+        db_call!(self, ListEpisodesForCollection { collection_id })
     }
 
     async fn get_episode_by_id(&self, episode_id: &str) -> AppResult<Option<Episode>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::GetEpisodeById {
-                episode_id: episode_id.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let episode_id = episode_id.to_string();
+        db_call!(self, GetEpisodeById { episode_id })
     }
 
     async fn create_episode(&self, episode: Episode) -> AppResult<Episode> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::CreateEpisode {
-                episode,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, CreateEpisode { episode })
     }
 
     async fn update_episode(
@@ -407,46 +207,28 @@ impl ShowRepository for SqliteServices {
         overview: Option<String>,
         tvdb_id: Option<String>,
     ) -> AppResult<Episode> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::UpdateEpisode {
-                episode_id: episode_id.to_string(),
-                episode_type,
-                episode_number,
-                season_number,
-                episode_label,
-                title,
-                air_date,
-                duration_seconds,
-                has_multi_audio,
-                has_subtitle,
-                monitored,
-                collection_id,
-                overview,
-                tvdb_id,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let episode_id = episode_id.to_string();
+        db_call!(self, UpdateEpisode {
+            episode_id,
+            episode_type,
+            episode_number,
+            season_number,
+            episode_label,
+            title,
+            air_date,
+            duration_seconds,
+            has_multi_audio,
+            has_subtitle,
+            monitored,
+            collection_id,
+            overview,
+            tvdb_id,
+        })
     }
 
     async fn delete_episode(&self, episode_id: &str) -> AppResult<()> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::DeleteEpisode {
-                episode_id: episode_id.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let episode_id = episode_id.to_string();
+        db_call!(self, DeleteEpisode { episode_id })
     }
 
     async fn find_episode_by_title_and_numbers(
@@ -473,79 +255,30 @@ impl ShowRepository for SqliteServices {
         start_date: &str,
         end_date: &str,
     ) -> AppResult<Vec<CalendarEpisode>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ListEpisodesInDateRange {
-                start_date: start_date.to_string(),
-                end_date: end_date.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let start_date = start_date.to_string();
+        let end_date = end_date.to_string();
+        db_call!(self, ListEpisodesInDateRange { start_date, end_date })
     }
 }
 
 #[async_trait]
 impl UserRepository for SqliteServices {
     async fn get_by_username(&self, username: &str) -> AppResult<Option<User>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::GetUserByUsername {
-                username: username.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let username = username.to_string();
+        db_call!(self, GetUserByUsername { username })
     }
 
     async fn get_by_id(&self, id: &str) -> AppResult<Option<User>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::GetUserById {
-                id: id.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let id = id.to_string();
+        db_call!(self, GetUserById { id })
     }
 
     async fn create(&self, user: User) -> AppResult<User> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::CreateUser {
-                user,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, CreateUser { user })
     }
 
     async fn list_all(&self) -> AppResult<Vec<User>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ListUsers { reply: reply_tx })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, ListUsers {})
     }
 
     async fn update_entitlements(
@@ -555,51 +288,18 @@ impl UserRepository for SqliteServices {
     ) -> AppResult<User> {
         let entitlements_json = serde_json::to_string(&entitlements)
             .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::UpdateUserEntitlements {
-                id: id.to_string(),
-                entitlements_json,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let id = id.to_string();
+        db_call!(self, UpdateUserEntitlements { id, entitlements_json })
     }
 
     async fn update_password_hash(&self, id: &str, password_hash: String) -> AppResult<User> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::UpdateUserPassword {
-                id: id.to_string(),
-                password_hash,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let id = id.to_string();
+        db_call!(self, UpdateUserPassword { id, password_hash })
     }
 
     async fn delete(&self, id: &str) -> AppResult<()> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::DeleteUser {
-                id: id.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let id = id.to_string();
+        db_call!(self, DeleteUser { id })
     }
 }
 
@@ -611,98 +311,32 @@ impl EventRepository for SqliteServices {
         limit: i64,
         offset: i64,
     ) -> AppResult<Vec<HistoryEvent>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ListEvents {
-                title_id,
-                limit,
-                offset,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, ListEvents { title_id, limit, offset })
     }
 
     async fn append(&self, event: HistoryEvent) -> AppResult<()> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::AppendEvent {
-                event,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, AppendEvent { event })
     }
 }
 
 #[async_trait]
 impl IndexerConfigRepository for SqliteServices {
     async fn list(&self, provider_type: Option<String>) -> AppResult<Vec<IndexerConfig>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ListIndexerConfigs {
-                provider_type,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, ListIndexerConfigs { provider_type })
     }
 
     async fn get_by_id(&self, id: &str) -> AppResult<Option<IndexerConfig>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::GetIndexerConfig {
-                id: id.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let id = id.to_string();
+        db_call!(self, GetIndexerConfig { id })
     }
 
     async fn create(&self, config: IndexerConfig) -> AppResult<IndexerConfig> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::CreateIndexerConfig {
-                config,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, CreateIndexerConfig { config })
     }
 
     async fn touch_last_error(&self, provider_type: &str) -> AppResult<()> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::TouchIndexerLastError {
-                provider_type: provider_type.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let provider_type = provider_type.to_string();
+        db_call!(self, TouchIndexerLastError { provider_type })
     }
 
     async fn update(
@@ -719,43 +353,25 @@ impl IndexerConfigRepository for SqliteServices {
         enable_auto_search: Option<bool>,
         config_json: Option<String>,
     ) -> AppResult<IndexerConfig> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::UpdateIndexerConfig {
-                id: id.to_string(),
-                name,
-                provider_type,
-                base_url,
-                api_key_encrypted,
-                rate_limit_seconds,
-                rate_limit_burst,
-                is_enabled,
-                enable_interactive_search,
-                enable_auto_search,
-                config_json,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let id = id.to_string();
+        db_call!(self, UpdateIndexerConfig {
+            id,
+            name,
+            provider_type,
+            base_url,
+            api_key_encrypted,
+            rate_limit_seconds,
+            rate_limit_burst,
+            is_enabled,
+            enable_interactive_search,
+            enable_auto_search,
+            config_json,
+        })
     }
 
     async fn delete(&self, id: &str) -> AppResult<()> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::DeleteIndexerConfig {
-                id: id.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let id = id.to_string();
+        db_call!(self, DeleteIndexerConfig { id })
     }
 }
 
@@ -953,6 +569,51 @@ impl DownloadSubmissionRepository for SqliteServices {
         self.delete_download_submission_by_client_item_id(download_client_item_id)
             .await
     }
+
+    async fn update_tracked_state(
+        &self,
+        download_client_type: &str,
+        download_client_item_id: &str,
+        tracked_state: &str,
+    ) -> AppResult<()> {
+        self.update_tracked_state(download_client_type, download_client_item_id, tracked_state)
+            .await
+    }
+
+    async fn get_tracked_state(
+        &self,
+        download_client_type: &str,
+        download_client_item_id: &str,
+    ) -> AppResult<Option<String>> {
+        self.get_tracked_state(download_client_type, download_client_item_id)
+            .await
+    }
+}
+
+#[async_trait]
+impl ImportArtifactRepository for SqliteServices {
+    async fn insert_artifact(&self, artifact: ImportArtifact) -> AppResult<()> {
+        self.insert_import_artifact(artifact).await
+    }
+
+    async fn list_by_source_ref(
+        &self,
+        source_system: &str,
+        source_ref: &str,
+    ) -> AppResult<Vec<ImportArtifact>> {
+        self.list_import_artifacts_by_source_ref(source_system, source_ref)
+            .await
+    }
+
+    async fn count_by_result(
+        &self,
+        source_system: &str,
+        source_ref: &str,
+        result: &str,
+    ) -> AppResult<u64> {
+        self.count_import_artifacts_by_result(source_system, source_ref, result)
+            .await
+    }
 }
 
 #[async_trait]
@@ -1024,22 +685,8 @@ impl QualityProfileRepository for SqliteServices {
         scope: &str,
         scope_id: Option<String>,
     ) -> AppResult<Vec<ApplicationQualityProfile>> {
-        let (reply_tx, reply_rx): (
-            oneshot::Sender<AppResult<Vec<ApplicationQualityProfile>>>,
-            oneshot::Receiver<AppResult<Vec<ApplicationQualityProfile>>>,
-        ) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ListQualityProfiles {
-                scope: scope.to_string(),
-                scope_id,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let scope = scope.to_string();
+        db_call!(self, ListQualityProfiles { scope, scope_id })
     }
 }
 
@@ -1187,81 +834,31 @@ impl WantedItemRepository for SqliteServices {
 #[async_trait]
 impl RuleSetRepository for SqliteServices {
     async fn list_rule_sets(&self) -> AppResult<Vec<RuleSet>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ListRuleSets { reply: reply_tx })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, ListRuleSets {})
     }
 
     async fn list_enabled_rule_sets(&self) -> AppResult<Vec<RuleSet>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ListEnabledRuleSets { reply: reply_tx })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, ListEnabledRuleSets {})
     }
 
     async fn get_rule_set(&self, id: &str) -> AppResult<Option<RuleSet>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::GetRuleSet {
-                id: id.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let id = id.to_string();
+        db_call!(self, GetRuleSet { id })
     }
 
     async fn create_rule_set(&self, rule_set: &RuleSet) -> AppResult<()> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::CreateRuleSet {
-                rule_set: rule_set.clone(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let rule_set = rule_set.clone();
+        db_call!(self, CreateRuleSet { rule_set })
     }
 
     async fn update_rule_set(&self, rule_set: &RuleSet) -> AppResult<()> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::UpdateRuleSet {
-                rule_set: rule_set.clone(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let rule_set = rule_set.clone();
+        db_call!(self, UpdateRuleSet { rule_set })
     }
 
     async fn delete_rule_set(&self, id: &str) -> AppResult<()> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::DeleteRuleSet {
-                id: id.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let id = id.to_string();
+        db_call!(self, DeleteRuleSet { id })
     }
 
     async fn record_rule_set_history(
@@ -1271,94 +868,42 @@ impl RuleSetRepository for SqliteServices {
         rego_source: Option<&str>,
         actor_id: Option<&str>,
     ) -> AppResult<()> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::RecordRuleSetHistory {
-                id: scryer_domain::Id::new().0,
-                rule_set_id: rule_set_id.to_string(),
-                action: action.to_string(),
-                rego_source: rego_source.map(|s| s.to_string()),
-                actor_id: actor_id.map(|s| s.to_string()),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let id = scryer_domain::Id::new().0;
+        let rule_set_id = rule_set_id.to_string();
+        let action = action.to_string();
+        let rego_source = rego_source.map(|s| s.to_string());
+        let actor_id = actor_id.map(|s| s.to_string());
+        db_call!(self, RecordRuleSetHistory { id, rule_set_id, action, rego_source, actor_id })
     }
 
     async fn get_rule_set_by_managed_key(&self, key: &str) -> AppResult<Option<RuleSet>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::GetRuleSetByManagedKey {
-                key: key.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let key = key.to_string();
+        db_call!(self, GetRuleSetByManagedKey { key })
     }
 
     async fn delete_rule_set_by_managed_key(&self, key: &str) -> AppResult<()> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::DeleteRuleSetByManagedKey {
-                key: key.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let key = key.to_string();
+        db_call!(self, DeleteRuleSetByManagedKey { key })
     }
 
     async fn list_rule_sets_by_managed_key_prefix(&self, prefix: &str) -> AppResult<Vec<RuleSet>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ListRuleSetsByManagedKeyPrefix {
-                prefix: prefix.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let prefix = prefix.to_string();
+        db_call!(self, ListRuleSetsByManagedKeyPrefix { prefix })
     }
 }
 
 #[async_trait]
 impl PluginInstallationRepository for SqliteServices {
     async fn list_plugin_installations(&self) -> AppResult<Vec<PluginInstallation>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ListPluginInstallations { reply: reply_tx })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, ListPluginInstallations {})
     }
 
     async fn get_plugin_installation(
         &self,
         plugin_id: &str,
     ) -> AppResult<Option<PluginInstallation>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::GetPluginInstallation {
-                plugin_id: plugin_id.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let plugin_id = plugin_id.to_string();
+        db_call!(self, GetPluginInstallation { plugin_id })
     }
 
     async fn create_plugin_installation(
@@ -1366,18 +911,9 @@ impl PluginInstallationRepository for SqliteServices {
         installation: &PluginInstallation,
         wasm_bytes: Option<&[u8]>,
     ) -> AppResult<PluginInstallation> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::CreatePluginInstallation {
-                installation: installation.clone(),
-                wasm_bytes: wasm_bytes.map(|b| b.to_vec()),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let installation = installation.clone();
+        let wasm_bytes = wasm_bytes.map(|b| b.to_vec());
+        db_call!(self, CreatePluginInstallation { installation, wasm_bytes })
     }
 
     async fn update_plugin_installation(
@@ -1385,45 +921,20 @@ impl PluginInstallationRepository for SqliteServices {
         installation: &PluginInstallation,
         wasm_bytes: Option<&[u8]>,
     ) -> AppResult<PluginInstallation> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::UpdatePluginInstallation {
-                installation: installation.clone(),
-                wasm_bytes: wasm_bytes.map(|b| b.to_vec()),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let installation = installation.clone();
+        let wasm_bytes = wasm_bytes.map(|b| b.to_vec());
+        db_call!(self, UpdatePluginInstallation { installation, wasm_bytes })
     }
 
     async fn delete_plugin_installation(&self, plugin_id: &str) -> AppResult<()> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::DeletePluginInstallation {
-                plugin_id: plugin_id.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let plugin_id = plugin_id.to_string();
+        db_call!(self, DeletePluginInstallation { plugin_id })
     }
 
     async fn get_enabled_plugin_wasm_bytes(
         &self,
     ) -> AppResult<Vec<(PluginInstallation, Option<Vec<u8>>)>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::GetEnabledPluginWasmBytes { reply: reply_tx })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, GetEnabledPluginWasmBytes {})
     }
 
     async fn seed_builtin(
@@ -1434,46 +945,21 @@ impl PluginInstallationRepository for SqliteServices {
         version: &str,
         provider_type: &str,
     ) -> AppResult<()> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::SeedBuiltinPlugin {
-                plugin_id: plugin_id.to_string(),
-                name: name.to_string(),
-                description: description.to_string(),
-                version: version.to_string(),
-                provider_type: provider_type.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let plugin_id = plugin_id.to_string();
+        let name = name.to_string();
+        let description = description.to_string();
+        let version = version.to_string();
+        let provider_type = provider_type.to_string();
+        db_call!(self, SeedBuiltinPlugin { plugin_id, name, description, version, provider_type })
     }
 
     async fn store_registry_cache(&self, json: &str) -> AppResult<()> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::StoreRegistryCache {
-                json: json.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let json = json.to_string();
+        db_call!(self, StoreRegistryCache { json })
     }
 
     async fn get_registry_cache(&self) -> AppResult<Option<String>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::GetRegistryCache { reply: reply_tx })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, GetRegistryCache {})
     }
 }
 
@@ -1482,76 +968,31 @@ impl PluginInstallationRepository for SqliteServices {
 #[async_trait]
 impl NotificationChannelRepository for SqliteServices {
     async fn list_channels(&self) -> AppResult<Vec<NotificationChannelConfig>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ListNotificationChannels { reply: reply_tx })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, ListNotificationChannels {})
     }
 
     async fn get_channel(&self, id: &str) -> AppResult<Option<NotificationChannelConfig>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::GetNotificationChannel {
-                id: id.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let id = id.to_string();
+        db_call!(self, GetNotificationChannel { id })
     }
 
     async fn create_channel(
         &self,
         config: NotificationChannelConfig,
     ) -> AppResult<NotificationChannelConfig> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::CreateNotificationChannel {
-                config,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, CreateNotificationChannel { config })
     }
 
     async fn update_channel(
         &self,
         config: NotificationChannelConfig,
     ) -> AppResult<NotificationChannelConfig> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::UpdateNotificationChannel {
-                config,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, UpdateNotificationChannel { config })
     }
 
     async fn delete_channel(&self, id: &str) -> AppResult<()> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::DeleteNotificationChannel {
-                id: id.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let id = id.to_string();
+        db_call!(self, DeleteNotificationChannel { id })
     }
 }
 
@@ -1560,191 +1001,73 @@ impl NotificationChannelRepository for SqliteServices {
 #[async_trait]
 impl NotificationSubscriptionRepository for SqliteServices {
     async fn list_subscriptions(&self) -> AppResult<Vec<NotificationSubscription>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ListNotificationSubscriptions { reply: reply_tx })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, ListNotificationSubscriptions {})
     }
 
     async fn list_subscriptions_for_channel(
         &self,
         channel_id: &str,
     ) -> AppResult<Vec<NotificationSubscription>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(
-                crate::commands::DbCommand::ListNotificationSubscriptionsForChannel {
-                    channel_id: channel_id.to_string(),
-                    reply: reply_tx,
-                },
-            )
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let channel_id = channel_id.to_string();
+        db_call!(self, ListNotificationSubscriptionsForChannel { channel_id })
     }
 
     async fn list_subscriptions_for_event(
         &self,
         event_type: &str,
     ) -> AppResult<Vec<NotificationSubscription>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(
-                crate::commands::DbCommand::ListNotificationSubscriptionsForEvent {
-                    event_type: event_type.to_string(),
-                    reply: reply_tx,
-                },
-            )
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let event_type = event_type.to_string();
+        db_call!(self, ListNotificationSubscriptionsForEvent { event_type })
     }
 
     async fn create_subscription(
         &self,
         sub: NotificationSubscription,
     ) -> AppResult<NotificationSubscription> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::CreateNotificationSubscription {
-                sub,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, CreateNotificationSubscription { sub })
     }
 
     async fn update_subscription(
         &self,
         sub: NotificationSubscription,
     ) -> AppResult<NotificationSubscription> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::UpdateNotificationSubscription {
-                sub,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, UpdateNotificationSubscription { sub })
     }
 
     async fn delete_subscription(&self, id: &str) -> AppResult<()> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::DeleteNotificationSubscription {
-                id: id.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let id = id.to_string();
+        db_call!(self, DeleteNotificationSubscription { id })
     }
 }
 
 #[async_trait]
 impl HousekeepingRepository for SqliteServices {
     async fn delete_release_decisions_older_than(&self, days: i64) -> AppResult<u32> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(
-                crate::commands::DbCommand::DeleteReleaseDecisionsOlderThan {
-                    days,
-                    reply: reply_tx,
-                },
-            )
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, DeleteReleaseDecisionsOlderThan { days })
     }
 
     async fn delete_release_attempts_older_than(&self, days: i64) -> AppResult<u32> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::DeleteReleaseAttemptsOlderThan {
-                days,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, DeleteReleaseAttemptsOlderThan { days })
     }
 
     async fn delete_dispatched_event_outboxes_older_than(&self, days: i64) -> AppResult<u32> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(
-                crate::commands::DbCommand::DeleteDispatchedEventOutboxesOlderThan {
-                    days,
-                    reply: reply_tx,
-                },
-            )
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, DeleteDispatchedEventOutboxesOlderThan { days })
     }
 
     async fn delete_history_events_older_than(&self, days: i64) -> AppResult<u32> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::DeleteHistoryEventsOlderThan {
-                days,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, DeleteHistoryEventsOlderThan { days })
     }
 
     async fn list_all_media_file_paths(&self) -> AppResult<Vec<(String, String)>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ListAllMediaFilePaths { reply: reply_tx })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, ListAllMediaFilePaths {})
     }
 
     async fn delete_media_files_by_ids(&self, ids: &[String]) -> AppResult<u32> {
         if ids.is_empty() {
             return Ok(0);
         }
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::DeleteMediaFilesByIds {
-                ids: ids.to_vec(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let ids = ids.to_vec();
+        db_call!(self, DeleteMediaFilesByIds { ids })
     }
 }
 
@@ -1930,98 +1253,34 @@ impl BlocklistRepository for SqliteServices {
 #[async_trait]
 impl PostProcessingScriptRepository for SqliteServices {
     async fn list_scripts(&self) -> AppResult<Vec<PostProcessingScript>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ListPPScripts { reply: reply_tx })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, ListPPScripts {})
     }
 
     async fn get_script(&self, id: &str) -> AppResult<Option<PostProcessingScript>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::GetPPScript {
-                id: id.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let id = id.to_string();
+        db_call!(self, GetPPScript { id })
     }
 
     async fn create_script(&self, script: PostProcessingScript) -> AppResult<PostProcessingScript> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::CreatePPScript {
-                script,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, CreatePPScript { script })
     }
 
     async fn update_script(&self, script: PostProcessingScript) -> AppResult<PostProcessingScript> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::UpdatePPScript {
-                script,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, UpdatePPScript { script })
     }
 
     async fn delete_script(&self, id: &str) -> AppResult<()> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::DeletePPScript {
-                id: id.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let id = id.to_string();
+        db_call!(self, DeletePPScript { id })
     }
 
     async fn list_enabled_for_facet(&self, facet: &str) -> AppResult<Vec<PostProcessingScript>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ListEnabledPPScriptsForFacet {
-                facet: facet.to_string(),
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let facet = facet.to_string();
+        db_call!(self, ListEnabledPPScriptsForFacet { facet })
     }
 
     async fn record_run(&self, run: PostProcessingScriptRun) -> AppResult<()> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::RecordPPScriptRun {
-                run,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        db_call!(self, RecordPPScriptRun { run })
     }
 
     async fn list_runs_for_script(
@@ -2029,18 +1288,8 @@ impl PostProcessingScriptRepository for SqliteServices {
         script_id: &str,
         limit: usize,
     ) -> AppResult<Vec<PostProcessingScriptRun>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ListPPScriptRunsForScript {
-                script_id: script_id.to_string(),
-                limit,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let script_id = script_id.to_string();
+        db_call!(self, ListPPScriptRunsForScript { script_id, limit })
     }
 
     async fn list_runs_for_title(
@@ -2048,18 +1297,8 @@ impl PostProcessingScriptRepository for SqliteServices {
         title_id: &str,
         limit: usize,
     ) -> AppResult<Vec<PostProcessingScriptRun>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.sender
-            .send(crate::commands::DbCommand::ListPPScriptRunsForTitle {
-                title_id: title_id.to_string(),
-                limit,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        reply_rx
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?
+        let title_id = title_id.to_string();
+        db_call!(self, ListPPScriptRunsForTitle { title_id, limit })
     }
 }
 
