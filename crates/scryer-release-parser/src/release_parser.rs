@@ -2676,14 +2676,13 @@ fn parse_season_pack(tokens: &[String]) -> Option<ParsedEpisodeMetadata> {
             }
         }
 
-        if let Some(candidate) = tokens.get(value_index + 1) {
-            if let Some(other_season) =
+        if let Some(candidate) = tokens.get(value_index + 1)
+            && let Some(other_season) =
                 parse_season_designator(candidate).or_else(|| parse_numeric_token(candidate))
-                && other_season > season
-                && parse_year(candidate).is_none()
-            {
-                is_multi_season = true;
-            }
+            && other_season > season
+            && parse_year(candidate).is_none()
+        {
+            is_multi_season = true;
         }
 
         if !is_multi_season
@@ -3079,7 +3078,7 @@ fn parse_series_episode_core(tokens: &[String]) -> Option<ParsedEpisodeMetadata>
             } else {
                 (token.as_str(), None)
             };
-            let next_is_numeric = next.is_some_and(|value| is_digit_str(value));
+            let next_is_numeric = next.is_some_and(is_digit_str);
             let prev_is_numeric = prev.is_some_and(|value| is_digit_str(value));
             let surrounded_by_media_tokens = prev.is_some_and(|value| {
                 parse_audio(value, next).is_some()

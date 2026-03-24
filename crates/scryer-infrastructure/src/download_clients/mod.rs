@@ -6,7 +6,6 @@ pub(crate) mod weaver;
 pub mod weaver_subscription;
 
 use scryer_application::{AppError, AppResult};
-use scryer_domain::DownloadClientConfig;
 use serde_json::{Value, json};
 
 pub use multi_indexer::MultiIndexerSearchClient;

@@ -14,8 +14,9 @@ use crate::{
 };
 use scryer_application::QualityProfile;
 use scryer_application::{
-    AppError, AppResult, PendingRelease, PrimaryCollectionSummary, ReleaseDecision,
-    ReleaseDownloadAttemptOutcome, TitleMediaSizeSummary, TitleMetadataUpdate, WantedItem,
+    AppError, AppResult, PendingRelease, PendingReleaseStatus, PrimaryCollectionSummary,
+    ReleaseDecision, ReleaseDownloadAttemptOutcome, SuccessfulGrabCommit,
+    TitleMediaSizeSummary, TitleMetadataUpdate, WantedItem,
 };
 use scryer_domain::{
     BlocklistEntry, CalendarEpisode, Collection, CollectionType, DownloadClientConfig, Episode,
@@ -378,6 +379,10 @@ pub(crate) enum DbCommand {
         collection_id: Option<String>,
         reply: Sender<AppResult<()>>,
     },
+    CommitSuccessfulGrab {
+        commit: SuccessfulGrabCommit,
+        reply: Sender<AppResult<()>>,
+    },
     FindDownloadSubmission {
         download_client_type: String,
         download_client_item_id: String,
@@ -502,6 +507,10 @@ pub(crate) enum DbCommand {
         item: WantedItem,
         reply: Sender<AppResult<String>>,
     },
+    EnsureWantedItemSeeded {
+        item: WantedItem,
+        reply: Sender<AppResult<String>>,
+    },
     ListDueWantedItems {
         now: String,
         batch_limit: i64,
@@ -577,7 +586,7 @@ pub(crate) enum DbCommand {
     },
     UpdatePendingReleaseStatus {
         id: String,
-        status: String,
+        status: PendingReleaseStatus,
         grabbed_at: Option<String>,
         reply: Sender<AppResult<()>>,
     },
@@ -594,8 +603,8 @@ pub(crate) enum DbCommand {
     },
     CompareAndSetPendingReleaseStatus {
         id: String,
-        current_status: String,
-        next_status: String,
+        current_status: PendingReleaseStatus,
+        next_status: PendingReleaseStatus,
         grabbed_at: Option<String>,
         reply: Sender<AppResult<bool>>,
     },
@@ -1456,6 +1465,9 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                         .await,
                     );
                 }
+                DbCommand::CommitSuccessfulGrab { commit, reply } => {
+                    let _ = reply.send(commit_successful_grab_query(&pool, &commit).await);
+                }
                 DbCommand::FindDownloadSubmission {
                     download_client_type,
                     download_client_item_id,
@@ -1735,6 +1747,12 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     let _ = reply
                         .send(crate::queries::wanted::upsert_wanted_item_query(&pool, &item).await);
                 }
+                DbCommand::EnsureWantedItemSeeded { item, reply } => {
+                    let _ = reply.send(
+                        crate::queries::wanted::ensure_wanted_item_seeded_query(&pool, &item)
+                            .await,
+                    );
+                }
                 DbCommand::ListDueWantedItems {
                     now,
                     batch_limit,
@@ -1911,7 +1929,7 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                         crate::queries::pending_releases::update_pending_release_status_query(
                             &pool,
                             &id,
-                            &status,
+                            status,
                             grabbed_at.as_deref(),
                         )
                         .await,
@@ -1960,8 +1978,8 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                         crate::queries::pending_releases::compare_and_set_pending_release_status_query(
                             &pool,
                             &id,
-                            &current_status,
-                            &next_status,
+                            current_status,
+                            next_status,
                             grabbed_at.as_deref(),
                         )
                         .await,

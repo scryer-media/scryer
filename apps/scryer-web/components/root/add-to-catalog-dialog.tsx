@@ -23,7 +23,6 @@ import { TitlePoster } from "@/components/title-poster";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import type { Facet } from "@/lib/types";
 import type {
-  AnimeCatalogDefaults,
   CatalogQualityProfileOption,
   MetadataCatalogAddOptions,
   MetadataCatalogMonitorType,
@@ -38,7 +37,6 @@ type AddToCatalogDialogProps = {
   catalogQualityProfileOptions: CatalogQualityProfileOption[];
   defaultQualityProfileId: string;
   rootFolders: RootFolderOption[];
-  animeCatalogDefaults: AnimeCatalogDefaults;
   onSubmit: (
     result: MetadataTvdbSearchItem,
     facet: Facet,
@@ -66,7 +64,6 @@ export const EMPTY_SEARCH_RESULT: MetadataTvdbSearchItem = {
 function buildDefaultDraft(
   facet: Facet,
   defaultQualityProfileId: string,
-  animeCatalogDefaults: AnimeCatalogDefaults,
 ): MetadataCatalogAddOptions {
   return {
     qualityProfileId: defaultQualityProfileId,
@@ -75,8 +72,8 @@ function buildDefaultDraft(
     ...(facet === "movie" ? { minAvailability: "announced" } : {}),
     ...(facet === "anime"
       ? {
-          monitorSpecials: animeCatalogDefaults.monitorSpecials,
-          interSeasonMovies: animeCatalogDefaults.interSeasonMovies,
+          monitorSpecials: false,
+          interSeasonMovies: true,
         }
       : {}),
   };
@@ -90,21 +87,20 @@ export function AddToCatalogDialog({
   catalogQualityProfileOptions,
   defaultQualityProfileId,
   rootFolders,
-  animeCatalogDefaults,
   onSubmit,
 }: AddToCatalogDialogProps) {
   const t = useTranslate();
   const [draft, setDraft] = React.useState<MetadataCatalogAddOptions>(() =>
-    buildDefaultDraft(facet, defaultQualityProfileId, animeCatalogDefaults),
+    buildDefaultDraft(facet, defaultQualityProfileId),
   );
   const [isSubmitting, setIsSubmitting] = React.useState(false);
 
   // Reset draft when dialog opens
   React.useEffect(() => {
     if (!open) return;
-    setDraft(buildDefaultDraft(facet, defaultQualityProfileId, animeCatalogDefaults));
+    setDraft(buildDefaultDraft(facet, defaultQualityProfileId));
     setIsSubmitting(false);
-  }, [open, facet, defaultQualityProfileId, animeCatalogDefaults]);
+  }, [open, facet, defaultQualityProfileId]);
 
   const qualityProfileValue =
     draft.qualityProfileId || defaultQualityProfileId;
@@ -263,32 +259,6 @@ export function AddToCatalogDialog({
                 </SelectContent>
               </Select>
             </label>
-          ) : null}
-
-          {/* Anime checkboxes — stacked vertically */}
-          {facet === "anime" ? (
-            <div className="flex flex-col gap-3 sm:col-span-2">
-              <label className="flex items-center gap-2">
-                <Checkbox
-                  checked={draft.monitorSpecials !== false}
-                  onCheckedChange={(v) => update({ monitorSpecials: v === true })}
-                  disabled={isSubmitting}
-                />
-                <span className="text-sm text-card-foreground">
-                  {t("settings.monitorSpecialsLabel")}
-                </span>
-              </label>
-              <label className="flex items-center gap-2">
-                <Checkbox
-                  checked={draft.interSeasonMovies !== false}
-                  onCheckedChange={(v) => update({ interSeasonMovies: v === true })}
-                  disabled={isSubmitting}
-                />
-                <span className="text-sm text-card-foreground">
-                  {t("settings.interSeasonMoviesLabel")}
-                </span>
-              </label>
-            </div>
           ) : null}
 
           {/* Monitored checkbox — movie only */}

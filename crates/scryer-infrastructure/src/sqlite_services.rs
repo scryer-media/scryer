@@ -343,6 +343,24 @@ impl SqliteServices {
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
+    pub async fn commit_successful_grab(
+        &self,
+        commit: scryer_application::SuccessfulGrabCommit,
+    ) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::CommitSuccessfulGrab {
+                commit,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
     pub async fn find_download_submission(
         &self,
         download_client_type: &str,
@@ -1070,6 +1088,24 @@ impl SqliteServices {
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
+    pub async fn ensure_wanted_item_seeded_atomic(
+        &self,
+        item: scryer_application::WantedItem,
+    ) -> AppResult<String> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::EnsureWantedItemSeeded {
+                item,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
     pub async fn list_due_wanted_items(
         &self,
         now: &str,
@@ -1464,14 +1500,14 @@ impl SqliteServices {
     pub async fn update_pending_release_status(
         &self,
         id: &str,
-        status: &str,
+        status: scryer_application::PendingReleaseStatus,
         grabbed_at: Option<&str>,
     ) -> AppResult<()> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
             .send(DbCommand::UpdatePendingReleaseStatus {
                 id: id.to_string(),
-                status: status.to_string(),
+                status,
                 grabbed_at: grabbed_at.map(str::to_string),
                 reply: reply_tx,
             })
@@ -1536,16 +1572,16 @@ impl SqliteServices {
     pub async fn compare_and_set_pending_release_status(
         &self,
         id: &str,
-        current_status: &str,
-        next_status: &str,
+        current_status: scryer_application::PendingReleaseStatus,
+        next_status: scryer_application::PendingReleaseStatus,
         grabbed_at: Option<&str>,
     ) -> AppResult<bool> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
             .send(DbCommand::CompareAndSetPendingReleaseStatus {
                 id: id.to_string(),
-                current_status: current_status.to_string(),
-                next_status: next_status.to_string(),
+                current_status,
+                next_status,
                 grabbed_at: grabbed_at.map(str::to_string),
                 reply: reply_tx,
             })

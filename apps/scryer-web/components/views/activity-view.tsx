@@ -1,6 +1,8 @@
 
 import {
   ArrowDownToLine,
+  CircleOff,
+  Link2,
   Loader2,
   Pause,
   Play,
@@ -38,6 +40,8 @@ type ActivityViewState = {
   queueError: string | null;
   lastRefreshedAt: Date | null;
   requestManualImport: (item: DownloadQueueItem) => Promise<void>;
+  requestAssignTitle: (item: DownloadQueueItem) => Promise<void>;
+  requestIgnore: (item: DownloadQueueItem) => Promise<void>;
   requestPause: (item: DownloadQueueItem) => Promise<void>;
   requestResume: (item: DownloadQueueItem) => Promise<void>;
   requestDelete: (item: DownloadQueueItem) => Promise<void>;
@@ -52,6 +56,7 @@ const queueStateClasses: Record<string, string> = {
   paused: "border-purple-500/40 bg-purple-500/10 text-purple-200",
   completed: "border-emerald-500/40 bg-emerald-500/15 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-200",
   import_pending: "border-indigo-500/40 bg-indigo-500/10 text-indigo-200",
+  import_blocked: "border-amber-500/40 bg-amber-500/10 text-amber-200",
   failed: "border-rose-500/40 bg-rose-500/10 text-rose-200",
 };
 
@@ -63,6 +68,7 @@ const queueStateLabels: Record<string, string> = {
   completed: "queue.state.completed",
   import_pending: "queue.state.importPending",
   importpending: "queue.state.importPending",
+  import_blocked: "queue.state.importBlocked",
   failed: "queue.state.failed",
 };
 
@@ -70,11 +76,24 @@ const queueStateAttention: Record<string, boolean> = {
   failed: true,
   import_pending: true,
   importpending: true,
+  import_blocked: true,
 };
 
-function normalizeQueueState(state: string): string {
-  const normalized = state.trim().toLowerCase();
+function normalizeQueueState(state: string | null | undefined): string {
+  const normalized = (state ?? "").trim().toLowerCase();
   return normalized === "importpending" ? "import_pending" : normalized;
+}
+
+function buildStatusDetail(queueItem: DownloadQueueItem): string {
+  const messages = [
+    ...(queueItem.trackedStatusMessages ?? []),
+    queueItem.attentionReason,
+    queueItem.importErrorMessage,
+  ]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+
+  return Array.from(new Set(messages)).join("\n");
 }
 
 function isPostProcessingReason(reason: string | null | undefined): boolean {
@@ -93,6 +112,11 @@ function isPostProcessingReason(reason: string | null | undefined): boolean {
 }
 
 function deriveDisplayState(queueItem: DownloadQueueItem): string {
+  const trackedStateKey = normalizeQueueState(queueItem.trackedState);
+  if (trackedStateKey === "import_blocked" || trackedStateKey === "import_pending") {
+    return trackedStateKey;
+  }
+
   const stateKey = normalizeQueueState(queueItem.state);
   if (stateKey === "extracting" || stateKey === "verifying" || stateKey === "repairing") {
     return "post_processing";
@@ -183,6 +207,8 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
     queueLoading,
     queueError,
     requestManualImport,
+    requestAssignTitle,
+    requestIgnore,
     requestPause,
     requestResume,
     requestDelete,
@@ -311,11 +337,13 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
               <div className="space-y-3">
                 {queueItems.map((queueItem) => {
                     const stateKey = normalizeQueueState(queueItem.state);
+                    const trackedStateKey = normalizeQueueState(queueItem.trackedState);
+                    const trackedMatchTypeKey = normalizeQueueState(queueItem.trackedMatchType);
                     const displayStateKey = deriveDisplayState(queueItem);
                     const percent = formatProgress(queueItem.progressPercent);
                     const remainingLabel = formatRemainingDuration(queueItem.remainingSeconds);
                     const needsManualImport =
-                      queueItem.attentionRequired || queueStateAttention[stateKey];
+                      queueItem.attentionRequired || queueStateAttention[stateKey] || queueStateAttention[displayStateKey];
                     const manualImportPending = manualImportingId === queueItem.id;
                     const isActionLoading = actionLoadingId === queueItem.id;
                     const isRowBusy = rowActionBusy[queueItem.id] ?? rowActionBusyRef.current[queueItem.id] ?? false;
@@ -326,17 +354,23 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
                     const canPause = stateKey === "downloading" || stateKey === "queued";
                     const canResume = stateKey === "paused";
                     const isCompleted = stateKey === "completed" || stateKey === "import_pending";
-                    const failureReason = (
-                      queueItem.attentionReason ||
-                      queueItem.importErrorMessage ||
-                      ""
-                    ).trim();
-                    const stageLabel = queueItem.attentionReason?.trim() ?? "";
+                    const failureReason = buildStatusDetail(queueItem);
+                    const stageLabel = queueItem.attentionReason?.trim() ?? queueItem.trackedStatusMessages[0]?.trim() ?? "";
                     const statusLabel =
                       displayStateKey === "post_processing" && stageLabel.length > 0
                         ? stageLabel
                         : t(queueStateLabels[displayStateKey] ?? "queue.state.unknown");
-                    const failedReason = stateKey === "failed" && failureReason.length > 0;
+                    const failedReason = (stateKey === "failed" || trackedStateKey === "import_blocked") && failureReason.length > 0;
+                    const canAssignTitle = trackedStateKey === "import_blocked";
+                    const canIgnore = trackedStateKey === "import_blocked";
+                    const canInteractiveManualImport =
+                      Boolean(queueItem.titleId) &&
+                      (queueItem.facet === "tv" || queueItem.facet === "anime") &&
+                      trackedStateKey === "import_blocked";
+                    const canDirectManualImport =
+                      Boolean(queueItem.titleId) &&
+                      ((isCompleted && needsManualImport) ||
+                        (trackedStateKey === "import_blocked" && queueItem.facet === "movie"));
                     const rowActionVisualClass = isRowFullyBusy
                       ? "pointer-events-none opacity-45 grayscale"
                       : "";
@@ -442,7 +476,7 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
                               <span>{t("queue.resume")}</span>
                             </Button>
                           )}
-                          {isCompleted && needsManualImport && (
+                          {(canInteractiveManualImport || canDirectManualImport) && (
                             <Button
                               type="button"
                               size="sm"
@@ -470,6 +504,56 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
                                 <ArrowDownToLine className="h-4 w-4" />
                               )}
                               <span>{manualImportPending ? t("queue.manualImporting") : t("queue.manualImportTooltip")}</span>
+                            </Button>
+                          )}
+                          {canAssignTitle && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              className={`flex-1 ${rowActionVisualClass}`}
+                              disabled={isRowFullyBusy}
+                              onClick={() => {
+                                if (rowActionBusyRef.current[queueItem.id] || isActionLoading || isRowBlocked) {
+                                  return;
+                                }
+                                setActionLoadingId(queueItem.id);
+                                setRowBusy(queueItem.id, true);
+                                void requestAssignTitle(queueItem).finally(() => {
+                                  setRowBusy(queueItem.id, false);
+                                  setActionLoadingId((current) => (current === queueItem.id ? null : current));
+                                });
+                              }}
+                            >
+                              <Link2 className="h-4 w-4" />
+                              <span>
+                                {trackedMatchTypeKey === "unmatched" || !queueItem.titleId
+                                  ? t("queue.assignTitle")
+                                  : t("queue.reassignTitle")}
+                              </span>
+                            </Button>
+                          )}
+                          {canIgnore && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              className={`flex-1 ${rowActionVisualClass}`}
+                              disabled={isRowFullyBusy}
+                              onClick={() => {
+                                if (rowActionBusyRef.current[queueItem.id] || isActionLoading || isRowBlocked) {
+                                  return;
+                                }
+                                setActionLoadingId(queueItem.id);
+                                setRowBusy(queueItem.id, true);
+                                void requestIgnore(queueItem).finally(() => {
+                                  setRowBusy(queueItem.id, false);
+                                  setActionLoadingId((current) => (current === queueItem.id ? null : current));
+                                });
+                              }}
+                            >
+                              <CircleOff className="h-4 w-4" />
+                              <span>{t("queue.ignore")}</span>
                             </Button>
                           )}
                           <Button
@@ -518,11 +602,13 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
                   ) : (
                     queueItems.map((queueItem) => {
                     const stateKey = normalizeQueueState(queueItem.state);
+                    const trackedStateKey = normalizeQueueState(queueItem.trackedState);
+                    const trackedMatchTypeKey = normalizeQueueState(queueItem.trackedMatchType);
                     const displayStateKey = deriveDisplayState(queueItem);
                     const percent = formatProgress(queueItem.progressPercent);
                     const remainingLabel = formatRemainingDuration(queueItem.remainingSeconds);
                     const needsManualImport =
-                      queueItem.attentionRequired || queueStateAttention[stateKey];
+                      queueItem.attentionRequired || queueStateAttention[stateKey] || queueStateAttention[displayStateKey];
                     const manualImportPending = manualImportingId === queueItem.id;
                     const isActionLoading = actionLoadingId === queueItem.id;
                     const isRowBusy = rowActionBusy[queueItem.id] ?? rowActionBusyRef.current[queueItem.id] ?? false;
@@ -533,17 +619,23 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
                     const canPause = stateKey === "downloading" || stateKey === "queued";
                     const canResume = stateKey === "paused";
                     const isCompleted = stateKey === "completed" || stateKey === "import_pending";
-                    const failureReason = (
-                      queueItem.attentionReason ||
-                      queueItem.importErrorMessage ||
-                      ""
-                    ).trim();
-                    const stageLabel = queueItem.attentionReason?.trim() ?? "";
+                    const failureReason = buildStatusDetail(queueItem);
+                    const stageLabel = queueItem.attentionReason?.trim() ?? queueItem.trackedStatusMessages[0]?.trim() ?? "";
                     const statusLabel =
                       displayStateKey === "post_processing" && stageLabel.length > 0
                         ? stageLabel
                         : t(queueStateLabels[displayStateKey] ?? "queue.state.unknown");
-                    const failedReason = stateKey === "failed" && failureReason.length > 0;
+                    const failedReason = (stateKey === "failed" || trackedStateKey === "import_blocked") && failureReason.length > 0;
+                    const canAssignTitle = trackedStateKey === "import_blocked";
+                    const canIgnore = trackedStateKey === "import_blocked";
+                    const canInteractiveManualImport =
+                      Boolean(queueItem.titleId) &&
+                      (queueItem.facet === "tv" || queueItem.facet === "anime") &&
+                      trackedStateKey === "import_blocked";
+                    const canDirectManualImport =
+                      Boolean(queueItem.titleId) &&
+                      ((isCompleted && needsManualImport) ||
+                        (trackedStateKey === "import_blocked" && queueItem.facet === "movie"));
                     const rowActionVisualClass = isRowFullyBusy
                       ? "pointer-events-none opacity-45 grayscale"
                       : "";
@@ -654,7 +746,7 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
                                 <Play className="h-6 w-6" />
                               </Button>
                             )}
-                            {isCompleted && needsManualImport && (
+                            {(canInteractiveManualImport || canDirectManualImport) && (
                               <Button
                                 type="button"
                                 size="sm"
@@ -683,6 +775,54 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
                                 ) : (
                                   <ArrowDownToLine className="h-5 w-5" />
                                 )}
+                              </Button>
+                            )}
+                            {canAssignTitle && (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="secondary"
+                                className={`h-10 w-10 border border-amber-500/60 bg-amber-600/15 text-amber-200 hover:bg-amber-600/25 ${rowActionVisualClass}`}
+                                disabled={isRowFullyBusy}
+                                title={trackedMatchTypeKey === "unmatched" || !queueItem.titleId ? t("queue.assignTitle") : t("queue.reassignTitle")}
+                                aria-label={trackedMatchTypeKey === "unmatched" || !queueItem.titleId ? t("queue.assignTitle") : t("queue.reassignTitle")}
+                                onClick={() => {
+                                  if (rowActionBusyRef.current[queueItem.id] || isActionLoading || isRowBlocked) {
+                                    return;
+                                  }
+                                  setActionLoadingId(queueItem.id);
+                                  setRowBusy(queueItem.id, true);
+                                  void requestAssignTitle(queueItem).finally(() => {
+                                    setRowBusy(queueItem.id, false);
+                                    setActionLoadingId((current) => (current === queueItem.id ? null : current));
+                                  });
+                                }}
+                              >
+                                <Link2 className="h-5 w-5" />
+                              </Button>
+                            )}
+                            {canIgnore && (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="secondary"
+                                className={`h-10 w-10 border border-border/50 bg-muted/70 text-foreground hover:bg-accent/90 ${rowActionVisualClass}`}
+                                disabled={isRowFullyBusy}
+                                title={t("queue.ignore")}
+                                aria-label={t("queue.ignore")}
+                                onClick={() => {
+                                  if (rowActionBusyRef.current[queueItem.id] || isActionLoading || isRowBlocked) {
+                                    return;
+                                  }
+                                  setActionLoadingId(queueItem.id);
+                                  setRowBusy(queueItem.id, true);
+                                  void requestIgnore(queueItem).finally(() => {
+                                    setRowBusy(queueItem.id, false);
+                                    setActionLoadingId((current) => (current === queueItem.id ? null : current));
+                                  });
+                                }}
+                              >
+                                <CircleOff className="h-5 w-5" />
                               </Button>
                             )}
                               <Button

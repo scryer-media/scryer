@@ -120,7 +120,7 @@ pub use library_scan::{
 };
 pub use notification_dispatcher::start_notification_dispatcher;
 pub use null_repositories::{
-    NullBlocklistRepository, NullDownloadSubmissionRepository, NullFileImporter,
+    NullAcquisitionStateRepository, NullBlocklistRepository, NullDownloadSubmissionRepository, NullFileImporter,
     NullHousekeepingRepository, NullImportRepository, NullIndexerStatsTracker,
     NullMediaFileRepository, NullNotificationChannelRepository,
     NullNotificationSubscriptionRepository, NullPendingReleaseRepository,
@@ -145,11 +145,13 @@ pub(crate) use types::JwtClaims;
 pub use types::{
     BackupInfo, DiskSpaceInfo, DownloadGrabResult, DownloadSourceKind, HealthCheckResult,
     HealthCheckStatus, HousekeepingReport, IndexerQueryStats, IndexerSearchResponse,
-    IndexerSearchResult, JwtAuthConfig, PendingRelease, PrimaryCollectionSummary, ReleaseDecision,
-    ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature, SystemHealth, TitleImageBlob,
-    TitleImageKind, TitleImageReplacement, TitleImageStorageMode, TitleImageSyncTask,
-    TitleImageVariantRecord, TitleMediaFile, TitleMediaSizeSummary, TitleMetadataUpdate,
-    TitleReleaseBlocklistEntry, WantedItem, WantedStatus,
+    IndexerSearchResult, JwtAuthConfig, PendingRelease, PendingReleaseStatus,
+    PrimaryCollectionSummary, ReleaseDecision, ReleaseDownloadAttemptOutcome,
+    ReleaseDownloadFailureSignature, SystemHealth, TitleImageBlob, TitleImageKind,
+    TitleImageReplacement, TitleImageStorageMode, TitleImageSyncTask, TitleImageVariantRecord,
+    TitleMediaFile, TitleMediaSizeSummary, TitleMetadataUpdate, TitleReleaseBlocklistEntry,
+    WantedCompleteTransition, WantedGrabTransition, WantedItem, WantedPauseTransition,
+    WantedSearchTransition, WantedStatus,
 };
 
 const SETTINGS_SCOPE_SYSTEM: &str = "system";
@@ -242,6 +244,7 @@ pub struct AppServices {
     pub media_files: Arc<dyn MediaFileRepository>,
     pub download_client_configs: Arc<dyn DownloadClientConfigRepository>,
     pub release_attempts: Arc<dyn ReleaseAttemptRepository>,
+    pub acquisition_state: Arc<dyn AcquisitionStateRepository>,
     pub download_submissions: Arc<dyn DownloadSubmissionRepository>,
     pub settings: Arc<dyn SettingsRepository>,
     pub quality_profiles: Arc<dyn QualityProfileRepository>,
@@ -318,6 +321,7 @@ impl AppServices {
             media_files: Arc::new(NullMediaFileRepository),
             download_client_configs,
             release_attempts,
+            acquisition_state: Arc::new(NullAcquisitionStateRepository),
             download_submissions: Arc::new(NullDownloadSubmissionRepository),
             settings,
             quality_profiles,
@@ -808,6 +812,23 @@ pub struct DownloadSubmission {
     pub collection_id: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct SuccessfulGrabCommit {
+    pub wanted_item_id: String,
+    pub search_count: i64,
+    pub current_score: Option<i32>,
+    pub grabbed_release: String,
+    pub last_search_at: Option<String>,
+    pub download_submission: DownloadSubmission,
+    pub grabbed_pending_release_id: Option<String>,
+    pub grabbed_at: Option<String>,
+}
+
+#[async_trait]
+pub trait AcquisitionStateRepository: Send + Sync {
+    async fn commit_successful_grab(&self, commit: &SuccessfulGrabCommit) -> AppResult<()>;
+}
+
 #[async_trait]
 pub trait DownloadSubmissionRepository: Send + Sync {
     async fn record_submission(&self, submission: DownloadSubmission) -> AppResult<()>;
@@ -1017,6 +1038,23 @@ pub trait MediaFileRepository: Send + Sync {
 #[async_trait]
 pub trait WantedItemRepository: Send + Sync {
     async fn upsert_wanted_item(&self, item: &WantedItem) -> AppResult<String>;
+    async fn ensure_wanted_item_seeded(&self, item: &WantedItem) -> AppResult<String> {
+        let existing = find_existing_wanted_item_seed(self, item).await?;
+        let mut seeded = item.clone();
+
+        if let Some(existing) = existing.as_ref() {
+            seeded.id = existing.id.clone();
+            if existing.search_count > 0 {
+                seeded.next_search_at = existing.next_search_at.clone();
+            }
+            if item.status == WantedStatus::Wanted && existing.status != WantedStatus::Wanted {
+                seeded.status = existing.status;
+            }
+        }
+
+        self.upsert_wanted_item(&seeded).await?;
+        Ok(existing.map_or(item.id.clone(), |item| item.id))
+    }
     async fn list_due_wanted_items(
         &self,
         now: &str,
@@ -1032,6 +1070,66 @@ pub trait WantedItemRepository: Send + Sync {
         current_score: Option<i32>,
         grabbed_release: Option<&str>,
     ) -> AppResult<()>;
+    async fn schedule_wanted_item_search(
+        &self,
+        transition: &WantedSearchTransition,
+    ) -> AppResult<()> {
+        self.update_wanted_item_status(
+            &transition.id,
+            WantedStatus::Wanted.as_str(),
+            transition.next_search_at.as_deref(),
+            transition.last_search_at.as_deref(),
+            transition.search_count,
+            transition.current_score,
+            transition.grabbed_release.as_deref(),
+        )
+        .await
+    }
+    async fn transition_wanted_to_grabbed(
+        &self,
+        transition: &WantedGrabTransition,
+    ) -> AppResult<()> {
+        self.update_wanted_item_status(
+            &transition.id,
+            WantedStatus::Grabbed.as_str(),
+            None,
+            transition.last_search_at.as_deref(),
+            transition.search_count,
+            transition.current_score,
+            Some(&transition.grabbed_release),
+        )
+        .await
+    }
+    async fn transition_wanted_to_completed(
+        &self,
+        transition: &WantedCompleteTransition,
+    ) -> AppResult<()> {
+        self.update_wanted_item_status(
+            &transition.id,
+            WantedStatus::Completed.as_str(),
+            None,
+            transition.last_search_at.as_deref(),
+            transition.search_count,
+            transition.current_score,
+            transition.grabbed_release.as_deref(),
+        )
+        .await
+    }
+    async fn transition_wanted_to_paused(
+        &self,
+        transition: &WantedPauseTransition,
+    ) -> AppResult<()> {
+        self.update_wanted_item_status(
+            &transition.id,
+            WantedStatus::Paused.as_str(),
+            None,
+            transition.last_search_at.as_deref(),
+            transition.search_count,
+            transition.current_score,
+            transition.grabbed_release.as_deref(),
+        )
+        .await
+    }
     async fn get_wanted_item_for_title(
         &self,
         title_id: &str,
@@ -1069,6 +1167,29 @@ pub trait WantedItemRepository: Send + Sync {
     ) -> AppResult<Vec<ReleaseDecision>>;
 }
 
+async fn find_existing_wanted_item_seed<R: WantedItemRepository + ?Sized>(
+    repo: &R,
+    item: &WantedItem,
+) -> AppResult<Option<WantedItem>> {
+    if let Some(collection_id) = item.collection_id.as_deref() {
+        return Ok(repo
+            .list_wanted_items(None, None, Some(&item.title_id), 500, 0)
+            .await?
+            .into_iter()
+            .find(|existing| existing.collection_id.as_deref() == Some(collection_id)));
+    }
+
+    if let Some(episode_id) = item.episode_id.as_deref() {
+        return repo.get_wanted_item_for_title(&item.title_id, Some(episode_id)).await;
+    }
+
+    Ok(repo
+        .list_wanted_items(None, None, Some(&item.title_id), 500, 0)
+        .await?
+        .into_iter()
+        .find(|existing| existing.episode_id.is_none() && existing.collection_id.is_none()))
+}
+
 #[async_trait]
 pub trait PendingReleaseRepository: Send + Sync {
     async fn insert_pending_release(&self, release: &PendingRelease) -> AppResult<String>;
@@ -1082,7 +1203,7 @@ pub trait PendingReleaseRepository: Send + Sync {
     async fn update_pending_release_status(
         &self,
         id: &str,
-        status: &str,
+        status: PendingReleaseStatus,
         grabbed_at: Option<&str>,
     ) -> AppResult<()>;
     async fn list_standby_pending_releases_for_wanted_item(
@@ -1097,8 +1218,8 @@ pub trait PendingReleaseRepository: Send + Sync {
     async fn compare_and_set_pending_release_status(
         &self,
         id: &str,
-        current_status: &str,
-        next_status: &str,
+        current_status: PendingReleaseStatus,
+        next_status: PendingReleaseStatus,
         grabbed_at: Option<&str>,
     ) -> AppResult<bool>;
     async fn supersede_pending_releases_for_wanted_item(
@@ -2697,6 +2818,13 @@ mod tests {
         release_decisions: Arc<Mutex<Vec<ReleaseDecision>>>,
     }
 
+    #[derive(Clone)]
+    struct TrackingAcquisitionStateRepo {
+        download_submissions: Arc<TrackingDownloadSubmissionRepo>,
+        pending_releases: Arc<TrackingPendingReleaseRepo>,
+        wanted_items: Arc<TrackingWantedItemRepo>,
+    }
+
     #[async_trait]
     impl WantedItemRepository for TrackingWantedItemRepo {
         async fn upsert_wanted_item(&self, item: &WantedItem) -> AppResult<String> {
@@ -2876,6 +3004,55 @@ mod tests {
     }
 
     #[async_trait]
+    impl AcquisitionStateRepository for TrackingAcquisitionStateRepo {
+        async fn commit_successful_grab(&self, commit: &SuccessfulGrabCommit) -> AppResult<()> {
+            self.download_submissions
+                .record_submission(commit.download_submission.clone())
+                .await?;
+
+            self.wanted_items
+                .update_wanted_item_status(
+                    &commit.wanted_item_id,
+                    WantedStatus::Grabbed.as_str(),
+                    None,
+                    commit.last_search_at.as_deref(),
+                    commit.search_count,
+                    commit.current_score,
+                    Some(&commit.grabbed_release),
+                )
+                .await?;
+
+            if let Some(pending_release_id) = commit.grabbed_pending_release_id.as_deref() {
+                self.pending_releases
+                    .update_pending_release_status(
+                        pending_release_id,
+                        PendingReleaseStatus::Grabbed,
+                        commit.grabbed_at.as_deref(),
+                    )
+                    .await?;
+            }
+
+            let mut store = self.pending_releases.store.lock().await;
+            for release in store.iter_mut() {
+                let is_sibling = release.wanted_item_id == commit.wanted_item_id
+                    && commit
+                        .grabbed_pending_release_id
+                        .as_deref()
+                        .is_none_or(|pending_release_id| release.id != pending_release_id);
+                let should_supersede = matches!(
+                    release.status,
+                    PendingReleaseStatus::Waiting | PendingReleaseStatus::Standby
+                );
+                if is_sibling && should_supersede {
+                    release.status = PendingReleaseStatus::Superseded;
+                }
+            }
+
+            Ok(())
+        }
+    }
+
+    #[async_trait]
     impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
         async fn record_submission(&self, submission: DownloadSubmission) -> AppResult<()> {
             let mut entries = self.store.lock().await;
@@ -2984,7 +3161,8 @@ mod tests {
                 .await
                 .iter()
                 .filter(|release| {
-                    release.wanted_item_id == wanted_item_id && release.status == "waiting"
+                    release.wanted_item_id == wanted_item_id
+                        && release.status == PendingReleaseStatus::Waiting
                 })
                 .cloned()
                 .collect())
@@ -2993,12 +3171,12 @@ mod tests {
         async fn update_pending_release_status(
             &self,
             id: &str,
-            status: &str,
+            status: PendingReleaseStatus,
             grabbed_at: Option<&str>,
         ) -> AppResult<()> {
             if let Some(release) = self.store.lock().await.iter_mut().find(|release| release.id == id)
             {
-                release.status = status.to_string();
+                release.status = status;
                 release.grabbed_at = grabbed_at.map(str::to_string);
             }
             Ok(())
@@ -3014,7 +3192,8 @@ mod tests {
                 .await
                 .iter()
                 .filter(|release| {
-                    release.wanted_item_id == wanted_item_id && release.status == "standby"
+                    release.wanted_item_id == wanted_item_id
+                        && release.status == PendingReleaseStatus::Standby
                 })
                 .cloned()
                 .collect())
@@ -3025,7 +3204,8 @@ mod tests {
             wanted_item_id: &str,
         ) -> AppResult<()> {
             self.store.lock().await.retain(|release| {
-                !(release.wanted_item_id == wanted_item_id && release.status == "standby")
+                !(release.wanted_item_id == wanted_item_id
+                    && release.status == PendingReleaseStatus::Standby)
             });
             Ok(())
         }
@@ -3036,7 +3216,7 @@ mod tests {
                 .lock()
                 .await
                 .iter()
-                .filter(|release| release.status == "standby")
+                .filter(|release| release.status == PendingReleaseStatus::Standby)
                 .cloned()
                 .collect())
         }
@@ -3044,8 +3224,8 @@ mod tests {
         async fn compare_and_set_pending_release_status(
             &self,
             id: &str,
-            current_status: &str,
-            next_status: &str,
+            current_status: PendingReleaseStatus,
+            next_status: PendingReleaseStatus,
             grabbed_at: Option<&str>,
         ) -> AppResult<bool> {
             let mut store = self.store.lock().await;
@@ -3055,7 +3235,7 @@ mod tests {
             if release.status != current_status {
                 return Ok(false);
             }
-            release.status = next_status.to_string();
+            release.status = next_status;
             release.grabbed_at = grabbed_at.map(str::to_string);
             Ok(true)
         }
@@ -3068,9 +3248,9 @@ mod tests {
             for release in self.store.lock().await.iter_mut() {
                 if release.wanted_item_id == wanted_item_id
                     && release.id != except_id
-                    && release.status == "waiting"
+                    && release.status == PendingReleaseStatus::Waiting
                 {
-                    release.status = "superseded".to_string();
+                    release.status = PendingReleaseStatus::Superseded;
                 }
             }
             Ok(())
@@ -3265,9 +3445,14 @@ mod tests {
     ) -> (AppUseCase, User) {
         let (mut app, user) = bootstrap_with_cleanup_tracking(
             download_client,
+            download_submissions.clone(),
+            pending_releases.clone(),
+        );
+        app.services.acquisition_state = Arc::new(TrackingAcquisitionStateRepo {
             download_submissions,
             pending_releases,
-        );
+            wanted_items: wanted_items.clone(),
+        });
         app.services.wanted_items = wanted_items;
         (app, user)
     }
@@ -3784,7 +3969,7 @@ mod tests {
                 release_guid: Some("guid-standby".to_string()),
                 added_at: Utc::now().to_rfc3339(),
                 delay_until: Utc::now().to_rfc3339(),
-                status: "standby".to_string(),
+                status: PendingReleaseStatus::Standby,
                 grabbed_at: None,
                 source_password: None,
                 published_at: Some(Utc::now().to_rfc3339()),
@@ -3831,7 +4016,171 @@ mod tests {
             .expect("list standby")
             .is_empty());
         assert!(pending_releases.store.lock().await.iter().any(|release| {
-            release.release_title == "Standby.Release.1080p.WEB-DL" && release.status == "grabbed"
+            release.release_title == "Standby.Release.1080p.WEB-DL"
+                && release.status == PendingReleaseStatus::Grabbed
+        }));
+
+        let submissions = download_submissions.store.lock().await.clone();
+        assert!(!submissions
+            .iter()
+            .any(|submission| submission.download_client_item_id == "failed-job"));
+        assert!(submissions.iter().any(|submission| {
+            submission.download_client_item_id == format!("job-for-{}", title.id)
+                && submission.source_title.as_deref() == Some("Standby.Release.1080p.WEB-DL")
+        }));
+
+        assert_eq!(
+            download_client.submitted_release_titles.lock().await.clone(),
+            vec!["Standby.Release.1080p.WEB-DL".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn tracked_download_failure_reuses_standby_recovery_policy() {
+        let download_client = Arc::new(StubDownloadClient::default());
+        let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+        let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+        let wanted_items = Arc::new(TrackingWantedItemRepo::default());
+        let (app, user) = bootstrap_with_acquisition_tracking(
+            download_client.clone(),
+            download_submissions.clone(),
+            pending_releases.clone(),
+            wanted_items.clone(),
+        );
+
+        let title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: "Tracked Failure Recovery".into(),
+                    facet: MediaFacet::Movie,
+                    monitored: true,
+                    tags: vec![],
+                    external_ids: vec![],
+                    min_availability: None,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create title");
+
+        let wanted = WantedItem {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            title_name: Some(title.name.clone()),
+            episode_id: None,
+            collection_id: None,
+            season_number: None,
+            media_type: "movie".to_string(),
+            search_phase: "initial".to_string(),
+            next_search_at: None,
+            last_search_at: Some((Utc::now() - chrono::Duration::minutes(5)).to_rfc3339()),
+            search_count: 1,
+            baseline_date: Some(
+                (Utc::now() - chrono::Duration::days(30))
+                    .format("%Y-%m-%d")
+                    .to_string(),
+            ),
+            status: WantedStatus::Grabbed,
+            grabbed_release: Some(
+                serde_json::json!({
+                    "title": "Failed.Release.1080p.WEB-DL",
+                    "score": 100,
+                    "grabbed_at": Utc::now().to_rfc3339(),
+                })
+                .to_string(),
+            ),
+            current_score: None,
+            created_at: Utc::now().to_rfc3339(),
+            updated_at: Utc::now().to_rfc3339(),
+        };
+        wanted_items
+            .upsert_wanted_item(&wanted)
+            .await
+            .expect("seed wanted item");
+
+        pending_releases
+            .insert_pending_release(&PendingRelease {
+                id: Id::new().0,
+                wanted_item_id: wanted.id.clone(),
+                title_id: title.id.clone(),
+                release_title: "Standby.Release.1080p.WEB-DL".to_string(),
+                release_url: Some("https://example.com/standby.nzb".to_string()),
+                source_kind: Some(DownloadSourceKind::NzbUrl),
+                release_size_bytes: Some(1_000),
+                release_score: 150,
+                scoring_log_json: None,
+                indexer_source: Some("nzbgeek".to_string()),
+                release_guid: Some("guid-standby".to_string()),
+                added_at: Utc::now().to_rfc3339(),
+                delay_until: Utc::now().to_rfc3339(),
+                status: PendingReleaseStatus::Standby,
+                grabbed_at: None,
+                source_password: None,
+                published_at: Some(Utc::now().to_rfc3339()),
+                info_hash: None,
+            })
+            .await
+            .expect("seed standby");
+
+        download_submissions
+            .record_submission(DownloadSubmission {
+                title_id: title.id.clone(),
+                facet: "movie".to_string(),
+                download_client_type: "nzbget".to_string(),
+                download_client_item_id: "failed-job".to_string(),
+                source_title: Some("Failed.Release.1080p.WEB-DL".to_string()),
+                collection_id: None,
+            })
+            .await
+            .expect("record failed submission");
+
+        let mut tracked_download = crate::tracked_downloads::TrackedDownload {
+            id: "nzbget:failed-job".to_string(),
+            client_id: "primary".to_string(),
+            client_type: "nzbget".to_string(),
+            client_item: failed_history_item("failed-job", "Failed.Release.1080p.WEB-DL"),
+            state: scryer_domain::TrackedDownloadState::FailedPending,
+            status: scryer_domain::TrackedDownloadStatus::Error,
+            status_messages: Vec::new(),
+            title_id: Some(title.id.clone()),
+            facet: Some("movie".to_string()),
+            source_title: Some("Failed.Release.1080p.WEB-DL".to_string()),
+            indexer: None,
+            added_at: None,
+            notified_manual_interaction: false,
+            match_type: scryer_domain::TitleMatchType::Submission,
+            is_trackable: true,
+            import_attempted: false,
+        };
+
+        crate::failed_download_handler::process_failed(&app, &mut tracked_download).await;
+
+        assert_eq!(
+            tracked_download.state,
+            scryer_domain::TrackedDownloadState::Failed
+        );
+
+        let updated = wanted_items
+            .get_wanted_item_by_id(&wanted.id)
+            .await
+            .expect("get wanted")
+            .expect("wanted exists");
+        assert_eq!(updated.status, WantedStatus::Grabbed);
+        assert!(updated
+            .grabbed_release
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Standby.Release.1080p.WEB-DL"));
+
+        assert!(pending_releases
+            .list_all_standby_pending_releases()
+            .await
+            .expect("list standby")
+            .is_empty());
+        assert!(pending_releases.store.lock().await.iter().any(|release| {
+            release.release_title == "Standby.Release.1080p.WEB-DL"
+                && release.status == PendingReleaseStatus::Grabbed
         }));
 
         let submissions = download_submissions.store.lock().await.clone();
@@ -3917,7 +4266,7 @@ mod tests {
                 release_guid: Some("guid-stale".to_string()),
                 added_at: (Utc::now() - chrono::Duration::hours(30)).to_rfc3339(),
                 delay_until: Utc::now().to_rfc3339(),
-                status: "standby".to_string(),
+                status: PendingReleaseStatus::Standby,
                 grabbed_at: None,
                 source_password: None,
                 published_at: None,

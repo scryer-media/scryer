@@ -24,7 +24,6 @@ import {
 import { QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY } from "@/lib/constants/settings";
 import { DEFAULT_DOWNLOAD_CLIENT_DRAFT, DEFAULT_PORT_FOR_CLIENT_TYPE } from "@/lib/constants/download-clients";
 import {
-  buildDownloadClientBaseUrl,
   buildDownloadClientConfigJson,
   buildDownloadClientTypeOptions,
   ensureDownloadClientTypeOption,

@@ -976,18 +976,18 @@ pub async fn start_download_queue_poller(
                             let is_new = tracker.find(&id).is_none();
                             tracker.track(&app, item.clone()).await;
 
-                            if let Some(td) = tracker.find(&id) {
-                                if is_new {
-                                    tracing::info!(
-                                        id = %td.id,
-                                        state = ?td.state,
-                                        client_state = ?td.client_item.state,
-                                        match_type = ?td.match_type,
-                                        title_id = ?td.title_id,
-                                        title_name = %td.client_item.title_name,
-                                        "tracked: new download"
-                                    );
-                                }
+                            if let Some(td) = tracker.find(&id)
+                                && is_new
+                            {
+                                tracing::info!(
+                                    id = %td.id,
+                                    state = ?td.state,
+                                    client_state = ?td.client_item.state,
+                                    match_type = ?td.match_type,
+                                    title_id = ?td.title_id,
+                                    title_name = %td.client_item.title_name,
+                                    "tracked: new download"
+                                );
                             }
 
                             if let Some(td) = tracker.find_mut(&id)

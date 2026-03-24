@@ -142,10 +142,6 @@ export function MediaContentView({
     setMonitoredForQueue: (value: boolean) => void;
     seasonFoldersForQueue: boolean;
     setSeasonFoldersForQueue: (value: boolean) => void;
-    monitorSpecialsForQueue: boolean;
-    setMonitorSpecialsForQueue: (value: boolean) => void;
-    interSeasonMoviesForQueue: boolean;
-    setInterSeasonMoviesForQueue: (value: boolean) => void;
     minAvailabilityForQueue: string;
     setMinAvailabilityForQueue: (value: string) => void;
     selectedTvdb: TvdbSearchItem | null;
@@ -252,10 +248,6 @@ export function MediaContentView({
     setMonitoredForQueue,
     seasonFoldersForQueue,
     setSeasonFoldersForQueue,
-    monitorSpecialsForQueue,
-    setMonitorSpecialsForQueue,
-    interSeasonMoviesForQueue,
-    setInterSeasonMoviesForQueue,
     minAvailabilityForQueue,
     setMinAvailabilityForQueue,
     selectedTvdb,
@@ -671,10 +663,6 @@ export function MediaContentView({
             setMonitoredForQueue={setMonitoredForQueue}
             seasonFoldersForQueue={seasonFoldersForQueue}
             setSeasonFoldersForQueue={setSeasonFoldersForQueue}
-            monitorSpecialsForQueue={monitorSpecialsForQueue}
-            setMonitorSpecialsForQueue={setMonitorSpecialsForQueue}
-            interSeasonMoviesForQueue={interSeasonMoviesForQueue}
-            setInterSeasonMoviesForQueue={setInterSeasonMoviesForQueue}
             minAvailabilityForQueue={minAvailabilityForQueue}
             setMinAvailabilityForQueue={setMinAvailabilityForQueue}
             onAddSubmit={onAddSubmit}

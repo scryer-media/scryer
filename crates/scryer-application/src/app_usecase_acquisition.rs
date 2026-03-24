@@ -1,5 +1,6 @@
 use super::*;
 use crate::acquisition_policy::{AcquisitionThresholds, compute_search_schedule, evaluate_upgrade};
+use crate::types::PendingReleaseStatus;
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use scryer_domain::NotificationEventType;
 use std::collections::HashMap;
@@ -113,7 +114,7 @@ impl AppUseCase {
             updated_at: now.to_rfc3339(),
         };
 
-        match self.services.wanted_items.upsert_wanted_item(&item).await {
+        match self.services.wanted_items.ensure_wanted_item_seeded(&item).await {
             Ok(_) => {
                 info!(
                     title_id = title.id.as_str(),
@@ -222,7 +223,7 @@ impl AppUseCase {
                     updated_at: now.to_rfc3339(),
                 };
 
-                if let Err(err) = self.services.wanted_items.upsert_wanted_item(&item).await {
+                if let Err(err) = self.services.wanted_items.ensure_wanted_item_seeded(&item).await {
                     warn!(
                         title_id = title.id.as_str(),
                         episode_id = episode.id.as_str(),
@@ -316,7 +317,7 @@ impl AppUseCase {
                     updated_at: now.to_rfc3339(),
                 };
 
-                if let Err(err) = self.services.wanted_items.upsert_wanted_item(&item).await {
+                if let Err(err) = self.services.wanted_items.ensure_wanted_item_seeded(&item).await {
                     warn!(
                         title_id = title.id.as_str(),
                         collection_id = collection.id.as_str(),
@@ -351,6 +352,25 @@ pub(crate) struct FailedDownloadSnapshot {
     reason: String,
     download_client_item_id: String,
     client_id: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct DownloadFailureContext {
+    pub wanted_item: Option<WantedItem>,
+    pub title_id: Option<String>,
+    pub client_id: String,
+    pub client_item_id: String,
+    pub release_title: String,
+    pub reason: String,
+    pub remove_from_client_if_configured: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FailureHandlingOutcome {
+    RecoveredFromStandby,
+    RequeuedFreshSearch,
+    RequeuedDeferred,
+    RecordedOnly,
 }
 
 impl DownloadClientSnapshot {
@@ -462,9 +482,6 @@ async fn check_grabbed_for_failures(app: &AppUseCase, dl_snapshot: &DownloadClie
         "check_grabbed_for_failures: checking grabbed wanted items against download client"
     );
 
-    let now = Utc::now();
-    let now_str = now.to_rfc3339();
-
     for item in &grabbed_items {
         // Extract the grabbed release title from the stored JSON (for logging/blocklist)
         let release_title = item
@@ -506,79 +523,128 @@ async fn check_grabbed_for_failures(app: &AppUseCase, dl_snapshot: &DownloadClie
                 "grabbed release failed in download client"
             );
 
-            // Blocklist the failed release
-            let hint = normalize_release_attempt_hint(None);
-            let rel_title = normalize_release_attempt_title(Some(&release_title));
-
-            let _ = app
-                .services
-                .release_attempts
-                .record_release_attempt(
-                    Some(item.title_id.clone()),
-                    hint,
-                    rel_title,
-                    ReleaseDownloadAttemptOutcome::Failed,
-                    Some(format!("download client failure: {}", failed_item.reason)),
-                    None,
-                )
-                .await;
-
-            // Add to persistent blocklist (user-visible, prevents re-grab)
-            let _ = app
-                .services
-                .blocklist_repo
-                .add(&NewBlocklistEntry {
-                    title_id: item.title_id.clone(),
-                    source_title: Some(release_title.clone()),
-                    source_hint: None,
-                    quality: None,
-                    download_id: Some(failed_item.download_client_item_id.clone()),
-                    reason: Some(format!("download client failure: {}", failed_item.reason)),
-                    data: Default::default(),
-                })
-                .await;
-
-            let recovered_from_standby = recover_from_standby_candidates(
+            let _ = process_download_failure(
                 app,
-                item,
-                &release_title,
-                dl_snapshot,
-                &now,
+                DownloadFailureContext {
+                    wanted_item: Some(item.clone()),
+                    title_id: Some(item.title_id.clone()),
+                    client_id: failed_item.client_id.clone(),
+                    client_item_id: failed_item.download_client_item_id.clone(),
+                    release_title: release_title.clone(),
+                    reason: failed_item.reason.clone(),
+                    remove_from_client_if_configured: true,
+                },
+                Some(dl_snapshot),
+            )
+            .await;
+        }
+    }
+}
+
+pub(crate) async fn process_download_failure(
+    app: &AppUseCase,
+    context: DownloadFailureContext,
+    snapshot: Option<&DownloadClientSnapshot>,
+) -> FailureHandlingOutcome {
+    let resolved_title_id = context
+        .wanted_item
+        .as_ref()
+        .map(|item| item.title_id.clone())
+        .or(context.title_id.clone());
+
+    if let Some(title_id) = resolved_title_id.clone() {
+        let hint = normalize_release_attempt_hint(None);
+        let rel_title = normalize_release_attempt_title(Some(&context.release_title));
+        let failure_message = format!("download client failure: {}", context.reason);
+
+        let _ = app
+            .services
+            .release_attempts
+            .record_release_attempt(
+                Some(title_id.clone()),
+                hint,
+                rel_title,
+                ReleaseDownloadAttemptOutcome::Failed,
+                Some(failure_message.clone()),
+                None,
             )
             .await;
 
-            if !recovered_from_standby {
+        let _ = app
+            .services
+            .blocklist_repo
+            .add(&NewBlocklistEntry {
+                title_id,
+                source_title: Some(context.release_title.clone()),
+                source_hint: None,
+                quality: None,
+                download_id: Some(context.client_item_id.clone()),
+                reason: Some(failure_message),
+                data: Default::default(),
+            })
+            .await;
+    }
+
+    let wanted_item = match context.wanted_item.clone() {
+        Some(item) => Some(item),
+        None => resolve_failure_wanted_item(
+            app,
+            resolved_title_id.as_deref(),
+            &context.release_title,
+        )
+        .await,
+    };
+
+    let outcome = if let Some(item) = wanted_item.as_ref() {
+        let now = Utc::now();
+        let owned_snapshot = if snapshot.is_none() {
+            Some(DownloadClientSnapshot::fetch(app).await)
+        } else {
+            None
+        };
+        let active_snapshot = snapshot.or(owned_snapshot.as_ref());
+
+        if let Some(active_snapshot) = active_snapshot {
+            if recover_from_standby_candidates(
+                app,
+                item,
+                &context.release_title,
+                active_snapshot,
+                &now,
+            )
+            .await
+            {
+                FailureHandlingOutcome::RecoveredFromStandby
+            } else {
                 let immediate_research = should_research_failed_grab(item, &now);
                 let next_search_at = if immediate_research {
-                    now_str.clone()
+                    now.to_rfc3339()
                 } else {
-                    (now + Duration::minutes(FAILED_GRAB_RESEARCH_COOLDOWN_MINUTES))
-                        .to_rfc3339()
+                    (now + Duration::minutes(FAILED_GRAB_RESEARCH_COOLDOWN_MINUTES)).to_rfc3339()
                 };
 
                 let _ = app
                     .services
                     .wanted_items
-                    .update_wanted_item_status(
-                        &item.id,
-                        "wanted",
-                        Some(&next_search_at),
-                        item.last_search_at.as_deref(),
-                        item.search_count,
-                        item.current_score,
-                        None,
-                    )
+                    .schedule_wanted_item_search(&WantedSearchTransition {
+                        id: item.id.clone(),
+                        next_search_at: Some(next_search_at),
+                        last_search_at: item.last_search_at.clone(),
+                        search_count: item.search_count,
+                        current_score: item.current_score,
+                        grabbed_release: None,
+                    })
                     .await;
 
                 let message = if immediate_research {
                     format!(
                         "download failed for '{}'; standby exhausted, re-queuing for fresh search",
-                        release_title
+                        context.release_title
                     )
                 } else {
                     format!(
                         "download failed for '{}'; standby exhausted, deferring reacquisition",
-                        release_title
+                        context.release_title
                     )
                 };
 
@@ -594,38 +660,100 @@ async fn check_grabbed_for_failures(app: &AppUseCase, dl_snapshot: &DownloadClie
                         vec![ActivityChannel::WebUi, ActivityChannel::Toast],
                     )
                     .await;
-            }
 
-            if let Ok(Some(title)) = app.services.titles.get_by_id(&item.title_id).await
-                && app
-                    .should_remove_failed_download(&title.facet, &failed_item.client_id)
-                    .await
-                && let Err(error) = app
-                    .services
-                    .download_client
-                    .delete_queue_item(&failed_item.download_client_item_id, true)
-                    .await
-            {
-                warn!(
-                    title_id = item.title_id.as_str(),
-                    client_id = failed_item.client_id.as_str(),
-                    download_client_item_id = failed_item.download_client_item_id.as_str(),
-                    error = %error,
-                    "failed to delete failed download from client history"
-                );
+                if immediate_research {
+                    FailureHandlingOutcome::RequeuedFreshSearch
+                } else {
+                    FailureHandlingOutcome::RequeuedDeferred
+                }
             }
-
-            // Clean up the processed submission so it doesn't re-match on
-            // subsequent cycles.  Without this, stale submissions cause a
-            // grab spiral: the old failure keeps triggering re-queues even
-            // after a newer grab succeeds.
-            let _ = app
-                .services
-                .download_submissions
-                .delete_by_client_item_id(&failed_item.download_client_item_id)
-                .await;
+        } else {
+            FailureHandlingOutcome::RecordedOnly
         }
+    } else {
+        let _ = app
+            .services
+            .record_activity_event(
+                None,
+                resolved_title_id.clone(),
+                None,
+                ActivityKind::AcquisitionDownloadFailed,
+                format!(
+                    "Download failed: {} — {}",
+                    context.release_title, context.reason
+                ),
+                ActivitySeverity::Error,
+                vec![ActivityChannel::WebUi, ActivityChannel::Toast],
+            )
+            .await;
+        FailureHandlingOutcome::RecordedOnly
+    };
+
+    if context.remove_from_client_if_configured
+        && let Some(title_id) = resolved_title_id.as_deref()
+        && let Ok(Some(title)) = app.services.titles.get_by_id(title_id).await
+        && app
+            .should_remove_failed_download(&title.facet, &context.client_id)
+            .await
+        && let Err(error) = app
+            .services
+            .download_client
+            .delete_queue_item(&context.client_item_id, true)
+            .await
+    {
+        warn!(
+            title_id,
+            client_id = context.client_id.as_str(),
+            download_client_item_id = context.client_item_id.as_str(),
+            error = %error,
+            "failed to delete failed download from client history"
+        );
     }
+
+    let _ = app
+        .services
+        .download_submissions
+        .delete_by_client_item_id(&context.client_item_id)
+        .await;
+
+    outcome
+}
+
+async fn resolve_failure_wanted_item(
+    app: &AppUseCase,
+    title_id: Option<&str>,
+    release_title: &str,
+) -> Option<WantedItem> {
+    let title_id = title_id?.trim();
+    if title_id.is_empty() {
+        return None;
+    }
+
+    let grabbed_items = app
+        .services
+        .wanted_items
+        .list_wanted_items(Some("grabbed"), None, Some(title_id), 25, 0)
+        .await
+        .ok()?;
+
+    if grabbed_items.len() == 1 {
+        return grabbed_items.into_iter().next();
+    }
+
+    grabbed_items.into_iter().find(|item| {
+        extract_grabbed_release_title(item.grabbed_release.as_deref())
+            .is_some_and(|title| title.eq_ignore_ascii_case(release_title))
+    })
+}
+
+fn extract_grabbed_release_title(raw: Option<&str>) -> Option<String> {
+    raw.and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+        .and_then(|value| {
+            value
+                .get("title")
+                .and_then(|title| title.as_str())
+                .map(str::to_string)
+        })
 }
 
 /// Process due wanted items: search indexers and auto-grab best releases.
@@ -751,15 +879,14 @@ async fn process_due_wanted_items(app: &AppUseCase) {
         let _ = app
             .services
             .wanted_items
-            .update_wanted_item_status(
-                &item.id,
-                "wanted",
-                Some(&schedule.next_search_at),
-                Some(&now.to_rfc3339()),
-                item.search_count + 1,
-                item.current_score,
-                item.grabbed_release.as_deref(),
-            )
+            .schedule_wanted_item_search(&WantedSearchTransition {
+                id: item.id.clone(),
+                next_search_at: Some(schedule.next_search_at),
+                last_search_at: Some(now.to_rfc3339()),
+                search_count: item.search_count + 1,
+                current_score: item.current_score,
+                grabbed_release: item.grabbed_release.clone(),
+            })
             .await;
     }
 }
@@ -825,7 +952,7 @@ async fn prune_standby_candidates(app: &AppUseCase) {
                     .pending_releases
                     .update_pending_release_status(
                         &release.id,
-                        crate::app_usecase_pending::PENDING_RELEASE_STATUS_EXPIRED,
+                        PendingReleaseStatus::Expired,
                         None,
                     )
                     .await;
@@ -1657,15 +1784,13 @@ async fn process_single_wanted_item(
             let _ = app
                 .services
                 .wanted_items
-                .update_wanted_item_status(
-                    &item.id,
-                    "grabbed",
-                    None,
-                    Some(&now.to_rfc3339()),
-                    item.search_count + 1,
-                    item.current_score,
-                    Some(&grabbed_json),
-                )
+                .transition_wanted_to_grabbed(&WantedGrabTransition {
+                    id: item.id.clone(),
+                    last_search_at: Some(now.to_rfc3339()),
+                    search_count: item.search_count + 1,
+                    current_score: item.current_score,
+                    grabbed_release: grabbed_json,
+                })
                 .await;
             return Ok(());
         }
@@ -1850,20 +1975,6 @@ async fn process_single_wanted_item(
                 // Record download submission for auto-import matching
                 let facet_str =
                     serde_json::to_string(&title.facet).unwrap_or_else(|_| "\"other\"".to_string());
-                let _ = app
-                    .services
-                    .download_submissions
-                    .record_submission(DownloadSubmission {
-                        title_id: title.id.clone(),
-                        facet: facet_str.trim_matches('"').to_string(),
-                        download_client_type: grab.client_type,
-                        download_client_item_id: grab.job_id,
-                        source_title: source_title.clone(),
-                        collection_id: item.collection_id.clone(),
-                    })
-                    .await;
-
-                // Update wanted item to grabbed
                 let grabbed_json = serde_json::json!({
                     "title": candidate.title,
                     "score": candidate_score,
@@ -1871,19 +1982,27 @@ async fn process_single_wanted_item(
                 })
                 .to_string();
 
-                let _ = app
+                app
                     .services
-                    .wanted_items
-                    .update_wanted_item_status(
-                        &item.id,
-                        "grabbed",
-                        None,
-                        Some(&now.to_rfc3339()),
-                        item.search_count + 1,
-                        item.current_score,
-                        Some(&grabbed_json),
-                    )
-                    .await;
+                    .acquisition_state
+                    .commit_successful_grab(&SuccessfulGrabCommit {
+                        wanted_item_id: item.id.clone(),
+                        search_count: item.search_count + 1,
+                        current_score: item.current_score,
+                        grabbed_release: grabbed_json,
+                        last_search_at: Some(now.to_rfc3339()),
+                        download_submission: DownloadSubmission {
+                            title_id: title.id.clone(),
+                            facet: facet_str.trim_matches('"').to_string(),
+                            download_client_type: grab.client_type,
+                            download_client_item_id: grab.job_id,
+                            source_title: source_title.clone(),
+                            collection_id: item.collection_id.clone(),
+                        },
+                        grabbed_pending_release_id: None,
+                        grabbed_at: Some(now.to_rfc3339()),
+                    })
+                    .await?;
 
                     persist_standby_candidates(
                         app,
@@ -1892,7 +2011,7 @@ async fn process_single_wanted_item(
                         &results,
                         candidate_index + 1,
                         now,
-                        &dl_snapshot,
+                        dl_snapshot,
                         &db_blocklist,
                         &thresholds,
                         &existing_files,
@@ -2037,15 +2156,14 @@ async fn process_single_wanted_item(
     let _ = app
         .services
         .wanted_items
-        .update_wanted_item_status(
-            &item.id,
-            "wanted",
-            Some(&now.to_rfc3339()),
-            Some(&now.to_rfc3339()),
-            item.search_count + 1,
-            item.current_score,
-            item.grabbed_release.as_deref(),
-        )
+        .schedule_wanted_item_search(&WantedSearchTransition {
+            id: item.id.clone(),
+            next_search_at: Some(now.to_rfc3339()),
+            last_search_at: Some(now.to_rfc3339()),
+            search_count: item.search_count + 1,
+            current_score: item.current_score,
+            grabbed_release: item.grabbed_release.clone(),
+        })
         .await;
 
     Ok(())
@@ -2075,8 +2193,8 @@ async fn recover_from_standby_candidates(
             .pending_releases
             .compare_and_set_pending_release_status(
                 &standby.id,
-                crate::app_usecase_pending::PENDING_RELEASE_STATUS_STANDBY,
-                crate::app_usecase_pending::PENDING_RELEASE_STATUS_PROCESSING,
+                PendingReleaseStatus::Standby,
+                PendingReleaseStatus::Processing,
                 None,
             )
             .await
@@ -2091,7 +2209,7 @@ async fn recover_from_standby_candidates(
                 .pending_releases
                 .update_pending_release_status(
                     &standby.id,
-                    crate::app_usecase_pending::PENDING_RELEASE_STATUS_EXPIRED,
+                    PendingReleaseStatus::Expired,
                     None,
                 )
                 .await;
@@ -2113,7 +2231,7 @@ async fn recover_from_standby_candidates(
                     .pending_releases
                     .update_pending_release_status(
                         &standby.id,
-                        crate::app_usecase_pending::PENDING_RELEASE_STATUS_GRABBED,
+                        PendingReleaseStatus::Grabbed,
                         Some(&grabbed_at),
                     )
                     .await;
@@ -2133,7 +2251,7 @@ async fn recover_from_standby_candidates(
                         .pending_releases
                         .update_pending_release_status(
                             &sibling.id,
-                            crate::app_usecase_pending::PENDING_RELEASE_STATUS_SUPERSEDED,
+                            PendingReleaseStatus::Superseded,
                             None,
                         )
                         .await;
@@ -2163,7 +2281,7 @@ async fn recover_from_standby_candidates(
                     .pending_releases
                     .update_pending_release_status(
                         &standby.id,
-                        crate::app_usecase_pending::PENDING_RELEASE_STATUS_EXPIRED,
+                        PendingReleaseStatus::Expired,
                         None,
                     )
                     .await;
@@ -2301,7 +2419,7 @@ async fn persist_standby_candidates(
             release_guid: candidate.guid.clone(),
             added_at: now.to_rfc3339(),
             delay_until: now.to_rfc3339(),
-            status: crate::app_usecase_pending::PENDING_RELEASE_STATUS_STANDBY.to_string(),
+            status: PendingReleaseStatus::Standby,
             grabbed_at: None,
             source_password: candidate.password_hint.clone(),
             published_at: candidate.published_at.clone(),
@@ -2666,15 +2784,14 @@ impl AppUseCase {
             if item.season_number.as_deref() == Some(season_str.as_str()) {
                 self.services
                     .wanted_items
-                    .update_wanted_item_status(
-                        &item.id,
-                        "wanted",
-                        Some(&now.to_rfc3339()),
-                        item.last_search_at.as_deref(),
-                        item.search_count,
-                        item.current_score,
-                        item.grabbed_release.as_deref(),
-                    )
+                    .schedule_wanted_item_search(&WantedSearchTransition {
+                        id: item.id.clone(),
+                        next_search_at: Some(now.to_rfc3339()),
+                        last_search_at: item.last_search_at.clone(),
+                        search_count: item.search_count,
+                        current_score: item.current_score,
+                        grabbed_release: item.grabbed_release.clone(),
+                    })
                     .await?;
                 queued += 1;
             }
@@ -2698,15 +2815,14 @@ impl AppUseCase {
         let now = Utc::now();
         self.services
             .wanted_items
-            .update_wanted_item_status(
-                &item.id,
-                "wanted",
-                Some(&now.to_rfc3339()),
-                item.last_search_at.as_deref(),
-                item.search_count,
-                item.current_score,
-                item.grabbed_release.as_deref(),
-            )
+            .schedule_wanted_item_search(&WantedSearchTransition {
+                id: item.id.clone(),
+                next_search_at: Some(now.to_rfc3339()),
+                last_search_at: item.last_search_at.clone(),
+                search_count: item.search_count,
+                current_score: item.current_score,
+                grabbed_release: item.grabbed_release.clone(),
+            })
             .await?;
         self.services.acquisition_wake.notify_one();
         Ok(())
@@ -2722,15 +2838,13 @@ impl AppUseCase {
 
         self.services
             .wanted_items
-            .update_wanted_item_status(
-                &item.id,
-                "paused",
-                None,
-                item.last_search_at.as_deref(),
-                item.search_count,
-                item.current_score,
-                item.grabbed_release.as_deref(),
-            )
+            .transition_wanted_to_paused(&WantedPauseTransition {
+                id: item.id.clone(),
+                last_search_at: item.last_search_at.clone(),
+                search_count: item.search_count,
+                current_score: item.current_score,
+                grabbed_release: item.grabbed_release.clone(),
+            })
             .await
     }
 
@@ -2752,15 +2866,14 @@ impl AppUseCase {
 
         self.services
             .wanted_items
-            .update_wanted_item_status(
-                &item.id,
-                "wanted",
-                Some(&schedule.next_search_at),
-                item.last_search_at.as_deref(),
-                item.search_count,
-                item.current_score,
-                item.grabbed_release.as_deref(),
-            )
+            .schedule_wanted_item_search(&WantedSearchTransition {
+                id: item.id.clone(),
+                next_search_at: Some(schedule.next_search_at),
+                last_search_at: item.last_search_at.clone(),
+                search_count: item.search_count,
+                current_score: item.current_score,
+                grabbed_release: item.grabbed_release.clone(),
+            })
             .await
     }
 
@@ -2782,15 +2895,14 @@ impl AppUseCase {
 
         self.services
             .wanted_items
-            .update_wanted_item_status(
-                &item.id,
-                "wanted",
-                Some(&schedule.next_search_at),
-                None,
-                0,
-                None,
-                None,
-            )
+            .schedule_wanted_item_search(&WantedSearchTransition {
+                id: item.id.clone(),
+                next_search_at: Some(schedule.next_search_at),
+                last_search_at: None,
+                search_count: 0,
+                current_score: None,
+                grabbed_release: None,
+            })
             .await
     }
 }
@@ -2826,15 +2938,14 @@ impl AppUseCase {
 
             self.services
                 .wanted_items
-                .update_wanted_item_status(
-                    &item.id,
-                    "wanted",
-                    Some(&next_search_at),
-                    item.last_search_at.as_deref(),
-                    item.search_count,
-                    item.current_score,
-                    item.grabbed_release.as_deref(),
-                )
+                .schedule_wanted_item_search(&WantedSearchTransition {
+                    id: item.id.clone(),
+                    next_search_at: Some(next_search_at.clone()),
+                    last_search_at: item.last_search_at.clone(),
+                    search_count: item.search_count,
+                    current_score: item.current_score,
+                    grabbed_release: item.grabbed_release.clone(),
+                })
                 .await?;
             return Ok(1);
         }
@@ -2861,7 +2972,7 @@ impl AppUseCase {
             updated_at: now.to_rfc3339(),
         };
 
-        self.services.wanted_items.upsert_wanted_item(&item).await?;
+        self.services.wanted_items.ensure_wanted_item_seeded(&item).await?;
         Ok(1)
     }
 
@@ -2917,15 +3028,14 @@ impl AppUseCase {
 
                     self.services
                         .wanted_items
-                        .update_wanted_item_status(
-                            &item.id,
-                            "wanted",
-                            Some(&next_search_at),
-                            item.last_search_at.as_deref(),
-                            item.search_count,
-                            item.current_score,
-                            item.grabbed_release.as_deref(),
-                        )
+                        .schedule_wanted_item_search(&WantedSearchTransition {
+                            id: item.id.clone(),
+                            next_search_at: Some(next_search_at.clone()),
+                            last_search_at: item.last_search_at.clone(),
+                            search_count: item.search_count,
+                            current_score: item.current_score,
+                            grabbed_release: item.grabbed_release.clone(),
+                        })
                         .await?;
                     queued += 1;
                     continue;
@@ -2954,7 +3064,7 @@ impl AppUseCase {
                     updated_at: now.to_rfc3339(),
                 };
 
-                self.services.wanted_items.upsert_wanted_item(&item).await?;
+                self.services.wanted_items.ensure_wanted_item_seeded(&item).await?;
                 queued += 1;
             }
         }

@@ -66,23 +66,55 @@ export function MobileSearchOverlay({
     };
   }, []);
 
+  const topCatalogResults = React.useMemo(() => {
+    const results = searchState.catalogSearchResults;
+    if (results.length === 0) return results;
+
+    const query = searchState.globalSearch.trim().toLowerCase();
+    const rank = (title: import("@/lib/types").TitleRecord) => {
+      const name = title.name.toLowerCase();
+      if (name === query) return 0;
+      if (name.startsWith(query)) return 1;
+      return 2 + name.length;
+    };
+
+    const buckets: Record<string, import("@/lib/types").TitleRecord[]> = {};
+    for (const title of results) {
+      const facet = catalogFacetFromString(title.facet);
+      (buckets[facet] ??= []).push(title);
+    }
+    for (const key of Object.keys(buckets)) {
+      buckets[key].sort((a, b) => rank(a) - rank(b));
+    }
+
+    // Round-robin: take one from each facet in registry order, repeat
+    const picked: import("@/lib/types").TitleRecord[] = [];
+    const indices: Record<string, number> = {};
+    while (picked.length < 3) {
+      let added = false;
+      for (const f of FACET_REGISTRY) {
+        if (picked.length >= 3) break;
+        const bucket = buckets[f.id];
+        if (!bucket) continue;
+        const idx = indices[f.id] ?? 0;
+        if (idx < bucket.length) {
+          picked.push(bucket[idx]);
+          indices[f.id] = idx + 1;
+          added = true;
+        }
+      }
+      if (!added) break;
+    }
+    return picked;
+  }, [searchState.catalogSearchResults, searchState.globalSearch]);
+
   const hasMetadataMatches = FACET_REGISTRY.some(
     (f) => (searchState.metadataSearchResults[f.metadataKey] ?? []).length > 0,
   );
 
-  const catalogSearchSections = React.useMemo(
-    () => Object.fromEntries(
-      FACET_REGISTRY.map((f) => [
-        f.id,
-        searchState.catalogSearchResults.filter((title) => catalogFacetFromString(title.facet) === f.id),
-      ]),
-    ) as Record<Facet, import("@/lib/types").TitleRecord[]>,
-    [searchState.catalogSearchResults],
-  );
 
   const {
     resolveDefaultQualityProfileIdForFacet,
-    animeCatalogDefaults,
     addMetadataSearchResultToCatalog,
     isMetadataSearchResultInCatalog,
     catalogQualityProfileOptions,
@@ -203,28 +235,6 @@ export function MobileSearchOverlay({
     [isMetadataSearchResultInCatalog, t],
   );
 
-  const renderCatalogSection = (
-    items: import("@/lib/types").TitleRecord[],
-    facet: Facet,
-    loading: boolean,
-  ) => {
-    if (!loading && items.length === 0) return null;
-    return (
-      <div className="space-y-2">
-        <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {sectionLabelForFacet(t, facet)}
-        </h4>
-        {loading ? (
-          <SearchSectionLoading label={t("label.loading")} />
-        ) : (
-          <div className="space-y-2">
-            {items.slice(0, 3).map((title) => renderCatalogItem(title, facet))}
-          </div>
-        )}
-      </div>
-    );
-  };
-
   const renderMetadataSection = (
     items: MetadataTvdbSearchItem[],
     facet: Facet,
@@ -248,8 +258,7 @@ export function MobileSearchOverlay({
     );
   };
 
-  const hasCatalog = catalogSearchSections.movie.length > 0 || catalogSearchSections.tv.length > 0 || catalogSearchSections.anime.length > 0;
-  const showCatalogSection = searchState.catalogSearchLoading || hasCatalog;
+  const showCatalogSection = searchState.catalogSearchLoading || searchState.catalogSearchResults.length > 0;
   const showMetadataSection = searchState.metadataSearchLoading || hasMetadataMatches;
   const showSectionResults = showCatalogSection || showMetadataSection;
 
@@ -271,6 +280,12 @@ export function MobileSearchOverlay({
             ref={inputRef}
             value={searchState.globalSearch}
             onChange={(e) => searchState.setGlobalSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void searchState.forceSearchGlobal();
+              }
+            }}
             className="h-10 w-full border-emerald-500/70 pl-10 text-base placeholder-heading-font focus-visible:border-emerald-400 focus-visible:ring-emerald-400/45"
             placeholder={t("search.globalPlaceholder")}
             aria-label={t("search.globalPlaceholder")}
@@ -300,15 +315,15 @@ export function MobileSearchOverlay({
             {showCatalogSection ? (
               <section className="space-y-3">
                 <h3 className="text-sm font-semibold text-foreground">{t("search.catalog")}</h3>
-                <div className="space-y-3">
-                  {FACET_REGISTRY.map((f) =>
-                    renderCatalogSection(
-                      catalogSearchSections[f.id] ?? [],
-                      f.id,
-                      searchState.catalogSearchLoading,
-                    ),
-                  )}
-                </div>
+                {searchState.catalogSearchLoading ? (
+                  <SearchSectionLoading label={t("label.loading")} />
+                ) : (
+                  <div className="space-y-2">
+                    {topCatalogResults.map((title) =>
+                      renderCatalogItem(title, catalogFacetFromString(title.facet)),
+                    )}
+                  </div>
+                )}
               </section>
             ) : null}
 
@@ -347,7 +362,6 @@ export function MobileSearchOverlay({
         catalogQualityProfileOptions={catalogQualityProfileOptions}
         defaultQualityProfileId={resolveDefaultQualityProfileIdForFacet(addDialogTarget?.facet ?? "tv")}
         rootFolders={rootFoldersByFacet[addDialogTarget?.facet ?? "tv"]}
-        animeCatalogDefaults={animeCatalogDefaults}
         onSubmit={handleAddDialogSubmit}
       />
     </div>

@@ -118,6 +118,7 @@ export interface UseGlobalSearchResult {
   }) => Promise<Release[]>;
   runTvdbSearch: (query: string) => Promise<MetadataTvdbSearchItem[]>;
   handleGlobalSearchSubmit: () => Promise<void>;
+  forceSearchGlobal: () => Promise<void>;
   selectTvdbCandidate: (candidate: MetadataTvdbSearchItem) => void;
   searchNzbForSelectedTvdb: () => Promise<void>;
   setSelectedTvdbId: (value: string | null) => void;
@@ -963,6 +964,14 @@ export function useGlobalSearch({
     await runSearch(globalSearch.trim());
   }, [globalSearch, runSearch]);
 
+  /** Force-trigger global search (bypasses autocomplete min-char threshold). */
+  const forceSearchGlobal = useCallback(async () => {
+    const trimmed = globalSearch.trim();
+    if (!trimmed) return;
+    setIsGlobalSearchPanelOpen(true);
+    await runMetadataAutocomplete(trimmed);
+  }, [globalSearch, runMetadataAutocomplete]);
+
   return {
     globalSearch,
     setGlobalSearch,
@@ -977,6 +986,7 @@ export function useGlobalSearch({
     runNzbSearch,
     runTvdbSearch,
     handleGlobalSearchSubmit,
+    forceSearchGlobal,
     selectTvdbCandidate,
     searchNzbForSelectedTvdb,
     setSelectedTvdbId,

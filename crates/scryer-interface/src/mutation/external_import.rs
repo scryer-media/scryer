@@ -263,19 +263,6 @@ impl ExternalImportMutations {
             let use_ssl = external_import::field_bool(&dc.fields, "useSsl").unwrap_or(false);
             let url_base = external_import::field_str(&dc.fields, "urlBase").unwrap_or_default();
 
-            let protocol = if use_ssl { "https" } else { "http" };
-            let port_part = if port.is_empty() {
-                String::new()
-            } else {
-                format!(":{port}")
-            };
-            let path_part = if url_base.is_empty() {
-                String::new()
-            } else {
-                format!("/{}", url_base.trim_start_matches('/'))
-            };
-            let base_url = format!("{protocol}://{host}{port_part}{path_part}");
-
             let mut config_obj = serde_json::Map::new();
             config_obj.insert("host".into(), serde_json::Value::String(host.clone()));
             config_obj.insert("port".into(), serde_json::Value::String(port.clone()));

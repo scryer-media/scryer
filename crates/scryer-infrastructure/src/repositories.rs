@@ -1,10 +1,12 @@
 use async_trait::async_trait;
 use scryer_application::{
-    AppError, AppResult, BlocklistRepository, DownloadClientConfigRepository, DownloadSubmission,
-    DownloadSubmissionRepository, EventRepository, HousekeepingRepository, ImportArtifact,
-    ImportArtifactRepository, ImportRepository, IndexerConfigRepository, InsertMediaFileInput,
-    MediaFileRepository, NewBlocklistEntry, NewTitleHistoryEvent, NotificationChannelRepository,
+    AcquisitionStateRepository, AppError, AppResult, BlocklistRepository,
+    DownloadClientConfigRepository, DownloadSubmission, DownloadSubmissionRepository,
+    EventRepository, HousekeepingRepository, ImportArtifact, ImportArtifactRepository,
+    ImportRepository, IndexerConfigRepository, InsertMediaFileInput, MediaFileRepository,
+    NewBlocklistEntry, NewTitleHistoryEvent, NotificationChannelRepository,
     NotificationSubscriptionRepository, PendingRelease, PendingReleaseRepository,
+    PendingReleaseStatus, SuccessfulGrabCommit,
     PluginInstallationRepository, PostProcessingScriptRepository, PrimaryCollectionSummary,
     QualityProfile as ApplicationQualityProfile, QualityProfileRepository,
     ReleaseAttemptRepository, ReleaseDecision, ReleaseDownloadAttemptOutcome,
@@ -33,6 +35,13 @@ macro_rules! db_call {
             .await
             .map_err(|err| AppError::Repository(err.to_string()))?
     }};
+}
+
+#[async_trait]
+impl AcquisitionStateRepository for SqliteServices {
+    async fn commit_successful_grab(&self, commit: &SuccessfulGrabCommit) -> AppResult<()> {
+        self.commit_successful_grab(commit.clone()).await
+    }
 }
 
 #[async_trait]
@@ -738,6 +747,10 @@ impl WantedItemRepository for SqliteServices {
         self.upsert_wanted_item(item).await
     }
 
+    async fn ensure_wanted_item_seeded(&self, item: &WantedItem) -> AppResult<String> {
+        self.ensure_wanted_item_seeded_atomic(item.clone()).await
+    }
+
     async fn list_due_wanted_items(
         &self,
         now: &str,
@@ -1100,7 +1113,7 @@ impl PendingReleaseRepository for SqliteServices {
     async fn update_pending_release_status(
         &self,
         id: &str,
-        status: &str,
+        status: PendingReleaseStatus,
         grabbed_at: Option<&str>,
     ) -> AppResult<()> {
         self.update_pending_release_status(id, status, grabbed_at)
@@ -1130,8 +1143,8 @@ impl PendingReleaseRepository for SqliteServices {
     async fn compare_and_set_pending_release_status(
         &self,
         id: &str,
-        current_status: &str,
-        next_status: &str,
+        current_status: PendingReleaseStatus,
+        next_status: PendingReleaseStatus,
         grabbed_at: Option<&str>,
     ) -> AppResult<bool> {
         self.compare_and_set_pending_release_status(id, current_status, next_status, grabbed_at)

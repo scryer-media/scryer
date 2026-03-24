@@ -5,6 +5,7 @@
 
 use scryer_domain::{DownloadQueueState, TrackedDownloadState, TrackedDownloadStatus};
 
+use crate::app_usecase_acquisition::DownloadFailureContext;
 use crate::tracked_downloads::TrackedDownload;
 use crate::{ActivityChannel, ActivityKind, ActivitySeverity, AppUseCase};
 
@@ -46,8 +47,6 @@ pub async fn process_failed(app: &AppUseCase, td: &mut TrackedDownload) {
         return;
     }
 
-    td.state = TrackedDownloadState::Failed;
-
     let failure_reason = td
         .client_item
         .attention_reason
@@ -60,6 +59,23 @@ pub async fn process_failed(app: &AppUseCase, td: &mut TrackedDownload) {
         reason = failure_reason,
         "download failed — processing failure"
     );
+
+    let _ = crate::app_usecase_acquisition::process_download_failure(
+        app,
+        DownloadFailureContext {
+            wanted_item: None,
+            title_id: td.title_id.clone(),
+            client_id: td.client_id.clone(),
+            client_item_id: td.client_item.download_client_item_id.clone(),
+            release_title: td.client_item.title_name.clone(),
+            reason: failure_reason.to_string(),
+            remove_from_client_if_configured: false,
+        },
+        None,
+    )
+    .await;
+
+    td.state = TrackedDownloadState::Failed;
 
     // Emit activity event.
     let _ = app
@@ -77,7 +93,4 @@ pub async fn process_failed(app: &AppUseCase, td: &mut TrackedDownload) {
             vec![ActivityChannel::WebUi, ActivityChannel::Toast],
         )
         .await;
-
-    // TODO: trigger re-search if auto-redownload is enabled and title is known.
-    // This would call the acquisition search pipeline for the same title/facet/collection.
 }

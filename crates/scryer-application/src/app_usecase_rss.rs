@@ -1086,15 +1086,13 @@ impl AppUseCase {
                 let _ = self
                     .services
                     .wanted_items
-                    .update_wanted_item_status(
-                        &wanted.id,
-                        "grabbed",
-                        None,
-                        Some(&now.to_rfc3339()),
-                        wanted.search_count,
-                        Some(candidate_score),
-                        Some(&grabbed_json),
-                    )
+                    .transition_wanted_to_grabbed(&WantedGrabTransition {
+                        id: wanted.id.clone(),
+                        last_search_at: Some(now.to_rfc3339()),
+                        search_count: wanted.search_count,
+                        current_score: Some(candidate_score),
+                        grabbed_release: grabbed_json,
+                    })
                     .await;
 
                 {

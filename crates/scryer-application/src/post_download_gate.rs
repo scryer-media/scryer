@@ -6,7 +6,7 @@ use chrono::Utc;
 use crate::activity::{ActivityChannel, ActivityKind, ActivitySeverity};
 use crate::{
     AppUseCase, ReleaseDownloadAttemptOutcome, normalize_release_attempt_hint,
-    normalize_release_attempt_title,
+    normalize_release_attempt_title, WantedSearchTransition,
 };
 use scryer_domain::{ImportSkipReason, MediaFacet, Title};
 use tracing::warn;
@@ -677,18 +677,18 @@ async fn reset_wanted_items_for_retry(app: &AppUseCase, title_id: &str, episode_
             .await
         {
             Ok(Some(item)) => {
+                let next_search_at = now_str.clone();
                 let _ = app
                     .services
                     .wanted_items
-                    .update_wanted_item_status(
-                        &item.id,
-                        "wanted",
-                        Some(&now_str),
-                        None,
-                        item.search_count,
-                        item.current_score,
-                        None,
-                    )
+                    .schedule_wanted_item_search(&WantedSearchTransition {
+                        id: item.id.clone(),
+                        next_search_at: Some(next_search_at),
+                        last_search_at: None,
+                        search_count: item.search_count,
+                        current_score: item.current_score,
+                        grabbed_release: None,
+                    })
                     .await;
             }
             Ok(None) => {}

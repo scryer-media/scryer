@@ -51,10 +51,10 @@ export const RootHeader = React.memo(function RootHeader({
   const searchState = useSearchContext();
   const {
     resolveDefaultQualityProfileIdForFacet,
-    animeCatalogDefaults,
     addMetadataSearchResultToCatalog,
     closeGlobalSearchPanel,
     openGlobalSearchPanel,
+    forceSearchGlobal,
     setGlobalSearch,
     globalSearchInputRef,
     isMetadataSearchResultInCatalog,
@@ -108,8 +108,9 @@ export const RootHeader = React.memo(function RootHeader({
   const handleSearchSubmit = React.useCallback(
     (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
+      void forceSearchGlobal();
     },
-    [],
+    [forceSearchGlobal],
   );
 
   const handleSearchChange = React.useCallback(
@@ -452,7 +453,6 @@ export const RootHeader = React.memo(function RootHeader({
         catalogQualityProfileOptions={catalogQualityProfileOptions}
         defaultQualityProfileId={resolveDefaultQualityProfileIdForFacet(addDialogTarget?.facet ?? "tv")}
         rootFolders={rootFoldersByFacet[addDialogTarget?.facet ?? "tv"]}
-        animeCatalogDefaults={animeCatalogDefaults}
         onSubmit={handleAddDialogSubmit}
       />
     </>

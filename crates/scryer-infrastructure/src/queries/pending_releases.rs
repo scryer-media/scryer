@@ -1,4 +1,6 @@
-use scryer_application::{AppError, AppResult, DownloadSourceKind, PendingRelease};
+use scryer_application::{
+    AppError, AppResult, DownloadSourceKind, PendingRelease, PendingReleaseStatus,
+};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
@@ -27,7 +29,7 @@ pub(crate) async fn insert_pending_release_query(
     .bind(&release.release_guid)
     .bind(&release.added_at)
     .bind(&release.delay_until)
-    .bind(&release.status)
+    .bind(release.status.as_str())
     .bind(&release.grabbed_at)
     .bind(&release.source_password)
     .bind(&release.published_at)
@@ -140,11 +142,11 @@ pub(crate) async fn list_all_standby_pending_releases_query(
 pub(crate) async fn update_pending_release_status_query(
     pool: &SqlitePool,
     id: &str,
-    status: &str,
+    status: PendingReleaseStatus,
     grabbed_at: Option<&str>,
 ) -> AppResult<()> {
     sqlx::query("UPDATE pending_releases SET status = ?, grabbed_at = ? WHERE id = ?")
-        .bind(status)
+        .bind(status.as_str())
         .bind(grabbed_at)
         .bind(id)
         .execute(pool)
@@ -157,8 +159,8 @@ pub(crate) async fn update_pending_release_status_query(
 pub(crate) async fn compare_and_set_pending_release_status_query(
     pool: &SqlitePool,
     id: &str,
-    current_status: &str,
-    next_status: &str,
+    current_status: PendingReleaseStatus,
+    next_status: PendingReleaseStatus,
     grabbed_at: Option<&str>,
 ) -> AppResult<bool> {
     let result = sqlx::query(
@@ -166,10 +168,10 @@ pub(crate) async fn compare_and_set_pending_release_status_query(
          SET status = ?, grabbed_at = ?
          WHERE id = ? AND status = ?",
     )
-    .bind(next_status)
+    .bind(next_status.as_str())
     .bind(grabbed_at)
     .bind(id)
-    .bind(current_status)
+    .bind(current_status.as_str())
     .execute(pool)
     .await
     .map_err(|err| AppError::Repository(err.to_string()))?;
@@ -299,9 +301,11 @@ fn row_to_pending_release(row: &SqliteRow) -> AppResult<PendingRelease> {
         delay_until: row
             .try_get("delay_until")
             .map_err(|e| AppError::Repository(e.to_string()))?,
-        status: row
-            .try_get("status")
-            .map_err(|e| AppError::Repository(e.to_string()))?,
+        status: PendingReleaseStatus::parse(
+            &row.try_get::<String, _>("status")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+        )
+        .ok_or_else(|| AppError::Repository("invalid pending release status".to_string()))?,
         grabbed_at: row.try_get("grabbed_at").unwrap_or(None),
         source_password: row.try_get("source_password").unwrap_or(None),
         published_at: row.try_get("published_at").unwrap_or(None),

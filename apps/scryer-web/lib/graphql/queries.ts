@@ -816,6 +816,10 @@ export const downloadQueueQuery = `query DownloadQueue($includeAllActivity: Bool
     importStatus
     importErrorMessage
     importedAt
+    trackedState
+    trackedStatus
+    trackedStatusMessages
+    trackedMatchType
   }
 }`;
 
@@ -841,6 +845,10 @@ export const downloadQueueSubscription = `subscription DownloadQueueStream($incl
     importStatus
     importErrorMessage
     importedAt
+    trackedState
+    trackedStatus
+    trackedStatusMessages
+    trackedMatchType
   }
 }`;
 

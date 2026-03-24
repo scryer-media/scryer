@@ -37,6 +37,7 @@
 
 ## Planning & Type Design
 - **When converting string workflow states, follow the existing serde-enum pattern already used in the codebase instead of inventing new constant-only patterns.** Keep text serialization at the persistence boundary and make the enum authoritative inside Rust.
+- **When moving conditional persistence logic out of SQL and into Rust, preserve the original atomicity guarantees.** If the old query did read/modify/write in one statement, replace it with a transaction or a single repository command, and keep low-level upserts defensive against accidental bypasses.
 
 ## Indexer Search Contracts
 - **Do not bake alias language or script policy into core search query construction.** Core should pass canonical title plus tagged alias context through to indexer plugins, and plugins should decide whether to prefer romanized Japanese, Korean aliases, or other provider-specific naming conventions.

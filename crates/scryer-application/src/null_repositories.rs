@@ -6,8 +6,9 @@ use scryer_domain::{ImportRecord, ImportStatus};
 
 use scryer_domain::RuleSet;
 
-use crate::InsertMediaFileInput;
+use crate::{AcquisitionStateRepository, InsertMediaFileInput, SuccessfulGrabCommit};
 use scryer_domain::PluginInstallation;
+use crate::types::PendingReleaseStatus;
 
 use scryer_domain::{BlocklistEntry, TitleHistoryEventType, TitleHistoryRecord};
 
@@ -587,6 +588,9 @@ impl HousekeepingRepository for NullHousekeepingRepository {
 #[derive(Default)]
 pub struct NullDownloadSubmissionRepository;
 
+#[derive(Default)]
+pub struct NullAcquisitionStateRepository;
+
 #[async_trait]
 impl DownloadSubmissionRepository for NullDownloadSubmissionRepository {
     async fn record_submission(&self, _: DownloadSubmission) -> AppResult<()> {
@@ -613,6 +617,13 @@ impl DownloadSubmissionRepository for NullDownloadSubmissionRepository {
     }
     async fn get_tracked_state(&self, _: &str, _: &str) -> AppResult<Option<String>> {
         Ok(None)
+    }
+}
+
+#[async_trait]
+impl AcquisitionStateRepository for NullAcquisitionStateRepository {
+    async fn commit_successful_grab(&self, _: &SuccessfulGrabCommit) -> AppResult<()> {
+        Ok(())
     }
 }
 
@@ -656,7 +667,7 @@ impl PendingReleaseRepository for NullPendingReleaseRepository {
     async fn update_pending_release_status(
         &self,
         _: &str,
-        _: &str,
+        _: PendingReleaseStatus,
         _: Option<&str>,
     ) -> AppResult<()> {
         Ok(())
@@ -676,8 +687,8 @@ impl PendingReleaseRepository for NullPendingReleaseRepository {
     async fn compare_and_set_pending_release_status(
         &self,
         _: &str,
-        _: &str,
-        _: &str,
+        _: PendingReleaseStatus,
+        _: PendingReleaseStatus,
         _: Option<&str>,
     ) -> AppResult<bool> {
         Ok(false)

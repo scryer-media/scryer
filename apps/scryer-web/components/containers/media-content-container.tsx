@@ -87,10 +87,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     setMonitoredForQueue,
     seasonFoldersForQueue,
     setSeasonFoldersForQueue,
-    monitorSpecialsForQueue,
-    setMonitorSpecialsForQueue,
-    interSeasonMoviesForQueue,
-    setInterSeasonMoviesForQueue,
     minAvailabilityForQueue,
     setMinAvailabilityForQueue,
   } = useQueueFormState();
@@ -255,16 +251,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     [activeFacet, client, refreshRuleSets, ruleSets, setGlobalStatus, t],
   );
 
-  React.useEffect(() => {
-    setMonitorSpecialsForQueue(categoryMonitorSpecials.anime !== "false");
-    setInterSeasonMoviesForQueue(categoryInterSeasonMovies.anime !== "false");
-  }, [
-    categoryMonitorSpecials.anime,
-    categoryInterSeasonMovies.anime,
-    setInterSeasonMoviesForQueue,
-    setMonitorSpecialsForQueue,
-  ]);
-
   const refreshTitles = React.useCallback(async () => {
     setTitleLoading(true);
     setTitleStatus(t("title.loading"));
@@ -357,8 +343,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           : []),
         ...(queueFacet === "anime"
           ? [
-              `scryer:monitor-specials:${monitorSpecialsForQueue ? "true" : "false"}`,
-              `scryer:inter-season-movies:${interSeasonMoviesForQueue ? "true" : "false"}`,
+              `scryer:monitor-specials:false`,
+              `scryer:inter-season-movies:true`,
             ]
           : []),
       ];
@@ -396,9 +382,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       }
     },
     [
-      interSeasonMoviesForQueue,
       minAvailabilityForQueue,
-      monitorSpecialsForQueue,
       monitoredForQueue,
       queueFacet,
       refreshTitles,
@@ -443,8 +427,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           : []),
         ...(queueFacet === "anime"
           ? [
-              `scryer:monitor-specials:${monitorSpecialsForQueue ? "true" : "false"}`,
-              `scryer:inter-season-movies:${interSeasonMoviesForQueue ? "true" : "false"}`,
+              `scryer:monitor-specials:false`,
+              `scryer:inter-season-movies:true`,
             ]
           : []),
       ];
@@ -486,9 +470,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       }
     },
     [
-      interSeasonMoviesForQueue,
       minAvailabilityForQueue,
-      monitorSpecialsForQueue,
       monitoredForQueue,
       queueFacet,
       refreshTitles,
@@ -944,10 +926,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           setMonitoredForQueue,
           seasonFoldersForQueue,
           setSeasonFoldersForQueue,
-          monitorSpecialsForQueue,
-          setMonitorSpecialsForQueue,
-          interSeasonMoviesForQueue,
-          setInterSeasonMoviesForQueue,
           minAvailabilityForQueue,
           setMinAvailabilityForQueue,
           selectedTvdb,

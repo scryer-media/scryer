@@ -182,6 +182,7 @@ pub enum WantedStatus {
     #[default]
     Wanted,
     Grabbed,
+    Paused,
     Completed,
 }
 
@@ -190,6 +191,7 @@ impl WantedStatus {
         match self {
             Self::Wanted => "wanted",
             Self::Grabbed => "grabbed",
+            Self::Paused => "paused",
             Self::Completed => "completed",
         }
     }
@@ -198,10 +200,48 @@ impl WantedStatus {
         match value {
             "wanted" => Some(Self::Wanted),
             "grabbed" => Some(Self::Grabbed),
+            "paused" => Some(Self::Paused),
             "completed" => Some(Self::Completed),
             _ => None,
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct WantedGrabTransition {
+    pub id: String,
+    pub last_search_at: Option<String>,
+    pub search_count: i64,
+    pub current_score: Option<i32>,
+    pub grabbed_release: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct WantedSearchTransition {
+    pub id: String,
+    pub next_search_at: Option<String>,
+    pub last_search_at: Option<String>,
+    pub search_count: i64,
+    pub current_score: Option<i32>,
+    pub grabbed_release: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct WantedCompleteTransition {
+    pub id: String,
+    pub last_search_at: Option<String>,
+    pub search_count: i64,
+    pub current_score: Option<i32>,
+    pub grabbed_release: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct WantedPauseTransition {
+    pub id: String,
+    pub last_search_at: Option<String>,
+    pub search_count: i64,
+    pub current_score: Option<i32>,
+    pub grabbed_release: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -256,7 +296,7 @@ pub struct PendingRelease {
     pub release_guid: Option<String>,
     pub added_at: String,
     pub delay_until: String,
-    pub status: String,
+    pub status: PendingReleaseStatus,
     pub grabbed_at: Option<String>,
     /// Password hint for protected NZBs (e.g. NZBGeek password field).
     pub source_password: Option<String>,
@@ -264,6 +304,72 @@ pub struct PendingRelease {
     pub published_at: Option<String>,
     /// Torrent info hash — passed to download client for magnet resolution.
     pub info_hash: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingReleaseStatus {
+    Waiting,
+    Standby,
+    Processing,
+    Grabbed,
+    Superseded,
+    Expired,
+    Dismissed,
+}
+
+impl PendingReleaseStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Waiting => "waiting",
+            Self::Standby => "standby",
+            Self::Processing => "processing",
+            Self::Grabbed => "grabbed",
+            Self::Superseded => "superseded",
+            Self::Expired => "expired",
+            Self::Dismissed => "dismissed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "waiting" => Some(Self::Waiting),
+            "standby" => Some(Self::Standby),
+            "processing" => Some(Self::Processing),
+            "grabbed" => Some(Self::Grabbed),
+            "superseded" => Some(Self::Superseded),
+            "expired" => Some(Self::Expired),
+            "dismissed" => Some(Self::Dismissed),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod pending_release_status_tests {
+    use super::PendingReleaseStatus;
+
+    #[test]
+    fn pending_release_status_round_trips() {
+        let statuses = [
+            PendingReleaseStatus::Waiting,
+            PendingReleaseStatus::Standby,
+            PendingReleaseStatus::Processing,
+            PendingReleaseStatus::Grabbed,
+            PendingReleaseStatus::Superseded,
+            PendingReleaseStatus::Expired,
+            PendingReleaseStatus::Dismissed,
+        ];
+
+        for status in statuses {
+            assert_eq!(PendingReleaseStatus::parse(status.as_str()), Some(status));
+        }
+    }
+
+    #[test]
+    fn pending_release_status_rejects_unknown_values() {
+        assert_eq!(PendingReleaseStatus::parse("unknown"), None);
+    }
 }
 
 #[derive(Clone, Debug)]

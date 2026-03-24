@@ -1,6 +1,6 @@
 use crate::{
     ActivityChannel, ActivityKind, ActivitySeverity, AppError, AppResult, AppUseCase,
-    ImportArtifact,
+    ImportArtifact, WantedCompleteTransition,
     app_usecase_post_processing::{PostProcessingContext, spawn_post_processing},
     nfo::{render_episode_nfo, render_movie_nfo, render_plexmatch, render_tvshow_nfo},
     parse_release_metadata, render_rename_template, require,
@@ -1883,15 +1883,13 @@ async fn mark_wanted_completed_for_collection(
                     let _ = app
                         .services
                         .wanted_items
-                        .update_wanted_item_status(
-                            &item.id,
-                            "completed",
-                            None,
-                            Some(&now),
-                            item.search_count,
-                            item.current_score,
-                            item.grabbed_release.as_deref(),
-                        )
+                        .transition_wanted_to_completed(&WantedCompleteTransition {
+                            id: item.id.clone(),
+                            last_search_at: Some(now),
+                            search_count: item.search_count,
+                            current_score: item.current_score,
+                            grabbed_release: item.grabbed_release.clone(),
+                        })
                         .await;
                     return;
                 }
@@ -2691,15 +2689,13 @@ pub(crate) async fn mark_wanted_completed(
             if let Err(err) = app
                 .services
                 .wanted_items
-                .update_wanted_item_status(
-                    &wanted.id,
-                    "completed",
-                    None,
-                    Some(&now_str),
-                    wanted.search_count,
-                    score,
-                    wanted.grabbed_release.as_deref(),
-                )
+                .transition_wanted_to_completed(&WantedCompleteTransition {
+                    id: wanted.id.clone(),
+                    last_search_at: Some(now_str),
+                    search_count: wanted.search_count,
+                    current_score: score,
+                    grabbed_release: wanted.grabbed_release.clone(),
+                })
                 .await
             {
                 tracing::warn!(error = %err, title_id = %title_id, "failed to mark wanted item completed");
@@ -2784,10 +2780,10 @@ pub(crate) async fn resolve_target_episodes(
 
                 if let Some(part) = ep_meta.daily_part {
                     let part_index = part.saturating_sub(1) as usize;
-                    if let Some(episode) = matches.into_iter().nth(part_index) {
-                        if seen.insert(episode.id.clone()) {
-                            episodes.push(episode);
-                        }
+                    if let Some(episode) = matches.into_iter().nth(part_index)
+                        && seen.insert(episode.id.clone())
+                    {
+                        episodes.push(episode);
                     }
                 } else {
                     for episode in matches {

@@ -19,4 +19,8 @@ export type DownloadQueueItem = {
   importStatus: string | null;
   importErrorMessage: string | null;
   importedAt: string | null;
+  trackedState: string | null;
+  trackedStatus: string | null;
+  trackedStatusMessages: string[];
+  trackedMatchType: string | null;
 };

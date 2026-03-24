@@ -1,15 +1,10 @@
 use chrono::Utc;
 use scryer_application::{AppError, AppResult, ReleaseDecision, WantedItem};
 use sqlx::sqlite::SqliteRow;
-use sqlx::{Row, SqlitePool};
+use sqlx::{Executor, Row, Sqlite, SqlitePool, Transaction};
 
-pub(crate) async fn upsert_wanted_item_query(
-    pool: &SqlitePool,
-    item: &WantedItem,
-) -> AppResult<String> {
-    let now = Utc::now().to_rfc3339();
-
-    let sql = if item.collection_id.is_some() {
+fn upsert_wanted_item_sql(item: &WantedItem) -> &'static str {
+    if item.collection_id.is_some() {
         // Interstitial movie: unique by collection_id
         "INSERT INTO wanted_items
          (id, title_id, episode_id, collection_id, media_type, search_phase, next_search_at,
@@ -67,9 +62,16 @@ pub(crate) async fn upsert_wanted_item_query(
                 ELSE excluded.status
             END,
             updated_at = excluded.updated_at"
-    };
+    }
+}
 
-    sqlx::query(sql)
+async fn execute_upsert_wanted_item<'e, E>(executor: E, item: &WantedItem) -> AppResult<String>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
+    let now = Utc::now().to_rfc3339();
+
+    sqlx::query(upsert_wanted_item_sql(item))
         .bind(&item.id)
         .bind(&item.title_id)
         .bind(&item.episode_id)
@@ -85,11 +87,104 @@ pub(crate) async fn upsert_wanted_item_query(
         .bind(item.current_score)
         .bind(&now)
         .bind(&now)
-        .execute(pool)
+        .execute(executor)
         .await
         .map_err(|err| AppError::Repository(err.to_string()))?;
 
     Ok(item.id.clone())
+}
+
+async fn fetch_seed_target_query<'e, E>(executor: E, item: &WantedItem) -> AppResult<Option<WantedItem>>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
+    let row: Option<SqliteRow> = if let Some(collection_id) = item.collection_id.as_deref() {
+        sqlx::query(
+            "SELECT id, title_id, episode_id, collection_id, media_type, search_phase, next_search_at,
+                    last_search_at, search_count, baseline_date, status, grabbed_release,
+                    current_score, created_at, updated_at
+             FROM wanted_items
+             WHERE title_id = ? AND collection_id = ?",
+        )
+        .bind(&item.title_id)
+        .bind(collection_id)
+        .fetch_optional(executor)
+        .await
+    } else if let Some(episode_id) = item.episode_id.as_deref() {
+        sqlx::query(
+            "SELECT id, title_id, episode_id, collection_id, media_type, search_phase, next_search_at,
+                    last_search_at, search_count, baseline_date, status, grabbed_release,
+                    current_score, created_at, updated_at
+             FROM wanted_items
+             WHERE title_id = ? AND episode_id = ?",
+        )
+        .bind(&item.title_id)
+        .bind(episode_id)
+        .fetch_optional(executor)
+        .await
+    } else {
+        sqlx::query(
+            "SELECT id, title_id, episode_id, collection_id, media_type, search_phase, next_search_at,
+                    last_search_at, search_count, baseline_date, status, grabbed_release,
+                    current_score, created_at, updated_at
+             FROM wanted_items
+             WHERE title_id = ? AND episode_id IS NULL AND collection_id IS NULL",
+        )
+        .bind(&item.title_id)
+        .fetch_optional(executor)
+        .await
+    }
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    match row {
+        Some(ref row) => Ok(Some(row_to_wanted_item(row)?)),
+        None => Ok(None),
+    }
+}
+
+fn merge_seeded_wanted_item(item: &WantedItem, existing: Option<&WantedItem>) -> WantedItem {
+    let mut seeded = item.clone();
+
+    if let Some(existing) = existing {
+        seeded.id = existing.id.clone();
+        if existing.search_count > 0 {
+            seeded.next_search_at = existing.next_search_at.clone();
+        }
+        if item.status == scryer_application::WantedStatus::Wanted
+            && existing.status != scryer_application::WantedStatus::Wanted
+        {
+            seeded.status = existing.status;
+        }
+    }
+
+    seeded
+}
+
+pub(crate) async fn upsert_wanted_item_query(
+    pool: &SqlitePool,
+    item: &WantedItem,
+) -> AppResult<String> {
+    execute_upsert_wanted_item(pool, item).await
+}
+
+pub(crate) async fn ensure_wanted_item_seeded_query(
+    pool: &SqlitePool,
+    item: &WantedItem,
+) -> AppResult<String> {
+    let mut tx: Transaction<'_, Sqlite> = pool
+        .begin()
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    let existing = fetch_seed_target_query(&mut *tx, item).await?;
+    let seeded = merge_seeded_wanted_item(item, existing.as_ref());
+    execute_upsert_wanted_item(&mut *tx, &seeded).await?;
+
+    tx.commit()
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(existing.map_or(item.id.clone(), |existing| existing.id))
 }
 
 pub(crate) async fn list_due_wanted_items_query(

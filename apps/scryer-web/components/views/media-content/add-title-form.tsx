@@ -33,10 +33,6 @@ type AddTitleFormProps = {
   setMonitoredForQueue: (value: boolean) => void;
   seasonFoldersForQueue: boolean;
   setSeasonFoldersForQueue: (value: boolean) => void;
-  monitorSpecialsForQueue: boolean;
-  setMonitorSpecialsForQueue: (value: boolean) => void;
-  interSeasonMoviesForQueue: boolean;
-  setInterSeasonMoviesForQueue: (value: boolean) => void;
   minAvailabilityForQueue: string;
   setMinAvailabilityForQueue: (value: string) => void;
   onAddSubmit: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
@@ -67,10 +63,6 @@ export function AddTitleForm({
   setMonitoredForQueue,
   seasonFoldersForQueue,
   setSeasonFoldersForQueue,
-  monitorSpecialsForQueue,
-  setMonitorSpecialsForQueue,
-  interSeasonMoviesForQueue,
-  setInterSeasonMoviesForQueue,
   minAvailabilityForQueue,
   setMinAvailabilityForQueue,
   onAddSubmit,
@@ -197,28 +189,6 @@ export function AddTitleForm({
                 />
                 <span className="text-sm">{t("search.addConfigSeasonFolder")}</span>
               </label>
-            )}
-            {queueFacet === "anime" && (
-              <>
-                <label className="flex items-start gap-2 pt-0 sm:items-center sm:pt-7">
-                  <Checkbox
-                    checked={monitorSpecialsForQueue}
-                    onCheckedChange={(checked) =>
-                      setMonitorSpecialsForQueue(checked === true)
-                    }
-                  />
-                  <span className="text-sm">{t("settings.monitorSpecialsLabel")}</span>
-                </label>
-                <label className="flex items-start gap-2 pt-0 sm:items-center sm:pt-7">
-                  <Checkbox
-                    checked={interSeasonMoviesForQueue}
-                    onCheckedChange={(checked) =>
-                      setInterSeasonMoviesForQueue(checked === true)
-                    }
-                  />
-                  <span className="text-sm">{t("settings.interSeasonMoviesLabel")}</span>
-                </label>
-              </>
             )}
             <div className="flex justify-end lg:col-span-5">
               <Button type="submit" className="w-full sm:w-auto">{t("tvdb.searchByTvdb")}</Button>

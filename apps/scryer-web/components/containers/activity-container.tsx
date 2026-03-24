@@ -2,10 +2,14 @@
 import { memo, useCallback, useState } from "react";
 import { useMutation } from "urql";
 
+import { AssignTrackedDownloadTitleDialog } from "@/components/dialogs/assign-tracked-download-title-dialog";
+import { ManualImportDialog } from "@/components/dialogs/manual-import-dialog";
 import { ActivityView } from "@/components/views/activity-view";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import {
+  assignTrackedDownloadTitleMutation,
+  ignoreTrackedDownloadMutation,
   triggerImportMutation,
   pauseDownloadMutation,
   resumeDownloadMutation,
@@ -21,11 +25,15 @@ export const ActivityContainer = memo(function ActivityContainer() {
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
   const [, executeTriggerImport] = useMutation(triggerImportMutation);
+  const [, executeAssignTrackedDownloadTitle] = useMutation(assignTrackedDownloadTitleMutation);
+  const [, executeIgnoreTrackedDownload] = useMutation(ignoreTrackedDownloadMutation);
   const [, executePauseDownload] = useMutation(pauseDownloadMutation);
   const [, executeResumeDownload] = useMutation(resumeDownloadMutation);
   const [, executeDeleteDownload] = useMutation(deleteDownloadMutation);
 
   const [queueMode, setQueueMode] = useState<QueueMode>("scryer");
+  const [manualImportItem, setManualImportItem] = useState<DownloadQueueItem | null>(null);
+  const [assignTitleItem, setAssignTitleItem] = useState<DownloadQueueItem | null>(null);
 
   const { queueItems, queueLoading, queueError, lastRefreshedAt, refreshQueue } = useDownloadQueue({
     includeAllActivity: queueMode !== "scryer",
@@ -34,6 +42,16 @@ export const ActivityContainer = memo(function ActivityContainer() {
 
   const requestManualImport = useCallback(
     async (item: DownloadQueueItem) => {
+      if (!item.titleId) {
+        setGlobalStatus(t("queue.assignTitleBeforeImport"));
+        return;
+      }
+
+      if (item.facet === "tv" || item.facet === "anime") {
+        setManualImportItem(item);
+        return;
+      }
+
       const result = await executeTriggerImport({
         input: {
           downloadClientItemId: item.downloadClientItemId,
@@ -48,7 +66,46 @@ export const ActivityContainer = memo(function ActivityContainer() {
       setGlobalStatus(t("queue.manualImportQueued"));
       await refreshQueue();
     },
-    [refreshQueue, executeTriggerImport, setGlobalStatus, t],
+    [executeTriggerImport, refreshQueue, setGlobalStatus, t],
+  );
+
+  const requestAssignTitle = useCallback(
+    async (item: DownloadQueueItem, titleId: string) => {
+      const result = await executeAssignTrackedDownloadTitle({
+        input: {
+          clientType: item.clientType,
+          downloadClientItemId: item.downloadClientItemId,
+          titleId,
+        },
+      });
+      if (result.error) {
+        const message = result.error.message ?? t("queue.assignTitleFailed");
+        setGlobalStatus(message);
+        throw result.error;
+      }
+      setGlobalStatus(t("queue.assignTitleQueued"));
+      await refreshQueue();
+    },
+    [executeAssignTrackedDownloadTitle, refreshQueue, setGlobalStatus, t],
+  );
+
+  const requestIgnore = useCallback(
+    async (item: DownloadQueueItem) => {
+      const result = await executeIgnoreTrackedDownload({
+        input: {
+          clientType: item.clientType,
+          downloadClientItemId: item.downloadClientItemId,
+        },
+      });
+      if (result.error) {
+        const message = result.error.message ?? t("queue.ignoreFailed");
+        setGlobalStatus(message);
+        throw result.error;
+      }
+      setGlobalStatus(t("queue.ignoreSuccess"));
+      await refreshQueue();
+    },
+    [executeIgnoreTrackedDownload, refreshQueue, setGlobalStatus, t],
   );
 
   const requestPause = useCallback(
@@ -105,19 +162,49 @@ export const ActivityContainer = memo(function ActivityContainer() {
   );
 
   return (
-    <ActivityView
-      state={{
-        queueItems,
-        queueLoading,
-        queueError,
-        lastRefreshedAt,
-        requestManualImport,
-        requestPause,
-        requestResume,
-        requestDelete,
-        queueMode,
-        setQueueMode,
-      }}
-    />
+    <>
+      <ActivityView
+        state={{
+          queueItems,
+          queueLoading,
+          queueError,
+          lastRefreshedAt,
+          requestManualImport,
+          requestAssignTitle: async (item) => {
+            setAssignTitleItem(item);
+          },
+          requestIgnore,
+          requestPause,
+          requestResume,
+          requestDelete,
+          queueMode,
+          setQueueMode,
+        }}
+      />
+      {manualImportItem?.titleId ? (
+        <ManualImportDialog
+          open={manualImportItem !== null}
+          onOpenChange={(open) => {
+            if (!open) {
+              setManualImportItem(null);
+            }
+          }}
+          titleId={manualImportItem.titleId}
+          titleName={manualImportItem.titleName}
+          downloadClientItemId={manualImportItem.downloadClientItemId}
+          onImportComplete={() => void refreshQueue()}
+        />
+      ) : null}
+      <AssignTrackedDownloadTitleDialog
+        open={assignTitleItem !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setAssignTitleItem(null);
+          }
+        }}
+        queueItem={assignTitleItem}
+        onAssign={requestAssignTitle}
+      />
+    </>
   );
 });

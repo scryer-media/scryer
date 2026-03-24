@@ -896,7 +896,7 @@ pub(crate) fn from_pending_release(pr: PendingRelease) -> PendingReleasePayload 
         indexer_source: pr.indexer_source,
         added_at: pr.added_at,
         delay_until: pr.delay_until,
-        status: pr.status,
+        status: pr.status.as_str().to_string(),
     }
 }
 

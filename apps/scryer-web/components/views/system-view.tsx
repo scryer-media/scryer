@@ -13,21 +13,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { serviceLogsQuery, serviceLogLinesSubscription } from "@/lib/graphql/queries";
 import { wsClient } from "@/lib/graphql/ws-client";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
-
-type RssSyncState = {
-  syncing: boolean;
-  triggerSync: () => Promise<void>;
-};
 
 type SystemViewState = {
   systemHealth: SystemHealth | null;
   systemLoading: boolean;
   refreshSystem: () => Promise<void>;
-  rssSync: RssSyncState;
 };
 
 type IndexerQueryStats = {
@@ -64,36 +57,14 @@ type SystemHealth = {
 
 type DataSource = {
   nameKey: string;
-  descriptionKey: string;
   href: string;
 };
 
 const DATA_SOURCES: DataSource[] = [
-  {
-    nameKey: "system.sourceTvdbName",
-    descriptionKey: "system.sourceTvdbDescription",
-    href: "https://www.thetvdb.com/",
-  },
-  {
-    nameKey: "system.sourceTmdbName",
-    descriptionKey: "system.sourceTmdbDescription",
-    href: "https://www.themoviedb.org/",
-  },
-  {
-    nameKey: "system.sourceJikanName",
-    descriptionKey: "system.sourceJikanDescription",
-    href: "https://jikan.moe/",
-  },
-  {
-    nameKey: "system.sourceMalName",
-    descriptionKey: "system.sourceMalDescription",
-    href: "https://myanimelist.net/",
-  },
-  {
-    nameKey: "system.sourceAniBridgeName",
-    descriptionKey: "system.sourceAniBridgeDescription",
-    href: "https://github.com/anibridge/anibridge",
-  },
+  { nameKey: "system.sourceTvdbName", href: "https://www.thetvdb.com/" },
+  { nameKey: "system.sourceTmdbName", href: "https://www.themoviedb.org/" },
+  { nameKey: "system.sourceMalName", href: "https://myanimelist.net/" },
+  { nameKey: "system.sourceAniBridgeName", href: "https://github.com/anibridge/anibridge" },
 ];
 
 function detectLogLevel(line: string): string {
@@ -101,14 +72,6 @@ function detectLogLevel(line: string): string {
   if (!match) return "info";
   if (match[1].toLowerCase() === "warning") return "warn";
   return match[1].toLowerCase();
-}
-
-function certBadgeClass(daysRemaining: number | null): string {
-  if (daysRemaining === null) return "text-muted-foreground";
-  if (daysRemaining < 0) return "text-red-500 font-semibold";
-  if (daysRemaining <= 7) return "text-red-400";
-  if (daysRemaining <= 30) return "text-yellow-400";
-  return "text-green-400";
 }
 
 function quotaBadgeClass(current: number | null, max: number | null): string {
@@ -121,12 +84,95 @@ function quotaBadgeClass(current: number | null, max: number | null): string {
 }
 
 const LOG_LEVEL_COLORS: Record<string, string> = {
-  error: "text-red-400",
-  warn: "text-yellow-400",
-  info: "text-blue-400",
-  debug: "text-emerald-400",
-  trace: "text-zinc-500",
+  error: "text-red-600 dark:text-red-400",
+  warn: "text-yellow-600 dark:text-yellow-400",
+  info: "text-blue-600 dark:text-blue-400",
+  debug: "text-emerald-600 dark:text-emerald-400",
+  trace: "text-zinc-400 dark:text-zinc-500",
 };
+
+// Tracing default format: {timestamp} {LEVEL} {target}: {message} {key=value ...}
+const TRACING_LINE_RE =
+  /^(\d{4}-\d{2}-\d{2}T[\d:.]+Z)\s+(ERROR|WARN|INFO|DEBUG|TRACE)\s+([\w:]+):\s+(.*)/;
+const KV_RE = /(\w+)=("(?:[^"\\]|\\.)*"|\S+)/g;
+
+type ParsedLine = {
+  timestamp: string;
+  level: string;
+  target: string;
+  message: string;
+  kvPairs: { key: string; value: string; start: number; end: number }[];
+};
+
+function parseLine(raw: string): ParsedLine | null {
+  const m = TRACING_LINE_RE.exec(raw);
+  if (!m) return null;
+
+  const body = m[4];
+  const kvPairs: ParsedLine["kvPairs"] = [];
+  let kv: RegExpExecArray | null;
+  KV_RE.lastIndex = 0;
+  while ((kv = KV_RE.exec(body)) !== null) {
+    kvPairs.push({
+      key: kv[1],
+      value: kv[2],
+      start: kv.index,
+      end: kv.index + kv[0].length,
+    });
+  }
+
+  return { timestamp: m[1], level: m[2], target: m[3], message: body, kvPairs };
+}
+
+function HighlightedLine({ line }: { line: string }) {
+  const parsed = parseLine(line);
+  if (!parsed) {
+    return <span className="text-foreground/80">{line}</span>;
+  }
+
+  const lvl = parsed.level.toLowerCase();
+  const levelColor = LOG_LEVEL_COLORS[lvl] ?? "text-foreground/80";
+
+  const fragments: React.ReactNode[] = [];
+  let cursor = 0;
+  for (const kv of parsed.kvPairs) {
+    if (kv.start > cursor) {
+      fragments.push(
+        <span key={`t${cursor}`} className="text-foreground/70">
+          {parsed.message.slice(cursor, kv.start)}
+        </span>,
+      );
+    }
+    fragments.push(
+      <span key={`k${kv.start}`}>
+        <span className="text-cyan-600 dark:text-cyan-400">{kv.key}</span>
+        <span className="text-muted-foreground">=</span>
+        <span className="text-foreground/90">{kv.value}</span>
+      </span>,
+    );
+    cursor = kv.end;
+  }
+  if (cursor < parsed.message.length) {
+    fragments.push(
+      <span key={`t${cursor}`} className="text-foreground/70">
+        {parsed.message.slice(cursor)}
+      </span>,
+    );
+  }
+
+  return (
+    <span>
+      <span className="text-muted-foreground/60">{parsed.timestamp}</span>
+      {" "}
+      <span className={levelColor}>{parsed.level.padStart(5)}</span>
+      {" "}
+      <span className="text-muted-foreground">{parsed.target}</span>
+      <span className="text-muted-foreground/60">:</span>
+      {" "}
+      {fragments}
+    </span>
+  );
+}
 
 const MAX_BUFFER = 2000;
 
@@ -284,24 +330,23 @@ function LogViewer() {
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className={`overflow-y-auto rounded-lg border border-border bg-[#0a0e1a] text-xs leading-5 ${isMobile ? "h-[55vh] min-h-[280px]" : "h-[calc(100vh-320px)] min-h-[400px]"}`}
+        className={`overflow-y-auto rounded-lg border border-border bg-card text-xs leading-5 ${isMobile ? "h-[55vh] min-h-[280px]" : "h-[calc(100vh-320px)] min-h-[400px]"}`}
         style={{ fontFamily: "'Fira Code', 'Fira Mono', 'JetBrains Mono', 'Source Code Pro', 'Cascadia Code', 'Consolas', monospace" }}
       >
         {filteredLines.length === 0 ? (
           <p className="p-4 text-muted-foreground">No logs available yet.</p>
         ) : (
           <div className="p-2">
-            {filteredLines.map((line, i) => {
-              const lvl = detectLogLevel(line);
-              return (
-                <div key={i} className="flex hover:bg-white/5">
-                  <span className="mr-3 select-none text-right text-zinc-600" style={{ minWidth: "3ch" }}>
-                    {i + 1}
-                  </span>
-                  <span className={`break-all ${LOG_LEVEL_COLORS[lvl] ?? "text-zinc-300"}`}>{line}</span>
-                </div>
-              );
-            })}
+            {filteredLines.map((line, i) => (
+              <div key={i} className="flex hover:bg-accent/50">
+                <span className="mr-3 select-none text-right text-muted-foreground/50" style={{ minWidth: "3ch" }}>
+                  {i + 1}
+                </span>
+                <span className="break-all">
+                  <HighlightedLine line={line} />
+                </span>
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -318,7 +363,7 @@ export function SystemView({
   state: SystemViewState;
 }) {
   const t = useTranslate();
-  const { systemHealth, systemLoading, refreshSystem, rssSync } = state;
+  const { systemHealth, systemLoading, refreshSystem } = state;
 
   return (
     <div className="space-y-4">
@@ -344,108 +389,38 @@ export function SystemView({
           ) : (
             <div className="space-y-2">
               <p className="text-sm">
-                {t("system.serviceReady")}: {systemHealth.serviceReady ? t("label.yes") : t("label.no")}
+                <span className="text-muted-foreground">{t("system.serviceReady")}:</span> {systemHealth.serviceReady ? t("label.yes") : t("label.no")}
               </p>
               <p className="text-sm">
-                {t("system.dbPathLabel")}: <span className="break-all">{systemHealth.dbPath}</span>
+                <span className="text-muted-foreground">{t("system.dbPathLabel")}:</span> <span className="break-all">{systemHealth.dbPath}</span>
               </p>
               <p className="text-sm">
-                {t("system.totalTitlesLabel")}: {systemHealth.totalTitles}
+                <span className="text-muted-foreground">Migration:</span>{" "}
+                <code className="rounded bg-muted px-1 py-0.5 text-xs">
+                  {systemHealth.dbMigrationVersion ?? "unknown"}
+                </code>
+                {systemHealth.dbPendingMigrations > 0 && (
+                  <span className="ml-2 text-yellow-400">({systemHealth.dbPendingMigrations} pending)</span>
+                )}
               </p>
               <p className="text-sm">
-                {t("system.monitoredTitlesLabel")}: {systemHealth.monitoredTitles}
+                <span className="text-muted-foreground">{t("system.totalTitlesLabel")}:</span> {systemHealth.totalTitles}
               </p>
               <p className="text-sm">
-                {t("system.usersLabel")}: {systemHealth.totalUsers}
+                <span className="text-muted-foreground">{t("system.monitoredTitlesLabel")}:</span> {systemHealth.monitoredTitles}
               </p>
               <p className="text-sm">
-                {t("system.facetLabel")}: movie={systemHealth.titlesMovie}, tv={systemHealth.titlesTv}, anime=
+                <span className="text-muted-foreground">{t("system.usersLabel")}:</span> {systemHealth.totalUsers}
+              </p>
+              <p className="text-sm">
+                <span className="text-muted-foreground">{t("system.facetLabel")}:</span> movie={systemHealth.titlesMovie}, tv={systemHealth.titlesTv}, anime=
                 {systemHealth.titlesAnime}, other={systemHealth.titlesOther}
               </p>
-              <Separator />
-              <p className="text-sm">{t("system.recentEventsLabel")}</p>
-              <ul className="space-y-1 text-sm text-card-foreground">
-                {systemHealth.recentEventPreview.map((entry) => (
-                  <li key={entry} className="rounded-xl border border-border bg-card p-2">
-                    {entry}
-                  </li>
-                ))}
-              </ul>
             </div>
           )}
         </CardContent>
       </Card>
 
-      {/* RSS Sync */}
-      <Card>
-        <CardHeader>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <CardTitle className="text-base">{t("system.rssSync")}</CardTitle>
-            <Button
-              size="sm"
-              variant="secondary"
-              className="w-full sm:w-auto"
-              onClick={() => void rssSync.triggerSync()}
-              disabled={rssSync.syncing}
-            >
-              {rssSync.syncing ? t("system.rssSyncing") : t("system.rssSyncTrigger")}
-            </Button>
-          </div>
-        </CardHeader>
-      </Card>
-
-      {/* Database & SMG Certificate */}
-      {systemHealth && (
-        <div className="grid gap-4 md:grid-cols-2">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Database</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              <p>
-                <span className="text-muted-foreground">Migration version:</span>{" "}
-                <code className="rounded bg-muted px-1 py-0.5 text-xs">
-                  {systemHealth.dbMigrationVersion ?? "unknown"}
-                </code>
-              </p>
-              <p>
-                <span className="text-muted-foreground">Pending migrations:</span>{" "}
-                <span className={systemHealth.dbPendingMigrations > 0 ? "text-yellow-400" : ""}>
-                  {systemHealth.dbPendingMigrations}
-                </span>
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">SMG Client Certificate</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              {systemHealth.smgCertExpiresAt ? (
-                <>
-                  <p>
-                    <span className="text-muted-foreground">Expires:</span>{" "}
-                    {new Date(systemHealth.smgCertExpiresAt).toLocaleString()}
-                  </p>
-                  <p>
-                    <span className="text-muted-foreground">Days remaining:</span>{" "}
-                    <span className={certBadgeClass(systemHealth.smgCertDaysRemaining)}>
-                      {systemHealth.smgCertDaysRemaining !== null
-                        ? systemHealth.smgCertDaysRemaining < 0
-                          ? `expired ${Math.abs(systemHealth.smgCertDaysRemaining)}d ago`
-                          : `${systemHealth.smgCertDaysRemaining}d`
-                        : "—"}
-                    </span>
-                  </p>
-                </>
-              ) : (
-                <p className="text-muted-foreground">Not enrolled</p>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      )}
 
       {/* Indexer Stats */}
       {systemHealth && systemHealth.indexerStats.length > 0 && (
@@ -454,14 +429,14 @@ export function SystemView({
             <CardTitle className="text-base">Indexer Stats (Last 24h)</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-3">
+            <div className={`grid gap-3 ${systemHealth.indexerStats.length === 1 ? "grid-cols-1" : systemHealth.indexerStats.length === 2 ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"}`}>
               {systemHealth.indexerStats.map((stat) => (
                 <div
                   key={stat.indexerId}
                   className="rounded-xl border border-border bg-card p-3 text-sm"
                 >
                   <p className="font-medium">{stat.indexerName}</p>
-                  <div className="mt-1 grid gap-x-6 gap-y-1 text-xs sm:grid-cols-2 lg:grid-cols-3">
+                  <div className="mt-1 space-y-1 text-xs">
                     <p>
                       <span className="text-muted-foreground">Queries:</span>{" "}
                       {stat.queriesLast24H}
@@ -506,22 +481,20 @@ export function SystemView({
         </CardHeader>
         <CardContent>
           <p className="mb-2 text-sm text-muted-foreground">{t("system.sourcesSupport")}</p>
-          <ul className="space-y-2 text-sm">
+          <div className="grid grid-cols-2 gap-2 text-sm">
             {DATA_SOURCES.map((source) => (
-              <li key={source.href} className="rounded-xl border border-border bg-card p-3">
-                <p className="font-medium">{t(source.nameKey)}</p>
-                <p className="text-xs text-muted-foreground">{t(source.descriptionKey)}</p>
+              <div key={source.href} className="rounded-xl border border-border bg-card p-3">
                 <a
                   href={source.href}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-xs font-medium text-primary hover:underline"
+                  className="font-medium text-primary hover:underline"
                 >
-                  {source.href}
+                  {t(source.nameKey)}
                 </a>
-              </li>
+              </div>
             ))}
-          </ul>
+          </div>
         </CardContent>
       </Card>
 

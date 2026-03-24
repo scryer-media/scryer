@@ -5,15 +5,7 @@ use std::collections::HashMap;
 use tracing::{info, warn};
 
 use crate::delay_profile::DelayProfile;
-use crate::types::PendingRelease;
-
-pub(crate) const PENDING_RELEASE_STATUS_WAITING: &str = "waiting";
-pub(crate) const PENDING_RELEASE_STATUS_STANDBY: &str = "standby";
-pub(crate) const PENDING_RELEASE_STATUS_PROCESSING: &str = "processing";
-pub(crate) const PENDING_RELEASE_STATUS_GRABBED: &str = "grabbed";
-pub(crate) const PENDING_RELEASE_STATUS_SUPERSEDED: &str = "superseded";
-pub(crate) const PENDING_RELEASE_STATUS_EXPIRED: &str = "expired";
-pub(crate) const PENDING_RELEASE_STATUS_DISMISSED: &str = "dismissed";
+use crate::types::{PendingRelease, PendingReleaseStatus};
 
 impl AppUseCase {
     /// Load delay profiles from settings.
@@ -76,7 +68,7 @@ impl AppUseCase {
             release_guid: release_guid.map(str::to_string),
             added_at: now.to_rfc3339(),
             delay_until: delay_until.to_rfc3339(),
-            status: PENDING_RELEASE_STATUS_WAITING.to_string(),
+            status: PendingReleaseStatus::Waiting,
             grabbed_at: None,
             source_password: source_password.map(str::to_string),
             published_at: published_at.map(str::to_string),
@@ -179,7 +171,7 @@ impl AppUseCase {
                     let _ = self
                         .services
                         .pending_releases
-                        .update_pending_release_status(&pr.id, "expired", None)
+                        .update_pending_release_status(&pr.id, PendingReleaseStatus::Expired, None)
                         .await;
                 }
                 continue;
@@ -191,7 +183,11 @@ impl AppUseCase {
                     let _ = self
                         .services
                         .pending_releases
-                        .update_pending_release_status(&pr.id, "superseded", None)
+                        .update_pending_release_status(
+                            &pr.id,
+                            PendingReleaseStatus::Superseded,
+                            None,
+                        )
                         .await;
                 }
                 continue;
@@ -208,7 +204,7 @@ impl AppUseCase {
                             .pending_releases
                             .update_pending_release_status(
                                 &pr.id,
-                                "grabbed",
+                                PendingReleaseStatus::Grabbed,
                                 Some(&now.to_rfc3339()),
                             )
                             .await;
@@ -227,7 +223,11 @@ impl AppUseCase {
                         let _ = self
                             .services
                             .pending_releases
-                            .update_pending_release_status(&pr.id, "expired", None)
+                            .update_pending_release_status(
+                                &pr.id,
+                                PendingReleaseStatus::Expired,
+                                None,
+                            )
                             .await;
                     }
                     Err(e) => {
@@ -239,7 +239,11 @@ impl AppUseCase {
                         let _ = self
                             .services
                             .pending_releases
-                            .update_pending_release_status(&pr.id, "expired", None)
+                            .update_pending_release_status(
+                                &pr.id,
+                                PendingReleaseStatus::Expired,
+                                None,
+                            )
                             .await;
                     }
                 }
@@ -276,7 +280,7 @@ impl AppUseCase {
                 "pending release {id} not found"
             )));
         };
-        if pr.status != PENDING_RELEASE_STATUS_WAITING {
+        if pr.status != PendingReleaseStatus::Waiting {
             return Err(AppError::Repository(format!(
                 "pending release {id} is not in waiting status"
             )));
@@ -305,14 +309,14 @@ impl AppUseCase {
                 "pending release {id} not found"
             )));
         };
-        if pr.status != PENDING_RELEASE_STATUS_WAITING {
+        if pr.status != PendingReleaseStatus::Waiting {
             return Err(AppError::Repository(format!(
                 "pending release {id} is not in waiting status"
             )));
         }
         self.services
             .pending_releases
-            .update_pending_release_status(id, PENDING_RELEASE_STATUS_DISMISSED, None)
+            .update_pending_release_status(id, PendingReleaseStatus::Dismissed, None)
             .await?;
         Ok(true)
     }
@@ -488,19 +492,6 @@ impl AppUseCase {
 
                 let facet_str =
                     serde_json::to_string(&title.facet).unwrap_or_else(|_| "\"other\"".to_string());
-                let _ = self
-                    .services
-                    .download_submissions
-                    .record_submission(DownloadSubmission {
-                        title_id: title.id.clone(),
-                        facet: facet_str.trim_matches('"').to_string(),
-                        download_client_type: grab.client_type,
-                        download_client_item_id: grab.job_id,
-                        source_title: source_title.clone(),
-                        collection_id: None,
-                    })
-                    .await;
-
                 let grabbed_json = serde_json::json!({
                     "title": pr.release_title,
                     "score": pr.release_score,
@@ -509,19 +500,27 @@ impl AppUseCase {
                 })
                 .to_string();
 
-                let _ = self
+                self
                     .services
-                    .wanted_items
-                    .update_wanted_item_status(
-                        &wanted.id,
-                        "grabbed",
-                        None,
-                        Some(&now.to_rfc3339()),
-                        wanted.search_count,
-                        wanted.current_score,
-                        Some(&grabbed_json),
-                    )
-                    .await;
+                    .acquisition_state
+                    .commit_successful_grab(&SuccessfulGrabCommit {
+                        wanted_item_id: wanted.id.clone(),
+                        search_count: wanted.search_count,
+                        current_score: wanted.current_score,
+                        grabbed_release: grabbed_json,
+                        last_search_at: Some(now.to_rfc3339()),
+                        download_submission: DownloadSubmission {
+                            title_id: title.id.clone(),
+                            facet: facet_str.trim_matches('"').to_string(),
+                            download_client_type: grab.client_type,
+                            download_client_item_id: grab.job_id,
+                            source_title: source_title.clone(),
+                            collection_id: None,
+                        },
+                        grabbed_pending_release_id: Some(pr.id.clone()),
+                        grabbed_at: Some(now.to_rfc3339()),
+                    })
+                    .await?;
 
                 {
                     let mut grab_meta = HashMap::new();

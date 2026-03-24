@@ -711,6 +711,14 @@ export const retryImportMutation = `mutation RetryImport($input: RetryImportInpu
   }
 }`;
 
+export const ignoreTrackedDownloadMutation = `mutation IgnoreTrackedDownload($input: IgnoreTrackedDownloadInput!) {
+  ignoreTrackedDownload(input: $input)
+}`;
+
+export const assignTrackedDownloadTitleMutation = `mutation AssignTrackedDownloadTitle($input: AssignTrackedDownloadTitleInput!) {
+  assignTrackedDownloadTitle(input: $input)
+}`;
+
 export type SubtitleSearchResult = {
   provider: string;
   providerFileId: string;

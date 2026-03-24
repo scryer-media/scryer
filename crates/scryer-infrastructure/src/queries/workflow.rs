@@ -1,8 +1,11 @@
 use chrono::Utc;
-use scryer_application::{AppError, AppResult, DownloadSubmission, ReleaseDownloadAttemptOutcome};
+use scryer_application::{
+    AppError, AppResult, DownloadSubmission, PendingReleaseStatus, ReleaseDownloadAttemptOutcome,
+    SuccessfulGrabCommit, WantedStatus,
+};
 use scryer_domain::{Id, ImportRecord, ImportStatus, ImportType};
 use sqlx::Row;
-use sqlx::SqlitePool;
+use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::types::{
     ReleaseDownloadFailureSignatureRecord, TitleReleaseBlocklistRecord, WorkflowOperationRecord,
@@ -657,6 +660,129 @@ pub(crate) async fn record_download_submission_query(
     .execute(pool)
     .await
     .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(())
+}
+
+pub(crate) async fn commit_successful_grab_query(
+    pool: &SqlitePool,
+    commit: &SuccessfulGrabCommit,
+) -> AppResult<()> {
+    let now = Utc::now().to_rfc3339();
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    record_download_submission_tx(&mut tx, &commit.download_submission).await?;
+
+    sqlx::query(
+        "UPDATE wanted_items
+         SET status = ?, next_search_at = ?, last_search_at = ?,
+             search_count = ?, current_score = ?, grabbed_release = ?, updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(WantedStatus::Grabbed.as_str())
+    .bind(Option::<String>::None)
+    .bind(commit.last_search_at.as_deref())
+    .bind(commit.search_count)
+    .bind(commit.current_score)
+    .bind(&commit.grabbed_release)
+    .bind(&now)
+    .bind(&commit.wanted_item_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    if let Some(pending_release_id) = commit.grabbed_pending_release_id.as_deref() {
+        sqlx::query(
+            "UPDATE pending_releases
+             SET status = ?, grabbed_at = ?
+             WHERE id = ?",
+        )
+        .bind(PendingReleaseStatus::Grabbed.as_str())
+        .bind(commit.grabbed_at.as_deref())
+        .bind(pending_release_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+    }
+
+    supersede_pending_release_siblings_tx(
+        &mut tx,
+        &commit.wanted_item_id,
+        commit.grabbed_pending_release_id.as_deref(),
+    )
+    .await?;
+
+    tx.commit()
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))
+}
+
+async fn record_download_submission_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    submission: &DownloadSubmission,
+) -> AppResult<()> {
+    let id = Id::new().0;
+
+    sqlx::query(
+        "INSERT INTO download_submissions
+         (id, title_id, facet, download_client_type, download_client_item_id, source_title, collection_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(download_client_type, download_client_item_id) DO UPDATE
+         SET title_id = excluded.title_id,
+             facet = excluded.facet,
+             source_title = excluded.source_title,
+             collection_id = excluded.collection_id",
+    )
+    .bind(&id)
+    .bind(&submission.title_id)
+    .bind(&submission.facet)
+    .bind(&submission.download_client_type)
+    .bind(&submission.download_client_item_id)
+    .bind(&submission.source_title)
+    .bind(&submission.collection_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(())
+}
+
+async fn supersede_pending_release_siblings_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    wanted_item_id: &str,
+    except_id: Option<&str>,
+) -> AppResult<()> {
+    match except_id {
+        Some(except_id) => {
+            sqlx::query(
+                "UPDATE pending_releases
+                 SET status = 'superseded'
+                 WHERE wanted_item_id = ?
+                   AND id != ?
+                   AND status IN ('waiting', 'standby')",
+            )
+            .bind(wanted_item_id)
+            .bind(except_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        }
+        None => {
+            sqlx::query(
+                "UPDATE pending_releases
+                 SET status = 'superseded'
+                 WHERE wanted_item_id = ?
+                   AND status IN ('waiting', 'standby')",
+            )
+            .bind(wanted_item_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+        }
+    }
 
     Ok(())
 }

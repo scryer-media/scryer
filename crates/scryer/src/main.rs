@@ -549,6 +549,7 @@ async fn bootstrap_application(
 
     services.library_scanner = library_scanner;
     services.library_renamer = library_renamer;
+    services.acquisition_state = Arc::new(db.clone());
     services.download_submissions = Arc::new(db.clone());
     services.imports = Arc::new(db.clone());
     services.import_artifacts = Arc::new(db.clone());
