@@ -4147,7 +4147,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scryer"
-version = "0.9.14"
+version = "0.9.15"
 dependencies = [
  "async-graphql",
  "async-graphql-axum",
@@ -4186,7 +4186,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-application"
-version = "0.9.14"
+version = "0.9.15"
 dependencies = [
  "alass-core",
  "argon2",
@@ -4219,7 +4219,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-domain"
-version = "0.9.14"
+version = "0.9.15"
 dependencies = [
  "chrono",
  "serde",
@@ -4229,7 +4229,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure"
-version = "0.9.14"
+version = "0.9.15"
 dependencies = [
  "async-trait",
  "base64",
@@ -4265,7 +4265,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface"
-version = "0.9.14"
+version = "0.9.15"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -4281,7 +4281,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-mediainfo"
-version = "0.9.14"
+version = "0.9.15"
 dependencies = [
  "bytes",
  "matroska-demuxer",
@@ -4296,7 +4296,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-mock-apis"
-version = "0.9.14"
+version = "0.9.15"
 dependencies = [
  "axum",
  "serde",
@@ -4308,7 +4308,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-plugins"
-version = "0.9.14"
+version = "0.9.15"
 dependencies = [
  "async-trait",
  "base64",
@@ -4328,14 +4328,14 @@ dependencies = [
 
 [[package]]
 name = "scryer-release-parser"
-version = "0.9.14"
+version = "0.9.15"
 dependencies = [
  "chrono",
 ]
 
 [[package]]
 name = "scryer-rules"
-version = "0.9.14"
+version = "0.9.15"
 dependencies = [
  "regorus",
  "serde",
