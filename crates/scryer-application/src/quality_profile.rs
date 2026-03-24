@@ -60,10 +60,10 @@ impl QualityProfileCriteria {
     /// Returns the scoring persona for a given media category, falling back to the
     /// base `scoring_persona` if no facet-specific override exists.
     pub fn resolve_persona(&self, category: Option<&str>) -> &ScoringPersona {
-        if let Some(cat) = category {
-            if let Some(persona) = self.facet_persona_overrides.get(cat) {
-                return persona;
-            }
+        if let Some(cat) = category
+            && let Some(persona) = self.facet_persona_overrides.get(cat)
+        {
+            return persona;
         }
         &self.scoring_persona
     }

@@ -359,12 +359,11 @@ impl AppUseCase {
                 .download_submissions
                 .find_by_client_item_id(&item.client_type, &item.download_client_item_id)
                 .await
+                && !submission.title_id.trim().is_empty()
             {
-                if !submission.title_id.trim().is_empty() {
-                    item.is_scryer_origin = true;
-                    item.title_id = Some(submission.title_id);
-                    item.facet = Some(submission.facet);
-                }
+                item.is_scryer_origin = true;
+                item.title_id = Some(submission.title_id);
+                item.facet = Some(submission.facet);
             }
         }
 
@@ -985,13 +984,12 @@ pub async fn start_download_queue_poller(
                             seen_ids.insert(id.clone());
                             tracker.track(&app, item.clone()).await;
 
-                            if let Some(td) = tracker.find_mut(&id) {
-                                if td.state == TrackedDownloadState::Downloading
-                                    || td.state == TrackedDownloadState::ImportBlocked
-                                {
-                                    crate::failed_download_handler::check(td);
-                                    crate::completed_download_handler::check(&app, td).await;
-                                }
+                            if let Some(td) = tracker.find_mut(&id)
+                                && (td.state == TrackedDownloadState::Downloading
+                                    || td.state == TrackedDownloadState::ImportBlocked)
+                            {
+                                crate::failed_download_handler::check(td);
+                                crate::completed_download_handler::check(&app, td).await;
                             }
                         }
 

@@ -66,15 +66,14 @@ impl TrackedDownload {
 // ── TrackedDownloadService ───────────────────────────────────────────────────
 
 /// In-memory cache of tracked downloads with title resolution and state management.
+#[derive(Default)]
 pub struct TrackedDownloadService {
     cache: HashMap<String, TrackedDownload>,
 }
 
 impl TrackedDownloadService {
     pub fn new() -> Self {
-        Self {
-            cache: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// Create or update a tracked download from a client item snapshot.
@@ -222,14 +221,13 @@ impl TrackedDownloadService {
                 &td.client_item.download_client_item_id,
             )
             .await
+            && !sub.title_id.is_empty()
         {
-            if !sub.title_id.is_empty() {
-                td.title_id = Some(sub.title_id.clone());
-                td.facet = Some(sub.facet.clone());
-                td.source_title = sub.source_title.clone();
-                td.match_type = TitleMatchType::Submission;
-                return;
-            }
+            td.title_id = Some(sub.title_id.clone());
+            td.facet = Some(sub.facet.clone());
+            td.source_title = sub.source_title.clone();
+            td.match_type = TitleMatchType::Submission;
+            return;
         }
 
         // 2. Embedded client parameters (*scryer_title_id).
@@ -273,13 +271,11 @@ impl TrackedDownloadService {
                 &td.client_item.download_client_item_id,
             )
             .await
+            && let Some(state) = TrackedDownloadState::from_str_opt(&tracked_state)
+            && state.is_terminal()
         {
-            if let Some(state) = TrackedDownloadState::from_str_opt(&tracked_state) {
-                if state.is_terminal() {
-                    td.state = state;
-                    return;
-                }
-            }
+            td.state = state;
+            return;
         }
 
         // Fall back to the latest import record for restart recovery if the
@@ -292,20 +288,18 @@ impl TrackedDownloadService {
                 &td.client_item.download_client_item_id,
             )
             .await
+            && import_record.status == ImportStatus::Completed
         {
-            if import_record.status == ImportStatus::Completed {
-                td.state = TrackedDownloadState::Imported;
-                let _ = app
-                    .services
-                    .download_submissions
-                    .update_tracked_state(
-                        &td.client_type,
-                        &td.client_item.download_client_item_id,
-                        TrackedDownloadState::Imported.as_str(),
-                    )
-                    .await;
-                return;
-            }
+            td.state = TrackedDownloadState::Imported;
+            let _ = app
+                .services
+                .download_submissions
+                .update_tracked_state(
+                    &td.client_type,
+                    &td.client_item.download_client_item_id,
+                    TrackedDownloadState::Imported.as_str(),
+                )
+                .await;
         }
 
         // Default: Downloading (will be re-evaluated by check cycle).
