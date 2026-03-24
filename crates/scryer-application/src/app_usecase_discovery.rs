@@ -1075,7 +1075,8 @@ fn normalize_imdb_id(raw: Option<String>) -> Option<String> {
 }
 
 fn normalize_numeric_id(raw: Option<String>) -> Option<String> {
-    raw.as_deref().and_then(crate::normalize::normalize_numeric_id)
+    raw.as_deref()
+        .and_then(crate::normalize::normalize_numeric_id)
 }
 
 impl AppUseCase {

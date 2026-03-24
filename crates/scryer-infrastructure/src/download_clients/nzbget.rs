@@ -449,10 +449,10 @@ impl NzbgetDownloadClient {
                     import_error_message: None,
                     imported_at: None,
                     is_scryer_origin: is_scryer,
-            tracked_state: None,
-            tracked_status: None,
-            tracked_status_messages: Vec::new(),
-            tracked_match_type: None,
+                    tracked_state: None,
+                    tracked_status: None,
+                    tracked_status_messages: Vec::new(),
+                    tracked_match_type: None,
                 })
             })
             .collect();
@@ -594,10 +594,10 @@ impl NzbgetDownloadClient {
                     import_error_message: None,
                     imported_at: None,
                     is_scryer_origin: is_scryer,
-            tracked_state: None,
-            tracked_status: None,
-            tracked_status_messages: Vec::new(),
-            tracked_match_type: None,
+                    tracked_state: None,
+                    tracked_status: None,
+                    tracked_status_messages: Vec::new(),
+                    tracked_match_type: None,
                 });
                 let next_index = items.len() - 1;
                 item_index_by_id.insert(id, next_index);
@@ -701,10 +701,10 @@ impl NzbgetDownloadClient {
                     import_error_message: None,
                     imported_at: None,
                     is_scryer_origin: is_scryer,
-            tracked_state: None,
-            tracked_status: None,
-            tracked_status_messages: Vec::new(),
-            tracked_match_type: None,
+                    tracked_state: None,
+                    tracked_status: None,
+                    tracked_status_messages: Vec::new(),
+                    tracked_match_type: None,
                 })
             })
             .collect())

@@ -6,8 +6,7 @@
 
 use chrono::{DateTime, Utc};
 use scryer_domain::{
-    DownloadQueueItem, ImportStatus, TitleMatchType, TrackedDownloadState,
-    TrackedDownloadStatus,
+    DownloadQueueItem, ImportStatus, TitleMatchType, TrackedDownloadState, TrackedDownloadStatus,
 };
 use std::collections::{HashMap, HashSet};
 use tokio::sync::{mpsc, oneshot};
@@ -83,11 +82,7 @@ impl TrackedDownloadService {
     ///
     /// On first see: resolves title, checks for terminal state in DB.
     /// On update: refreshes client_item but preserves scryer state if past Downloading.
-    pub async fn track(
-        &mut self,
-        app: &AppUseCase,
-        client_item: DownloadQueueItem,
-    ) {
+    pub async fn track(&mut self, app: &AppUseCase, client_item: DownloadQueueItem) {
         let id = tracked_download_id(
             &client_item.client_type,
             &client_item.download_client_item_id,
@@ -220,10 +215,7 @@ impl TrackedDownloadService {
         if let Ok(Some(sub)) = app
             .services
             .download_submissions
-            .find_by_client_item_id(
-                &td.client_type,
-                &td.client_item.download_client_item_id,
-            )
+            .find_by_client_item_id(&td.client_type, &td.client_item.download_client_item_id)
             .await
             && !sub.title_id.is_empty()
         {
@@ -270,10 +262,7 @@ impl TrackedDownloadService {
         if let Ok(Some(tracked_state)) = app
             .services
             .download_submissions
-            .get_tracked_state(
-                &td.client_type,
-                &td.client_item.download_client_item_id,
-            )
+            .get_tracked_state(&td.client_type, &td.client_item.download_client_item_id)
             .await
             && let Some(state) = TrackedDownloadState::from_str_opt(&tracked_state)
             && state.is_terminal()
@@ -287,10 +276,7 @@ impl TrackedDownloadService {
         if let Ok(Some(import_record)) = app
             .services
             .imports
-            .get_import_by_source_ref(
-                &td.client_type,
-                &td.client_item.download_client_item_id,
-            )
+            .get_import_by_source_ref(&td.client_type, &td.client_item.download_client_item_id)
             .await
             && import_record.status == ImportStatus::Completed
         {
@@ -352,7 +338,9 @@ impl TrackedDownloadHandle {
                 reply: reply_tx,
             })
             .await
-            .map_err(|_| crate::AppError::Repository("tracked download service unavailable".into()))?;
+            .map_err(|_| {
+                crate::AppError::Repository("tracked download service unavailable".into())
+            })?;
         reply_rx.await.map_err(|_| {
             crate::AppError::Repository("tracked download service dropped reply".into())
         })?
@@ -366,7 +354,9 @@ impl TrackedDownloadHandle {
                 reply: reply_tx,
             })
             .await
-            .map_err(|_| crate::AppError::Repository("tracked download service unavailable".into()))?;
+            .map_err(|_| {
+                crate::AppError::Repository("tracked download service unavailable".into())
+            })?;
         reply_rx.await.map_err(|_| {
             crate::AppError::Repository("tracked download service dropped reply".into())
         })?
@@ -380,7 +370,9 @@ impl TrackedDownloadHandle {
                 reply: reply_tx,
             })
             .await
-            .map_err(|_| crate::AppError::Repository("tracked download service unavailable".into()))?;
+            .map_err(|_| {
+                crate::AppError::Repository("tracked download service unavailable".into())
+            })?;
         reply_rx.await.map_err(|_| {
             crate::AppError::Repository("tracked download service dropped reply".into())
         })?
@@ -395,7 +387,9 @@ impl TrackedDownloadHandle {
                 reply: reply_tx,
             })
             .await
-            .map_err(|_| crate::AppError::Repository("tracked download service unavailable".into()))?;
+            .map_err(|_| {
+                crate::AppError::Repository("tracked download service unavailable".into())
+            })?;
         reply_rx.await.map_err(|_| {
             crate::AppError::Repository("tracked download service dropped reply".into())
         })?
@@ -417,13 +411,11 @@ mod tests {
         NullShowRepository, NullTitleRepository, NullUserRepository,
     };
     use crate::{
-        AppError, AppResult, AppServices, AppUseCase, DownloadSubmissionRepository,
-        FacetRegistry, ImportRepository, IndexerConfigRepository, JwtAuthConfig,
+        AppError, AppResult, AppServices, AppUseCase, DownloadSubmissionRepository, FacetRegistry,
+        ImportRepository, IndexerConfigRepository, JwtAuthConfig,
     };
     use async_trait::async_trait;
-    use scryer_domain::{
-        DownloadQueueState, Id, ImportRecord, ImportType,
-    };
+    use scryer_domain::{DownloadQueueState, Id, ImportRecord, ImportType};
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
@@ -460,7 +452,12 @@ mod tests {
             Ok(())
         }
 
-        async fn update_tracked_state(&self, _: &str, _: &str, tracked_state: &str) -> AppResult<()> {
+        async fn update_tracked_state(
+            &self,
+            _: &str,
+            _: &str,
+            tracked_state: &str,
+        ) -> AppResult<()> {
             self.tracked_state_updates
                 .lock()
                 .await
@@ -540,7 +537,11 @@ mod tests {
             Ok(None)
         }
 
-        async fn get_import_by_source_ref(&self, _: &str, _: &str) -> AppResult<Option<ImportRecord>> {
+        async fn get_import_by_source_ref(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> AppResult<Option<ImportRecord>> {
             Ok(self.import_record.clone())
         }
 
@@ -668,7 +669,11 @@ mod tests {
         let tracked = tracker.find("nzbget:dl-1").expect("tracked download");
         assert_eq!(tracked.state, TrackedDownloadState::Imported);
         assert_eq!(
-            download_submissions.tracked_state_updates.lock().await.as_slice(),
+            download_submissions
+                .tracked_state_updates
+                .lock()
+                .await
+                .as_slice(),
             ["imported"]
         );
     }

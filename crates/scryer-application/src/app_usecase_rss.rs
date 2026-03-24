@@ -1418,9 +1418,8 @@ mod tests {
             vec!["Mon Cousin"],
         )];
         let lookup = build_title_lookup(&titles);
-        let parsed = crate::parse_release_metadata(
-            "Mon.Cousin.A.K.A.My.Cousin.2020.1080p.BluRay.x264-GRP",
-        );
+        let parsed =
+            crate::parse_release_metadata("Mon.Cousin.A.K.A.My.Cousin.2020.1080p.BluRay.x264-GRP");
         let result = match_release_to_title(&parsed, &lookup);
         assert!(result.is_some());
         assert_eq!(result.unwrap().title_id, "t1");

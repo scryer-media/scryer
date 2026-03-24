@@ -45,7 +45,10 @@ mod tests {
 
     #[test]
     fn imdb_id_with_prefix() {
-        assert_eq!(normalize_imdb_id("tt1234567"), Some("tt1234567".to_string()));
+        assert_eq!(
+            normalize_imdb_id("tt1234567"),
+            Some("tt1234567".to_string())
+        );
     }
 
     #[test]
@@ -55,7 +58,10 @@ mod tests {
 
     #[test]
     fn imdb_id_with_trailing_chars() {
-        assert_eq!(normalize_imdb_id("tt0123456abc"), Some("tt0123456".to_string()));
+        assert_eq!(
+            normalize_imdb_id("tt0123456abc"),
+            Some("tt0123456".to_string())
+        );
     }
 
     #[test]
@@ -75,7 +81,10 @@ mod tests {
 
     #[test]
     fn imdb_id_trimmed() {
-        assert_eq!(normalize_imdb_id("  tt1234567  "), Some("tt1234567".to_string()));
+        assert_eq!(
+            normalize_imdb_id("  tt1234567  "),
+            Some("tt1234567".to_string())
+        );
     }
 
     #[test]

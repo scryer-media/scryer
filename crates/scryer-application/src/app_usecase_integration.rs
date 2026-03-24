@@ -930,7 +930,7 @@ pub async fn start_download_queue_poller(
     token: tokio_util::sync::CancellationToken,
     mut command_rx: tokio::sync::mpsc::Receiver<crate::tracked_downloads::TrackedDownloadCommand>,
 ) {
-    use crate::tracked_downloads::{tracked_download_id, TrackedDownloadService};
+    use crate::tracked_downloads::{TrackedDownloadService, tracked_download_id};
     use scryer_domain::TrackedDownloadState;
     use std::collections::HashSet;
 

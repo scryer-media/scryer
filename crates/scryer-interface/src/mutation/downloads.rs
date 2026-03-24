@@ -125,14 +125,10 @@ impl DownloadMutations {
     ) -> GqlResult<bool> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        app.ignore_tracked_download(
-            &actor,
-            &input.client_type,
-            &input.download_client_item_id,
-        )
-        .await
-        .map(|_| true)
-        .map_err(to_gql_error)
+        app.ignore_tracked_download(&actor, &input.client_type, &input.download_client_item_id)
+            .await
+            .map(|_| true)
+            .map_err(to_gql_error)
     }
 
     async fn mark_tracked_download_failed(
@@ -142,14 +138,10 @@ impl DownloadMutations {
     ) -> GqlResult<bool> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        app.mark_tracked_download_failed(
-            &actor,
-            &input.client_type,
-            &input.download_client_item_id,
-        )
-        .await
-        .map(|_| true)
-        .map_err(to_gql_error)
+        app.mark_tracked_download_failed(&actor, &input.client_type, &input.download_client_item_id)
+            .await
+            .map(|_| true)
+            .map_err(to_gql_error)
     }
 
     async fn retry_tracked_download_import(

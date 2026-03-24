@@ -973,7 +973,10 @@ pub(crate) fn parse_config_json_entries(json_str: &str) -> Result<HashMap<String
 /// Compute a base URL from host/port/use_ssl/url_base in config_json.
 fn compute_base_url_from_config_json(json_str: &str) -> Option<String> {
     let parsed: serde_json::Value = serde_json::from_str(json_str).ok()?;
-    let host = parsed.get("host").and_then(|v| v.as_str()).filter(|s| !s.is_empty())?;
+    let host = parsed
+        .get("host")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())?;
     let port = parsed.get("port").and_then(|v| match v {
         serde_json::Value::String(s) => Some(s.as_str().to_string()),
         serde_json::Value::Number(n) => Some(n.to_string()),

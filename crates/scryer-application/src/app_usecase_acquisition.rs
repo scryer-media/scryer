@@ -114,7 +114,12 @@ impl AppUseCase {
             updated_at: now.to_rfc3339(),
         };
 
-        match self.services.wanted_items.ensure_wanted_item_seeded(&item).await {
+        match self
+            .services
+            .wanted_items
+            .ensure_wanted_item_seeded(&item)
+            .await
+        {
             Ok(_) => {
                 info!(
                     title_id = title.id.as_str(),
@@ -223,7 +228,12 @@ impl AppUseCase {
                     updated_at: now.to_rfc3339(),
                 };
 
-                if let Err(err) = self.services.wanted_items.ensure_wanted_item_seeded(&item).await {
+                if let Err(err) = self
+                    .services
+                    .wanted_items
+                    .ensure_wanted_item_seeded(&item)
+                    .await
+                {
                     warn!(
                         title_id = title.id.as_str(),
                         episode_id = episode.id.as_str(),
@@ -317,7 +327,12 @@ impl AppUseCase {
                     updated_at: now.to_rfc3339(),
                 };
 
-                if let Err(err) = self.services.wanted_items.ensure_wanted_item_seeded(&item).await {
+                if let Err(err) = self
+                    .services
+                    .wanted_items
+                    .ensure_wanted_item_seeded(&item)
+                    .await
+                {
                     warn!(
                         title_id = title.id.as_str(),
                         collection_id = collection.id.as_str(),
@@ -587,12 +602,10 @@ pub(crate) async fn process_download_failure(
 
     let wanted_item = match context.wanted_item.clone() {
         Some(item) => Some(item),
-        None => resolve_failure_wanted_item(
-            app,
-            resolved_title_id.as_deref(),
-            &context.release_title,
-        )
-        .await,
+        None => {
+            resolve_failure_wanted_item(app, resolved_title_id.as_deref(), &context.release_title)
+                .await
+        }
     };
 
     let outcome = if let Some(item) = wanted_item.as_ref() {
@@ -950,11 +963,7 @@ async fn prune_standby_candidates(app: &AppUseCase) {
                 let _ = app
                     .services
                     .pending_releases
-                    .update_pending_release_status(
-                        &release.id,
-                        PendingReleaseStatus::Expired,
-                        None,
-                    )
+                    .update_pending_release_status(&release.id, PendingReleaseStatus::Expired, None)
                     .await;
             }
         }
@@ -1982,8 +1991,7 @@ async fn process_single_wanted_item(
                 })
                 .to_string();
 
-                app
-                    .services
+                app.services
                     .acquisition_state
                     .commit_successful_grab(&SuccessfulGrabCommit {
                         wanted_item_id: item.id.clone(),
@@ -2004,21 +2012,21 @@ async fn process_single_wanted_item(
                     })
                     .await?;
 
-                    persist_standby_candidates(
-                        app,
-                        item,
-                        &title,
-                        &results,
-                        candidate_index + 1,
-                        now,
-                        dl_snapshot,
-                        &db_blocklist,
-                        &thresholds,
-                        &existing_files,
-                        min_age_minutes,
-                        &title_norm,
-                    )
-                    .await;
+                persist_standby_candidates(
+                    app,
+                    item,
+                    &title,
+                    &results,
+                    candidate_index + 1,
+                    now,
+                    dl_snapshot,
+                    &db_blocklist,
+                    &thresholds,
+                    &existing_files,
+                    min_age_minutes,
+                    &title_norm,
+                )
+                .await;
 
                 {
                     let mut grab_meta = HashMap::new();
@@ -2207,11 +2215,7 @@ async fn recover_from_standby_candidates(
             let _ = app
                 .services
                 .pending_releases
-                .update_pending_release_status(
-                    &standby.id,
-                    PendingReleaseStatus::Expired,
-                    None,
-                )
+                .update_pending_release_status(&standby.id, PendingReleaseStatus::Expired, None)
                 .await;
             continue;
         }
@@ -2223,7 +2227,10 @@ async fn recover_from_standby_candidates(
             "attempting standby reacquisition"
         );
 
-        match app.try_grab_pending_release(&effective_wanted, &standby, now).await {
+        match app
+            .try_grab_pending_release(&effective_wanted, &standby, now)
+            .await
+        {
             Ok(true) => {
                 let grabbed_at = now.to_rfc3339();
                 let _ = app
@@ -2279,11 +2286,7 @@ async fn recover_from_standby_candidates(
                 let _ = app
                     .services
                     .pending_releases
-                    .update_pending_release_status(
-                        &standby.id,
-                        PendingReleaseStatus::Expired,
-                        None,
-                    )
+                    .update_pending_release_status(&standby.id, PendingReleaseStatus::Expired, None)
                     .await;
             }
         }
@@ -2394,16 +2397,19 @@ async fn persist_standby_candidates(
             continue;
         }
 
-        let scoring_log_json = candidate.quality_profile_decision.as_ref().and_then(|decision| {
-            serde_json::to_string(
-                &decision
-                    .scoring_log
-                    .iter()
-                    .map(|entry| serde_json::json!({"code": entry.code, "delta": entry.delta}))
-                    .collect::<Vec<_>>(),
-            )
-            .ok()
-        });
+        let scoring_log_json = candidate
+            .quality_profile_decision
+            .as_ref()
+            .and_then(|decision| {
+                serde_json::to_string(
+                    &decision
+                        .scoring_log
+                        .iter()
+                        .map(|entry| serde_json::json!({"code": entry.code, "delta": entry.delta}))
+                        .collect::<Vec<_>>(),
+                )
+                .ok()
+            });
 
         let standby = PendingRelease {
             id: Id::new().0,
@@ -2452,7 +2458,8 @@ async fn persist_standby_candidates(
 }
 
 fn should_research_failed_grab(item: &WantedItem, now: &DateTime<Utc>) -> bool {
-    !is_old_failed_grab_title(item, now) && is_last_search_stale(item.last_search_at.as_deref(), now)
+    !is_old_failed_grab_title(item, now)
+        && is_last_search_stale(item.last_search_at.as_deref(), now)
 }
 
 fn is_old_failed_grab_title(item: &WantedItem, now: &DateTime<Utc>) -> bool {
@@ -2462,7 +2469,10 @@ fn is_old_failed_grab_title(item: &WantedItem, now: &DateTime<Utc>) -> bool {
     let Some(parsed_date) = parse_failed_grab_baseline_date(baseline_date) else {
         return false;
     };
-    now.date_naive().signed_duration_since(parsed_date).num_days() > FAILED_GRAB_OLD_TITLE_DAYS
+    now.date_naive()
+        .signed_duration_since(parsed_date)
+        .num_days()
+        > FAILED_GRAB_OLD_TITLE_DAYS
 }
 
 fn is_last_search_stale(last_search_at: Option<&str>, now: &DateTime<Utc>) -> bool {
@@ -2972,7 +2982,10 @@ impl AppUseCase {
             updated_at: now.to_rfc3339(),
         };
 
-        self.services.wanted_items.ensure_wanted_item_seeded(&item).await?;
+        self.services
+            .wanted_items
+            .ensure_wanted_item_seeded(&item)
+            .await?;
         Ok(1)
     }
 
@@ -3064,7 +3077,10 @@ impl AppUseCase {
                     updated_at: now.to_rfc3339(),
                 };
 
-                self.services.wanted_items.ensure_wanted_item_seeded(&item).await?;
+                self.services
+                    .wanted_items
+                    .ensure_wanted_item_seeded(&item)
+                    .await?;
                 queued += 1;
             }
         }

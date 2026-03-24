@@ -52,7 +52,11 @@ pub async fn check(app: &AppUseCase, td: &mut TrackedDownload) {
     // Auto-import safety gating.
     match td.match_type {
         TitleMatchType::Unmatched => {
-            if !td.status_messages.iter().any(|m| m.contains("couldn't be matched")) {
+            if !td
+                .status_messages
+                .iter()
+                .any(|m| m.contains("couldn't be matched"))
+            {
                 td.status_messages.clear();
                 td.warn("Download couldn't be matched to a library title. Assign a title manually or check the download name.");
             }
@@ -63,7 +67,11 @@ pub async fn check(app: &AppUseCase, td: &mut TrackedDownload) {
             // ID-only matches from automated grabs are too risky for auto-import.
             // Interactive searches (user confirmed) are trusted.
             if !td.client_item.is_scryer_origin {
-                if !td.status_messages.iter().any(|m| m.contains("matched by ID only")) {
+                if !td
+                    .status_messages
+                    .iter()
+                    .any(|m| m.contains("matched by ID only"))
+                {
                     td.status_messages.clear();
                     td.warn("Download was matched to a title by ID only. Manual confirmation required to import.");
                 }
@@ -71,7 +79,9 @@ pub async fn check(app: &AppUseCase, td: &mut TrackedDownload) {
                 return;
             }
         }
-        TitleMatchType::Submission | TitleMatchType::ClientParameter | TitleMatchType::TitleParse => {
+        TitleMatchType::Submission
+        | TitleMatchType::ClientParameter
+        | TitleMatchType::TitleParse => {
             // High-confidence matches — proceed.
         }
     }
@@ -103,11 +113,7 @@ pub async fn check(app: &AppUseCase, td: &mut TrackedDownload) {
 ///
 /// This is async because it calls the import pipeline. Returns true if the
 /// download transitioned to a terminal state (Imported or ImportBlocked).
-pub async fn import(
-    app: &AppUseCase,
-    actor: &User,
-    td: &mut TrackedDownload,
-) -> bool {
+pub async fn import(app: &AppUseCase, actor: &User, td: &mut TrackedDownload) -> bool {
     if td.state != TrackedDownloadState::ImportPending {
         return false;
     }
@@ -195,10 +201,9 @@ pub async fn verify_import(
     let mut rejected_units = HashSet::new();
 
     for artifact in artifacts {
-        let logical_unit = artifact
-            .episode_id
-            .clone()
-            .unwrap_or_else(|| format!("{}:{}", artifact.media_kind, artifact.normalized_file_name));
+        let logical_unit = artifact.episode_id.clone().unwrap_or_else(|| {
+            format!("{}:{}", artifact.media_kind, artifact.normalized_file_name)
+        });
 
         match artifact.result.as_str() {
             "imported" | "already_present" => {
@@ -257,7 +262,12 @@ async fn find_completed_download(
     app: &AppUseCase,
     td: &TrackedDownload,
 ) -> Option<CompletedDownload> {
-    let completed_downloads = match app.services.download_client.list_completed_downloads().await {
+    let completed_downloads = match app
+        .services
+        .download_client
+        .list_completed_downloads()
+        .await
+    {
         Ok(downloads) => downloads,
         Err(error) => {
             tracing::warn!(error = %error, "find_completed_download: failed to fetch from client");
@@ -322,7 +332,10 @@ fn upsert_parameter(params: &mut Vec<(String, String)>, key: &str, value: String
         return;
     }
 
-    if let Some((_, existing)) = params.iter_mut().find(|(existing_key, _)| existing_key == key) {
+    if let Some((_, existing)) = params
+        .iter_mut()
+        .find(|(existing_key, _)| existing_key == key)
+    {
         *existing = value;
     } else {
         params.push((key.to_string(), value));
@@ -383,7 +396,11 @@ async fn apply_import_result(
 }
 
 fn import_result_message(result: &ImportResult, fallback_status: ImportStatus) -> String {
-    if let Some(message) = result.error_message.as_ref().filter(|message| !message.trim().is_empty()) {
+    if let Some(message) = result
+        .error_message
+        .as_ref()
+        .filter(|message| !message.trim().is_empty())
+    {
         return message.clone();
     }
 
@@ -415,19 +432,30 @@ async fn expected_episode_units(
         return ExpectedEpisodeResolution::NotApplicable;
     };
     let season_str = ep_meta.season.unwrap_or(1).to_string();
-    let episodes = crate::app_usecase_import::resolve_target_episodes(app, &title, ep_meta, &season_str).await;
+    let episodes =
+        crate::app_usecase_import::resolve_target_episodes(app, &title, ep_meta, &season_str).await;
 
     if episodes.is_empty() {
         return ExpectedEpisodeResolution::Unresolved;
     }
 
     let expected_lookup_count = if ep_meta.season.is_some() && !ep_meta.episode_numbers.is_empty() {
-        ep_meta.episode_numbers.iter().copied().collect::<HashSet<_>>().len()
+        ep_meta
+            .episode_numbers
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>()
+            .len()
     } else if ep_meta.absolute_episode.is_some() {
         if ep_meta.episode_numbers.is_empty() {
             1
         } else {
-            ep_meta.episode_numbers.iter().copied().collect::<HashSet<_>>().len()
+            ep_meta
+                .episode_numbers
+                .iter()
+                .copied()
+                .collect::<HashSet<_>>()
+                .len()
         }
     } else {
         0
@@ -460,7 +488,10 @@ async fn set_state_to_import_blocked(app: &AppUseCase, td: &mut TrackedDownload)
         "download_client_item_id".to_string(),
         serde_json::json!(td.client_item.download_client_item_id),
     );
-    metadata.insert("download_title".to_string(), serde_json::json!(td.client_item.title_name));
+    metadata.insert(
+        "download_title".to_string(),
+        serde_json::json!(td.client_item.title_name),
+    );
 
     let envelope = crate::activity::NotificationEnvelope {
         event_type: NotificationEventType::ManualInteractionRequired,
@@ -510,17 +541,16 @@ mod tests {
         NullIndexerClient, NullReleaseAttemptRepository, NullUserRepository,
     };
     use crate::{
-        AppError, AppResult, AppServices, AppUseCase,
-        FacetRegistry, ImportArtifact, ImportArtifactRepository, IndexerConfigRepository,
-        JwtAuthConfig, QualityProfile, QualityProfileRepository, ShowRepository,
-        TitleMetadataUpdate, TitleRepository,
+        AppError, AppResult, AppServices, AppUseCase, FacetRegistry, ImportArtifact,
+        ImportArtifactRepository, IndexerConfigRepository, JwtAuthConfig, QualityProfile,
+        QualityProfileRepository, ShowRepository, TitleMetadataUpdate, TitleRepository,
     };
     use async_trait::async_trait;
     use chrono::Utc;
     use scryer_domain::{
         CalendarEpisode, Collection, CollectionType, DownloadQueueItem, DownloadQueueState,
-        Episode, EpisodeType, Id, MediaFacet, NotificationEventType, Title,
-        TitleMatchType, TrackedDownloadState, TrackedDownloadStatus, User,
+        Episode, EpisodeType, Id, MediaFacet, NotificationEventType, Title, TitleMatchType,
+        TrackedDownloadState, TrackedDownloadStatus, User,
     };
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -540,11 +570,18 @@ mod tests {
             let titles = self.titles.lock().await.clone();
             Ok(titles
                 .into_iter()
-                .filter(|title| facet.as_ref().is_none_or(|expected| &title.facet == expected))
                 .filter(|title| {
-                    query
+                    facet
                         .as_ref()
-                        .is_none_or(|value| title.name.to_ascii_lowercase().contains(&value.to_ascii_lowercase()))
+                        .is_none_or(|expected| &title.facet == expected)
+                })
+                .filter(|title| {
+                    query.as_ref().is_none_or(|value| {
+                        title
+                            .name
+                            .to_ascii_lowercase()
+                            .contains(&value.to_ascii_lowercase())
+                    })
                 })
                 .collect())
         }
@@ -658,7 +695,10 @@ mod tests {
             Ok(())
         }
 
-        async fn list_episodes_for_collection(&self, collection_id: &str) -> AppResult<Vec<Episode>> {
+        async fn list_episodes_for_collection(
+            &self,
+            collection_id: &str,
+        ) -> AppResult<Vec<Episode>> {
             let episodes = self.episodes.lock().await;
             Ok(episodes
                 .iter()
@@ -669,7 +709,10 @@ mod tests {
 
         async fn get_episode_by_id(&self, episode_id: &str) -> AppResult<Option<Episode>> {
             let episodes = self.episodes.lock().await;
-            Ok(episodes.iter().find(|episode| episode.id == episode_id).cloned())
+            Ok(episodes
+                .iter()
+                .find(|episode| episode.id == episode_id)
+                .cloned())
         }
 
         async fn create_episode(&self, episode: Episode) -> AppResult<Episode> {
@@ -1043,11 +1086,7 @@ mod tests {
         }
     }
 
-    fn build_tracked_download(
-        title_id: &str,
-        facet: &str,
-        release_title: &str,
-    ) -> TrackedDownload {
+    fn build_tracked_download(title_id: &str, facet: &str, release_title: &str) -> TrackedDownload {
         TrackedDownload {
             id: format!("nzbget:{release_title}"),
             client_id: "client-1".to_string(),
@@ -1116,7 +1155,10 @@ mod tests {
         let parsed = crate::parse_release_metadata(
             "Star.Trek.Picard.S02.2022.Complete.1080p.Amazon.WEB-DL.AVC.DDP.5.1-DBTV",
         );
-        assert_eq!(parsed.episode.as_ref().and_then(|episode| episode.season), Some(2));
+        assert_eq!(
+            parsed.episode.as_ref().and_then(|episode| episode.season),
+            Some(2)
+        );
 
         match expected_episode_units(&app, &td).await {
             ExpectedEpisodeResolution::Resolved(expected) => assert_eq!(expected.len(), 3),
@@ -1225,7 +1267,11 @@ mod tests {
                 None,
             ),
         ];
-        let artifacts = vec![build_artifact("dl-1", "ep-101", "Series.Title.2015.09.07.mkv")];
+        let artifacts = vec![build_artifact(
+            "dl-1",
+            "ep-101",
+            "Series.Title.2015.09.07.mkv",
+        )];
         let app = build_app(vec![title], vec![collection], episodes, artifacts);
         let td = build_tracked_download(
             "title-1",
@@ -1275,11 +1321,7 @@ mod tests {
             "imported",
         )];
         let app = build_app(vec![title], vec![], vec![], artifacts);
-        let td = build_tracked_download(
-            "title-1",
-            "series",
-            "Mystery.Show.S01E01.1080p.WEB-DL",
-        );
+        let td = build_tracked_download("title-1", "series", "Mystery.Show.S01E01.1080p.WEB-DL");
 
         match expected_episode_units(&app, &td).await {
             ExpectedEpisodeResolution::Unresolved => {}

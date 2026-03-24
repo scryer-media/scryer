@@ -500,8 +500,7 @@ impl AppUseCase {
                 })
                 .to_string();
 
-                self
-                    .services
+                self.services
                     .acquisition_state
                     .commit_successful_grab(&SuccessfulGrabCommit {
                         wanted_item_id: wanted.id.clone(),

@@ -24,11 +24,13 @@ mod app_usecase_security;
 mod app_usecase_subtitles;
 mod app_usecase_title_images;
 pub(crate) mod archive_extractor;
+pub mod completed_download_handler;
 mod delay_profile;
 pub(crate) mod facet_handler;
 mod facet_movie;
 mod facet_registry;
 mod facet_series;
+pub mod failed_download_handler;
 pub(crate) mod import_checks;
 mod library_rename;
 mod library_scan;
@@ -38,9 +40,6 @@ pub(crate) mod normalize;
 mod notification_dispatcher;
 mod null_repositories;
 mod post_download_gate;
-pub mod tracked_downloads;
-pub mod completed_download_handler;
-pub mod failed_download_handler;
 mod quality_profile;
 pub mod recycle_bin;
 pub mod release_dedup;
@@ -48,6 +47,7 @@ mod release_group_db;
 mod release_parser;
 mod scoring_weights;
 pub mod subtitles;
+pub mod tracked_downloads;
 mod types;
 pub mod upgrade;
 mod user_rule_input;
@@ -80,8 +80,8 @@ pub use activity::{
 pub use app_usecase_acquisition::start_background_acquisition_poller;
 pub use app_usecase_backup::BackupService;
 pub use app_usecase_catalog::{
-    start_background_hydration_loop, DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY,
-    LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY,
+    DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY, LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY,
+    start_background_hydration_loop,
 };
 pub use app_usecase_import::{
     ManualImportFileMapping, ManualImportFilePreview, ManualImportFileResult, ManualImportPreview,
@@ -120,8 +120,8 @@ pub use library_scan::{
 };
 pub use notification_dispatcher::start_notification_dispatcher;
 pub use null_repositories::{
-    NullAcquisitionStateRepository, NullBlocklistRepository, NullDownloadSubmissionRepository, NullFileImporter,
-    NullHousekeepingRepository, NullImportRepository, NullIndexerStatsTracker,
+    NullAcquisitionStateRepository, NullBlocklistRepository, NullDownloadSubmissionRepository,
+    NullFileImporter, NullHousekeepingRepository, NullImportRepository, NullIndexerStatsTracker,
     NullMediaFileRepository, NullNotificationChannelRepository,
     NullNotificationSubscriptionRepository, NullPendingReleaseRepository,
     NullPluginInstallationRepository, NullPostProcessingScriptRepository, NullRuleSetRepository,
@@ -1180,7 +1180,9 @@ async fn find_existing_wanted_item_seed<R: WantedItemRepository + ?Sized>(
     }
 
     if let Some(episode_id) = item.episode_id.as_deref() {
-        return repo.get_wanted_item_for_title(&item.title_id, Some(episode_id)).await;
+        return repo
+            .get_wanted_item_for_title(&item.title_id, Some(episode_id))
+            .await;
     }
 
     Ok(repo
@@ -2837,7 +2839,11 @@ mod tests {
             Ok(item.id.clone())
         }
 
-        async fn list_due_wanted_items(&self, now: &str, batch_limit: i64) -> AppResult<Vec<WantedItem>> {
+        async fn list_due_wanted_items(
+            &self,
+            now: &str,
+            batch_limit: i64,
+        ) -> AppResult<Vec<WantedItem>> {
             let now = chrono::DateTime::parse_from_rfc3339(now)
                 .map(|value| value.with_timezone(&Utc))
                 .map_err(|err| AppError::Repository(err.to_string()))?;
@@ -2903,7 +2909,10 @@ mod tests {
         }
 
         async fn delete_wanted_items_for_title(&self, title_id: &str) -> AppResult<()> {
-            self.store.lock().await.retain(|item| item.title_id != title_id);
+            self.store
+                .lock()
+                .await
+                .retain(|item| item.title_id != title_id);
             Ok(())
         }
 
@@ -3174,7 +3183,12 @@ mod tests {
             status: PendingReleaseStatus,
             grabbed_at: Option<&str>,
         ) -> AppResult<()> {
-            if let Some(release) = self.store.lock().await.iter_mut().find(|release| release.id == id)
+            if let Some(release) = self
+                .store
+                .lock()
+                .await
+                .iter_mut()
+                .find(|release| release.id == id)
             {
                 release.status = status;
                 release.grabbed_at = grabbed_at.map(str::to_string);
@@ -3698,10 +3712,10 @@ mod tests {
                 import_error_message: None,
                 imported_at: None,
                 is_scryer_origin: true,
-            tracked_state: None,
-            tracked_status: None,
-            tracked_status_messages: Vec::new(),
-            tracked_match_type: None,
+                tracked_state: None,
+                tracked_status: None,
+                tracked_status_messages: Vec::new(),
+                tracked_match_type: None,
             },
             DownloadQueueItem {
                 id: "queue-fallback".to_string(),
@@ -3724,10 +3738,10 @@ mod tests {
                 import_error_message: None,
                 imported_at: None,
                 is_scryer_origin: false,
-            tracked_state: None,
-            tracked_status: None,
-            tracked_status_messages: Vec::new(),
-            tracked_match_type: None,
+                tracked_state: None,
+                tracked_status: None,
+                tracked_status_messages: Vec::new(),
+                tracked_match_type: None,
             },
             DownloadQueueItem {
                 id: "queue-unrelated".to_string(),
@@ -3750,10 +3764,10 @@ mod tests {
                 import_error_message: None,
                 imported_at: None,
                 is_scryer_origin: false,
-            tracked_state: None,
-            tracked_status: None,
-            tracked_status_messages: Vec::new(),
-            tracked_match_type: None,
+                tracked_state: None,
+                tracked_status: None,
+                tracked_status_messages: Vec::new(),
+                tracked_match_type: None,
             },
         ];
 
@@ -4004,33 +4018,43 @@ mod tests {
             .expect("wanted exists");
         assert_eq!(updated.status, WantedStatus::Grabbed);
         assert_eq!(updated.current_score, None);
-        assert!(updated
-            .grabbed_release
-            .as_deref()
-            .unwrap_or_default()
-            .contains("Standby.Release.1080p.WEB-DL"));
+        assert!(
+            updated
+                .grabbed_release
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Standby.Release.1080p.WEB-DL")
+        );
 
-        assert!(pending_releases
-            .list_all_standby_pending_releases()
-            .await
-            .expect("list standby")
-            .is_empty());
+        assert!(
+            pending_releases
+                .list_all_standby_pending_releases()
+                .await
+                .expect("list standby")
+                .is_empty()
+        );
         assert!(pending_releases.store.lock().await.iter().any(|release| {
             release.release_title == "Standby.Release.1080p.WEB-DL"
                 && release.status == PendingReleaseStatus::Grabbed
         }));
 
         let submissions = download_submissions.store.lock().await.clone();
-        assert!(!submissions
-            .iter()
-            .any(|submission| submission.download_client_item_id == "failed-job"));
+        assert!(
+            !submissions
+                .iter()
+                .any(|submission| submission.download_client_item_id == "failed-job")
+        );
         assert!(submissions.iter().any(|submission| {
             submission.download_client_item_id == format!("job-for-{}", title.id)
                 && submission.source_title.as_deref() == Some("Standby.Release.1080p.WEB-DL")
         }));
 
         assert_eq!(
-            download_client.submitted_release_titles.lock().await.clone(),
+            download_client
+                .submitted_release_titles
+                .lock()
+                .await
+                .clone(),
             vec!["Standby.Release.1080p.WEB-DL".to_string()]
         );
     }
@@ -4167,33 +4191,43 @@ mod tests {
             .expect("get wanted")
             .expect("wanted exists");
         assert_eq!(updated.status, WantedStatus::Grabbed);
-        assert!(updated
-            .grabbed_release
-            .as_deref()
-            .unwrap_or_default()
-            .contains("Standby.Release.1080p.WEB-DL"));
+        assert!(
+            updated
+                .grabbed_release
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Standby.Release.1080p.WEB-DL")
+        );
 
-        assert!(pending_releases
-            .list_all_standby_pending_releases()
-            .await
-            .expect("list standby")
-            .is_empty());
+        assert!(
+            pending_releases
+                .list_all_standby_pending_releases()
+                .await
+                .expect("list standby")
+                .is_empty()
+        );
         assert!(pending_releases.store.lock().await.iter().any(|release| {
             release.release_title == "Standby.Release.1080p.WEB-DL"
                 && release.status == PendingReleaseStatus::Grabbed
         }));
 
         let submissions = download_submissions.store.lock().await.clone();
-        assert!(!submissions
-            .iter()
-            .any(|submission| submission.download_client_item_id == "failed-job"));
+        assert!(
+            !submissions
+                .iter()
+                .any(|submission| submission.download_client_item_id == "failed-job")
+        );
         assert!(submissions.iter().any(|submission| {
             submission.download_client_item_id == format!("job-for-{}", title.id)
                 && submission.source_title.as_deref() == Some("Standby.Release.1080p.WEB-DL")
         }));
 
         assert_eq!(
-            download_client.submitted_release_titles.lock().await.clone(),
+            download_client
+                .submitted_release_titles
+                .lock()
+                .await
+                .clone(),
             vec!["Standby.Release.1080p.WEB-DL".to_string()]
         );
     }
@@ -4277,11 +4311,13 @@ mod tests {
 
         app.run_acquisition_cycle_once().await;
 
-        assert!(pending_releases
-            .list_all_standby_pending_releases()
-            .await
-            .expect("list standby")
-            .is_empty());
+        assert!(
+            pending_releases
+                .list_all_standby_pending_releases()
+                .await
+                .expect("list standby")
+                .is_empty()
+        );
     }
 
     #[tokio::test]

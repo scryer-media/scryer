@@ -200,9 +200,8 @@ fn find_monitored_movie_title_from_release_prefers_imdb_id() {
         ),
     ];
 
-    let parsed = crate::parse_release_metadata(
-        "Dune.2021.{tmdb-438631}.[tt1160419].1080p.BluRay.x264-GRP",
-    );
+    let parsed =
+        crate::parse_release_metadata("Dune.2021.{tmdb-438631}.[tt1160419].1080p.BluRay.x264-GRP");
 
     let matched = find_monitored_movie_title_from_release(&titles, &parsed)
         .expect("movie should resolve by embedded IDs");

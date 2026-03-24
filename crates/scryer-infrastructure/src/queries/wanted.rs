@@ -94,7 +94,10 @@ where
     Ok(item.id.clone())
 }
 
-async fn fetch_seed_target_query<'e, E>(executor: E, item: &WantedItem) -> AppResult<Option<WantedItem>>
+async fn fetch_seed_target_query<'e, E>(
+    executor: E,
+    item: &WantedItem,
+) -> AppResult<Option<WantedItem>>
 where
     E: Executor<'e, Database = Sqlite>,
 {

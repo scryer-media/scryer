@@ -221,9 +221,8 @@ fn parse_movie_release_group_with_hash_bracket() {
 
 #[test]
 fn parse_movie_title_variants_from_aka() {
-    let parsed = parse_release_metadata(
-        "Sydney.A.K.A.Hard.Eight.1996.1080p.AMZN.WEB-DL.DDP2.0.H.264",
-    );
+    let parsed =
+        parse_release_metadata("Sydney.A.K.A.Hard.Eight.1996.1080p.AMZN.WEB-DL.DDP2.0.H.264");
 
     assert_eq!(parsed.normalized_title, "SYDNEY AKA HARD EIGHT");
     assert_eq!(
@@ -238,8 +237,7 @@ fn parse_movie_title_variants_from_aka() {
 
 #[test]
 fn parse_movie_title_variants_from_slash_delimited_titles() {
-    let parsed =
-        parse_release_metadata("Mon Cousin / My Cousin 2020 1080p BluRay x264-GRP");
+    let parsed = parse_release_metadata("Mon Cousin / My Cousin 2020 1080p BluRay x264-GRP");
 
     assert_eq!(parsed.normalized_title, "MON COUSIN MY COUSIN");
     assert_eq!(
@@ -254,9 +252,8 @@ fn parse_movie_title_variants_from_slash_delimited_titles() {
 
 #[test]
 fn parse_movie_ids_from_release_title() {
-    let parsed = parse_release_metadata(
-        "Movie.Name.2016.{tmdbid-43074}.[tt0133093].1080p.WEB-DL.H.264",
-    );
+    let parsed =
+        parse_release_metadata("Movie.Name.2016.{tmdbid-43074}.[tt0133093].1080p.WEB-DL.H.264");
 
     assert_eq!(parsed.tmdb_id, Some(43074));
     assert_eq!(parsed.imdb_id.as_deref(), Some("tt0133093"));
@@ -303,7 +300,10 @@ fn parse_movie_editions_for_radarr_parity() {
 
     let anniversary =
         parse_release_metadata("Movie.Title.2012.50th.Anniversary.Edition.1080p.BluRay.x264");
-    assert_eq!(anniversary.edition.as_deref(), Some("50TH Anniversary Edition"));
+    assert_eq!(
+        anniversary.edition.as_deref(),
+        Some("50TH Anniversary Edition")
+    );
 
     let rekall = parse_release_metadata(
         "Movie.Title.1990.Ultimate.Rekall.Edition.1080p.BluRay.AVC.DTS-HD.MA5.1-TWA",
@@ -328,7 +328,8 @@ fn parse_movie_language_aliases_for_radarr_parity() {
     let thai = parse_release_metadata("Movie.Title.1994.Thai.1080p.XviD-LOL");
     assert_eq!(thai.languages_audio, vec!["tha".to_string()]);
 
-    let korsubs = parse_release_metadata("Movie.Title.2016.1080p.KORSUBS.WEBRip.x264.AAC2.0-RADARR");
+    let korsubs =
+        parse_release_metadata("Movie.Title.2016.1080p.KORSUBS.WEBRip.x264.AAC2.0-RADARR");
     assert_eq!(korsubs.languages_subtitles, vec!["kor".to_string()]);
     assert!(korsubs.is_hardcoded_subs);
 }
@@ -347,9 +348,8 @@ fn parse_movie_release_group_exceptions_for_radarr_parity() {
         parse_release_metadata("Movie.Name.2018.1080p.Blu-ray.Remux.AVC.DTS-HD.MA.5.1.KRaLiMaRKo");
     assert_eq!(kralimarko.release_group.as_deref(), Some("KRaLiMaRKo"));
 
-    let hqmux = parse_release_metadata(
-        "Movie.Title.2005.2160p.UHD.BluRay.TrueHD.7.1.Atmos.x265 - HQMUX",
-    );
+    let hqmux =
+        parse_release_metadata("Movie.Title.2005.2160p.UHD.BluRay.TrueHD.7.1.Atmos.x265 - HQMUX");
     assert_eq!(hqmux.release_group.as_deref(), Some("HQMUX"));
 
     let datalass = parse_release_metadata(
@@ -774,16 +774,25 @@ fn parse_daily_iso_with_part() {
         "Series.Title.2015.09.07.Part.2.720p.HULU.WEBRip.AAC2.0.H.264-Sonarr",
     );
     let episode = parsed.episode.expect("daily episode metadata");
-    assert_eq!(episode.air_date, chrono::NaiveDate::from_ymd_opt(2015, 9, 7));
+    assert_eq!(
+        episode.air_date,
+        chrono::NaiveDate::from_ymd_opt(2015, 9, 7)
+    );
     assert_eq!(episode.daily_part, Some(2));
-    assert_eq!(episode.release_type, ParsedEpisodeReleaseType::SingleEpisode);
+    assert_eq!(
+        episode.release_type,
+        ParsedEpisodeReleaseType::SingleEpisode
+    );
 }
 
 #[test]
 fn parse_daily_dmy_when_unambiguous() {
     let parsed = parse_release_metadata("Series.Title.13.02.2025.1080i.HDTV.MPA2.0.H.264");
     let episode = parsed.episode.expect("daily episode metadata");
-    assert_eq!(episode.air_date, chrono::NaiveDate::from_ymd_opt(2025, 2, 13));
+    assert_eq!(
+        episode.air_date,
+        chrono::NaiveDate::from_ymd_opt(2025, 2, 13)
+    );
 }
 
 #[test]
@@ -812,10 +821,7 @@ fn parse_numbered_ova_as_special() {
     let episode = parsed.episode.expect("special episode metadata");
     assert_eq!(episode.season, Some(0));
     assert_eq!(episode.episode_numbers, vec![1]);
-    assert_eq!(
-        episode.special_kind,
-        Some(ParsedSpecialKind::OVA)
-    );
+    assert_eq!(episode.special_kind, Some(ParsedSpecialKind::OVA));
     assert_eq!(episode.special_absolute_episode_numbers, vec![1]);
 }
 
@@ -842,10 +848,7 @@ fn website_prefix_is_removed_before_parsing() {
         parse_release_metadata("[ www.Torrenting.com ] - Series.S03E14.720p.HDTV.X264-DIMENSION");
     assert_eq!(parsed.release_group.as_deref(), Some("DIMENSION"));
     assert_eq!(parsed.episode.as_ref().and_then(|ep| ep.season), Some(3));
-    assert_eq!(
-        parsed.normalized_title,
-        "SERIES".to_string()
-    );
+    assert_eq!(parsed.normalized_title, "SERIES".to_string());
 }
 
 #[test]
@@ -2005,9 +2008,7 @@ fn tosho_galactic_e_range() {
 
 #[test]
 fn hyphen_delimited_episode_with_title_and_webdl() {
-    let p = parse_release_metadata(
-        "Assassination.Classroom-S02E21-Trust.Time.720p.WEB-DL.",
-    );
+    let p = parse_release_metadata("Assassination.Classroom-S02E21-Trust.Time.720p.WEB-DL.");
     assert_eq!(p.quality.as_deref(), Some("720p"));
     assert_eq!(p.source.as_deref(), Some("WEB-DL"));
     // Release group should NOT be "DL" (WEB-DL is a source, not a group)

@@ -698,9 +698,7 @@ fn router_config(id: &str, base_url: &str, priority: i64, enabled: bool) -> Down
         .trim_start_matches("http://")
         .trim_start_matches("https://")
         .trim_end_matches('/');
-    let (host, port) = stripped
-        .rsplit_once(':')
-        .unwrap_or((stripped, ""));
+    let (host, port) = stripped.rsplit_once(':').unwrap_or((stripped, ""));
     let config_json = serde_json::json!({
         "host": host,
         "port": port,

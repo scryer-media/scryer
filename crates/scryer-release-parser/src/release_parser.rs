@@ -149,9 +149,7 @@ pub fn normalize_language_token(token: &str) -> Option<&'static str> {
             Some("fra")
         }
         "DE" | "DEU" | "GER" | "GERMAN" | "SWISSGERMAN" => Some("deu"),
-        "ES" | "SPA" | "ESP" | "SPANISH" | "ESPANOL" | "ESPAÑOL" | "CASTELLANO" => {
-            Some("spa")
-        }
+        "ES" | "SPA" | "ESP" | "SPANISH" | "ESPANOL" | "ESPAÑOL" | "CASTELLANO" => Some("spa"),
         "IT" | "ITA" | "ITALIAN" => Some("ita"),
         "RU" | "RUS" | "RUSSIAN" => Some("rus"),
         "PT" | "POR" | "PORTUGUESE" => Some("por"),
@@ -524,7 +522,8 @@ impl ParsedEpisodeMetadata {
 
 fn finalize_episode_metadata(mut metadata: ParsedEpisodeMetadata) -> ParsedEpisodeMetadata {
     metadata.absolute_episode_numbers = dedupe_u32(metadata.absolute_episode_numbers);
-    metadata.special_absolute_episode_numbers = dedupe_u32(metadata.special_absolute_episode_numbers);
+    metadata.special_absolute_episode_numbers =
+        dedupe_u32(metadata.special_absolute_episode_numbers);
     metadata.episode_numbers = dedupe_u32(metadata.episode_numbers);
 
     if metadata.absolute_episode.is_none() {
@@ -651,7 +650,9 @@ fn is_website_like(value: &str) -> bool {
 
     let valid_tail = tail.len() >= 2
         && tail.len() <= 6
-        && tail.chars().all(|character| character.is_ascii_alphabetic());
+        && tail
+            .chars()
+            .all(|character| character.is_ascii_alphabetic());
     let valid_head = head
         .chars()
         .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '.'));
@@ -668,16 +669,7 @@ fn strip_known_extension(value: &str) -> &str {
     let ext = tail.to_ascii_lowercase();
     if matches!(
         ext.as_str(),
-        "mkv"
-            | "mp4"
-            | "avi"
-            | "ts"
-            | "m2ts"
-            | "mov"
-            | "wmv"
-            | "mpg"
-            | "mpeg"
-            | "flv"
+        "mkv" | "mp4" | "avi" | "ts" | "m2ts" | "mov" | "wmv" | "mpg" | "mpeg" | "flv"
     ) {
         head
     } else {
@@ -695,7 +687,10 @@ fn is_reversed_title_token(token: &str) -> bool {
         return false;
     }
 
-    let digit_count = bytes.iter().take_while(|byte| byte.is_ascii_digit()).count();
+    let digit_count = bytes
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
     if !(2..=3).contains(&digit_count) || digit_count + 2 >= bytes.len() {
         return false;
     }
@@ -1039,7 +1034,9 @@ fn parse_source(token: &str, next: Option<&str>) -> Option<SourceResult> {
         }),
         _ if upper.len() == 2
             && upper.starts_with('R')
-            && upper[1..].chars().all(|character| character.is_ascii_digit()) =>
+            && upper[1..]
+                .chars()
+                .all(|character| character.is_ascii_digit()) =>
         {
             Some(SourceResult {
                 source: "REGIONAL",
@@ -1283,8 +1280,7 @@ fn is_release_suffix_token(token: &str) -> bool {
 fn is_repost_suffix_token(token: &str) -> bool {
     if matches!(
         token,
-        "RP"
-            | "NZBGEEK"
+        "RP" | "NZBGEEK"
             | "OBFUSCATED"
             | "SCRAMBLED"
             | "SAMPLE"
@@ -1351,10 +1347,13 @@ fn extract_release_group_from_raw_suffix(raw_title: &str) -> Option<String> {
             .next()
             .unwrap_or_default()
             .to_ascii_uppercase();
-        let compound = format!("{prefix}-{}", tail.split(['.', ' ', '-', '_', '[', '('])
-            .next()
-            .unwrap_or_default()
-            .to_ascii_uppercase());
+        let compound = format!(
+            "{prefix}-{}",
+            tail.split(['.', ' ', '-', '_', '[', '('])
+                .next()
+                .unwrap_or_default()
+                .to_ascii_uppercase()
+        );
         if should_preserve_hyphen_token(&compound) {
             continue;
         }
@@ -1631,7 +1630,9 @@ fn split_hyphenated_token(token: &str) -> Vec<String> {
                 // Only split if the part after the dash is NOT a continuation
                 // of the episode pattern (e.g. "S02E21-E22" should stay together)
                 let after = &season_tail[ep_end + 1..];
-                if after.starts_with('E') || after.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                if after.starts_with('E')
+                    || after.chars().next().is_some_and(|c| c.is_ascii_digit())
+                {
                     out.push(season_tail.to_string());
                 } else {
                     out.push(ep_token.to_string());
@@ -2010,9 +2011,7 @@ fn parse_edition_at(tokens: &[String], index: usize) -> Option<(String, usize)> 
         "FAN" if next == Some("EDIT") => Some(("Fan Edit".to_string(), 2)),
         "FINAL" if next == Some("CUT") => Some(("Final Cut".to_string(), 2)),
         "ASSEMBLY" if next == Some("CUT") => Some(("Assembly Cut".to_string(), 2)),
-        "DIRECTORS" | "DIRECTOR" if next == Some("CUT") => {
-            Some(("Director's Cut".to_string(), 2))
-        }
+        "DIRECTORS" | "DIRECTOR" if next == Some("CUT") => Some(("Director's Cut".to_string(), 2)),
         "SPECIAL" if next == Some("EDITION") && third == Some("REMASTERED") => {
             Some(("Special Edition Remastered".to_string(), 3))
         }
@@ -2021,22 +2020,29 @@ fn parse_edition_at(tokens: &[String], index: usize) -> Option<(String, usize)> 
         }
         "SPECIAL" if next == Some("EDITION") => Some(("Special Edition".to_string(), 2)),
         "2IN1" | "3IN1" | "4IN1" => Some((token.to_string(), 1)),
-        "ULTIMATE" if matches!(next, Some("HUNTER") | Some("REKALL")) && third == Some("EDITION") => {
-            Some((format!("Ultimate {} Edition", title_case_token(next.unwrap_or_default())), 3))
-        }
-        "DIAMOND" | "SIGNATURE" | "IMPERIAL" | "HUNTER" | "REKALL"
-            if next == Some("EDITION") =>
+        "ULTIMATE"
+            if matches!(next, Some("HUNTER") | Some("REKALL")) && third == Some("EDITION") =>
         {
+            Some((
+                format!(
+                    "Ultimate {} Edition",
+                    title_case_token(next.unwrap_or_default())
+                ),
+                3,
+            ))
+        }
+        "DIAMOND" | "SIGNATURE" | "IMPERIAL" | "HUNTER" | "REKALL" if next == Some("EDITION") => {
             Some((format!("{} Edition", title_case_token(token)), 2))
         }
         "THE" if next == Some("IMPERIAL") && third == Some("EDITION") => {
             Some(("Imperial Edition".to_string(), 3))
         }
-        value if value.ends_with("TH")
-            && value[..value.len() - 2]
-                .chars()
-                .all(|character| character.is_ascii_digit())
-            && next == Some("ANNIVERSARY") =>
+        value
+            if value.ends_with("TH")
+                && value[..value.len() - 2]
+                    .chars()
+                    .all(|character| character.is_ascii_digit())
+                && next == Some("ANNIVERSARY") =>
         {
             let label = if third == Some("EDITION") {
                 format!("{value} Anniversary Edition")
@@ -2068,7 +2074,9 @@ fn is_noise_token(token: &str) -> bool {
         return true;
     }
 
-    if (token.contains('.') || token.contains('-') || token.bytes().any(|byte| byte.is_ascii_digit()))
+    if (token.contains('.')
+        || token.contains('-')
+        || token.bytes().any(|byte| byte.is_ascii_digit()))
         && (parse_source(token, None).is_some()
             || parse_video(token).0.is_some()
             || parse_audio(token, None).is_some()
@@ -2202,9 +2210,7 @@ fn collect_normalized_title_tokens(
         .and_then(|ep| ep.raw.as_ref())
         .map(|raw| split_title(raw))
         .unwrap_or_default();
-    let release_group_tokens = release_group
-        .map(split_title)
-        .unwrap_or_default();
+    let release_group_tokens = release_group.map(split_title).unwrap_or_default();
 
     for token in tokens {
         if is_noise_token(token) {
@@ -2603,7 +2609,8 @@ fn tokens_have_explicit_episode_pattern(tokens: &[String]) -> bool {
 
         if parse_named_episode_anchor_token(token)
             && let Some(next) = tokens.get(index + 1)
-            && (!parse_named_episode_token(next).is_empty() || !parse_pending_episode_token(next).is_empty())
+            && (!parse_named_episode_token(next).is_empty()
+                || !parse_pending_episode_token(next).is_empty())
         {
             return true;
         }
@@ -2794,7 +2801,8 @@ fn apply_special_context(
                 if !metadata.episode_numbers.is_empty() {
                     metadata.special_absolute_episode_numbers = metadata.episode_numbers.clone();
                 } else if !metadata.absolute_episode_numbers.is_empty() {
-                    metadata.special_absolute_episode_numbers = metadata.absolute_episode_numbers.clone();
+                    metadata.special_absolute_episode_numbers =
+                        metadata.absolute_episode_numbers.clone();
                     metadata.episode_numbers = metadata.absolute_episode_numbers.clone();
                     metadata.absolute_episode_numbers.clear();
                     metadata.absolute_episode = None;
@@ -2808,7 +2816,9 @@ fn apply_special_context(
         (Some(mut metadata), None) => {
             if metadata.season == Some(0) && metadata.special_kind.is_none() {
                 metadata.special_kind = Some(ParsedSpecialKind::Special);
-                if metadata.special_absolute_episode_numbers.is_empty() && !metadata.episode_numbers.is_empty() {
+                if metadata.special_absolute_episode_numbers.is_empty()
+                    && !metadata.episode_numbers.is_empty()
+                {
                     metadata.special_absolute_episode_numbers = metadata.episode_numbers.clone();
                 }
             }
@@ -2853,7 +2863,12 @@ fn parse_series_episode_core(tokens: &[String]) -> Option<ParsedEpisodeMetadata>
                 token.clone()
             };
 
-            return Some(new_episode_metadata(season, episodes, Vec::new(), Some(raw)));
+            return Some(new_episode_metadata(
+                season,
+                episodes,
+                Vec::new(),
+                Some(raw),
+            ));
         }
 
         if skip_next_as_season_value {
@@ -2895,7 +2910,12 @@ fn parse_series_episode_core(tokens: &[String]) -> Option<ParsedEpisodeMetadata>
                         },
                     );
 
-                    return Some(new_episode_metadata(Some(season), episodes, Vec::new(), Some(raw)));
+                    return Some(new_episode_metadata(
+                        Some(season),
+                        episodes,
+                        Vec::new(),
+                        Some(raw),
+                    ));
                 }
             }
 
@@ -2916,7 +2936,12 @@ fn parse_series_episode_core(tokens: &[String]) -> Option<ParsedEpisodeMetadata>
                     },
                 );
 
-                return Some(new_episode_metadata(Some(season), episodes, Vec::new(), Some(raw)));
+                return Some(new_episode_metadata(
+                    Some(season),
+                    episodes,
+                    Vec::new(),
+                    Some(raw),
+                ));
             }
 
             let delayed_episodes = parse_pending_episode_token(token);

@@ -319,8 +319,8 @@ impl PrioritizedDownloadClientRouter {
         match config.client_type.as_str() {
             "nzbget" => {
                 let parsed_config = parse_download_client_config_json(&config.config_json)?;
-                let base_url = resolve_download_client_base_url(&parsed_config)
-                    .ok_or_else(|| {
+                let base_url =
+                    resolve_download_client_base_url(&parsed_config).ok_or_else(|| {
                         AppError::Validation(format!(
                             "download client {} has no valid base URL",
                             config.id
@@ -335,8 +335,8 @@ impl PrioritizedDownloadClientRouter {
             }
             "sabnzbd" => {
                 let parsed_config = parse_download_client_config_json(&config.config_json)?;
-                let base_url = resolve_download_client_base_url(&parsed_config)
-                    .ok_or_else(|| {
+                let base_url =
+                    resolve_download_client_base_url(&parsed_config).ok_or_else(|| {
                         AppError::Validation(format!(
                             "download client {} has no valid base URL",
                             config.id

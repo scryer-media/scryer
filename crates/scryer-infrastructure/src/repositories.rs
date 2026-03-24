@@ -6,14 +6,14 @@ use scryer_application::{
     ImportRepository, IndexerConfigRepository, InsertMediaFileInput, MediaFileRepository,
     NewBlocklistEntry, NewTitleHistoryEvent, NotificationChannelRepository,
     NotificationSubscriptionRepository, PendingRelease, PendingReleaseRepository,
-    PendingReleaseStatus, SuccessfulGrabCommit,
-    PluginInstallationRepository, PostProcessingScriptRepository, PrimaryCollectionSummary,
-    QualityProfile as ApplicationQualityProfile, QualityProfileRepository,
-    ReleaseAttemptRepository, ReleaseDecision, ReleaseDownloadAttemptOutcome,
-    ReleaseDownloadFailureSignature, RuleSetRepository, SettingsRepository, ShowRepository,
-    SystemInfoProvider, TitleHistoryFilter, TitleHistoryPage, TitleHistoryRepository,
-    TitleMediaFile, TitleMediaSizeSummary, TitleMetadataUpdate, TitleReleaseBlocklistEntry,
-    TitleRepository, UserRepository, WantedItem, WantedItemRepository,
+    PendingReleaseStatus, PluginInstallationRepository, PostProcessingScriptRepository,
+    PrimaryCollectionSummary, QualityProfile as ApplicationQualityProfile,
+    QualityProfileRepository, ReleaseAttemptRepository, ReleaseDecision,
+    ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature, RuleSetRepository,
+    SettingsRepository, ShowRepository, SuccessfulGrabCommit, SystemInfoProvider,
+    TitleHistoryFilter, TitleHistoryPage, TitleHistoryRepository, TitleMediaFile,
+    TitleMediaSizeSummary, TitleMetadataUpdate, TitleReleaseBlocklistEntry, TitleRepository,
+    UserRepository, WantedItem, WantedItemRepository,
 };
 use scryer_domain::{
     BlocklistEntry, CalendarEpisode, Collection, CollectionType, DownloadClientConfig, Entitlement,
@@ -83,7 +83,15 @@ impl TitleRepository for SqliteServices {
             None => None,
         };
         let id = id.to_string();
-        db_call!(self, UpdateTitleMetadata { id, name, facet, tags_json })
+        db_call!(
+            self,
+            UpdateTitleMetadata {
+                id,
+                name,
+                facet,
+                tags_json
+            }
+        )
     }
 
     async fn update_title_hydrated_metadata(
@@ -150,16 +158,19 @@ impl ShowRepository for SqliteServices {
         monitored: Option<bool>,
     ) -> AppResult<Collection> {
         let collection_id = collection_id.to_string();
-        db_call!(self, UpdateCollection {
-            collection_id,
-            collection_type,
-            collection_index,
-            label,
-            ordered_path,
-            first_episode_number,
-            last_episode_number,
-            monitored,
-        })
+        db_call!(
+            self,
+            UpdateCollection {
+                collection_id,
+                collection_type,
+                collection_index,
+                label,
+                ordered_path,
+                first_episode_number,
+                last_episode_number,
+                monitored,
+            }
+        )
     }
 
     async fn update_interstitial_season_episode(
@@ -168,7 +179,13 @@ impl ShowRepository for SqliteServices {
         season_episode: Option<String>,
     ) -> AppResult<()> {
         let collection_id = collection_id.to_string();
-        db_call!(self, UpdateInterstitialSeasonEpisode { collection_id, season_episode })
+        db_call!(
+            self,
+            UpdateInterstitialSeasonEpisode {
+                collection_id,
+                season_episode
+            }
+        )
     }
 
     async fn set_collection_episodes_monitored(
@@ -177,7 +194,13 @@ impl ShowRepository for SqliteServices {
         monitored: bool,
     ) -> AppResult<()> {
         let collection_id = collection_id.to_string();
-        db_call!(self, SetCollectionEpisodesMonitored { collection_id, monitored })
+        db_call!(
+            self,
+            SetCollectionEpisodesMonitored {
+                collection_id,
+                monitored
+            }
+        )
     }
 
     async fn delete_collection(&self, collection_id: &str) -> AppResult<()> {
@@ -217,22 +240,25 @@ impl ShowRepository for SqliteServices {
         tvdb_id: Option<String>,
     ) -> AppResult<Episode> {
         let episode_id = episode_id.to_string();
-        db_call!(self, UpdateEpisode {
-            episode_id,
-            episode_type,
-            episode_number,
-            season_number,
-            episode_label,
-            title,
-            air_date,
-            duration_seconds,
-            has_multi_audio,
-            has_subtitle,
-            monitored,
-            collection_id,
-            overview,
-            tvdb_id,
-        })
+        db_call!(
+            self,
+            UpdateEpisode {
+                episode_id,
+                episode_type,
+                episode_number,
+                season_number,
+                episode_label,
+                title,
+                air_date,
+                duration_seconds,
+                has_multi_audio,
+                has_subtitle,
+                monitored,
+                collection_id,
+                overview,
+                tvdb_id,
+            }
+        )
     }
 
     async fn delete_episode(&self, episode_id: &str) -> AppResult<()> {
@@ -266,7 +292,13 @@ impl ShowRepository for SqliteServices {
     ) -> AppResult<Vec<CalendarEpisode>> {
         let start_date = start_date.to_string();
         let end_date = end_date.to_string();
-        db_call!(self, ListEpisodesInDateRange { start_date, end_date })
+        db_call!(
+            self,
+            ListEpisodesInDateRange {
+                start_date,
+                end_date
+            }
+        )
     }
 }
 
@@ -298,7 +330,13 @@ impl UserRepository for SqliteServices {
         let entitlements_json = serde_json::to_string(&entitlements)
             .map_err(|err| AppError::Repository(err.to_string()))?;
         let id = id.to_string();
-        db_call!(self, UpdateUserEntitlements { id, entitlements_json })
+        db_call!(
+            self,
+            UpdateUserEntitlements {
+                id,
+                entitlements_json
+            }
+        )
     }
 
     async fn update_password_hash(&self, id: &str, password_hash: String) -> AppResult<User> {
@@ -320,7 +358,14 @@ impl EventRepository for SqliteServices {
         limit: i64,
         offset: i64,
     ) -> AppResult<Vec<HistoryEvent>> {
-        db_call!(self, ListEvents { title_id, limit, offset })
+        db_call!(
+            self,
+            ListEvents {
+                title_id,
+                limit,
+                offset
+            }
+        )
     }
 
     async fn append(&self, event: HistoryEvent) -> AppResult<()> {
@@ -363,19 +408,22 @@ impl IndexerConfigRepository for SqliteServices {
         config_json: Option<String>,
     ) -> AppResult<IndexerConfig> {
         let id = id.to_string();
-        db_call!(self, UpdateIndexerConfig {
-            id,
-            name,
-            provider_type,
-            base_url,
-            api_key_encrypted,
-            rate_limit_seconds,
-            rate_limit_burst,
-            is_enabled,
-            enable_interactive_search,
-            enable_auto_search,
-            config_json,
-        })
+        db_call!(
+            self,
+            UpdateIndexerConfig {
+                id,
+                name,
+                provider_type,
+                base_url,
+                api_key_encrypted,
+                rate_limit_seconds,
+                rate_limit_burst,
+                is_enabled,
+                enable_interactive_search,
+                enable_auto_search,
+                config_json,
+            }
+        )
     }
 
     async fn delete(&self, id: &str) -> AppResult<()> {
@@ -886,7 +934,16 @@ impl RuleSetRepository for SqliteServices {
         let action = action.to_string();
         let rego_source = rego_source.map(|s| s.to_string());
         let actor_id = actor_id.map(|s| s.to_string());
-        db_call!(self, RecordRuleSetHistory { id, rule_set_id, action, rego_source, actor_id })
+        db_call!(
+            self,
+            RecordRuleSetHistory {
+                id,
+                rule_set_id,
+                action,
+                rego_source,
+                actor_id
+            }
+        )
     }
 
     async fn get_rule_set_by_managed_key(&self, key: &str) -> AppResult<Option<RuleSet>> {
@@ -926,7 +983,13 @@ impl PluginInstallationRepository for SqliteServices {
     ) -> AppResult<PluginInstallation> {
         let installation = installation.clone();
         let wasm_bytes = wasm_bytes.map(|b| b.to_vec());
-        db_call!(self, CreatePluginInstallation { installation, wasm_bytes })
+        db_call!(
+            self,
+            CreatePluginInstallation {
+                installation,
+                wasm_bytes
+            }
+        )
     }
 
     async fn update_plugin_installation(
@@ -936,7 +999,13 @@ impl PluginInstallationRepository for SqliteServices {
     ) -> AppResult<PluginInstallation> {
         let installation = installation.clone();
         let wasm_bytes = wasm_bytes.map(|b| b.to_vec());
-        db_call!(self, UpdatePluginInstallation { installation, wasm_bytes })
+        db_call!(
+            self,
+            UpdatePluginInstallation {
+                installation,
+                wasm_bytes
+            }
+        )
     }
 
     async fn delete_plugin_installation(&self, plugin_id: &str) -> AppResult<()> {
@@ -963,7 +1032,16 @@ impl PluginInstallationRepository for SqliteServices {
         let description = description.to_string();
         let version = version.to_string();
         let provider_type = provider_type.to_string();
-        db_call!(self, SeedBuiltinPlugin { plugin_id, name, description, version, provider_type })
+        db_call!(
+            self,
+            SeedBuiltinPlugin {
+                plugin_id,
+                name,
+                description,
+                version,
+                provider_type
+            }
+        )
     }
 
     async fn store_registry_cache(&self, json: &str) -> AppResult<()> {

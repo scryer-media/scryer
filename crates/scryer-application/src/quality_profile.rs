@@ -546,7 +546,8 @@ pub fn evaluate_against_profile(
     // ── Source ───────────────────────────────────────────────────────────────
     match normalize_source(release.source.as_deref()) {
         Some(source) => {
-            let explicitly_allowed = !c.source_allowlist.is_empty() && is_in_list(&source, &c.source_allowlist);
+            let explicitly_allowed =
+                !c.source_allowlist.is_empty() && is_in_list(&source, &c.source_allowlist);
             if matches!(
                 source.as_str(),
                 "CAM" | "TELESYNC" | "TELECINE" | "DVDSCR" | "WORKPRINT" | "REGIONAL"

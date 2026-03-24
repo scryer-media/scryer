@@ -15,8 +15,8 @@ use crate::{
 use scryer_application::QualityProfile;
 use scryer_application::{
     AppError, AppResult, PendingRelease, PendingReleaseStatus, PrimaryCollectionSummary,
-    ReleaseDecision, ReleaseDownloadAttemptOutcome, SuccessfulGrabCommit,
-    TitleMediaSizeSummary, TitleMetadataUpdate, WantedItem,
+    ReleaseDecision, ReleaseDownloadAttemptOutcome, SuccessfulGrabCommit, TitleMediaSizeSummary,
+    TitleMetadataUpdate, WantedItem,
 };
 use scryer_domain::{
     BlocklistEntry, CalendarEpisode, Collection, CollectionType, DownloadClientConfig, Episode,
@@ -1533,9 +1533,7 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     );
                 }
                 DbCommand::InsertImportArtifact { artifact, reply } => {
-                    let _ = reply.send(
-                        insert_import_artifact_query(&pool, &artifact).await,
-                    );
+                    let _ = reply.send(insert_import_artifact_query(&pool, &artifact).await);
                 }
                 DbCommand::ListImportArtifactsBySourceRef {
                     source_system,
@@ -1749,8 +1747,7 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 }
                 DbCommand::EnsureWantedItemSeeded { item, reply } => {
                     let _ = reply.send(
-                        crate::queries::wanted::ensure_wanted_item_seeded_query(&pool, &item)
-                            .await,
+                        crate::queries::wanted::ensure_wanted_item_seeded_query(&pool, &item).await,
                     );
                 }
                 DbCommand::ListDueWantedItems {

@@ -996,22 +996,52 @@ pub(crate) async fn list_import_artifacts_by_source_ref_query(
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
         out.push(scryer_application::ImportArtifact {
-            id: row.try_get("id").map_err(|e| AppError::Repository(e.to_string()))?,
-            source_system: row.try_get("source_system").map_err(|e| AppError::Repository(e.to_string()))?,
-            source_ref: row.try_get("source_ref").map_err(|e| AppError::Repository(e.to_string()))?,
-            import_id: row.try_get("import_id").map_err(|e| AppError::Repository(e.to_string()))?,
-            relative_path: row.try_get("relative_path").map_err(|e| AppError::Repository(e.to_string()))?,
-            normalized_file_name: row.try_get("normalized_file_name").map_err(|e| AppError::Repository(e.to_string()))?,
-            media_kind: row.try_get("media_kind").map_err(|e| AppError::Repository(e.to_string()))?,
-            title_id: row.try_get("title_id").map_err(|e| AppError::Repository(e.to_string()))?,
-            episode_id: row.try_get("episode_id").map_err(|e| AppError::Repository(e.to_string()))?,
-            season_number: row.try_get("season_number").map_err(|e| AppError::Repository(e.to_string()))?,
-            episode_number: row.try_get("episode_number").map_err(|e| AppError::Repository(e.to_string()))?,
-            result: row.try_get("result").map_err(|e| AppError::Repository(e.to_string()))?,
-            reason_code: row.try_get("reason_code").map_err(|e| AppError::Repository(e.to_string()))?,
-            imported_media_file_id: row.try_get("imported_media_file_id").map_err(|e| AppError::Repository(e.to_string()))?,
+            id: row
+                .try_get("id")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            source_system: row
+                .try_get("source_system")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            source_ref: row
+                .try_get("source_ref")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            import_id: row
+                .try_get("import_id")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            relative_path: row
+                .try_get("relative_path")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            normalized_file_name: row
+                .try_get("normalized_file_name")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            media_kind: row
+                .try_get("media_kind")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            title_id: row
+                .try_get("title_id")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            episode_id: row
+                .try_get("episode_id")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            season_number: row
+                .try_get("season_number")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            episode_number: row
+                .try_get("episode_number")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            result: row
+                .try_get("result")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            reason_code: row
+                .try_get("reason_code")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
+            imported_media_file_id: row
+                .try_get("imported_media_file_id")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
             created_at: {
-                let s: String = row.try_get("created_at").map_err(|e| AppError::Repository(e.to_string()))?;
+                let s: String = row
+                    .try_get("created_at")
+                    .map_err(|e| AppError::Repository(e.to_string()))?;
                 chrono::DateTime::parse_from_rfc3339(&s)
                     .map(|dt| dt.with_timezone(&chrono::Utc))
                     .unwrap_or_else(|_| chrono::Utc::now())

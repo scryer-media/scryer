@@ -36,13 +36,12 @@ impl WeaverDownloadClient {
 
     pub fn from_config(config: &DownloadClientConfig) -> AppResult<Self> {
         let parsed_config = parse_download_client_config_json(&config.config_json)?;
-        let base_url =
-            resolve_download_client_base_url(&parsed_config).ok_or_else(|| {
-                AppError::Validation(format!(
-                    "download client {} has no valid base URL",
-                    config.id
-                ))
-            })?;
+        let base_url = resolve_download_client_base_url(&parsed_config).ok_or_else(|| {
+            AppError::Validation(format!(
+                "download client {} has no valid base URL",
+                config.id
+            ))
+        })?;
         let api_key = read_config_string(&parsed_config, &["api_key", "apiKey", "apikey"]);
         Ok(Self::new(base_url, api_key))
     }
@@ -168,7 +167,7 @@ mod tests {
             id: "dc-weaver".to_string(),
             name: "Weaver".to_string(),
             client_type: "weaver".to_string(),
-            
+
             config_json: config_json.to_string(),
             client_priority: 1,
             is_enabled: true,
@@ -319,10 +318,10 @@ pub(crate) fn weaver_job_to_queue_item(job: &Value) -> Option<DownloadQueueItem>
         import_error_message: None,
         imported_at: None,
         is_scryer_origin: is_scryer,
-            tracked_state: None,
-            tracked_status: None,
-            tracked_status_messages: Vec::new(),
-            tracked_match_type: None,
+        tracked_state: None,
+        tracked_status: None,
+        tracked_status_messages: Vec::new(),
+        tracked_match_type: None,
     })
 }
 

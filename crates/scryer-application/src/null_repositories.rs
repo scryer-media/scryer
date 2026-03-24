@@ -6,9 +6,9 @@ use scryer_domain::{ImportRecord, ImportStatus};
 
 use scryer_domain::RuleSet;
 
+use crate::types::PendingReleaseStatus;
 use crate::{AcquisitionStateRepository, InsertMediaFileInput, SuccessfulGrabCommit};
 use scryer_domain::PluginInstallation;
-use crate::types::PendingReleaseStatus;
 
 use scryer_domain::{BlocklistEntry, TitleHistoryEventType, TitleHistoryRecord};
 

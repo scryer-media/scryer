@@ -966,10 +966,7 @@ async fn import_movie_download(
                             &source_video,
                             "movie",
                             "already_present",
-                            rejection
-                                .skip_reason
-                                .as_ref()
-                                .map(ImportSkipReason::as_str),
+                            rejection.skip_reason.as_ref().map(ImportSkipReason::as_str),
                             None,
                             &[],
                         )
@@ -1051,10 +1048,7 @@ async fn import_movie_download(
                 &source_video,
                 "movie",
                 "already_present",
-                rejection
-                    .skip_reason
-                    .as_ref()
-                    .map(ImportSkipReason::as_str),
+                rejection.skip_reason.as_ref().map(ImportSkipReason::as_str),
                 None,
                 &[],
             )
@@ -1507,10 +1501,7 @@ async fn import_interstitial_movie_download(
                             &source_video,
                             "movie",
                             "already_present",
-                            rejection
-                                .skip_reason
-                                .as_ref()
-                                .map(ImportSkipReason::as_str),
+                            rejection.skip_reason.as_ref().map(ImportSkipReason::as_str),
                             None,
                             &[],
                         )
@@ -1634,10 +1625,7 @@ async fn import_interstitial_movie_download(
                 &source_video,
                 "movie",
                 "already_present",
-                rejection
-                    .skip_reason
-                    .as_ref()
-                    .map(ImportSkipReason::as_str),
+                rejection.skip_reason.as_ref().map(ImportSkipReason::as_str),
                 None,
                 &[],
             )
@@ -2295,10 +2283,7 @@ async fn import_single_episode_file(
                             source_video,
                             "episode",
                             "already_present",
-                            rejection
-                                .skip_reason
-                                .as_ref()
-                                .map(ImportSkipReason::as_str),
+                            rejection.skip_reason.as_ref().map(ImportSkipReason::as_str),
                             None,
                             &target_episodes,
                         )
@@ -2366,10 +2351,7 @@ async fn import_single_episode_file(
                 source_video,
                 "episode",
                 "already_present",
-                rejection
-                    .skip_reason
-                    .as_ref()
-                    .map(ImportSkipReason::as_str),
+                rejection.skip_reason.as_ref().map(ImportSkipReason::as_str),
                 None,
                 &target_episodes,
             )
@@ -2755,18 +2737,30 @@ pub(crate) async fn resolve_target_episodes(
 
     if let Some(air_date) = ep_meta.air_date {
         let air_date_str = air_date.format("%Y-%m-%d").to_string();
-        match app.services.shows.list_collections_for_title(&title.id).await {
+        match app
+            .services
+            .shows
+            .list_collections_for_title(&title.id)
+            .await
+        {
             Ok(collections) => {
                 let mut matches = Vec::new();
                 for collection in collections {
-                    match app.services.shows.list_episodes_for_collection(&collection.id).await {
+                    match app
+                        .services
+                        .shows
+                        .list_episodes_for_collection(&collection.id)
+                        .await
+                    {
                         Ok(collection_episodes) => {
                             matches.extend(collection_episodes.into_iter().filter(|episode| {
                                 episode.title_id == title.id
                                     && episode.air_date.as_deref() == Some(air_date_str.as_str())
                             }));
                         }
-                        Err(err) => tracing::warn!(error = %err, "daily episode lookup failed during import"),
+                        Err(err) => {
+                            tracing::warn!(error = %err, "daily episode lookup failed during import")
+                        }
                     }
                 }
 
@@ -2793,7 +2787,9 @@ pub(crate) async fn resolve_target_episodes(
                     }
                 }
             }
-            Err(err) => tracing::warn!(error = %err, "daily collection lookup failed during import"),
+            Err(err) => {
+                tracing::warn!(error = %err, "daily collection lookup failed during import")
+            }
         }
     }
 
@@ -2827,13 +2823,23 @@ pub(crate) async fn resolve_target_episodes(
         && ep_meta.episode_numbers.is_empty()
         && ep_meta.release_type == crate::ParsedEpisodeReleaseType::SeasonPack
     {
-        match app.services.shows.list_collections_for_title(&title.id).await {
+        match app
+            .services
+            .shows
+            .list_collections_for_title(&title.id)
+            .await
+        {
             Ok(collections) => {
                 for collection in collections
                     .into_iter()
                     .filter(|collection| collection.collection_index == target_season)
                 {
-                    match app.services.shows.list_episodes_for_collection(&collection.id).await {
+                    match app
+                        .services
+                        .shows
+                        .list_episodes_for_collection(&collection.id)
+                        .await
+                    {
                         Ok(collection_episodes) => {
                             let mut collection_episodes: Vec<_> = collection_episodes
                                 .into_iter()
@@ -2856,11 +2862,15 @@ pub(crate) async fn resolve_target_episodes(
                                 }
                             }
                         }
-                        Err(err) => tracing::warn!(error = %err, "season episode lookup failed during import"),
+                        Err(err) => {
+                            tracing::warn!(error = %err, "season episode lookup failed during import")
+                        }
                     }
                 }
             }
-            Err(err) => tracing::warn!(error = %err, "season collection lookup failed during import"),
+            Err(err) => {
+                tracing::warn!(error = %err, "season collection lookup failed during import")
+            }
         }
     }
 
@@ -2885,7 +2895,9 @@ pub(crate) async fn resolve_target_episodes(
                         "no matching special episode found during import"
                     );
                 }
-                Err(err) => tracing::warn!(error = %err, "special episode lookup failed during import"),
+                Err(err) => {
+                    tracing::warn!(error = %err, "special episode lookup failed during import")
+                }
             }
         }
     }
@@ -3035,7 +3047,10 @@ async fn persist_file_import_artifact(
             .map(|episode| {
                 (
                     Some(episode.id.clone()),
-                    episode.season_number.as_deref().and_then(|value| value.parse().ok()),
+                    episode
+                        .season_number
+                        .as_deref()
+                        .and_then(|value| value.parse().ok()),
                     episode
                         .episode_number
                         .as_deref()
@@ -3063,7 +3078,12 @@ async fn persist_file_import_artifact(
             imported_media_file_id: imported_media_file_id.map(str::to_string),
             created_at: Utc::now(),
         };
-        if let Err(error) = app.services.import_artifacts.insert_artifact(artifact).await {
+        if let Err(error) = app
+            .services
+            .import_artifacts
+            .insert_artifact(artifact)
+            .await
+        {
             tracing::warn!(
                 error = %error,
                 import_id,

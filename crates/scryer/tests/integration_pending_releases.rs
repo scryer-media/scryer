@@ -143,9 +143,33 @@ async fn list_pending_releases_returns_only_waiting() {
 
     seed_title(&ctx, "title-1").await;
     let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Wanted).await;
-    seed_pending_release(&ctx, &wi.id, "title-1", 500, 6, PendingReleaseStatus::Waiting).await;
-    seed_pending_release(&ctx, &wi.id, "title-1", 300, 6, PendingReleaseStatus::Grabbed).await;
-    seed_pending_release(&ctx, &wi.id, "title-1", 200, 6, PendingReleaseStatus::Dismissed).await;
+    seed_pending_release(
+        &ctx,
+        &wi.id,
+        "title-1",
+        500,
+        6,
+        PendingReleaseStatus::Waiting,
+    )
+    .await;
+    seed_pending_release(
+        &ctx,
+        &wi.id,
+        "title-1",
+        300,
+        6,
+        PendingReleaseStatus::Grabbed,
+    )
+    .await;
+    seed_pending_release(
+        &ctx,
+        &wi.id,
+        "title-1",
+        200,
+        6,
+        PendingReleaseStatus::Dismissed,
+    )
+    .await;
 
     let pending = app.list_pending_releases().await.expect("list");
     assert_eq!(pending.len(), 1);
@@ -158,8 +182,24 @@ async fn standby_listing_returns_only_standby_rows() {
 
     seed_title(&ctx, "title-1").await;
     let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Wanted).await;
-    let standby = seed_pending_release(&ctx, &wi.id, "title-1", 500, 0, PendingReleaseStatus::Standby).await;
-    seed_pending_release(&ctx, &wi.id, "title-1", 300, 6, PendingReleaseStatus::Waiting).await;
+    let standby = seed_pending_release(
+        &ctx,
+        &wi.id,
+        "title-1",
+        500,
+        0,
+        PendingReleaseStatus::Standby,
+    )
+    .await;
+    seed_pending_release(
+        &ctx,
+        &wi.id,
+        "title-1",
+        300,
+        6,
+        PendingReleaseStatus::Waiting,
+    )
+    .await;
 
     let pending = ctx
         .db
@@ -176,17 +216,44 @@ async fn delete_standby_for_wanted_item_leaves_waiting_rows_intact() {
 
     seed_title(&ctx, "title-1").await;
     let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Wanted).await;
-    let standby = seed_pending_release(&ctx, &wi.id, "title-1", 500, 0, PendingReleaseStatus::Standby).await;
-    let waiting = seed_pending_release(&ctx, &wi.id, "title-1", 300, 6, PendingReleaseStatus::Waiting).await;
+    let standby = seed_pending_release(
+        &ctx,
+        &wi.id,
+        "title-1",
+        500,
+        0,
+        PendingReleaseStatus::Standby,
+    )
+    .await;
+    let waiting = seed_pending_release(
+        &ctx,
+        &wi.id,
+        "title-1",
+        300,
+        6,
+        PendingReleaseStatus::Waiting,
+    )
+    .await;
 
     ctx.db
         .delete_standby_pending_releases_for_wanted_item(&wi.id)
         .await
         .expect("delete standby");
 
-    assert!(ctx.db.get_pending_release(&standby.id).await.unwrap().is_none());
+    assert!(
+        ctx.db
+            .get_pending_release(&standby.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
-        ctx.db.get_pending_release(&waiting.id).await.unwrap().unwrap().status,
+        ctx.db
+            .get_pending_release(&waiting.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
         PendingReleaseStatus::Waiting
     );
 }
@@ -197,7 +264,15 @@ async fn compare_and_set_pending_release_status_claims_once() {
 
     seed_title(&ctx, "title-1").await;
     let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Wanted).await;
-    let standby = seed_pending_release(&ctx, &wi.id, "title-1", 500, 0, PendingReleaseStatus::Standby).await;
+    let standby = seed_pending_release(
+        &ctx,
+        &wi.id,
+        "title-1",
+        500,
+        0,
+        PendingReleaseStatus::Standby,
+    )
+    .await;
 
     let first = ctx
         .db
@@ -223,7 +298,12 @@ async fn compare_and_set_pending_release_status_claims_once() {
     assert!(first);
     assert!(!second);
     assert_eq!(
-        ctx.db.get_pending_release(&standby.id).await.unwrap().unwrap().status,
+        ctx.db
+            .get_pending_release(&standby.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
         PendingReleaseStatus::Processing
     );
 }
@@ -234,12 +314,24 @@ async fn commit_successful_grab_supersedes_all_pending_siblings_for_normal_grab(
 
     seed_title(&ctx, "title-1").await;
     let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Wanted).await;
-    let waiting =
-        seed_pending_release(&ctx, &wi.id, "title-1", 500, 6, PendingReleaseStatus::Waiting)
-            .await;
-    let standby =
-        seed_pending_release(&ctx, &wi.id, "title-1", 400, 0, PendingReleaseStatus::Standby)
-            .await;
+    let waiting = seed_pending_release(
+        &ctx,
+        &wi.id,
+        "title-1",
+        500,
+        6,
+        PendingReleaseStatus::Waiting,
+    )
+    .await;
+    let standby = seed_pending_release(
+        &ctx,
+        &wi.id,
+        "title-1",
+        400,
+        0,
+        PendingReleaseStatus::Standby,
+    )
+    .await;
     let grabbed_at = Utc::now().to_rfc3339();
     let grabbed_release = serde_json::json!({
         "title": "Best.Release.1080p.WEB-DL",
@@ -279,7 +371,10 @@ async fn commit_successful_grab_supersedes_all_pending_siblings_for_normal_grab(
     assert_eq!(wanted.search_count, 1);
     assert_eq!(wanted.next_search_at, None);
     assert_eq!(wanted.last_search_at.as_deref(), Some(grabbed_at.as_str()));
-    assert_eq!(wanted.grabbed_release.as_deref(), Some(grabbed_release.as_str()));
+    assert_eq!(
+        wanted.grabbed_release.as_deref(),
+        Some(grabbed_release.as_str())
+    );
 
     let submission = ctx
         .db
@@ -288,7 +383,10 @@ async fn commit_successful_grab_supersedes_all_pending_siblings_for_normal_grab(
         .expect("find submission")
         .expect("submission exists");
     assert_eq!(submission.title_id, wi.title_id);
-    assert_eq!(submission.source_title.as_deref(), Some("Best.Release.1080p.WEB-DL"));
+    assert_eq!(
+        submission.source_title.as_deref(),
+        Some("Best.Release.1080p.WEB-DL")
+    );
 
     assert_eq!(
         ctx.db
@@ -316,12 +414,24 @@ async fn commit_successful_grab_marks_selected_pending_release_grabbed() {
 
     seed_title(&ctx, "title-1").await;
     let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Wanted).await;
-    let claimed =
-        seed_pending_release(&ctx, &wi.id, "title-1", 500, 6, PendingReleaseStatus::Waiting)
-            .await;
-    let sibling =
-        seed_pending_release(&ctx, &wi.id, "title-1", 400, 0, PendingReleaseStatus::Standby)
-            .await;
+    let claimed = seed_pending_release(
+        &ctx,
+        &wi.id,
+        "title-1",
+        500,
+        6,
+        PendingReleaseStatus::Waiting,
+    )
+    .await;
+    let sibling = seed_pending_release(
+        &ctx,
+        &wi.id,
+        "title-1",
+        400,
+        0,
+        PendingReleaseStatus::Standby,
+    )
+    .await;
     let grabbed_at = Utc::now().to_rfc3339();
 
     ctx.db
@@ -358,7 +468,10 @@ async fn commit_successful_grab_marks_selected_pending_release_grabbed() {
         .unwrap()
         .unwrap();
     assert_eq!(claimed_release.status, PendingReleaseStatus::Grabbed);
-    assert_eq!(claimed_release.grabbed_at.as_deref(), Some(grabbed_at.as_str()));
+    assert_eq!(
+        claimed_release.grabbed_at.as_deref(),
+        Some(grabbed_at.as_str())
+    );
 
     let sibling_release = ctx
         .db
@@ -512,7 +625,10 @@ async fn ensure_wanted_item_seeded_preserves_existing_schedule_after_search_acti
         .expect("fetch wanted")
         .expect("wanted item exists");
     assert_eq!(fetched.status, WantedStatus::Wanted);
-    assert_eq!(fetched.next_search_at.as_deref(), Some(preserved_next_search_at.as_str()));
+    assert_eq!(
+        fetched.next_search_at.as_deref(),
+        Some(preserved_next_search_at.as_str())
+    );
     assert_eq!(fetched.search_phase, "secondary");
     assert_eq!(fetched.baseline_date.as_deref(), Some("2024-01-03"));
 }
@@ -687,7 +803,10 @@ async fn direct_upsert_wanted_item_preserves_existing_schedule_after_search_acti
         .expect("fetch wanted")
         .expect("wanted item exists");
     assert_eq!(fetched.status, WantedStatus::Wanted);
-    assert_eq!(fetched.next_search_at.as_deref(), Some(preserved_next_search_at.as_str()));
+    assert_eq!(
+        fetched.next_search_at.as_deref(),
+        Some(preserved_next_search_at.as_str())
+    );
     assert_eq!(fetched.search_phase, "secondary");
     assert_eq!(fetched.baseline_date.as_deref(), Some("2024-04-02"));
 }
@@ -703,7 +822,15 @@ async fn dismiss_sets_status_to_dismissed() {
 
     seed_title(&ctx, "title-1").await;
     let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Wanted).await;
-    let pr = seed_pending_release(&ctx, &wi.id, "title-1", 500, 6, PendingReleaseStatus::Waiting).await;
+    let pr = seed_pending_release(
+        &ctx,
+        &wi.id,
+        "title-1",
+        500,
+        6,
+        PendingReleaseStatus::Waiting,
+    )
+    .await;
 
     let result = app.dismiss_pending_release(&pr.id).await.expect("dismiss");
     assert!(result);
@@ -736,7 +863,15 @@ async fn dismiss_non_waiting_returns_error() {
 
     seed_title(&ctx, "title-1").await;
     let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Wanted).await;
-    let pr = seed_pending_release(&ctx, &wi.id, "title-1", 500, 6, PendingReleaseStatus::Grabbed).await;
+    let pr = seed_pending_release(
+        &ctx,
+        &wi.id,
+        "title-1",
+        500,
+        6,
+        PendingReleaseStatus::Grabbed,
+    )
+    .await;
 
     let err = app.dismiss_pending_release(&pr.id).await.unwrap_err();
     assert!(matches!(err, AppError::Repository(_)));
@@ -765,7 +900,15 @@ async fn force_grab_non_waiting_returns_error() {
 
     seed_title(&ctx, "title-1").await;
     let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Wanted).await;
-    let pr = seed_pending_release(&ctx, &wi.id, "title-1", 500, 6, PendingReleaseStatus::Dismissed).await;
+    let pr = seed_pending_release(
+        &ctx,
+        &wi.id,
+        "title-1",
+        500,
+        6,
+        PendingReleaseStatus::Dismissed,
+    )
+    .await;
 
     let err = app.force_grab_pending_release(&pr.id).await.unwrap_err();
     assert!(matches!(err, AppError::Repository(_)));
@@ -783,7 +926,15 @@ async fn process_expired_skips_when_none_expired() {
     seed_title(&ctx, "title-1").await;
     let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Wanted).await;
     // delay_until is 6 hours from now — not expired
-    seed_pending_release(&ctx, &wi.id, "title-1", 500, 6, PendingReleaseStatus::Waiting).await;
+    seed_pending_release(
+        &ctx,
+        &wi.id,
+        "title-1",
+        500,
+        6,
+        PendingReleaseStatus::Waiting,
+    )
+    .await;
 
     let count = app
         .process_expired_pending_releases()
@@ -800,7 +951,15 @@ async fn process_expired_marks_expired_when_wanted_item_gone() {
     // Create pending release referencing a wanted item, then delete the wanted item
     seed_title(&ctx, "title-1").await;
     let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Wanted).await;
-    let pr = seed_pending_release(&ctx, &wi.id, "title-1", 500, -1, PendingReleaseStatus::Waiting).await;
+    let pr = seed_pending_release(
+        &ctx,
+        &wi.id,
+        "title-1",
+        500,
+        -1,
+        PendingReleaseStatus::Waiting,
+    )
+    .await;
     // Delete the wanted item
     ctx.db
         .delete_wanted_items_for_title("title-1")
@@ -825,7 +984,15 @@ async fn process_expired_supersedes_when_already_grabbed() {
 
     seed_title(&ctx, "title-1").await;
     let wi = seed_wanted_item(&ctx, "title-1", scryer_application::WantedStatus::Grabbed).await;
-    let pr = seed_pending_release(&ctx, &wi.id, "title-1", 500, -1, PendingReleaseStatus::Waiting).await;
+    let pr = seed_pending_release(
+        &ctx,
+        &wi.id,
+        "title-1",
+        500,
+        -1,
+        PendingReleaseStatus::Waiting,
+    )
+    .await;
 
     let count = app
         .process_expired_pending_releases()
