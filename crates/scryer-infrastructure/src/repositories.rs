@@ -1447,6 +1447,10 @@ impl scryer_application::SubtitleDownloadRepository for SqliteServices {
         crate::queries::subtitle::insert_subtitle_download(&self.pool, download).await
     }
 
+    async fn set_synced(&self, id: &str, synced: bool) -> AppResult<()> {
+        crate::queries::subtitle::update_subtitle_download_synced(&self.pool, id, synced).await
+    }
+
     async fn delete(&self, id: &str) -> AppResult<Option<scryer_domain::SubtitleDownload>> {
         crate::queries::subtitle::delete_subtitle_download(&self.pool, id).await
     }

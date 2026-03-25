@@ -14,7 +14,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
-import type { DelayProfileDraft, ParsedDelayProfile } from "@/lib/types/delay-profiles";
+import type {
+  DelayProfileDraft,
+  DelayProfileFacet,
+  ParsedDelayProfile,
+} from "@/lib/types/delay-profiles";
 import { FACET_OPTIONS } from "@/lib/utils/delay-profiles";
 
 type SettingsDelayProfilesSectionProps = {
@@ -32,7 +36,7 @@ type SettingsDelayProfilesSectionProps = {
 
 const FACET_LABELS: Record<string, string> = {
   movie: "Movies",
-  tv: "TV Series",
+  series: "TV Series",
   anime: "Anime",
 };
 
@@ -61,7 +65,7 @@ export function SettingsDelayProfilesSection({
     return nextValue === "" ? 0 : Number(nextValue);
   }
 
-  function toggleFacet(facet: string) {
+  function toggleFacet(facet: DelayProfileFacet) {
     setDraft((prev) => {
       const has = prev.applies_to_facets.includes(facet);
       return {

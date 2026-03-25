@@ -908,65 +908,46 @@ impl AppUseCase {
             }
         }
 
-        // Check delay profile — hold release instead of grabbing immediately.
-        // Two independent checks:
-        //   1. Min age (hard gate, usenet only, no bypass)
-        //   2. Protocol delay (can be bypassed by score on preferred protocol)
-        if let Some(dp) =
-            crate::delay_profile::resolve_delay_profile(delay_profiles, &title.tags, &title.facet)
+        if let Some(delay_decision) = crate::delay_profile::resolve_delay_decision(
+            delay_profiles,
+            &title.tags,
+            &title.facet,
+            best.source_kind,
+            best.published_at
+                .as_deref()
+                .and_then(crate::quality_profile::parse_published_at),
+            candidate_score,
+            now,
+        ) && delay_decision.should_hold()
         {
-            // 1. Usenet minimum age — hard gate, no bypass.
-            let min_age_hold = if dp.min_age_minutes > 0
-                && crate::delay_profile::is_usenet_source(best.source_kind)
-            {
-                best.published_at
-                    .as_deref()
-                    .and_then(crate::quality_profile::parse_published_at)
-                    .map(|published| (dp.min_age_minutes - (*now - published).num_minutes()).max(0))
-                    .unwrap_or(0)
-            } else {
-                0
-            };
-
-            // 2. Protocol-specific delay — can be bypassed by score on preferred protocol.
-            let protocol_hold = if !dp.should_bypass_delay(best.source_kind, candidate_score) {
-                dp.get_protocol_delay(best.source_kind).max(0)
-            } else {
-                0
-            };
-
-            let effective_delay_minutes = min_age_hold.max(protocol_hold);
-
-            if effective_delay_minutes > 0 {
-                let scoring_json = best.quality_profile_decision.as_ref().map(|d| {
-                    serde_json::to_string(
-                        &d.scoring_log
-                            .iter()
-                            .map(|e| serde_json::json!({"code": e.code, "delta": e.delta}))
-                            .collect::<Vec<_>>(),
-                    )
-                    .unwrap_or_default()
-                });
-                self.insert_pending_release(
-                    wanted,
-                    title,
-                    &best.title,
-                    best.download_url.as_deref().or(best.link.as_deref()),
-                    best.source_kind,
-                    best.size_bytes,
-                    candidate_score,
-                    scoring_json,
-                    Some(best.source.as_str()),
-                    best.guid.as_deref(),
-                    effective_delay_minutes,
-                    best.password_hint.as_deref(),
-                    best.published_at.as_deref(),
-                    best.extra.get("info_hash").and_then(|v| v.as_str()),
+            let scoring_json = best.quality_profile_decision.as_ref().map(|d| {
+                serde_json::to_string(
+                    &d.scoring_log
+                        .iter()
+                        .map(|e| serde_json::json!({"code": e.code, "delta": e.delta}))
+                        .collect::<Vec<_>>(),
                 )
-                .await;
-                report.releases_held += 1;
-                return;
-            }
+                .unwrap_or_default()
+            });
+            self.insert_pending_release(
+                wanted,
+                title,
+                &best.title,
+                best.download_url.as_deref().or(best.link.as_deref()),
+                best.source_kind,
+                best.size_bytes,
+                candidate_score,
+                scoring_json,
+                Some(best.source.as_str()),
+                best.guid.as_deref(),
+                delay_decision.effective_delay_minutes,
+                best.password_hint.as_deref(),
+                best.published_at.as_deref(),
+                best.extra.get("info_hash").and_then(|v| v.as_str()),
+            )
+            .await;
+            report.releases_held += 1;
+            return;
         }
 
         // Submit to download client

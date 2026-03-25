@@ -1080,6 +1080,34 @@ async fn check_version_upgrade(db: &SqliteServices) {
     }
 }
 
+pub(crate) fn normalize_env_option_with_legacy<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+) -> Option<String> {
+    for name in names {
+        if let Some(value) = normalize_env_option(name) {
+            return Some(value);
+        }
+    }
+
+    None
+}
+
+/// Check if the primary download client is weaver and return its WebSocket URL and API key.
+async fn resolve_weaver_ws_url(app: &AppUseCase) -> Option<(String, Option<String>)> {
+    let configs = app.services.download_client_configs.list(None).await.ok()?;
+    let primary = configs
+        .into_iter()
+        .filter(|c| c.is_enabled)
+        .min_by_key(|c| c.client_priority)?;
+
+    if primary.client_type != "weaver" {
+        return None;
+    }
+
+    let client = WeaverDownloadClient::from_config(&primary).ok()?;
+    Some((client.ws_url(), client.api_key().map(str::to_string)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AuthModeConfig, resolve_auth_mode, title_image_handler};
@@ -1303,32 +1331,4 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
     }
-}
-
-pub(crate) fn normalize_env_option_with_legacy<'a>(
-    names: impl IntoIterator<Item = &'a str>,
-) -> Option<String> {
-    for name in names {
-        if let Some(value) = normalize_env_option(name) {
-            return Some(value);
-        }
-    }
-
-    None
-}
-
-/// Check if the primary download client is weaver and return its WebSocket URL and API key.
-async fn resolve_weaver_ws_url(app: &AppUseCase) -> Option<(String, Option<String>)> {
-    let configs = app.services.download_client_configs.list(None).await.ok()?;
-    let primary = configs
-        .into_iter()
-        .filter(|c| c.is_enabled)
-        .min_by_key(|c| c.client_priority)?;
-
-    if primary.client_type != "weaver" {
-        return None;
-    }
-
-    let client = WeaverDownloadClient::from_config(&primary).ok()?;
-    Some((client.ws_url(), client.api_key().map(str::to_string)))
 }

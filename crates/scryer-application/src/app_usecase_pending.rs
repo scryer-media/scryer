@@ -23,12 +23,22 @@ impl AppUseCase {
             .flatten();
 
         match json {
-            Some(raw) => {
-                crate::delay_profile::parse_delay_profile_catalog(&raw).unwrap_or_else(|e| {
-                    warn!(error = %e, "failed to parse delay profile catalog");
+            Some(raw) => match crate::delay_profile::parse_delay_profile_catalog(&raw) {
+                Ok(profiles) => {
+                    if let Err(error) =
+                        crate::delay_profile::validate_delay_profile_catalog(&profiles)
+                    {
+                        warn!(error = %error, "failed to validate delay profile catalog");
+                        vec![]
+                    } else {
+                        profiles
+                    }
+                }
+                Err(error) => {
+                    warn!(error = %error, "failed to parse delay profile catalog");
                     vec![]
-                })
-            }
+                }
+            },
             None => vec![],
         }
     }

@@ -154,71 +154,6 @@ impl WeaverDownloadClient {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use chrono::Utc;
-    use serde_json::json;
-
-    use super::{WeaverDownloadClient, weaver_job_to_queue_item};
-    use scryer_domain::{DownloadClientConfig, DownloadQueueState};
-
-    fn test_config(config_json: &str, base_url: Option<&str>) -> DownloadClientConfig {
-        DownloadClientConfig {
-            id: "dc-weaver".to_string(),
-            name: "Weaver".to_string(),
-            client_type: "weaver".to_string(),
-
-            config_json: config_json.to_string(),
-            client_priority: 1,
-            is_enabled: true,
-            status: scryer_domain::DownloadClientStatus::Healthy,
-            last_error: None,
-            last_seen_at: None,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        }
-    }
-
-    #[test]
-    fn from_config_reads_api_key_and_base_url() {
-        let config = test_config(
-            r#"{"api_key":"wvr_test","host":"weaver.local","port":"9090"}"#,
-            None,
-        );
-
-        let client =
-            WeaverDownloadClient::from_config(&config).expect("weaver config should parse");
-
-        assert_eq!(client.graphql_url(), "http://weaver.local:9090/graphql");
-        assert_eq!(client.api_key(), Some("wvr_test"));
-        assert_eq!(client.ws_url(), "ws://weaver.local:9090/graphql/ws");
-    }
-
-    #[test]
-    fn weaver_job_to_queue_item_marks_failed_job_attention() {
-        let job = json!({
-            "id": 42,
-            "name": "Example Job",
-            "status": "FAILED",
-            "error": "archive corrupt",
-            "progress": 0.25,
-            "totalBytes": 4000,
-            "createdAt": 1_700_000_000_000_f64,
-            "metadata": [
-                { "key": "*scryer_title_id", "value": "title-1" },
-                { "key": "*scryer_facet", "value": "anime" }
-            ]
-        });
-
-        let item = weaver_job_to_queue_item(&job).expect("job should map");
-
-        assert_eq!(item.state, DownloadQueueState::Failed);
-        assert_eq!(item.title_id.as_deref(), Some("title-1"));
-        assert!(item.is_scryer_origin);
-        assert_eq!(item.attention_reason.as_deref(), Some("archive corrupt"));
-    }
-}
-
 /// Extract scryer metadata from weaver job metadata entries.
 fn extract_scryer_metadata(job: &Value) -> (Option<String>, Option<String>, bool) {
     let metadata = match job.get("metadata").and_then(Value::as_array) {
@@ -577,5 +512,67 @@ impl DownloadClient for WeaverDownloadClient {
         };
         self.graphql_request(query, json!({ "id": job_id })).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use serde_json::json;
+
+    use super::{WeaverDownloadClient, weaver_job_to_queue_item};
+    use scryer_domain::{DownloadClientConfig, DownloadQueueState};
+
+    fn test_config(config_json: &str) -> DownloadClientConfig {
+        DownloadClientConfig {
+            id: "dc-weaver".to_string(),
+            name: "Weaver".to_string(),
+            client_type: "weaver".to_string(),
+
+            config_json: config_json.to_string(),
+            client_priority: 1,
+            is_enabled: true,
+            status: scryer_domain::DownloadClientStatus::Healthy,
+            last_error: None,
+            last_seen_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn from_config_reads_api_key_and_base_url() {
+        let config = test_config(r#"{"api_key":"wvr_test","host":"weaver.local","port":"9090"}"#);
+
+        let client =
+            WeaverDownloadClient::from_config(&config).expect("weaver config should parse");
+
+        assert_eq!(client.graphql_url(), "http://weaver.local:9090/graphql");
+        assert_eq!(client.api_key(), Some("wvr_test"));
+        assert_eq!(client.ws_url(), "ws://weaver.local:9090/graphql/ws");
+    }
+
+    #[test]
+    fn weaver_job_to_queue_item_marks_failed_job_attention() {
+        let job = json!({
+            "id": 42,
+            "name": "Example Job",
+            "status": "FAILED",
+            "error": "archive corrupt",
+            "progress": 0.25,
+            "totalBytes": 4000,
+            "createdAt": 1_700_000_000_000_f64,
+            "metadata": [
+                { "key": "*scryer_title_id", "value": "title-1" },
+                { "key": "*scryer_facet", "value": "anime" }
+            ]
+        });
+
+        let item = weaver_job_to_queue_item(&job).expect("job should map");
+
+        assert_eq!(item.state, DownloadQueueState::Failed);
+        assert_eq!(item.title_id.as_deref(), Some("title-1"));
+        assert!(item.is_scryer_origin);
+        assert_eq!(item.attention_reason.as_deref(), Some("archive corrupt"));
     }
 }

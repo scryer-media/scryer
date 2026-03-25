@@ -508,7 +508,7 @@ mod tests {
         assert_eq!(parsed.query, "Dune");
         assert_eq!(parsed.ids.get("imdb_id"), Some(&"tt15239678".to_string()));
         assert_eq!(parsed.facet, Some("movie".to_string()));
-        assert!(parsed.ids.get("tvdb_id").is_none());
+        assert!(!parsed.ids.contains_key("tvdb_id"));
         assert_eq!(parsed.tagged_aliases.len(), 1);
     }
 

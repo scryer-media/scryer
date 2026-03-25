@@ -1,8 +1,31 @@
 use crate::DownloadSourceKind;
+use chrono::{DateTime, Utc};
 use scryer_domain::MediaFacet;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 pub const DELAY_PROFILE_CATALOG_KEY: &str = "acquisition.delay_profiles";
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PreferredProtocol {
+    #[default]
+    Usenet,
+    Torrent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DelayDecision {
+    pub min_age_hold_minutes: i64,
+    pub protocol_hold_minutes: i64,
+    pub effective_delay_minutes: i64,
+}
+
+impl DelayDecision {
+    pub fn should_hold(&self) -> bool {
+        self.effective_delay_minutes > 0
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DelayProfile {
@@ -19,7 +42,7 @@ pub struct DelayProfile {
     /// Preferred download protocol. Score-based bypass only applies
     /// when the release matches the preferred protocol.
     #[serde(default = "default_preferred_protocol")]
-    pub preferred_protocol: String,
+    pub preferred_protocol: PreferredProtocol,
     /// Usenet-only minimum age in minutes. Releases younger than this
     /// are held as pending regardless of score. 0 = disabled.
     #[serde(default)]
@@ -41,12 +64,66 @@ fn default_true() -> bool {
     true
 }
 
-fn default_preferred_protocol() -> String {
-    "usenet".to_string()
+fn default_preferred_protocol() -> PreferredProtocol {
+    PreferredProtocol::Usenet
 }
 
 pub fn parse_delay_profile_catalog(raw_json: &str) -> Result<Vec<DelayProfile>, serde_json::Error> {
     serde_json::from_str::<Vec<DelayProfile>>(raw_json)
+}
+
+pub fn validate_delay_profile_catalog(profiles: &[DelayProfile]) -> Result<(), String> {
+    let mut ids = HashSet::new();
+
+    for profile in profiles {
+        if profile.id.trim().is_empty() {
+            return Err("delay profile id is required".to_string());
+        }
+        if !ids.insert(profile.id.to_ascii_lowercase()) {
+            return Err(format!("duplicate delay profile id '{}'", profile.id));
+        }
+        if profile.name.trim().is_empty() {
+            return Err(format!("delay profile '{}' must have a name", profile.id));
+        }
+        if profile.usenet_delay_minutes < 0 {
+            return Err(format!(
+                "delay profile '{}' has a negative usenet delay",
+                profile.id
+            ));
+        }
+        if profile.torrent_delay_minutes < 0 {
+            return Err(format!(
+                "delay profile '{}' has a negative torrent delay",
+                profile.id
+            ));
+        }
+        if profile.min_age_minutes < 0 {
+            return Err(format!(
+                "delay profile '{}' has a negative minimum usenet age",
+                profile.id
+            ));
+        }
+        if let Some(threshold) = profile.bypass_score_threshold
+            && threshold < 0
+        {
+            return Err(format!(
+                "delay profile '{}' has a negative bypass score threshold",
+                profile.id
+            ));
+        }
+        if let Some(invalid_facet) = profile
+            .applies_to_facets
+            .iter()
+            .find(|facet| MediaFacet::parse(facet).is_none())
+        {
+            return Err(format!(
+                "delay profile '{}' has an invalid facet '{}'",
+                profile.id, invalid_facet
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 /// Resolve the delay profile that applies to a title, based on tags and facet.
@@ -62,8 +139,6 @@ pub fn resolve_delay_profile<'a>(
     title_tags: &[String],
     facet: &MediaFacet,
 ) -> Option<&'a DelayProfile> {
-    let facet_str = facet.as_str();
-
     let mut sorted: Vec<&DelayProfile> = profiles.iter().filter(|p| p.enabled).collect();
     sorted.sort_by_key(|p| p.priority);
 
@@ -73,7 +148,8 @@ pub fn resolve_delay_profile<'a>(
             && !profile
                 .applies_to_facets
                 .iter()
-                .any(|f| f.eq_ignore_ascii_case(facet_str))
+                .filter_map(|value| MediaFacet::parse(value))
+                .any(|profile_facet| profile_facet == *facet)
         {
             continue;
         }
@@ -94,6 +170,20 @@ pub fn resolve_delay_profile<'a>(
     None
 }
 
+pub fn resolve_delay_decision(
+    profiles: &[DelayProfile],
+    title_tags: &[String],
+    facet: &MediaFacet,
+    source_kind: Option<DownloadSourceKind>,
+    published_at: Option<DateTime<Utc>>,
+    candidate_score: i32,
+    now: &DateTime<Utc>,
+) -> Option<DelayDecision> {
+    resolve_delay_profile(profiles, title_tags, facet).map(|profile| {
+        profile.evaluate_delay_decision(source_kind, published_at, candidate_score, now)
+    })
+}
+
 impl DelayProfile {
     /// Get the delay in minutes for the given source kind's protocol.
     pub fn get_protocol_delay(&self, source_kind: Option<DownloadSourceKind>) -> i64 {
@@ -107,8 +197,8 @@ impl DelayProfile {
     /// Whether the release is on the preferred protocol.
     pub fn is_preferred_protocol(&self, source_kind: Option<DownloadSourceKind>) -> bool {
         let usenet = is_usenet_source(source_kind);
-        (usenet && self.preferred_protocol == "usenet")
-            || (!usenet && self.preferred_protocol == "torrent")
+        (usenet && self.preferred_protocol == PreferredProtocol::Usenet)
+            || (!usenet && self.preferred_protocol == PreferredProtocol::Torrent)
     }
 
     /// Determine whether a release should bypass the protocol delay and be
@@ -131,6 +221,34 @@ impl DelayProfile {
             return true;
         }
         false
+    }
+
+    pub fn evaluate_delay_decision(
+        &self,
+        source_kind: Option<DownloadSourceKind>,
+        published_at: Option<DateTime<Utc>>,
+        candidate_score: i32,
+        now: &DateTime<Utc>,
+    ) -> DelayDecision {
+        let min_age_hold_minutes = if self.min_age_minutes > 0 && is_usenet_source(source_kind) {
+            published_at
+                .map(|published| (self.min_age_minutes - (*now - published).num_minutes()).max(0))
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        let protocol_hold_minutes = if self.should_bypass_delay(source_kind, candidate_score) {
+            0
+        } else {
+            self.get_protocol_delay(source_kind).max(0)
+        };
+
+        DelayDecision {
+            min_age_hold_minutes,
+            protocol_hold_minutes,
+            effective_delay_minutes: min_age_hold_minutes.max(protocol_hold_minutes),
+        }
     }
 }
 
@@ -156,7 +274,7 @@ mod tests {
             name: id.to_string(),
             usenet_delay_minutes: usenet_delay,
             torrent_delay_minutes: torrent_delay,
-            preferred_protocol: "usenet".to_string(),
+            preferred_protocol: PreferredProtocol::Usenet,
             min_age_minutes: 0,
             bypass_score_threshold: None,
             applies_to_facets: vec![],
@@ -255,7 +373,7 @@ mod tests {
     fn bypass_score_threshold_preferred_protocol() {
         let mut profile = make_profile("delayed", 10, 360, 360);
         profile.bypass_score_threshold = Some(2000);
-        profile.preferred_protocol = "usenet".to_string();
+        profile.preferred_protocol = PreferredProtocol::Usenet;
 
         // Usenet is preferred → bypass at threshold
         assert!(!profile.should_bypass_delay(Some(DownloadSourceKind::NzbFile), 1500));
@@ -296,5 +414,51 @@ mod tests {
         assert_eq!(parsed[0].id, "test");
         assert_eq!(parsed[0].usenet_delay_minutes, 60);
         assert_eq!(parsed[0].torrent_delay_minutes, 360);
+    }
+
+    #[test]
+    fn resolve_profile_accepts_legacy_tv_facet_value() {
+        let mut profile = make_profile("series", 10, 60, 360);
+        profile.applies_to_facets = vec!["tv".to_string()];
+        let profiles = vec![profile];
+
+        let result = resolve_delay_profile(&profiles, &[], &MediaFacet::Series);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn delay_decision_combines_min_age_and_protocol_hold() {
+        let mut profile = make_profile("test", 10, 60, 360);
+        profile.min_age_minutes = 120;
+
+        let published_at = Utc::now() - chrono::Duration::minutes(30);
+        let decision = profile.evaluate_delay_decision(
+            Some(DownloadSourceKind::NzbFile),
+            Some(published_at),
+            100,
+            &Utc::now(),
+        );
+
+        assert_eq!(decision.min_age_hold_minutes, 90);
+        assert_eq!(decision.protocol_hold_minutes, 60);
+        assert_eq!(decision.effective_delay_minutes, 90);
+        assert!(decision.should_hold());
+    }
+
+    #[test]
+    fn validation_rejects_duplicate_ids() {
+        let profiles = vec![
+            make_profile("dup", 10, 60, 60),
+            make_profile("dup", 20, 120, 120),
+        ];
+        assert!(validate_delay_profile_catalog(&profiles).is_err());
+    }
+
+    #[test]
+    fn validation_rejects_invalid_facet() {
+        let mut profile = make_profile("bad", 10, 60, 60);
+        profile.applies_to_facets = vec!["documentary".to_string()];
+        let profiles = vec![profile];
+        assert!(validate_delay_profile_catalog(&profiles).is_err());
     }
 }

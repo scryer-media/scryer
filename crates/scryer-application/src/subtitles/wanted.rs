@@ -1,5 +1,7 @@
 use scryer_domain::SubtitleDownload;
 
+use super::language::same_subtitle_language;
+
 /// Represents a subtitle that is wanted but not yet downloaded.
 #[derive(Debug, Clone)]
 pub struct WantedSubtitle {
@@ -51,20 +53,90 @@ pub fn compute_missing_subtitles(
         .filter(|want| {
             let lang = &want.code;
 
-            // Check embedded streams
-            if !want.forced && embedded_languages.iter().any(|e| e == lang) {
+            if !want.forced
+                && embedded_languages
+                    .iter()
+                    .any(|embedded| same_subtitle_language(embedded, lang))
+            {
                 return false;
             }
 
-            // Check existing downloads
             !existing_downloads.iter().any(|dl| {
-                dl.language == *lang
+                same_subtitle_language(&dl.language, lang)
                     && dl.forced == want.forced
                     && dl.hearing_impaired == want.hearing_impaired
             })
         })
         .cloned()
         .collect()
+}
+
+pub fn compute_missing_subtitles_from_streams(
+    wanted_languages: &[SubtitleLanguagePref],
+    existing_downloads: &[SubtitleDownload],
+    embedded_streams: &[crate::SubtitleStreamDetail],
+) -> Vec<SubtitleLanguagePref> {
+    wanted_languages
+        .iter()
+        .filter(|want| {
+            let lang = &want.code;
+
+            if embedded_streams
+                .iter()
+                .any(|stream| embedded_stream_satisfies(stream, want))
+            {
+                return false;
+            }
+
+            !existing_downloads.iter().any(|dl| {
+                same_subtitle_language(&dl.language, lang)
+                    && dl.forced == want.forced
+                    && dl.hearing_impaired == want.hearing_impaired
+            })
+        })
+        .cloned()
+        .collect()
+}
+
+fn embedded_stream_satisfies(
+    stream: &crate::SubtitleStreamDetail,
+    wanted: &SubtitleLanguagePref,
+) -> bool {
+    let Some(language) = stream.language.as_deref() else {
+        return false;
+    };
+    if !same_subtitle_language(language, &wanted.code) {
+        return false;
+    }
+
+    if wanted.forced {
+        return stream.forced;
+    }
+    if stream.forced {
+        return false;
+    }
+
+    let embedded_hi = stream_name_is_hearing_impaired(stream.name.as_deref());
+    if wanted.hearing_impaired {
+        embedded_hi
+    } else {
+        !embedded_hi
+    }
+}
+
+fn stream_name_is_hearing_impaired(name: Option<&str>) -> bool {
+    let Some(name) = name else {
+        return false;
+    };
+    let upper = name.to_ascii_uppercase();
+    if upper.contains("HEARING IMPAIRED") {
+        return true;
+    }
+
+    upper
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .any(|token| matches!(token, "SDH" | "HI" | "CC"))
 }
 
 #[cfg(test)]
@@ -90,6 +162,16 @@ mod tests {
             release_info: None,
             synced: false,
             downloaded_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    fn make_stream(lang: &str, forced: bool, name: Option<&str>) -> crate::SubtitleStreamDetail {
+        crate::SubtitleStreamDetail {
+            codec: Some("srt".into()),
+            language: Some(lang.into()),
+            name: name.map(str::to_string),
+            forced,
+            default: false,
         }
     }
 
@@ -405,5 +487,54 @@ mod tests {
         let downloads = vec![make_download("eng", false, false)];
         let missing = compute_missing_subtitles(&wanted, &downloads, &[]);
         assert_eq!(missing.len(), 2);
+    }
+
+    #[test]
+    fn embedded_streams_distinguish_forced_and_hi() {
+        let wanted = vec![
+            SubtitleLanguagePref {
+                code: "eng".into(),
+                hearing_impaired: true,
+                forced: false,
+            },
+            SubtitleLanguagePref {
+                code: "eng".into(),
+                hearing_impaired: false,
+                forced: true,
+            },
+        ];
+        let embedded = vec![
+            make_stream("eng", false, Some("English SDH")),
+            make_stream("eng", true, Some("English Forced")),
+        ];
+
+        let missing = compute_missing_subtitles_from_streams(&wanted, &[], &embedded);
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn embedded_streams_use_canonical_language_matching() {
+        let wanted = vec![SubtitleLanguagePref {
+            code: "fre".into(),
+            hearing_impaired: false,
+            forced: false,
+        }];
+        let embedded = vec![make_stream("fra", false, Some("French"))];
+
+        let missing = compute_missing_subtitles_from_streams(&wanted, &[], &embedded);
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn hi_detection_ignores_hi_substrings_inside_words() {
+        assert!(!stream_name_is_hearing_impaired(Some("Thai")));
+        assert!(!stream_name_is_hearing_impaired(Some("Hindi")));
+        assert!(!stream_name_is_hearing_impaired(Some("Simplified Chinese")));
+        assert!(stream_name_is_hearing_impaired(Some("English HI")));
+        assert!(stream_name_is_hearing_impaired(Some("English SDH")));
+        assert!(stream_name_is_hearing_impaired(Some("English CC")));
+        assert!(stream_name_is_hearing_impaired(Some(
+            "English Hearing Impaired"
+        )));
     }
 }

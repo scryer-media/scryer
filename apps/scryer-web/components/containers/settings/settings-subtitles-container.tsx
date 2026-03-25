@@ -20,6 +20,9 @@ export type SubtitleSettings = {
   includeAiTranslated: boolean;
   includeMachineTranslated: boolean;
   syncEnabled: boolean;
+  syncThresholdSeries: number;
+  syncThresholdMovie: number;
+  syncMaxOffsetSeconds: number;
 };
 
 const DEFAULTS: SubtitleSettings = {
@@ -34,6 +37,9 @@ const DEFAULTS: SubtitleSettings = {
   includeAiTranslated: false,
   includeMachineTranslated: false,
   syncEnabled: true,
+  syncThresholdSeries: 90,
+  syncThresholdMovie: 70,
+  syncMaxOffsetSeconds: 60,
 };
 
 function parseSetting(items: AdminSetting[], key: string, fallback: string): string {
@@ -69,6 +75,9 @@ function buildSaveItems(settings: SubtitleSettings) {
     { keyName: "subtitles.include_ai_translated", value: String(settings.includeAiTranslated) },
     { keyName: "subtitles.include_machine_translated", value: String(settings.includeMachineTranslated) },
     { keyName: "subtitles.sync_enabled", value: String(settings.syncEnabled) },
+    { keyName: "subtitles.sync_threshold_series", value: String(settings.syncThresholdSeries) },
+    { keyName: "subtitles.sync_threshold_movie", value: String(settings.syncThresholdMovie) },
+    { keyName: "subtitles.sync_max_offset_seconds", value: String(settings.syncMaxOffsetSeconds) },
   ];
 }
 
@@ -101,6 +110,9 @@ export function SettingsSubtitlesContainer() {
           includeAiTranslated: parseSetting(items, "subtitles.include_ai_translated", "false") === "true",
           includeMachineTranslated: parseSetting(items, "subtitles.include_machine_translated", "false") === "true",
           syncEnabled: parseSetting(items, "subtitles.sync_enabled", "true") === "true",
+          syncThresholdSeries: Number(parseSetting(items, "subtitles.sync_threshold_series", "90")),
+          syncThresholdMovie: Number(parseSetting(items, "subtitles.sync_threshold_movie", "70")),
+          syncMaxOffsetSeconds: Number(parseSetting(items, "subtitles.sync_max_offset_seconds", "60")),
         });
         loadedRef.current = true;
       } catch {

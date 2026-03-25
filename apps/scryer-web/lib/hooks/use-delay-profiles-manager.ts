@@ -10,6 +10,7 @@ import {
   DELAY_PROFILE_CATALOG_KEY,
   parseDelayProfileCatalog,
   serializeDelayProfileCatalog,
+  validateDelayProfileDraft,
 } from "@/lib/utils/delay-profiles";
 import { getSettingStringFromItems } from "@/lib/utils/settings";
 import type { AdminSetting } from "@/lib/types";
@@ -106,6 +107,11 @@ export function useDelayProfilesManager() {
         ? createDelayProfileId(draft.name, profiles)
         : draft.id;
       const entry: ParsedDelayProfile = { ...draft, id };
+      const validationError = validateDelayProfileDraft(entry);
+      if (validationError) {
+        showStatus(validationError);
+        return;
+      }
       const next = isNew
         ? [...profiles, entry]
         : profiles.map((p) => (p.id === id ? entry : p));

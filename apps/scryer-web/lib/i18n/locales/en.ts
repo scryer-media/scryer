@@ -882,6 +882,8 @@ const en: LocaleDictionary = {
   "settings.sub.syncThresholdSeries": "Auto-correct below this score (series)",
   "settings.sub.syncThresholdMovie": "Auto-correct below this score (movies)",
   "settings.sub.syncThresholdHelp": "Low-scoring subtitles are more likely to have timing issues. Subtitles above this score are assumed to be well-timed.",
+  "settings.sub.syncMaxOffset": "Maximum correction (seconds)",
+  "settings.sub.syncMaxOffsetHelp": "Skip timing changes larger than this value to avoid damaging a subtitle that is probably already close enough.",
   "settings.postProcessing": "Post-Processing",
   "settings.postProcessingSaved": "Post-processing script saved.",
   "settings.pp.title": "Post-Processing Scripts",

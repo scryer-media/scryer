@@ -38,6 +38,7 @@ ring = "0.17"
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem", "arithmetic"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 toml = "0.8"
+quick-xml = "0.37"
 extism = "1.13"
 semver = "1"
 metrics = "0.24"

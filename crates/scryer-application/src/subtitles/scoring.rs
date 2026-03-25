@@ -2,7 +2,7 @@
 ///
 /// Each factor contributes points. The `hash` score equals the sum of all
 /// non-hash, non-HI factors (so a hash match guarantees maximum quality).
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
 pub struct ScoreWeights {
@@ -71,6 +71,12 @@ impl MovieScore {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubtitleScoreKind {
+    Movie,
+    Episode,
+}
+
 /// Compute a subtitle match score given which factors matched.
 pub fn compute_score(weights: &ScoreWeights, matches: &HashMap<String, bool>) -> i32 {
     let mut score = 0i32;
@@ -108,6 +114,69 @@ pub fn compute_score(weights: &ScoreWeights, matches: &HashMap<String, bool>) ->
         score += weights.hearing_impaired;
     }
     score
+}
+
+pub fn compute_verified_score(
+    weights: &ScoreWeights,
+    kind: SubtitleScoreKind,
+    matches: &HashSet<String>,
+    is_special: bool,
+) -> i32 {
+    let mut verified = matches.clone();
+
+    if verified.contains("hash") {
+        let required: &[&str] = match kind {
+            SubtitleScoreKind::Movie => &["source", "video_codec"],
+            SubtitleScoreKind::Episode => &["series", "season", "episode", "source"],
+        };
+
+        if matches!(kind, SubtitleScoreKind::Movie) || !is_special {
+            if required.iter().all(|key| verified.contains(*key)) {
+                verified.retain(|key| key == "hash");
+            } else {
+                verified.remove("hash");
+            }
+        }
+    }
+
+    let mut expanded = verified.clone();
+
+    match kind {
+        SubtitleScoreKind::Movie => {
+            if expanded.contains("imdb_id") {
+                expanded.insert("title".to_string());
+                expanded.insert("year".to_string());
+            }
+        }
+        SubtitleScoreKind::Episode => {
+            if expanded.contains("title") {
+                expanded.insert("episode".to_string());
+            }
+            if expanded.contains("series_imdb_id") {
+                expanded.insert("series".to_string());
+                expanded.insert("year".to_string());
+            }
+            if expanded.contains("imdb_id") {
+                expanded.insert("series".to_string());
+                expanded.insert("year".to_string());
+                expanded.insert("season".to_string());
+                expanded.insert("episode".to_string());
+            }
+            if is_special
+                && expanded.contains("title")
+                && expanded.contains("series")
+                && expanded.contains("year")
+            {
+                expanded.insert("season".to_string());
+                expanded.insert("episode".to_string());
+            }
+        }
+    }
+
+    let score_matches: HashMap<String, bool> =
+        expanded.into_iter().map(|key| (key, true)).collect();
+
+    compute_score(weights, &score_matches)
 }
 
 #[cfg(test)]
@@ -436,5 +505,53 @@ mod tests {
         matches.insert("season".to_string(), true);
         matches.insert("episode".to_string(), true);
         assert_eq!(compute_score(&w, &matches), 0);
+    }
+
+    #[test]
+    fn verified_movie_hash_requires_source_and_video_codec() {
+        let w = MOVIE_WEIGHTS.weights();
+        let mut matches = HashSet::new();
+        matches.insert("hash".to_string());
+        matches.insert("title".to_string());
+        assert_eq!(
+            compute_verified_score(&w, SubtitleScoreKind::Movie, &matches, false),
+            w.title
+        );
+
+        matches.insert("source".to_string());
+        matches.insert("video_codec".to_string());
+        assert_eq!(
+            compute_verified_score(&w, SubtitleScoreKind::Movie, &matches, false),
+            w.hash
+        );
+    }
+
+    #[test]
+    fn verified_episode_identifier_adds_equivalent_matches() {
+        let w = SERIES_WEIGHTS.weights();
+        let mut matches = HashSet::new();
+        matches.insert("series_imdb_id".to_string());
+        matches.insert("season".to_string());
+        matches.insert("episode".to_string());
+        matches.insert("source".to_string());
+
+        assert_eq!(
+            compute_verified_score(&w, SubtitleScoreKind::Episode, &matches, false),
+            w.title + w.year + w.season + w.episode + w.source
+        );
+    }
+
+    #[test]
+    fn verified_score_does_not_double_count_title_and_series() {
+        let w = SERIES_WEIGHTS.weights();
+        let mut matches = HashSet::new();
+        matches.insert("title".to_string());
+        matches.insert("series".to_string());
+        matches.insert("year".to_string());
+
+        assert_eq!(
+            compute_verified_score(&w, SubtitleScoreKind::Episode, &matches, false),
+            w.title + w.year + w.episode
+        );
     }
 }

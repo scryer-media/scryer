@@ -1594,8 +1594,7 @@ async fn process_single_wanted_item(
 
     let thresholds = AcquisitionThresholds::for_persona(&profile.criteria.scoring_persona);
 
-    // Resolve delay profile for min_age_minutes (usenet minimum age gate).
-    // Load existing media files for repack group validation (GAP 6).
+    // Load existing media files for repack group validation.
     let existing_files = app
         .services
         .media_files
@@ -1604,10 +1603,6 @@ async fn process_single_wanted_item(
         .unwrap_or_default();
 
     let delay_profiles = app.load_delay_profiles().await;
-    let min_age_minutes =
-        crate::delay_profile::resolve_delay_profile(&delay_profiles, &title.tags, &title.facet)
-            .map(|dp| dp.min_age_minutes)
-            .unwrap_or(0);
 
     // ── Candidate fallthrough loop ──────────────────────────────────────────
     // Iterate ranked candidates (sorted by preference_score DESC).  If a grab
@@ -1836,27 +1831,54 @@ async fn process_single_wanted_item(
             continue;
         }
 
-        // Skip usenet releases younger than delay profile's minimum age.
-        // Background acquisition doesn't use the pending system — too-young
-        // releases are simply skipped and will be re-evaluated next cycle.
-        if min_age_minutes > 0
-            && crate::delay_profile::is_usenet_source(candidate.source_kind)
-            && let Some(published) = candidate
+        if let Some(delay_decision) = crate::delay_profile::resolve_delay_decision(
+            &delay_profiles,
+            &title.tags,
+            &title.facet,
+            candidate.source_kind,
+            candidate
                 .published_at
                 .as_deref()
-                .and_then(crate::quality_profile::parse_published_at)
+                .and_then(crate::quality_profile::parse_published_at),
+            candidate_score,
+            now,
+        ) && delay_decision.should_hold()
         {
-            let age = (*now - published).num_minutes();
-            if age < min_age_minutes {
-                info!(
-                    title = title.name.as_str(),
-                    release = candidate.title.as_str(),
-                    age_minutes = age,
-                    min_age = min_age_minutes,
-                    "skipping too-young usenet release"
-                );
-                continue;
-            }
+            let scoring_json = candidate.quality_profile_decision.as_ref().map(|decision| {
+                serde_json::to_string(
+                    &decision
+                        .scoring_log
+                        .iter()
+                        .map(|entry| serde_json::json!({"code": entry.code, "delta": entry.delta}))
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap_or_default()
+            });
+
+            app.insert_pending_release(
+                item,
+                &title,
+                &candidate.title,
+                candidate
+                    .download_url
+                    .as_deref()
+                    .or(candidate.link.as_deref()),
+                candidate.source_kind,
+                candidate.size_bytes,
+                candidate_score,
+                scoring_json,
+                Some(candidate.source.as_str()),
+                candidate.guid.as_deref(),
+                delay_decision.effective_delay_minutes,
+                candidate.password_hint.as_deref(),
+                candidate.published_at.as_deref(),
+                candidate
+                    .extra
+                    .get("info_hash")
+                    .and_then(|value| value.as_str()),
+            )
+            .await;
+            return Ok(());
         }
 
         let is_recent = app.is_recent_for_queue_priority(
@@ -2023,7 +2045,7 @@ async fn process_single_wanted_item(
                     &db_blocklist,
                     &thresholds,
                     &existing_files,
-                    min_age_minutes,
+                    &delay_profiles,
                     &title_norm,
                 )
                 .await;
@@ -2306,7 +2328,7 @@ async fn persist_standby_candidates(
     db_blocklist: &std::collections::HashSet<String>,
     thresholds: &AcquisitionThresholds,
     existing_files: &[TitleMediaFile],
-    min_age_minutes: i64,
+    delay_profiles: &[crate::DelayProfile],
     title_norm: &str,
 ) {
     let _ = app
@@ -2373,17 +2395,20 @@ async fn persist_standby_candidates(
             continue;
         }
 
-        if min_age_minutes > 0
-            && crate::delay_profile::is_usenet_source(candidate.source_kind)
-            && let Some(published) = candidate
+        if let Some(delay_decision) = crate::delay_profile::resolve_delay_decision(
+            delay_profiles,
+            &title.tags,
+            &title.facet,
+            candidate.source_kind,
+            candidate
                 .published_at
                 .as_deref()
-                .and_then(crate::quality_profile::parse_published_at)
+                .and_then(crate::quality_profile::parse_published_at),
+            candidate_score,
+            now,
+        ) && delay_decision.should_hold()
         {
-            let age = (*now - published).num_minutes();
-            if age < min_age_minutes {
-                continue;
-            }
+            continue;
         }
 
         let source_hint = candidate

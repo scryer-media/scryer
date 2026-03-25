@@ -98,8 +98,9 @@ pub use app_usecase_title_images::start_background_banner_loop;
 pub use app_usecase_title_images::start_background_fanart_loop;
 pub use app_usecase_title_images::start_background_poster_loop;
 pub use delay_profile::{
-    DELAY_PROFILE_CATALOG_KEY, DelayProfile, is_usenet_source, parse_delay_profile_catalog,
-    resolve_delay_profile,
+    DELAY_PROFILE_CATALOG_KEY, DelayDecision, DelayProfile, PreferredProtocol, is_usenet_source,
+    parse_delay_profile_catalog, resolve_delay_decision, resolve_delay_profile,
+    validate_delay_profile_catalog,
 };
 pub use facet_handler::{
     FacetHandler, HydrationResult, movie_to_hydration_result, series_to_hydration_result,
@@ -1876,6 +1877,7 @@ pub trait SubtitleDownloadRepository: Send + Sync {
         media_file_id: &str,
     ) -> AppResult<Vec<scryer_domain::SubtitleDownload>>;
     async fn insert(&self, download: &scryer_domain::SubtitleDownload) -> AppResult<()>;
+    async fn set_synced(&self, id: &str, synced: bool) -> AppResult<()>;
     async fn delete(&self, id: &str) -> AppResult<Option<scryer_domain::SubtitleDownload>>;
     async fn is_blacklisted(
         &self,
@@ -2380,7 +2382,7 @@ mod tests {
                             left.collection_type != CollectionType::Movie,
                             left.ordered_path
                                 .as_deref()
-                                .map_or(true, |path| path.trim().is_empty()),
+                                .is_none_or(|path| path.trim().is_empty()),
                             left.collection_index.parse::<u32>().unwrap_or(u32::MAX),
                             left.collection_index.clone(),
                         );
@@ -2389,7 +2391,7 @@ mod tests {
                             right
                                 .ordered_path
                                 .as_deref()
-                                .map_or(true, |path| path.trim().is_empty()),
+                                .is_none_or(|path| path.trim().is_empty()),
                             right.collection_index.parse::<u32>().unwrap_or(u32::MAX),
                             right.collection_index.clone(),
                         );

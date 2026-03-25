@@ -533,6 +533,18 @@ async fn total_successful_artifacts(app: &AppUseCase, td: &TrackedDownload) -> u
     imported + already_present
 }
 
+async fn current_visible_video_file_count(app: &AppUseCase, td: &TrackedDownload) -> usize {
+    let Some(completed) = find_completed_download(app, td).await else {
+        return 0;
+    };
+
+    let path = std::path::Path::new(&completed.dest_dir);
+    let filter_samples = td.facet.as_deref() != Some("movie");
+    crate::app_usecase_import::find_video_files(path, filter_samples)
+        .map(|files| files.len())
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1395,16 +1407,4 @@ mod tests {
             Some(NotificationEventType::ManualInteractionRequired)
         );
     }
-}
-
-async fn current_visible_video_file_count(app: &AppUseCase, td: &TrackedDownload) -> usize {
-    let Some(completed) = find_completed_download(app, td).await else {
-        return 0;
-    };
-
-    let path = std::path::Path::new(&completed.dest_dir);
-    let filter_samples = td.facet.as_deref() != Some("movie");
-    crate::app_usecase_import::find_video_files(path, filter_samples)
-        .map(|files| files.len())
-        .unwrap_or(0)
 }

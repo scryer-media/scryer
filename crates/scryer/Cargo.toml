@@ -13,7 +13,7 @@ async-graphql = { workspace = true }
 async-graphql-axum = { version = "7.0" }
 axum = { version = "0.8", features = ["macros", "http1", "http2", "json", "ws"] }
 futures-util = "0.3"
-axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
+axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["compression-full"] }
@@ -28,7 +28,7 @@ serde_json = { workspace = true }
 flate2 = "1"
 percent-encoding = "2"
 toml = { workspace = true }
-metrics-exporter-prometheus = "0.16"
+metrics-exporter-prometheus = "0.18"
 directories = "6"
 open = "5"
 
@@ -37,5 +37,5 @@ scryer-rules = { path = "../scryer-rules" }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 wiremock = { workspace = true }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "brotli", "zstd", "deflate"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "gzip", "brotli", "zstd", "deflate"] }
 tempfile = "3"

@@ -53,9 +53,15 @@ impl SettingsMutations {
             }
 
             if key_name == DELAY_PROFILE_CATALOG_KEY {
-                scryer_application::parse_delay_profile_catalog(&item.value).map_err(|error| {
+                let profiles = scryer_application::parse_delay_profile_catalog(&item.value)
+                    .map_err(|error| {
+                        Error::new(format!(
+                            "invalid delay profile catalog JSON for {DELAY_PROFILE_CATALOG_KEY}: {error}"
+                        ))
+                    })?;
+                scryer_application::validate_delay_profile_catalog(&profiles).map_err(|error| {
                     Error::new(format!(
-                        "invalid delay profile catalog JSON for {DELAY_PROFILE_CATALOG_KEY}: {error}"
+                        "invalid delay profile catalog for {DELAY_PROFILE_CATALOG_KEY}: {error}"
                     ))
                 })?;
                 // Validated — fall through to normal upsert_setting_value below.

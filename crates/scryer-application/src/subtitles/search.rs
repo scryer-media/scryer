@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use super::provider::{SubtitleMatch, SubtitleProvider, SubtitleQuery, compute_opensubtitles_hash};
+use super::provider::{
+    SubtitleMatch, SubtitleMediaKind, SubtitleProvider, SubtitleQuery, compute_opensubtitles_hash,
+};
 use crate::AppResult;
 
 /// Orchestrates subtitle searching: tries hash-based lookup first,
@@ -24,9 +26,12 @@ impl SubtitleSearchOrchestrator {
         &self,
         provider: &dyn SubtitleProvider,
         file_path: &Path,
+        media_kind: SubtitleMediaKind,
         title: &str,
+        title_aliases: &[String],
         year: Option<i32>,
         imdb_id: Option<&str>,
+        series_imdb_id: Option<&str>,
         season: Option<i32>,
         episode: Option<i32>,
         languages: &[String],
@@ -35,6 +40,7 @@ impl SubtitleSearchOrchestrator {
         video_codec: Option<&str>,
         audio_codec: Option<&str>,
         resolution: Option<&str>,
+        hearing_impaired: Option<bool>,
         include_ai_translated: bool,
         include_machine_translated: bool,
     ) -> AppResult<Vec<SubtitleMatch>> {
@@ -43,9 +49,12 @@ impl SubtitleSearchOrchestrator {
 
         if file_hash.is_some() {
             let query = SubtitleQuery {
+                media_kind,
                 file_hash: file_hash.clone(),
                 imdb_id: imdb_id.map(|s| s.to_string()),
+                series_imdb_id: series_imdb_id.map(|s| s.to_string()),
                 title: title.to_string(),
+                title_aliases: title_aliases.to_vec(),
                 year,
                 season,
                 episode,
@@ -55,6 +64,7 @@ impl SubtitleSearchOrchestrator {
                 video_codec: video_codec.map(|s| s.to_string()),
                 audio_codec: audio_codec.map(|s| s.to_string()),
                 resolution: resolution.map(|s| s.to_string()),
+                hearing_impaired,
                 include_ai_translated,
                 include_machine_translated,
             };
@@ -77,9 +87,12 @@ impl SubtitleSearchOrchestrator {
                         let metadata_results = self
                             .search_by_metadata(
                                 provider,
+                                media_kind,
                                 title,
+                                title_aliases,
                                 year,
                                 imdb_id,
+                                series_imdb_id,
                                 season,
                                 episode,
                                 languages,
@@ -88,6 +101,7 @@ impl SubtitleSearchOrchestrator {
                                 video_codec,
                                 audio_codec,
                                 resolution,
+                                hearing_impaired,
                                 include_ai_translated,
                                 include_machine_translated,
                             )
@@ -106,9 +120,12 @@ impl SubtitleSearchOrchestrator {
         // Metadata-based fallback
         self.search_by_metadata(
             provider,
+            media_kind,
             title,
+            title_aliases,
             year,
             imdb_id,
+            series_imdb_id,
             season,
             episode,
             languages,
@@ -117,6 +134,7 @@ impl SubtitleSearchOrchestrator {
             video_codec,
             audio_codec,
             resolution,
+            hearing_impaired,
             include_ai_translated,
             include_machine_translated,
         )
@@ -126,9 +144,12 @@ impl SubtitleSearchOrchestrator {
     async fn search_by_metadata(
         &self,
         provider: &dyn SubtitleProvider,
+        media_kind: SubtitleMediaKind,
         title: &str,
+        title_aliases: &[String],
         year: Option<i32>,
         imdb_id: Option<&str>,
+        series_imdb_id: Option<&str>,
         season: Option<i32>,
         episode: Option<i32>,
         languages: &[String],
@@ -137,13 +158,17 @@ impl SubtitleSearchOrchestrator {
         video_codec: Option<&str>,
         audio_codec: Option<&str>,
         resolution: Option<&str>,
+        hearing_impaired: Option<bool>,
         include_ai_translated: bool,
         include_machine_translated: bool,
     ) -> AppResult<Vec<SubtitleMatch>> {
         let query = SubtitleQuery {
+            media_kind,
             file_hash: None,
             imdb_id: imdb_id.map(|s| s.to_string()),
+            series_imdb_id: series_imdb_id.map(|s| s.to_string()),
             title: title.to_string(),
+            title_aliases: title_aliases.to_vec(),
             year,
             season,
             episode,
@@ -153,6 +178,7 @@ impl SubtitleSearchOrchestrator {
             video_codec: video_codec.map(|s| s.to_string()),
             audio_codec: audio_codec.map(|s| s.to_string()),
             resolution: resolution.map(|s| s.to_string()),
+            hearing_impaired,
             include_ai_translated,
             include_machine_translated,
         };

@@ -76,6 +76,7 @@ export function SettingsSubtitlesSection({
     setSettings({ ...settings, ...patch });
 
   const disabled = !settings.enabled;
+  const syncDisabled = disabled || !settings.syncEnabled;
 
   if (loading) {
     return (
@@ -173,6 +174,34 @@ export function SettingsSubtitlesSection({
         <div className="space-y-3">
           <Toggle checked={settings.syncEnabled} onChange={(v) => update({ syncEnabled: v })} label={t("settings.sub.syncEnabled")} disabled={disabled} />
           <p className="text-xs text-muted-foreground">{t("settings.sub.syncEnabledHelp")}</p>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="space-y-1">
+              <Label>{t("settings.sub.syncThresholdSeries")}</Label>
+              <BlurIntegerInput
+                value={settings.syncThresholdSeries}
+                onCommit={(v) => update({ syncThresholdSeries: v })}
+                disabled={syncDisabled}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>{t("settings.sub.syncThresholdMovie")}</Label>
+              <BlurIntegerInput
+                value={settings.syncThresholdMovie}
+                onCommit={(v) => update({ syncThresholdMovie: v })}
+                disabled={syncDisabled}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>{t("settings.sub.syncMaxOffset")}</Label>
+              <BlurIntegerInput
+                value={settings.syncMaxOffsetSeconds}
+                onCommit={(v) => update({ syncMaxOffsetSeconds: v })}
+                disabled={syncDisabled}
+              />
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">{t("settings.sub.syncThresholdHelp")}</p>
+          <p className="text-xs text-muted-foreground">{t("settings.sub.syncMaxOffsetHelp")}</p>
         </div>
       </div>
     </div>

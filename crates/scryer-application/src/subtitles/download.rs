@@ -1,16 +1,24 @@
 use std::path::{Path, PathBuf};
 
+use super::language::normalize_subtitle_language_code;
 use super::provider::{SubtitleFile, SubtitleProvider};
 use crate::{AppError, AppResult};
 
-/// Validate that a language code is safe for use in filenames (2-3 alphanumeric chars).
-fn validate_language(lang: &str) -> AppResult<()> {
-    if lang.len() < 2 || lang.len() > 3 || !lang.chars().all(|c| c.is_ascii_alphanumeric()) {
+/// Normalize a language code and ensure it's safe for use in filenames.
+fn normalize_language(lang: &str) -> AppResult<String> {
+    let normalized = normalize_subtitle_language_code(lang)
+        .ok_or_else(|| AppError::Validation(format!("invalid subtitle language code: {lang:?}")))?;
+
+    if normalized.len() < 2
+        || normalized.len() > 3
+        || !normalized.chars().all(|c| c.is_ascii_alphanumeric())
+    {
         return Err(AppError::Validation(format!(
             "invalid subtitle language code: {lang:?}"
         )));
     }
-    Ok(())
+
+    Ok(normalized)
 }
 
 /// Validate that a subtitle format is safe for use in filenames.
@@ -64,10 +72,16 @@ pub async fn download_and_save(
     forced: bool,
     hearing_impaired: bool,
 ) -> AppResult<(PathBuf, SubtitleFile)> {
-    validate_language(language)?;
+    let language = normalize_language(language)?;
     let file = provider.download(provider_file_id).await?;
     validate_format(&file.format)?;
-    let dest = build_subtitle_path(video_path, language, &file.format, forced, hearing_impaired);
+    let dest = build_subtitle_path(
+        video_path,
+        &language,
+        &file.format,
+        forced,
+        hearing_impaired,
+    );
 
     // Ensure parent directory exists
     if let Some(parent) = dest.parent()
@@ -90,7 +104,7 @@ pub async fn download_and_save(
 
     tracing::info!(
         path = %dest.display(),
-        language,
+        language = %language,
         provider = provider.name(),
         "subtitle downloaded and saved"
     );

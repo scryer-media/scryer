@@ -780,6 +780,51 @@ impl BlocklistRepository for NullBlocklistRepository {
 
 // ── Additional null impls for test bootstrapping ─────────────────────────────
 
+pub struct NullSubtitleDownloadRepository;
+
+#[async_trait]
+impl crate::SubtitleDownloadRepository for NullSubtitleDownloadRepository {
+    async fn list_for_title(
+        &self,
+        _title_id: &str,
+    ) -> AppResult<Vec<scryer_domain::SubtitleDownload>> {
+        Ok(Vec::new())
+    }
+    async fn list_for_media_file(
+        &self,
+        _media_file_id: &str,
+    ) -> AppResult<Vec<scryer_domain::SubtitleDownload>> {
+        Ok(Vec::new())
+    }
+    async fn insert(&self, _download: &scryer_domain::SubtitleDownload) -> AppResult<()> {
+        Ok(())
+    }
+    async fn set_synced(&self, _id: &str, _synced: bool) -> AppResult<()> {
+        Ok(())
+    }
+    async fn delete(&self, _id: &str) -> AppResult<Option<scryer_domain::SubtitleDownload>> {
+        Ok(None)
+    }
+    async fn is_blacklisted(
+        &self,
+        _media_file_id: &str,
+        _provider: &str,
+        _provider_file_id: &str,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
+    async fn blacklist(
+        &self,
+        _media_file_id: &str,
+        _provider: &str,
+        _provider_file_id: &str,
+        _language: &str,
+        _reason: Option<&str>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 pub mod test_nulls {
     use crate::{
@@ -1111,47 +1156,5 @@ pub mod test_nulls {
         ) -> AppResult<Vec<QualityProfile>> {
             Ok(vec![])
         }
-    }
-}
-
-pub struct NullSubtitleDownloadRepository;
-
-#[async_trait]
-impl crate::SubtitleDownloadRepository for NullSubtitleDownloadRepository {
-    async fn list_for_title(
-        &self,
-        _title_id: &str,
-    ) -> AppResult<Vec<scryer_domain::SubtitleDownload>> {
-        Ok(Vec::new())
-    }
-    async fn list_for_media_file(
-        &self,
-        _media_file_id: &str,
-    ) -> AppResult<Vec<scryer_domain::SubtitleDownload>> {
-        Ok(Vec::new())
-    }
-    async fn insert(&self, _download: &scryer_domain::SubtitleDownload) -> AppResult<()> {
-        Ok(())
-    }
-    async fn delete(&self, _id: &str) -> AppResult<Option<scryer_domain::SubtitleDownload>> {
-        Ok(None)
-    }
-    async fn is_blacklisted(
-        &self,
-        _media_file_id: &str,
-        _provider: &str,
-        _provider_file_id: &str,
-    ) -> AppResult<bool> {
-        Ok(false)
-    }
-    async fn blacklist(
-        &self,
-        _media_file_id: &str,
-        _provider: &str,
-        _provider_file_id: &str,
-        _language: &str,
-        _reason: Option<&str>,
-    ) -> AppResult<()> {
-        Ok(())
     }
 }

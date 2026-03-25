@@ -888,65 +888,6 @@ fn load_single_plugin(wasm_path: &Path) -> Result<(PluginDescriptor, Vec<u8>), S
     load_from_bytes(&wasm_bytes)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn descriptor(plugin_type: &str) -> PluginDescriptor {
-        PluginDescriptor {
-            name: "Test".to_string(),
-            version: "0.1.0".to_string(),
-            sdk_version: "0.1".to_string(),
-            plugin_type: plugin_type.to_string(),
-            provider_type: "test".to_string(),
-            provider_aliases: vec![],
-            capabilities: crate::types::IndexerCapabilities::default(),
-            scoring_policies: vec![],
-            config_fields: vec![],
-            default_base_url: None,
-            allowed_hosts: vec![],
-            rate_limit_seconds: None,
-            notification_capabilities: None,
-            accepted_inputs: vec![],
-            isolation_modes: vec![],
-            download_client_capabilities: None,
-        }
-    }
-
-    #[test]
-    fn indexer_family_types_are_accepted() {
-        assert!(validate_indexer_descriptor(&descriptor("indexer")));
-        assert!(validate_indexer_descriptor(&descriptor("usenet_indexer")));
-        assert!(validate_indexer_descriptor(&descriptor("torrent_indexer")));
-    }
-
-    #[test]
-    fn non_indexer_types_are_rejected_for_indexer_provider() {
-        assert!(!validate_indexer_descriptor(&descriptor("notification")));
-        assert!(!validate_indexer_descriptor(&descriptor("download_client")));
-    }
-
-    #[test]
-    fn parse_config_json_entries_stringifies_scalar_values() {
-        let entries = parse_config_json_entries(
-            r#"{"username":"alice","password":"secret","use_ssl":false,"port":8080,"meta":{"tag":"tv"}}"#,
-        )
-        .unwrap();
-
-        assert_eq!(entries.get("username"), Some(&"alice".to_string()));
-        assert_eq!(entries.get("password"), Some(&"secret".to_string()));
-        assert_eq!(entries.get("use_ssl"), Some(&"false".to_string()));
-        assert_eq!(entries.get("port"), Some(&"8080".to_string()));
-        assert_eq!(entries.get("meta"), Some(&r#"{"tag":"tv"}"#.to_string()));
-    }
-
-    #[test]
-    fn parse_config_json_entries_requires_object_root() {
-        let error = parse_config_json_entries(r#"["not","an","object"]"#).unwrap_err();
-        assert_eq!(error, "config_json must be a JSON object");
-    }
-}
-
 pub(crate) fn parse_config_json_entries(json_str: &str) -> Result<HashMap<String, String>, String> {
     let parsed: serde_json::Value =
         serde_json::from_str(json_str).map_err(|error| error.to_string())?;
@@ -1341,5 +1282,64 @@ impl NotificationPluginProvider for DynamicNotificationPluginProvider {
 
         self.reload(provider);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn descriptor(plugin_type: &str) -> PluginDescriptor {
+        PluginDescriptor {
+            name: "Test".to_string(),
+            version: "0.1.0".to_string(),
+            sdk_version: "0.1".to_string(),
+            plugin_type: plugin_type.to_string(),
+            provider_type: "test".to_string(),
+            provider_aliases: vec![],
+            capabilities: crate::types::IndexerCapabilities::default(),
+            scoring_policies: vec![],
+            config_fields: vec![],
+            default_base_url: None,
+            allowed_hosts: vec![],
+            rate_limit_seconds: None,
+            notification_capabilities: None,
+            accepted_inputs: vec![],
+            isolation_modes: vec![],
+            download_client_capabilities: None,
+        }
+    }
+
+    #[test]
+    fn indexer_family_types_are_accepted() {
+        assert!(validate_indexer_descriptor(&descriptor("indexer")));
+        assert!(validate_indexer_descriptor(&descriptor("usenet_indexer")));
+        assert!(validate_indexer_descriptor(&descriptor("torrent_indexer")));
+    }
+
+    #[test]
+    fn non_indexer_types_are_rejected_for_indexer_provider() {
+        assert!(!validate_indexer_descriptor(&descriptor("notification")));
+        assert!(!validate_indexer_descriptor(&descriptor("download_client")));
+    }
+
+    #[test]
+    fn parse_config_json_entries_stringifies_scalar_values() {
+        let entries = parse_config_json_entries(
+            r#"{"username":"alice","password":"secret","use_ssl":false,"port":8080,"meta":{"tag":"tv"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(entries.get("username"), Some(&"alice".to_string()));
+        assert_eq!(entries.get("password"), Some(&"secret".to_string()));
+        assert_eq!(entries.get("use_ssl"), Some(&"false".to_string()));
+        assert_eq!(entries.get("port"), Some(&"8080".to_string()));
+        assert_eq!(entries.get("meta"), Some(&r#"{"tag":"tv"}"#.to_string()));
+    }
+
+    #[test]
+    fn parse_config_json_entries_requires_object_root() {
+        let error = parse_config_json_entries(r#"["not","an","object"]"#).unwrap_err();
+        assert_eq!(error, "config_json must be a JSON object");
     }
 }

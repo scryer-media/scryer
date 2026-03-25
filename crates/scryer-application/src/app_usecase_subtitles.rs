@@ -3,10 +3,10 @@ use std::path::Path;
 use chrono::Utc;
 use tracing::{debug, info, warn};
 
-use crate::subtitles::provider::OpenSubtitlesProvider;
+use crate::subtitles::provider::{OpenSubtitlesProvider, SubtitleMediaKind};
 use crate::subtitles::search::SubtitleSearchOrchestrator;
 use crate::subtitles::sync;
-use crate::subtitles::wanted::{SubtitleLanguagePref, compute_missing_subtitles};
+use crate::subtitles::wanted::{SubtitleLanguagePref, compute_missing_subtitles_from_streams};
 use crate::{AppResult, AppUseCase};
 use scryer_domain::SubtitleDownload;
 
@@ -71,6 +71,178 @@ pub fn spawn_subtitle_search_for_file(app: AppUseCase, title_id: String, media_f
     });
 }
 
+fn is_series_title(title: &scryer_domain::Title) -> bool {
+    title.facet == scryer_domain::MediaFacet::Series
+        || title.facet == scryer_domain::MediaFacet::Anime
+}
+
+fn subtitle_media_kind(title: &scryer_domain::Title) -> SubtitleMediaKind {
+    if is_series_title(title) {
+        SubtitleMediaKind::Episode
+    } else {
+        SubtitleMediaKind::Movie
+    }
+}
+
+fn title_imdb_ids(title: &scryer_domain::Title) -> (Option<&str>, Option<&str>) {
+    let imdb_id = title
+        .external_ids
+        .iter()
+        .find(|external_id| external_id.source == "imdb")
+        .map(|external_id| external_id.value.as_str());
+
+    if is_series_title(title) {
+        (None, imdb_id)
+    } else {
+        (imdb_id, None)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SubtitleSyncSettings {
+    enabled: bool,
+    threshold_series: i32,
+    threshold_movie: i32,
+    max_offset_seconds: i64,
+}
+
+impl SubtitleSyncSettings {
+    fn threshold_for(self, media_kind: SubtitleMediaKind) -> i32 {
+        match media_kind {
+            SubtitleMediaKind::Episode => self.threshold_series,
+            SubtitleMediaKind::Movie => self.threshold_movie,
+        }
+    }
+}
+
+async fn read_subtitle_sync_settings(app: &AppUseCase) -> AppResult<SubtitleSyncSettings> {
+    Ok(SubtitleSyncSettings {
+        enabled: app
+            .read_setting_string_value("subtitles.sync_enabled", None)
+            .await?
+            .as_deref()
+            != Some("false"),
+        threshold_series: app
+            .read_setting_string_value("subtitles.sync_threshold_series", None)
+            .await?
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(90),
+        threshold_movie: app
+            .read_setting_string_value("subtitles.sync_threshold_movie", None)
+            .await?
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(70),
+        max_offset_seconds: app
+            .read_setting_string_value("subtitles.sync_max_offset_seconds", None)
+            .await?
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(60),
+    })
+}
+
+async fn maybe_sync_downloaded_subtitle(
+    app: &AppUseCase,
+    sync_settings: SubtitleSyncSettings,
+    media_kind: SubtitleMediaKind,
+    video_path: &Path,
+    subtitle_path: &Path,
+    download_id: Option<&str>,
+    score: Option<i32>,
+    forced: bool,
+) -> Option<sync::SyncResult> {
+    let policy = sync::SyncPolicy {
+        enabled: sync_settings.enabled,
+        forced,
+        score,
+        threshold: Some(sync_settings.threshold_for(media_kind)),
+        max_offset_seconds: sync_settings.max_offset_seconds,
+    };
+
+    match sync::sync_subtitle_with_policy(video_path, subtitle_path, policy).await {
+        Ok(result) => {
+            if result.applied
+                && let Some(id) = download_id
+                && let Err(err) = app.services.subtitle_downloads.set_synced(id, true).await
+            {
+                warn!(error = %err, download_id = id, "failed to persist subtitle sync status");
+            }
+
+            if result.applied {
+                info!(
+                    offset_ms = result.offset_ms,
+                    consistency_ratio = result.consistency_ratio,
+                    nosplit_score = result.nosplit_score,
+                    split_score = result.split_score,
+                    path = %subtitle_path.display(),
+                    "subtitle timing synced"
+                );
+            } else {
+                debug!(
+                    reason = ?result.skipped_reason,
+                    score,
+                    path = %subtitle_path.display(),
+                    "subtitle sync skipped"
+                );
+            }
+
+            Some(result)
+        }
+        Err(err) => {
+            warn!(error = %err, path = %subtitle_path.display(), "subtitle sync failed (non-fatal)");
+            None
+        }
+    }
+}
+
+fn sync_summary_suffix(result: Option<&sync::SyncResult>) -> String {
+    result
+        .map(|sync_result| format!(" [sync: {}]", sync_result.summary()))
+        .unwrap_or_default()
+}
+
+async fn media_file_episode_context(
+    app: &AppUseCase,
+    media_file: &crate::TitleMediaFile,
+) -> (Option<i32>, Option<i32>) {
+    let Some(episode_id) = media_file.episode_id.as_deref() else {
+        return (None, None);
+    };
+
+    match app.services.shows.get_episode_by_id(episode_id).await {
+        Ok(Some(episode)) => (
+            episode
+                .season_number
+                .as_deref()
+                .and_then(|value| value.parse::<i32>().ok()),
+            episode
+                .episode_number
+                .as_deref()
+                .and_then(|value| value.parse::<i32>().ok()),
+        ),
+        _ => (None, None),
+    }
+}
+
+fn embedded_subtitle_streams(
+    media_file: &crate::TitleMediaFile,
+) -> Vec<crate::SubtitleStreamDetail> {
+    if !media_file.subtitle_streams.is_empty() {
+        return media_file.subtitle_streams.clone();
+    }
+
+    media_file
+        .subtitle_languages
+        .iter()
+        .map(|language| crate::SubtitleStreamDetail {
+            codec: None,
+            language: Some(language.clone()),
+            name: None,
+            forced: false,
+            default: false,
+        })
+        .collect()
+}
+
 async fn run_subtitle_search_for_file(
     app: &AppUseCase,
     title_id: &str,
@@ -129,8 +301,7 @@ async fn run_subtitle_search_for_file(
         .await?
         .ok_or_else(|| crate::AppError::NotFound("media file not found".into()))?;
 
-    let is_series = title.facet == scryer_domain::MediaFacet::Series
-        || title.facet == scryer_domain::MediaFacet::Anime;
+    let is_series = is_series_title(&title);
     let min_score: i32 = if is_series {
         app.read_setting_string_value("subtitles.minimum_score_series", None)
             .await?
@@ -142,6 +313,7 @@ async fn run_subtitle_search_for_file(
             .and_then(|v| v.parse().ok())
             .unwrap_or(70)
     };
+    let sync_settings = read_subtitle_sync_settings(app).await?;
 
     let provider = OpenSubtitlesProvider::new(api_key);
     if !username.is_empty() && !password.is_empty() {
@@ -154,15 +326,13 @@ async fn run_subtitle_search_for_file(
         .list_for_media_file(&mf.id)
         .await
         .unwrap_or_default();
-    let embedded: Vec<String> = mf.subtitle_languages.clone();
-    let missing = compute_missing_subtitles(&wanted_languages, &existing, &embedded);
+    let embedded = embedded_subtitle_streams(&mf);
+    let missing = compute_missing_subtitles_from_streams(&wanted_languages, &existing, &embedded);
 
     let orchestrator = SubtitleSearchOrchestrator::new(min_score);
-    let imdb_id = title
-        .external_ids
-        .iter()
-        .find(|e| e.source == "imdb")
-        .map(|e| e.value.as_str());
+    let media_kind = subtitle_media_kind(&title);
+    let (imdb_id, series_imdb_id) = title_imdb_ids(&title);
+    let (season_num, episode_num) = media_file_episode_context(app, &mf).await;
     let file_path = Path::new(&mf.file_path);
 
     for lang_pref in &missing {
@@ -170,17 +340,21 @@ async fn run_subtitle_search_for_file(
             .search(
                 &provider,
                 file_path,
+                media_kind,
                 &title.name,
+                &title.aliases,
                 title.year,
                 imdb_id,
-                None,
-                None,
+                series_imdb_id,
+                season_num,
+                episode_num,
                 std::slice::from_ref(&lang_pref.code),
                 mf.release_group.as_deref(),
                 mf.source_type.as_deref(),
                 mf.video_codec_parsed.as_deref(),
                 mf.audio_codec_parsed.as_deref(),
                 mf.resolution.as_deref(),
+                Some(lang_pref.hearing_impaired),
                 include_ai,
                 include_machine,
             )
@@ -193,9 +367,23 @@ async fn run_subtitle_search_for_file(
             }
         };
 
-        let best = results
+        let mut filtered_results = Vec::new();
+        for result in &results {
+            let blacklisted = app
+                .services
+                .subtitle_downloads
+                .is_blacklisted(&mf.id, &result.provider, &result.provider_file_id)
+                .await
+                .unwrap_or(false);
+            if !blacklisted {
+                filtered_results.push(result);
+            }
+        }
+
+        let best = filtered_results
             .iter()
             .filter(|r| r.score >= min_score)
+            .filter(|r| r.hearing_impaired == lang_pref.hearing_impaired)
             .filter(|r| r.forced == lang_pref.forced)
             .max_by_key(|r| r.score);
 
@@ -208,7 +396,7 @@ async fn run_subtitle_search_for_file(
             &provider,
             &best.provider_file_id,
             file_path,
-            &lang_pref.code,
+            &best.language,
             best.forced,
             best.hearing_impaired,
         )
@@ -220,7 +408,7 @@ async fn run_subtitle_search_for_file(
                     media_file_id: mf.id.clone(),
                     title_id: title.id.clone(),
                     episode_id: mf.episode_id.clone(),
-                    language: lang_pref.code.clone(),
+                    language: best.language.clone(),
                     provider: best.provider.clone(),
                     provider_file_id: Some(best.provider_file_id.clone()),
                     file_path: dest_path.to_string_lossy().to_string(),
@@ -234,10 +422,29 @@ async fn run_subtitle_search_for_file(
                     synced: false,
                     downloaded_at: Utc::now().to_rfc3339(),
                 };
-                let _ = app.services.subtitle_downloads.insert(&record).await;
+                let record_id = record.id.clone();
+                let record_inserted = match app.services.subtitle_downloads.insert(&record).await {
+                    Ok(()) => true,
+                    Err(err) => {
+                        warn!(error = %err, "failed to persist on-import subtitle download record");
+                        false
+                    }
+                };
+                let sync_result = maybe_sync_downloaded_subtitle(
+                    app,
+                    sync_settings,
+                    media_kind,
+                    file_path,
+                    &dest_path,
+                    record_inserted.then_some(record_id.as_str()),
+                    Some(best.score),
+                    best.forced,
+                )
+                .await;
                 info!(
                     title = %title.name,
                     language = %lang_pref.code,
+                    sync = sync_summary_suffix(sync_result.as_ref()),
                     "on-import subtitle downloaded"
                 );
             }
@@ -310,12 +517,7 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
         return Ok(());
     }
 
-    // Read sync settings
-    let sync_enabled = app
-        .read_setting_string_value("subtitles.sync_enabled", None)
-        .await?
-        .as_deref()
-        != Some("false");
+    let sync_settings = read_subtitle_sync_settings(app).await?;
 
     // Initialize provider
     let provider = OpenSubtitlesProvider::new(api_key);
@@ -350,15 +552,15 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
                 .await
                 .unwrap_or_default();
 
-            let embedded: Vec<String> = mf.subtitle_languages.clone();
+            let embedded = embedded_subtitle_streams(mf);
 
-            let missing = compute_missing_subtitles(&wanted_languages, &existing, &embedded);
+            let missing =
+                compute_missing_subtitles_from_streams(&wanted_languages, &existing, &embedded);
             if missing.is_empty() {
                 continue;
             }
 
-            let is_series = title.facet == scryer_domain::MediaFacet::Series
-                || title.facet == scryer_domain::MediaFacet::Anime;
+            let is_series = is_series_title(title);
             let min_score = if is_series {
                 min_score_series
             } else {
@@ -366,30 +568,12 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
             };
 
             let orchestrator = SubtitleSearchOrchestrator::new(min_score);
-            let imdb_id = title
-                .external_ids
-                .iter()
-                .find(|e| e.source == "imdb")
-                .map(|e| e.value.as_str());
+            let media_kind = subtitle_media_kind(title);
+            let (imdb_id, series_imdb_id) = title_imdb_ids(title);
 
             let file_path = Path::new(&mf.file_path);
 
-            // Look up season/episode for series
-            let (season_num, episode_num) = if let Some(ep_id) = &mf.episode_id {
-                match app.services.shows.get_episode_by_id(ep_id).await {
-                    Ok(Some(ep)) => (
-                        ep.season_number
-                            .as_ref()
-                            .and_then(|s| s.parse::<i32>().ok()),
-                        ep.episode_number
-                            .as_ref()
-                            .and_then(|s| s.parse::<i32>().ok()),
-                    ),
-                    _ => (None, None),
-                }
-            } else {
-                (None, None)
-            };
+            let (season_num, episode_num) = media_file_episode_context(app, mf).await;
 
             for lang_pref in &missing {
                 searched += 1;
@@ -398,9 +582,12 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
                     .search(
                         &provider,
                         file_path,
+                        media_kind,
                         &title.name,
+                        &title.aliases,
                         title.year,
                         imdb_id,
+                        series_imdb_id,
                         season_num,
                         episode_num,
                         std::slice::from_ref(&lang_pref.code),
@@ -409,6 +596,7 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
                         mf.video_codec_parsed.as_deref(),
                         mf.audio_codec_parsed.as_deref(),
                         mf.resolution.as_deref(),
+                        Some(lang_pref.hearing_impaired),
                         include_ai,
                         include_machine,
                     )
@@ -444,10 +632,7 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
                 let best = filtered_results
                     .iter()
                     .filter(|r| r.score >= min_score)
-                    .filter(|r| {
-                        r.hearing_impaired == lang_pref.hearing_impaired
-                            || !lang_pref.hearing_impaired
-                    })
+                    .filter(|r| r.hearing_impaired == lang_pref.hearing_impaired)
                     .filter(|r| r.forced == lang_pref.forced)
                     .max_by_key(|r| r.score)
                     .copied();
@@ -470,7 +655,7 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
                     &provider,
                     &best.provider_file_id,
                     file_path,
-                    &lang_pref.code,
+                    &best.language,
                     best.forced,
                     best.hearing_impaired,
                 )
@@ -483,7 +668,7 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
                             media_file_id: mf.id.clone(),
                             title_id: title.id.clone(),
                             episode_id: mf.episode_id.clone(),
-                            language: lang_pref.code.clone(),
+                            language: best.language.clone(),
                             provider: best.provider.clone(),
                             provider_file_id: Some(best.provider_file_id.clone()),
                             file_path: dest_path.to_string_lossy().to_string(),
@@ -498,33 +683,39 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
                             downloaded_at: Utc::now().to_rfc3339(),
                         };
 
-                        if let Err(err) = app.services.subtitle_downloads.insert(&record).await {
-                            warn!(error = %err, "failed to persist subtitle download record");
-                        }
-
-                        // Sync subtitle timing if enabled
-                        if sync_enabled && !best.forced {
-                            match sync::sync_subtitle(file_path, &dest_path, 60).await {
-                                Ok(result) if result.applied => {
-                                    info!(
-                                        offset_ms = result.offset_ms,
-                                        path = %dest_path.display(),
-                                        "subtitle timing synced"
-                                    );
-                                }
-                                Ok(_) => {
-                                    debug!(path = %dest_path.display(), "subtitle sync: no offset applied");
-                                }
-                                Err(err) => {
-                                    warn!(error = %err, "subtitle sync failed (non-fatal)");
-                                }
+                        let record_inserted = match app
+                            .services
+                            .subtitle_downloads
+                            .insert(&record)
+                            .await
+                        {
+                            Ok(()) => true,
+                            Err(err) => {
+                                warn!(error = %err, "failed to persist subtitle download record");
+                                false
                             }
-                        }
+                        };
+
+                        let sync_result = maybe_sync_downloaded_subtitle(
+                            app,
+                            sync_settings,
+                            media_kind,
+                            file_path,
+                            &dest_path,
+                            record_inserted.then_some(record.id.as_str()),
+                            Some(best.score),
+                            best.forced,
+                        )
+                        .await;
 
                         downloaded += 1;
                         let event_msg = format!(
-                            "{} subtitle downloaded for {} (score: {}, provider: {})",
-                            lang_pref.code, title.name, best.score, best.provider,
+                            "{} subtitle downloaded for {} (score: {}, provider: {}){}",
+                            lang_pref.code,
+                            title.name,
+                            best.score,
+                            best.provider,
+                            sync_summary_suffix(sync_result.as_ref()),
                         );
                         info!(
                             title = %title.name,
@@ -532,6 +723,7 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
                             provider = %best.provider,
                             score = best.score,
                             path = %dest_path.display(),
+                            sync = sync_summary_suffix(sync_result.as_ref()),
                             "subtitle downloaded"
                         );
                         let _ = app

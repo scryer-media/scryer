@@ -657,6 +657,14 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             default_value_json: "70",
             is_sensitive: false,
         },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SUBTITLES,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "subtitles.sync_max_offset_seconds",
+            data_type: "number",
+            default_value_json: "60",
+            is_sensitive: false,
+        },
     ]
 }
 

@@ -26,6 +26,11 @@ pub struct DownloadSubtitleInput {
     pub language: String,
     pub forced: Option<bool>,
     pub hearing_impaired: Option<bool>,
+    pub score: Option<i32>,
+    pub release_info: Option<String>,
+    pub uploader: Option<String>,
+    pub ai_translated: Option<bool>,
+    pub machine_translated: Option<bool>,
 }
 
 #[derive(SimpleObject)]
@@ -66,6 +71,15 @@ async fn read_subtitle_setting(
     })
 }
 
+async fn read_subtitle_i32_setting(
+    db: &scryer_infrastructure::SqliteServices,
+    key: &str,
+) -> Option<i32> {
+    read_subtitle_setting(db, key)
+        .await
+        .and_then(|value| value.parse::<i32>().ok())
+}
+
 #[Object]
 impl SubtitleMutations {
     /// Search for subtitles for a media file in a given language.
@@ -85,7 +99,6 @@ impl SubtitleMutations {
             .await
             .map_err(to_gql_error)?
             .ok_or_else(|| async_graphql::Error::new("media file not found"))?;
-
         let title = app
             .services
             .titles
@@ -119,11 +132,43 @@ impl SubtitleMutations {
             let _ = provider.login(&username, &password).await;
         }
 
-        let imdb_id = title
-            .external_ids
-            .iter()
-            .find(|e| e.source == "imdb")
-            .map(|e| e.value.as_str());
+        let is_series = title.facet == scryer_domain::MediaFacet::Series
+            || title.facet == scryer_domain::MediaFacet::Anime;
+        let imdb_id = if is_series {
+            None
+        } else {
+            title
+                .external_ids
+                .iter()
+                .find(|e| e.source == "imdb")
+                .map(|e| e.value.as_str())
+        };
+        let series_imdb_id = if is_series {
+            title
+                .external_ids
+                .iter()
+                .find(|e| e.source == "imdb")
+                .map(|e| e.value.as_str())
+        } else {
+            None
+        };
+        let (season_num, episode_num) = if let Some(episode_id) = mf.episode_id.as_deref() {
+            match app.services.shows.get_episode_by_id(episode_id).await {
+                Ok(Some(episode)) => (
+                    episode
+                        .season_number
+                        .as_deref()
+                        .and_then(|value| value.parse::<i32>().ok()),
+                    episode
+                        .episode_number
+                        .as_deref()
+                        .and_then(|value| value.parse::<i32>().ok()),
+                ),
+                _ => (None, None),
+            }
+        } else {
+            (None, None)
+        };
 
         let orchestrator =
             scryer_application::subtitles::search::SubtitleSearchOrchestrator::new(0);
@@ -133,17 +178,25 @@ impl SubtitleMutations {
             .search(
                 &provider,
                 file_path,
+                if is_series {
+                    scryer_application::subtitles::provider::SubtitleMediaKind::Episode
+                } else {
+                    scryer_application::subtitles::provider::SubtitleMediaKind::Movie
+                },
                 &title.name,
+                &title.aliases,
                 title.year,
                 imdb_id,
-                None,
-                None,
+                series_imdb_id,
+                season_num,
+                episode_num,
                 &[input.language],
                 mf.release_group.as_deref(),
                 mf.source_type.as_deref(),
                 mf.video_codec_parsed.as_deref(),
                 mf.audio_codec_parsed.as_deref(),
                 mf.resolution.as_deref(),
+                None,
                 include_ai,
                 include_machine,
             )
@@ -186,6 +239,13 @@ impl SubtitleMutations {
             .await
             .map_err(to_gql_error)?
             .ok_or_else(|| async_graphql::Error::new("media file not found"))?;
+        let title = app
+            .services
+            .titles
+            .get_by_id(&mf.title_id)
+            .await
+            .map_err(to_gql_error)?
+            .ok_or_else(|| async_graphql::Error::new("title not found"))?;
 
         let api_key = read_subtitle_setting(&db, "subtitles.opensubtitles_api_key")
             .await
@@ -228,31 +288,73 @@ impl SubtitleMutations {
             provider: "opensubtitles".to_string(),
             provider_file_id: Some(input.provider_file_id),
             file_path: dest_path.to_string_lossy().to_string(),
-            score: None,
+            score: input.score,
             hearing_impaired,
             forced,
-            ai_translated: false,
-            machine_translated: false,
-            uploader: None,
-            release_info: None,
+            ai_translated: input.ai_translated.unwrap_or(false),
+            machine_translated: input.machine_translated.unwrap_or(false),
+            uploader: input.uploader,
+            release_info: input.release_info,
             synced: false,
             downloaded_at: chrono::Utc::now().to_rfc3339(),
         };
-        scryer_infrastructure::queries::subtitle::insert_subtitle_download(db.pool(), &record)
+        app.services
+            .subtitle_downloads
+            .insert(&record)
             .await
             .map_err(to_gql_error)?;
 
-        // Attempt subtitle timing sync if enabled
-        let sync_enabled = read_subtitle_setting(&db, "subtitles.sync_enabled")
-            .await
-            .as_deref()
-            != Some("false");
-        if sync_enabled
-            && !forced
-            && let Err(err) =
-                scryer_application::subtitles::sync::sync_subtitle(file_path, &dest_path, 60).await
+        let is_series = title.facet == scryer_domain::MediaFacet::Series
+            || title.facet == scryer_domain::MediaFacet::Anime;
+        let policy = scryer_application::subtitles::sync::SyncPolicy {
+            enabled: read_subtitle_setting(&db, "subtitles.sync_enabled")
+                .await
+                .as_deref()
+                != Some("false"),
+            forced,
+            score: input.score,
+            threshold: Some(if is_series {
+                read_subtitle_i32_setting(&db, "subtitles.sync_threshold_series")
+                    .await
+                    .unwrap_or(90)
+            } else {
+                read_subtitle_i32_setting(&db, "subtitles.sync_threshold_movie")
+                    .await
+                    .unwrap_or(70)
+            }),
+            max_offset_seconds: i64::from(
+                read_subtitle_i32_setting(&db, "subtitles.sync_max_offset_seconds")
+                    .await
+                    .unwrap_or(60),
+            ),
+        };
+
+        match scryer_application::subtitles::sync::sync_subtitle_with_policy(
+            file_path, &dest_path, policy,
+        )
+        .await
         {
-            tracing::warn!(error = %err, "subtitle sync failed (non-fatal)");
+            Ok(result) => {
+                if result.applied
+                    && let Err(err) = app
+                        .services
+                        .subtitle_downloads
+                        .set_synced(&record.id, true)
+                        .await
+                {
+                    tracing::warn!(error = %err, download_id = %record.id, "failed to persist subtitle sync status");
+                }
+
+                tracing::info!(
+                    media_file_id = %mf.id,
+                    subtitle_download_id = %record.id,
+                    summary = %result.summary(),
+                    "manual subtitle sync completed"
+                );
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "subtitle sync failed (non-fatal)");
+            }
         }
 
         Ok(true)

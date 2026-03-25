@@ -90,6 +90,20 @@ pub async fn insert_subtitle_download(
     Ok(())
 }
 
+pub async fn update_subtitle_download_synced(
+    pool: &SqlitePool,
+    id: &str,
+    synced: bool,
+) -> AppResult<()> {
+    sqlx::query("UPDATE subtitle_downloads SET synced = ? WHERE id = ?")
+        .bind(synced as i32)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| AppError::Repository(e.to_string()))?;
+    Ok(())
+}
+
 pub async fn delete_subtitle_download(
     pool: &SqlitePool,
     id: &str,

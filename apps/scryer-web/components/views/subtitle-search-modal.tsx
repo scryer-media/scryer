@@ -86,6 +86,11 @@ export function SubtitleSearchModal({
               language: result.language,
               forced: result.forced,
               hearingImpaired: result.hearingImpaired,
+              score: result.score,
+              releaseInfo: result.releaseInfo,
+              uploader: result.uploader,
+              aiTranslated: result.aiTranslated,
+              machineTranslated: result.machineTranslated,
             },
           })
           .toPromise();
