@@ -52,7 +52,7 @@ impl TitleMutations {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let source_hint = input.source_hint.clone();
-        let source_kind = parse_download_source_kind(input.source_kind.clone());
+        let source_kind = parse_download_source_kind(input.source_kind);
         let source_title = input.source_title.clone();
         let request = map_add_input(input)?;
         let (title, job_id) = app

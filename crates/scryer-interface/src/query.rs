@@ -90,7 +90,6 @@ fn from_delay_profile(profile: scryer_application::DelayProfile) -> DelayProfile
 #[derive(Copy, Clone)]
 pub struct QueryRoot;
 
-#[expect(clippy::too_many_arguments)]
 #[Object]
 impl QueryRoot {
     async fn titles(

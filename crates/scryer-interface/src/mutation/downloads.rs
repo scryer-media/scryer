@@ -49,7 +49,7 @@ impl DownloadMutations {
     ) -> GqlResult<QueueDownloadPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let source_kind = parse_download_source_kind(input.release.source_kind.clone());
+        let source_kind = parse_download_source_kind(input.release.source_kind);
         let job_id = app
             .queue_existing_title_download(
                 &actor,
