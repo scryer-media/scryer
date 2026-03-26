@@ -1,10 +1,9 @@
 use scryer_application::{
-    ActivityEvent, BackupInfo, DiskSpaceInfo, HealthCheckResult,
-    HousekeepingReport, IndexerSearchResult, LibraryScanSummary, ParsedEpisodeMetadata,
-    ParsedReleaseMetadata, PendingRelease, QualityProfile, QualityProfileCriteria,
-    QualityProfileDecision, RegistryPlugin, RenameApplyItemResult, RenameApplyResult, RenamePlan,
-    RenamePlanItem, RssSyncReport, ScoringEntry, ScoringSource, SystemHealth, TitleHistoryPage,
-    TitleReleaseBlocklistEntry,
+    ActivityEvent, BackupInfo, DiskSpaceInfo, HealthCheckResult, HousekeepingReport,
+    IndexerSearchResult, LibraryScanSummary, ParsedEpisodeMetadata, ParsedReleaseMetadata,
+    PendingRelease, QualityProfile, QualityProfileCriteria, QualityProfileDecision, RegistryPlugin,
+    RenameApplyItemResult, RenameApplyResult, RenamePlan, RenamePlanItem, RssSyncReport,
+    ScoringEntry, ScoringSource, SystemHealth, TitleHistoryPage, TitleReleaseBlocklistEntry,
 };
 use scryer_domain::{
     CalendarEpisode, Collection, DownloadClientConfig, DownloadQueueItem, Episode, IndexerConfig,
@@ -312,12 +311,16 @@ pub(crate) fn from_download_queue_item(item: DownloadQueueItem) -> DownloadQueue
         title_name: item.title_name,
         facet: item.facet.as_deref().and_then(MediaFacetValue::parse),
         is_scryer_origin: item.is_scryer_origin,
-        tracked_state: item.tracked_state.map(TrackedDownloadStateValue::from_domain),
+        tracked_state: item
+            .tracked_state
+            .map(TrackedDownloadStateValue::from_domain),
         tracked_status: item
             .tracked_status
             .map(TrackedDownloadStatusValue::from_domain),
         tracked_status_messages: item.tracked_status_messages,
-        tracked_match_type: item.tracked_match_type.map(TitleMatchTypeValue::from_domain),
+        tracked_match_type: item
+            .tracked_match_type
+            .map(TitleMatchTypeValue::from_domain),
         client_id: item.client_id,
         client_name: item.client_name,
         client_type: item.client_type,

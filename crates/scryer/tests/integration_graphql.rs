@@ -938,9 +938,18 @@ async fn graphql_typed_library_paths_round_trip() {
     )
     .await;
     assert_no_errors(&read);
-    assert_eq!(read["data"]["libraryPaths"]["moviePath"], "/mnt/storage/movies");
-    assert_eq!(read["data"]["libraryPaths"]["seriesPath"], "/mnt/storage/series");
-    assert_eq!(read["data"]["libraryPaths"]["animePath"], "/mnt/storage/anime");
+    assert_eq!(
+        read["data"]["libraryPaths"]["moviePath"],
+        "/mnt/storage/movies"
+    );
+    assert_eq!(
+        read["data"]["libraryPaths"]["seriesPath"],
+        "/mnt/storage/series"
+    );
+    assert_eq!(
+        read["data"]["libraryPaths"]["animePath"],
+        "/mnt/storage/anime"
+    );
 }
 
 #[tokio::test]
@@ -985,8 +994,14 @@ async fn graphql_typed_service_settings_round_trip() {
     )
     .await;
     assert_no_errors(&read);
-    assert_eq!(read["data"]["serviceSettings"]["tlsCertPath"], "/etc/scryer/tls.crt");
-    assert_eq!(read["data"]["serviceSettings"]["tlsKeyPath"], "/etc/scryer/tls.key");
+    assert_eq!(
+        read["data"]["serviceSettings"]["tlsCertPath"],
+        "/etc/scryer/tls.crt"
+    );
+    assert_eq!(
+        read["data"]["serviceSettings"]["tlsKeyPath"],
+        "/etc/scryer/tls.key"
+    );
 }
 
 #[tokio::test]
@@ -1205,7 +1220,10 @@ async fn graphql_delay_profiles_round_trip() {
     .await;
     assert_no_errors(&upsert);
     assert_eq!(upsert["data"]["upsertDelayProfile"]["id"], "balanced-delay");
-    assert_eq!(upsert["data"]["upsertDelayProfile"]["appliesToFacets"][1], "tv");
+    assert_eq!(
+        upsert["data"]["upsertDelayProfile"]["appliesToFacets"][1],
+        "tv"
+    );
 
     let read = gql(
         &ctx,
@@ -1496,8 +1514,14 @@ async fn graphql_typed_routing_round_trip() {
     )
     .await;
     assert_no_errors(&read);
-    assert_eq!(read["data"]["downloadClientRouting"][0]["clientId"], "client-a");
-    assert_eq!(read["data"]["downloadClientRouting"][0]["category"], "movies");
+    assert_eq!(
+        read["data"]["downloadClientRouting"][0]["clientId"],
+        "client-a"
+    );
+    assert_eq!(
+        read["data"]["downloadClientRouting"][0]["category"],
+        "movies"
+    );
     assert_eq!(read["data"]["indexerRouting"][0]["indexerId"], "indexer-a");
     assert_eq!(read["data"]["indexerRouting"][0]["priority"], 3);
 }
@@ -1624,13 +1648,13 @@ async fn graphql_introspection_exposes_core_graph_relationship_fields() {
     assert!(pending_release_fields.contains(&"title"));
     assert!(pending_release_fields.contains(&"wantedItem"));
 
-    let pending_release_status_names: Vec<&str> = body["data"]["pendingReleaseStatus"]
-        ["enumValues"]
-        .as_array()
-        .expect("pending release status values")
-        .iter()
-        .filter_map(|value| value["name"].as_str())
-        .collect();
+    let pending_release_status_names: Vec<&str> =
+        body["data"]["pendingReleaseStatus"]["enumValues"]
+            .as_array()
+            .expect("pending release status values")
+            .iter()
+            .filter_map(|value| value["name"].as_str())
+            .collect();
     assert_eq!(
         pending_release_status_names,
         vec![
@@ -1731,7 +1755,11 @@ async fn graphql_traverses_core_graph_relationships() {
         monitored: true,
         created_at: chrono::Utc::now(),
     };
-    let episode = ctx.db.create_episode(episode).await.expect("create episode");
+    let episode = ctx
+        .db
+        .create_episode(episode)
+        .await
+        .expect("create episode");
 
     let file_path = media_root
         .path()
@@ -1941,7 +1969,10 @@ async fn graphql_traverses_core_graph_relationships() {
     assert_eq!(title_data["mediaFiles"][0]["title"]["id"], title.id);
     assert_eq!(title_data["mediaFiles"][0]["episode"]["id"], episode.id);
     assert_eq!(title_data["wantedItems"][0]["title"]["id"], title.id);
-    assert_eq!(title_data["wantedItems"][0]["collection"]["id"], collection.id);
+    assert_eq!(
+        title_data["wantedItems"][0]["collection"]["id"],
+        collection.id
+    );
     assert_eq!(title_data["wantedItems"][0]["episode"]["id"], episode.id);
     assert_eq!(
         title_data["wantedItems"][0]["pendingReleases"][0]["id"],
@@ -1966,17 +1997,26 @@ async fn graphql_traverses_core_graph_relationships() {
     assert_eq!(body["data"]["episode"]["wantedItem"]["id"], wanted_item.id);
     assert_eq!(body["data"]["episode"]["mediaFiles"][0]["id"], file_id);
     assert_eq!(body["data"]["wantedItem"]["title"]["id"], title.id);
-    assert_eq!(body["data"]["wantedItem"]["collection"]["id"], collection.id);
+    assert_eq!(
+        body["data"]["wantedItem"]["collection"]["id"],
+        collection.id
+    );
     assert_eq!(body["data"]["wantedItem"]["episode"]["id"], episode.id);
     assert_eq!(
         body["data"]["wantedItem"]["pendingReleases"][0]["id"],
         pending_release.id
     );
-    assert_eq!(body["data"]["wantedItem"]["releaseDecisions"][0]["id"], decision.id);
+    assert_eq!(
+        body["data"]["wantedItem"]["releaseDecisions"][0]["id"],
+        decision.id
+    );
     assert_eq!(body["data"]["pendingRelease"]["id"], pending_release.id);
     assert_eq!(body["data"]["pendingRelease"]["status"], "waiting");
     assert_eq!(body["data"]["pendingRelease"]["title"]["id"], title.id);
-    assert_eq!(body["data"]["pendingRelease"]["wantedItem"]["id"], wanted_item.id);
+    assert_eq!(
+        body["data"]["pendingRelease"]["wantedItem"]["id"],
+        wanted_item.id
+    );
 }
 
 #[tokio::test]
@@ -2023,11 +2063,23 @@ async fn graphql_introspection_exposes_queue_and_source_enums() {
     };
 
     assert_eq!(field("state")["type"]["kind"], "NON_NULL");
-    assert_eq!(field("state")["type"]["ofType"]["name"], "DownloadQueueStateValue");
+    assert_eq!(
+        field("state")["type"]["ofType"]["name"],
+        "DownloadQueueStateValue"
+    );
     assert_eq!(field("importStatus")["type"]["name"], "ImportStatusValue");
-    assert_eq!(field("trackedState")["type"]["name"], "TrackedDownloadStateValue");
-    assert_eq!(field("trackedStatus")["type"]["name"], "TrackedDownloadStatusValue");
-    assert_eq!(field("trackedMatchType")["type"]["name"], "TitleMatchTypeValue");
+    assert_eq!(
+        field("trackedState")["type"]["name"],
+        "TrackedDownloadStateValue"
+    );
+    assert_eq!(
+        field("trackedStatus")["type"]["name"],
+        "TrackedDownloadStatusValue"
+    );
+    assert_eq!(
+        field("trackedMatchType")["type"]["name"],
+        "TitleMatchTypeValue"
+    );
 
     let queue_states = body["data"]["queueState"]["enumValues"]
         .as_array()
@@ -2137,9 +2189,15 @@ async fn graphql_introspection_exposes_queue_action_payloads() {
         action_field("kind")["type"]["ofType"]["name"],
         "DownloadQueueActionKindValue"
     );
-    assert_eq!(action_field("downloadClientItemId")["type"]["kind"], "NON_NULL");
+    assert_eq!(
+        action_field("downloadClientItemId")["type"]["kind"],
+        "NON_NULL"
+    );
     assert_eq!(action_field("removed")["type"]["kind"], "NON_NULL");
-    assert_eq!(action_field("queueItem")["type"]["name"], "DownloadQueueItemPayload");
+    assert_eq!(
+        action_field("queueItem")["type"]["name"],
+        "DownloadQueueItemPayload"
+    );
     assert_eq!(action_field("importId")["type"]["name"], "String");
 
     let action_kind_names: Vec<&str> = body["data"]["actionKind"]["enumValues"]
@@ -2200,14 +2258,20 @@ async fn graphql_introspection_exposes_wanted_enums() {
     };
 
     assert_eq!(field("mediaType")["type"]["kind"], "NON_NULL");
-    assert_eq!(field("mediaType")["type"]["ofType"]["name"], "WantedMediaTypeValue");
+    assert_eq!(
+        field("mediaType")["type"]["ofType"]["name"],
+        "WantedMediaTypeValue"
+    );
     assert_eq!(field("searchPhase")["type"]["kind"], "NON_NULL");
     assert_eq!(
         field("searchPhase")["type"]["ofType"]["name"],
         "WantedSearchPhaseValue"
     );
     assert_eq!(field("status")["type"]["kind"], "NON_NULL");
-    assert_eq!(field("status")["type"]["ofType"]["name"], "WantedStatusValue");
+    assert_eq!(
+        field("status")["type"]["ofType"]["name"],
+        "WantedStatusValue"
+    );
 
     let status_names: Vec<&str> = body["data"]["wantedStatus"]["enumValues"]
         .as_array()
@@ -2215,7 +2279,10 @@ async fn graphql_introspection_exposes_wanted_enums() {
         .iter()
         .filter_map(|value| value["name"].as_str())
         .collect();
-    assert_eq!(status_names, vec!["wanted", "grabbed", "paused", "completed"]);
+    assert_eq!(
+        status_names,
+        vec!["wanted", "grabbed", "paused", "completed"]
+    );
 
     let media_type_names: Vec<&str> = body["data"]["wantedMediaType"]["enumValues"]
         .as_array()
@@ -2223,7 +2290,10 @@ async fn graphql_introspection_exposes_wanted_enums() {
         .iter()
         .filter_map(|value| value["name"].as_str())
         .collect();
-    assert_eq!(media_type_names, vec!["movie", "episode", "interstitial_movie"]);
+    assert_eq!(
+        media_type_names,
+        vec!["movie", "episode", "interstitial_movie"]
+    );
 
     let search_phase_names: Vec<&str> = body["data"]["wantedSearchPhase"]["enumValues"]
         .as_array()
@@ -2233,7 +2303,13 @@ async fn graphql_introspection_exposes_wanted_enums() {
         .collect();
     assert_eq!(
         search_phase_names,
-        vec!["pre_air", "pre_release", "primary", "secondary", "long_tail"]
+        vec![
+            "pre_air",
+            "pre_release",
+            "primary",
+            "secondary",
+            "long_tail"
+        ]
     );
 }
 
@@ -2300,10 +2376,19 @@ async fn graphql_introspection_exposes_import_enums() {
     };
 
     assert_eq!(record_field("importType")["type"]["kind"], "NON_NULL");
-    assert_eq!(record_field("importType")["type"]["ofType"]["name"], "ImportTypeValue");
+    assert_eq!(
+        record_field("importType")["type"]["ofType"]["name"],
+        "ImportTypeValue"
+    );
     assert_eq!(record_field("status")["type"]["kind"], "NON_NULL");
-    assert_eq!(record_field("status")["type"]["ofType"]["name"], "ImportStatusValue");
-    assert_eq!(record_field("decision")["type"]["name"], "ImportDecisionValue");
+    assert_eq!(
+        record_field("status")["type"]["ofType"]["name"],
+        "ImportStatusValue"
+    );
+    assert_eq!(
+        record_field("decision")["type"]["name"],
+        "ImportDecisionValue"
+    );
     assert_eq!(
         record_field("skipReason")["type"]["name"],
         "ImportSkipReasonValue"

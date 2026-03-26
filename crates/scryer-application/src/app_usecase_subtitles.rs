@@ -242,14 +242,8 @@ async fn run_subtitle_search_for_file(
         return Ok(());
     }
 
-    let username = settings
-        .open_subtitles_username
-        .clone()
-        .unwrap_or_default();
-    let password = settings
-        .open_subtitles_password
-        .clone()
-        .unwrap_or_default();
+    let username = settings.open_subtitles_username.clone().unwrap_or_default();
+    let password = settings.open_subtitles_password.clone().unwrap_or_default();
     let include_ai = settings.include_ai_translated;
     let include_machine = settings.include_machine_translated;
 
@@ -434,14 +428,8 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
         }
     };
 
-    let username = settings
-        .open_subtitles_username
-        .clone()
-        .unwrap_or_default();
-    let password = settings
-        .open_subtitles_password
-        .clone()
-        .unwrap_or_default();
+    let username = settings.open_subtitles_username.clone().unwrap_or_default();
+    let password = settings.open_subtitles_password.clone().unwrap_or_default();
 
     let include_ai = settings.include_ai_translated;
     let include_machine = settings.include_machine_translated;

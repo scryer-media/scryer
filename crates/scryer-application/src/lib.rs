@@ -94,9 +94,7 @@ pub use app_usecase_plugins::{RegistryPlugin, RulePackRegistryEntry, RulePackTem
 pub use app_usecase_post_processing::{PostProcessingContext, run_post_processing};
 pub use app_usecase_rss::RssSyncReport;
 pub use app_usecase_rules::{ConvenienceAudioSetting, ConvenienceBoolSetting, ConvenienceSettings};
-pub use app_usecase_settings::{
-    AcquisitionSettings, SubtitleSettings, UpdateSubtitleSettings,
-};
+pub use app_usecase_settings::{AcquisitionSettings, SubtitleSettings, UpdateSubtitleSettings};
 pub use app_usecase_subtitles::{spawn_subtitle_search_for_file, start_background_subtitle_poller};
 pub use app_usecase_title_images::start_background_banner_loop;
 pub use app_usecase_title_images::start_background_fanart_loop;
@@ -135,10 +133,10 @@ pub use null_repositories::{
 };
 pub use quality_profile::{
     BLOCK_SCORE, QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY,
-    QUALITY_PROFILE_INHERIT_VALUE, QualityProfile, QualityProfileCriteria,
-    QualityProfileDecision, ScoringConfig, ScoringEntry, ScoringSource, apply_age_scoring,
-    apply_size_scoring_for_category, default_quality_profile_1080p_for_search,
-    default_quality_profile_for_search, evaluate_against_profile, parse_profile_catalog_from_json,
+    QUALITY_PROFILE_INHERIT_VALUE, QualityProfile, QualityProfileCriteria, QualityProfileDecision,
+    ScoringConfig, ScoringEntry, ScoringSource, apply_age_scoring, apply_size_scoring_for_category,
+    default_quality_profile_1080p_for_search, default_quality_profile_for_search,
+    evaluate_against_profile, parse_profile_catalog_from_json,
 };
 pub use release_parser::{
     ParsedEpisodeMetadata, ParsedEpisodeReleaseType, ParsedReleaseMetadata, ParsedSpecialKind,

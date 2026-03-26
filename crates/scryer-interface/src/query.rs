@@ -477,7 +477,10 @@ impl QueryRoot {
     async fn subtitle_settings(&self, ctx: &Context<'_>) -> GqlResult<SubtitleSettingsPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let settings = app.get_subtitle_settings(&actor).await.map_err(to_gql_error)?;
+        let settings = app
+            .get_subtitle_settings(&actor)
+            .await
+            .map_err(to_gql_error)?;
         Ok(from_subtitle_settings(settings))
     }
 

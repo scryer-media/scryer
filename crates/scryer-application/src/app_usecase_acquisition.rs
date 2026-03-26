@@ -2738,11 +2738,7 @@ pub(crate) fn anidb_id_from_external_ids(external_ids: &[ExternalId]) -> Option<
 // --- Public use-case methods for the wanted items API ---
 
 impl AppUseCase {
-    pub async fn get_wanted_item(
-        &self,
-        actor: &User,
-        id: &str,
-    ) -> AppResult<Option<WantedItem>> {
+    pub async fn get_wanted_item(&self, actor: &User, id: &str) -> AppResult<Option<WantedItem>> {
         require(actor, &Entitlement::ViewCatalog)?;
         self.services.wanted_items.get_wanted_item_by_id(id).await
     }

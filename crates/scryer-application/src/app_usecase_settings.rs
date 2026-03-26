@@ -5,8 +5,8 @@ use tracing::warn;
 
 use super::*;
 use crate::acquisition_policy::AcquisitionThresholds;
-use crate::subtitles::{normalize_subtitle_language_code, wanted::SubtitleLanguagePref};
 use crate::scoring_weights::ScoringPersona;
+use crate::subtitles::{normalize_subtitle_language_code, wanted::SubtitleLanguagePref};
 
 const SETTINGS_SOURCE_TYPED_GRAPHQL: &str = "typed_graphql";
 
@@ -14,8 +14,7 @@ const ACQUISITION_ENABLED_KEY: &str = "acquisition.enabled";
 const ACQUISITION_UPGRADE_COOLDOWN_HOURS_KEY: &str = "acquisition.upgrade_cooldown_hours";
 const ACQUISITION_SAME_TIER_MIN_DELTA_KEY: &str = "acquisition.same_tier_min_delta";
 const ACQUISITION_CROSS_TIER_MIN_DELTA_KEY: &str = "acquisition.cross_tier_min_delta";
-const ACQUISITION_FORCED_UPGRADE_DELTA_BYPASS_KEY: &str =
-    "acquisition.forced_upgrade_delta_bypass";
+const ACQUISITION_FORCED_UPGRADE_DELTA_BYPASS_KEY: &str = "acquisition.forced_upgrade_delta_bypass";
 const ACQUISITION_POLL_INTERVAL_SECONDS_KEY: &str = "acquisition.poll_interval_seconds";
 const ACQUISITION_SYNC_INTERVAL_SECONDS_KEY: &str = "acquisition.sync_interval_seconds";
 const ACQUISITION_BATCH_SIZE_KEY: &str = "acquisition.batch_size";
@@ -111,10 +110,7 @@ fn normalize_subtitle_languages(languages: Vec<SubtitleLanguagePref>) -> Vec<Sub
         let Some(code) = normalize_subtitle_language_code(&language.code) else {
             continue;
         };
-        let key = format!(
-            "{}:{}:{}",
-            code, language.hearing_impaired, language.forced
-        );
+        let key = format!("{}:{}:{}", code, language.hearing_impaired, language.forced);
         if seen.insert(key) {
             normalized.push(SubtitleLanguagePref {
                 code,
@@ -342,8 +338,7 @@ impl AppUseCase {
             .map(normalize_delay_profile)
             .collect::<Vec<_>>();
 
-        crate::validate_delay_profile_catalog(&profiles)
-            .map_err(AppError::Validation)?;
+        crate::validate_delay_profile_catalog(&profiles).map_err(AppError::Validation)?;
 
         Ok(profiles)
     }
@@ -397,8 +392,12 @@ impl AppUseCase {
         let api_key_update = normalize_optional_string(input.open_subtitles_api_key);
         let password_update = normalize_optional_string(input.open_subtitles_password);
 
-        self.upsert_system_setting_json(SUBTITLES_ENABLED_KEY, &input.enabled, Some(actor.id.clone()))
-            .await?;
+        self.upsert_system_setting_json(
+            SUBTITLES_ENABLED_KEY,
+            &input.enabled,
+            Some(actor.id.clone()),
+        )
+        .await?;
         self.upsert_system_setting_json(
             SUBTITLES_OPENSUBTITLES_USERNAME_KEY,
             &username,
@@ -554,8 +553,12 @@ impl AppUseCase {
             ));
         }
 
-        self.upsert_system_setting_json(ACQUISITION_ENABLED_KEY, &settings.enabled, Some(actor.id.clone()))
-            .await?;
+        self.upsert_system_setting_json(
+            ACQUISITION_ENABLED_KEY,
+            &settings.enabled,
+            Some(actor.id.clone()),
+        )
+        .await?;
         self.upsert_system_setting_json(
             ACQUISITION_UPGRADE_COOLDOWN_HOURS_KEY,
             &settings.upgrade_cooldown_hours,
@@ -641,14 +644,16 @@ impl AppUseCase {
         }
 
         let mut profiles = self.delay_profiles().await?;
-        if let Some(existing) = profiles.iter_mut().find(|existing| existing.id == profile.id) {
+        if let Some(existing) = profiles
+            .iter_mut()
+            .find(|existing| existing.id == profile.id)
+        {
             *existing = profile.clone();
         } else {
             profiles.push(profile.clone());
         }
 
-        crate::validate_delay_profile_catalog(&profiles)
-            .map_err(AppError::Validation)?;
+        crate::validate_delay_profile_catalog(&profiles).map_err(AppError::Validation)?;
         self.upsert_system_setting_json(
             crate::delay_profile::DELAY_PROFILE_CATALOG_KEY,
             &profiles,
@@ -676,11 +681,7 @@ impl AppUseCase {
         Ok(profile)
     }
 
-    pub async fn delete_delay_profile(
-        &self,
-        actor: &User,
-        profile_id: &str,
-    ) -> AppResult<String> {
+    pub async fn delete_delay_profile(&self, actor: &User, profile_id: &str) -> AppResult<String> {
         require(actor, &Entitlement::ManageConfig)?;
 
         let profile_id = profile_id.trim().to_string();
@@ -692,9 +693,7 @@ impl AppUseCase {
 
         let profiles = self.delay_profiles().await?;
         if !profiles.iter().any(|profile| profile.id == profile_id) {
-            return Err(AppError::NotFound(format!(
-                "delay profile {profile_id}"
-            )));
+            return Err(AppError::NotFound(format!("delay profile {profile_id}")));
         }
 
         let next_profiles: Vec<crate::DelayProfile> = profiles

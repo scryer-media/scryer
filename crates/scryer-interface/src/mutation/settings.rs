@@ -12,10 +12,10 @@ use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_
 use crate::mappers::{from_tvdb_scan_operation, from_user};
 use crate::settings_graph::{
     load_download_client_routing, load_indexer_routing, load_library_paths_payload,
-    load_media_settings_payload, load_quality_profile_settings_payload, load_service_settings_payload,
-    persist_library_paths, persist_media_settings, persist_quality_profile_catalog,
-    persist_service_settings, quality_profile_from_input, serialize_download_client_routing,
-    serialize_indexer_routing,
+    load_media_settings_payload, load_quality_profile_settings_payload,
+    load_service_settings_payload, persist_library_paths, persist_media_settings,
+    persist_quality_profile_catalog, persist_service_settings, quality_profile_from_input,
+    serialize_download_client_routing, serialize_indexer_routing,
 };
 use crate::types::*;
 
@@ -135,10 +135,12 @@ impl SettingsMutations {
                     languages: input
                         .languages
                         .into_iter()
-                        .map(|language| scryer_application::subtitles::wanted::SubtitleLanguagePref {
-                            code: language.code,
-                            hearing_impaired: language.hearing_impaired.unwrap_or(false),
-                            forced: language.forced.unwrap_or(false),
+                        .map(|language| {
+                            scryer_application::subtitles::wanted::SubtitleLanguagePref {
+                                code: language.code,
+                                hearing_impaired: language.hearing_impaired.unwrap_or(false),
+                                forced: language.forced.unwrap_or(false),
+                            }
                         })
                         .collect(),
                     auto_download_on_import: input.auto_download_on_import,
@@ -344,8 +346,11 @@ impl SettingsMutations {
         }
 
         let current = load_quality_profile_settings_payload(&app, &db).await?;
-        let valid_profile_ids: std::collections::HashSet<&str> =
-            current.profiles.iter().map(|profile| profile.id.as_str()).collect();
+        let valid_profile_ids: std::collections::HashSet<&str> = current
+            .profiles
+            .iter()
+            .map(|profile| profile.id.as_str())
+            .collect();
 
         if let Some(global_profile_id) = input.global_profile_id {
             let global_profile_id = global_profile_id.trim();
@@ -380,7 +385,9 @@ impl SettingsMutations {
                     .as_deref()
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
-                    .ok_or_else(|| Error::new("profile_id is required when inheritGlobal is false"))?;
+                    .ok_or_else(|| {
+                        Error::new("profile_id is required when inheritGlobal is false")
+                    })?;
                 if !valid_profile_ids.contains(profile_id) {
                     return Err(Error::new(format!(
                         "unknown quality profile '{profile_id}'"
@@ -458,7 +465,10 @@ impl SettingsMutations {
                 None,
                 None,
                 scryer_application::ActivityKind::SettingSaved,
-                format!("download client routing updated for {}", scope.as_scope_id()),
+                format!(
+                    "download client routing updated for {}",
+                    scope.as_scope_id()
+                ),
                 scryer_application::ActivitySeverity::Success,
                 vec![
                     scryer_application::ActivityChannel::Toast,
@@ -613,10 +623,10 @@ impl SettingsMutations {
             )
             .await;
 
-        let _ = app
-            .services
-            .settings_changed_broadcast
-            .send(vec!["quality.profiles".to_string(), "quality.profile_id".to_string()]);
+        let _ = app.services.settings_changed_broadcast.send(vec![
+            "quality.profiles".to_string(),
+            "quality.profile_id".to_string(),
+        ]);
 
         load_quality_profile_settings_payload(&app, &db).await
     }

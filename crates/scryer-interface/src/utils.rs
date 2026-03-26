@@ -40,12 +40,16 @@ pub(crate) fn apply_title_options(tags: &mut Vec<String>, options: TitleOptionsI
     set_structured_tag(
         tags,
         "scryer:quality-profile:",
-        options.quality_profile_id.map(|value| value.trim().to_string()),
+        options
+            .quality_profile_id
+            .map(|value| value.trim().to_string()),
     );
     set_structured_tag(
         tags,
         "scryer:root-folder:",
-        options.root_folder_path.map(|value| value.trim().to_string()),
+        options
+            .root_folder_path
+            .map(|value| value.trim().to_string()),
     );
     set_structured_tag(
         tags,

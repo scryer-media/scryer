@@ -35,10 +35,7 @@ impl TitleMutations {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let request = map_add_input(input)?;
-        let domain_title = app
-            .add_title(&actor, request)
-            .await
-            .map_err(to_gql_error)?;
+        let domain_title = app.add_title(&actor, request).await.map_err(to_gql_error)?;
 
         Ok(AddTitleResult {
             title: from_title(domain_title),
@@ -68,7 +65,8 @@ impl TitleMutations {
             )
             .await
             .map_err(to_gql_error)?;
-        let queued_download = queued_download_payload(&title, job_id.clone(), source_title, source_kind);
+        let queued_download =
+            queued_download_payload(&title, job_id.clone(), source_title, source_kind);
 
         Ok(AddTitleResult {
             title: from_title(title),

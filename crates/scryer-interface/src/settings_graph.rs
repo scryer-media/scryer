@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use async_graphql::{Error, Result as GqlResult};
 use scryer_application::{
-    AppUseCase, QualityProfile, QualityProfileCriteria, QUALITY_PROFILE_CATALOG_KEY,
-    QUALITY_PROFILE_ID_KEY, QUALITY_PROFILE_INHERIT_VALUE,
+    AppUseCase, QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY, QUALITY_PROFILE_INHERIT_VALUE,
+    QualityProfile, QualityProfileCriteria,
 };
 use scryer_domain::RootFolderEntry;
 use scryer_infrastructure::{SettingsValueRecord, SqliteServices};
@@ -183,10 +183,7 @@ fn ensure_quality_profiles_exist(mut profiles: Vec<QualityProfile>) -> Vec<Quali
     profiles
 }
 
-fn resolve_global_profile_id(
-    profiles: &[QualityProfile],
-    candidate: Option<String>,
-) -> String {
+fn resolve_global_profile_id(profiles: &[QualityProfile], candidate: Option<String>) -> String {
     let trimmed = candidate.unwrap_or_default();
     if profiles.iter().any(|profile| profile.id == trimmed) {
         return trimmed;
@@ -218,7 +215,8 @@ pub(crate) async fn load_quality_profile_settings_payload(
         )
         .await
         .map_err(|error| Error::new(error.to_string()))?;
-    let global_profile_id = resolve_global_profile_id(&profiles, read_effective_setting_string(&global_setting));
+    let global_profile_id =
+        resolve_global_profile_id(&profiles, read_effective_setting_string(&global_setting));
 
     let mut category_selections = Vec::with_capacity(3);
     for scope in [
@@ -306,7 +304,9 @@ pub(crate) fn quality_profile_from_input(input: QualityProfileInput) -> GqlResul
         return Err(Error::new("quality profile name is required"));
     }
     if profile.criteria.quality_tiers.is_empty() {
-        return Err(Error::new("quality profile must include at least one quality tier"));
+        return Err(Error::new(
+            "quality profile must include at least one quality tier",
+        ));
     }
 
     Ok(profile)
@@ -467,7 +467,11 @@ pub(crate) async fn load_media_settings_payload(
     scope: ContentScopeValue,
 ) -> GqlResult<MediaSettingsPayload> {
     let library_record = db
-        .get_setting_with_defaults(SETTINGS_SCOPE_MEDIA, library_path_key(scope), None::<String>)
+        .get_setting_with_defaults(
+            SETTINGS_SCOPE_MEDIA,
+            library_path_key(scope),
+            None::<String>,
+        )
         .await
         .map_err(|error| Error::new(error.to_string()))?;
     let scoped_rename_template = db
@@ -636,10 +640,12 @@ pub(crate) async fn load_media_settings_payload(
             .or_else(|| read_effective_setting_string(&global_collision_policy))
             .or_else(|| read_effective_setting_string(&legacy_collision_policy))
             .unwrap_or_else(|| DEFAULT_RENAME_COLLISION_POLICY.to_string()),
-        rename_missing_metadata_policy: read_effective_setting_string(&scoped_missing_metadata_policy)
-            .or_else(|| read_effective_setting_string(&global_missing_metadata_policy))
-            .or_else(|| read_effective_setting_string(&legacy_missing_metadata_policy))
-            .unwrap_or_else(|| DEFAULT_RENAME_MISSING_METADATA_POLICY.to_string()),
+        rename_missing_metadata_policy: read_effective_setting_string(
+            &scoped_missing_metadata_policy,
+        )
+        .or_else(|| read_effective_setting_string(&global_missing_metadata_policy))
+        .or_else(|| read_effective_setting_string(&legacy_missing_metadata_policy))
+        .unwrap_or_else(|| DEFAULT_RENAME_MISSING_METADATA_POLICY.to_string()),
         filler_policy,
         recap_policy,
         monitor_specials,
@@ -652,7 +658,9 @@ pub(crate) async fn load_media_settings_payload(
     })
 }
 
-pub(crate) async fn load_library_paths_payload(db: &SqliteServices) -> GqlResult<LibraryPathsPayload> {
+pub(crate) async fn load_library_paths_payload(
+    db: &SqliteServices,
+) -> GqlResult<LibraryPathsPayload> {
     let movie = db
         .get_setting_with_defaults(SETTINGS_SCOPE_MEDIA, MOVIES_PATH_KEY, None::<String>)
         .await
@@ -732,7 +740,10 @@ pub(crate) async fn persist_media_settings(
         )
         .await
         .map_err(|error| Error::new(error.to_string()))?;
-        if !changed_keys.iter().any(|key| key == library_path_key(scope)) {
+        if !changed_keys
+            .iter()
+            .any(|key| key == library_path_key(scope))
+        {
             changed_keys.push(library_path_key(scope).to_string());
         }
     } else if let Some(library_path) = normalize_optional_text(input.library_path) {
@@ -1086,7 +1097,9 @@ pub(crate) fn serialize_download_client_routing(
     for entry in entries {
         let client_id = entry.client_id.trim();
         if client_id.is_empty() {
-            return Err(Error::new("download client routing entry requires client_id"));
+            return Err(Error::new(
+                "download client routing entry requires client_id",
+            ));
         }
 
         payload.insert(
@@ -1152,7 +1165,9 @@ pub(crate) async fn load_indexer_routing(
     Ok(payloads)
 }
 
-pub(crate) fn serialize_indexer_routing(entries: Vec<IndexerRoutingEntryInput>) -> GqlResult<String> {
+pub(crate) fn serialize_indexer_routing(
+    entries: Vec<IndexerRoutingEntryInput>,
+) -> GqlResult<String> {
     let mut payload = serde_json::Map::new();
     for entry in entries {
         let indexer_id = entry.indexer_id.trim();

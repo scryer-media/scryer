@@ -52,14 +52,14 @@ impl DownloadMutations {
         let source_kind = parse_download_source_kind(input.release.source_kind.clone());
         let job_id = app
             .queue_existing_title_download(
-            &actor,
-            &input.title_id,
-            input.release.source_hint,
-            source_kind,
-            input.release.source_title.clone(),
-        )
-        .await
-        .map_err(to_gql_error)?;
+                &actor,
+                &input.title_id,
+                input.release.source_hint,
+                source_kind,
+                input.release.source_title.clone(),
+            )
+            .await
+            .map_err(to_gql_error)?;
         let title = app
             .services
             .titles
@@ -88,13 +88,13 @@ impl DownloadMutations {
         let client_type = input.client_type.clone();
         let import_id = app
             .queue_manual_import(
-            &actor,
-            input.title_id,
-            client_type.clone(),
-            download_client_item_id.clone(),
-        )
-        .await
-        .map_err(to_gql_error)?;
+                &actor,
+                input.title_id,
+                client_type.clone(),
+                download_client_item_id.clone(),
+            )
+            .await
+            .map_err(to_gql_error)?;
         let queue_item = queue_item_payload_for_action(
             &app,
             &actor,
@@ -146,7 +146,9 @@ impl DownloadMutations {
         Ok(ImportResultPayload {
             import_id: import_result.import_id,
             decision: ImportDecisionValue::from_domain(import_result.decision),
-            skip_reason: import_result.skip_reason.map(ImportSkipReasonValue::from_domain),
+            skip_reason: import_result
+                .skip_reason
+                .map(ImportSkipReasonValue::from_domain),
             title_id: import_result.title_id,
             source_path: import_result.source_path,
             dest_path: import_result.dest_path,
@@ -199,9 +201,13 @@ impl DownloadMutations {
         app.ignore_tracked_download(&actor, &input.client_type, &input.download_client_item_id)
             .await
             .map_err(to_gql_error)?;
-        let queue_item =
-            queue_item_payload_for_action(&app, &actor, Some(&client_type), &download_client_item_id)
-                .await?;
+        let queue_item = queue_item_payload_for_action(
+            &app,
+            &actor,
+            Some(&client_type),
+            &download_client_item_id,
+        )
+        .await?;
 
         Ok(download_queue_action_payload(
             DownloadQueueActionKindValue::IgnoredTrackedDownload,
@@ -222,12 +228,20 @@ impl DownloadMutations {
         let actor = actor_from_ctx(ctx)?;
         let client_type = input.client_type.clone();
         let download_client_item_id = input.download_client_item_id.clone();
-        app.mark_tracked_download_failed(&actor, &input.client_type, &input.download_client_item_id)
-            .await
-            .map_err(to_gql_error)?;
-        let queue_item =
-            queue_item_payload_for_action(&app, &actor, Some(&client_type), &download_client_item_id)
-                .await?;
+        app.mark_tracked_download_failed(
+            &actor,
+            &input.client_type,
+            &input.download_client_item_id,
+        )
+        .await
+        .map_err(to_gql_error)?;
+        let queue_item = queue_item_payload_for_action(
+            &app,
+            &actor,
+            Some(&client_type),
+            &download_client_item_id,
+        )
+        .await?;
 
         Ok(download_queue_action_payload(
             DownloadQueueActionKindValue::MarkedTrackedDownloadFailed,
@@ -255,9 +269,13 @@ impl DownloadMutations {
         )
         .await
         .map_err(to_gql_error)?;
-        let queue_item =
-            queue_item_payload_for_action(&app, &actor, Some(&client_type), &download_client_item_id)
-                .await?;
+        let queue_item = queue_item_payload_for_action(
+            &app,
+            &actor,
+            Some(&client_type),
+            &download_client_item_id,
+        )
+        .await?;
 
         Ok(download_queue_action_payload(
             DownloadQueueActionKindValue::RetriedTrackedDownloadImport,
@@ -286,9 +304,13 @@ impl DownloadMutations {
         )
         .await
         .map_err(to_gql_error)?;
-        let queue_item =
-            queue_item_payload_for_action(&app, &actor, Some(&client_type), &download_client_item_id)
-                .await?;
+        let queue_item = queue_item_payload_for_action(
+            &app,
+            &actor,
+            Some(&client_type),
+            &download_client_item_id,
+        )
+        .await?;
 
         Ok(download_queue_action_payload(
             DownloadQueueActionKindValue::AssignedTrackedDownloadTitle,
@@ -400,7 +422,9 @@ impl DownloadMutations {
         Ok(download_queue_action_payload(
             DownloadQueueActionKindValue::Deleted,
             download_client_item_id,
-            existing_queue_item.as_ref().map(|item| item.client_type.clone()),
+            existing_queue_item
+                .as_ref()
+                .map(|item| item.client_type.clone()),
             None,
             true,
             None,
