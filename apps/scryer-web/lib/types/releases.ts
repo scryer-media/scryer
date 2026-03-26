@@ -1,9 +1,11 @@
+export type DownloadSourceKind = "nzbFile" | "nzbUrl" | "torrentFile" | "magnetUri";
+
 export type Release = {
   source: string | null;
   title: string;
   link: string | null;
   downloadUrl: string | null;
-  sourceKind?: string | null;
+  sourceKind?: DownloadSourceKind | null;
   sizeBytes: number | null;
   publishedAt: string | null;
   thumbsUp?: number | null;

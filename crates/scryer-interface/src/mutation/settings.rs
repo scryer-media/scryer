@@ -1,26 +1,320 @@
 use async_graphql::{Context, Error, Object, Result as GqlResult};
 use chrono::Utc;
 use scryer_application::{
-    DELAY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY,
+    AcquisitionSettings as AppAcquisitionSettings, QUALITY_PROFILE_CATALOG_KEY,
+    QUALITY_PROFILE_ID_KEY, QUALITY_PROFILE_INHERIT_VALUE,
+    UpdateSubtitleSettings as AppUpdateSubtitleSettings,
 };
 use scryer_domain::Entitlement;
 use serde_json::json;
 
 use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_error};
-use crate::mappers::{from_tvdb_scan_operation, from_user, map_admin_setting};
-use crate::quality_profiles::{merge_quality_profiles, parse_profile_catalog_from_json};
+use crate::mappers::{from_tvdb_scan_operation, from_user};
+use crate::settings_graph::{
+    load_download_client_routing, load_indexer_routing, load_library_paths_payload,
+    load_media_settings_payload, load_quality_profile_settings_payload, load_service_settings_payload,
+    persist_library_paths, persist_media_settings, persist_quality_profile_catalog,
+    persist_service_settings, quality_profile_from_input, serialize_download_client_routing,
+    serialize_indexer_routing,
+};
 use crate::types::*;
 
 #[derive(Default)]
 pub(crate) struct SettingsMutations;
 
+fn from_subtitle_settings(
+    settings: scryer_application::SubtitleSettings,
+) -> SubtitleSettingsPayload {
+    SubtitleSettingsPayload {
+        enabled: settings.enabled,
+        has_open_subtitles_api_key: settings.open_subtitles_api_key.is_some(),
+        open_subtitles_username: settings.open_subtitles_username.unwrap_or_default(),
+        has_open_subtitles_password: settings.open_subtitles_password.is_some(),
+        languages: settings
+            .languages
+            .into_iter()
+            .map(|language| SubtitleLanguagePreferencePayload {
+                code: language.code,
+                hearing_impaired: language.hearing_impaired,
+                forced: language.forced,
+            })
+            .collect(),
+        auto_download_on_import: settings.auto_download_on_import,
+        minimum_score_series: settings.minimum_score_series,
+        minimum_score_movie: settings.minimum_score_movie,
+        search_interval_hours: settings.search_interval_hours,
+        include_ai_translated: settings.include_ai_translated,
+        include_machine_translated: settings.include_machine_translated,
+        sync_enabled: settings.sync_enabled,
+        sync_threshold_series: settings.sync_threshold_series,
+        sync_threshold_movie: settings.sync_threshold_movie,
+        sync_max_offset_seconds: settings.sync_max_offset_seconds,
+    }
+}
+
+fn from_acquisition_settings(
+    settings: scryer_application::AcquisitionSettings,
+) -> AcquisitionSettingsPayload {
+    AcquisitionSettingsPayload {
+        enabled: settings.enabled,
+        upgrade_cooldown_hours: settings.upgrade_cooldown_hours,
+        same_tier_min_delta: settings.same_tier_min_delta,
+        cross_tier_min_delta: settings.cross_tier_min_delta,
+        forced_upgrade_delta_bypass: settings.forced_upgrade_delta_bypass,
+        poll_interval_seconds: settings.poll_interval_seconds,
+        sync_interval_seconds: settings.sync_interval_seconds,
+        batch_size: settings.batch_size,
+    }
+}
+
+fn from_delay_profile(profile: scryer_application::DelayProfile) -> DelayProfilePayload {
+    DelayProfilePayload {
+        id: profile.id,
+        name: profile.name,
+        usenet_delay_minutes: profile.usenet_delay_minutes as i32,
+        torrent_delay_minutes: profile.torrent_delay_minutes as i32,
+        preferred_protocol: DelayProfilePreferredProtocolValue::from_application(
+            profile.preferred_protocol,
+        ),
+        min_age_minutes: profile.min_age_minutes as i32,
+        bypass_score_threshold: profile.bypass_score_threshold,
+        applies_to_facets: profile
+            .applies_to_facets
+            .into_iter()
+            .filter_map(|facet| MediaFacetValue::parse(&facet))
+            .collect(),
+        tags: profile.tags,
+        priority: profile.priority,
+        enabled: profile.enabled,
+    }
+}
+
+async fn record_settings_saved(
+    app: &scryer_application::AppUseCase,
+    actor: &scryer_domain::User,
+    message: String,
+    changed_keys: Vec<String>,
+) {
+    let _ = app
+        .services
+        .record_activity_event(
+            Some(actor.id.clone()),
+            None,
+            None,
+            scryer_application::ActivityKind::SettingSaved,
+            message,
+            scryer_application::ActivitySeverity::Success,
+            vec![
+                scryer_application::ActivityChannel::Toast,
+                scryer_application::ActivityChannel::WebUi,
+            ],
+        )
+        .await;
+
+    let _ = app.services.settings_changed_broadcast.send(changed_keys);
+}
+
 #[Object]
 impl SettingsMutations {
-    async fn save_admin_settings(
+    async fn update_subtitle_settings(
         &self,
         ctx: &Context<'_>,
-        input: AdminSettingsUpdateInput,
-    ) -> GqlResult<AdminSettingsPayload> {
+        input: UpdateSubtitleSettingsInput,
+    ) -> GqlResult<SubtitleSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let settings = app
+            .update_subtitle_settings(
+                &actor,
+                AppUpdateSubtitleSettings {
+                    enabled: input.enabled,
+                    open_subtitles_api_key: input.open_subtitles_api_key,
+                    open_subtitles_username: input.open_subtitles_username,
+                    open_subtitles_password: input.open_subtitles_password,
+                    languages: input
+                        .languages
+                        .into_iter()
+                        .map(|language| scryer_application::subtitles::wanted::SubtitleLanguagePref {
+                            code: language.code,
+                            hearing_impaired: language.hearing_impaired.unwrap_or(false),
+                            forced: language.forced.unwrap_or(false),
+                        })
+                        .collect(),
+                    auto_download_on_import: input.auto_download_on_import,
+                    minimum_score_series: input.minimum_score_series,
+                    minimum_score_movie: input.minimum_score_movie,
+                    search_interval_hours: input.search_interval_hours,
+                    include_ai_translated: input.include_ai_translated,
+                    include_machine_translated: input.include_machine_translated,
+                    sync_enabled: input.sync_enabled,
+                    sync_threshold_series: input.sync_threshold_series,
+                    sync_threshold_movie: input.sync_threshold_movie,
+                    sync_max_offset_seconds: input.sync_max_offset_seconds,
+                },
+            )
+            .await
+            .map_err(to_gql_error)?;
+
+        Ok(from_subtitle_settings(settings))
+    }
+
+    async fn update_acquisition_settings(
+        &self,
+        ctx: &Context<'_>,
+        input: UpdateAcquisitionSettingsInput,
+    ) -> GqlResult<AcquisitionSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let settings = app
+            .update_acquisition_settings(
+                &actor,
+                AppAcquisitionSettings {
+                    enabled: input.enabled,
+                    upgrade_cooldown_hours: input.upgrade_cooldown_hours,
+                    same_tier_min_delta: input.same_tier_min_delta,
+                    cross_tier_min_delta: input.cross_tier_min_delta,
+                    forced_upgrade_delta_bypass: input.forced_upgrade_delta_bypass,
+                    poll_interval_seconds: input.poll_interval_seconds,
+                    sync_interval_seconds: input.sync_interval_seconds,
+                    batch_size: input.batch_size,
+                },
+            )
+            .await
+            .map_err(to_gql_error)?;
+
+        Ok(from_acquisition_settings(settings))
+    }
+
+    async fn upsert_delay_profile(
+        &self,
+        ctx: &Context<'_>,
+        input: DelayProfileInput,
+    ) -> GqlResult<DelayProfilePayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let profile = app
+            .upsert_delay_profile(
+                &actor,
+                scryer_application::DelayProfile {
+                    id: input.id,
+                    name: input.name,
+                    usenet_delay_minutes: input.usenet_delay_minutes as i64,
+                    torrent_delay_minutes: input.torrent_delay_minutes as i64,
+                    preferred_protocol: input.preferred_protocol.into_application(),
+                    min_age_minutes: input.min_age_minutes as i64,
+                    bypass_score_threshold: input.bypass_score_threshold,
+                    applies_to_facets: input
+                        .applies_to_facets
+                        .into_iter()
+                        .map(|facet| facet.into_domain().as_str().to_string())
+                        .collect(),
+                    tags: input.tags,
+                    priority: input.priority,
+                    enabled: input.enabled,
+                },
+            )
+            .await
+            .map_err(to_gql_error)?;
+
+        Ok(from_delay_profile(profile))
+    }
+
+    async fn delete_delay_profile(
+        &self,
+        ctx: &Context<'_>,
+        input: DeleteDelayProfileInput,
+    ) -> GqlResult<DelayProfileDeletionPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let id = app
+            .delete_delay_profile(&actor, &input.id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(DelayProfileDeletionPayload { id })
+    }
+
+    async fn update_media_settings(
+        &self,
+        ctx: &Context<'_>,
+        input: UpdateMediaSettingsInput,
+    ) -> GqlResult<MediaSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let db = settings_db_from_ctx(ctx)?;
+        let scope = input.scope;
+        let changed_keys =
+            persist_media_settings(&db, scope, input, Some(actor.id.clone())).await?;
+
+        record_settings_saved(
+            &app,
+            &actor,
+            format!("media settings updated for {}", scope.as_scope_id()),
+            changed_keys,
+        )
+        .await;
+
+        load_media_settings_payload(&app, &db, scope).await
+    }
+
+    async fn update_library_paths(
+        &self,
+        ctx: &Context<'_>,
+        input: UpdateLibraryPathsInput,
+    ) -> GqlResult<LibraryPathsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let db = settings_db_from_ctx(ctx)?;
+        let changed_keys = persist_library_paths(&db, &input, Some(actor.id.clone())).await?;
+
+        record_settings_saved(
+            &app,
+            &actor,
+            "library paths updated".to_string(),
+            changed_keys,
+        )
+        .await;
+
+        load_library_paths_payload(&db).await
+    }
+
+    async fn update_service_settings(
+        &self,
+        ctx: &Context<'_>,
+        input: UpdateServiceSettingsInput,
+    ) -> GqlResult<ServiceSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let db = settings_db_from_ctx(ctx)?;
+        let changed_keys = persist_service_settings(&db, &input, Some(actor.id.clone())).await?;
+
+        record_settings_saved(
+            &app,
+            &actor,
+            "service settings updated".to_string(),
+            changed_keys,
+        )
+        .await;
+
+        load_service_settings_payload(&db).await
+    }
+
+    async fn save_quality_profile_settings(
+        &self,
+        ctx: &Context<'_>,
+        input: SaveQualityProfileSettingsInput,
+    ) -> GqlResult<QualityProfileSettingsPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         if !actor.has_entitlement(&Entitlement::ManageConfig) {
@@ -28,101 +322,86 @@ impl SettingsMutations {
         }
         let db = settings_db_from_ctx(ctx)?;
 
-        let scope = input.scope.trim();
-        if scope.is_empty() {
-            return Err(Error::new("scope is required"));
+        let profiles = input
+            .profiles
+            .into_iter()
+            .map(quality_profile_from_input)
+            .collect::<GqlResult<Vec<_>>>()?;
+
+        if !profiles.is_empty() {
+            persist_quality_profile_catalog(
+                &db,
+                &profiles,
+                Some(actor.id.clone()),
+                input.replace_existing,
+            )
+            .await?;
         }
-        if input.items.is_empty() {
-            return Err(Error::new("at least one setting update item is required"));
+
+        let mut changed_keys = Vec::new();
+        if !profiles.is_empty() {
+            changed_keys.push(QUALITY_PROFILE_CATALOG_KEY.to_string());
         }
 
-        let mut profile_catalog_update: Option<(
-            String,
-            Option<String>,
-            Vec<scryer_application::QualityProfile>,
-        )> = None;
-        let mut updated_keys = Vec::with_capacity(input.items.len());
-        let mut quality_profiles_json: Option<String> = None;
-        for item in input.items {
-            let key_name = item.key_name.trim();
-            if key_name.is_empty() {
-                return Err(Error::new("key_name is required"));
-            }
-            if !updated_keys.iter().any(|key| key == key_name) {
-                updated_keys.push(key_name.to_string());
-            }
+        let current = load_quality_profile_settings_payload(&app, &db).await?;
+        let valid_profile_ids: std::collections::HashSet<&str> =
+            current.profiles.iter().map(|profile| profile.id.as_str()).collect();
 
-            if key_name == DELAY_PROFILE_CATALOG_KEY {
-                let profiles = scryer_application::parse_delay_profile_catalog(&item.value)
-                    .map_err(|error| {
-                        Error::new(format!(
-                            "invalid delay profile catalog JSON for {DELAY_PROFILE_CATALOG_KEY}: {error}"
-                        ))
-                    })?;
-                scryer_application::validate_delay_profile_catalog(&profiles).map_err(|error| {
-                    Error::new(format!(
-                        "invalid delay profile catalog for {DELAY_PROFILE_CATALOG_KEY}: {error}"
-                    ))
-                })?;
-                // Validated — fall through to normal upsert_setting_value below.
+        if let Some(global_profile_id) = input.global_profile_id {
+            let global_profile_id = global_profile_id.trim();
+            if !global_profile_id.is_empty() {
+                if !valid_profile_ids.contains(global_profile_id) {
+                    return Err(Error::new(format!(
+                        "unknown quality profile '{global_profile_id}'"
+                    )));
+                }
+                db.upsert_setting_value(
+                    "system",
+                    QUALITY_PROFILE_ID_KEY,
+                    None,
+                    serde_json::to_string(global_profile_id)
+                        .map_err(|error| Error::new(error.to_string()))?,
+                    "typed_graphql",
+                    Some(actor.id.clone()),
+                )
+                .await
+                .map_err(to_gql_error)?;
+                changed_keys.push(QUALITY_PROFILE_ID_KEY.to_string());
             }
+        }
 
-            if key_name == QUALITY_PROFILE_CATALOG_KEY {
-                let parsed_profiles = parse_profile_catalog_from_json(&item.value).map_err(|error| {
-                    Error::new(format!(
-                        "invalid quality profile catalog JSON for {QUALITY_PROFILE_CATALOG_KEY}: {error}"
-                    ))
-                })?;
-                profile_catalog_update =
-                    Some((scope.to_string(), input.scope_id.clone(), parsed_profiles));
-                continue;
-            }
+        for selection in input.category_selections {
+            let scope_id = selection.scope.as_scope_id().to_string();
+            let value = if selection.inherit_global {
+                QUALITY_PROFILE_INHERIT_VALUE.to_string()
+            } else {
+                let profile_id = selection
+                    .profile_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| Error::new("profile_id is required when inheritGlobal is false"))?;
+                if !valid_profile_ids.contains(profile_id) {
+                    return Err(Error::new(format!(
+                        "unknown quality profile '{profile_id}'"
+                    )));
+                }
+                profile_id.to_string()
+            };
 
             db.upsert_setting_value(
-                scope.to_string(),
-                key_name.to_string(),
-                input.scope_id.clone(),
-                item.value,
-                "admin_graphql",
+                "system",
+                QUALITY_PROFILE_ID_KEY,
+                Some(scope_id),
+                serde_json::to_string(&value).map_err(|error| Error::new(error.to_string()))?,
+                "typed_graphql",
                 Some(actor.id.clone()),
             )
             .await
             .map_err(to_gql_error)?;
-        }
-
-        if let Some((profile_scope, profile_scope_id, profiles)) = profile_catalog_update {
-            let existing_profiles = app
-                .services
-                .quality_profiles
-                .list_quality_profiles(profile_scope.as_str(), profile_scope_id.clone())
-                .await
-                .map_err(to_gql_error)?;
-            let merged_profiles = merge_quality_profiles(existing_profiles, profiles.clone());
-            let profile_catalog_text =
-                serde_json::to_string(&merged_profiles).map_err(|error| {
-                    Error::new(format!("failed to encode quality profiles: {error}"))
-                })?;
-            quality_profiles_json = Some(profile_catalog_text.clone());
-
-            db.upsert_quality_profiles(&profile_scope, profile_scope_id.clone(), profiles)
-                .await
-                .map_err(|error| {
-                    Error::new(format!("failed to persist quality profiles: {error}"))
-                })?;
-            db.upsert_setting_value(
-                profile_scope,
-                QUALITY_PROFILE_CATALOG_KEY,
-                profile_scope_id,
-                profile_catalog_text,
-                "admin_graphql",
-                Some(actor.id.clone()),
-            )
-            .await
-            .map_err(|error| {
-                Error::new(format!(
-                    "failed to persist quality profile catalog setting {QUALITY_PROFILE_CATALOG_KEY}: {error}"
-                ))
-            })?;
+            if !changed_keys.iter().any(|key| key == QUALITY_PROFILE_ID_KEY) {
+                changed_keys.push(QUALITY_PROFILE_ID_KEY.to_string());
+            }
         }
 
         let _ = app
@@ -132,10 +411,7 @@ impl SettingsMutations {
                 None,
                 None,
                 scryer_application::ActivityKind::SettingSaved,
-                format!(
-                    "settings saved in scope '{scope}' ({})",
-                    updated_keys.join(", ")
-                ),
+                "quality profile settings updated".to_string(),
                 scryer_application::ActivitySeverity::Success,
                 vec![
                     scryer_application::ActivityChannel::Toast,
@@ -143,39 +419,114 @@ impl SettingsMutations {
                 ],
             )
             .await;
+        if !changed_keys.is_empty() {
+            let _ = app.services.settings_changed_broadcast.send(changed_keys);
+        }
+
+        load_quality_profile_settings_payload(&app, &db).await
+    }
+
+    async fn update_download_client_routing(
+        &self,
+        ctx: &Context<'_>,
+        input: UpdateDownloadClientRoutingInput,
+    ) -> GqlResult<Vec<DownloadClientRoutingEntryPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let db = settings_db_from_ctx(ctx)?;
+
+        let scope = input.scope;
+        let payload = serialize_download_client_routing(input.entries)?;
+        db.upsert_setting_value(
+            "system",
+            "download_client.routing",
+            Some(scope.as_scope_id().to_string()),
+            payload,
+            "typed_graphql",
+            Some(actor.id.clone()),
+        )
+        .await
+        .map_err(to_gql_error)?;
 
         let _ = app
             .services
+            .record_activity_event(
+                Some(actor.id.clone()),
+                None,
+                None,
+                scryer_application::ActivityKind::SettingSaved,
+                format!("download client routing updated for {}", scope.as_scope_id()),
+                scryer_application::ActivitySeverity::Success,
+                vec![
+                    scryer_application::ActivityChannel::Toast,
+                    scryer_application::ActivityChannel::WebUi,
+                ],
+            )
+            .await;
+        let _ = app
+            .services
             .settings_changed_broadcast
-            .send(updated_keys.clone());
+            .send(vec!["download_client.routing".to_string()]);
 
-        let scope_name = scope.to_string();
-        let keys = updated_keys
-            .iter()
-            .map(|key_name| (scope_name.clone(), key_name.clone(), input.scope_id.clone()))
-            .collect();
-        let items = db
-            .batch_get_settings_with_defaults(keys)
-            .await
-            .map_err(to_gql_error)?
-            .into_iter()
-            .flatten()
-            .map(map_admin_setting)
-            .collect();
+        load_download_client_routing(&db, scope).await
+    }
 
-        Ok(AdminSettingsPayload {
-            scope: scope_name,
-            scope_id: input.scope_id,
-            items,
-            quality_profiles: quality_profiles_json,
-        })
+    async fn update_indexer_routing(
+        &self,
+        ctx: &Context<'_>,
+        input: UpdateIndexerRoutingInput,
+    ) -> GqlResult<Vec<IndexerRoutingEntryPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let db = settings_db_from_ctx(ctx)?;
+
+        let scope = input.scope;
+        let payload = serialize_indexer_routing(input.entries)?;
+        db.upsert_setting_value(
+            "system",
+            "indexer.routing",
+            Some(scope.as_scope_id().to_string()),
+            payload,
+            "typed_graphql",
+            Some(actor.id.clone()),
+        )
+        .await
+        .map_err(to_gql_error)?;
+
+        let _ = app
+            .services
+            .record_activity_event(
+                Some(actor.id.clone()),
+                None,
+                None,
+                scryer_application::ActivityKind::SettingSaved,
+                format!("indexer routing updated for {}", scope.as_scope_id()),
+                scryer_application::ActivitySeverity::Success,
+                vec![
+                    scryer_application::ActivityChannel::Toast,
+                    scryer_application::ActivityChannel::WebUi,
+                ],
+            )
+            .await;
+        let _ = app
+            .services
+            .settings_changed_broadcast
+            .send(vec!["indexer.routing".to_string()]);
+
+        load_indexer_routing(&db, scope).await
     }
 
     async fn delete_quality_profile(
         &self,
         ctx: &Context<'_>,
         input: DeleteQualityProfileInput,
-    ) -> GqlResult<AdminSettingsPayload> {
+    ) -> GqlResult<QualityProfileSettingsPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         if !actor.has_entitlement(&Entitlement::ManageConfig) {
@@ -237,25 +588,14 @@ impl SettingsMutations {
             .await
             .map_err(to_gql_error)?;
 
-        // Rebuild the catalog text from remaining profiles and persist it.
         let remaining_profiles = app
             .services
             .quality_profiles
             .list_quality_profiles("system", None)
             .await
             .map_err(to_gql_error)?;
-        let catalog_text = serde_json::to_string(&remaining_profiles)
-            .map_err(|error| Error::new(format!("failed to encode quality profiles: {error}")))?;
-        db.upsert_setting_value(
-            "system".to_string(),
-            QUALITY_PROFILE_CATALOG_KEY.to_string(),
-            None,
-            catalog_text,
-            "admin_graphql",
-            Some(actor.id.clone()),
-        )
-        .await
-        .map_err(to_gql_error)?;
+        persist_quality_profile_catalog(&db, &remaining_profiles, Some(actor.id.clone()), true)
+            .await?;
 
         let _ = app
             .services
@@ -276,23 +616,9 @@ impl SettingsMutations {
         let _ = app
             .services
             .settings_changed_broadcast
-            .send(vec!["quality.profiles".to_string()]);
+            .send(vec!["quality.profiles".to_string(), "quality.profile_id".to_string()]);
 
-        // Return refreshed system settings.
-        let items = db
-            .list_settings_with_defaults("system".to_string(), None)
-            .await
-            .map_err(to_gql_error)?
-            .into_iter()
-            .map(map_admin_setting)
-            .collect();
-
-        Ok(AdminSettingsPayload {
-            scope: "system".to_string(),
-            scope_id: None,
-            items,
-            quality_profiles: None,
-        })
+        load_quality_profile_settings_payload(&app, &db).await
     }
 
     async fn queue_tvdb_movies_scan(

@@ -35,6 +35,7 @@ export type QualityProfileCriteriaPayload = {
   detected_hdr_allowed: boolean;
   prefer_remux: boolean;
   prefer_dual_audio: boolean;
+  required_audio_languages: string[];
   allow_bd_disk: boolean;
   allow_upgrades: boolean;
   scoring_persona: ScoringPersonaId;
@@ -46,6 +47,53 @@ export type QualityProfileCriteriaPayload = {
 
 export type ParsedQualityProfileEntry = ParsedQualityProfile & {
   criteria: QualityProfileCriteriaPayload;
+};
+
+export type QualityProfileSelectionRecord = {
+  scope: ViewCategoryId;
+  overrideProfileId: string | null;
+  effectiveProfileId: string;
+  inheritsGlobal: boolean;
+};
+
+export type QualityProfileGraphCriteriaPayload = {
+  qualityTiers: string[];
+  archivalQuality: string | null;
+  allowUnknownQuality: boolean;
+  sourceAllowlist: string[];
+  sourceBlocklist: string[];
+  videoCodecAllowlist: string[];
+  videoCodecBlocklist: string[];
+  audioCodecAllowlist: string[];
+  audioCodecBlocklist: string[];
+  atmosPreferred: boolean;
+  dolbyVisionAllowed: boolean;
+  detectedHdrAllowed: boolean;
+  preferRemux: boolean;
+  allowBdDisk: boolean;
+  allowUpgrades: boolean;
+  preferDualAudio: boolean;
+  requiredAudioLanguages: string[];
+  scoringPersona: ScoringPersonaId;
+  scoringOverrides: ScoringOverridesPayload;
+  cutoffTier: string | null;
+  minScoreToGrab: number | null;
+  facetPersonaOverrides: Array<{
+    scope: ViewCategoryId;
+    persona: ScoringPersonaId;
+  }>;
+};
+
+export type QualityProfileGraphPayload = {
+  id: string;
+  name: string;
+  criteria: QualityProfileGraphCriteriaPayload;
+};
+
+export type QualityProfileSettingsPayload = {
+  globalProfileId: string;
+  profiles: QualityProfileGraphPayload[];
+  categorySelections: QualityProfileSelectionRecord[];
 };
 
 export type CommittedQualityProfileDraft = {
@@ -70,6 +118,7 @@ export type QualityProfileDraft = {
   detected_hdr_allowed: boolean;
   prefer_remux: boolean;
   prefer_dual_audio: boolean;
+  required_audio_languages: string[];
   allow_bd_disk: boolean;
   allow_upgrades: boolean;
   scoring_persona: ScoringPersonaId;

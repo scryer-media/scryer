@@ -52,10 +52,15 @@ Runtime bootstrap environment values (optional, used when DB settings are empty)
 
 Application configuration now lives in `settings_definitions` and `settings_values`.
 
-Configuration reads and writes are exposed through GraphQL on `POST /graphql`:
+Configuration reads and writes are exposed through typed GraphQL fields on `POST /graphql`,
+including:
 
-- `adminSettings(scope: ..., scopeId: ..., category: ...)`
-- `saveAdminSettings(input: AdminSettingsUpdateInput!)`
+- `serviceSettings` / `updateServiceSettings(...)`
+- `libraryPaths` / `updateLibraryPaths(...)`
+- `mediaSettings(scope: ...)` / `updateMediaSettings(...)`
+- `qualityProfileSettings` / `saveQualityProfileSettings(...)`
+- `downloadClientRouting(scope: ...)` / `updateDownloadClientRouting(...)`
+- `indexerRouting(scope: ...)` / `updateIndexerRouting(...)`
 
 Common managed keys:
 

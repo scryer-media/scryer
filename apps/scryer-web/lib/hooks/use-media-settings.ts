@@ -3,33 +3,23 @@ import { useClient } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 
-import { saveAdminSettingsMutation } from "@/lib/graphql/mutations";
+import {
+  saveQualityProfileSettingsMutation,
+  updateMediaSettingsMutation,
+} from "@/lib/graphql/mutations";
 import { mediaSettingsInitQuery } from "@/lib/graphql/queries";
 import {
-  ANIME_FILLER_POLICY_KEY,
-  ANIME_RECAP_POLICY_KEY,
-  ANIME_INTER_SEASON_MOVIES_KEY,
-  ANIME_MONITOR_FILLER_MOVIES_KEY,
-  ANIME_MONITOR_SPECIALS_KEY,
   DEFAULT_MOVIE_LIBRARY_PATH,
   DEFAULT_SERIES_LIBRARY_PATH,
-  MOVIE_FOLDER_KEY,
   NFO_WRITE_ON_IMPORT_ANIME_KEY,
   NFO_WRITE_ON_IMPORT_MOVIE_KEY,
   NFO_WRITE_ON_IMPORT_SERIES_KEY,
   PLEXMATCH_WRITE_ON_IMPORT_ANIME_KEY,
   PLEXMATCH_WRITE_ON_IMPORT_SERIES_KEY,
-  SERIES_FOLDER_KEY,
   QUALITY_PROFILE_CATALOG_KEY,
   QUALITY_PROFILE_ID_KEY,
   QUALITY_PROFILE_INHERIT_VALUE,
   QUALITY_PROFILE_SCOPE_IDS,
-  RENAME_COLLISION_POLICY_GLOBAL_KEY,
-  RENAME_COLLISION_POLICY_KEY,
-  RENAME_MISSING_METADATA_POLICY_GLOBAL_KEY,
-  RENAME_MISSING_METADATA_POLICY_KEY,
-  RENAME_TEMPLATE_GLOBAL_KEYS,
-  RENAME_TEMPLATE_KEY,
 } from "@/lib/constants/settings";
 import type { ViewId } from "@/components/root/types";
 import type { SearchableQualityProfileBody } from "@/lib/utils/media-content";
@@ -37,14 +27,17 @@ import type { ParsedQualityProfileEntry } from "@/lib/types/quality-profiles";
 import {
   coerceProfileSetting,
   isValidProfileSelection,
+  qualityProfileSettingsToCatalogText,
+  qualityProfileSettingsToCategoryOverrides,
   resolveQualityProfileCatalogState,
 } from "@/lib/utils/quality-profiles";
-import { getSettingDisplayValue } from "@/lib/utils/settings";
-import type { AdminSetting, AdminSettingsResponse } from "@/lib/types";
 import type { RootFolderOption } from "@/lib/types/titles";
-import type { ViewCategoryId } from "@/lib/types/quality-profiles";
-import { viewToFacet } from "@/lib/constants/settings";
-import { FACETS_BY_VIEW, FACET_REGISTRY } from "@/lib/facets/registry";
+import type {
+  QualityProfileSettingsPayload,
+  ViewCategoryId,
+} from "@/lib/types/quality-profiles";
+import type { MediaSettings } from "@/lib/types/settings";
+import { FACET_REGISTRY } from "@/lib/facets/registry";
 import { useSettingsSubscription } from "@/lib/hooks/use-settings-subscription";
 
 type UseMediaSettingsArgs = {
@@ -136,66 +129,9 @@ const ALLOWED_RECAP_POLICIES = new Set(["download_all", "skip_recap"]);
 const DEFAULT_RENAME_TEMPLATE =
   "{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}";
 
-const NFO_WRITE_KEYS: Record<ViewCategoryId, string> = {
-  movie: NFO_WRITE_ON_IMPORT_MOVIE_KEY,
-  series: NFO_WRITE_ON_IMPORT_SERIES_KEY,
-  anime: NFO_WRITE_ON_IMPORT_ANIME_KEY,
-};
-
-const PLEXMATCH_WRITE_KEYS: Partial<Record<ViewCategoryId, string>> = {
-  series: PLEXMATCH_WRITE_ON_IMPORT_SERIES_KEY,
-  anime: PLEXMATCH_WRITE_ON_IMPORT_ANIME_KEY,
-};
-
-function buildMediaSettingsInitVariables(
-  activeQualityScopeId: ViewCategoryId,
-  view: ViewId,
-) {
-  const mediaKeyNames: string[] = [];
-  const systemKeyNames = [QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY];
-  const categoryKeyNames = [QUALITY_PROFILE_ID_KEY];
-
-  if (view === "movies") {
-    mediaKeyNames.push(MOVIE_FOLDER_KEY);
-  } else if (view === "series") {
-    mediaKeyNames.push(SERIES_FOLDER_KEY);
-  }
-
-  systemKeyNames.push(
-    RENAME_TEMPLATE_GLOBAL_KEYS[activeQualityScopeId],
-    RENAME_COLLISION_POLICY_GLOBAL_KEY,
-    RENAME_MISSING_METADATA_POLICY_GLOBAL_KEY,
-    NFO_WRITE_KEYS[activeQualityScopeId],
-  );
-
-  const plexmatchKey = PLEXMATCH_WRITE_KEYS[activeQualityScopeId];
-  if (plexmatchKey) {
-    systemKeyNames.push(plexmatchKey);
-  }
-
-  categoryKeyNames.push(
-    RENAME_TEMPLATE_KEY,
-    RENAME_COLLISION_POLICY_KEY,
-    RENAME_MISSING_METADATA_POLICY_KEY,
-  );
-
-  if (activeQualityScopeId === "anime") {
-    categoryKeyNames.push(
-      ANIME_FILLER_POLICY_KEY,
-      ANIME_RECAP_POLICY_KEY,
-      ANIME_MONITOR_SPECIALS_KEY,
-      ANIME_INTER_SEASON_MOVIES_KEY,
-    );
-  }
-
-  const facet = viewToFacet[view] ?? "movie";
-
+function buildMediaSettingsInitVariables(activeQualityScopeId: ViewCategoryId) {
   return {
-    scopeId: activeQualityScopeId,
-    facet,
-    mediaKeyNames,
-    systemKeyNames,
-    categoryKeyNames,
+    scope: activeQualityScopeId,
   };
 }
 
@@ -304,18 +240,14 @@ export function useMediaSettings({
   const saveRootFolders = React.useCallback(
     (folders: RootFolderOption[]) => {
       setRootFolders(folders);
-      const facetDef = FACETS_BY_VIEW.get(view);
-      if (!facetDef) return;
-      const defaultFolder = folders.find((rf) => rf.isDefault);
-      const legacyPath = defaultFolder?.path ?? facetDef.defaultLibraryPath;
       client
-        .mutation(saveAdminSettingsMutation, {
+        .mutation(updateMediaSettingsMutation, {
           input: {
-            scope: "media",
-            items: [
-              { keyName: facetDef.folderSettingKey, value: legacyPath },
-              { keyName: facetDef.rootFoldersKey, value: JSON.stringify(folders) },
-            ],
+            scope: activeQualityScopeId,
+            rootFolders: folders.map((folder) => ({
+              path: folder.path,
+              isDefault: folder.isDefault,
+            })),
           },
         })
         .toPromise()
@@ -325,19 +257,72 @@ export function useMediaSettings({
           }
         });
     },
-    [client, setGlobalStatus, view],
+    [activeQualityScopeId, client, setGlobalStatus],
   );
 
   const saveSetting = React.useCallback(
-    (scope: string, scopeId: string | undefined, keyName: string, value: string) => {
+    (_scope: string, _scopeId: string | undefined, keyName: string, value: string) => {
+      const boolValue = value.trim().toLowerCase() === "true";
+      let input:
+        | Record<string, boolean | string>
+        | null = null;
+
+      switch (keyName) {
+        case "anime.filler_policy":
+          input = {
+            scope: "anime",
+            fillerPolicy: value,
+          };
+          break;
+        case "anime.recap_policy":
+          input = {
+            scope: "anime",
+            recapPolicy: value,
+          };
+          break;
+        case "anime.monitor_specials":
+          input = {
+            scope: "anime",
+            monitorSpecials: boolValue,
+          };
+          break;
+        case "anime.inter_season_movies":
+          input = {
+            scope: "anime",
+            interSeasonMovies: boolValue,
+          };
+          break;
+        case "anime.monitor_filler_movies":
+          input = {
+            scope: "anime",
+            monitorFillerMovies: boolValue,
+          };
+          break;
+        case NFO_WRITE_ON_IMPORT_MOVIE_KEY:
+          input = { scope: "movie", nfoWriteOnImport: boolValue };
+          break;
+        case NFO_WRITE_ON_IMPORT_SERIES_KEY:
+          input = { scope: "series", nfoWriteOnImport: boolValue };
+          break;
+        case NFO_WRITE_ON_IMPORT_ANIME_KEY:
+          input = { scope: "anime", nfoWriteOnImport: boolValue };
+          break;
+        case PLEXMATCH_WRITE_ON_IMPORT_SERIES_KEY:
+          input = { scope: "series", plexmatchWriteOnImport: boolValue };
+          break;
+        case PLEXMATCH_WRITE_ON_IMPORT_ANIME_KEY:
+          input = { scope: "anime", plexmatchWriteOnImport: boolValue };
+          break;
+        default:
+          break;
+      }
+
+      if (!input) {
+        return;
+      }
+
       client
-        .mutation(saveAdminSettingsMutation, {
-          input: {
-            scope,
-            ...(scopeId ? { scopeId } : {}),
-            items: [{ keyName, value }],
-          },
-        })
+        .mutation(updateMediaSettingsMutation, { input })
         .toPromise()
         .then(({ error }) => {
           if (error) setGlobalStatus(error.message);
@@ -410,48 +395,44 @@ export function useMediaSettings({
 
   const applyMediaSettingsFromPayload = React.useCallback(
     (
-      payload: AdminSettingsResponse,
-      mediaPayload: AdminSettingsResponse,
-      categoryPayloads: AdminSettingsResponse[] = [],
+      qualityProfileSettings: QualityProfileSettingsPayload | null | undefined,
+      mediaSettings: MediaSettings | null | undefined,
     ) => {
-      const systemItemsByKey = Object.fromEntries(
-        payload.items.map((item) => [item.keyName, item]),
-      ) as Record<string, (typeof payload.items)[number]>;
-      const moviePathRecord =
-        mediaPayload.items.find((item) => item.keyName === MOVIE_FOLDER_KEY) ??
-        payload.items.find((item) => item.keyName === MOVIE_FOLDER_KEY);
-      const seriesPathRecord =
-        mediaPayload.items.find((item) => item.keyName === SERIES_FOLDER_KEY) ??
-        payload.items.find((item) => item.keyName === SERIES_FOLDER_KEY);
-      const profileCatalogRecord = payload.items.find(
-        (item) => item.keyName === QUALITY_PROFILE_CATALOG_KEY,
-      );
+      if (mediaSettings) {
+        if (view === "movies") {
+          const nextPath = mediaSettings.libraryPath.trim() || DEFAULT_MOVIE_LIBRARY_PATH;
+          setMoviesPath((currentPath) =>
+            currentPath === nextPath ? currentPath : nextPath,
+          );
+        }
 
-      if (moviePathRecord) {
-        const nextPath = getSettingDisplayValue(moviePathRecord);
-        setMoviesPath((currentPath) => {
-          const resolvedPath = nextPath || DEFAULT_MOVIE_LIBRARY_PATH;
-          return currentPath === resolvedPath ? currentPath : resolvedPath;
+        if (view === "series") {
+          const nextPath = mediaSettings.libraryPath.trim() || DEFAULT_SERIES_LIBRARY_PATH;
+          setSeriesPath((currentPath) =>
+            currentPath === nextPath ? currentPath : nextPath,
+          );
+        }
+
+        setRootFolders((currentFolders) => {
+          const nextFolders = mediaSettings.rootFolders ?? [];
+          const same =
+            currentFolders.length === nextFolders.length &&
+            currentFolders.every(
+              (folder, index) =>
+                folder.path === nextFolders[index]?.path &&
+                folder.isDefault === nextFolders[index]?.isDefault,
+            );
+          return same ? currentFolders : nextFolders;
         });
       }
 
-      if (seriesPathRecord) {
-        const nextPath = getSettingDisplayValue(seriesPathRecord);
-        setSeriesPath((currentPath) => {
-          const resolvedPath = nextPath || DEFAULT_SERIES_LIBRARY_PATH;
-          return currentPath === resolvedPath ? currentPath : resolvedPath;
-        });
-      }
-
-      const nextProfileText =
-        payload.qualityProfiles ?? getSettingDisplayValue(profileCatalogRecord);
+      const nextProfileText = qualityProfileSettingsToCatalogText(qualityProfileSettings);
       const nextProfiles = normalizeQualityProfiles(nextProfileText);
 
-      const globalProfileRecord = payload.items.find(
-        (item) => item.keyName === QUALITY_PROFILE_ID_KEY,
-      );
       const rawGlobalProfileId =
-        getSettingDisplayValue(globalProfileRecord).trim();
+        coerceProfileSetting(
+          qualityProfileSettings?.globalProfileId ?? "",
+        ) || "";
       const resolvedGlobalId =
         rawGlobalProfileId &&
         nextProfiles.some((p) => p.id === rawGlobalProfileId)
@@ -472,275 +453,116 @@ export function useMediaSettings({
           : nextProfiles,
       );
 
-      setCategoryQualityProfileOverrides((previous) => {
-        let hasUpdate = false;
-        const next = { ...previous };
-        for (const categoryBody of categoryPayloads) {
-          const scopeId = categoryBody.scopeId as ViewCategoryId | undefined;
-          if (!scopeId) {
-            continue;
-          }
-          if (!QUALITY_PROFILE_SCOPE_IDS.includes(scopeId)) {
-            continue;
-          }
+      const nextOverrides = qualityProfileSettingsToCategoryOverrides(qualityProfileSettings);
+      setCategoryQualityProfileOverrides((previous) =>
+        QUALITY_PROFILE_SCOPE_IDS.every((scopeId) => previous[scopeId] === nextOverrides[scopeId])
+          ? previous
+          : nextOverrides,
+      );
 
-          const categoryProfileRecord = categoryBody.items.find(
-            (item) => item.keyName === QUALITY_PROFILE_ID_KEY,
+      if (mediaSettings) {
+        setCategoryRenameTemplates((previous) => {
+          const nextTemplate = mediaSettings.renameTemplate || DEFAULT_RENAME_TEMPLATE;
+          if (previous[activeQualityScopeId] === nextTemplate) {
+            return previous;
+          }
+          return { ...previous, [activeQualityScopeId]: nextTemplate };
+        });
+
+        setCategoryRenameCollisionPolicies((previous) => {
+          const nextPolicy = normalizeRenameCollisionPolicy(
+            mediaSettings.renameCollisionPolicy,
           );
-          const categoryProfileValue = coerceProfileSetting(
-            getSettingDisplayValue(categoryProfileRecord),
+          if (previous[activeQualityScopeId] === nextPolicy) {
+            return previous;
+          }
+          return { ...previous, [activeQualityScopeId]: nextPolicy };
+        });
+
+        setCategoryRenameMissingMetadataPolicies((previous) => {
+          const nextPolicy = normalizeRenameMissingMetadataPolicy(
+            mediaSettings.renameMissingMetadataPolicy,
           );
-          const nextValue =
-            categoryProfileValue || QUALITY_PROFILE_INHERIT_VALUE;
-          if (next[scopeId] !== nextValue) {
-            next[scopeId] = nextValue;
-            hasUpdate = true;
+          if (previous[activeQualityScopeId] === nextPolicy) {
+            return previous;
           }
-        }
-        return hasUpdate ? next : previous;
-      });
+          return { ...previous, [activeQualityScopeId]: nextPolicy };
+        });
 
-      setCategoryRenameTemplates((previous) => {
-        let hasUpdate = false;
-        const next = { ...previous };
-
-        for (const categoryBody of categoryPayloads) {
-          const scopeId = categoryBody.scopeId as ViewCategoryId | undefined;
-          if (!scopeId || !QUALITY_PROFILE_SCOPE_IDS.includes(scopeId)) {
-            continue;
-          }
-
-          const categoryTemplateRecord = categoryBody.items.find(
-            (item) => item.keyName === RENAME_TEMPLATE_KEY,
-          );
-          const scopedTemplate = getSettingDisplayValue(
-            categoryTemplateRecord,
-          ).trim();
-          const globalTemplateRecord =
-            systemItemsByKey[RENAME_TEMPLATE_GLOBAL_KEYS[scopeId]];
-          const globalTemplate =
-            getSettingDisplayValue(globalTemplateRecord).trim();
-          const nextTemplate =
-            scopedTemplate || globalTemplate || DEFAULT_RENAME_TEMPLATE;
-
-          if (next[scopeId] !== nextTemplate) {
-            next[scopeId] = nextTemplate;
-            hasUpdate = true;
-          }
-        }
-
-        return hasUpdate ? next : previous;
-      });
-
-      setCategoryRenameCollisionPolicies((previous) => {
-        let hasUpdate = false;
-        const next = { ...previous };
-        const globalPolicy = normalizeRenameCollisionPolicy(
-          getSettingDisplayValue(
-            systemItemsByKey[RENAME_COLLISION_POLICY_GLOBAL_KEY],
-          ),
-        );
-
-        for (const categoryBody of categoryPayloads) {
-          const scopeId = categoryBody.scopeId as ViewCategoryId | undefined;
-          if (!scopeId || !QUALITY_PROFILE_SCOPE_IDS.includes(scopeId)) {
-            continue;
-          }
-
-          const categoryPolicyRecord = categoryBody.items.find(
-            (item) => item.keyName === RENAME_COLLISION_POLICY_KEY,
-          );
-          const scopedPolicy = normalizeRenameCollisionPolicy(
-            getSettingDisplayValue(categoryPolicyRecord),
-          );
-          const isScopedValueSet =
-            getSettingDisplayValue(categoryPolicyRecord).trim().length > 0;
-          const nextPolicy = isScopedValueSet ? scopedPolicy : globalPolicy;
-          if (next[scopeId] !== nextPolicy) {
-            next[scopeId] = nextPolicy;
-            hasUpdate = true;
-          }
+        if (mediaSettings.scope === "anime") {
+          setCategoryFillerPolicies((previous) => {
+            const nextPolicy = normalizeFillerPolicy(mediaSettings.fillerPolicy);
+            return previous.anime === nextPolicy
+              ? previous
+              : { ...previous, anime: nextPolicy };
+          });
+          setCategoryRecapPolicies((previous) => {
+            const nextPolicy = normalizeRecapPolicy(mediaSettings.recapPolicy);
+            return previous.anime === nextPolicy
+              ? previous
+              : { ...previous, anime: nextPolicy };
+          });
+          setCategoryMonitorSpecials((previous) => {
+            const nextValue = mediaSettings.monitorSpecials ? "true" : "false";
+            return previous.anime === nextValue
+              ? previous
+              : { ...previous, anime: nextValue };
+          });
+          setCategoryInterSeasonMovies((previous) => {
+            const nextValue = mediaSettings.interSeasonMovies === false ? "false" : "true";
+            return previous.anime === nextValue
+              ? previous
+              : { ...previous, anime: nextValue };
+          });
+          setCategoryMonitorFillerMovies((previous) => {
+            const nextValue = mediaSettings.monitorFillerMovies ? "true" : "false";
+            return previous.anime === nextValue
+              ? previous
+              : { ...previous, anime: nextValue };
+          });
         }
 
-        return hasUpdate ? next : previous;
-      });
+        setNfoWriteOnImport((previous) => {
+          const nextValue = mediaSettings.nfoWriteOnImport ? "true" : "false";
+          return previous[activeQualityScopeId] === nextValue
+            ? previous
+            : { ...previous, [activeQualityScopeId]: nextValue };
+        });
 
-      setCategoryRenameMissingMetadataPolicies((previous) => {
-        let hasUpdate = false;
-        const next = { ...previous };
-        const globalPolicy = normalizeRenameMissingMetadataPolicy(
-          getSettingDisplayValue(
-            systemItemsByKey[RENAME_MISSING_METADATA_POLICY_GLOBAL_KEY],
-          ),
-        );
-
-        for (const categoryBody of categoryPayloads) {
-          const scopeId = categoryBody.scopeId as ViewCategoryId | undefined;
-          if (!scopeId || !QUALITY_PROFILE_SCOPE_IDS.includes(scopeId)) {
-            continue;
-          }
-
-          const categoryPolicyRecord = categoryBody.items.find(
-            (item) => item.keyName === RENAME_MISSING_METADATA_POLICY_KEY,
-          );
-          const scopedPolicy = normalizeRenameMissingMetadataPolicy(
-            getSettingDisplayValue(categoryPolicyRecord),
-          );
-          const isScopedValueSet =
-            getSettingDisplayValue(categoryPolicyRecord).trim().length > 0;
-          const nextPolicy = isScopedValueSet ? scopedPolicy : globalPolicy;
-          if (next[scopeId] !== nextPolicy) {
-            next[scopeId] = nextPolicy;
-            hasUpdate = true;
-          }
+        if (mediaSettings.plexmatchWriteOnImport !== null) {
+          setPlexmatchWriteOnImport((previous) => {
+            const nextValue = mediaSettings.plexmatchWriteOnImport ? "true" : "false";
+            return previous[activeQualityScopeId] === nextValue
+              ? previous
+              : { ...previous, [activeQualityScopeId]: nextValue };
+          });
         }
-
-        return hasUpdate ? next : previous;
-      });
-
-      setCategoryFillerPolicies((previous) => {
-        const animeBody = categoryPayloads.find(
-          (body) => body.scopeId === "anime",
-        );
-        if (!animeBody) return previous;
-
-        const fillerRecord = animeBody.items.find(
-          (item) => item.keyName === ANIME_FILLER_POLICY_KEY,
-        );
-        const nextPolicy = normalizeFillerPolicy(
-          getSettingDisplayValue(fillerRecord),
-        );
-        if (previous.anime === nextPolicy) return previous;
-        return { ...previous, anime: nextPolicy };
-      });
-
-      setCategoryRecapPolicies((previous) => {
-        const animeBody = categoryPayloads.find(
-          (body) => body.scopeId === "anime",
-        );
-        if (!animeBody) return previous;
-
-        const recapRecord = animeBody.items.find(
-          (item) => item.keyName === ANIME_RECAP_POLICY_KEY,
-        );
-        const nextPolicy = normalizeRecapPolicy(
-          getSettingDisplayValue(recapRecord),
-        );
-        if (previous.anime === nextPolicy) return previous;
-        return { ...previous, anime: nextPolicy };
-      });
-
-      setCategoryMonitorSpecials((previous) => {
-        const animeBody = categoryPayloads.find(
-          (body) => body.scopeId === "anime",
-        );
-        if (!animeBody) return previous;
-
-        const monitorRecord = animeBody.items.find(
-          (item) => item.keyName === ANIME_MONITOR_SPECIALS_KEY,
-        );
-        const rawValue = getSettingDisplayValue(monitorRecord)
-          .trim()
-          .toLowerCase();
-        const nextValue = rawValue === "true" ? "true" : "false";
-        if (previous.anime === nextValue) return previous;
-        return { ...previous, anime: nextValue };
-      });
-
-      setCategoryInterSeasonMovies((previous) => {
-        const animeBody = categoryPayloads.find(
-          (body) => body.scopeId === "anime",
-        );
-        if (!animeBody) return previous;
-
-        const record = animeBody.items.find(
-          (item) => item.keyName === ANIME_INTER_SEASON_MOVIES_KEY,
-        );
-        const raw = getSettingDisplayValue(record).trim().toLowerCase();
-        const next = raw === "false" ? "false" : "true";
-        if (previous.anime === next) return previous;
-        return { ...previous, anime: next };
-      });
-
-      setCategoryMonitorFillerMovies((previous) => {
-        const animeBody = categoryPayloads.find(
-          (body) => body.scopeId === "anime",
-        );
-        if (!animeBody) return previous;
-
-        const record = animeBody.items.find(
-          (item) => item.keyName === ANIME_MONITOR_FILLER_MOVIES_KEY,
-        );
-        const raw = getSettingDisplayValue(record).trim().toLowerCase();
-        const next = raw === "true" ? "true" : "false";
-        if (previous.anime === next) return previous;
-        return { ...previous, anime: next };
-      });
-
-      // NFO write-on-import (system-scoped, keyed per facet)
-      setNfoWriteOnImport((previous) => {
-        let hasUpdate = false;
-        const next = { ...previous };
-        for (const [scopeId, key] of Object.entries(NFO_WRITE_KEYS)) {
-          const raw = getSettingDisplayValue(systemItemsByKey[key])
-            .trim()
-            .toLowerCase();
-          const val = raw === "true" ? "true" : "false";
-          if (next[scopeId as ViewCategoryId] !== val) {
-            next[scopeId as ViewCategoryId] = val;
-            hasUpdate = true;
-          }
-        }
-        return hasUpdate ? next : previous;
-      });
-
-      // Plexmatch write-on-import (system-scoped, series + anime only)
-      setPlexmatchWriteOnImport((previous) => {
-        let hasUpdate = false;
-        const next = { ...previous };
-        for (const [scopeId, key] of Object.entries(PLEXMATCH_WRITE_KEYS)) {
-          const raw = getSettingDisplayValue(systemItemsByKey[key])
-            .trim()
-            .toLowerCase();
-          const val = raw === "true" ? "true" : "false";
-          if (next[scopeId as ViewCategoryId] !== val) {
-            next[scopeId as ViewCategoryId] = val;
-            hasUpdate = true;
-          }
-        }
-        return hasUpdate ? next : previous;
-      });
+      }
     },
     [
+      activeQualityScopeId,
       normalizeQualityProfiles,
       normalizeRenameCollisionPolicy,
       normalizeRenameMissingMetadataPolicy,
       normalizeFillerPolicy,
       normalizeRecapPolicy,
+      view,
     ],
   );
 
   const refreshMediaSettings = React.useCallback(async () => {
     setMediaSettingsLoading(true);
     try {
-      const variables = buildMediaSettingsInitVariables(
-        activeQualityScopeId,
-        view,
-      );
+      const variables = buildMediaSettingsInitVariables(activeQualityScopeId);
       const { data, error } = await client
         .query(mediaSettingsInitQuery, variables)
         .toPromise();
       if (error) throw error;
 
       applyMediaSettingsFromPayload(
-        data.systemSettings,
+        data.qualityProfileSettings,
         data.mediaSettings,
-        data.categorySettings ? [data.categorySettings] : [],
       );
-
-      if (Array.isArray(data.rootFolders)) {
-        setRootFolders(data.rootFolders);
-      }
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToLoad"),
@@ -754,7 +576,6 @@ export function useMediaSettings({
     client,
     setGlobalStatus,
     t,
-    view,
   ]);
 
   const updateCategoryMediaProfileSettings = React.useCallback(
@@ -813,236 +634,74 @@ export function useMediaSettings({
       setQualityProfileParseError("");
 
       try {
-        const globalSaveItems: Array<{ keyName: string; value: string }> = [];
-        let globalSaveResponse: {
-          saveAdminSettings: AdminSettingsResponse;
+        let qualityProfileResponse: {
+          saveQualityProfileSettings: QualityProfileSettingsPayload;
         } | null = null;
 
-        if (view === "movies" || view === "series") {
-          const facetDef = FACETS_BY_VIEW.get(view);
-          const pathKey =
-            view === "movies" ? MOVIE_FOLDER_KEY : SERIES_FOLDER_KEY;
-          // Save default root folder to legacy path key for backwards compat
-          const defaultFolder = rootFolders.find((rf) => rf.isDefault);
-          const legacyPath = defaultFolder?.path || path;
-          globalSaveItems.push({ keyName: pathKey, value: legacyPath });
-          // Save root folders JSON array
-          if (facetDef) {
-            globalSaveItems.push({
-              keyName: facetDef.rootFoldersKey,
-              value: JSON.stringify(rootFolders),
-            });
-          }
-          const { data: globalData, error: globalError } = await client
-            .mutation(saveAdminSettingsMutation, {
-              input: {
-                scope: "media",
-                items: globalSaveItems,
-              },
-            })
-            .toPromise();
-          if (globalError) throw globalError;
-          globalSaveResponse = globalData;
-        }
-
-        const { data: categoryData, error: categoryError } = await client
-          .mutation(saveAdminSettingsMutation, {
+        const { data: qualityProfileData, error: qualityProfileError } = await client
+          .mutation(saveQualityProfileSettingsMutation, {
             input: {
-              scope: "system",
-              scopeId: activeQualityScopeId,
-              items: [
-                { keyName: QUALITY_PROFILE_ID_KEY, value: selectedProfile },
-                { keyName: RENAME_TEMPLATE_KEY, value: renameTemplate },
+              profiles: [],
+              globalProfileId: null,
+              categorySelections: [
                 {
-                  keyName: RENAME_COLLISION_POLICY_KEY,
-                  value: renameCollisionPolicy,
+                  scope: activeQualityScopeId,
+                  profileId:
+                    selectedProfile === QUALITY_PROFILE_INHERIT_VALUE
+                      ? null
+                      : selectedProfile,
+                  inheritGlobal: selectedProfile === QUALITY_PROFILE_INHERIT_VALUE,
                 },
-                {
-                  keyName: RENAME_MISSING_METADATA_POLICY_KEY,
-                  value: renameMissingMetadataPolicy,
-                },
-                ...(activeQualityScopeId === "anime"
-                  ? [
-                      {
-                        keyName: ANIME_FILLER_POLICY_KEY,
-                        value: normalizeFillerPolicy(
-                          categoryFillerPolicies.anime,
-                        ),
-                      },
-                      {
-                        keyName: ANIME_RECAP_POLICY_KEY,
-                        value: normalizeRecapPolicy(
-                          categoryRecapPolicies.anime,
-                        ),
-                      },
-                      {
-                        keyName: ANIME_MONITOR_SPECIALS_KEY,
-                        value: categoryMonitorSpecials.anime,
-                      },
-                      {
-                        keyName: ANIME_INTER_SEASON_MOVIES_KEY,
-                        value: categoryInterSeasonMovies.anime,
-                      },
-                      {
-                        keyName: ANIME_MONITOR_FILLER_MOVIES_KEY,
-                        value: categoryMonitorFillerMovies.anime,
-                      },
-                    ]
-                  : []),
               ],
+              replaceExisting: false,
             },
           })
           .toPromise();
-        if (categoryError) throw categoryError;
-        const categoryResponse = categoryData;
+        if (qualityProfileError) throw qualityProfileError;
+        qualityProfileResponse = qualityProfileData;
 
-        if ((view === "movies" || view === "series") && globalSaveResponse) {
-          const pathKey =
-            view === "movies" ? MOVIE_FOLDER_KEY : SERIES_FOLDER_KEY;
-          const pathRecord = globalSaveResponse.saveAdminSettings.items.find(
-            (item) => item.keyName === pathKey,
-          );
-          const nextPath = getSettingDisplayValue(pathRecord);
-          if (view === "movies") {
-            setMoviesPath(nextPath || DEFAULT_MOVIE_LIBRARY_PATH);
-          } else {
-            setSeriesPath(nextPath || DEFAULT_SERIES_LIBRARY_PATH);
-          }
-        } else if (view === "movies") {
-          setMoviesPath(path || DEFAULT_MOVIE_LIBRARY_PATH);
-        } else if (view === "series") {
-          setSeriesPath(path || DEFAULT_SERIES_LIBRARY_PATH);
-        }
-
-        const categoryProfileRecord =
-          categoryResponse.saveAdminSettings.items.find(
-            (item: AdminSetting) => item.keyName === QUALITY_PROFILE_ID_KEY,
-          );
-        const persistedTemplateRecord =
-          categoryResponse.saveAdminSettings.items.find(
-            (item: AdminSetting) => item.keyName === RENAME_TEMPLATE_KEY,
-          );
-        const persistedCollisionPolicyRecord =
-          categoryResponse.saveAdminSettings.items.find(
-            (item: AdminSetting) =>
-              item.keyName === RENAME_COLLISION_POLICY_KEY,
-          );
-        const persistedMissingMetadataPolicyRecord =
-          categoryResponse.saveAdminSettings.items.find(
-            (item: AdminSetting) =>
-              item.keyName === RENAME_MISSING_METADATA_POLICY_KEY,
-          );
-        const persistedProfile = coerceProfileSetting(
-          getSettingDisplayValue(categoryProfileRecord),
-        );
-        setCategoryQualityProfileOverrides((previous) => ({
-          ...previous,
-          [activeQualityScopeId]:
-            persistedProfile || QUALITY_PROFILE_INHERIT_VALUE,
-        }));
-        setCategoryRenameTemplates((previous) => ({
-          ...previous,
-          [activeQualityScopeId]:
-            getSettingDisplayValue(persistedTemplateRecord).trim() ||
-            renameTemplate,
-        }));
-        setCategoryRenameCollisionPolicies((previous) => ({
-          ...previous,
-          [activeQualityScopeId]: normalizeRenameCollisionPolicy(
-            getSettingDisplayValue(persistedCollisionPolicyRecord) ||
+        const { data: mediaData, error: mediaError } = await client
+          .mutation(updateMediaSettingsMutation, {
+            input: {
+              scope: activeQualityScopeId,
+              ...(view === "movies" || view === "series"
+                ? {
+                    libraryPath: path,
+                    rootFolders: rootFolders.map((folder) => ({
+                      path: folder.path,
+                      isDefault: folder.isDefault,
+                    })),
+                  }
+                : {}),
+              renameTemplate,
               renameCollisionPolicy,
-          ),
-        }));
-        setCategoryRenameMissingMetadataPolicies((previous) => ({
-          ...previous,
-          [activeQualityScopeId]: normalizeRenameMissingMetadataPolicy(
-            getSettingDisplayValue(persistedMissingMetadataPolicyRecord) ||
               renameMissingMetadataPolicy,
-          ),
-        }));
+              nfoWriteOnImport: nfoWriteOnImport[activeQualityScopeId] === "true",
+              ...(activeQualityScopeId === "anime"
+                ? {
+                    fillerPolicy: normalizeFillerPolicy(categoryFillerPolicies.anime),
+                    recapPolicy: normalizeRecapPolicy(categoryRecapPolicies.anime),
+                    monitorSpecials: categoryMonitorSpecials.anime === "true",
+                    interSeasonMovies: categoryInterSeasonMovies.anime !== "false",
+                    monitorFillerMovies: categoryMonitorFillerMovies.anime === "true",
+                    plexmatchWriteOnImport:
+                      plexmatchWriteOnImport[activeQualityScopeId] === "true",
+                  }
+                : activeQualityScopeId === "series"
+                  ? {
+                      plexmatchWriteOnImport:
+                        plexmatchWriteOnImport[activeQualityScopeId] === "true",
+                    }
+                  : {}),
+            },
+          })
+          .toPromise();
+        if (mediaError) throw mediaError;
 
-        if (activeQualityScopeId === "anime") {
-          const persistedFillerPolicyRecord =
-            categoryResponse.saveAdminSettings.items.find(
-              (item: AdminSetting) => item.keyName === ANIME_FILLER_POLICY_KEY,
-            );
-          setCategoryFillerPolicies((previous) => ({
-            ...previous,
-            anime: normalizeFillerPolicy(
-              getSettingDisplayValue(persistedFillerPolicyRecord) ||
-                categoryFillerPolicies.anime,
-            ),
-          }));
-
-          const persistedRecapPolicyRecord =
-            categoryResponse.saveAdminSettings.items.find(
-              (item: AdminSetting) => item.keyName === ANIME_RECAP_POLICY_KEY,
-            );
-          setCategoryRecapPolicies((previous) => ({
-            ...previous,
-            anime: normalizeRecapPolicy(
-              getSettingDisplayValue(persistedRecapPolicyRecord) ||
-                categoryRecapPolicies.anime,
-            ),
-          }));
-
-          const persistedMonitorSpecialsRecord =
-            categoryResponse.saveAdminSettings.items.find(
-              (item: AdminSetting) =>
-                item.keyName === ANIME_MONITOR_SPECIALS_KEY,
-            );
-          const rawMonitor = getSettingDisplayValue(
-            persistedMonitorSpecialsRecord,
-          )
-            .trim()
-            .toLowerCase();
-          setCategoryMonitorSpecials((previous) => ({
-            ...previous,
-            anime: rawMonitor === "true" ? "true" : "false",
-          }));
-
-          const persistedInterSeasonMoviesRecord =
-            categoryResponse.saveAdminSettings.items.find(
-              (item: AdminSetting) =>
-                item.keyName === ANIME_INTER_SEASON_MOVIES_KEY,
-            );
-          const rawInterSeason = getSettingDisplayValue(
-            persistedInterSeasonMoviesRecord,
-          )
-            .trim()
-            .toLowerCase();
-          setCategoryInterSeasonMovies((previous) => ({
-            ...previous,
-            anime: rawInterSeason === "false" ? "false" : "true",
-          }));
-        }
-
-        // Save NFO/plexmatch sidecar settings (system scope, no scopeId)
-        {
-          const sidecarItems: Array<{ keyName: string; value: string }> = [];
-          const nfoKey = NFO_WRITE_KEYS[activeQualityScopeId];
-          if (nfoKey) {
-            sidecarItems.push({
-              keyName: nfoKey,
-              value: nfoWriteOnImport[activeQualityScopeId],
-            });
-          }
-          const plexKey = PLEXMATCH_WRITE_KEYS[activeQualityScopeId];
-          if (plexKey) {
-            sidecarItems.push({
-              keyName: plexKey,
-              value: plexmatchWriteOnImport[activeQualityScopeId],
-            });
-          }
-          if (sidecarItems.length > 0) {
-            const { error: sidecarError } = await client
-              .mutation(saveAdminSettingsMutation, {
-                input: { scope: "system", items: sidecarItems },
-              })
-              .toPromise();
-            if (sidecarError) throw sidecarError;
-          }
-        }
+        applyMediaSettingsFromPayload(
+          qualityProfileResponse?.saveQualityProfileSettings,
+          mediaData?.updateMediaSettings,
+        );
 
         const successMessage =
           view === "movies"
@@ -1072,6 +731,7 @@ export function useMediaSettings({
       categoryRenameTemplates,
       nfoWriteOnImport,
       plexmatchWriteOnImport,
+      applyMediaSettingsFromPayload,
       normalizeFillerPolicy,
       normalizeRecapPolicy,
       normalizeRenameCollisionPolicy,
@@ -1137,17 +797,25 @@ export function useMediaSettings({
       new Set([
         QUALITY_PROFILE_CATALOG_KEY,
         QUALITY_PROFILE_ID_KEY,
-        MOVIE_FOLDER_KEY,
-        SERIES_FOLDER_KEY,
-        RENAME_TEMPLATE_KEY,
-        RENAME_COLLISION_POLICY_KEY,
-        RENAME_COLLISION_POLICY_GLOBAL_KEY,
-        RENAME_MISSING_METADATA_POLICY_KEY,
-        RENAME_MISSING_METADATA_POLICY_GLOBAL_KEY,
-        ANIME_FILLER_POLICY_KEY,
-        ANIME_RECAP_POLICY_KEY,
-        ANIME_MONITOR_SPECIALS_KEY,
-        ANIME_INTER_SEASON_MOVIES_KEY,
+        "rename.template",
+        "rename.template.movie.global",
+        "rename.template.series.global",
+        "rename.template.anime.global",
+        "rename.collision_policy",
+        "rename.collision_policy.global",
+        "rename.collision_policy.movie.global",
+        "rename.collision_policy.series.global",
+        "rename.collision_policy.anime.global",
+        "rename.missing_metadata_policy",
+        "rename.missing_metadata_policy.global",
+        "rename.missing_metadata_policy.movie.global",
+        "rename.missing_metadata_policy.series.global",
+        "rename.missing_metadata_policy.anime.global",
+        "anime.filler_policy",
+        "anime.recap_policy",
+        "anime.monitor_specials",
+        "anime.inter_season_movies",
+        "anime.monitor_filler_movies",
         NFO_WRITE_ON_IMPORT_MOVIE_KEY,
         NFO_WRITE_ON_IMPORT_SERIES_KEY,
         NFO_WRITE_ON_IMPORT_ANIME_KEY,
@@ -1155,7 +823,6 @@ export function useMediaSettings({
         PLEXMATCH_WRITE_ON_IMPORT_ANIME_KEY,
         ...FACET_REGISTRY.map((f) => f.rootFoldersKey),
         ...FACET_REGISTRY.map((f) => f.folderSettingKey),
-        ...Object.values(RENAME_TEMPLATE_GLOBAL_KEYS),
       ]),
     [],
   );

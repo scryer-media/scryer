@@ -7,7 +7,7 @@ use crate::subtitles::provider::{OpenSubtitlesProvider, SubtitleMediaKind};
 use crate::subtitles::search::SubtitleSearchOrchestrator;
 use crate::subtitles::sync;
 use crate::subtitles::wanted::{SubtitleLanguagePref, compute_missing_subtitles_from_streams};
-use crate::{AppResult, AppUseCase};
+use crate::{AppResult, AppUseCase, SubtitleSettings as AppSubtitleSettings};
 use scryer_domain::SubtitleDownload;
 
 /// Background subtitle poller — searches for missing subtitles on a schedule.
@@ -15,30 +15,22 @@ pub async fn start_background_subtitle_poller(
     app: AppUseCase,
     token: tokio_util::sync::CancellationToken,
 ) {
-    // Check if subtitles are enabled
-    let enabled = app
-        .read_setting_string_value("subtitles.enabled", None)
-        .await
-        .ok()
-        .flatten()
-        .as_deref()
-        == Some("true");
+    let settings = match app.subtitle_settings().await {
+        Ok(settings) => settings,
+        Err(err) => {
+            warn!(error = %err, "failed to load subtitle settings");
+            return;
+        }
+    };
 
-    if !enabled {
+    if !settings.enabled {
         debug!("subtitle poller disabled (subtitles.enabled != true)");
         return;
     }
 
     info!("background subtitle poller started");
 
-    // Read search interval (default 6 hours)
-    let interval_hours: u64 = app
-        .read_setting_string_value("subtitles.search_interval_hours", None)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(6);
+    let interval_hours = settings.search_interval_hours.max(1) as u64;
 
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_hours * 3600));
     interval.tick().await; // consume first tick
@@ -115,29 +107,13 @@ impl SubtitleSyncSettings {
     }
 }
 
-async fn read_subtitle_sync_settings(app: &AppUseCase) -> AppResult<SubtitleSyncSettings> {
-    Ok(SubtitleSyncSettings {
-        enabled: app
-            .read_setting_string_value("subtitles.sync_enabled", None)
-            .await?
-            .as_deref()
-            != Some("false"),
-        threshold_series: app
-            .read_setting_string_value("subtitles.sync_threshold_series", None)
-            .await?
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(90),
-        threshold_movie: app
-            .read_setting_string_value("subtitles.sync_threshold_movie", None)
-            .await?
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(70),
-        max_offset_seconds: app
-            .read_setting_string_value("subtitles.sync_max_offset_seconds", None)
-            .await?
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(60),
-    })
+fn read_subtitle_sync_settings(settings: &AppSubtitleSettings) -> SubtitleSyncSettings {
+    SubtitleSyncSettings {
+        enabled: settings.sync_enabled,
+        threshold_series: settings.sync_threshold_series,
+        threshold_movie: settings.sync_threshold_movie,
+        max_offset_seconds: settings.sync_max_offset_seconds as i64,
+    }
 }
 
 async fn maybe_sync_downloaded_subtitle(
@@ -251,42 +227,31 @@ async fn run_subtitle_search_for_file(
     // Short delay to let the media file be fully committed
     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
-    let api_key = match app
-        .read_setting_string_value("subtitles.opensubtitles_api_key", None)
-        .await?
-    {
+    let settings = app.subtitle_settings().await?;
+    if !settings.enabled {
+        return Ok(());
+    }
+
+    let api_key = match settings.open_subtitles_api_key.clone() {
         Some(key) if !key.is_empty() => key,
         _ => return Ok(()),
     };
 
-    let languages_json = app
-        .read_setting_string_value("subtitles.languages", None)
-        .await?
-        .unwrap_or_else(|| "[]".to_string());
-    let wanted_languages: Vec<SubtitleLanguagePref> =
-        serde_json::from_str(&languages_json).unwrap_or_default();
+    let wanted_languages: Vec<SubtitleLanguagePref> = settings.languages.clone();
     if wanted_languages.is_empty() {
         return Ok(());
     }
 
-    let username = app
-        .read_setting_string_value("subtitles.opensubtitles_username", None)
-        .await?
+    let username = settings
+        .open_subtitles_username
+        .clone()
         .unwrap_or_default();
-    let password = app
-        .read_setting_string_value("subtitles.opensubtitles_password", None)
-        .await?
+    let password = settings
+        .open_subtitles_password
+        .clone()
         .unwrap_or_default();
-    let include_ai = app
-        .read_setting_string_value("subtitles.include_ai_translated", None)
-        .await?
-        .as_deref()
-        == Some("true");
-    let include_machine = app
-        .read_setting_string_value("subtitles.include_machine_translated", None)
-        .await?
-        .as_deref()
-        == Some("true");
+    let include_ai = settings.include_ai_translated;
+    let include_machine = settings.include_machine_translated;
 
     let title = app
         .services
@@ -303,17 +268,11 @@ async fn run_subtitle_search_for_file(
 
     let is_series = is_series_title(&title);
     let min_score: i32 = if is_series {
-        app.read_setting_string_value("subtitles.minimum_score_series", None)
-            .await?
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(240)
+        settings.minimum_score_series
     } else {
-        app.read_setting_string_value("subtitles.minimum_score_movie", None)
-            .await?
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(70)
+        settings.minimum_score_movie
     };
-    let sync_settings = read_subtitle_sync_settings(app).await?;
+    let sync_settings = read_subtitle_sync_settings(&settings);
 
     let provider = OpenSubtitlesProvider::new(api_key);
     if !username.is_empty() && !password.is_empty() {
@@ -461,11 +420,13 @@ async fn run_subtitle_search_for_file(
 
 /// Run a single subtitle search cycle across all monitored titles.
 async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
-    // Read subtitle settings
-    let api_key = match app
-        .read_setting_string_value("subtitles.opensubtitles_api_key", None)
-        .await?
-    {
+    let settings = app.subtitle_settings().await?;
+    if !settings.enabled {
+        debug!("subtitle management disabled, skipping subtitle search");
+        return Ok(());
+    }
+
+    let api_key = match settings.open_subtitles_api_key.clone() {
         Some(key) if !key.is_empty() => key,
         _ => {
             debug!("no OpenSubtitles API key configured, skipping subtitle search");
@@ -473,51 +434,28 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
         }
     };
 
-    let username = app
-        .read_setting_string_value("subtitles.opensubtitles_username", None)
-        .await?
+    let username = settings
+        .open_subtitles_username
+        .clone()
         .unwrap_or_default();
-    let password = app
-        .read_setting_string_value("subtitles.opensubtitles_password", None)
-        .await?
+    let password = settings
+        .open_subtitles_password
+        .clone()
         .unwrap_or_default();
 
-    let include_ai = app
-        .read_setting_string_value("subtitles.include_ai_translated", None)
-        .await?
-        .as_deref()
-        == Some("true");
-    let include_machine = app
-        .read_setting_string_value("subtitles.include_machine_translated", None)
-        .await?
-        .as_deref()
-        == Some("true");
+    let include_ai = settings.include_ai_translated;
+    let include_machine = settings.include_machine_translated;
+    let min_score_series: i32 = settings.minimum_score_series;
+    let min_score_movie: i32 = settings.minimum_score_movie;
 
-    let min_score_series: i32 = app
-        .read_setting_string_value("subtitles.minimum_score_series", None)
-        .await?
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(240);
-    let min_score_movie: i32 = app
-        .read_setting_string_value("subtitles.minimum_score_movie", None)
-        .await?
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(70);
-
-    // Parse wanted languages from settings
-    let languages_json = app
-        .read_setting_string_value("subtitles.languages", None)
-        .await?
-        .unwrap_or_else(|| "[]".to_string());
-    let wanted_languages: Vec<SubtitleLanguagePref> =
-        serde_json::from_str(&languages_json).unwrap_or_default();
+    let wanted_languages: Vec<SubtitleLanguagePref> = settings.languages.clone();
 
     if wanted_languages.is_empty() {
         debug!("no subtitle languages configured, skipping");
         return Ok(());
     }
 
-    let sync_settings = read_subtitle_sync_settings(app).await?;
+    let sync_settings = read_subtitle_sync_settings(&settings);
 
     // Initialize provider
     let provider = OpenSubtitlesProvider::new(api_key);

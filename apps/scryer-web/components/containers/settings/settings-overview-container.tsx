@@ -3,10 +3,11 @@ import * as React from "react";
 import { SettingsOverviewSection } from "@/components/views/settings/settings-overview-section";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { tlsSettingsQuery } from "@/lib/graphql/queries";
-import { rehydrateAllMetadataMutation, saveAdminSettingsMutation } from "@/lib/graphql/mutations";
-import type { AdminSetting } from "@/lib/types/admin-settings";
-import { TLS_CERT_PATH_KEY, TLS_KEY_PATH_KEY } from "@/lib/constants/settings";
-import { getSettingDisplayValue } from "@/lib/utils/settings";
+import {
+  rehydrateAllMetadataMutation,
+  updateServiceSettingsMutation,
+} from "@/lib/graphql/mutations";
+import type { ServiceSettings } from "@/lib/types/settings";
 import { useClient } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
@@ -41,14 +42,9 @@ export function SettingsOverviewContainer({
         const { data, error } = await client.query(tlsSettingsQuery, {}).toPromise();
         if (error) throw error;
         if (cancelled) return;
-        const certRecord = data.serviceSettings.items.find(
-          (item: AdminSetting) => item.keyName === TLS_CERT_PATH_KEY,
-        );
-        const keyRecord = data.serviceSettings.items.find(
-          (item: AdminSetting) => item.keyName === TLS_KEY_PATH_KEY,
-        );
-        setTlsCertPath(getSettingDisplayValue(certRecord));
-        setTlsKeyPath(getSettingDisplayValue(keyRecord));
+        const serviceSettings = data.serviceSettings as ServiceSettings | undefined;
+        setTlsCertPath(serviceSettings?.tlsCertPath ?? "");
+        setTlsKeyPath(serviceSettings?.tlsKeyPath ?? "");
       } catch {
         // TLS settings are optional — silently ignore load failures
       }
@@ -59,18 +55,14 @@ export function SettingsOverviewContainer({
   const handleTlsSave = React.useCallback(async () => {
     setTlsSaving(true);
     try {
-      const { error } = await client.mutation(
-        saveAdminSettingsMutation,
-        {
+      const { error } = await client
+        .mutation(updateServiceSettingsMutation, {
           input: {
-            scope: "system",
-            items: [
-              { keyName: TLS_CERT_PATH_KEY, value: tlsCertPath.trim() },
-              { keyName: TLS_KEY_PATH_KEY, value: tlsKeyPath.trim() },
-            ],
+            tlsCertPath: tlsCertPath.trim(),
+            tlsKeyPath: tlsKeyPath.trim(),
           },
-        },
-      ).toPromise();
+        })
+        .toPromise();
       if (error) throw error;
       setGlobalStatus(t("settings.tlsSaved"));
     } catch (error) {

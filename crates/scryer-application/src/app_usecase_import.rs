@@ -23,12 +23,11 @@ fn maybe_trigger_subtitle_search(app: &AppUseCase, title_id: &str, media_file_id
     let media_file_id = media_file_id.to_string();
     tokio::spawn(async move {
         let auto = app
-            .read_setting_string_value("subtitles.auto_download_on_import", None)
+            .subtitle_settings()
             .await
             .ok()
-            .flatten()
-            .as_deref()
-            == Some("true");
+            .map(|settings| settings.auto_download_on_import)
+            .unwrap_or(false);
         if auto {
             crate::spawn_subtitle_search_for_file(app, title_id, media_file_id);
         }

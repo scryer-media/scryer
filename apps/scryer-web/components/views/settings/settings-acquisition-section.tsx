@@ -3,17 +3,7 @@ import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input"
 import { Label } from "@/components/ui/label";
 import { Loader2 } from "lucide-react";
 import { useTranslate } from "@/lib/context/translate-context";
-
-type AcquisitionSettings = {
-  enabled: boolean;
-  upgradeCooldownHours: number;
-  sameTierMinDelta: number;
-  crossTierMinDelta: number;
-  forcedUpgradeDeltaBypass: number;
-  pollIntervalSeconds: number;
-  syncIntervalSeconds: number;
-  batchSize: number;
-};
+import type { AcquisitionSettings } from "@/lib/types/settings";
 
 type Props = {
   settings: AcquisitionSettings;

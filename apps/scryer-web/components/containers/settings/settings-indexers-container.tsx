@@ -3,6 +3,7 @@ import {
   type FormEvent,
   useCallback,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
@@ -12,8 +13,8 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import type { IndexerRecord, ProviderTypeInfo } from "@/lib/types";
 import {
+  indexersInitQuery,
   indexersQuery,
-  indexerProviderTypesQuery,
 } from "@/lib/graphql/queries";
 import {
   resolveIndexerBaseUrl,
@@ -78,6 +79,7 @@ export function SettingsIndexersContainer() {
   const [indexerDraft, setIndexerDraft] = useState<
     SettingsIndexersSectionProps["indexerDraft"]
   >(() => ({ ...INDEXER_INITIAL_DRAFT }));
+  const didMountRef = useRef(false);
 
   const resetIndexerDraft = useCallback(() => {
     setEditingIndexerId(null);
@@ -101,23 +103,33 @@ export function SettingsIndexersContainer() {
   }, [client, settingsIndexerFilter, setGlobalStatus, t]);
 
   useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const { data, error } = await client.query(indexersInitQuery, {}).toPromise();
+        if (error && !data?.indexers) throw error;
+        if (cancelled) return;
+        setSettingsIndexers(data?.indexers || []);
+        setProviderTypes(data?.indexerProviderTypes || []);
+      } catch (error) {
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.failedToLoad"),
+        );
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, setGlobalStatus, t]);
+
+  useEffect(() => {
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      return;
+    }
     void refreshIndexers();
   }, [refreshIndexers]);
-
-  // Fetch available provider types from loaded plugins
-  useEffect(() => {
-    client
-      .query(indexerProviderTypesQuery, {})
-      .toPromise()
-      .then(({ data }) => {
-        if (data?.indexerProviderTypes) {
-          setProviderTypes(data.indexerProviderTypes);
-        }
-      })
-      .catch(() => {
-        /* ignore — provider types are optional */
-      });
-  }, [client]);
 
   const submitIndexer = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

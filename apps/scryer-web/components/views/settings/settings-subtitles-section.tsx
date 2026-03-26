@@ -4,7 +4,7 @@ import { Label } from "@/components/ui/label";
 import { Loader2, Subtitles } from "lucide-react";
 import { useTranslate } from "@/lib/context/translate-context";
 import { SubtitleLanguagePicker } from "@/components/common/subtitle-language-picker";
-import type { SubtitleSettings } from "@/components/containers/settings/settings-subtitles-container";
+import type { SubtitleSettings } from "@/lib/types/settings";
 
 type Props = {
   settings: SubtitleSettings;
@@ -74,6 +74,18 @@ export function SettingsSubtitlesSection({
   const t = useTranslate();
   const update = (patch: Partial<SubtitleSettings>) =>
     setSettings({ ...settings, ...patch });
+  const updateLanguageCodes = (codes: string[]) => {
+    const existingByCode = new Map(
+      settings.languages.map((language) => [language.code, language]),
+    );
+    update({
+      languages: codes.map((code) => existingByCode.get(code) ?? {
+        code,
+        hearingImpaired: false,
+        forced: false,
+      }),
+    });
+  };
 
   const disabled = !settings.enabled;
   const syncDisabled = disabled || !settings.syncEnabled;
@@ -105,8 +117,8 @@ export function SettingsSubtitlesSection({
             <div className="space-y-1">
               <Label>{t("settings.sub.username")}</Label>
               <BlurInput
-                value={settings.opensubtitlesUsername}
-                onCommit={(v) => update({ opensubtitlesUsername: v })}
+                value={settings.openSubtitlesUsername}
+                onCommit={(v) => update({ openSubtitlesUsername: v })}
                 disabled={disabled}
               />
             </div>
@@ -114,10 +126,10 @@ export function SettingsSubtitlesSection({
               <Label>{t("settings.sub.password")}</Label>
               <BlurInput
                 type="password"
-                value={settings.opensubtitlesPassword}
-                onCommit={(v) => update({ opensubtitlesPassword: v })}
+                value={settings.openSubtitlesPassword}
+                onCommit={(v) => update({ openSubtitlesPassword: v })}
                 disabled={disabled}
-                placeholder="••••••••"
+                placeholder={settings.hasOpenSubtitlesPassword ? "••••••••" : ""}
               />
             </div>
           </div>
@@ -127,8 +139,8 @@ export function SettingsSubtitlesSection({
         <div className="space-y-1">
           <Label>{t("settings.sub.languages")}</Label>
           <SubtitleLanguagePicker
-            value={settings.languages}
-            onChange={(codes) => update({ languages: codes })}
+            value={settings.languages.map((language) => language.code)}
+            onChange={updateLanguageCodes}
           />
         </div>
 

@@ -59,6 +59,13 @@ export type IndexerCategoryRoutingSettings = {
   priority: number;
 };
 
+export type IndexerRoutingEntry = {
+  indexerId: string;
+  enabled: boolean;
+  categories: string[];
+  priority: number;
+};
+
 export type IndexerRoutingSettingsByIndexer = Record<string, IndexerCategoryRoutingSettings>;
 
 export type IndexerRoutingSettingsByScope = Record<ViewCategoryId, IndexerRoutingSettingsByIndexer>;

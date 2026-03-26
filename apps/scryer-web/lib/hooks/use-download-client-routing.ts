@@ -1,14 +1,12 @@
 import * as React from "react";
 
-import { saveAdminSettingsMutation } from "@/lib/graphql/mutations";
+import { updateDownloadClientRoutingMutation } from "@/lib/graphql/mutations";
 import { downloadClientRoutingInitQuery } from "@/lib/graphql/queries";
 import {
   DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY,
   DOWNLOAD_CLIENT_ROUTING_EMPTY,
 } from "@/lib/constants/nzbget";
 import { useClient } from "urql";
-import { getSettingStringFromItems } from "@/lib/utils/settings";
-import { parseDownloadClientRoutingFromJson } from "@/lib/utils/nzbget-routing";
 import {
   buildRoutingOrder,
   getDefaultRoutingOrder,
@@ -17,8 +15,8 @@ import {
   type NzbgetRoutingOrder,
 } from "@/lib/utils/media-content";
 import type {
-  AdminSettingsResponse,
   DownloadClientRecord,
+  DownloadClientRoutingEntry,
   DownloadClientRoutingSettingsByClient,
   DownloadClientRoutingSettingsByScope,
   DownloadClientRoutingSettings,
@@ -50,7 +48,7 @@ export type DownloadClientRoutingHookResult = {
   downloadClientRoutingSaving: boolean;
   hydrateDownloadClientRouting: (
     clients: DownloadClientRecord[],
-    categorySettings: AdminSettingsResponse,
+    routingEntries: DownloadClientRoutingEntry[],
   ) => void;
   refreshDownloadClientRouting: () => Promise<void>;
   updateDownloadClientRoutingForScope: (
@@ -60,6 +58,22 @@ export type DownloadClientRoutingHookResult = {
   ) => Promise<void>;
   moveDownloadClientInScope: (clientId: string, direction: Direction) => void;
 };
+
+function normalizeRoutingEntry(
+  entry: DownloadClientRoutingEntry | undefined,
+): DownloadClientRoutingSettings {
+  return {
+    enabled: entry?.enabled ?? DOWNLOAD_CLIENT_ROUTING_EMPTY.enabled,
+    category: entry?.category ?? DOWNLOAD_CLIENT_ROUTING_EMPTY.category,
+    recentQueuePriority:
+      entry?.recentQueuePriority ?? DOWNLOAD_CLIENT_ROUTING_EMPTY.recentQueuePriority,
+    olderQueuePriority:
+      entry?.olderQueuePriority ?? DOWNLOAD_CLIENT_ROUTING_EMPTY.olderQueuePriority,
+    removeCompleted:
+      entry?.removeCompleted ?? DOWNLOAD_CLIENT_ROUTING_EMPTY.removeCompleted,
+    removeFailed: entry?.removeFailed ?? DOWNLOAD_CLIENT_ROUTING_EMPTY.removeFailed,
+  };
+}
 
 export function useDownloadClientRouting({
   activeQualityScopeId,
@@ -97,28 +111,18 @@ export function useDownloadClientRouting({
   const hydrateDownloadClientRouting = React.useCallback(
     (
       clients: DownloadClientRecord[],
-      categorySettings: AdminSettingsResponse,
+      routingEntries: DownloadClientRoutingEntry[],
     ) => {
-      const rawRoutingValue = getSettingStringFromItems(
-        categorySettings.items,
-        DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY,
-      ) ??
-        getSettingStringFromItems(
-          categorySettings.items,
-          LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY,
-        );
-      const parsedRouting = parseDownloadClientRoutingFromJson(rawRoutingValue);
+      const parsedRouting = Object.fromEntries(
+        routingEntries.map((entry) => [entry.clientId, normalizeRoutingEntry(entry)]),
+      ) as DownloadClientRoutingSettingsByClient;
 
       setDownloadClients(clients);
 
       const scopeRouting: DownloadClientRoutingSettingsByClient = {};
       for (const client of clients) {
-        const clientRouting =
+        scopeRouting[client.id] =
           parsedRouting[client.id] ?? DOWNLOAD_CLIENT_ROUTING_EMPTY;
-        scopeRouting[client.id] = {
-          ...DOWNLOAD_CLIENT_ROUTING_EMPTY,
-          ...clientRouting,
-        };
       }
 
       setDownloadClientRoutingByScope((previous) => {
@@ -162,7 +166,7 @@ export function useDownloadClientRouting({
       if (error) throw error;
       hydrateDownloadClientRouting(
         data.downloadClientConfigs || [],
-        data.categorySettings,
+        data.downloadClientRouting || [],
       );
     } catch (error) {
       setGlobalStatus(
@@ -207,27 +211,31 @@ export function useDownloadClientRouting({
         }
 
         const { data: saveData, error: saveError } = await client
-          .mutation(saveAdminSettingsMutation, {
+          .mutation(updateDownloadClientRoutingMutation, {
             input: {
-              scope: "system",
-              scopeId,
-              items: [
-                {
-                  keyName: DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY,
-                  value: JSON.stringify(payload),
-                },
-              ],
+              scope: scopeId,
+              entries: Object.entries(payload).map(([clientId, routing]) => ({
+                clientId,
+                enabled: routing.enabled,
+                category: routing.category || null,
+                recentQueuePriority: routing.recentQueuePriority || null,
+                olderQueuePriority: routing.olderQueuePriority || null,
+                removeCompleted: routing.removeCompleted,
+                removeFailed: routing.removeFailed,
+              })),
             },
           })
           .toPromise();
         if (saveError) throw saveError;
 
-        const rawSavedRoutingValue = getSettingStringFromItems(
-          saveData.saveAdminSettings.items,
-          DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY,
-        );
-        const savedRouting =
-          parseDownloadClientRoutingFromJson(rawSavedRoutingValue);
+        const savedRouting = Object.fromEntries(
+          (saveData.updateDownloadClientRouting || []).map(
+            (entry: DownloadClientRoutingEntry) => [
+              entry.clientId,
+              normalizeRoutingEntry(entry),
+            ],
+          ),
+        ) as DownloadClientRoutingSettingsByClient;
         const normalizedSavedRouting: DownloadClientRoutingSettingsByClient = {};
         for (const client of downloadClients) {
           const routing =

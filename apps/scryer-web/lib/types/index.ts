@@ -1,4 +1,3 @@
-export * from "./admin-settings";
 export * from "./activity";
 export * from "./download-clients";
 export * from "./external-import";
@@ -9,6 +8,7 @@ export * from "./delay-profiles";
 export * from "./quality-profiles";
 export * from "./releases";
 export * from "./root";
+export * from "./settings";
 export * from "./titles";
 export * from "./users";
 export * from "./wanted";

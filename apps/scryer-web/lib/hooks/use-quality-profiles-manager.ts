@@ -1,5 +1,8 @@
 import * as React from "react";
-import { deleteQualityProfileMutation, saveAdminSettingsMutation } from "@/lib/graphql/mutations";
+import {
+  deleteQualityProfileMutation,
+  saveQualityProfileSettingsMutation,
+} from "@/lib/graphql/mutations";
 import { qualityProfilesInitQuery } from "@/lib/graphql/queries";
 import { useClient } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -16,6 +19,8 @@ import {
   normalizeQualityProfilesForUi,
   parseQualityProfileCatalog,
   parseQualityProfileCatalogEntries,
+  qualityProfileSettingsToCatalogText,
+  qualityProfileSettingsToCategoryOverrides,
   qualityProfileCatalogEntryFromDraft,
   resolveQualityProfileCatalogState,
   sortStringByNumericDesc,
@@ -35,16 +40,14 @@ import {
   QUALITY_PROFILE_SCOPE_IDS,
 } from "@/lib/constants/settings";
 import { useSettingsSubscription } from "@/lib/hooks/use-settings-subscription";
-import { getSettingDisplayValue } from "@/lib/utils/settings";
 import type {
-  AdminSetting,
-  AdminSettingsResponse,
   CommittedQualityProfileDraft,
   DownloadClientRecord,
   ParsedQualityProfile,
   ParsedQualityProfileEntry,
   QualityProfileCriteriaPayload,
   QualityProfileDraft,
+  QualityProfileSettingsPayload,
   QualityProfileListField,
   ViewCategoryId,
 } from "@/lib/types";
@@ -260,14 +263,12 @@ export function useQualityProfilesManager(
     [qualityProfileEntryById],
   );
 
-  const applyQualityProfileSettingsFromAdminPayload = React.useCallback(
-    (payload: AdminSettingsResponse, categoryPayloads: AdminSettingsResponse[] = [], preserveProfileId?: string) => {
-      const mediaItems = payload?.items || [];
-      const profileCatalogRecord = mediaItems.find((item) => item.keyName === QUALITY_PROFILE_CATALOG_KEY);
-      const globalProfileRecord = mediaItems.find((item) => item.keyName === QUALITY_PROFILE_ID_KEY);
-
-      const nextProfileText =
-        payload.qualityProfiles ?? getSettingDisplayValue(profileCatalogRecord);
+  const applyQualityProfileSettingsPayload = React.useCallback(
+    (
+      payload: QualityProfileSettingsPayload | null | undefined,
+      preserveProfileId?: string,
+    ) => {
+      const nextProfileText = qualityProfileSettingsToCatalogText(payload);
       const resolved = resolveQualityProfileCatalogState(nextProfileText);
       const resolvedProfiles = resolved.profiles;
 
@@ -279,7 +280,7 @@ export function useQualityProfilesManager(
 
       const validGlobalProfile = resolveGlobalQualityProfileId(
         resolvedProfiles,
-        getSettingDisplayValue(globalProfileRecord),
+        payload?.globalProfileId,
       );
 
       const catalogEntries = resolved.entries;
@@ -306,29 +307,12 @@ export function useQualityProfilesManager(
       setQualityProfileDraftOriginalName(nextDefaultDraft.name);
       setGlobalQualityProfileId(validGlobalProfile);
 
-      setCategoryQualityProfileOverrides((previous) => {
-        const next = { ...previous };
-        let hasUpdate = false;
-        for (const categoryBody of categoryPayloads) {
-          const scopeId = categoryBody.scopeId as ViewCategoryId | undefined;
-          if (!scopeId) continue;
-          if (!QUALITY_PROFILE_SCOPE_IDS.includes(scopeId as (typeof QUALITY_PROFILE_SCOPE_IDS)[number])) {
-            continue;
-          }
-          const categoryProfileRecord = categoryBody.items.find(
-            (item) => item.keyName === QUALITY_PROFILE_ID_KEY,
-          );
-          const hasExplicitOverride = categoryProfileRecord?.hasOverride ?? false;
-          const nextValue = hasExplicitOverride
-            ? (coerceProfileSetting(getSettingDisplayValue(categoryProfileRecord)) || QUALITY_PROFILE_INHERIT_VALUE)
-            : QUALITY_PROFILE_INHERIT_VALUE;
-          if (next[scopeId] !== nextValue) {
-            next[scopeId] = nextValue;
-            hasUpdate = true;
-          }
-        }
-        return hasUpdate ? next : previous;
-      });
+      const nextOverrides = qualityProfileSettingsToCategoryOverrides(payload);
+      setCategoryQualityProfileOverrides((previous) =>
+        QUALITY_PROFILE_SCOPE_IDS.every((scopeId) => previous[scopeId] === nextOverrides[scopeId])
+          ? previous
+          : nextOverrides,
+      );
     },
     [t],
   );
@@ -346,7 +330,7 @@ export function useQualityProfilesManager(
         ).toPromise();
         if (error) throw error;
 
-        applyQualityProfileSettingsFromAdminPayload(data.deleteQualityProfile, []);
+        applyQualityProfileSettingsPayload(data.deleteQualityProfile);
         setGlobalStatus(t("settings.qualitySettingsSaved"));
       } catch (error) {
         setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"));
@@ -354,7 +338,7 @@ export function useQualityProfilesManager(
         setQualityProfilesSaving(false);
       }
     },
-    [applyQualityProfileSettingsFromAdminPayload, client, setGlobalStatus, t],
+    [applyQualityProfileSettingsPayload, client, setGlobalStatus, t],
   );
 
   const refreshQualityProfiles = React.useCallback(async () => {
@@ -364,17 +348,14 @@ export function useQualityProfilesManager(
       if (error) throw error;
 
       setDownloadClients(data.downloadClientConfigs || []);
-      applyQualityProfileSettingsFromAdminPayload(
-        data.systemSettings,
-        [data.movieSettings, data.seriesSettings, data.animeSettings],
-      );
+      applyQualityProfileSettingsPayload(data.qualityProfileSettings);
     } catch (error) {
       setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
     } finally {
       setMediaSettingsLoading(false);
       setInitialLoadComplete(true);
     }
-  }, [applyQualityProfileSettingsFromAdminPayload, client, setGlobalStatus, t]);
+  }, [applyQualityProfileSettingsPayload, client, setGlobalStatus, t]);
 
   React.useEffect(() => {
     void refreshQualityProfiles();
@@ -574,24 +555,58 @@ export function useQualityProfilesManager(
       setQualityProfilesSaving(true);
       setQualityProfileParseError("");
       try {
-        const catalogPatchText = normalizeQualityProfilesForSave(
-          JSON.stringify([committed.draftEntry]),
-        );
         const { data: globalData, error: globalError } = await client.mutation(
-          saveAdminSettingsMutation,
+          saveQualityProfileSettingsMutation,
           {
             input: {
-              scope: "system",
-              items: [
-                { keyName: QUALITY_PROFILE_CATALOG_KEY, value: catalogPatchText },
-                { keyName: QUALITY_PROFILE_ID_KEY, value: normalizedGlobalProfile },
+              profiles: [
+                {
+                  id: committed.draftEntry.id,
+                  name: committed.draftEntry.name,
+                  criteria: {
+                    qualityTiers: committed.draftEntry.criteria.quality_tiers,
+                    archivalQuality: committed.draftEntry.criteria.archival_quality,
+                    allowUnknownQuality: committed.draftEntry.criteria.allow_unknown_quality,
+                    sourceAllowlist: committed.draftEntry.criteria.source_allowlist,
+                    sourceBlocklist: committed.draftEntry.criteria.source_blocklist,
+                    videoCodecAllowlist: committed.draftEntry.criteria.video_codec_allowlist,
+                    videoCodecBlocklist: committed.draftEntry.criteria.video_codec_blocklist,
+                    audioCodecAllowlist: committed.draftEntry.criteria.audio_codec_allowlist,
+                    audioCodecBlocklist: committed.draftEntry.criteria.audio_codec_blocklist,
+                    atmosPreferred: committed.draftEntry.criteria.atmos_preferred,
+                    dolbyVisionAllowed: committed.draftEntry.criteria.dolby_vision_allowed,
+                    detectedHdrAllowed: committed.draftEntry.criteria.detected_hdr_allowed,
+                    preferRemux: committed.draftEntry.criteria.prefer_remux,
+                    allowBdDisk: committed.draftEntry.criteria.allow_bd_disk,
+                    allowUpgrades: committed.draftEntry.criteria.allow_upgrades,
+                    preferDualAudio: committed.draftEntry.criteria.prefer_dual_audio,
+                    requiredAudioLanguages:
+                      committed.draftEntry.criteria.required_audio_languages ?? [],
+                    scoringPersona: committed.draftEntry.criteria.scoring_persona,
+                    scoringOverrides: committed.draftEntry.criteria.scoring_overrides ?? {},
+                    cutoffTier: committed.draftEntry.criteria.cutoff_tier,
+                    minScoreToGrab: committed.draftEntry.criteria.min_score_to_grab,
+                    facetPersonaOverrides: Object.entries(
+                      committed.draftEntry.criteria.facet_persona_overrides ?? {},
+                    ).map(([scope, persona]) => ({
+                      scope,
+                      persona,
+                    })),
+                  },
+                },
               ],
+              globalProfileId: normalizedGlobalProfile,
+              categorySelections: [],
+              replaceExisting: false,
             },
           },
         ).toPromise();
         if (globalError) throw globalError;
 
-        applyQualityProfileSettingsFromAdminPayload(globalData.saveAdminSettings, [], committed.draftEntry.id);
+        applyQualityProfileSettingsPayload(
+          globalData.saveQualityProfileSettings,
+          committed.draftEntry.id,
+        );
         setGlobalStatus(t("settings.qualitySettingsSaved"));
       } catch (error) {
         setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
@@ -600,7 +615,7 @@ export function useQualityProfilesManager(
       }
     },
     [
-      applyQualityProfileSettingsFromAdminPayload,
+      applyQualityProfileSettingsPayload,
       client,
       commitQualityProfileDraftToCatalog,
       globalQualityProfileId,
@@ -627,22 +642,21 @@ export function useQualityProfilesManager(
 
       try {
         const { data: profileData, error: profileError } = await client.mutation(
-          saveAdminSettingsMutation,
+          saveQualityProfileSettingsMutation,
           {
             input: {
-              scope: "system",
-              items: [{ keyName: QUALITY_PROFILE_ID_KEY, value: normalizedValue }],
+              profiles: [],
+              globalProfileId: normalizedValue,
+              categorySelections: [],
+              replaceExisting: false,
             },
           },
         ).toPromise();
         if (profileError) throw profileError;
 
-        const record = profileData.saveAdminSettings.items.find(
-          (item: AdminSetting) => item.keyName === QUALITY_PROFILE_ID_KEY,
-        );
         const persisted = resolveGlobalQualityProfileId(
           qualityProfiles,
-          getSettingDisplayValue(record),
+          profileData.saveQualityProfileSettings.globalProfileId,
         );
         setGlobalQualityProfileId(persisted);
         const message = t("settings.qualitySettingsSaved");
@@ -686,29 +700,29 @@ export function useQualityProfilesManager(
 
       try {
         const { data: categoryData, error: categoryError } = await client.mutation(
-          saveAdminSettingsMutation,
+          saveQualityProfileSettingsMutation,
           {
             input: {
-              scope: "system",
-              scopeId: normalizedScope,
-              items: [
+              profiles: [],
+              globalProfileId: null,
+              categorySelections: [
                 {
-                  keyName: QUALITY_PROFILE_ID_KEY,
-                  value: normalizedValue,
+                  scope: normalizedScope,
+                  profileId:
+                    normalizedValue === QUALITY_PROFILE_INHERIT_VALUE ? null : normalizedValue,
+                  inheritGlobal: normalizedValue === QUALITY_PROFILE_INHERIT_VALUE,
                 },
               ],
+              replaceExisting: false,
             },
           },
         ).toPromise();
         if (categoryError) throw categoryError;
 
-        const record = categoryData.saveAdminSettings.items.find(
-          (item: AdminSetting) => item.keyName === QUALITY_PROFILE_ID_KEY,
-        );
-        const hasOverride = record?.hasOverride ?? false;
-        const persisted = hasOverride
-          ? coerceProfileSetting(getSettingDisplayValue(record))
-          : QUALITY_PROFILE_INHERIT_VALUE;
+        const persisted =
+          qualityProfileSettingsToCategoryOverrides(categoryData.saveQualityProfileSettings)[
+            normalizedScope
+          ];
         setCategoryQualityProfileOverrides((previous) => ({
           ...previous,
           [normalizedScope]: persisted || QUALITY_PROFILE_INHERIT_VALUE,

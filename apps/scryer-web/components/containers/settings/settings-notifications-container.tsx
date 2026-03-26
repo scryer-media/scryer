@@ -8,15 +8,14 @@ import { useGlobalStatus } from "@/lib/context/global-status-context";
 import type {
   NotificationChannel,
   NotificationChannelDraft,
+  NotificationProviderType,
   NotificationSubscription,
   NotificationSubscriptionDraft,
-  NotificationProviderType,
 } from "@/lib/types";
 import {
   notificationChannelsQuery,
   notificationSubscriptionsQuery,
-  notificationProviderTypesQuery,
-  notificationEventTypesQuery,
+  notificationsInitQuery,
 } from "@/lib/graphql/queries";
 import {
   createNotificationChannelMutation,
@@ -103,25 +102,25 @@ export function SettingsNotificationsContainer() {
   }, [client, setGlobalStatus, t]);
 
   useEffect(() => {
-    void refreshChannels();
-    void refreshSubscriptions();
-  }, [refreshChannels, refreshSubscriptions]);
-
-  useEffect(() => {
-    client.query(notificationProviderTypesQuery, {}).toPromise().then(({ data }) => {
-      if (data?.notificationProviderTypes) {
-        setProviderTypes(data.notificationProviderTypes);
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const { data, error } = await client.query(notificationsInitQuery, {}).toPromise();
+        if (error && !data?.notificationChannels && !data?.notificationSubscriptions) throw error;
+        if (cancelled) return;
+        setChannels(data?.notificationChannels || []);
+        setSubscriptions(data?.notificationSubscriptions || []);
+        setProviderTypes(data?.notificationProviderTypes || []);
+        setEventTypes(data?.notificationEventTypes || []);
+      } catch (error) {
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
       }
-    }).catch(() => { /* ignore */ });
-  }, [client]);
-
-  useEffect(() => {
-    client.query(notificationEventTypesQuery, {}).toPromise().then(({ data }) => {
-      if (data?.notificationEventTypes) {
-        setEventTypes(data.notificationEventTypes);
-      }
-    }).catch(() => { /* ignore */ });
-  }, [client]);
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, setGlobalStatus, t]);
 
   // --- Channel CRUD ---
   const resetChannelDraft = useCallback(() => {

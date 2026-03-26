@@ -1,24 +1,22 @@
 import * as React from "react";
 
-import { saveAdminSettingsMutation } from "@/lib/graphql/mutations";
+import { updateIndexerRoutingMutation } from "@/lib/graphql/mutations";
 import { indexerRoutingInitQuery } from "@/lib/graphql/queries";
 import {
   INDEXER_ROUTING_SETTINGS_KEY,
   getDefaultIndexerRouting,
 } from "@/lib/constants/indexers";
 import { useClient } from "urql";
-import { getSettingStringFromItems } from "@/lib/utils/settings";
 import {
   areIndexerRoutingMapsEqual,
   buildIndexerRoutingOrder,
-  parseIndexerCategoryRoutingFromJson,
 } from "@/lib/utils/indexer-routing";
 import {
   areRoutingOrdersEqual,
   getDefaultRoutingOrder,
 } from "@/lib/utils/media-content";
 import type {
-  AdminSettingsResponse,
+  IndexerRoutingEntry,
   IndexerRecord,
   IndexerRoutingSettingsByIndexer,
   IndexerRoutingSettingsByScope,
@@ -45,7 +43,7 @@ export type IndexerRoutingHookResult = {
   indexerRoutingSaving: boolean;
   hydrateIndexerRouting: (
     indexers: IndexerRecord[],
-    categorySettings: AdminSettingsResponse,
+    routingEntries: IndexerRoutingEntry[],
   ) => void;
   refreshIndexerRouting: () => Promise<void>;
   setIndexerEnabledForScope: (
@@ -87,13 +85,17 @@ export function useIndexerRouting({
     indexerRoutingOrderByScope[activeQualityScopeId] ?? [];
 
   const hydrateIndexerRouting = React.useCallback(
-    (indexerList: IndexerRecord[], categorySettings: AdminSettingsResponse) => {
-      const rawRoutingValue = getSettingStringFromItems(
-        categorySettings.items,
-        INDEXER_ROUTING_SETTINGS_KEY,
-      );
-      const parsedRouting =
-        parseIndexerCategoryRoutingFromJson(rawRoutingValue);
+    (indexerList: IndexerRecord[], routingEntries: IndexerRoutingEntry[]) => {
+      const parsedRouting = Object.fromEntries(
+        routingEntries.map((entry) => [
+          entry.indexerId,
+          {
+            categories: entry.categories,
+            enabled: entry.enabled,
+            priority: entry.priority,
+          },
+        ]),
+      ) as IndexerRoutingSettingsByIndexer;
 
       setIndexers(indexerList);
 
@@ -186,27 +188,30 @@ export function useIndexerRouting({
           scopeOrder,
         );
         const { data: saveData, error: saveError } = await client
-          .mutation(saveAdminSettingsMutation, {
+          .mutation(updateIndexerRoutingMutation, {
             input: {
-              scope: "system",
-              scopeId,
-              items: [
-                {
-                  keyName: INDEXER_ROUTING_SETTINGS_KEY,
-                  value: JSON.stringify(payload),
-                },
-              ],
+              scope: scopeId,
+              entries: Object.entries(payload).map(([indexerId, routing]) => ({
+                indexerId,
+                enabled: routing.enabled,
+                categories: routing.categories,
+                priority: routing.priority,
+              })),
             },
           })
           .toPromise();
         if (saveError) throw saveError;
 
-        const rawSavedRoutingValue = getSettingStringFromItems(
-          saveData.saveAdminSettings.items,
-          INDEXER_ROUTING_SETTINGS_KEY,
-        );
-        const savedRouting =
-          parseIndexerCategoryRoutingFromJson(rawSavedRoutingValue);
+        const savedRouting = Object.fromEntries(
+          (saveData.updateIndexerRouting || []).map((entry: IndexerRoutingEntry) => [
+            entry.indexerId,
+            {
+              categories: entry.categories,
+              enabled: entry.enabled,
+              priority: entry.priority,
+            },
+          ]),
+        ) as IndexerRoutingSettingsByIndexer;
         const normalizedSavedRouting: IndexerRoutingSettingsByIndexer = {};
         const scopeDefaults = getDefaultIndexerRouting(scopeId);
         for (const indexer of indexers) {
@@ -270,7 +275,7 @@ export function useIndexerRouting({
         .query(indexerRoutingInitQuery, { scopeId: activeQualityScopeId })
         .toPromise();
       if (error) throw error;
-      hydrateIndexerRouting(data.indexers || [], data.categorySettings);
+      hydrateIndexerRouting(data.indexers || [], data.indexerRouting || []);
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToLoad"),

@@ -9,7 +9,7 @@ import {
   deleteTitleMutation,
   setTitleMonitoredMutation,
   updateRuleSetMutation,
-  saveAdminSettingsMutation,
+  saveQualityProfileSettingsMutation,
 } from "@/lib/graphql/mutations";
 import {
   titlesQuery,
@@ -18,14 +18,12 @@ import {
 } from "@/lib/graphql/queries";
 import {
   CATEGORY_SCOPE_MAP,
-  QUALITY_PROFILE_CATALOG_KEY,
   QUALITY_PROFILE_INHERIT_VALUE,
   viewToFacet,
 } from "@/lib/constants/settings";
 import { useClient } from "urql";
 import type { ContentSettingsSection, ViewId } from "@/components/root/types";
 import {
-  normalizeQualityProfilesForSave,
   parseQualityProfileCatalogEntries,
   toProfileOptions,
 } from "@/lib/utils/quality-profiles";
@@ -334,21 +332,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       ];
 
       const monitorType = monitoredForQueue ? "allEpisodes" : "none";
-      const tags = [
-        `scryer:monitor-type:${monitorType}`,
-        ...(queueFacet !== "movie"
-          ? [
-              `scryer:season-folder:${seasonFoldersForQueue ? "enabled" : "disabled"}`,
-            ]
-          : []),
-        ...(queueFacet === "anime"
-          ? [
-              `scryer:monitor-specials:false`,
-              `scryer:inter-season-movies:true`,
-            ]
-          : []),
-      ];
-
       try {
         const { data, error } = await client
           .mutation(addTitleMutation, {
@@ -356,7 +339,19 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
               name,
               facet: queueFacet,
               monitored: monitoredForQueue,
-              tags,
+              tags: [],
+              options: {
+                monitorType,
+                ...(queueFacet === "movie"
+                  ? {}
+                  : { useSeasonFolders: seasonFoldersForQueue }),
+                ...(queueFacet === "anime"
+                  ? {
+                      monitorSpecials: false,
+                      interSeasonMovies: true,
+                    }
+                  : {}),
+              },
               externalIds,
               ...(queueFacet === "movie"
                 ? { minAvailability: minAvailabilityForQueue }
@@ -418,21 +413,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       }
 
       const queueMonitorType = monitoredForQueue ? "allEpisodes" : "none";
-      const queueTags = [
-        `scryer:monitor-type:${queueMonitorType}`,
-        ...(queueFacet !== "movie"
-          ? [
-              `scryer:season-folder:${seasonFoldersForQueue ? "enabled" : "disabled"}`,
-            ]
-          : []),
-        ...(queueFacet === "anime"
-          ? [
-              `scryer:monitor-specials:false`,
-              `scryer:inter-season-movies:true`,
-            ]
-          : []),
-      ];
-
       try {
         const { data, error } = await client
           .mutation(addTitleAndQueueMutation, {
@@ -440,7 +420,19 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
               name: queuedTitle,
               facet: queueFacet,
               monitored: monitoredForQueue,
-              tags: queueTags,
+              tags: [],
+              options: {
+                monitorType: queueMonitorType,
+                ...(queueFacet === "movie"
+                  ? {}
+                  : { useSeasonFolders: seasonFoldersForQueue }),
+                ...(queueFacet === "anime"
+                  ? {
+                      monitorSpecials: false,
+                      interSeasonMovies: true,
+                    }
+                  : {}),
+              },
               externalIds: [
                 ...(selectedTvdb
                   ? [{ source: "tvdb", value: String(selectedTvdb.tvdbId) }]
@@ -518,9 +510,11 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           .mutation(queueExistingMutation, {
             input: {
               titleId: title.id,
-              sourceHint,
-              sourceKind: top.sourceKind ?? null,
-              sourceTitle: top.title,
+              release: {
+                sourceHint,
+                sourceKind: top.sourceKind ?? null,
+                sourceTitle: top.title,
+              },
             },
           })
           .toPromise();
@@ -581,9 +575,11 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           .mutation(queueExistingMutation, {
             input: {
               titleId: title.id,
-              sourceHint,
-              sourceKind: release.sourceKind ?? null,
-              sourceTitle: release.title,
+              release: {
+                sourceHint,
+                sourceKind: release.sourceKind ?? null,
+                sourceTitle: release.title,
+              },
             },
           })
           .toPromise();
@@ -764,16 +760,47 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         ...entry,
         criteria: { ...entry.criteria, facet_persona_overrides: nextOverrides },
       };
-      const catalogPatchText = normalizeQualityProfilesForSave(
-        JSON.stringify([updatedEntry]),
-      );
       await client
-        .mutation(saveAdminSettingsMutation, {
+        .mutation(saveQualityProfileSettingsMutation, {
           input: {
-            scope: "system",
-            items: [
-              { keyName: QUALITY_PROFILE_CATALOG_KEY, value: catalogPatchText },
+            profiles: [
+              {
+                id: updatedEntry.id,
+                name: updatedEntry.name,
+                criteria: {
+                  qualityTiers: updatedEntry.criteria.quality_tiers,
+                  archivalQuality: updatedEntry.criteria.archival_quality,
+                  allowUnknownQuality: updatedEntry.criteria.allow_unknown_quality,
+                  sourceAllowlist: updatedEntry.criteria.source_allowlist,
+                  sourceBlocklist: updatedEntry.criteria.source_blocklist,
+                  videoCodecAllowlist: updatedEntry.criteria.video_codec_allowlist,
+                  videoCodecBlocklist: updatedEntry.criteria.video_codec_blocklist,
+                  audioCodecAllowlist: updatedEntry.criteria.audio_codec_allowlist,
+                  audioCodecBlocklist: updatedEntry.criteria.audio_codec_blocklist,
+                  atmosPreferred: updatedEntry.criteria.atmos_preferred,
+                  dolbyVisionAllowed: updatedEntry.criteria.dolby_vision_allowed,
+                  detectedHdrAllowed: updatedEntry.criteria.detected_hdr_allowed,
+                  preferRemux: updatedEntry.criteria.prefer_remux,
+                  allowBdDisk: updatedEntry.criteria.allow_bd_disk,
+                  allowUpgrades: updatedEntry.criteria.allow_upgrades,
+                  preferDualAudio: updatedEntry.criteria.prefer_dual_audio,
+                  requiredAudioLanguages: updatedEntry.criteria.required_audio_languages ?? [],
+                  scoringPersona: updatedEntry.criteria.scoring_persona,
+                  scoringOverrides: updatedEntry.criteria.scoring_overrides ?? {},
+                  cutoffTier: updatedEntry.criteria.cutoff_tier,
+                  minScoreToGrab: updatedEntry.criteria.min_score_to_grab,
+                  facetPersonaOverrides: Object.entries(
+                    updatedEntry.criteria.facet_persona_overrides ?? {},
+                  ).map(([scope, persona]) => ({
+                    scope,
+                    persona,
+                  })),
+                },
+              },
             ],
+            globalProfileId: null,
+            categorySelections: [],
+            replaceExisting: false,
           },
         })
         .toPromise();
@@ -828,9 +855,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           }
           hydrateDownloadClientRouting(
             data?.downloadClientConfigs || [],
-            data.categorySettings,
+            data.downloadClientRouting || [],
           );
-          hydrateIndexerRouting(data?.indexers || [], data.categorySettings);
+          hydrateIndexerRouting(data?.indexers || [], data.indexerRouting || []);
         })
         .catch((error) => {
           if (cancelled) {

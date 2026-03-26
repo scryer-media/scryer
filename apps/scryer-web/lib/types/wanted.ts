@@ -1,15 +1,27 @@
+export type WantedMediaType = "movie" | "episode" | "interstitial_movie";
+export type WantedSearchPhase = "pre_air" | "pre_release" | "primary" | "secondary" | "long_tail";
+export type WantedStatus = "wanted" | "grabbed" | "paused" | "completed";
+export type PendingReleaseStatus =
+  | "waiting"
+  | "standby"
+  | "processing"
+  | "grabbed"
+  | "superseded"
+  | "expired"
+  | "dismissed";
+
 export type WantedItem = {
   id: string;
   titleId: string;
   titleName: string | null;
   episodeId: string | null;
-  mediaType: string;
-  searchPhase: string;
+  mediaType: WantedMediaType;
+  searchPhase: WantedSearchPhase;
   nextSearchAt: string | null;
   lastSearchAt: string | null;
   searchCount: number;
   baselineDate: string | null;
-  status: string;
+  status: WantedStatus;
   grabbedRelease: string | null;
   currentScore: number | null;
   createdAt: string;
@@ -28,7 +40,7 @@ export type PendingReleaseItem = {
   indexerSource: string | null;
   addedAt: string;
   delayUntil: string;
-  status: string;
+  status: PendingReleaseStatus;
 };
 
 export type ReleaseDecisionItem = {

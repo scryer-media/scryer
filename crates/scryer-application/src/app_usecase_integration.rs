@@ -306,14 +306,11 @@ impl AppUseCase {
             .await
     }
 
-    pub async fn list_download_queue(
+    async fn collect_download_queue_items(
         &self,
-        actor: &User,
         include_all_activity: bool,
         include_history_only: bool,
     ) -> AppResult<Vec<DownloadQueueItem>> {
-        require(actor, &Entitlement::ManageConfig)?;
-
         let mut enabled_clients = self
             .services
             .download_client_configs
@@ -479,6 +476,45 @@ impl AppUseCase {
         }
 
         Ok(merged)
+    }
+
+    pub async fn list_download_queue(
+        &self,
+        actor: &User,
+        include_all_activity: bool,
+        include_history_only: bool,
+    ) -> AppResult<Vec<DownloadQueueItem>> {
+        require(actor, &Entitlement::ManageConfig)?;
+        self.collect_download_queue_items(include_all_activity, include_history_only)
+            .await
+    }
+
+    pub async fn find_download_queue_item(
+        &self,
+        actor: &User,
+        client_type: Option<&str>,
+        download_client_item_id: &str,
+    ) -> AppResult<Option<DownloadQueueItem>> {
+        require(actor, &Entitlement::TriggerActions)?;
+
+        let target_download_client_item_id = download_client_item_id.trim();
+        if target_download_client_item_id.is_empty() {
+            return Err(AppError::Validation(
+                "download client item id is required".to_string(),
+            ));
+        }
+
+        let normalized_client_type = client_type
+            .map(|value| value.trim().to_lowercase())
+            .filter(|value| !value.is_empty());
+
+        let items = self.collect_download_queue_items(true, false).await?;
+        Ok(items.into_iter().find(|item| {
+            item.download_client_item_id == target_download_client_item_id
+                && normalized_client_type
+                    .as_ref()
+                    .is_none_or(|client_type| item.client_type.eq_ignore_ascii_case(client_type))
+        }))
     }
 
     pub fn subscribe_download_queue(

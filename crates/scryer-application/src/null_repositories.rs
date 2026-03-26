@@ -714,6 +714,18 @@ impl SettingsRepository for NullSettingsRepository {
     ) -> AppResult<Option<String>> {
         Ok(None)
     }
+
+    async fn upsert_setting_json(
+        &self,
+        _: &str,
+        _: &str,
+        _: Option<String>,
+        _: String,
+        _: &str,
+        _: Option<String>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
 }
 
 #[derive(Default)]

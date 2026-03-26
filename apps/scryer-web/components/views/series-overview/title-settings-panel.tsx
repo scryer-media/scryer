@@ -8,21 +8,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SubtitleLanguagePicker } from "@/components/common/subtitle-language-picker";
-import {
-  QUALITY_PROFILE_PREFIX,
-  ROOT_FOLDER_PREFIX,
-  SEASON_FOLDER_PREFIX,
-  FILLER_POLICY_PREFIX,
-  RECAP_POLICY_PREFIX,
-  getTagValue,
-  setTagValue,
-  removeTagByPrefix,
-} from "@/lib/utils/title-tags";
 import { convenienceSettingsQuery } from "@/lib/graphql/queries";
 import { setTitleRequiredAudioMutation } from "@/lib/graphql/mutations";
 import { useTranslate } from "@/lib/context/translate-context";
 import { getSubtitleLanguage } from "@/lib/constants/subtitle-languages";
 import type { TitleDetail } from "@/components/containers/series-overview-container";
+import type { TitleOptionUpdates } from "@/lib/types/title-options";
 
 const INHERIT_VALUE = "__inherit__";
 const DEFAULT_MARKER = "__default__";
@@ -32,13 +23,13 @@ export function TitleSettingsPanel({
   qualityProfiles,
   defaultRootFolder,
   rootFolders,
-  onUpdateTitleTags,
+  onUpdateTitleOptions,
 }: {
   title: TitleDetail;
   qualityProfiles: { id: string; name: string }[];
   defaultRootFolder: string;
   rootFolders: { path: string; isDefault: boolean }[];
-  onUpdateTitleTags: (newTags: string[]) => Promise<void>;
+  onUpdateTitleOptions: (options: TitleOptionUpdates) => Promise<void>;
 }) {
   const t = useTranslate();
   const client = useClient();
@@ -112,11 +103,11 @@ export function TitleSettingsPanel({
       ? "None"
       : codes.map((c) => getSubtitleLanguage(c)?.name ?? c).join(", ");
 
-  const currentProfileId = getTagValue(title.tags, QUALITY_PROFILE_PREFIX) ?? INHERIT_VALUE;
-  const currentRootFolder = getTagValue(title.tags, ROOT_FOLDER_PREFIX) ?? "";
-  const currentSeasonFolder = getTagValue(title.tags, SEASON_FOLDER_PREFIX) ?? "enabled";
-  const currentFillerPolicy = getTagValue(title.tags, FILLER_POLICY_PREFIX) ?? INHERIT_VALUE;
-  const currentRecapPolicy = getTagValue(title.tags, RECAP_POLICY_PREFIX) ?? INHERIT_VALUE;
+  const currentProfileId = title.qualityProfileId?.trim() || INHERIT_VALUE;
+  const currentRootFolder = title.rootFolderPath?.trim() || "";
+  const currentSeasonFolder = title.useSeasonFolders === false ? "disabled" : "enabled";
+  const currentFillerPolicy = title.fillerPolicy?.trim() || INHERIT_VALUE;
+  const currentRecapPolicy = title.recapPolicy?.trim() || INHERIT_VALUE;
   const [saving, setSaving] = React.useState(false);
 
   const rootFolderSelectValue = currentRootFolder || DEFAULT_MARKER;
@@ -124,11 +115,9 @@ export function TitleSettingsPanel({
   const handleProfileChange = async (value: string) => {
     setSaving(true);
     try {
-      const newTags =
-        value === INHERIT_VALUE
-          ? removeTagByPrefix(title.tags, QUALITY_PROFILE_PREFIX)
-          : setTagValue(title.tags, QUALITY_PROFILE_PREFIX, value);
-      await onUpdateTitleTags(newTags);
+      await onUpdateTitleOptions({
+        qualityProfileId: value === INHERIT_VALUE ? "" : value,
+      });
     } finally {
       setSaving(false);
     }
@@ -137,11 +126,9 @@ export function TitleSettingsPanel({
   const handleRootFolderChange = async (value: string) => {
     setSaving(true);
     try {
-      if (value === DEFAULT_MARKER) {
-        await onUpdateTitleTags(removeTagByPrefix(title.tags, ROOT_FOLDER_PREFIX));
-      } else {
-        await onUpdateTitleTags(setTagValue(title.tags, ROOT_FOLDER_PREFIX, value));
-      }
+      await onUpdateTitleOptions({
+        rootFolderPath: value === DEFAULT_MARKER ? "" : value,
+      });
     } finally {
       setSaving(false);
     }
@@ -150,7 +137,9 @@ export function TitleSettingsPanel({
   const handleSeasonFolderChange = async (value: string) => {
     setSaving(true);
     try {
-      await onUpdateTitleTags(setTagValue(title.tags, SEASON_FOLDER_PREFIX, value));
+      await onUpdateTitleOptions({
+        useSeasonFolders: value === "enabled",
+      });
     } finally {
       setSaving(false);
     }
@@ -159,11 +148,9 @@ export function TitleSettingsPanel({
   const handleFillerPolicyChange = async (value: string) => {
     setSaving(true);
     try {
-      const newTags =
-        value === INHERIT_VALUE
-          ? removeTagByPrefix(title.tags, FILLER_POLICY_PREFIX)
-          : setTagValue(title.tags, FILLER_POLICY_PREFIX, value);
-      await onUpdateTitleTags(newTags);
+      await onUpdateTitleOptions({
+        fillerPolicy: value === INHERIT_VALUE ? "" : value,
+      });
     } finally {
       setSaving(false);
     }
@@ -172,11 +159,9 @@ export function TitleSettingsPanel({
   const handleRecapPolicyChange = async (value: string) => {
     setSaving(true);
     try {
-      const newTags =
-        value === INHERIT_VALUE
-          ? removeTagByPrefix(title.tags, RECAP_POLICY_PREFIX)
-          : setTagValue(title.tags, RECAP_POLICY_PREFIX, value);
-      await onUpdateTitleTags(newTags);
+      await onUpdateTitleOptions({
+        recapPolicy: value === INHERIT_VALUE ? "" : value,
+      });
     } finally {
       setSaving(false);
     }

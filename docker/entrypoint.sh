@@ -4,7 +4,7 @@ set -e
 # If not running as root (e.g. --user flag), skip privilege setup
 # and just exec the binary directly.
 if [ "$(id -u)" -ne 0 ]; then
-    exec /usr/local/bin/scryer "$@"
+    exec /usr/local/bin/scryer --data-dir /config "$@"
 fi
 
 PUID=${PUID:-1000}
@@ -49,4 +49,4 @@ echo "
 ───────────────────────────────────
 "
 
-exec su-exec "$PUID":"$PGID" /usr/local/bin/scryer "$@"
+exec su-exec "$PUID":"$PGID" /usr/local/bin/scryer --data-dir /config "$@"

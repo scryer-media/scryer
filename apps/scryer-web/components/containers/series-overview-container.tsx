@@ -2,13 +2,10 @@
 import * as React from "react";
 import {
   activitySubscriptionQuery,
-  adminSettingsQuery,
-  buildCollectionEpisodesBatchQuery,
   searchQuery,
   searchForEpisodeQuery,
-  titleMediaFilesQuery,
+  seriesOverviewSettingsInitQuery,
   titleOverviewInitQuery,
-  subtitleDownloadsQuery,
 } from "@/lib/graphql/queries";
 import {
   deleteMediaFileMutation,
@@ -22,13 +19,10 @@ import {
   triggerSeasonWantedSearchMutation,
   updateTitleMutation,
 } from "@/lib/graphql/mutations";
-import { downloadQueueQuery, rootFoldersQuery } from "@/lib/graphql/queries";
 import type { DownloadQueueItem } from "@/lib/types/download-queue";
-import type { AdminSetting } from "@/lib/types/admin-settings";
 import type { Release } from "@/lib/types";
-import { QUALITY_PROFILE_CATALOG_KEY, SERIES_FOLDER_KEY, DEFAULT_SERIES_LIBRARY_PATH } from "@/lib/constants/settings";
-import { getSettingDisplayValue } from "@/lib/utils/settings";
-import { parseQualityProfileCatalog } from "@/lib/utils/quality-profiles";
+import { DEFAULT_SERIES_LIBRARY_PATH } from "@/lib/constants/settings";
+import { qualityProfileSettingsToEntries } from "@/lib/utils/quality-profiles";
 import {
   collectActivityEventsFromPayload,
   normalizeActivityEvent,
@@ -41,6 +35,7 @@ import { SeriesOverviewView } from "@/components/views/series-overview-view";
 import { ManualImportDialog } from "@/components/dialogs/manual-import-dialog";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
+import type { TitleOptionUpdates } from "@/lib/types/title-options";
 
 export type TitleDetail = {
   id: string;
@@ -69,6 +64,15 @@ export type TitleDetail = {
   aliases: string[];
   metadataLanguage: string | null;
   metadataFetchedAt: string | null;
+  qualityProfileId?: string | null;
+  rootFolderPath?: string | null;
+  monitorType?: string | null;
+  useSeasonFolders?: boolean | null;
+  monitorSpecials?: boolean | null;
+  interSeasonMovies?: boolean | null;
+  fillerPolicy?: string | null;
+  recapPolicy?: string | null;
+  downloadQueueItems?: DownloadQueueItem[];
   createdAt: string;
 };
 
@@ -87,6 +91,7 @@ export type TitleCollection = {
   specialsMovies: InterstitialMovieMetadata[];
   interstitialSeasonEpisode: string | null;
   monitored: boolean;
+  episodes?: CollectionEpisode[];
   createdAt: string;
 };
 
@@ -198,6 +203,17 @@ type SeriesOverviewContainerProps = {
   initialEpisodeId?: string | null;
 };
 
+function groupMediaFilesByEpisode(
+  files: EpisodeMediaFile[],
+): Record<string, EpisodeMediaFile[]> {
+  const grouped: Record<string, EpisodeMediaFile[]> = {};
+  for (const file of files) {
+    const key = file.episodeId ?? "__unlinked__";
+    (grouped[key] ??= []).push(file);
+  }
+  return grouped;
+}
+
 export const SeriesOverviewContainer = React.memo(function SeriesOverviewContainer({
   titleId,
   onTitleNotFound,
@@ -239,10 +255,29 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   const refreshTitleDetail = React.useCallback(async (_options?: { quiet?: boolean }) => {
     const { data, error } = await client.query(titleOverviewInitQuery, { id: titleId, blocklistLimit: 300 }, { requestPolicy: "network-only" }).toPromise();
     if (error) throw error;
-    setTitle(data.title ?? null);
-    setCollections(data.titleCollections ?? []);
+    const nextTitle = data.title ?? null;
+    const nextCollections = nextTitle?.collections ?? [];
+    const nextMediaFiles = nextTitle?.mediaFiles ?? [];
+    const nextDownloadQueueItems = nextTitle?.downloadQueueItems ?? [];
+    setTitle(nextTitle);
+    setCollections(nextCollections);
+    setEpisodesByCollection(
+      Object.fromEntries(
+        nextCollections.map((collection: TitleCollection) => [
+          collection.id,
+          collection.episodes ?? [],
+        ]),
+      ),
+    );
+    setMediaFilesByEpisode(groupMediaFilesByEpisode(nextMediaFiles));
     setEvents(data.titleEvents ?? []);
     setReleaseBlocklistEntries(data.titleReleaseBlocklist ?? []);
+    setSubtitleDownloads(data.subtitleDownloads ?? []);
+    setCompletedDownloads(
+      nextDownloadQueueItems.filter(
+        (item: DownloadQueueItem) => item.state === "completed" || item.state === "import_pending",
+      ),
+    );
   }, [titleId, client]);
 
   React.useEffect(() => {
@@ -302,34 +337,21 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     let cancelled = false;
     const load = async () => {
       try {
-        const [systemResult, mediaResult] = await Promise.all([
-          client.query(adminSettingsQuery, {
-            scope: "system",
-            category: "media",
-          }).toPromise(),
-          client.query(adminSettingsQuery, {
-            scope: "media",
-            category: "media",
-          }).toPromise(),
-        ]);
-        if (systemResult.error) throw systemResult.error;
-        if (mediaResult.error) throw mediaResult.error;
+        const { data, error } = await client.query(seriesOverviewSettingsInitQuery, {
+          scope: title?.facet === "anime" ? "anime" : "series",
+        }).toPromise();
+        if (error) throw error;
         if (cancelled) return;
-        const catalogRecord = systemResult.data.adminSettings.items.find(
-          (item: AdminSetting) => item.keyName === QUALITY_PROFILE_CATALOG_KEY,
+        setQualityProfiles(
+          qualityProfileSettingsToEntries(data.qualityProfileSettings).map((profile) => ({
+            id: profile.id,
+            name: profile.name,
+          })),
         );
-        const catalogJson = getSettingDisplayValue(catalogRecord);
-        setQualityProfiles(parseQualityProfileCatalog(catalogJson));
-        const folderRecord = mediaResult.data.adminSettings.items.find(
-          (item: AdminSetting) => item.keyName === SERIES_FOLDER_KEY,
-        );
-        const folder = getSettingDisplayValue(folderRecord).trim();
+        const folder = (data.mediaSettings?.libraryPath ?? "").trim();
         if (folder) setDefaultRootFolder(folder);
-
-        const facet = title?.facet === "anime" ? "anime" : "tv";
-        const rfResult = await client.query(rootFoldersQuery, { facet }).toPromise();
-        if (!cancelled && Array.isArray(rfResult.data?.rootFolders)) {
-          setRootFolders(rfResult.data.rootFolders);
+        if (Array.isArray(data.mediaSettings?.rootFolders)) {
+          setRootFolders(data.mediaSettings.rootFolders);
         }
       } catch {
         // Settings fetch is best-effort
@@ -339,10 +361,10 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     return () => { cancelled = true; };
   }, [client, title?.facet]);
 
-  const handleUpdateTitleTags = React.useCallback(
-    async (newTags: string[]) => {
+  const handleUpdateTitleOptions = React.useCallback(
+    async (options: TitleOptionUpdates) => {
       const { error } = await client.mutation(updateTitleMutation, {
-        input: { titleId, tags: newTags },
+        input: { titleId, options },
       }).toPromise();
       if (error) throw error;
       await refreshTitleDetail();
@@ -361,7 +383,11 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       if (!payload) return;
       // Update collection monitored flag from the mutation response.
       setCollections((prev) =>
-        prev.map((c) => c.id === payload.id ? { ...c, monitored: payload.monitored } : c),
+        prev.map((c) => (
+          c.id === payload.id
+            ? { ...c, monitored: payload.monitored, episodes: payload.episodes ?? c.episodes }
+            : c
+        )),
       );
       // Update episode monitored flags from the projected episodes.
       if (payload.episodes) {
@@ -447,38 +473,17 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     }
   }, [client, setGlobalStatus, t, title]);
 
-  // Reusable callback to (re)fetch media files for the title
-  const refreshMediaFiles = React.useCallback(async () => {
-    if (!title) return;
-    try {
-      const { data, error } = await client.query(titleMediaFilesQuery, { titleId: title.id }).toPromise();
-      if (error) throw error;
-      const grouped: Record<string, EpisodeMediaFile[]> = {};
-      for (const file of data.titleMediaFiles ?? []) {
-        const key = file.episodeId ?? "__unlinked__";
-        (grouped[key] ??= []).push(file);
-      }
-      setMediaFilesByEpisode(grouped);
-      // Also fetch subtitle downloads
-      client.query(subtitleDownloadsQuery, { titleId: title.id }).toPromise().then((subResult) => {
-        setSubtitleDownloads(subResult.data?.subtitleDownloads ?? []);
-      }).catch(() => {});
-    } catch {
-      // Media files fetch is best-effort
-    }
-  }, [title, client]);
-
   const handleDeleteMediaFile = React.useCallback(async (fileId: string) => {
     try {
       const { error } = await client.mutation(deleteMediaFileMutation, {
         input: { fileId, deleteFromDisk: true },
       }).toPromise();
       if (error) throw error;
-      await refreshMediaFiles();
+      await refreshTitleDetail();
     } catch (error: unknown) {
       setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
     }
-  }, [client, refreshMediaFiles, setGlobalStatus, t]);
+  }, [client, refreshTitleDetail, setGlobalStatus, t]);
 
   const handleRefreshAndScan = React.useCallback(async () => {
     if (!title) return;
@@ -498,13 +503,13 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
           unmatched: summary?.unmatched ?? 0,
         }),
       );
-      await Promise.all([refreshTitleDetail(), refreshMediaFiles()]);
+      await refreshTitleDetail();
     } catch (error: unknown) {
       setGlobalStatus(error instanceof Error ? error.message : t("settings.libraryScanFailed"));
     } finally {
       setRefreshAndScanLoading(false);
     }
-  }, [client, refreshMediaFiles, refreshTitleDetail, setGlobalStatus, t, title]);
+  }, [client, refreshTitleDetail, setGlobalStatus, t, title]);
 
   const handleRequestDeleteTitle = React.useCallback(() => {
     setDeleteFilesOnDisk(false);
@@ -575,7 +580,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       }).toPromise();
       if (error) throw error;
 
-      const top = payload.searchIndexersForEpisode.find(
+      const top = payload.searchReleases.find(
         (release: Release) => release.qualityProfileDecision?.allowed ?? true,
       );
       if (!top) {
@@ -593,9 +598,11 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         const { error } = await client.mutation(queueExistingMutation, {
           input: {
             titleId: title.id,
-            sourceHint,
-            sourceKind: top.sourceKind ?? null,
-            sourceTitle: top.title,
+            release: {
+              sourceHint,
+              sourceKind: top.sourceKind ?? null,
+              sourceTitle: top.title,
+            },
           },
         }).toPromise();
         if (error) throw error;
@@ -624,7 +631,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       }).toPromise();
       if (error) throw error;
 
-      const top = data.searchIndexers.find(
+      const top = data.searchReleases.find(
         (release: Release) => release.qualityProfileDecision?.allowed ?? true,
       );
       if (!top) {
@@ -641,9 +648,11 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       const { error: queueError } = await client.mutation(queueExistingMutation, {
         input: {
           titleId: title.id,
-          sourceHint,
-          sourceKind: top.sourceKind ?? null,
-          sourceTitle: top.title,
+          release: {
+            sourceHint,
+            sourceKind: top.sourceKind ?? null,
+            sourceTitle: top.title,
+          },
         },
       }).toPromise();
       if (queueError) throw queueError;
@@ -690,9 +699,11 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
           .mutation(queueExistingMutation, {
             input: {
               titleId: title.id,
-              sourceHint,
-              sourceKind: release.sourceKind ?? null,
-              sourceTitle: release.title,
+              release: {
+                sourceHint,
+                sourceKind: release.sourceKind ?? null,
+                sourceTitle: release.title,
+              },
             },
           })
           .toPromise();
@@ -706,76 +717,6 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     [client, title, refreshTitleDetail, setGlobalStatus, t],
   );
 
-  // Only re-fetch episodes when the set of collection IDs changes (add/remove),
-  // not when a property like `monitored` is updated on an existing collection.
-  const collectionIdKey = collections.map((c) => c.id).join("\0");
-
-  React.useEffect(() => {
-    if (collections.length === 0) {
-      setEpisodesByCollection({});
-      return;
-    }
-
-    let cancelled = false;
-    const loadCollectionEpisodes = async () => {
-      const collectionIds = collections.map((c) => c.id);
-      const { query, variables } = buildCollectionEpisodesBatchQuery(collectionIds);
-
-      try {
-        const { data, error } = await client.query(query, variables).toPromise();
-        if (error) throw error;
-        if (cancelled) return;
-
-        const result: Record<string, CollectionEpisode[]> = {};
-        for (let i = 0; i < collectionIds.length; i++) {
-          result[collectionIds[i]] = data[`c${i}`] ?? [];
-        }
-        setEpisodesByCollection(result);
-      } catch {
-        if (!cancelled) {
-          setEpisodesByCollection({});
-        }
-      }
-    };
-
-    void loadCollectionEpisodes();
-    return () => {
-      cancelled = true;
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [collectionIdKey, client]);
-
-  // Fetch completed downloads for this title (for manual import button)
-  React.useEffect(() => {
-    if (!title) {
-      setCompletedDownloads([]);
-      return;
-    }
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const { data, error } = await client.query(downloadQueueQuery, {
-          includeAllActivity: true,
-          includeHistoryOnly: false,
-        }).toPromise();
-        if (error) throw error;
-        if (cancelled) return;
-        const completed = (data.downloadQueue ?? []).filter(
-          (item: DownloadQueueItem) =>
-            item.titleId === titleId &&
-            (item.state.toLowerCase() === "completed" ||
-              item.state.toLowerCase() === "import_pending" ||
-              item.state.toLowerCase() === "importpending"),
-        );
-        setCompletedDownloads(completed);
-      } catch {
-        // best-effort
-      }
-    };
-    void load();
-    return () => { cancelled = true; };
-  }, [title, titleId, client]);
-
   const handleOpenManualImport = React.useCallback(
     (item: DownloadQueueItem) => {
       setManualImportItem(item);
@@ -785,22 +726,12 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
 
   const handleManualImportComplete = React.useCallback(async () => {
     await refreshTitleDetail();
-    await refreshMediaFiles();
-  }, [refreshTitleDetail, refreshMediaFiles]);
-
-  // Fetch media files on initial load / title change
-  React.useEffect(() => {
-    if (!title) {
-      setMediaFilesByEpisode({});
-      return;
-    }
-    void refreshMediaFiles();
-  }, [title, refreshMediaFiles]);
+  }, [refreshTitleDetail]);
 
   // Fallback: also listen to importHistoryChanged — fires from a different
   // broadcast channel so the page still refreshes even if the activity
   // subscription misses an event (e.g. transient WebSocket gap).
-  useImportHistorySubscription(refreshMediaFiles);
+  useImportHistorySubscription(refreshTitleDetail);
 
   // Subscribe to activity events via WebSocket — refetch media files when an
   // import completes for this title (movie_downloaded / series_episode_imported / file_upgraded).
@@ -813,7 +744,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   const HYDRATION_FAILED_KIND = "metadata_hydration_failed";
 
   // Use a ref for title so the effect only fires on new subscription data,
-  // not when refreshMediaFiles() updates state (which would loop).
+  // not when refreshTitleDetail() updates state (which would loop).
   const titleRef = React.useRef(title);
   titleRef.current = title;
   const processedActivityEventIdsRef = React.useRef<Set<string>>(new Set());
@@ -867,7 +798,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       }
 
       if (IMPORT_KINDS.has(activity.kind)) {
-        void refreshMediaFiles();
+        void refreshTitleDetail();
         return;
       }
     }
@@ -876,7 +807,6 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     HYDRATION_FAILED_KIND,
     HYDRATION_STARTED_KIND,
     IMPORT_KINDS,
-    refreshMediaFiles,
     refreshTitleDetail,
     activitySub.data,
   ]);
@@ -904,7 +834,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         qualityProfiles={qualityProfiles}
         defaultRootFolder={defaultRootFolder}
         rootFolders={rootFolders}
-        onUpdateTitleTags={handleUpdateTitleTags}
+        onUpdateTitleOptions={handleUpdateTitleOptions}
         completedDownloads={completedDownloads}
         onOpenManualImport={handleOpenManualImport}
         initialEpisodeId={initialEpisodeId}

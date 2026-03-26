@@ -363,10 +363,14 @@ pub(crate) async fn get_wanted_item_by_id_query(
     id: &str,
 ) -> AppResult<Option<WantedItem>> {
     let row: Option<SqliteRow> = sqlx::query(
-        "SELECT id, title_id, episode_id, media_type, search_phase, next_search_at,
-                last_search_at, search_count, baseline_date, status, grabbed_release,
-                current_score, created_at, updated_at
-         FROM wanted_items WHERE id = ?",
+        "SELECT w.id, w.title_id, t.name AS title_name, w.episode_id, w.collection_id,
+                e.season_number, w.media_type, w.search_phase, w.next_search_at,
+                w.last_search_at, w.search_count, w.baseline_date, w.status, w.grabbed_release,
+                w.current_score, w.created_at, w.updated_at
+         FROM wanted_items w
+         LEFT JOIN titles t ON t.id = w.title_id
+         LEFT JOIN episodes e ON e.id = w.episode_id
+         WHERE w.id = ?",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -388,12 +392,13 @@ pub(crate) async fn list_wanted_items_query(
     offset: i64,
 ) -> AppResult<Vec<WantedItem>> {
     let mut sql = String::from(
-        "SELECT w.id, w.title_id, t.name AS title_name, w.episode_id, w.media_type,
-                w.search_phase, w.next_search_at, w.last_search_at, w.search_count,
-                w.baseline_date, w.status, w.grabbed_release, w.current_score,
-                w.created_at, w.updated_at
+        "SELECT w.id, w.title_id, t.name AS title_name, w.episode_id, w.collection_id,
+                e.season_number, w.media_type, w.search_phase, w.next_search_at,
+                w.last_search_at, w.search_count, w.baseline_date, w.status,
+                w.grabbed_release, w.current_score, w.created_at, w.updated_at
          FROM wanted_items w
          LEFT JOIN titles t ON t.id = w.title_id
+         LEFT JOIN episodes e ON e.id = w.episode_id
          WHERE 1=1",
     );
     let mut binds: Vec<String> = Vec::new();

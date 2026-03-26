@@ -30,9 +30,16 @@ import {
   boxedActionButtonBaseClass,
   boxedActionButtonToneClass,
 } from "@/lib/utils/action-button-styles";
-import type { ImportRecord } from "@/lib/types";
+import type {
+  ImportDecision,
+  ImportRecord,
+  ImportRecordStatus,
+  ImportSkipReason,
+  ImportType,
+} from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
+import { humanizeEnumValue } from "@/lib/utils/formatting";
 
 export type ImportHistoryViewProps = {
   records: ImportRecord[];
@@ -45,16 +52,41 @@ export type ImportHistoryViewProps = {
   compact?: boolean;
 };
 
-const statusClasses: Record<string, string> = {
+const statusClasses: Record<ImportRecordStatus, string> = {
+  pending:
+    "border-border/40 bg-muted-foreground/10 text-card-foreground",
+  running:
+    "border-indigo-500/40 bg-indigo-500/10 text-indigo-700 dark:text-indigo-200",
+  processing:
+    "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-200",
   completed:
     "border-emerald-500/40 bg-emerald-500/15 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-200",
   failed: "border-rose-500/40 bg-rose-500/10 text-rose-200",
   skipped: "border-amber-500/40 bg-amber-500/10 text-amber-200",
-  processing: "border-sky-500/40 bg-sky-500/10 text-sky-200",
-  queued: "border-border/40 bg-muted-foreground/10 text-card-foreground",
 };
 
-type StatusFilter = "all" | "completed" | "failed" | "skipped";
+type StatusFilter = "all" | ImportRecordStatus;
+
+const importTypeLabels: Record<ImportType, string> = {
+  movie_download: "Movie Download",
+  tv_download: "TV Download",
+  rename_preview: "Rename Preview",
+  rename_apply_title: "Rename Apply Title",
+  rename_apply_facet: "Rename Apply Facet",
+  rename_apply_result: "Rename Apply Result",
+  rename_io_failed: "Rename I/O Failed",
+  rename_move: "Rename Move",
+  rename_stale_plan: "Rename Stale Plan",
+};
+
+const statusFilterOptions: ImportRecordStatus[] = [
+  "pending",
+  "running",
+  "processing",
+  "completed",
+  "failed",
+  "skipped",
+];
 
 function formatTimestamp(ts: string | null): string {
   if (!ts) return "\u2014";
@@ -66,6 +98,28 @@ function formatTimestamp(ts: string | null): string {
   } catch {
     return ts;
   }
+}
+
+function formatImportType(importType: ImportType): string {
+  return importTypeLabels[importType] ?? humanizeEnumValue(importType);
+}
+
+function formatImportStatus(status: ImportRecordStatus): string {
+  return humanizeEnumValue(status);
+}
+
+function formatImportDecision(decision: ImportDecision): string {
+  return humanizeEnumValue(decision);
+}
+
+function formatImportSkipReason(
+  skipReason: ImportSkipReason,
+  passwordRequiredLabel: string,
+): string {
+  if (skipReason === "password_required") {
+    return passwordRequiredLabel;
+  }
+  return humanizeEnumValue(skipReason);
 }
 
 function RetryButton({
@@ -194,9 +248,11 @@ export function ImportHistoryView({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All statuses</SelectItem>
-                    <SelectItem value="completed">Completed</SelectItem>
-                    <SelectItem value="failed">Failed</SelectItem>
-                    <SelectItem value="skipped">Skipped</SelectItem>
+                    {statusFilterOptions.map((status) => (
+                      <SelectItem key={status} value={status}>
+                        {formatImportStatus(status)}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
                 {limit != null && onLimitChange ? (
@@ -268,27 +324,30 @@ export function ImportHistoryView({
                         <RetryButton record={record} onRetry={onRetry} />
                       ) : null}
                       <span
-                        className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${statusClasses[record.status] ?? "border-border bg-muted text-card-foreground"}`}
+                        className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${statusClasses[record.status]}`}
                       >
-                        {record.status}
+                        {formatImportStatus(record.status)}
                       </span>
                     </div>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                    <span>{record.importType}</span>
+                    <span>{formatImportType(record.importType)}</span>
                     <span>{formatTimestamp(record.createdAt)}</span>
                     {record.finishedAt && record.finishedAt !== record.createdAt ? (
                       <span>{formatTimestamp(record.finishedAt)}</span>
                     ) : null}
                   </div>
                   {record.decision ? (
-                    <p className="mt-2 text-xs text-foreground">{record.decision}</p>
+                    <p className="mt-2 text-xs text-foreground">
+                      {formatImportDecision(record.decision)}
+                    </p>
                   ) : null}
                   {record.skipReason ? (
                     <p className="mt-1 break-words text-xs text-muted-foreground">
-                      {record.skipReason === "password_required"
-                        ? t("importHistory.passwordRequired")
-                        : record.skipReason}
+                      {formatImportSkipReason(
+                        record.skipReason,
+                        t("importHistory.passwordRequired"),
+                      )}
                     </p>
                   ) : null}
                   {record.errorMessage ? (
@@ -338,9 +397,9 @@ export function ImportHistoryView({
                       {/* Status */}
                       <TableCell className="align-middle">
                         <span
-                          className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${statusClasses[record.status] ?? "border-border bg-muted text-card-foreground"}`}
+                          className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${statusClasses[record.status]}`}
                         >
-                          {record.status}
+                          {formatImportStatus(record.status)}
                         </span>
                       </TableCell>
 
@@ -390,19 +449,24 @@ export function ImportHistoryView({
 
                       {/* Type */}
                       <TableCell className="min-w-0 align-middle">
-                        <span className="text-xs text-muted-foreground">{record.importType}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {formatImportType(record.importType)}
+                        </span>
                       </TableCell>
 
                       {/* Decision */}
                       <TableCell className="min-w-0 align-middle">
                         {record.decision ? (
-                          <span className="text-xs">{record.decision}</span>
+                          <span className="text-xs">
+                            {formatImportDecision(record.decision)}
+                          </span>
                         ) : null}
                         {record.skipReason ? (
                           <p className="text-xs text-muted-foreground break-words whitespace-normal">
-                            {record.skipReason === "password_required"
-                              ? t("importHistory.passwordRequired")
-                              : record.skipReason}
+                            {formatImportSkipReason(
+                              record.skipReason,
+                              t("importHistory.passwordRequired"),
+                            )}
                           </p>
                         ) : null}
                         {!record.decision && !record.skipReason ? (

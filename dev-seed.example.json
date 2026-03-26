@@ -17,6 +17,7 @@
   ],
   "downloadClients": [
     {
+      "seedId": "home-nzbget",
       "name": "Home NZBGet",
       "clientType": "nzbget",
       "baseUrl": "http://scryer-nzbget:6789/",
@@ -35,6 +36,7 @@
       }
     },
     {
+      "seedId": "home-sabnzbd",
       "name": "Home SABnzbd",
       "clientType": "sabnzbd",
       "baseUrl": "http://scryer-sabnzbd:8080",
@@ -67,19 +69,46 @@
       "scope": "system",
       "key": "download_client.routing",
       "scopeId": "movie",
-      "value": "{\"home-nzbget\": {\"category\": \"Movies\", \"recentQueuePriority\": \"normal\", \"olderQueuePriority\": \"normal\", \"removeCompleted\": false, \"removeFailed\": false, \"priority\": 1}}"
+      "valueJson": {
+        "home-nzbget": {
+          "category": "Movies",
+          "recentQueuePriority": "normal",
+          "olderQueuePriority": "normal",
+          "removeCompleted": false,
+          "removeFailed": false,
+          "priority": 1
+        }
+      }
     },
     {
       "scope": "system",
       "key": "download_client.routing",
       "scopeId": "series",
-      "value": "{\"home-nzbget\": {\"category\": \"Movies\", \"recentQueuePriority\": \"normal\", \"olderQueuePriority\": \"normal\", \"removeCompleted\": false, \"removeFailed\": false, \"priority\": 1}}"
+      "valueJson": {
+        "home-nzbget": {
+          "category": "Movies",
+          "recentQueuePriority": "normal",
+          "olderQueuePriority": "normal",
+          "removeCompleted": false,
+          "removeFailed": false,
+          "priority": 1
+        }
+      }
     },
     {
       "scope": "system",
       "key": "download_client.routing",
       "scopeId": "anime",
-      "value": "{\"home-nzbget\": {\"category\": \"Movies\", \"recentQueuePriority\": \"normal\", \"olderQueuePriority\": \"normal\", \"removeCompleted\": false, \"removeFailed\": false, \"priority\": 1}}"
+      "valueJson": {
+        "home-nzbget": {
+          "category": "Movies",
+          "recentQueuePriority": "normal",
+          "olderQueuePriority": "normal",
+          "removeCompleted": false,
+          "removeFailed": false,
+          "priority": 1
+        }
+      }
     }
   ],
   "titles": {

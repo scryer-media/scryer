@@ -1,5 +1,4 @@
-export const titleDetailQuery = `query TitleDetail($id: String!) {
-  title(id: $id) {
+const TITLE_CORE_FIELDS = `
     id
     name
     facet
@@ -31,70 +30,233 @@ export const titleDetailQuery = `query TitleDetail($id: String!) {
     aliases
     metadataLanguage
     metadataFetchedAt
-    createdAt
-  }
-  titleCollections(titleId: $id) {
+    qualityProfileId
+    rootFolderPath
+    monitorType
+    useSeasonFolders
+    monitorSpecials
+    interSeasonMovies
+    fillerPolicy
+    recapPolicy
+    createdAt`;
+
+const INTERSTITIAL_MOVIE_FIELDS = `
+      tvdbId
+      name
+      slug
+      year
+      contentStatus
+      overview
+      posterUrl
+      language
+      runtimeMinutes
+      sortTitle
+      imdbId
+      genres
+      studio
+      digitalReleaseDate
+      associationConfidence
+      continuityStatus
+      movieForm
+      confidence
+      signalSummary
+      placement
+      movieTmdbId
+      movieMalId`;
+
+const COLLECTION_EPISODE_FIELDS = `
+      id
+      titleId
+      collectionId
+      episodeType
+      episodeNumber
+      seasonNumber
+      episodeLabel
+      title
+      overview
+      airDate
+      durationSeconds
+      hasMultiAudio
+      hasSubtitle
+      isFiller
+      isRecap
+      absoluteNumber
+      monitored
+      createdAt`;
+
+const TITLE_COLLECTION_FIELDS = `
+      id
+      titleId
+      collectionType
+      collectionIndex
+      label
+      orderedPath
+      narrativeOrder
+      fileSizeBytes
+      firstEpisodeNumber
+      lastEpisodeNumber
+      interstitialMovie {${INTERSTITIAL_MOVIE_FIELDS}
+      }
+      specialsMovies {${INTERSTITIAL_MOVIE_FIELDS}
+      }
+      interstitialSeasonEpisode
+      monitored
+      createdAt
+      episodes {${COLLECTION_EPISODE_FIELDS}
+      }`;
+
+const TITLE_MEDIA_FILE_FIELDS = `
+      id
+      titleId
+      episodeId
+      filePath
+      sizeBytes
+      qualityLabel
+      scanStatus
+      createdAt
+      videoCodec
+      videoWidth
+      videoHeight
+      videoBitrateKbps
+      videoBitDepth
+      videoHdrFormat
+      videoFrameRate
+      videoProfile
+      audioCodec
+      audioChannels
+      audioBitrateKbps
+      audioLanguages
+      audioStreams {
+        codec
+        channels
+        language
+        bitrateKbps
+      }
+      subtitleLanguages
+      subtitleCodecs
+      subtitleStreams {
+        codec
+        language
+        name
+        forced
+        default
+      }
+      hasMultiaudio
+      durationSeconds
+      numChapters
+      containerFormat
+      sceneName
+      releaseGroup
+      sourceType
+      resolution
+      videoCodecParsed
+      audioCodecParsed
+      acquisitionScore
+      scoringLog
+      indexerSource
+      grabbedReleaseTitle
+      grabbedAt
+      edition
+      originalFilePath
+      releaseHash`;
+
+const WANTED_ITEM_FIELDS = `
+      id
+      titleId
+      titleName
+      episodeId
+      collectionId
+      mediaType
+      searchPhase
+      nextSearchAt
+      lastSearchAt
+      searchCount
+      baselineDate
+      status
+      grabbedRelease
+      currentScore
+      createdAt
+      updatedAt`;
+
+const DOWNLOAD_QUEUE_ITEM_FIELDS = `
     id
     titleId
-    collectionType
-    collectionIndex
-    label
-    orderedPath
-    narrativeOrder
-    fileSizeBytes
-    firstEpisodeNumber
-    lastEpisodeNumber
-    interstitialMovie {
-      tvdbId
-      name
-      slug
-      year
-      contentStatus
-      overview
-      posterUrl
-      language
-      runtimeMinutes
-      sortTitle
-      imdbId
-      genres
-      studio
-      digitalReleaseDate
-      associationConfidence
-      continuityStatus
-      movieForm
-      confidence
-      signalSummary
-      placement
-      movieTmdbId
-      movieMalId
-    }
-    specialsMovies {
-      tvdbId
-      name
-      slug
-      year
-      contentStatus
-      overview
-      posterUrl
-      language
-      runtimeMinutes
-      sortTitle
-      imdbId
-      genres
-      studio
-      digitalReleaseDate
-      associationConfidence
-      continuityStatus
-      movieForm
-      confidence
-      signalSummary
-      placement
-      movieTmdbId
-      movieMalId
-    }
-    interstitialSeasonEpisode
-    monitored
+    titleName
+    facet
+    isScryerOrigin
+    clientId
+    clientName
+    clientType
+    state
+    progressPercent
+    sizeBytes
+    remainingSeconds
+    queuedAt
+    lastUpdatedAt
+    attentionRequired
+    attentionReason
+    downloadClientItemId
+    importStatus
+    importErrorMessage
+    importedAt
+    trackedState
+    trackedStatus
+    trackedStatusMessages
+    trackedMatchType`;
+
+const SUBTITLE_DOWNLOAD_FIELDS = `
+    id
+    mediaFileId
+    language
+    provider
+    filePath
+    score
+    hearingImpaired
+    forced
+    aiTranslated
+    machineTranslated
+    uploader
+    releaseInfo
+    synced
+    downloadedAt`;
+
+const PROVIDER_TYPE_FIELDS = `
+    providerType
+    name
+    defaultBaseUrl
+    configFields {
+      key
+      label
+      fieldType
+      required
+      defaultValue
+      options { value label }
+      helpText
+    }`;
+
+const NOTIFICATION_CHANNEL_FIELDS = `
+    id
+    name
+    channelType
+    configJson
+    isEnabled
     createdAt
+    updatedAt`;
+
+const NOTIFICATION_SUBSCRIPTION_FIELDS = `
+    id
+    channelId
+    eventType
+    scope
+    scopeId
+    isEnabled
+    createdAt
+    updatedAt`;
+
+export const titleDetailQuery = `query TitleDetail($id: String!) {
+  title(id: $id) {${TITLE_CORE_FIELDS}
+    collections {${TITLE_COLLECTION_FIELDS}
+    }
   }
   titleEvents(titleId: $id, limit: 50, offset: 0) {
     id
@@ -121,102 +283,15 @@ export const titleReleaseBlocklistQuery = `query TitleReleaseBlocklist($titleId:
 }`;
 
 export const titleOverviewInitQuery = `query TitleOverviewInit($id: String!, $blocklistLimit: Int) {
-  title(id: $id) {
-    id
-    name
-    facet
-    monitored
-    tags
-    externalIds {
-      source
-      value
+  title(id: $id) {${TITLE_CORE_FIELDS}
+    collections {${TITLE_COLLECTION_FIELDS}
     }
-    year
-    overview
-    posterUrl
-    posterSourceUrl
-    bannerUrl
-    bannerSourceUrl
-    backgroundUrl
-    backgroundSourceUrl
-    sortTitle
-    slug
-    imdbId
-    runtimeMinutes
-    genres
-    contentStatus
-    language
-    firstAired
-    network
-    studio
-    country
-    aliases
-    metadataLanguage
-    metadataFetchedAt
-    createdAt
-  }
-  titleCollections(titleId: $id) {
-    id
-    titleId
-    collectionType
-    collectionIndex
-    label
-    orderedPath
-    narrativeOrder
-    fileSizeBytes
-    firstEpisodeNumber
-    lastEpisodeNumber
-    interstitialMovie {
-      tvdbId
-      name
-      slug
-      year
-      contentStatus
-      overview
-      posterUrl
-      language
-      runtimeMinutes
-      sortTitle
-      imdbId
-      genres
-      studio
-      digitalReleaseDate
-      associationConfidence
-      continuityStatus
-      movieForm
-      confidence
-      signalSummary
-      placement
-      movieTmdbId
-      movieMalId
+    mediaFiles {${TITLE_MEDIA_FILE_FIELDS}
     }
-    specialsMovies {
-      tvdbId
-      name
-      slug
-      year
-      contentStatus
-      overview
-      posterUrl
-      language
-      runtimeMinutes
-      sortTitle
-      imdbId
-      genres
-      studio
-      digitalReleaseDate
-      associationConfidence
-      continuityStatus
-      movieForm
-      confidence
-      signalSummary
-      placement
-      movieTmdbId
-      movieMalId
+    wantedItems {${WANTED_ITEM_FIELDS}
     }
-    interstitialSeasonEpisode
-    monitored
-    createdAt
+    downloadQueueItems {${DOWNLOAD_QUEUE_ITEM_FIELDS}
+    }
   }
   titleEvents(titleId: $id, limit: 50, offset: 0) {
     id
@@ -237,52 +312,18 @@ export const titleOverviewInitQuery = `query TitleOverviewInit($id: String!, $bl
     errorMessage
     attemptedAt
   }
+  subtitleDownloads(titleId: $id) {${SUBTITLE_DOWNLOAD_FIELDS}
+  }
 }`;
 
-const COLLECTION_EPISODE_FIELDS = `
-    id
-    titleId
-    collectionId
-    episodeType
-    episodeNumber
-    seasonNumber
-    episodeLabel
-    title
-    overview
-    airDate
-    durationSeconds
-    hasMultiAudio
-    hasSubtitle
-    isFiller
-    isRecap
-    absoluteNumber
-    monitored
-    createdAt`;
-
-export function buildCollectionEpisodesBatchQuery(collectionIds: string[]): {
-  query: string;
-  variables: Record<string, string>;
-} {
-  if (collectionIds.length === 0) {
-    return { query: "query Empty { __typename }", variables: {} };
-  }
-
-  const variables: Record<string, string> = {};
-  const parts: string[] = [];
-  for (let i = 0; i < collectionIds.length; i++) {
-    variables[`cid${i}`] = collectionIds[i];
-    parts.push(
-      `  c${i}: collectionEpisodes(collectionId: $cid${i}) {${COLLECTION_EPISODE_FIELDS}\n  }`,
-    );
-  }
-
-  const varDecls = collectionIds.map((_, i) => `$cid${i}: String!`).join(", ");
-  const query = `query CollectionEpisodesBatch(${varDecls}) {\n${parts.join("\n")}\n}`;
-  return { query, variables };
-}
-
 export const searchQuery = `query SearchIndexers($query: String!, $imdbId: String, $tvdbId: String, $category: String, $limit: Int) {
-  searchIndexers(query: $query, imdbId: $imdbId, tvdbId: $tvdbId, category: $category, limit: $limit) {
+  searchReleases(input: {
+    query: $query,
+    imdbId: $imdbId,
+    tvdbId: $tvdbId,
+    category: $category,
+    limit: $limit
+  }) {
     source
     title
     link
@@ -332,7 +373,16 @@ export const searchQuery = `query SearchIndexers($query: String!, $imdbId: Strin
 }`;
 
 export const searchSeriesEpisodeQuery = `query SearchIndexersEpisode($title: String!, $season: String!, $episode: String!, $imdbId: String, $tvdbId: String, $anidbId: String, $category: String, $absoluteEpisode: Int) {
-  searchIndexersEpisode(title: $title, season: $season, episode: $episode, imdbId: $imdbId, tvdbId: $tvdbId, anidbId: $anidbId, category: $category, absoluteEpisode: $absoluteEpisode) {
+  searchReleases(input: {
+    query: $title,
+    season: $season,
+    episode: $episode,
+    imdbId: $imdbId,
+    tvdbId: $tvdbId,
+    anidbId: $anidbId,
+    category: $category,
+    absoluteEpisode: $absoluteEpisode
+  }) {
     source
     title
     link
@@ -382,7 +432,7 @@ export const searchSeriesEpisodeQuery = `query SearchIndexersEpisode($title: Str
 }`;
 
 export const searchForTitleQuery = `query SearchIndexersForTitle($titleId: String!) {
-  searchIndexersForTitle(titleId: $titleId) {
+  searchReleases(input: { titleId: $titleId }) {
     source
     title
     link
@@ -432,7 +482,11 @@ export const searchForTitleQuery = `query SearchIndexersForTitle($titleId: Strin
 }`;
 
 export const searchForEpisodeQuery = `query SearchIndexersForEpisode($titleId: String!, $season: String!, $episode: String!) {
-  searchIndexersForEpisode(titleId: $titleId, season: $season, episode: $episode) {
+  searchReleases(input: {
+    titleId: $titleId,
+    season: $season,
+    episode: $episode
+  }) {
     source
     title
     link
@@ -481,7 +535,7 @@ export const searchForEpisodeQuery = `query SearchIndexersForEpisode($titleId: S
   }
 }`;
 
-export const titlesQuery = `query Titles($facet: String, $query: String) {
+export const titlesQuery = `query Titles($facet: MediaFacetValue, $query: String) {
   titles(facet: $facet, query: $query) {
     id
     name
@@ -498,141 +552,6 @@ export const titlesQuery = `query Titles($facet: String, $query: String) {
       source
       value
     }
-  }
-}`;
-
-export const titleCollectionsQuery = `query TitleCollections($titleId: String!) {
-  titleCollections(titleId: $titleId) {
-    id
-    collectionType
-    collectionIndex
-    label
-    orderedPath
-    narrativeOrder
-    fileSizeBytes
-    firstEpisodeNumber
-    lastEpisodeNumber
-    interstitialMovie {
-      tvdbId
-      name
-      slug
-      year
-      contentStatus
-      overview
-      posterUrl
-      language
-      runtimeMinutes
-      sortTitle
-      imdbId
-      genres
-      studio
-      digitalReleaseDate
-      associationConfidence
-      continuityStatus
-      movieForm
-      confidence
-      signalSummary
-    }
-    specialsMovies {
-      tvdbId
-      name
-      slug
-      year
-      contentStatus
-      overview
-      posterUrl
-      language
-      runtimeMinutes
-      sortTitle
-      imdbId
-      genres
-      studio
-      digitalReleaseDate
-      associationConfidence
-      continuityStatus
-      movieForm
-      confidence
-      signalSummary
-    }
-  }
-}`;
-
-export const collectionEpisodesQuery = `query CollectionEpisodes($collectionId: String!) {
-  collectionEpisodes(collectionId: $collectionId) {
-    id
-    titleId
-    collectionId
-    episodeType
-    episodeNumber
-    seasonNumber
-    episodeLabel
-    title
-    overview
-    airDate
-    durationSeconds
-    hasMultiAudio
-    hasSubtitle
-    isFiller
-    isRecap
-    monitored
-    createdAt
-  }
-}`;
-
-export const titleMediaFilesQuery = `query TitleMediaFiles($titleId: String!) {
-  titleMediaFiles(titleId: $titleId) {
-    id
-    titleId
-    episodeId
-    filePath
-    sizeBytes
-    qualityLabel
-    scanStatus
-    createdAt
-    videoCodec
-    videoWidth
-    videoHeight
-    videoBitrateKbps
-    videoBitDepth
-    videoHdrFormat
-    videoFrameRate
-    videoProfile
-    audioCodec
-    audioChannels
-    audioBitrateKbps
-    audioLanguages
-    audioStreams {
-      codec
-      channels
-      language
-      bitrateKbps
-    }
-    subtitleLanguages
-    subtitleCodecs
-    subtitleStreams {
-      codec
-      language
-      name
-      forced
-      default
-    }
-    hasMultiaudio
-    durationSeconds
-    numChapters
-    containerFormat
-    sceneName
-    sourceType
-    resolution
-    videoCodecParsed
-    audioCodecParsed
-    acquisitionScore
-    scoringLog
-    indexerSource
-    grabbedReleaseTitle
-    grabbedAt
-    edition
-    originalFilePath
-    releaseHash
   }
 }`;
 
@@ -721,36 +640,12 @@ export const indexersQuery = `query Indexers($providerType: String) {
 }`;
 
 export const indexerProviderTypesQuery = `query IndexerProviderTypes {
-  indexerProviderTypes {
-    providerType
-    name
-    defaultBaseUrl
-    configFields {
-      key
-      label
-      fieldType
-      required
-      defaultValue
-      options { value label }
-      helpText
-    }
+  indexerProviderTypes {${PROVIDER_TYPE_FIELDS}
   }
 }`;
 
 export const downloadClientProviderTypesQuery = `query DownloadClientProviderTypes {
-  downloadClientProviderTypes {
-    providerType
-    name
-    defaultBaseUrl
-    configFields {
-      key
-      label
-      fieldType
-      required
-      defaultValue
-      options { value label }
-      helpText
-    }
+  downloadClientProviderTypes {${PROVIDER_TYPE_FIELDS}
   }
 }`;
 
@@ -770,109 +665,15 @@ export const downloadClientsQuery = `query DownloadClients {
   }
 }`;
 
-export const adminSettingsQuery = `query AdminSettings($scope: String, $scopeId: String, $category: String, $keyNames: [String!]) {
-  adminSettings(scope: $scope, scopeId: $scopeId, category: $category, keyNames: $keyNames) {
-    scope
-    scopeId
-    items {
-      category
-      scope
-      keyName
-      dataType
-      defaultValueJson
-      effectiveValueJson
-      valueJson
-      source
-      hasOverride
-      isSensitive
-      validationJson
-      scopeId
-      updatedByUserId
-      createdAt
-      updatedAt
-    }
-  }
-}`;
-
 export const downloadQueueQuery = `query DownloadQueue($includeAllActivity: Boolean, $includeHistoryOnly: Boolean) {
-  downloadQueue(includeAllActivity: $includeAllActivity, includeHistoryOnly: $includeHistoryOnly) {
-    id
-    titleId
-    titleName
-    facet
-    isScryerOrigin
-    clientId
-    clientName
-    clientType
-    state
-    progressPercent
-    sizeBytes
-    remainingSeconds
-    queuedAt
-    lastUpdatedAt
-    attentionRequired
-    attentionReason
-    downloadClientItemId
-    importStatus
-    importErrorMessage
-    importedAt
-    trackedState
-    trackedStatus
-    trackedStatusMessages
-    trackedMatchType
+  downloadQueue(includeAllActivity: $includeAllActivity, includeHistoryOnly: $includeHistoryOnly) {${DOWNLOAD_QUEUE_ITEM_FIELDS}
   }
 }`;
 
 export const downloadQueueSubscription = `subscription DownloadQueueStream($includeAllActivity: Boolean, $includeHistoryOnly: Boolean) {
-  downloadQueue(includeAllActivity: $includeAllActivity, includeHistoryOnly: $includeHistoryOnly) {
-    id
-    titleId
-    titleName
-    facet
-    isScryerOrigin
-    clientId
-    clientName
-    clientType
-    state
-    progressPercent
-    sizeBytes
-    remainingSeconds
-    queuedAt
-    lastUpdatedAt
-    attentionRequired
-    attentionReason
-    downloadClientItemId
-    importStatus
-    importErrorMessage
-    importedAt
-    trackedState
-    trackedStatus
-    trackedStatusMessages
-    trackedMatchType
+  downloadQueue(includeAllActivity: $includeAllActivity, includeHistoryOnly: $includeHistoryOnly) {${DOWNLOAD_QUEUE_ITEM_FIELDS}
   }
 }`;
-
-// Shared field selections for batched queries
-const adminSettingsFieldSelection = `
-    scope
-    scopeId
-    items {
-      category
-      scope
-      keyName
-      dataType
-      defaultValueJson
-      effectiveValueJson
-      valueJson
-      source
-      hasOverride
-      isSensitive
-      validationJson
-      scopeId
-      updatedByUserId
-      createdAt
-      updatedAt
-    }`;
 
 const downloadClientFieldSelection = `
     id
@@ -905,105 +706,262 @@ const indexerFieldSelection = `
     createdAt
     updatedAt`;
 
+const qualityProfileCriteriaFields = `
+      qualityTiers
+      archivalQuality
+      allowUnknownQuality
+      sourceAllowlist
+      sourceBlocklist
+      videoCodecAllowlist
+      videoCodecBlocklist
+      audioCodecAllowlist
+      audioCodecBlocklist
+      atmosPreferred
+      dolbyVisionAllowed
+      detectedHdrAllowed
+      preferRemux
+      allowBdDisk
+      allowUpgrades
+      preferDualAudio
+      requiredAudioLanguages
+      scoringPersona
+      scoringOverrides {
+        allowX265Non4k
+        blockDvWithoutFallback
+        preferCompactEncodes
+        preferLosslessAudio
+        blockUpscaled
+      }
+      cutoffTier
+      minScoreToGrab
+      facetPersonaOverrides {
+        scope
+        persona
+      }`;
+
+const qualityProfileSettingsFieldSelection = `
+    globalProfileId
+    profiles {
+      id
+      name
+      criteria {${qualityProfileCriteriaFields}
+      }
+    }
+    categorySelections {
+      scope
+      overrideProfileId
+      effectiveProfileId
+      inheritsGlobal
+    }`;
+
+const downloadClientRoutingFieldSelection = `
+    clientId
+    enabled
+    category
+    recentQueuePriority
+    olderQueuePriority
+    removeCompleted
+    removeFailed`;
+
+const indexerRoutingFieldSelection = `
+    indexerId
+    enabled
+    categories
+    priority`;
+
+const mediaSettingsFieldSelection = `
+    scope
+    libraryPath
+    rootFolders {
+      path
+      isDefault
+    }
+    renameTemplate
+    renameCollisionPolicy
+    renameMissingMetadataPolicy
+    fillerPolicy
+    recapPolicy
+    monitorSpecials
+    interSeasonMovies
+    monitorFillerMovies
+    nfoWriteOnImport
+    plexmatchWriteOnImport`;
+
+const libraryPathsFieldSelection = `
+    moviePath
+    seriesPath
+    animePath`;
+
+const serviceSettingsFieldSelection = `
+    tlsCertPath
+    tlsKeyPath`;
+
 // Batched query for quality profiles page: 5 requests → 1
 export const qualityProfilesInitQuery = `query QualityProfilesInit {
+  qualityProfileSettings {${qualityProfileSettingsFieldSelection}
+  }
+}`;
+
+export const movieOverviewSettingsInitQuery = `query MovieOverviewSettingsInit {
+  qualityProfileSettings {${qualityProfileSettingsFieldSelection}
+  }
+  mediaSettings(scope: movie) {${mediaSettingsFieldSelection}
+  }
+}`;
+
+export const seriesOverviewSettingsInitQuery = `query SeriesOverviewSettingsInit($scope: ContentScopeValue!) {
+  qualityProfileSettings {${qualityProfileSettingsFieldSelection}
+  }
+  mediaSettings(scope: $scope) {${mediaSettingsFieldSelection}
+  }
+}`;
+
+export const wantedCutoffInitQuery = `query WantedCutoffInit {
+  titles {
+    id
+    name
+    monitored
+    facet
+    posterUrl
+    qualityTier
+  }
+  qualityProfileSettings {${qualityProfileSettingsFieldSelection}
+  }
+}`;
+
+export const downloadClientsInitQuery = `query DownloadClientsInit {
   downloadClientConfigs {${downloadClientFieldSelection}
   }
-  systemSettings: adminSettings(scope: "system") {${adminSettingsFieldSelection}
-  }
-  movieSettings: adminSettings(scope: "system", scopeId: "movie", category: "media") {${adminSettingsFieldSelection}
-  }
-  seriesSettings: adminSettings(scope: "system", scopeId: "series", category: "media") {${adminSettingsFieldSelection}
-  }
-  animeSettings: adminSettings(scope: "system", scopeId: "anime", category: "media") {${adminSettingsFieldSelection}
+  downloadClientProviderTypes {${PROVIDER_TYPE_FIELDS}
   }
 }`;
 
-export const rootFoldersQuery = `query RootFolders($facet: String!) {
+export const indexersInitQuery = `query IndexersInit($providerType: String) {
+  indexers(providerType: $providerType) {${indexerFieldSelection}
+  }
+  indexerProviderTypes {${PROVIDER_TYPE_FIELDS}
+  }
+}`;
+
+export const setupWizardProviderTypesInitQuery = `query SetupWizardProviderTypesInit {
+  downloadClientProviderTypes {${PROVIDER_TYPE_FIELDS}
+  }
+  indexerProviderTypes {${PROVIDER_TYPE_FIELDS}
+  }
+}`;
+
+export const rootFoldersQuery = `query RootFolders($facet: MediaFacetValue!) {
   rootFolders(facet: $facet) { path isDefault }
 }`;
 
-// Batched query for media settings with current-scope key filtering.
-export const mediaSettingsInitQuery = `query MediaSettingsInit(
-  $scopeId: String!
-  $facet: String!
-  $mediaKeyNames: [String!]
-  $systemKeyNames: [String!]
-  $categoryKeyNames: [String!]
-) {
-  systemSettings: adminSettings(scope: "system", category: "media", keyNames: $systemKeyNames) {${adminSettingsFieldSelection}
+export const mediaSettingsInitQuery = `query MediaSettingsInit($scope: ContentScopeValue!) {
+  qualityProfileSettings {${qualityProfileSettingsFieldSelection}
   }
-  mediaSettings: adminSettings(scope: "system", category: "media", keyNames: $mediaKeyNames) {${adminSettingsFieldSelection}
+  mediaSettings(scope: $scope) {${mediaSettingsFieldSelection}
   }
-  categorySettings: adminSettings(scope: "system", scopeId: $scopeId, category: "media", keyNames: $categoryKeyNames) {${adminSettingsFieldSelection}
-  }
-  rootFolders(facet: $facet) { path isDefault }
 }`;
 
-export const globalSearchInitQuery = `query GlobalSearchInit(
-  $systemKeyNames: [String!]
-  $movieKeyNames: [String!]
-  $seriesKeyNames: [String!]
-  $animeKeyNames: [String!]
-) {
-  systemSettings: adminSettings(scope: "system", category: "media", keyNames: $systemKeyNames) {${adminSettingsFieldSelection}
+export const globalSearchInitQuery = `query GlobalSearchInit {
+  qualityProfileSettings {${qualityProfileSettingsFieldSelection}
   }
-  movieSettings: adminSettings(scope: "system", scopeId: "movie", category: "media", keyNames: $movieKeyNames) {${adminSettingsFieldSelection}
+  movieSettings: mediaSettings(scope: movie) {${mediaSettingsFieldSelection}
   }
-  seriesSettings: adminSettings(scope: "system", scopeId: "series", category: "media", keyNames: $seriesKeyNames) {${adminSettingsFieldSelection}
+  seriesSettings: mediaSettings(scope: series) {${mediaSettingsFieldSelection}
   }
-  animeSettings: adminSettings(scope: "system", scopeId: "anime", category: "media", keyNames: $animeKeyNames) {${adminSettingsFieldSelection}
+  animeSettings: mediaSettings(scope: anime) {${mediaSettingsFieldSelection}
   }
-  movieRootFolders: rootFolders(facet: "movie") { path isDefault }
-  seriesRootFolders: rootFolders(facet: "tv") { path isDefault }
-  animeRootFolders: rootFolders(facet: "anime") { path isDefault }
 }`;
 
 // Batched query for routing page bootstrap.
-export const routingPageInitQuery = `query RoutingPageInit($scopeId: String!) {
+export const routingPageInitQuery = `query RoutingPageInit($scopeId: ContentScopeValue!) {
   downloadClientConfigs {${downloadClientFieldSelection}
   }
   indexers {${indexerFieldSelection}
   }
-  categorySettings: adminSettings(scope: "system", scopeId: $scopeId, category: "media") {${adminSettingsFieldSelection}
+  downloadClientRouting(scope: $scopeId) {${downloadClientRoutingFieldSelection}
+  }
+  indexerRouting(scope: $scopeId) {${indexerRoutingFieldSelection}
   }
 }`;
 
 // TLS settings query
 export const tlsSettingsQuery = `query TlsSettings {
-  serviceSettings: adminSettings(scope: "system", category: "service") {${adminSettingsFieldSelection}
+  serviceSettings {${serviceSettingsFieldSelection}
   }
 }`;
 
 // Acquisition settings query
 export const acquisitionSettingsQuery = `query AcquisitionSettings {
-  acquisitionSettings: adminSettings(scope: "system", category: "acquisition") {${adminSettingsFieldSelection}
+  acquisitionSettings {
+    enabled
+    upgradeCooldownHours
+    sameTierMinDelta
+    crossTierMinDelta
+    forcedUpgradeDeltaBypass
+    pollIntervalSeconds
+    syncIntervalSeconds
+    batchSize
   }
 }`;
 
-export const postProcessingSettingsQuery = `query PostProcessingSettings {
-  postProcessingSettings: adminSettings(scope: "system", category: "post_processing") {${adminSettingsFieldSelection}
+export const delayProfilesQuery = `query DelayProfiles {
+  delayProfiles {
+    id
+    name
+    usenetDelayMinutes
+    torrentDelayMinutes
+    preferredProtocol
+    minAgeMinutes
+    bypassScoreThreshold
+    appliesToFacets
+    tags
+    priority
+    enabled
+  }
+}`;
+
+export const libraryPathsQuery = `query LibraryPaths {
+  libraryPaths {${libraryPathsFieldSelection}
   }
 }`;
 
 export const subtitleSettingsQuery = `query SubtitleSettings {
-  subtitleSettings: adminSettings(scope: "system", category: "subtitles") {${adminSettingsFieldSelection}
+  subtitleSettings {
+    enabled
+    hasOpenSubtitlesApiKey
+    openSubtitlesUsername
+    hasOpenSubtitlesPassword
+    languages {
+      code
+      hearingImpaired
+      forced
+    }
+    autoDownloadOnImport
+    minimumScoreSeries
+    minimumScoreMovie
+    searchIntervalHours
+    includeAiTranslated
+    includeMachineTranslated
+    syncEnabled
+    syncThresholdSeries
+    syncThresholdMovie
+    syncMaxOffsetSeconds
   }
 }`;
 
 // Batched query for download client routing: 2 requests → 1
-export const downloadClientRoutingInitQuery = `query DownloadClientRoutingInit($scopeId: String!) {
+export const downloadClientRoutingInitQuery = `query DownloadClientRoutingInit($scopeId: ContentScopeValue!) {
   downloadClientConfigs {${downloadClientFieldSelection}
   }
-  categorySettings: adminSettings(scope: "system", scopeId: $scopeId, category: "media") {${adminSettingsFieldSelection}
+  downloadClientRouting(scope: $scopeId) {${downloadClientRoutingFieldSelection}
   }
 }`;
 
 // Batched query for indexer routing: 2 requests → 1
-export const indexerRoutingInitQuery = `query IndexerRoutingInit($scopeId: String!) {
+export const indexerRoutingInitQuery = `query IndexerRoutingInit($scopeId: ContentScopeValue!) {
   indexers {${indexerFieldSelection}
   }
-  categorySettings: adminSettings(scope: "system", scopeId: $scopeId, category: "media") {${adminSettingsFieldSelection}
+  indexerRouting(scope: $scopeId) {${indexerRoutingFieldSelection}
   }
 }`;
 
@@ -1113,7 +1071,7 @@ export const previewManualImportQuery = `query PreviewManualImport($downloadClie
   }
 }`;
 
-export const wantedItemsQuery = `query WantedItems($status: String, $mediaType: String, $titleId: String, $limit: Int, $offset: Int) {
+export const wantedItemsQuery = `query WantedItems($status: WantedStatusValue, $mediaType: WantedMediaTypeValue, $titleId: String, $limit: Int, $offset: Int) {
   wantedItems(status: $status, mediaType: $mediaType, titleId: $titleId, limit: $limit, offset: $offset) {
     items {
       id
@@ -1136,20 +1094,23 @@ export const wantedItemsQuery = `query WantedItems($status: String, $mediaType: 
   }
 }`;
 
-export const releaseDecisionsQuery = `query ReleaseDecisions($wantedItemId: String, $titleId: String, $limit: Int) {
-  releaseDecisions(wantedItemId: $wantedItemId, titleId: $titleId, limit: $limit) {
+export const releaseDecisionsQuery = `query ReleaseDecisions($wantedItemId: String!, $limit: Int) {
+  wantedItem(id: $wantedItemId) {
     id
-    wantedItemId
-    titleId
-    releaseTitle
-    releaseUrl
-    releaseSizeBytes
-    decisionCode
-    candidateScore
-    currentScore
-    scoreDelta
-    explanationJson
-    createdAt
+    releaseDecisions(limit: $limit) {
+      id
+      wantedItemId
+      titleId
+      releaseTitle
+      releaseUrl
+      releaseSizeBytes
+      decisionCode
+      candidateScore
+      currentScore
+      scoreDelta
+      explanationJson
+      createdAt
+    }
   }
 }`;
 
@@ -1237,48 +1198,31 @@ export const rulePackTemplatesQuery = `query RulePackTemplates($packId: String!)
 // ── Notifications ─────────────────────────────────────────────────────
 
 export const notificationChannelsQuery = `query NotificationChannels {
-  notificationChannels {
-    id
-    name
-    channelType
-    configJson
-    isEnabled
-    createdAt
-    updatedAt
+  notificationChannels {${NOTIFICATION_CHANNEL_FIELDS}
   }
 }`;
 
 export const notificationSubscriptionsQuery = `query NotificationSubscriptions {
-  notificationSubscriptions {
-    id
-    channelId
-    eventType
-    scope
-    scopeId
-    isEnabled
-    createdAt
-    updatedAt
+  notificationSubscriptions {${NOTIFICATION_SUBSCRIPTION_FIELDS}
   }
 }`;
 
 export const notificationProviderTypesQuery = `query NotificationProviderTypes {
-  notificationProviderTypes {
-    providerType
-    name
-    defaultBaseUrl
-    configFields {
-      key
-      label
-      fieldType
-      required
-      defaultValue
-      options { value label }
-      helpText
-    }
+  notificationProviderTypes {${PROVIDER_TYPE_FIELDS}
   }
 }`;
 
 export const notificationEventTypesQuery = `query NotificationEventTypes {
+  notificationEventTypes
+}`;
+
+export const notificationsInitQuery = `query NotificationsInit {
+  notificationChannels {${NOTIFICATION_CHANNEL_FIELDS}
+  }
+  notificationSubscriptions {${NOTIFICATION_SUBSCRIPTION_FIELDS}
+  }
+  notificationProviderTypes {${PROVIDER_TYPE_FIELDS}
+  }
   notificationEventTypes
 }`;
 
@@ -1454,21 +1398,7 @@ export const postProcessingScriptRunsQuery = `query PostProcessingScriptRuns($sc
 }`;
 
 export const subtitleDownloadsQuery = `query SubtitleDownloads($titleId: String!) {
-  subtitleDownloads(titleId: $titleId) {
-    id
-    mediaFileId
-    language
-    provider
-    filePath
-    score
-    hearingImpaired
-    forced
-    aiTranslated
-    machineTranslated
-    uploader
-    releaseInfo
-    synced
-    downloadedAt
+  subtitleDownloads(titleId: $titleId) {${SUBTITLE_DOWNLOAD_FIELDS}
   }
 }`;
 

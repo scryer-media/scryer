@@ -14,13 +14,6 @@ import {
 } from "@/components/ui/select";
 import { SearchResultBuckets } from "@/components/common/release-search-results";
 import { TitleHistoryModal } from "@/components/common/title-history-modal";
-import {
-  QUALITY_PROFILE_PREFIX,
-  ROOT_FOLDER_PREFIX,
-  getTagValue,
-  setTagValue,
-  removeTagByPrefix,
-} from "@/lib/utils/title-tags";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { Translate } from "@/components/root/types";
 import type { Release, WantedItem } from "@/lib/types";
@@ -40,6 +33,8 @@ import { SubtitleSearchModal } from "@/components/views/subtitle-search-modal";
 import { blacklistSubtitleMutation } from "@/lib/graphql/mutations";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { TitlePoster } from "@/components/title-poster";
+import type { TitleOptionUpdates } from "@/lib/types/title-options";
+import type { WantedSearchPhase, WantedStatus } from "@/lib/types";
 
 const imdbLogoUrl = `${import.meta.env.BASE_URL}media-sites/imdb.svg`;
 const tmdbLogoUrl = `${import.meta.env.BASE_URL}media-sites/tmdb.svg`;
@@ -143,7 +138,7 @@ function formatTitleTag(t: Translate, tag: string, qualityProfiles?: { id: strin
 
 const MONITOR_TYPE_TAG_PREFIX = "scryer:monitor-type:";
 
-function wantedStatusClass(status: string) {
+function wantedStatusClass(status: WantedStatus) {
   switch (status) {
     case "wanted":
       return "bg-blue-500/20 text-blue-300";
@@ -158,7 +153,7 @@ function wantedStatusClass(status: string) {
   }
 }
 
-function wantedPhaseClass(phase: string) {
+function wantedPhaseClass(phase: WantedSearchPhase) {
   switch (phase) {
     case "primary":
       return "bg-emerald-500/15 text-emerald-300";
@@ -172,7 +167,7 @@ function wantedPhaseClass(phase: string) {
   }
 }
 
-function formatWantedPhase(phase: string) {
+function formatWantedPhase(phase: WantedSearchPhase) {
   return phase.replaceAll("_", " ");
 }
 
@@ -184,16 +179,16 @@ function TitleSettingsPanel({
   title,
   qualityProfiles,
   defaultRootFolder,
-  onUpdateTitleTags,
+  onUpdateTitleOptions,
 }: {
   title: TitleDetail;
   qualityProfiles: { id: string; name: string }[];
   defaultRootFolder: string;
-  onUpdateTitleTags: (newTags: string[]) => Promise<void>;
+  onUpdateTitleOptions: (options: TitleOptionUpdates) => Promise<void>;
 }) {
   const t = useTranslate();
-  const currentProfileId = getTagValue(title.tags, QUALITY_PROFILE_PREFIX) ?? INHERIT_VALUE;
-  const currentRootFolder = getTagValue(title.tags, ROOT_FOLDER_PREFIX) ?? "";
+  const currentProfileId = title.qualityProfileId?.trim() || INHERIT_VALUE;
+  const currentRootFolder = title.rootFolderPath?.trim() || "";
   const [rootFolderDraft, setRootFolderDraft] = React.useState(currentRootFolder || defaultRootFolder);
   const [saving, setSaving] = React.useState(false);
 
@@ -205,11 +200,9 @@ function TitleSettingsPanel({
   const handleProfileChange = async (value: string) => {
     setSaving(true);
     try {
-      const newTags =
-        value === INHERIT_VALUE
-          ? removeTagByPrefix(title.tags, QUALITY_PROFILE_PREFIX)
-          : setTagValue(title.tags, QUALITY_PROFILE_PREFIX, value);
-      await onUpdateTitleTags(newTags);
+      await onUpdateTitleOptions({
+        qualityProfileId: value === INHERIT_VALUE ? "" : value,
+      });
     } finally {
       setSaving(false);
     }
@@ -221,7 +214,7 @@ function TitleSettingsPanel({
       // Reset to default — remove tag
       setSaving(true);
       try {
-        await onUpdateTitleTags(removeTagByPrefix(title.tags, ROOT_FOLDER_PREFIX));
+        await onUpdateTitleOptions({ rootFolderPath: "" });
       } finally {
         setSaving(false);
       }
@@ -229,7 +222,7 @@ function TitleSettingsPanel({
     }
     setSaving(true);
     try {
-      await onUpdateTitleTags(setTagValue(title.tags, ROOT_FOLDER_PREFIX, trimmed));
+      await onUpdateTitleOptions({ rootFolderPath: trimmed });
     } finally {
       setSaving(false);
     }
@@ -319,7 +312,7 @@ type Props = {
   onBackToList?: () => void;
   qualityProfiles: { id: string; name: string }[];
   defaultRootFolder: string;
-  onUpdateTitleTags: (newTags: string[]) => Promise<void>;
+  onUpdateTitleOptions: (options: TitleOptionUpdates) => Promise<void>;
   onSetTitleMonitored: (monitored: boolean) => Promise<void>;
   monitoredUpdating: boolean;
   wantedItem: WantedItem | null;
@@ -358,7 +351,7 @@ export function MovieOverviewView({
   onBackToList,
   qualityProfiles,
   defaultRootFolder,
-  onUpdateTitleTags,
+  onUpdateTitleOptions,
   onSetTitleMonitored,
   monitoredUpdating,
   wantedItem,
@@ -701,12 +694,12 @@ export function MovieOverviewView({
         onRequestDelete={onRequestDeleteTitle}
         onHistory={() => setHistoryOpen(true)}
         settingsPanel={(
-          <TitleSettingsPanel
-            title={title}
-            qualityProfiles={qualityProfiles}
-            defaultRootFolder={defaultRootFolder}
-            onUpdateTitleTags={onUpdateTitleTags}
-          />
+            <TitleSettingsPanel
+              title={title}
+              qualityProfiles={qualityProfiles}
+              defaultRootFolder={defaultRootFolder}
+              onUpdateTitleOptions={onUpdateTitleOptions}
+            />
         )}
         interactiveSearchPanel={interactiveSearchPanel}
       />

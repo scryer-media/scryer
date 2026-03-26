@@ -51,6 +51,10 @@
 - **No Laziness**: Find root causes. No temporary fixes. Senior developer standards.
 - **Minimal Impact**: Changes should only touch what's necessary. Avoid introducing bugs.
 
+## Rust Style Rules
+
+- Always use `clamp()` instead of `.min().max()` or `.max().min()` chains — clippy will catch it every time.
+
 ## Codebase Navigation
 
 - **Rust crates**: `crates/` — domain, application, infrastructure, interface, service (scryer)

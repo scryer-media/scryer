@@ -737,6 +737,18 @@ mod tests {
         ) -> AppResult<Option<String>> {
             Ok(scope_id.and_then(|id| self.routing_by_scope.get(&id).cloned()))
         }
+
+        async fn upsert_setting_json(
+            &self,
+            _scope: &str,
+            _key_name: &str,
+            _scope_id: Option<String>,
+            _value_json: String,
+            _source: &str,
+            _updated_by_user_id: Option<String>,
+        ) -> AppResult<()> {
+            Ok(())
+        }
     }
 
     #[derive(Default)]

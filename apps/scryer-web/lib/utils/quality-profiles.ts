@@ -6,10 +6,13 @@ import type {
   ParsedQualityProfile,
   ParsedQualityProfileEntry,
   QualityProfileDraft,
+  QualityProfileGraphPayload,
+  QualityProfileSettingsPayload,
   ProfileListChoice,
   ProfileRawRecord,
   ScoringPersonaId,
   ScoringOverridesPayload,
+  ViewCategoryId,
 } from "@/lib/types";
 
 type ProfileCatalogParseResult = {
@@ -70,6 +73,7 @@ export function normalizeQualityProfileEntry(rawEntry: unknown): ParsedQualityPr
       detected_hdr_allowed: readBoolean(criteria.detected_hdr_allowed, false),
       prefer_remux: readBoolean(criteria.prefer_remux, false),
       prefer_dual_audio: readBoolean(criteria.prefer_dual_audio, false),
+      required_audio_languages: readList(criteria.required_audio_languages),
       allow_bd_disk: readBoolean(criteria.allow_bd_disk, false),
       allow_upgrades: readBoolean(criteria.allow_upgrades, false),
       scoring_persona: readScoringPersona(criteria.scoring_persona),
@@ -83,6 +87,82 @@ export function normalizeQualityProfileEntry(rawEntry: unknown): ParsedQualityPr
       facet_persona_overrides: readFacetPersonaOverrides(criteria.facet_persona_overrides),
     },
   };
+}
+
+export function qualityProfileEntryFromGraph(
+  profile: QualityProfileGraphPayload,
+): ParsedQualityProfileEntry {
+  return {
+    id: profile.id.trim(),
+    name: profile.name.trim() || profile.id.trim(),
+    criteria: {
+      quality_tiers: dedupeOrdered(
+        profile.criteria.qualityTiers.map((value) => value.trim().toUpperCase()),
+      ),
+      archival_quality: profile.criteria.archivalQuality?.trim().toUpperCase() || null,
+      allow_unknown_quality: profile.criteria.allowUnknownQuality,
+      source_allowlist: dedupeOrdered(profile.criteria.sourceAllowlist.map((value) => value.trim())),
+      source_blocklist: dedupeOrdered(profile.criteria.sourceBlocklist.map((value) => value.trim())),
+      video_codec_allowlist: dedupeOrdered(
+        profile.criteria.videoCodecAllowlist.map((value) => value.trim()),
+      ),
+      video_codec_blocklist: dedupeOrdered(
+        profile.criteria.videoCodecBlocklist.map((value) => value.trim()),
+      ),
+      audio_codec_allowlist: dedupeOrdered(
+        profile.criteria.audioCodecAllowlist.map((value) => value.trim()),
+      ),
+      audio_codec_blocklist: dedupeOrdered(
+        profile.criteria.audioCodecBlocklist.map((value) => value.trim()),
+      ),
+      atmos_preferred: profile.criteria.atmosPreferred,
+      dolby_vision_allowed: profile.criteria.dolbyVisionAllowed,
+      detected_hdr_allowed: profile.criteria.detectedHdrAllowed,
+      prefer_remux: profile.criteria.preferRemux,
+      prefer_dual_audio: profile.criteria.preferDualAudio,
+      required_audio_languages: dedupeOrdered(
+        profile.criteria.requiredAudioLanguages.map((value) => value.trim()),
+      ),
+      allow_bd_disk: profile.criteria.allowBdDisk,
+      allow_upgrades: profile.criteria.allowUpgrades,
+      scoring_persona: profile.criteria.scoringPersona,
+      scoring_overrides: profile.criteria.scoringOverrides,
+      cutoff_tier: profile.criteria.cutoffTier?.trim().toUpperCase() || null,
+      min_score_to_grab: profile.criteria.minScoreToGrab,
+      facet_persona_overrides: Object.fromEntries(
+        profile.criteria.facetPersonaOverrides.map((override) => [override.scope, override.persona]),
+      ),
+    },
+  };
+}
+
+export function qualityProfileSettingsToEntries(
+  payload: QualityProfileSettingsPayload | null | undefined,
+): ParsedQualityProfileEntry[] {
+  return (payload?.profiles ?? []).map(qualityProfileEntryFromGraph);
+}
+
+export function qualityProfileSettingsToCatalogText(
+  payload: QualityProfileSettingsPayload | null | undefined,
+): string {
+  return normalizeQualityProfilesForUi(JSON.stringify(qualityProfileSettingsToEntries(payload)));
+}
+
+export function qualityProfileSettingsToCategoryOverrides(
+  payload: QualityProfileSettingsPayload | null | undefined,
+): Record<ViewCategoryId, string> {
+  const result: Record<ViewCategoryId, string> = {
+    movie: QUALITY_PROFILE_INHERIT_VALUE,
+    series: QUALITY_PROFILE_INHERIT_VALUE,
+    anime: QUALITY_PROFILE_INHERIT_VALUE,
+  };
+
+  for (const selection of payload?.categorySelections ?? []) {
+    result[selection.scope] =
+      selection.overrideProfileId?.trim() || QUALITY_PROFILE_INHERIT_VALUE;
+  }
+
+  return result;
 }
 
 const VALID_PERSONAS = new Set<ScoringPersonaId>(["Balanced", "Audiophile", "Efficient", "Compatible"]);
@@ -277,6 +357,7 @@ export function buildQualityProfileTemplate(profileId: string, profileName: stri
     detected_hdr_allowed: true,
     prefer_remux: false,
     prefer_dual_audio: false,
+    required_audio_languages: [],
     allow_bd_disk: true,
     allow_upgrades: true,
     scoring_persona: "Balanced",
@@ -346,6 +427,7 @@ export function toQualityProfileDraft(
     prefer_remux:
       typeof entry.criteria.prefer_remux === "boolean" ? entry.criteria.prefer_remux : false,
     prefer_dual_audio: typeof entry.criteria.prefer_dual_audio === "boolean" ? entry.criteria.prefer_dual_audio : false,
+    required_audio_languages: parseStringArrayValue(entry.criteria.required_audio_languages),
     allow_bd_disk: typeof entry.criteria.allow_bd_disk === "boolean" ? entry.criteria.allow_bd_disk : true,
     allow_upgrades:
       typeof entry.criteria.allow_upgrades === "boolean" ? entry.criteria.allow_upgrades : true,
@@ -392,6 +474,7 @@ export function qualityProfileCatalogEntryFromDraft(draft: QualityProfileDraft):
       detected_hdr_allowed: draft.detected_hdr_allowed,
       prefer_remux: draft.prefer_remux,
       prefer_dual_audio: draft.prefer_dual_audio,
+      required_audio_languages: draft.required_audio_languages,
       allow_bd_disk: draft.allow_bd_disk,
       allow_upgrades: draft.allow_upgrades,
       scoring_persona: draft.scoring_persona,

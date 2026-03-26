@@ -3,13 +3,12 @@ import { useClient, useMutation } from "urql";
 import { WantedView } from "@/components/views/wanted-view";
 import type { CutoffUnmetItem } from "@/components/views/cutoff-unmet-view";
 import {
-  wantedItemsQuery,
-  releaseDecisionsQuery,
-  titlesQuery,
-  adminSettingsQuery,
-  searchQuery,
   calendarEpisodesQuery,
   pendingReleasesQuery,
+  releaseDecisionsQuery,
+  searchQuery,
+  wantedCutoffInitQuery,
+  wantedItemsQuery,
 } from "@/lib/graphql/queries";
 import {
   triggerWantedSearchMutation,
@@ -20,13 +19,20 @@ import {
   forceGrabPendingReleaseMutation,
   dismissPendingReleaseMutation,
 } from "@/lib/graphql/mutations";
-import { resolveQualityProfileCatalogState } from "@/lib/utils/quality-profiles";
 import {
-  QUALITY_PROFILE_CATALOG_KEY,
-  QUALITY_PROFILE_ID_KEY,
-  QUALITY_PROFILE_INHERIT_VALUE,
-} from "@/lib/constants/settings";
-import type { WantedItem, ReleaseDecisionItem, TitleRecord, Release, PendingReleaseItem } from "@/lib/types";
+  qualityProfileSettingsToCategoryOverrides,
+  qualityProfileSettingsToEntries,
+} from "@/lib/utils/quality-profiles";
+import { QUALITY_PROFILE_INHERIT_VALUE } from "@/lib/constants/settings";
+import type {
+  PendingReleaseItem,
+  Release,
+  ReleaseDecisionItem,
+  TitleRecord,
+  WantedItem,
+  WantedMediaType,
+  WantedStatus,
+} from "@/lib/types";
 import type { ParsedQualityProfileEntry } from "@/lib/types/quality-profiles";
 import { FACETS_BY_ID } from "@/lib/facets/registry";
 import type { ViewId } from "@/components/root/types";
@@ -38,19 +44,6 @@ export type WantedTab = "wanted" | "cutoff" | "calendar" | "pending";
 type WantedContainerProps = {
   onOpenOverview?: (targetView: ViewId, titleId: string, episodeId?: string) => void;
 };
-
-type AdminSettingsItem = {
-  keyName: string;
-  effectiveValueJson: string | null;
-  scopeId: string | null;
-};
-
-function extractSettingValue(items: AdminSettingsItem[], key: string, scopeId?: string): string | null {
-  const match = items.find(
-    (i) => i.keyName === key && (scopeId ? i.scopeId === scopeId : true),
-  );
-  return match?.effectiveValueJson ?? null;
-}
 
 function computeCutoffUnmetItems(
   titles: TitleRecord[],
@@ -140,8 +133,8 @@ export const WantedContainer = memo(function WantedContainer({ onOpenOverview }:
   const [items, setItems] = useState<WantedItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
-  const [mediaTypeFilter, setMediaTypeFilter] = useState<string | undefined>(undefined);
+  const [statusFilter, setStatusFilter] = useState<WantedStatus | undefined>(undefined);
+  const [mediaTypeFilter, setMediaTypeFilter] = useState<WantedMediaType | undefined>(undefined);
   const [offset, setOffset] = useState(0);
   const limit = 50;
 
@@ -296,65 +289,17 @@ export const WantedContainer = memo(function WantedContainer({ onOpenOverview }:
   const refreshCutoff = useCallback(async () => {
     setCutoffLoading(true);
     try {
-      // Fetch titles and quality profile settings in parallel
-      const [titlesResult, systemSettingsResult, movieSettingsResult, seriesSettingsResult, animeSettingsResult] =
-        await Promise.all([
-          client.query(titlesQuery, {}).toPromise(),
-          client.query(adminSettingsQuery, { scope: "system", category: "media" }).toPromise(),
-          client.query(adminSettingsQuery, { scope: "system", scopeId: "movie", category: "media" }).toPromise(),
-          client.query(adminSettingsQuery, { scope: "system", scopeId: "series", category: "media" }).toPromise(),
-          client.query(adminSettingsQuery, { scope: "system", scopeId: "anime", category: "media" }).toPromise(),
-        ]);
+      const { data, error } = await client.query(wantedCutoffInitQuery, {}).toPromise();
+      if (error) throw error;
 
-      if (titlesResult.error) throw titlesResult.error;
-
-      const titles: TitleRecord[] = titlesResult.data?.titles ?? [];
+      const titles: TitleRecord[] = data?.titles ?? [];
       titlesRef.current = titles;
 
-      // Parse quality profile catalog from system settings
-      const systemItems: AdminSettingsItem[] = systemSettingsResult.data?.adminSettings?.items ?? [];
-      const catalogRaw = extractSettingValue(systemItems, QUALITY_PROFILE_CATALOG_KEY);
-      const globalProfileIdRaw = extractSettingValue(systemItems, QUALITY_PROFILE_ID_KEY);
-
-      let catalogJson = "";
-      if (catalogRaw) {
-        try {
-          catalogJson = typeof JSON.parse(catalogRaw) === "string" ? JSON.parse(catalogRaw) : catalogRaw;
-        } catch {
-          catalogJson = catalogRaw;
-        }
-      }
-
-      const { entries } = resolveQualityProfileCatalogState(catalogJson);
-
-      let globalProfileId: string | null = null;
-      if (globalProfileIdRaw) {
-        try {
-          const parsed = JSON.parse(globalProfileIdRaw);
-          globalProfileId = typeof parsed === "string" ? parsed : null;
-        } catch {
-          globalProfileId = globalProfileIdRaw;
-        }
-      }
-
-      // Extract per-scope profile IDs
-      const profileIdByScope: Record<string, string> = {};
-      for (const [scopeId, result] of [
-        ["movie", movieSettingsResult],
-        ["series", seriesSettingsResult],
-        ["anime", animeSettingsResult],
-      ] as const) {
-        const scopeItems: AdminSettingsItem[] = result.data?.adminSettings?.items ?? [];
-        const raw = extractSettingValue(scopeItems, QUALITY_PROFILE_ID_KEY, scopeId);
-        if (raw) {
-          try {
-            const parsed = JSON.parse(raw);
-            if (typeof parsed === "string") profileIdByScope[scopeId] = parsed;
-          } catch {
-            profileIdByScope[scopeId] = raw;
-          }
-        }
-      }
+      const entries = qualityProfileSettingsToEntries(data?.qualityProfileSettings);
+      const globalProfileId = data?.qualityProfileSettings?.globalProfileId ?? null;
+      const profileIdByScope = qualityProfileSettingsToCategoryOverrides(
+        data?.qualityProfileSettings,
+      );
 
       const computed = computeCutoffUnmetItems(titles, entries, profileIdByScope, globalProfileId);
       setCutoffItems(computed);
@@ -387,7 +332,7 @@ export const WantedContainer = memo(function WantedContainer({ onOpenOverview }:
           .query(releaseDecisionsQuery, { wantedItemId, limit: 20 })
           .toPromise();
         if (error) throw error;
-        setDecisions(data?.releaseDecisions ?? []);
+        setDecisions(data?.wantedItem?.releaseDecisions ?? []);
       } catch {
         setDecisions([]);
       } finally {
@@ -474,7 +419,7 @@ export const WantedContainer = memo(function WantedContainer({ onOpenOverview }:
 
       if (error) throw error;
 
-      const results: Release[] = data?.searchIndexers ?? [];
+      const results: Release[] = data?.searchReleases ?? [];
       const top = results.find((r) => r.qualityProfileDecision?.allowed ?? true);
       if (!top) {
         setGlobalStatus(t("status.noReleaseForTitle", { name: title.name }));
@@ -491,9 +436,11 @@ export const WantedContainer = memo(function WantedContainer({ onOpenOverview }:
         .mutation(queueExistingMutation, {
           input: {
             titleId: title.id,
-            sourceHint,
-            sourceKind: top.sourceKind ?? null,
-            sourceTitle: top.title,
+            release: {
+              sourceHint,
+              sourceKind: top.sourceKind ?? null,
+              sourceTitle: top.title,
+            },
           },
         })
         .toPromise();

@@ -10,36 +10,12 @@ use crate::types::{PendingRelease, PendingReleaseStatus};
 impl AppUseCase {
     /// Load delay profiles from settings.
     pub(crate) async fn load_delay_profiles(&self) -> Vec<DelayProfile> {
-        let json = self
-            .services
-            .settings
-            .get_setting_json(
-                SETTINGS_SCOPE_SYSTEM,
-                crate::delay_profile::DELAY_PROFILE_CATALOG_KEY,
-                None,
-            )
-            .await
-            .ok()
-            .flatten();
-
-        match json {
-            Some(raw) => match crate::delay_profile::parse_delay_profile_catalog(&raw) {
-                Ok(profiles) => {
-                    if let Err(error) =
-                        crate::delay_profile::validate_delay_profile_catalog(&profiles)
-                    {
-                        warn!(error = %error, "failed to validate delay profile catalog");
-                        vec![]
-                    } else {
-                        profiles
-                    }
-                }
-                Err(error) => {
-                    warn!(error = %error, "failed to parse delay profile catalog");
-                    vec![]
-                }
-            },
-            None => vec![],
+        match self.delay_profiles().await {
+            Ok(profiles) => profiles,
+            Err(error) => {
+                warn!(error = %error, "failed to load delay profile catalog");
+                vec![]
+            }
         }
     }
 
@@ -278,6 +254,27 @@ impl AppUseCase {
             .await
     }
 
+    pub async fn get_pending_release(
+        &self,
+        actor: &User,
+        id: &str,
+    ) -> AppResult<Option<PendingRelease>> {
+        require(actor, &Entitlement::ManageConfig)?;
+        self.services.pending_releases.get_pending_release(id).await
+    }
+
+    pub async fn list_pending_releases_for_wanted_item(
+        &self,
+        actor: &User,
+        wanted_item_id: &str,
+    ) -> AppResult<Vec<PendingRelease>> {
+        require(actor, &Entitlement::ManageConfig)?;
+        self.services
+            .pending_releases
+            .list_pending_releases_for_wanted_item(wanted_item_id)
+            .await
+    }
+
     /// Force-grab a pending release immediately, ignoring the delay.
     pub async fn force_grab_pending_release(&self, id: &str) -> AppResult<bool> {
         let pr = self
@@ -399,7 +396,9 @@ impl AppUseCase {
             return Ok(false);
         }
 
-        let thresholds = AcquisitionThresholds::for_persona(&profile.criteria.scoring_persona);
+        let thresholds = self
+            .acquisition_thresholds(&profile.criteria.scoring_persona)
+            .await;
         let decision = crate::acquisition_policy::evaluate_upgrade(
             pr.release_score,
             wanted.current_score,

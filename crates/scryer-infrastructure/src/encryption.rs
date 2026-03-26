@@ -208,7 +208,7 @@ fn try_store_new_key(stores: &[Box<dyn KeyStore>], key: &EncryptionKey) -> Optio
         match store.set_key(&key.to_base64()) {
             Ok(()) => return Some(store.name()),
             Err(e) => {
-                tracing::debug!("could not store key in {}: {e}", store.name());
+                tracing::warn!("could not store encryption key in {}: {e}", store.name());
                 continue;
             }
         }

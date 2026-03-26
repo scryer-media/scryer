@@ -1,4 +1,45 @@
-import type { ActivityEvent } from "@/lib/types";
+import {
+  activityChannelValues,
+  activityKindValues,
+  activitySeverityValues,
+} from "@/lib/types/activity";
+import type {
+  ActivityChannel,
+  ActivityEvent,
+  ActivityKind,
+  ActivitySeverity,
+} from "@/lib/types/activity";
+
+const activityKindSet = new Set<string>(activityKindValues);
+const activitySeveritySet = new Set<string>(activitySeverityValues);
+const activityChannelSet = new Set<string>(activityChannelValues);
+
+function normalizeActivityKind(value: string | undefined): ActivityKind {
+  const normalized = (value ?? "").trim().toLowerCase();
+  return activityKindSet.has(normalized)
+    ? (normalized as ActivityKind)
+    : "system_notice";
+}
+
+function normalizeActivitySeverity(value: string | undefined): ActivitySeverity {
+  const normalized = (value ?? "").trim().toLowerCase();
+  return activitySeveritySet.has(normalized)
+    ? (normalized as ActivitySeverity)
+    : "info";
+}
+
+function normalizeActivityChannels(values: unknown): ActivityChannel[] {
+  if (!Array.isArray(values)) {
+    return ["web_ui", "toast"];
+  }
+
+  const normalized = values
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim().toLowerCase())
+    .filter((value): value is ActivityChannel => activityChannelSet.has(value));
+
+  return normalized.length > 0 ? normalized : ["web_ui", "toast"];
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -82,11 +123,9 @@ export function collectActivityEventsFromPayload(payload: unknown): unknown[] {
 }
 
 export function normalizeActivityEvent(input: Partial<ActivityEvent>): ActivityEvent {
-  const normalizedKind = input.kind ?? input.eventType ?? "system_notice";
-  const rawChannels = Array.isArray(input.channels) ? input.channels : [];
-  const normalizedChannels =
-    rawChannels.filter((value) => value.trim().length > 0).map((value) => value.toLowerCase()) ??
-    ["web_ui", "toast"];
+  const normalizedKind = normalizeActivityKind(input.kind ?? input.eventType);
+  const normalizedSeverity = normalizeActivitySeverity(input.severity);
+  const normalizedChannels = normalizeActivityChannels(input.channels);
 
   return {
     id:
@@ -94,8 +133,8 @@ export function normalizeActivityEvent(input: Partial<ActivityEvent>): ActivityE
       `activity-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     kind: normalizedKind,
     eventType: input.eventType ?? normalizedKind,
-    severity: input.severity ?? "info",
-    channels: normalizedChannels.length ? normalizedChannels : ["web_ui", "toast"],
+    severity: normalizedSeverity,
+    channels: normalizedChannels,
     actorUserId: input.actorUserId ?? null,
     titleId: input.titleId ?? null,
     facet: input.facet ?? null,
@@ -103,4 +142,3 @@ export function normalizeActivityEvent(input: Partial<ActivityEvent>): ActivityE
     occurredAt: input.occurredAt ?? new Date().toISOString(),
   };
 }
-

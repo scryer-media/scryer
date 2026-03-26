@@ -1,48 +1,83 @@
 use scryer_application::{
-    ActivityChannel, ActivityEvent, BackupInfo, DiskSpaceInfo, HealthCheckResult,
+    ActivityEvent, BackupInfo, DiskSpaceInfo, HealthCheckResult,
     HousekeepingReport, IndexerSearchResult, LibraryScanSummary, ParsedEpisodeMetadata,
-    ParsedReleaseMetadata, PendingRelease, QualityProfileDecision, RegistryPlugin,
-    RenameApplyItemResult, RenameApplyResult, RenamePlan, RenamePlanItem, RssSyncReport,
-    ScoringEntry, ScoringSource, SystemHealth, TitleHistoryPage, TitleReleaseBlocklistEntry,
+    ParsedReleaseMetadata, PendingRelease, QualityProfile, QualityProfileCriteria,
+    QualityProfileDecision, RegistryPlugin, RenameApplyItemResult, RenameApplyResult, RenamePlan,
+    RenamePlanItem, RssSyncReport, ScoringEntry, ScoringSource, SystemHealth, TitleHistoryPage,
+    TitleReleaseBlocklistEntry,
 };
 use scryer_domain::{
     CalendarEpisode, Collection, DownloadClientConfig, DownloadQueueItem, Episode, IndexerConfig,
     PluginInstallation, PolicyOutput, RuleSet, Title, TitleHistoryRecord, User,
 };
-use scryer_infrastructure::{SettingsValueRecord, WorkflowOperationRecord};
+use scryer_infrastructure::WorkflowOperationRecord;
 use scryer_rules;
 use std::fs;
 
 use crate::types::*;
 
-pub(crate) fn map_admin_setting(record: SettingsValueRecord) -> AdminSettingsItemPayload {
-    let has_override = record.has_override();
-    let is_sensitive = record.is_sensitive;
+pub(crate) fn from_scoring_overrides(
+    overrides: scryer_application::ScoringOverrides,
+) -> ScoringOverridesPayload {
+    ScoringOverridesPayload {
+        allow_x265_non4k: overrides.allow_x265_non4k,
+        block_dv_without_fallback: overrides.block_dv_without_fallback,
+        prefer_compact_encodes: overrides.prefer_compact_encodes,
+        prefer_lossless_audio: overrides.prefer_lossless_audio,
+        block_upscaled: overrides.block_upscaled,
+    }
+}
 
-    AdminSettingsItemPayload {
-        category: record.category,
-        scope: record.scope,
-        key_name: record.key_name,
-        data_type: record.data_type,
-        default_value_json: record.default_value_json,
-        effective_value_json: if is_sensitive {
-            None
-        } else {
-            Some(record.effective_value_json)
-        },
-        value_json: if is_sensitive {
-            None
-        } else {
-            record.value_json
-        },
-        source: record.source,
-        has_override,
-        is_sensitive,
-        validation_json: record.validation_json,
-        scope_id: record.scope_id,
-        updated_by_user_id: record.updated_by_user_id,
-        created_at: record.created_at,
-        updated_at: record.updated_at,
+pub(crate) fn from_content_scope(scope: &str) -> Option<ContentScopeValue> {
+    ContentScopeValue::parse(scope)
+}
+
+pub(crate) fn from_quality_profile_criteria(
+    criteria: QualityProfileCriteria,
+) -> QualityProfileCriteriaPayload {
+    let mut facet_persona_overrides: Vec<FacetScoringPersonaOverridePayload> = criteria
+        .facet_persona_overrides
+        .into_iter()
+        .filter_map(|(scope, persona)| {
+            from_content_scope(&scope).map(|scope| FacetScoringPersonaOverridePayload {
+                scope,
+                persona: ScoringPersonaValue::from_application(persona),
+            })
+        })
+        .collect();
+    facet_persona_overrides.sort_by_key(|entry| entry.scope.as_scope_id());
+
+    QualityProfileCriteriaPayload {
+        quality_tiers: criteria.quality_tiers,
+        archival_quality: criteria.archival_quality,
+        allow_unknown_quality: criteria.allow_unknown_quality,
+        source_allowlist: criteria.source_allowlist,
+        source_blocklist: criteria.source_blocklist,
+        video_codec_allowlist: criteria.video_codec_allowlist,
+        video_codec_blocklist: criteria.video_codec_blocklist,
+        audio_codec_allowlist: criteria.audio_codec_allowlist,
+        audio_codec_blocklist: criteria.audio_codec_blocklist,
+        atmos_preferred: criteria.atmos_preferred,
+        dolby_vision_allowed: criteria.dolby_vision_allowed,
+        detected_hdr_allowed: criteria.detected_hdr_allowed,
+        prefer_remux: criteria.prefer_remux,
+        allow_bd_disk: criteria.allow_bd_disk,
+        allow_upgrades: criteria.allow_upgrades,
+        prefer_dual_audio: criteria.prefer_dual_audio,
+        required_audio_languages: criteria.required_audio_languages,
+        scoring_persona: ScoringPersonaValue::from_application(criteria.scoring_persona),
+        scoring_overrides: from_scoring_overrides(criteria.scoring_overrides),
+        cutoff_tier: criteria.cutoff_tier,
+        min_score_to_grab: criteria.min_score_to_grab,
+        facet_persona_overrides,
+    }
+}
+
+pub(crate) fn from_quality_profile(profile: QualityProfile) -> QualityProfilePayload {
+    QualityProfilePayload {
+        id: profile.id,
+        name: profile.name,
+        criteria: from_quality_profile_criteria(profile.criteria),
     }
 }
 
@@ -92,7 +127,9 @@ pub(crate) fn from_search_result(result: IndexerSearchResult) -> IndexerSearchRe
         title: result.title,
         link: result.link,
         download_url: result.download_url,
-        source_kind: result.source_kind.map(|value| value.as_str().to_string()),
+        source_kind: result
+            .source_kind
+            .map(DownloadSourceKindValue::from_application),
         size_bytes: result.size_bytes,
         published_at: result.published_at,
         thumbs_up: result.thumbs_up,
@@ -273,16 +310,18 @@ pub(crate) fn from_download_queue_item(item: DownloadQueueItem) -> DownloadQueue
         id: item.id,
         title_id: item.title_id,
         title_name: item.title_name,
-        facet: item.facet,
+        facet: item.facet.as_deref().and_then(MediaFacetValue::parse),
         is_scryer_origin: item.is_scryer_origin,
-        tracked_state: item.tracked_state.map(|s| s.as_str().to_string()),
-        tracked_status: item.tracked_status.map(|s| format!("{s:?}").to_lowercase()),
+        tracked_state: item.tracked_state.map(TrackedDownloadStateValue::from_domain),
+        tracked_status: item
+            .tracked_status
+            .map(TrackedDownloadStatusValue::from_domain),
         tracked_status_messages: item.tracked_status_messages,
-        tracked_match_type: item.tracked_match_type.map(|m| m.as_str().to_string()),
+        tracked_match_type: item.tracked_match_type.map(TitleMatchTypeValue::from_domain),
         client_id: item.client_id,
         client_name: item.client_name,
         client_type: item.client_type,
-        state: format!("{:?}", item.state).to_lowercase(),
+        state: DownloadQueueStateValue::from_domain(item.state),
         progress_percent: i32::from(item.progress_percent),
         size_bytes: item.size_bytes.map(|value| value.to_string()),
         remaining_seconds: item
@@ -293,17 +332,48 @@ pub(crate) fn from_download_queue_item(item: DownloadQueueItem) -> DownloadQueue
         attention_required: item.attention_required,
         attention_reason: item.attention_reason,
         download_client_item_id: item.download_client_item_id,
-        import_status: item.import_status.map(|s| s.as_str().to_string()),
+        import_status: item.import_status.map(ImportStatusValue::from_domain),
         import_error_message: item.import_error_message,
         imported_at: item.imported_at,
     }
 }
 
+fn extract_tag_string(tags: &[String], prefix: &str) -> Option<String> {
+    tags.iter().find_map(|tag| {
+        tag.strip_prefix(prefix).and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+    })
+}
+
+fn extract_tag_bool(tags: &[String], prefix: &str) -> Option<bool> {
+    tags.iter()
+        .find_map(|tag| tag.strip_prefix(prefix))
+        .map(|value| !value.trim().eq_ignore_ascii_case("false"))
+}
+
 pub(crate) fn from_title(title: Title) -> TitlePayload {
+    let quality_profile_id = extract_tag_string(&title.tags, "scryer:quality-profile:");
+    let root_folder_path = extract_tag_string(&title.tags, "scryer:root-folder:");
+    let monitor_type = extract_tag_string(&title.tags, "scryer:monitor-type:")
+        .as_deref()
+        .and_then(MonitorTypeValue::from_tag_value);
+    let use_season_folders = extract_tag_string(&title.tags, "scryer:season-folder:")
+        .map(|value| !value.eq_ignore_ascii_case("disabled"));
+    let monitor_specials = extract_tag_bool(&title.tags, "scryer:monitor-specials:");
+    let inter_season_movies = extract_tag_bool(&title.tags, "scryer:inter-season-movies:");
+    let filler_policy = extract_tag_string(&title.tags, "scryer:filler-policy:");
+    let recap_policy = extract_tag_string(&title.tags, "scryer:recap-policy:");
+
     TitlePayload {
         id: title.id,
         name: title.name,
-        facet: format!("{:?}", title.facet).to_lowercase(),
+        facet: MediaFacetValue::from_domain(title.facet),
         monitored: title.monitored,
         tags: title.tags,
         external_ids: title
@@ -340,6 +410,14 @@ pub(crate) fn from_title(title: Title) -> TitlePayload {
         metadata_fetched_at: title.metadata_fetched_at.map(|dt| dt.to_rfc3339()),
         min_availability: title.min_availability,
         digital_release_date: title.digital_release_date,
+        quality_profile_id,
+        root_folder_path,
+        monitor_type,
+        use_season_folders,
+        monitor_specials,
+        inter_season_movies,
+        filler_policy,
+        recap_policy,
         quality_tier: None,
         size_bytes: None,
     }
@@ -357,7 +435,7 @@ pub(crate) fn from_library_scan_summary(summary: LibraryScanSummary) -> LibraryS
 
 pub(crate) fn from_media_rename_plan(plan: RenamePlan) -> MediaRenamePlanPayload {
     MediaRenamePlanPayload {
-        facet: format!("{:?}", plan.facet).to_lowercase(),
+        facet: MediaFacetValue::from_domain(plan.facet),
         title_id: plan.title_id,
         template: plan.template,
         collision_policy: plan.collision_policy.as_str().to_string(),
@@ -601,16 +679,16 @@ pub(crate) fn from_user(user: User) -> UserPayload {
 pub(crate) fn from_activity_event(event: ActivityEvent) -> ActivityEventPayload {
     ActivityEventPayload {
         id: event.id,
-        kind: event.kind.as_str().to_string(),
-        severity: event.severity.as_str().to_string(),
+        kind: ActivityKindValue::from_application(event.kind),
+        severity: ActivitySeverityValue::from_application(event.severity),
         channels: event
             .channels
             .into_iter()
-            .map(|channel: ActivityChannel| channel.as_str().to_string())
+            .map(ActivityChannelValue::from_application)
             .collect(),
         actor_user_id: event.actor_user_id,
         title_id: event.title_id,
-        facet: event.facet,
+        facet: event.facet.as_deref().and_then(MediaFacetValue::parse),
         message: event.message,
         occurred_at: event.occurred_at.to_rfc3339(),
     }
@@ -623,8 +701,8 @@ pub(crate) fn from_import_record(record: scryer_domain::ImportRecord) -> ImportR
             if let Ok(result) = serde_json::from_str::<scryer_domain::ImportResult>(result_json) {
                 (
                     result.error_message,
-                    Some(result.decision.as_str().to_string()),
-                    result.skip_reason.map(|r| r.as_str().to_string()),
+                    Some(ImportDecisionValue::from_domain(result.decision)),
+                    result.skip_reason.map(ImportSkipReasonValue::from_domain),
                     result.title_id,
                     Some(result.source_path),
                     result.dest_path,
@@ -653,8 +731,8 @@ pub(crate) fn from_import_record(record: scryer_domain::ImportRecord) -> ImportR
         source_system: record.source_system,
         source_ref: record.source_ref,
         source_title,
-        import_type: record.import_type.as_str().to_string(),
-        status: record.status.as_str().to_string(),
+        import_type: ImportTypeValue::from_domain(record.import_type),
+        status: ImportStatusValue::from_domain(record.status),
         error_message,
         decision,
         skip_reason,
@@ -693,13 +771,15 @@ pub(crate) fn from_wanted_item(item: scryer_application::WantedItem) -> WantedIt
         title_name: item.title_name,
         episode_id: item.episode_id,
         collection_id: item.collection_id,
-        media_type: item.media_type,
-        search_phase: item.search_phase,
+        media_type: WantedMediaTypeValue::parse(&item.media_type)
+            .expect("wanted item media_type should map to GraphQL enum"),
+        search_phase: WantedSearchPhaseValue::parse(&item.search_phase)
+            .expect("wanted item search_phase should map to GraphQL enum"),
         next_search_at: item.next_search_at,
         last_search_at: item.last_search_at,
         search_count: item.search_count,
         baseline_date: item.baseline_date,
-        status: item.status.as_str().to_string(),
+        status: WantedStatusValue::from_application(item.status),
         grabbed_release: item.grabbed_release,
         current_score: item.current_score,
         created_at: item.created_at,
@@ -896,7 +976,7 @@ pub(crate) fn from_pending_release(pr: PendingRelease) -> PendingReleasePayload 
         indexer_source: pr.indexer_source,
         added_at: pr.added_at,
         delay_until: pr.delay_until,
-        status: pr.status.as_str().to_string(),
+        status: PendingReleaseStatusValue::from_application(pr.status),
     }
 }
 
@@ -929,7 +1009,7 @@ pub(crate) fn from_pp_script_run(
         script_name: r.script_name,
         title_id: r.title_id,
         title_name: r.title_name,
-        facet: r.facet,
+        facet: r.facet.as_deref().and_then(MediaFacetValue::parse),
         file_path: r.file_path,
         status: r.status.as_str().to_string(),
         exit_code: r.exit_code,

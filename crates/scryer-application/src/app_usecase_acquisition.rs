@@ -783,10 +783,18 @@ async fn process_due_wanted_items(app: &AppUseCase) {
     let now = Utc::now();
     let now_str = now.to_rfc3339();
 
+    let batch_size = match app.acquisition_settings().await {
+        Ok(settings) => settings.batch_size.clamp(1, 500) as i64,
+        Err(err) => {
+            warn!(error = %err, "failed to load acquisition settings, using default batch size");
+            50
+        }
+    };
+
     let due_items = match app
         .services
         .wanted_items
-        .list_due_wanted_items(&now_str, 50)
+        .list_due_wanted_items(&now_str, batch_size)
         .await
     {
         Ok(items) => {
@@ -1592,7 +1600,9 @@ async fn process_single_wanted_item(
         return Ok(());
     }
 
-    let thresholds = AcquisitionThresholds::for_persona(&profile.criteria.scoring_persona);
+    let thresholds = app
+        .acquisition_thresholds(&profile.criteria.scoring_persona)
+        .await;
 
     // Load existing media files for repack group validation.
     let existing_files = app
@@ -2728,6 +2738,15 @@ pub(crate) fn anidb_id_from_external_ids(external_ids: &[ExternalId]) -> Option<
 // --- Public use-case methods for the wanted items API ---
 
 impl AppUseCase {
+    pub async fn get_wanted_item(
+        &self,
+        actor: &User,
+        id: &str,
+    ) -> AppResult<Option<WantedItem>> {
+        require(actor, &Entitlement::ViewCatalog)?;
+        self.services.wanted_items.get_wanted_item_by_id(id).await
+    }
+
     pub async fn list_wanted_items(
         &self,
         status: Option<&str>,
@@ -3128,6 +3147,28 @@ pub async fn start_background_acquisition_poller(
         return;
     }
 
+    let settings = match app.acquisition_settings().await {
+        Ok(settings) => settings,
+        Err(err) => {
+            warn!(error = %err, "failed to load acquisition settings, using defaults");
+            crate::AcquisitionSettings {
+                enabled: true,
+                upgrade_cooldown_hours: 24,
+                same_tier_min_delta: 120,
+                cross_tier_min_delta: 30,
+                forced_upgrade_delta_bypass: 400,
+                poll_interval_seconds: 60,
+                sync_interval_seconds: 3600,
+                batch_size: 50,
+            }
+        }
+    };
+
+    if !settings.enabled {
+        info!("background acquisition poller is disabled (acquisition.enabled != true)");
+        return;
+    }
+
     info!("background acquisition poller started");
 
     // Initial wanted state sync
@@ -3165,8 +3206,12 @@ pub async fn start_background_acquisition_poller(
         });
     }
 
-    let mut poll_interval = tokio::time::interval(std::time::Duration::from_mins(1));
-    let mut sync_interval = tokio::time::interval(std::time::Duration::from_hours(1));
+    let mut poll_interval = tokio::time::interval(std::time::Duration::from_secs(
+        settings.poll_interval_seconds.max(1) as u64,
+    ));
+    let mut sync_interval = tokio::time::interval(std::time::Duration::from_secs(
+        settings.sync_interval_seconds.max(1) as u64,
+    ));
     let mut metadata_refresh_interval = tokio::time::interval(std::time::Duration::from_hours(12));
     let mut registry_refresh_interval = tokio::time::interval(std::time::Duration::from_hours(24));
     let mut health_check_interval = tokio::time::interval(std::time::Duration::from_hours(6));

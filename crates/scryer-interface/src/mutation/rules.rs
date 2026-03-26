@@ -112,7 +112,8 @@ impl RulesMutations {
     ) -> GqlResult<bool> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        app.set_title_required_audio(&actor, &input.title_id, &input.facet, input.languages)
+        let facet = input.facet.into_domain();
+        app.set_title_required_audio(&actor, &input.title_id, facet.as_str(), input.languages)
             .await
             .map_err(to_gql_error)?;
         Ok(true)

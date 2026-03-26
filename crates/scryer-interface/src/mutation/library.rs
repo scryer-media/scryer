@@ -9,7 +9,6 @@ use std::sync::{LazyLock, Mutex};
 use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_error};
 use crate::mappers::{from_library_scan_summary, from_media_rename_apply};
 use crate::types::*;
-use crate::utils::parse_facet;
 
 static RENAME_IDEMPOTENCY_KEYS: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
@@ -101,12 +100,11 @@ impl LibraryMutations {
     async fn scan_library(
         &self,
         ctx: &Context<'_>,
-        facet: String,
+        facet: MediaFacetValue,
     ) -> GqlResult<LibraryScanSummaryPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let facet =
-            parse_facet(Some(facet)).ok_or_else(|| Error::new("invalid facet for scanLibrary"))?;
+        let facet = facet.into_domain();
         let summary = app
             .scan_library(&actor, facet)
             .await
@@ -142,8 +140,7 @@ impl LibraryMutations {
             fingerprint,
             idempotency_key,
         } = input;
-        let facet = parse_facet(Some(facet))
-            .ok_or_else(|| Error::new("invalid facet for applyMediaRename"))?;
+        let facet = facet.into_domain();
         let facet_name = facet.as_str();
         let idempotency_key = claim_rename_idempotency_key("apply_media_rename", idempotency_key)?;
 
@@ -195,8 +192,7 @@ impl LibraryMutations {
             fingerprint,
             idempotency_key,
         } = input;
-        let facet = parse_facet(Some(facet))
-            .ok_or_else(|| Error::new("invalid facet for applyMediaRenameBulk"))?;
+        let facet = facet.into_domain();
         let facet_name = facet.as_str();
         let idempotency_key =
             claim_rename_idempotency_key("apply_media_rename_bulk", idempotency_key)?;

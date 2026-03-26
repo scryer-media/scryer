@@ -67,7 +67,6 @@ const queueStateLabels: Record<string, string> = {
   paused: "queue.state.paused",
   completed: "queue.state.completed",
   import_pending: "queue.state.importPending",
-  importpending: "queue.state.importPending",
   import_blocked: "queue.state.importBlocked",
   failed: "queue.state.failed",
 };
@@ -75,13 +74,11 @@ const queueStateLabels: Record<string, string> = {
 const queueStateAttention: Record<string, boolean> = {
   failed: true,
   import_pending: true,
-  importpending: true,
   import_blocked: true,
 };
 
 function normalizeQueueState(state: string | null | undefined): string {
-  const normalized = (state ?? "").trim().toLowerCase();
-  return normalized === "importpending" ? "import_pending" : normalized;
+  return (state ?? "").trim().toLowerCase();
 }
 
 function buildStatusDetail(queueItem: DownloadQueueItem): string {

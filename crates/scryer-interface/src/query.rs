@@ -1,10 +1,8 @@
-use async_graphql::{Context, Error, Object, Result as GqlResult};
+use async_graphql::{ComplexObject, Context, Error, Object, Result as GqlResult};
 
 use chrono::Utc;
 use scryer_application::TitleHistoryFilter;
-use scryer_application::{RenamePlan, parse_release_metadata};
-use scryer_domain::{ImportType, MediaFacet, PolicyInput, TitleHistoryEventType};
-use serde_json::json;
+use scryer_domain::{PolicyInput, TitleHistoryEventType};
 
 use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_error};
 use crate::mappers::{
@@ -13,10 +11,81 @@ use crate::mappers::{
     from_indexer_config, from_media_rename_plan, from_pending_release, from_provider_type,
     from_release_decision, from_system_health, from_title, from_title_history_page,
     from_title_history_record, from_title_media_file, from_title_release_blocklist_entry,
-    from_user, from_wanted_item, map_admin_setting,
+    from_user, from_wanted_item,
+};
+use crate::settings_graph::{
+    load_download_client_routing, load_indexer_routing, load_library_paths_payload,
+    load_media_settings_payload, load_quality_profile_settings_payload,
+    load_service_settings_payload,
 };
 use crate::types::*;
-use crate::utils::parse_facet;
+
+fn from_subtitle_settings(
+    settings: scryer_application::SubtitleSettings,
+) -> SubtitleSettingsPayload {
+    SubtitleSettingsPayload {
+        enabled: settings.enabled,
+        has_open_subtitles_api_key: settings.open_subtitles_api_key.is_some(),
+        open_subtitles_username: settings.open_subtitles_username.unwrap_or_default(),
+        has_open_subtitles_password: settings.open_subtitles_password.is_some(),
+        languages: settings
+            .languages
+            .into_iter()
+            .map(|language| SubtitleLanguagePreferencePayload {
+                code: language.code,
+                hearing_impaired: language.hearing_impaired,
+                forced: language.forced,
+            })
+            .collect(),
+        auto_download_on_import: settings.auto_download_on_import,
+        minimum_score_series: settings.minimum_score_series,
+        minimum_score_movie: settings.minimum_score_movie,
+        search_interval_hours: settings.search_interval_hours,
+        include_ai_translated: settings.include_ai_translated,
+        include_machine_translated: settings.include_machine_translated,
+        sync_enabled: settings.sync_enabled,
+        sync_threshold_series: settings.sync_threshold_series,
+        sync_threshold_movie: settings.sync_threshold_movie,
+        sync_max_offset_seconds: settings.sync_max_offset_seconds,
+    }
+}
+
+fn from_acquisition_settings(
+    settings: scryer_application::AcquisitionSettings,
+) -> AcquisitionSettingsPayload {
+    AcquisitionSettingsPayload {
+        enabled: settings.enabled,
+        upgrade_cooldown_hours: settings.upgrade_cooldown_hours,
+        same_tier_min_delta: settings.same_tier_min_delta,
+        cross_tier_min_delta: settings.cross_tier_min_delta,
+        forced_upgrade_delta_bypass: settings.forced_upgrade_delta_bypass,
+        poll_interval_seconds: settings.poll_interval_seconds,
+        sync_interval_seconds: settings.sync_interval_seconds,
+        batch_size: settings.batch_size,
+    }
+}
+
+fn from_delay_profile(profile: scryer_application::DelayProfile) -> DelayProfilePayload {
+    DelayProfilePayload {
+        id: profile.id,
+        name: profile.name,
+        usenet_delay_minutes: profile.usenet_delay_minutes as i32,
+        torrent_delay_minutes: profile.torrent_delay_minutes as i32,
+        preferred_protocol: DelayProfilePreferredProtocolValue::from_application(
+            profile.preferred_protocol,
+        ),
+        min_age_minutes: profile.min_age_minutes as i32,
+        bypass_score_threshold: profile.bypass_score_threshold,
+        applies_to_facets: profile
+            .applies_to_facets
+            .into_iter()
+            .filter_map(|facet| MediaFacetValue::parse(&facet))
+            .collect(),
+        tags: profile.tags,
+        priority: profile.priority,
+        enabled: profile.enabled,
+    }
+}
 
 #[derive(Copy, Clone)]
 pub struct QueryRoot;
@@ -27,12 +96,12 @@ impl QueryRoot {
     async fn titles(
         &self,
         ctx: &Context<'_>,
-        facet: Option<String>,
+        facet: Option<MediaFacetValue>,
         query: Option<String>,
     ) -> GqlResult<Vec<TitlePayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let parsed_facet = parse_facet(facet);
+        let parsed_facet = facet.map(MediaFacetValue::into_domain);
         let titles = app
             .list_titles(&actor, parsed_facet, query)
             .await
@@ -79,20 +148,6 @@ impl QueryRoot {
         Ok(title)
     }
 
-    async fn title_collections(
-        &self,
-        ctx: &Context<'_>,
-        title_id: String,
-    ) -> GqlResult<Vec<CollectionPayload>> {
-        let app = app_from_ctx(ctx)?;
-        let actor = actor_from_ctx(ctx)?;
-        let collections = app
-            .list_collections(&actor, &title_id)
-            .await
-            .map_err(to_gql_error)?;
-        Ok(collections.into_iter().map(from_collection).collect())
-    }
-
     async fn media_rename_preview(
         &self,
         ctx: &Context<'_>,
@@ -101,8 +156,7 @@ impl QueryRoot {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let _ = input.dry_run;
-        let facet = parse_facet(Some(input.facet))
-            .ok_or_else(|| Error::new("invalid facet for mediaRenamePreview"))?;
+        let facet = input.facet.into_domain();
         let plan = if let Some(title_id) = input.title_id {
             app.preview_rename_for_title(&actor, &title_id, facet)
                 .await
@@ -113,79 +167,7 @@ impl QueryRoot {
                 .map_err(to_gql_error)?
         };
 
-        if let Ok(db) = settings_db_from_ctx(ctx) {
-            let _ = record_rename_preview_audit(&db, &actor.id, &plan).await;
-        }
-
         Ok(from_media_rename_plan(plan))
-    }
-
-    async fn collection_episodes(
-        &self,
-        ctx: &Context<'_>,
-        collection_id: String,
-    ) -> GqlResult<Vec<EpisodePayload>> {
-        let app = app_from_ctx(ctx)?;
-        let actor = actor_from_ctx(ctx)?;
-        let episodes = app
-            .list_episodes(&actor, &collection_id)
-            .await
-            .map_err(to_gql_error)?;
-        Ok(episodes.into_iter().map(from_episode).collect())
-    }
-
-    async fn title_media_files(
-        &self,
-        ctx: &Context<'_>,
-        title_id: String,
-    ) -> GqlResult<Vec<TitleMediaFilePayload>> {
-        let app = app_from_ctx(ctx)?;
-        let actor = actor_from_ctx(ctx)?;
-        if !actor.has_entitlement(&scryer_domain::Entitlement::ViewCatalog) {
-            return Err(async_graphql::Error::new("insufficient entitlements"));
-        }
-        let mut files = app
-            .services
-            .media_files
-            .list_media_files_for_title(&title_id)
-            .await
-            .map_err(to_gql_error)?;
-
-        // Backfill: link unlinked files to episodes by parsing file paths
-        for file in &mut files {
-            if file.episode_id.is_some() {
-                continue;
-            }
-            let stem = std::path::Path::new(&file.file_path)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default();
-            let parsed = parse_release_metadata(stem);
-            if let Some(ref ep_meta) = parsed.episode {
-                let season_str = ep_meta
-                    .season
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "1".to_string());
-                if let Some(ep_num) = ep_meta.episode_numbers.first() {
-                    let ep_str = ep_num.to_string();
-                    if let Ok(Some(episode)) = app
-                        .services
-                        .shows
-                        .find_episode_by_title_and_numbers(&title_id, &season_str, &ep_str)
-                        .await
-                    {
-                        let _ = app
-                            .services
-                            .media_files
-                            .link_file_to_episode(&file.id, &episode.id)
-                            .await;
-                        file.episode_id = Some(episode.id);
-                    }
-                }
-            }
-        }
-
-        Ok(files.into_iter().map(from_title_media_file).collect())
     }
 
     async fn collection(
@@ -214,6 +196,21 @@ impl QueryRoot {
         Ok(episode)
     }
 
+    async fn wanted_item(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+    ) -> GqlResult<Option<WantedItemPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let item = app
+            .get_wanted_item(&actor, &id)
+            .await
+            .map_err(to_gql_error)?
+            .map(from_wanted_item);
+        Ok(item)
+    }
+
     async fn policy_preview(
         &self,
         ctx: &Context<'_>,
@@ -227,11 +224,11 @@ impl QueryRoot {
                 &actor,
                 PolicyInput {
                     title_id: input.title_id,
-                    facet: parse_facet(Some(input.facet)).unwrap_or_default(),
+                    facet: input.facet.into_domain(),
                     has_existing_file: input.has_existing_file,
                     candidate_quality: input.candidate_quality,
                     requested_mode: scryer_domain::RequestedMode::parse(&input.requested_mode)
-                        .unwrap_or_default(),
+                        .ok_or_else(|| Error::new("invalid requestedMode for policyPreview"))?,
                     release_title: None,
                     quality_profile_id: None,
                     category: None,
@@ -245,97 +242,75 @@ impl QueryRoot {
         Ok(crate::mappers::from_policy(decision))
     }
 
-    async fn search_indexers(
+    async fn search_releases(
         &self,
         ctx: &Context<'_>,
-        query: String,
-        imdb_id: Option<String>,
-        tvdb_id: Option<String>,
-        anidb_id: Option<String>,
-        category: Option<String>,
+        input: SearchReleasesInput,
     ) -> GqlResult<Vec<IndexerSearchResultPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let results = app
-            .search_indexers(&actor, query, imdb_id, tvdb_id, anidb_id, category)
-            .await
-            .map_err(to_gql_error)?;
+
+        let SearchReleasesInput {
+            query,
+            title_id,
+            season,
+            episode,
+            imdb_id,
+            tvdb_id,
+            anidb_id,
+            category,
+            absolute_episode,
+            limit,
+        } = input;
+
+        let safe_limit = limit.unwrap_or(50).clamp(1, 200) as usize;
+        let results = match (query, title_id, season, episode) {
+            (Some(query), None, Some(season), Some(episode)) => app
+                .search_indexers_episode(
+                    &actor,
+                    query,
+                    season,
+                    episode,
+                    imdb_id,
+                    tvdb_id,
+                    anidb_id,
+                    category,
+                    absolute_episode.map(|value| value as u32),
+                )
+                .await
+                .map_err(to_gql_error)?,
+            (Some(query), None, None, None) => app
+                .search_indexers(&actor, query, imdb_id, tvdb_id, anidb_id, category)
+                .await
+                .map_err(to_gql_error)?,
+            (None, Some(title_id), Some(season), Some(episode)) => app
+                .search_indexers_for_episode(&actor, title_id, season, episode)
+                .await
+                .map_err(to_gql_error)?,
+            (None, Some(title_id), None, None) => app
+                .search_indexers_for_title(&actor, title_id)
+                .await
+                .map_err(to_gql_error)?,
+            (Some(_), Some(_), _, _) => {
+                return Err(Error::new(
+                    "searchReleases accepts either query or titleId, not both",
+                ));
+            }
+            (_, _, Some(_), None) | (_, _, None, Some(_)) => {
+                return Err(Error::new(
+                    "episode searches require both season and episode",
+                ));
+            }
+            _ => {
+                return Err(Error::new(
+                    "searchReleases requires either query or titleId",
+                ));
+            }
+        };
 
         Ok(results
             .into_iter()
-            .map(crate::mappers::from_search_result)
-            .collect())
-    }
-
-    async fn search_indexers_episode(
-        &self,
-        ctx: &Context<'_>,
-        title: String,
-        season: String,
-        episode: String,
-        imdb_id: Option<String>,
-        tvdb_id: Option<String>,
-        anidb_id: Option<String>,
-        category: Option<String>,
-        absolute_episode: Option<i32>,
-    ) -> GqlResult<Vec<IndexerSearchResultPayload>> {
-        let app = app_from_ctx(ctx)?;
-        let actor = actor_from_ctx(ctx)?;
-        let results = app
-            .search_indexers_episode(
-                &actor,
-                title,
-                season,
-                episode,
-                imdb_id,
-                tvdb_id,
-                anidb_id,
-                category,
-                absolute_episode.map(|v| v as u32),
-            )
-            .await
-            .map_err(to_gql_error)?;
-
-        Ok(results
-            .into_iter()
-            .map(crate::mappers::from_search_result)
-            .collect())
-    }
-
-    async fn search_indexers_for_title(
-        &self,
-        ctx: &Context<'_>,
-        title_id: String,
-    ) -> GqlResult<Vec<IndexerSearchResultPayload>> {
-        let app = app_from_ctx(ctx)?;
-        let actor = actor_from_ctx(ctx)?;
-        let results = app
-            .search_indexers_for_title(&actor, title_id)
-            .await
-            .map_err(to_gql_error)?;
-
-        Ok(results
-            .into_iter()
-            .map(crate::mappers::from_search_result)
-            .collect())
-    }
-
-    async fn search_indexers_for_episode(
-        &self,
-        ctx: &Context<'_>,
-        title_id: String,
-        season: String,
-        episode: String,
-    ) -> GqlResult<Vec<IndexerSearchResultPayload>> {
-        let app = app_from_ctx(ctx)?;
-        let actor = actor_from_ctx(ctx)?;
-        let results = app
-            .search_indexers_for_episode(&actor, title_id, season, episode)
-            .await
-            .map_err(to_gql_error)?;
-
-        Ok(results
-            .into_iter()
+            .take(safe_limit)
             .map(crate::mappers::from_search_result)
             .collect())
     }
@@ -499,53 +474,102 @@ impl QueryRoot {
         Ok(items.into_iter().map(from_download_queue_item).collect())
     }
 
-    async fn admin_settings(
+    async fn subtitle_settings(&self, ctx: &Context<'_>) -> GqlResult<SubtitleSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let settings = app.get_subtitle_settings(&actor).await.map_err(to_gql_error)?;
+        Ok(from_subtitle_settings(settings))
+    }
+
+    async fn acquisition_settings(
         &self,
         ctx: &Context<'_>,
-        scope: Option<String>,
-        scope_id: Option<String>,
-        category: Option<String>,
-        key_names: Option<Vec<String>>,
-    ) -> GqlResult<AdminSettingsPayload> {
+    ) -> GqlResult<AcquisitionSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let settings = app
+            .get_acquisition_settings(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_acquisition_settings(settings))
+    }
+
+    async fn delay_profiles(&self, ctx: &Context<'_>) -> GqlResult<Vec<DelayProfilePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let profiles = app.get_delay_profiles(&actor).await.map_err(to_gql_error)?;
+        Ok(profiles.into_iter().map(from_delay_profile).collect())
+    }
+
+    async fn media_settings(
+        &self,
+        ctx: &Context<'_>,
+        scope: ContentScopeValue,
+    ) -> GqlResult<MediaSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {
             return Err(Error::new("insufficient entitlements"));
         }
         let db = settings_db_from_ctx(ctx)?;
-        let scope = scope.unwrap_or_else(|| "system".to_string());
-        let category_filter = category.map(|value| value.trim().to_string());
-        let key_filter = key_names.map(|values| {
-            values
-                .into_iter()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-                .collect::<std::collections::HashSet<_>>()
-        });
+        load_media_settings_payload(&app, &db, scope).await
+    }
 
-        let records = db
-            .list_settings_with_defaults(&scope, scope_id.clone())
-            .await
-            .map_err(to_gql_error)?;
+    async fn library_paths(&self, ctx: &Context<'_>) -> GqlResult<LibraryPathsPayload> {
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let db = settings_db_from_ctx(ctx)?;
+        load_library_paths_payload(&db).await
+    }
 
-        let items = records
-            .into_iter()
-            .filter(|record| {
-                category_filter
-                    .as_deref()
-                    .is_none_or(|target| record.category == target)
-                    && key_filter
-                        .as_ref()
-                        .is_none_or(|targets| targets.contains(record.key_name.as_str()))
-            })
-            .map(map_admin_setting)
-            .collect();
+    async fn service_settings(&self, ctx: &Context<'_>) -> GqlResult<ServiceSettingsPayload> {
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let db = settings_db_from_ctx(ctx)?;
+        load_service_settings_payload(&db).await
+    }
 
-        Ok(AdminSettingsPayload {
-            scope,
-            scope_id,
-            items,
-            quality_profiles: None,
-        })
+    async fn quality_profile_settings(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<QualityProfileSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let db = settings_db_from_ctx(ctx)?;
+        load_quality_profile_settings_payload(&app, &db).await
+    }
+
+    async fn download_client_routing(
+        &self,
+        ctx: &Context<'_>,
+        scope: ContentScopeValue,
+    ) -> GqlResult<Vec<DownloadClientRoutingEntryPayload>> {
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let db = settings_db_from_ctx(ctx)?;
+        load_download_client_routing(&db, scope).await
+    }
+
+    async fn indexer_routing(
+        &self,
+        ctx: &Context<'_>,
+        scope: ContentScopeValue,
+    ) -> GqlResult<Vec<IndexerRoutingEntryPayload>> {
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
+        let db = settings_db_from_ctx(ctx)?;
+        load_indexer_routing(&db, scope).await
     }
 
     async fn indexers(
@@ -594,10 +618,10 @@ impl QueryRoot {
     async fn root_folders(
         &self,
         ctx: &Context<'_>,
-        facet: String,
+        facet: MediaFacetValue,
     ) -> GqlResult<Vec<RootFolderPayload>> {
         let app = app_from_ctx(ctx)?;
-        let media_facet = parse_facet(Some(facet)).unwrap_or(MediaFacet::Movie);
+        let media_facet = facet.into_domain();
         let entries = app
             .root_folders_for_facet(&media_facet)
             .await
@@ -733,8 +757,27 @@ impl QueryRoot {
 
     async fn pending_releases(&self, ctx: &Context<'_>) -> GqlResult<Vec<PendingReleasePayload>> {
         let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
         let releases = app.list_pending_releases().await.map_err(to_gql_error)?;
         Ok(releases.into_iter().map(from_pending_release).collect())
+    }
+
+    async fn pending_release(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+    ) -> GqlResult<Option<PendingReleasePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let release = app
+            .get_pending_release(&actor, &id)
+            .await
+            .map_err(to_gql_error)?
+            .map(from_pending_release);
+        Ok(release)
     }
 
     async fn import_history(
@@ -810,8 +853,8 @@ impl QueryRoot {
     async fn wanted_items(
         &self,
         ctx: &Context<'_>,
-        status: Option<String>,
-        media_type: Option<String>,
+        status: Option<WantedStatusValue>,
+        media_type: Option<WantedMediaTypeValue>,
         title_id: Option<String>,
         #[graphql(default = 50)] limit: i64,
         #[graphql(default = 0)] offset: i64,
@@ -823,8 +866,8 @@ impl QueryRoot {
         }
         let (items, total) = app
             .list_wanted_items(
-                status.as_deref(),
-                media_type.as_deref(),
+                status.map(WantedStatusValue::as_str),
+                media_type.map(WantedMediaTypeValue::as_str),
                 title_id.as_deref(),
                 limit,
                 offset,
@@ -1459,59 +1502,353 @@ impl QueryRoot {
     }
 }
 
-async fn record_rename_preview_audit(
-    db: &scryer_infrastructure::SqliteServices,
-    actor_user_id: &str,
-    plan: &RenamePlan,
-) -> Result<(), scryer_application::AppError> {
-    let now = Utc::now().to_rfc3339();
-    let fingerprint = plan.fingerprint.clone();
-    let progress_json = json!({
-        "operation": "rename_preview",
-        "facet": format!("{:?}", plan.facet).to_lowercase(),
-        "title_id": plan.title_id.clone(),
-        "fingerprint": fingerprint.clone(),
-        "total": plan.total,
-        "renamable": plan.renamable,
-        "noop": plan.noop,
-        "conflicts": plan.conflicts,
-        "errors": plan.errors,
-    })
-    .to_string();
+#[ComplexObject]
+impl TitlePayload {
+    async fn collections(&self, ctx: &Context<'_>) -> GqlResult<Vec<CollectionPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let collections = app
+            .list_collections(&actor, &self.id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(collections.into_iter().map(from_collection).collect())
+    }
 
-    let _ = db
-        .create_workflow_operation(
-            "rename_preview",
-            "completed",
-            Some(actor_user_id.to_string()),
-            Some(progress_json),
-            Some(now.clone()),
-            Some(now),
-        )
-        .await?;
+    async fn media_files(&self, ctx: &Context<'_>) -> GqlResult<Vec<TitleMediaFilePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ViewCatalog) {
+            return Err(async_graphql::Error::new("insufficient entitlements"));
+        }
+        let files = app
+            .services
+            .media_files
+            .list_media_files_for_title(&self.id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(files.into_iter().map(from_title_media_file).collect())
+    }
 
-    let source_ref = plan
-        .title_id
-        .as_ref()
-        .map(|title_id| format!("title:{title_id}:{fingerprint}"))
-        .unwrap_or_else(|| {
-            format!(
-                "facet:{}:{}",
-                format!("{:?}", plan.facet).to_lowercase(),
-                fingerprint
+    async fn wanted_items(
+        &self,
+        ctx: &Context<'_>,
+        status: Option<String>,
+    ) -> GqlResult<Vec<WantedItemPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ViewCatalog) {
+            return Err(async_graphql::Error::new("insufficient entitlements"));
+        }
+        let (items, _) = app
+            .list_wanted_items(status.as_deref(), None, Some(&self.id), 500, 0)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(items.into_iter().map(from_wanted_item).collect())
+    }
+
+    async fn release_decisions(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default = 50)] limit: i64,
+    ) -> GqlResult<Vec<ReleaseDecisionPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ViewCatalog) {
+            return Err(async_graphql::Error::new("insufficient entitlements"));
+        }
+        let decisions = app
+            .list_release_decisions(None, Some(&self.id), limit)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(decisions.into_iter().map(from_release_decision).collect())
+    }
+
+    async fn download_queue_items(
+        &self,
+        ctx: &Context<'_>,
+        include_all_activity: Option<bool>,
+        include_history_only: Option<bool>,
+    ) -> GqlResult<Vec<DownloadQueueItemPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let items = app
+            .list_download_queue(
+                &actor,
+                include_all_activity.unwrap_or(false),
+                include_history_only.unwrap_or(false),
             )
-        });
-    let payload_json = serde_json::to_string(plan)
-        .unwrap_or_else(|_| "{\"error\":\"failed_to_serialize_rename_plan\"}".to_string());
+            .await
+            .map_err(to_gql_error)?;
+        Ok(items
+            .into_iter()
+            .filter(|item| item.title_id.as_deref() == Some(self.id.as_str()))
+            .map(from_download_queue_item)
+            .collect())
+    }
+}
 
-    let _ = db
-        .create_import_request(
-            "scryer_rename".to_string(),
-            source_ref,
-            ImportType::RenamePreview.as_str().to_string(),
-            payload_json,
-        )
-        .await?;
+#[ComplexObject]
+impl CollectionPayload {
+    async fn title(&self, ctx: &Context<'_>) -> GqlResult<Option<TitlePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let title = app
+            .get_title(&actor, &self.title_id)
+            .await
+            .map_err(to_gql_error)?
+            .map(from_title);
+        Ok(title)
+    }
 
-    Ok(())
+    async fn episodes(&self, ctx: &Context<'_>) -> GqlResult<Vec<EpisodePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let episodes = app
+            .list_episodes(&actor, &self.id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(episodes.into_iter().map(from_episode).collect())
+    }
+}
+
+#[ComplexObject]
+impl EpisodePayload {
+    async fn parent_title(&self, ctx: &Context<'_>) -> GqlResult<Option<TitlePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let title = app
+            .get_title(&actor, &self.title_id)
+            .await
+            .map_err(to_gql_error)?
+            .map(from_title);
+        Ok(title)
+    }
+
+    async fn collection(&self, ctx: &Context<'_>) -> GqlResult<Option<CollectionPayload>> {
+        let Some(collection_id) = self.collection_id.as_deref() else {
+            return Ok(None);
+        };
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let collection = app
+            .get_collection(&actor, collection_id)
+            .await
+            .map_err(to_gql_error)?
+            .map(from_collection);
+        Ok(collection)
+    }
+
+    async fn wanted_item(&self, ctx: &Context<'_>) -> GqlResult<Option<WantedItemPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ViewCatalog) {
+            return Err(async_graphql::Error::new("insufficient entitlements"));
+        }
+        let wanted_item = app
+            .services
+            .wanted_items
+            .get_wanted_item_for_title(&self.title_id, Some(&self.id))
+            .await
+            .map_err(to_gql_error)?
+            .map(from_wanted_item);
+        Ok(wanted_item)
+    }
+
+    async fn media_files(&self, ctx: &Context<'_>) -> GqlResult<Vec<TitleMediaFilePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ViewCatalog) {
+            return Err(async_graphql::Error::new("insufficient entitlements"));
+        }
+        let files = app
+            .services
+            .media_files
+            .list_media_files_for_title(&self.title_id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(files
+            .into_iter()
+            .filter(|file| file.episode_id.as_deref() == Some(self.id.as_str()))
+            .map(from_title_media_file)
+            .collect())
+    }
+}
+
+#[ComplexObject]
+impl TitleMediaFilePayload {
+    async fn title(&self, ctx: &Context<'_>) -> GqlResult<Option<TitlePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let title = app
+            .get_title(&actor, &self.title_id)
+            .await
+            .map_err(to_gql_error)?
+            .map(from_title);
+        Ok(title)
+    }
+
+    async fn episode(&self, ctx: &Context<'_>) -> GqlResult<Option<EpisodePayload>> {
+        let Some(episode_id) = self.episode_id.as_deref() else {
+            return Ok(None);
+        };
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let episode = app
+            .get_episode(&actor, episode_id)
+            .await
+            .map_err(to_gql_error)?
+            .map(from_episode);
+        Ok(episode)
+    }
+}
+
+#[ComplexObject]
+impl WantedItemPayload {
+    async fn title(&self, ctx: &Context<'_>) -> GqlResult<Option<TitlePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let title = app
+            .get_title(&actor, &self.title_id)
+            .await
+            .map_err(to_gql_error)?
+            .map(from_title);
+        Ok(title)
+    }
+
+    async fn collection(&self, ctx: &Context<'_>) -> GqlResult<Option<CollectionPayload>> {
+        let Some(collection_id) = self.collection_id.as_deref() else {
+            return Ok(None);
+        };
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let collection = app
+            .get_collection(&actor, collection_id)
+            .await
+            .map_err(to_gql_error)?
+            .map(from_collection);
+        Ok(collection)
+    }
+
+    async fn episode(&self, ctx: &Context<'_>) -> GqlResult<Option<EpisodePayload>> {
+        let Some(episode_id) = self.episode_id.as_deref() else {
+            return Ok(None);
+        };
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let episode = app
+            .get_episode(&actor, episode_id)
+            .await
+            .map_err(to_gql_error)?
+            .map(from_episode);
+        Ok(episode)
+    }
+
+    async fn release_decisions(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default = 50)] limit: i64,
+    ) -> GqlResult<Vec<ReleaseDecisionPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ViewCatalog) {
+            return Err(async_graphql::Error::new("insufficient entitlements"));
+        }
+        let decisions = app
+            .list_release_decisions(Some(&self.id), None, limit)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(decisions.into_iter().map(from_release_decision).collect())
+    }
+
+    async fn pending_releases(&self, ctx: &Context<'_>) -> GqlResult<Vec<PendingReleasePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let releases = app
+            .list_pending_releases_for_wanted_item(&actor, &self.id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(releases.into_iter().map(from_pending_release).collect())
+    }
+}
+
+#[ComplexObject]
+impl ReleaseDecisionPayload {
+    async fn title(&self, ctx: &Context<'_>) -> GqlResult<Option<TitlePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let title = app
+            .get_title(&actor, &self.title_id)
+            .await
+            .map_err(to_gql_error)?
+            .map(from_title);
+        Ok(title)
+    }
+
+    async fn wanted_item(&self, ctx: &Context<'_>) -> GqlResult<Option<WantedItemPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let item = app
+            .get_wanted_item(&actor, &self.wanted_item_id)
+            .await
+            .map_err(to_gql_error)?
+            .map(from_wanted_item);
+        Ok(item)
+    }
+}
+
+#[ComplexObject]
+impl DownloadQueueItemPayload {
+    async fn title(&self, ctx: &Context<'_>) -> GqlResult<Option<TitlePayload>> {
+        let Some(title_id) = self.title_id.as_deref() else {
+            return Ok(None);
+        };
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {
+            return Err(async_graphql::Error::new("insufficient entitlements"));
+        }
+        let title = app
+            .services
+            .titles
+            .get_by_id(title_id)
+            .await
+            .map_err(to_gql_error)?
+            .map(from_title);
+        Ok(title)
+    }
+}
+
+#[ComplexObject]
+impl PendingReleasePayload {
+    async fn title(&self, ctx: &Context<'_>) -> GqlResult<Option<TitlePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {
+            return Err(async_graphql::Error::new("insufficient entitlements"));
+        }
+        let title = app
+            .services
+            .titles
+            .get_by_id(&self.title_id)
+            .await
+            .map_err(to_gql_error)?
+            .map(from_title);
+        Ok(title)
+    }
+
+    async fn wanted_item(&self, ctx: &Context<'_>) -> GqlResult<Option<WantedItemPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {
+            return Err(async_graphql::Error::new("insufficient entitlements"));
+        }
+        let wanted_item = app
+            .services
+            .wanted_items
+            .get_wanted_item_by_id(&self.wanted_item_id)
+            .await
+            .map_err(to_gql_error)?
+            .map(from_wanted_item);
+        Ok(wanted_item)
+    }
 }

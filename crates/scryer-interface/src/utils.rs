@@ -1,21 +1,144 @@
 use async_graphql::{Error, Result as GqlResult};
-use scryer_application::DownloadSourceKind;
-use scryer_domain::{Entitlement, ExternalId, MediaFacet, NewTitle};
+use scryer_domain::{Entitlement, ExternalId, NewTitle};
 
-use crate::types::AddTitleInput;
+use crate::types::{AddTitleInput, DownloadSourceKindValue, TitleOptionsInput};
 
-pub(crate) fn parse_facet(raw: Option<String>) -> Option<MediaFacet> {
-    raw.and_then(|value| MediaFacet::parse(&value))
+fn push_structured_tag(tags: &mut Vec<String>, prefix: &str, value: Option<String>) {
+    let Some(value) = value else {
+        return;
+    };
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return;
+    }
+    tags.push(format!("{prefix}{normalized}"));
 }
 
-pub(crate) fn map_add_input(input: AddTitleInput) -> NewTitle {
-    NewTitle {
-        name: input.name,
-        facet: parse_facet(Some(input.facet)).unwrap_or_default(),
-        monitored: input.monitored,
-        tags: input.tags,
-        external_ids: input
-            .external_ids
+fn set_structured_tag(tags: &mut Vec<String>, prefix: &str, value: Option<String>) {
+    tags.retain(|tag| !tag.starts_with(prefix));
+    push_structured_tag(tags, prefix, value);
+}
+
+fn normalize_title_tag(tag: String) -> Option<String> {
+    let trimmed = tag.trim().to_string();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    Some(if trimmed.starts_with("scryer:") {
+        trimmed
+    } else {
+        trimmed.to_lowercase()
+    })
+}
+
+pub(crate) fn normalize_title_tags(tags: Vec<String>) -> Vec<String> {
+    tags.into_iter().filter_map(normalize_title_tag).collect()
+}
+
+pub(crate) fn apply_title_options(tags: &mut Vec<String>, options: TitleOptionsInput) {
+    set_structured_tag(
+        tags,
+        "scryer:quality-profile:",
+        options.quality_profile_id.map(|value| value.trim().to_string()),
+    );
+    set_structured_tag(
+        tags,
+        "scryer:root-folder:",
+        options.root_folder_path.map(|value| value.trim().to_string()),
+    );
+    set_structured_tag(
+        tags,
+        "scryer:monitor-type:",
+        options
+            .monitor_type
+            .map(|value| value.as_tag_value().to_string()),
+    );
+    set_structured_tag(
+        tags,
+        "scryer:filler-policy:",
+        options.filler_policy.map(|value| value.trim().to_string()),
+    );
+    set_structured_tag(
+        tags,
+        "scryer:recap-policy:",
+        options.recap_policy.map(|value| value.trim().to_string()),
+    );
+
+    if let Some(use_season_folders) = options.use_season_folders {
+        set_structured_tag(
+            tags,
+            "scryer:season-folder:",
+            Some(
+                if use_season_folders {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+                .to_string(),
+            ),
+        );
+    }
+
+    if let Some(monitor_specials) = options.monitor_specials {
+        set_structured_tag(
+            tags,
+            "scryer:monitor-specials:",
+            Some(if monitor_specials { "true" } else { "false" }.to_string()),
+        );
+    }
+
+    if let Some(inter_season_movies) = options.inter_season_movies {
+        set_structured_tag(
+            tags,
+            "scryer:inter-season-movies:",
+            Some(if inter_season_movies { "true" } else { "false" }.to_string()),
+        );
+    }
+}
+
+pub(crate) fn merge_title_option_tags(
+    mut tags: Vec<String>,
+    options: TitleOptionsInput,
+) -> Vec<String> {
+    apply_title_options(&mut tags, options);
+    tags
+}
+
+pub(crate) fn map_add_input(input: AddTitleInput) -> GqlResult<NewTitle> {
+    let AddTitleInput {
+        name,
+        facet,
+        monitored,
+        mut tags,
+        options,
+        external_ids,
+        source_hint: _,
+        source_kind: _,
+        source_title: _,
+        min_availability,
+        poster_url,
+        year,
+        overview,
+        sort_title,
+        slug,
+        runtime_minutes,
+        language,
+        content_status,
+    } = input;
+
+    let parsed_facet = facet.into_domain();
+    tags = normalize_title_tags(tags);
+    if let Some(options) = options {
+        apply_title_options(&mut tags, options);
+    }
+
+    Ok(NewTitle {
+        name,
+        facet: parsed_facet,
+        monitored,
+        tags,
+        external_ids: external_ids
             .unwrap_or_default()
             .into_iter()
             .map(|item| ExternalId {
@@ -23,20 +146,22 @@ pub(crate) fn map_add_input(input: AddTitleInput) -> NewTitle {
                 value: item.value,
             })
             .collect(),
-        min_availability: input.min_availability,
-        poster_url: input.poster_url,
-        year: input.year,
-        overview: input.overview,
-        sort_title: input.sort_title,
-        slug: input.slug,
-        runtime_minutes: input.runtime_minutes,
-        language: input.language,
-        content_status: input.content_status,
-    }
+        min_availability,
+        poster_url,
+        year,
+        overview,
+        sort_title,
+        slug,
+        runtime_minutes,
+        language,
+        content_status,
+    })
 }
 
-pub(crate) fn parse_download_source_kind(raw: Option<String>) -> Option<DownloadSourceKind> {
-    raw.and_then(|value| DownloadSourceKind::parse(&value))
+pub(crate) fn parse_download_source_kind(
+    raw: Option<DownloadSourceKindValue>,
+) -> Option<scryer_application::DownloadSourceKind> {
+    raw.map(DownloadSourceKindValue::into_application)
 }
 
 pub(crate) fn parse_entitlements(raw_entitlements: &[String]) -> GqlResult<Vec<Entitlement>> {
@@ -69,7 +194,8 @@ pub(crate) fn parse_entitlements(raw_entitlements: &[String]) -> GqlResult<Vec<E
 mod tests {
     use super::*;
 
-    use scryer_domain::Entitlement;
+    use crate::types::MediaFacetValue;
+    use scryer_domain::{Entitlement, MediaFacet};
 
     #[test]
     fn parse_entitlements_accepts_known_values() {
@@ -94,14 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_facet_known_values_are_mapped() {
-        assert_eq!(parse_facet(Some("movie".into())), Some(MediaFacet::Movie));
-        assert_eq!(parse_facet(Some("TV".into())), Some(MediaFacet::Series));
-        assert_eq!(parse_facet(Some("anime".into())), Some(MediaFacet::Anime));
-    }
-
-    #[test]
-    fn parse_facet_unknown_value_is_none() {
-        assert_eq!(parse_facet(Some("wrong".into())), None);
+    fn media_facet_value_maps_tv_to_series_domain() {
+        assert_eq!(MediaFacetValue::Tv.into_domain(), MediaFacet::Series);
     }
 }

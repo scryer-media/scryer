@@ -3,13 +3,13 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { useClient } from "urql";
 
 import {
-  adminSettingsQuery,
-  downloadClientProviderTypesQuery,
-  indexerProviderTypesQuery,
   pluginsQuery,
+  qualityProfilesInitQuery,
+  setupWizardProviderTypesInitQuery,
 } from "@/lib/graphql/queries";
 import {
-  saveAdminSettingsMutation,
+  saveQualityProfileSettingsMutation,
+  updateLibraryPathsMutation,
   createDownloadClientMutation,
   testDownloadClientConnectionMutation,
   createIndexerMutation,
@@ -21,7 +21,6 @@ import {
   installPluginMutation,
   uninstallPluginMutation,
 } from "@/lib/graphql/mutations";
-import { QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY } from "@/lib/constants/settings";
 import { DEFAULT_DOWNLOAD_CLIENT_DRAFT, DEFAULT_PORT_FOR_CLIENT_TYPE } from "@/lib/constants/download-clients";
 import {
   buildDownloadClientConfigJson,
@@ -30,8 +29,7 @@ import {
   normalizeDownloadClientType,
 } from "@/lib/utils/download-clients";
 import {
-  parseQualityProfileCatalogEntries,
-  normalizeQualityProfilesForSave,
+  qualityProfileSettingsToEntries,
 } from "@/lib/utils/quality-profiles";
 import type { DownloadClientDraft, DownloadClientTypeOption } from "@/lib/types/download-clients";
 import type { FacetQualityPrefs, ViewCategoryId } from "@/lib/types/quality-profiles";
@@ -154,20 +152,18 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
 
   const refreshProviderOptions = useCallback(async () => {
     try {
-      const [{ data: dcData }, { data: idxData }] = await Promise.all([
-        client.query(downloadClientProviderTypesQuery, {}).toPromise(),
-        client.query(indexerProviderTypesQuery, {}).toPromise(),
-      ]);
+      const { data, error } = await client.query(setupWizardProviderTypesInitQuery, {}).toPromise();
+      if (error && !data?.downloadClientProviderTypes && !data?.indexerProviderTypes) throw error;
 
       setDcTypeOptions(
         buildDownloadClientTypeOptions(
-          (dcData?.downloadClientProviderTypes as ProviderTypeInfo[] | undefined) ?? [],
+          (data?.downloadClientProviderTypes as ProviderTypeInfo[] | undefined) ?? [],
         ),
       );
 
-      if (idxData?.indexerProviderTypes?.length) {
+      if (data?.indexerProviderTypes?.length) {
         setIdxProviderOptions(
-          idxData.indexerProviderTypes.map(
+          data.indexerProviderTypes.map(
             (provider: { providerType: string; name: string; defaultBaseUrl?: string }) => ({
               value: provider.providerType,
               label: provider.name,
@@ -319,15 +315,8 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
     async (nextStep: number) => {
       setPersonaSaving(true);
       try {
-        // Load existing catalog to use as templates
-        const { data } = await client.query(adminSettingsQuery, { scope: "system" }).toPromise();
-        const catalogRecord = data?.adminSettings?.items?.find(
-          (item: { keyName: string }) => item.keyName === QUALITY_PROFILE_CATALOG_KEY,
-        );
-        const rawCatalog =
-          data?.adminSettings?.qualityProfiles ??
-          (catalogRecord?.valueJson ?? catalogRecord?.effectiveValueJson ?? "[]");
-        const existingProfiles = parseQualityProfileCatalogEntries(rawCatalog);
+        const { data } = await client.query(qualityProfilesInitQuery, {}).toPromise();
+        const existingProfiles = qualityProfileSettingsToEntries(data?.qualityProfileSettings);
 
         // Build per-facet profiles from templates
         const WIZARD_FACETS: { facet: ViewCategoryId; name: string }[] = [
@@ -354,29 +343,52 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
           }
         }
 
-        // Save updated catalog
-        const catalogText = normalizeQualityProfilesForSave(JSON.stringify(keptProfiles));
         await client
-          .mutation(saveAdminSettingsMutation, {
+          .mutation(saveQualityProfileSettingsMutation, {
             input: {
-              scope: "system",
-              items: [{ keyName: QUALITY_PROFILE_CATALOG_KEY, value: catalogText }],
+              profiles: keptProfiles.map((profile) => ({
+                id: profile.id,
+                name: profile.name,
+                criteria: {
+                  qualityTiers: profile.criteria.quality_tiers,
+                  archivalQuality: profile.criteria.archival_quality,
+                  allowUnknownQuality: profile.criteria.allow_unknown_quality,
+                  sourceAllowlist: profile.criteria.source_allowlist,
+                  sourceBlocklist: profile.criteria.source_blocklist,
+                  videoCodecAllowlist: profile.criteria.video_codec_allowlist,
+                  videoCodecBlocklist: profile.criteria.video_codec_blocklist,
+                  audioCodecAllowlist: profile.criteria.audio_codec_allowlist,
+                  audioCodecBlocklist: profile.criteria.audio_codec_blocklist,
+                  atmosPreferred: profile.criteria.atmos_preferred,
+                  dolbyVisionAllowed: profile.criteria.dolby_vision_allowed,
+                  detectedHdrAllowed: profile.criteria.detected_hdr_allowed,
+                  preferRemux: profile.criteria.prefer_remux,
+                  allowBdDisk: profile.criteria.allow_bd_disk,
+                  allowUpgrades: profile.criteria.allow_upgrades,
+                  preferDualAudio: profile.criteria.prefer_dual_audio,
+                  requiredAudioLanguages: profile.criteria.required_audio_languages ?? [],
+                  scoringPersona: profile.criteria.scoring_persona,
+                  scoringOverrides: profile.criteria.scoring_overrides ?? {},
+                  cutoffTier: profile.criteria.cutoff_tier,
+                  minScoreToGrab: profile.criteria.min_score_to_grab,
+                  facetPersonaOverrides: Object.entries(
+                    profile.criteria.facet_persona_overrides ?? {},
+                  ).map(([scope, persona]) => ({
+                    scope,
+                    persona,
+                  })),
+                },
+              })),
+              globalProfileId: null,
+              categorySelections: WIZARD_FACETS.map(({ facet }) => ({
+                scope: facet,
+                profileId: `wizard-${facet}`,
+                inheritGlobal: false,
+              })),
+              replaceExisting: true,
             },
           })
           .toPromise();
-
-        // Set quality.profile_id per facet
-        for (const { facet } of WIZARD_FACETS) {
-          await client
-            .mutation(saveAdminSettingsMutation, {
-              input: {
-                scope: "system",
-                scopeId: facet,
-                items: [{ keyName: QUALITY_PROFILE_ID_KEY, value: JSON.stringify(`wizard-${facet}`) }],
-              },
-            })
-            .toPromise();
-        }
 
         goToStep(nextStep);
       } catch (err) {
@@ -394,17 +406,14 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
     setMediaPathsSaving(true);
     setMediaPathsError(null);
     try {
-      const items = [
-        { keyName: "movies.path", value: JSON.stringify(moviesPath.trim()) },
-        { keyName: "series.path", value: JSON.stringify(seriesPath.trim()) },
-      ];
       const trimmedAnime = animePath.trim();
-      if (trimmedAnime.length > 0) {
-        items.push({ keyName: "anime.path", value: JSON.stringify(trimmedAnime) });
-      }
       const { error } = await client
-        .mutation(saveAdminSettingsMutation, {
-          input: { scope: "media", items },
+        .mutation(updateLibraryPathsMutation, {
+          input: {
+            moviePath: moviesPath.trim(),
+            seriesPath: seriesPath.trim(),
+            animePath: trimmedAnime.length > 0 ? trimmedAnime : null,
+          },
         })
         .toPromise();
       if (error) throw error;

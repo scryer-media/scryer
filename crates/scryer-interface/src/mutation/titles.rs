@@ -1,12 +1,29 @@
-use async_graphql::{Context, Object, Result as GqlResult};
+use async_graphql::{Context, Error, Object, Result as GqlResult};
 
 use crate::context::{actor_from_ctx, app_from_ctx, to_gql_error};
 use crate::mappers::from_title;
 use crate::types::*;
-use crate::utils::{map_add_input, parse_download_source_kind, parse_facet};
+use crate::utils::{
+    map_add_input, merge_title_option_tags, normalize_title_tags, parse_download_source_kind,
+};
 
 #[derive(Default)]
 pub(crate) struct TitleMutations;
+
+fn queued_download_payload(
+    title: &scryer_domain::Title,
+    job_id: String,
+    source_title: Option<String>,
+    source_kind: Option<scryer_application::DownloadSourceKind>,
+) -> QueueDownloadPayload {
+    QueueDownloadPayload {
+        job_id,
+        title_id: title.id.clone(),
+        title_name: title.name.clone(),
+        source_title,
+        source_kind: source_kind.map(DownloadSourceKindValue::from_application),
+    }
+}
 
 #[Object]
 impl TitleMutations {
@@ -17,14 +34,16 @@ impl TitleMutations {
     ) -> GqlResult<AddTitleResult> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
+        let request = map_add_input(input)?;
         let domain_title = app
-            .add_title(&actor, map_add_input(input))
+            .add_title(&actor, request)
             .await
             .map_err(to_gql_error)?;
 
         Ok(AddTitleResult {
             title: from_title(domain_title),
-            download_job_id: String::new(),
+            download_job_id: None,
+            queued_download: None,
         })
     }
 
@@ -38,20 +57,23 @@ impl TitleMutations {
         let source_hint = input.source_hint.clone();
         let source_kind = parse_download_source_kind(input.source_kind.clone());
         let source_title = input.source_title.clone();
+        let request = map_add_input(input)?;
         let (title, job_id) = app
             .add_title_and_queue_download(
                 &actor,
-                map_add_input(input),
+                request,
                 source_hint,
                 source_kind,
-                source_title,
+                source_title.clone(),
             )
             .await
             .map_err(to_gql_error)?;
+        let queued_download = queued_download_payload(&title, job_id.clone(), source_title, source_kind);
 
         Ok(AddTitleResult {
             title: from_title(title),
-            download_job_id: job_id,
+            download_job_id: Some(job_id),
+            queued_download: Some(queued_download),
         })
     }
 
@@ -62,24 +84,33 @@ impl TitleMutations {
     ) -> GqlResult<TitlePayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let facet = input.facet.and_then(|value| parse_facet(Some(value)));
-        let tags = input.tags.map(|tags| {
-            tags.into_iter()
-                .map(|tag| {
-                    let trimmed = tag.trim().to_string();
-                    // Preserve case for structured scryer: tags (they may contain paths)
-                    if trimmed.starts_with("scryer:") {
-                        trimmed
-                    } else {
-                        trimmed.to_lowercase()
-                    }
-                })
-                .filter(|tag| !tag.is_empty())
-                .collect::<Vec<_>>()
-        });
+        let UpdateTitleInput {
+            title_id,
+            name,
+            facet,
+            tags,
+            options,
+        } = input;
+        let facet = facet.map(MediaFacetValue::into_domain);
+        let mut tags = tags.map(normalize_title_tags);
+
+        if let Some(options) = options {
+            let base_tags = match tags.take() {
+                Some(tags) => tags,
+                None => app
+                    .services
+                    .titles
+                    .get_by_id(&title_id)
+                    .await
+                    .map_err(to_gql_error)?
+                    .map(|title| title.tags)
+                    .ok_or_else(|| Error::new(format!("title not found: {title_id}")))?,
+            };
+            tags = Some(merge_title_option_tags(base_tags, options));
+        }
 
         let title = app
-            .update_title_metadata(&actor, &input.title_id, input.name, facet, tags)
+            .update_title_metadata(&actor, &title_id, name, facet, tags)
             .await
             .map_err(to_gql_error)?;
         Ok(from_title(title))

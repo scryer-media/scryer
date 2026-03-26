@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useClient } from "urql";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
-import type { AdminSetting } from "@/lib/types/admin-settings";
 import type { Facet, Release, TitleRecord } from "@/lib/types";
 import type { ViewCategoryId } from "@/lib/types/quality-profiles";
 import type { LocaleCode } from "@/lib/i18n";
@@ -27,9 +26,8 @@ import {
 } from "@/lib/constants/settings";
 import {
   coerceProfileSetting,
-  resolveQualityProfileCatalogState,
+  qualityProfileSettingsToCategoryOverrides,
 } from "@/lib/utils/quality-profiles";
-import { getSettingDisplayValue } from "@/lib/utils/settings";
 import { FACET_REGISTRY, facetById } from "@/lib/facets/registry";
 import { useSettingsSubscription } from "@/lib/hooks/use-settings-subscription";
 
@@ -79,19 +77,6 @@ function isMetadataEmpty(results: MetadataSearchResults): boolean {
 const AUTOCOMPLETE_MIN_CHARS = 2;
 const AUTOCOMPLETE_DEBOUNCE_MS = 250;
 const AUTOCOMPLETE_LIMIT = 10;
-
-const GLOBAL_SEARCH_SYSTEM_KEY_NAMES = [
-  QUALITY_PROFILE_CATALOG_KEY,
-  QUALITY_PROFILE_ID_KEY,
-];
-
-const GLOBAL_SEARCH_MOVIE_KEY_NAMES = [QUALITY_PROFILE_ID_KEY];
-const GLOBAL_SEARCH_SERIES_KEY_NAMES = [QUALITY_PROFILE_ID_KEY];
-const GLOBAL_SEARCH_ANIME_KEY_NAMES = [
-  QUALITY_PROFILE_ID_KEY,
-  ANIME_MONITOR_SPECIALS_KEY,
-  ANIME_INTER_SEASON_MOVIES_KEY,
-];
 
 type UseGlobalSearchArgs = {
   queueFacet: Facet;
@@ -287,21 +272,11 @@ export function useGlobalSearch({
 
   const refreshCatalogQualityProfileState = useCallback(async () => {
     try {
-      const { data, error } = await client.query(globalSearchInitQuery, {
-        systemKeyNames: GLOBAL_SEARCH_SYSTEM_KEY_NAMES,
-        movieKeyNames: GLOBAL_SEARCH_MOVIE_KEY_NAMES,
-        seriesKeyNames: GLOBAL_SEARCH_SERIES_KEY_NAMES,
-        animeKeyNames: GLOBAL_SEARCH_ANIME_KEY_NAMES,
-      }).toPromise();
+      const { data, error } = await client.query(globalSearchInitQuery, {}).toPromise();
       if (error) throw error;
 
-      const profileCatalogRecord = data.systemSettings.items.find(
-        (item: AdminSetting) => item.keyName === QUALITY_PROFILE_CATALOG_KEY,
-      );
-      const qualityCatalogRaw =
-        data.systemSettings.qualityProfiles ?? getSettingDisplayValue(profileCatalogRecord);
-      const parsedProfiles = resolveQualityProfileCatalogState(qualityCatalogRaw).profiles.map(
-        (profile) => ({
+      const parsedProfiles = (data.qualityProfileSettings?.profiles ?? []).map(
+        (profile: { id: string; name: string }) => ({
           id: profile.id.trim(),
           name: profile.name.trim() || profile.id.trim(),
         }),
@@ -318,31 +293,15 @@ export function useGlobalSearch({
           : parsedProfiles,
       );
 
-      const globalProfileRecord = data.systemSettings.items.find(
-        (item: AdminSetting) => item.keyName === QUALITY_PROFILE_ID_KEY,
-      );
       const nextGlobalProfileId = coerceProfileSetting(
-        getSettingDisplayValue(globalProfileRecord),
+        data.qualityProfileSettings?.globalProfileId ?? "",
       );
       setGlobalQualityProfileId((previous) =>
         previous === nextGlobalProfileId ? previous : nextGlobalProfileId,
       );
 
-      const movieProfileRecord = data.movieSettings.items.find(
-        (item: AdminSetting) => item.keyName === QUALITY_PROFILE_ID_KEY,
-      );
-      const seriesProfileRecord = data.seriesSettings.items.find(
-        (item: AdminSetting) => item.keyName === QUALITY_PROFILE_ID_KEY,
-      );
-      const animeProfileRecord = data.animeSettings.items.find(
-        (item: AdminSetting) => item.keyName === QUALITY_PROFILE_ID_KEY,
-      );
-
-      const nextOverrides: Record<ViewCategoryId, string> = {
-        movie: coerceProfileSetting(getSettingDisplayValue(movieProfileRecord)),
-        series: coerceProfileSetting(getSettingDisplayValue(seriesProfileRecord)),
-        anime: coerceProfileSetting(getSettingDisplayValue(animeProfileRecord)),
-      };
+      const nextOverrides: Record<ViewCategoryId, string> =
+        qualityProfileSettingsToCategoryOverrides(data.qualityProfileSettings);
       setCategoryQualityProfileOverrides((previous) =>
         previous.movie === nextOverrides.movie &&
         previous.series === nextOverrides.series &&
@@ -351,15 +310,9 @@ export function useGlobalSearch({
           : nextOverrides,
       );
 
-      const animeMonitorSpecialsRecord = data.animeSettings.items.find(
-        (item: AdminSetting) => item.keyName === ANIME_MONITOR_SPECIALS_KEY,
-      );
-      const animeInterSeasonMoviesRecord = data.animeSettings.items.find(
-        (item: AdminSetting) => item.keyName === ANIME_INTER_SEASON_MOVIES_KEY,
-      );
       const nextAnimeDefaults: AnimeCatalogDefaults = {
-        monitorSpecials: getSettingDisplayValue(animeMonitorSpecialsRecord) !== "false",
-        interSeasonMovies: getSettingDisplayValue(animeInterSeasonMoviesRecord) !== "false",
+        monitorSpecials: data.animeSettings?.monitorSpecials ?? false,
+        interSeasonMovies: data.animeSettings?.interSeasonMovies ?? true,
       };
       setAnimeCatalogDefaults((previous) =>
         previous.monitorSpecials === nextAnimeDefaults.monitorSpecials &&
@@ -369,9 +322,9 @@ export function useGlobalSearch({
       );
 
       const nextRootFolders: Record<Facet, RootFolderOption[]> = {
-        movie: data.movieRootFolders ?? [],
-        tv: data.seriesRootFolders ?? [],
-        anime: data.animeRootFolders ?? [],
+        movie: data.movieSettings?.rootFolders ?? [],
+        tv: data.seriesSettings?.rootFolders ?? [],
+        anime: data.animeSettings?.rootFolders ?? [],
       };
       setRootFoldersByFacet((previous) => {
         const same = (["movie", "tv", "anime"] as Facet[]).every((f) => {
@@ -512,11 +465,11 @@ export function useGlobalSearch({
           limit: 15,
         }).toPromise();
         if (searchError) throw searchError;
-        setSearchResults(searchData.searchIndexers || []);
+        setSearchResults(searchData.searchReleases || []);
         setGlobalStatus(
-          t("status.foundNzb", { count: searchData.searchIndexers?.length || 0 }),
+          t("status.foundNzb", { count: searchData.searchReleases?.length || 0 }),
         );
-        return searchData.searchIndexers || [];
+        return searchData.searchReleases || [];
       } catch (error) {
         setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
         setSearchResults([]);
@@ -859,28 +812,27 @@ export function useGlobalSearch({
         ...(tvdbId ? [{ source: "tvdb", value: tvdbId }] : []),
         ...(imdbId ? [{ source: "imdb", value: imdbId }] : []),
       ];
-      const tags = [
-        `scryer:quality-profile:${qualityProfileId}`,
-        `scryer:monitor-type:${options.monitorType}`,
-        ...(facet === "movie"
-          ? []
-          : [`scryer:season-folder:${options.seasonFolder ? "enabled" : "disabled"}`]),
-        ...(facet === "anime"
-          ? [
-              `scryer:monitor-specials:${options.monitorSpecials !== false ? "true" : "false"}`,
-              `scryer:inter-season-movies:${options.interSeasonMovies !== false ? "true" : "false"}`,
-            ]
-          : []),
-        ...(options.rootFolder ? [`scryer:root-folder:${options.rootFolder}`] : []),
-      ];
-
       try {
         const { data: addData, error: addError } = await client.mutation(addTitleMutation, {
           input: {
             name,
             facet,
             monitored,
-            tags,
+            tags: [],
+            options: {
+              qualityProfileId: qualityProfileId || undefined,
+              rootFolderPath: options.rootFolder || undefined,
+              monitorType: options.monitorType,
+              ...(facet === "movie"
+                ? {}
+                : { useSeasonFolders: options.seasonFolder }),
+              ...(facet === "anime"
+                ? {
+                    monitorSpecials: options.monitorSpecials !== false,
+                    interSeasonMovies: options.interSeasonMovies !== false,
+                  }
+                : {}),
+            },
             externalIds,
             ...(facet === "movie" && options.minAvailability ? { minAvailability: options.minAvailability } : {}),
             posterUrl: result.posterUrl || undefined,
@@ -942,9 +894,9 @@ export function useGlobalSearch({
           limit,
         }).toPromise();
         if (searchError) throw searchError;
-        setSearchResults(searchData.searchIndexers || []);
-        setGlobalStatus(t("status.searchingByQuery", { count: searchData.searchIndexers?.length || 0, query }));
-        return searchData.searchIndexers || [];
+        setSearchResults(searchData.searchReleases || []);
+        setGlobalStatus(t("status.searchingByQuery", { count: searchData.searchReleases?.length || 0, query }));
+        return searchData.searchReleases || [];
       } catch (error) {
         setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
         return [];

@@ -36,6 +36,7 @@ import { OverviewControlPanel } from "../overview-control-panel";
 import { OverviewBackLink } from "../overview-back-link";
 import { TitleSettingsPanel } from "./title-settings-panel";
 import { SeasonSection } from "./season-section";
+import type { TitleOptionUpdates } from "@/lib/types/title-options";
 
 const imdbLogoUrl = `${import.meta.env.BASE_URL}media-sites/imdb.svg`;
 const tvdbLogoUrl = `${import.meta.env.BASE_URL}media-sites/tvdb.svg`;
@@ -66,7 +67,7 @@ type Props = {
   qualityProfiles?: { id: string; name: string }[];
   defaultRootFolder?: string;
   rootFolders?: { path: string; isDefault: boolean }[];
-  onUpdateTitleTags?: (newTags: string[]) => Promise<void>;
+  onUpdateTitleOptions?: (options: TitleOptionUpdates) => Promise<void>;
   completedDownloads?: DownloadQueueItem[];
   onOpenManualImport?: (item: DownloadQueueItem) => void;
   initialEpisodeId?: string | null;
@@ -104,7 +105,7 @@ export function SeriesOverviewView({
   qualityProfiles,
   defaultRootFolder,
   rootFolders,
-  onUpdateTitleTags,
+  onUpdateTitleOptions,
   completedDownloads,
   onOpenManualImport,
   initialEpisodeId,
@@ -194,13 +195,13 @@ export function SeriesOverviewView({
         titleId: title.id,
         season: seasonNum,
         episode: episodeNum,
-      }).toPromise()
+        }).toPromise()
         .then(({ data, error: queryError }) => {
           if (queryError) throw queryError;
           dispatchEpisodePanel({
             type: "SET_SEARCH_RESULTS",
             episodeId,
-            results: data.searchIndexersForEpisode ?? [],
+            results: data.searchReleases ?? [],
           });
         })
         .catch(() => {
@@ -280,9 +281,11 @@ export function SeriesOverviewView({
       return client.mutation(queueExistingMutation, {
         input: {
           titleId: title.id,
-          sourceHint,
-          sourceKind: release.sourceKind ?? null,
-          sourceTitle: release.title,
+          release: {
+            sourceHint,
+            sourceKind: release.sourceKind ?? null,
+            sourceTitle: release.title,
+          },
         },
       }).toPromise()
         .then(async ({ error: mutationError }) => {
@@ -540,13 +543,13 @@ export function SeriesOverviewView({
         onRequestDelete={onRequestDeleteTitle}
         onHistory={() => setHistoryOpen(true)}
         settingsPanel={
-          onUpdateTitleTags && qualityProfiles && defaultRootFolder ? (
+          onUpdateTitleOptions && qualityProfiles && defaultRootFolder ? (
             <TitleSettingsPanel
               title={title}
               qualityProfiles={qualityProfiles}
               defaultRootFolder={defaultRootFolder}
               rootFolders={rootFolders ?? []}
-              onUpdateTitleTags={onUpdateTitleTags}
+              onUpdateTitleOptions={onUpdateTitleOptions}
             />
           ) : undefined
         }

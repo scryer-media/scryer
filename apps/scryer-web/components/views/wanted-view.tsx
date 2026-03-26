@@ -31,7 +31,14 @@ import {
 } from "lucide-react";
 import { CutoffUnmetView } from "@/components/views/cutoff-unmet-view";
 import type { CutoffUnmetItem } from "@/components/views/cutoff-unmet-view";
-import type { WantedItem, ReleaseDecisionItem, PendingReleaseItem } from "@/lib/types";
+import type {
+  PendingReleaseItem,
+  ReleaseDecisionItem,
+  WantedItem,
+  WantedMediaType,
+  WantedSearchPhase,
+  WantedStatus,
+} from "@/lib/types";
 import type { WantedTab } from "@/components/containers/wanted-container";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
 
@@ -56,10 +63,10 @@ type WantedViewState = {
   items: WantedItem[];
   total: number;
   loading: boolean;
-  statusFilter: string | undefined;
-  setStatusFilter: (v: string | undefined) => void;
-  mediaTypeFilter: string | undefined;
-  setMediaTypeFilter: (v: string | undefined) => void;
+  statusFilter: WantedStatus | undefined;
+  setStatusFilter: (v: WantedStatus | undefined) => void;
+  mediaTypeFilter: WantedMediaType | undefined;
+  setMediaTypeFilter: (v: WantedMediaType | undefined) => void;
   offset: number;
   setOffset: (v: number) => void;
   limit: number;
@@ -74,11 +81,11 @@ type WantedViewState = {
   resetItem: (id: string) => Promise<void>;
 };
 
-const STATUS_OPTIONS = ["wanted", "grabbed", "completed", "paused"] as const;
-const MEDIA_TYPE_OPTIONS = ["movie", "episode", "interstitial_movie"] as const;
+const STATUS_OPTIONS: WantedStatus[] = ["wanted", "grabbed", "completed", "paused"];
+const MEDIA_TYPE_OPTIONS: WantedMediaType[] = ["movie", "episode", "interstitial_movie"];
 
-function statusBadge(status: string) {
-  const colors: Record<string, string> = {
+function statusBadge(status: WantedStatus) {
+  const colors: Record<WantedStatus, string> = {
     wanted: "bg-blue-500/20 text-blue-400",
     grabbed: "bg-amber-500/20 text-amber-400",
     completed: "bg-green-500/20 text-green-400",
@@ -93,14 +100,13 @@ function statusBadge(status: string) {
   );
 }
 
-function phaseBadge(phase: string) {
-  const colors: Record<string, string> = {
+function phaseBadge(phase: WantedSearchPhase) {
+  const colors: Record<WantedSearchPhase, string> = {
     primary: "bg-green-500/20 text-green-400",
     pre_release: "bg-purple-500/20 text-purple-400",
     pre_air: "bg-purple-500/20 text-purple-400",
     secondary: "bg-yellow-500/20 text-yellow-400",
     long_tail: "bg-muted text-muted-foreground",
-    paused: "bg-muted text-muted-foreground",
   };
   return (
     <span
@@ -292,7 +298,7 @@ function WantedItemsCard({ state }: { state: WantedViewState }) {
           <Select
             value={statusFilter ?? "__all__"}
             onValueChange={(v) => {
-              setStatusFilter(v === "__all__" ? undefined : v);
+              setStatusFilter(v === "__all__" ? undefined : (v as WantedStatus));
               setOffset(0);
             }}
           >
@@ -312,7 +318,7 @@ function WantedItemsCard({ state }: { state: WantedViewState }) {
           <Select
             value={mediaTypeFilter ?? "__all__"}
             onValueChange={(v) => {
-              setMediaTypeFilter(v === "__all__" ? undefined : v);
+              setMediaTypeFilter(v === "__all__" ? undefined : (v as WantedMediaType));
               setOffset(0);
             }}
           >

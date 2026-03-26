@@ -43,6 +43,16 @@ export type DownloadClientRoutingSettings = {
   removeFailed: boolean;
 };
 
+export type DownloadClientRoutingEntry = {
+  clientId: string;
+  enabled: boolean;
+  category: string | null;
+  recentQueuePriority: string | null;
+  olderQueuePriority: string | null;
+  removeCompleted: boolean;
+  removeFailed: boolean;
+};
+
 export type DownloadClientRoutingSettingsByClient = Record<
   string,
   DownloadClientRoutingSettings

@@ -1,5 +1,5 @@
 use super::*;
-use crate::acquisition_policy::{AcquisitionThresholds, evaluate_upgrade};
+use crate::acquisition_policy::evaluate_upgrade;
 use crate::delay_profile::DelayProfile;
 use chrono::{DateTime, Utc};
 use scryer_domain::NotificationEventType;
@@ -847,7 +847,9 @@ impl AppUseCase {
             return;
         }
 
-        let thresholds = AcquisitionThresholds::for_persona(&profile.criteria.scoring_persona);
+        let thresholds = self
+            .acquisition_thresholds(&profile.criteria.scoring_persona)
+            .await;
         let decision = evaluate_upgrade(
             candidate_score,
             wanted.current_score,

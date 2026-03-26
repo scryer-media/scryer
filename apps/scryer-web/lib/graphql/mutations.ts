@@ -140,6 +140,13 @@ export const addTitleMutation = `mutation AddTitle($input: AddTitleInput!) {
   addTitle(input: $input) {
     title { id name facet minAvailability }
     downloadJobId
+    queuedDownload {
+      jobId
+      titleId
+      titleName
+      sourceTitle
+      sourceKind
+    }
   }
 }`;
 
@@ -147,6 +154,13 @@ export const addTitleAndQueueMutation = `mutation AddTitleAndQueue($input: AddTi
   addTitleAndQueueDownload(input: $input) {
     title { id name facet }
     downloadJobId
+    queuedDownload {
+      jobId
+      titleId
+      titleName
+      sourceTitle
+      sourceKind
+    }
   }
 }`;
 
@@ -154,7 +168,7 @@ export const deleteMediaFileMutation = `mutation DeleteMediaFile($input: DeleteM
   deleteMediaFile(input: $input)
 }`;
 
-export const scanLibraryMutation = `mutation ScanLibrary($facet: String!) {
+export const scanLibraryMutation = `mutation ScanLibrary($facet: MediaFacetValue!) {
   scanLibrary(facet: $facet) {
     scanned
     matched
@@ -214,62 +228,253 @@ export const applyMediaRenameBulkMutation = `mutation ApplyMediaRenameBulk($inpu
   }
 }`;
 
-export const saveAdminSettingsMutation = `mutation SaveAdminSettings($input: AdminSettingsUpdateInput!) {
-  saveAdminSettings(input: $input) {
-    scope
-    scopeId
-    items {
-      keyName
-      defaultValueJson
-      effectiveValueJson
-      valueJson
-      hasOverride
+export const updateSubtitleSettingsMutation = `mutation UpdateSubtitleSettings($input: UpdateSubtitleSettingsInput!) {
+  updateSubtitleSettings(input: $input) {
+    enabled
+    hasOpenSubtitlesApiKey
+    openSubtitlesUsername
+    hasOpenSubtitlesPassword
+    languages {
+      code
+      hearingImpaired
+      forced
     }
+    autoDownloadOnImport
+    minimumScoreSeries
+    minimumScoreMovie
+    searchIntervalHours
+    includeAiTranslated
+    includeMachineTranslated
+    syncEnabled
+    syncThresholdSeries
+    syncThresholdMovie
+    syncMaxOffsetSeconds
+  }
+}`;
+
+export const updateAcquisitionSettingsMutation = `mutation UpdateAcquisitionSettings($input: UpdateAcquisitionSettingsInput!) {
+  updateAcquisitionSettings(input: $input) {
+    enabled
+    upgradeCooldownHours
+    sameTierMinDelta
+    crossTierMinDelta
+    forcedUpgradeDeltaBypass
+    pollIntervalSeconds
+    syncIntervalSeconds
+    batchSize
+  }
+}`;
+
+export const upsertDelayProfileMutation = `mutation UpsertDelayProfile($input: DelayProfileInput!) {
+  upsertDelayProfile(input: $input) {
+    id
+    name
+    usenetDelayMinutes
+    torrentDelayMinutes
+    preferredProtocol
+    minAgeMinutes
+    bypassScoreThreshold
+    appliesToFacets
+    tags
+    priority
+    enabled
+  }
+}`;
+
+export const deleteDelayProfileMutation = `mutation DeleteDelayProfile($input: DeleteDelayProfileInput!) {
+  deleteDelayProfile(input: $input) {
+    id
+  }
+}`;
+
+const qualityProfileCriteriaFields = `
+      qualityTiers
+      archivalQuality
+      allowUnknownQuality
+      sourceAllowlist
+      sourceBlocklist
+      videoCodecAllowlist
+      videoCodecBlocklist
+      audioCodecAllowlist
+      audioCodecBlocklist
+      atmosPreferred
+      dolbyVisionAllowed
+      detectedHdrAllowed
+      preferRemux
+      allowBdDisk
+      allowUpgrades
+      preferDualAudio
+      requiredAudioLanguages
+      scoringPersona
+      scoringOverrides {
+        allowX265Non4k
+        blockDvWithoutFallback
+        preferCompactEncodes
+        preferLosslessAudio
+        blockUpscaled
+      }
+      cutoffTier
+      minScoreToGrab
+      facetPersonaOverrides {
+        scope
+        persona
+      }`;
+
+const qualityProfileSettingsFieldSelection = `
+    globalProfileId
+    profiles {
+      id
+      name
+      criteria {${qualityProfileCriteriaFields}
+      }
+    }
+    categorySelections {
+      scope
+      overrideProfileId
+      effectiveProfileId
+      inheritsGlobal
+    }`;
+
+const downloadClientRoutingFieldSelection = `
+    clientId
+    enabled
+    category
+    recentQueuePriority
+    olderQueuePriority
+    removeCompleted
+    removeFailed`;
+
+const indexerRoutingFieldSelection = `
+    indexerId
+    enabled
+    categories
+    priority`;
+
+const mediaSettingsFieldSelection = `
+    scope
+    libraryPath
+    rootFolders {
+      path
+      isDefault
+    }
+    renameTemplate
+    renameCollisionPolicy
+    renameMissingMetadataPolicy
+    fillerPolicy
+    recapPolicy
+    monitorSpecials
+    interSeasonMovies
+    monitorFillerMovies
+    nfoWriteOnImport
+    plexmatchWriteOnImport`;
+
+const libraryPathsFieldSelection = `
+    moviePath
+    seriesPath
+    animePath`;
+
+const serviceSettingsFieldSelection = `
+    tlsCertPath
+    tlsKeyPath`;
+
+export const saveQualityProfileSettingsMutation = `mutation SaveQualityProfileSettings($input: SaveQualityProfileSettingsInput!) {
+  saveQualityProfileSettings(input: $input) {${qualityProfileSettingsFieldSelection}
   }
 }`;
 
 export const deleteQualityProfileMutation = `mutation DeleteQualityProfile($input: DeleteQualityProfileInput!) {
   deleteQualityProfile(input: $input) {
-    scope
-    scopeId
-    items {
-      category
-      scope
-      keyName
-      dataType
-      defaultValueJson
-      effectiveValueJson
-      valueJson
-      source
-      hasOverride
-      isSensitive
-      validationJson
-      scopeId
-      updatedByUserId
-      createdAt
-      updatedAt
-    }
+${qualityProfileSettingsFieldSelection}
+  }
+}`;
+
+export const updateDownloadClientRoutingMutation = `mutation UpdateDownloadClientRouting($input: UpdateDownloadClientRoutingInput!) {
+  updateDownloadClientRouting(input: $input) {${downloadClientRoutingFieldSelection}
+  }
+}`;
+
+export const updateIndexerRoutingMutation = `mutation UpdateIndexerRouting($input: UpdateIndexerRoutingInput!) {
+  updateIndexerRouting(input: $input) {${indexerRoutingFieldSelection}
+  }
+}`;
+
+export const updateMediaSettingsMutation = `mutation UpdateMediaSettings($input: UpdateMediaSettingsInput!) {
+  updateMediaSettings(input: $input) {${mediaSettingsFieldSelection}
+  }
+}`;
+
+export const updateLibraryPathsMutation = `mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
+  updateLibraryPaths(input: $input) {${libraryPathsFieldSelection}
+  }
+}`;
+
+export const updateServiceSettingsMutation = `mutation UpdateServiceSettings($input: UpdateServiceSettingsInput!) {
+  updateServiceSettings(input: $input) {${serviceSettingsFieldSelection}
   }
 }`;
 
 export const queueExistingMutation = `mutation QueueExisting($input: QueueDownloadInput!) {
-  queueExistingTitleDownload(input: $input)
+  queueExistingTitleDownload(input: $input) {
+    jobId
+    titleId
+    titleName
+    sourceTitle
+    sourceKind
+  }
 }`;
 
 export const queueManualImportMutation = `mutation QueueManualImport($input: QueueManualImportInput!) {
-  queueManualImport(input: $input)
+  queueManualImport(input: $input) {
+    kind
+    downloadClientItemId
+    importId
+    removed
+    queueItem {
+      id
+      titleId
+      titleName
+      clientType
+      downloadClientItemId
+      state
+    }
+  }
 }`;
 
 export const pauseDownloadMutation = `mutation PauseDownload($input: PauseDownloadInput!) {
-  pauseDownload(input: $input)
+  pauseDownload(input: $input) {
+    kind
+    downloadClientItemId
+    removed
+    queueItem {
+      id
+      clientType
+      downloadClientItemId
+      state
+    }
+  }
 }`;
 
 export const resumeDownloadMutation = `mutation ResumeDownload($input: ResumeDownloadInput!) {
-  resumeDownload(input: $input)
+  resumeDownload(input: $input) {
+    kind
+    downloadClientItemId
+    removed
+    queueItem {
+      id
+      clientType
+      downloadClientItemId
+      state
+    }
+  }
 }`;
 
 export const deleteDownloadMutation = `mutation DeleteDownload($input: DeleteDownloadInput!) {
-  deleteDownload(input: $input)
+  deleteDownload(input: $input) {
+    kind
+    downloadClientItemId
+    removed
+    clientType
+  }
 }`;
 
 export const setCollectionMonitoredMutation = `mutation SetCollectionMonitored($input: SetCollectionMonitoredInput!) {
@@ -307,7 +512,21 @@ export const setTitleMonitoredMutation = `mutation SetTitleMonitored($input: Set
 }`;
 
 export const updateTitleMutation = `mutation UpdateTitle($input: UpdateTitleInput!) {
-  updateTitle(input: $input) { id name facet tags monitored }
+  updateTitle(input: $input) {
+    id
+    name
+    facet
+    tags
+    monitored
+    qualityProfileId
+    rootFolderPath
+    monitorType
+    useSeasonFolders
+    monitorSpecials
+    interSeasonMovies
+    fillerPolicy
+    recapPolicy
+  }
 }`;
 
 export const triggerImportMutation = `mutation TriggerImport($input: TriggerImportInput!) {
@@ -712,11 +931,42 @@ export const retryImportMutation = `mutation RetryImport($input: RetryImportInpu
 }`;
 
 export const ignoreTrackedDownloadMutation = `mutation IgnoreTrackedDownload($input: IgnoreTrackedDownloadInput!) {
-  ignoreTrackedDownload(input: $input)
+  ignoreTrackedDownload(input: $input) {
+    kind
+    downloadClientItemId
+    clientType
+    removed
+    queueItem {
+      id
+      titleId
+      titleName
+      clientType
+      downloadClientItemId
+      state
+      trackedState
+      trackedStatus
+    }
+  }
 }`;
 
 export const assignTrackedDownloadTitleMutation = `mutation AssignTrackedDownloadTitle($input: AssignTrackedDownloadTitleInput!) {
-  assignTrackedDownloadTitle(input: $input)
+  assignTrackedDownloadTitle(input: $input) {
+    kind
+    downloadClientItemId
+    clientType
+    removed
+    queueItem {
+      id
+      titleId
+      titleName
+      facet
+      clientType
+      downloadClientItemId
+      state
+      trackedState
+      trackedStatus
+    }
+  }
 }`;
 
 export type SubtitleSearchResult = {

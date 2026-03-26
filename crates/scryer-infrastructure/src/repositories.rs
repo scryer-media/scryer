@@ -448,6 +448,27 @@ impl SettingsRepository for SqliteServices {
             None => Ok(None),
         }
     }
+
+    async fn upsert_setting_json(
+        &self,
+        scope: &str,
+        key_name: &str,
+        scope_id: Option<String>,
+        value_json: String,
+        source: &str,
+        updated_by_user_id: Option<String>,
+    ) -> AppResult<()> {
+        self.upsert_setting_value(
+            scope.to_string(),
+            key_name.to_string(),
+            scope_id,
+            value_json,
+            source.to_string(),
+            updated_by_user_id,
+        )
+        .await?;
+        Ok(())
+    }
 }
 
 #[async_trait]

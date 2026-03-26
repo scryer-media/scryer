@@ -194,6 +194,7 @@ struct RawQualityProfile {
 }
 pub const QUALITY_PROFILE_CATALOG_KEY: &str = "quality.profiles";
 pub const QUALITY_PROFILE_ID_KEY: &str = "quality.profile_id";
+pub const QUALITY_PROFILE_INHERIT_VALUE: &str = "__inherit__";
 fn default_true() -> bool {
     true
 }

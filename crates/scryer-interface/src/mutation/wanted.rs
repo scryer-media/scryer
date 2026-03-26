@@ -113,6 +113,10 @@ impl WantedMutations {
         input: PendingReleaseActionInput,
     ) -> GqlResult<bool> {
         let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
         app.force_grab_pending_release(&input.id)
             .await
             .map_err(to_gql_error)
@@ -124,6 +128,10 @@ impl WantedMutations {
         input: PendingReleaseActionInput,
     ) -> GqlResult<bool> {
         let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        if !actor.has_entitlement(&Entitlement::ManageConfig) {
+            return Err(Error::new("insufficient entitlements"));
+        }
         app.dismiss_pending_release(&input.id)
             .await
             .map_err(to_gql_error)

@@ -1,4 +1,600 @@
-use async_graphql::{InputObject, SimpleObject};
+use async_graphql::{Enum, InputObject, SimpleObject};
+use scryer_application::{
+    ActivityChannel as AppActivityChannel, ActivityKind as AppActivityKind,
+    ActivitySeverity as AppActivitySeverity, DownloadSourceKind as AppDownloadSourceKind,
+    PendingReleaseStatus as AppPendingReleaseStatus, ScoringOverrides as AppScoringOverrides,
+    ScoringPersona as AppScoringPersona, WantedStatus as AppWantedStatus,
+};
+use scryer_domain::{
+    DownloadQueueState, ImportDecision, ImportSkipReason, ImportStatus, ImportType, MediaFacet,
+    TitleMatchType, TrackedDownloadState, TrackedDownloadStatus,
+};
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "lowercase")]
+pub enum MediaFacetValue {
+    Movie,
+    #[graphql(name = "tv")]
+    Tv,
+    Anime,
+}
+
+impl MediaFacetValue {
+    pub fn into_domain(self) -> MediaFacet {
+        match self {
+            Self::Movie => MediaFacet::Movie,
+            Self::Tv => MediaFacet::Series,
+            Self::Anime => MediaFacet::Anime,
+        }
+    }
+
+    pub fn from_domain(value: MediaFacet) -> Self {
+        match value {
+            MediaFacet::Movie => Self::Movie,
+            MediaFacet::Series => Self::Tv,
+            MediaFacet::Anime => Self::Anime,
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "movie" => Some(Self::Movie),
+            "tv" | "series" => Some(Self::Tv),
+            "anime" => Some(Self::Anime),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "lowercase")]
+pub enum ContentScopeValue {
+    Movie,
+    Series,
+    Anime,
+}
+
+impl ContentScopeValue {
+    pub fn as_scope_id(self) -> &'static str {
+        match self {
+            Self::Movie => "movie",
+            Self::Series => "series",
+            Self::Anime => "anime",
+        }
+    }
+
+    pub fn into_media_facet(self) -> MediaFacet {
+        match self {
+            Self::Movie => MediaFacet::Movie,
+            Self::Series => MediaFacet::Series,
+            Self::Anime => MediaFacet::Anime,
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "movie" => Some(Self::Movie),
+            "series" | "tv" => Some(Self::Series),
+            "anime" => Some(Self::Anime),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "PascalCase")]
+pub enum ScoringPersonaValue {
+    Balanced,
+    Audiophile,
+    Efficient,
+    Compatible,
+}
+
+impl ScoringPersonaValue {
+    pub fn from_application(value: AppScoringPersona) -> Self {
+        match value {
+            AppScoringPersona::Balanced => Self::Balanced,
+            AppScoringPersona::Audiophile => Self::Audiophile,
+            AppScoringPersona::Efficient => Self::Efficient,
+            AppScoringPersona::Compatible => Self::Compatible,
+        }
+    }
+
+    pub fn into_application(self) -> AppScoringPersona {
+        match self {
+            Self::Balanced => AppScoringPersona::Balanced,
+            Self::Audiophile => AppScoringPersona::Audiophile,
+            Self::Efficient => AppScoringPersona::Efficient,
+            Self::Compatible => AppScoringPersona::Compatible,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "camelCase")]
+pub enum MonitorTypeValue {
+    Monitored,
+    Unmonitored,
+    FutureEpisodes,
+    MissingAndFutureEpisodes,
+    AllEpisodes,
+    #[graphql(name = "none")]
+    NoneSelected,
+}
+
+impl MonitorTypeValue {
+    pub fn as_tag_value(self) -> &'static str {
+        match self {
+            Self::Monitored => "monitored",
+            Self::Unmonitored => "unmonitored",
+            Self::FutureEpisodes => "futureepisodes",
+            Self::MissingAndFutureEpisodes => "missingandfutureepisodes",
+            Self::AllEpisodes => "allepisodes",
+            Self::NoneSelected => "none",
+        }
+    }
+
+    pub fn from_tag_value(value: &str) -> Option<Self> {
+        match value.trim() {
+            "monitored" => Some(Self::Monitored),
+            "unmonitored" => Some(Self::Unmonitored),
+            "futureepisodes" | "futureEpisodes" => Some(Self::FutureEpisodes),
+            "missingandfutureepisodes" | "missingAndFutureEpisodes" => {
+                Some(Self::MissingAndFutureEpisodes)
+            }
+            "allepisodes" | "allEpisodes" => Some(Self::AllEpisodes),
+            "none" => Some(Self::NoneSelected),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "camelCase")]
+pub enum DownloadSourceKindValue {
+    NzbFile,
+    NzbUrl,
+    TorrentFile,
+    MagnetUri,
+}
+
+impl DownloadSourceKindValue {
+    pub fn into_application(self) -> AppDownloadSourceKind {
+        match self {
+            Self::NzbFile => AppDownloadSourceKind::NzbFile,
+            Self::NzbUrl => AppDownloadSourceKind::NzbUrl,
+            Self::TorrentFile => AppDownloadSourceKind::TorrentFile,
+            Self::MagnetUri => AppDownloadSourceKind::MagnetUri,
+        }
+    }
+
+    pub fn from_application(value: AppDownloadSourceKind) -> Self {
+        match value {
+            AppDownloadSourceKind::NzbFile => Self::NzbFile,
+            AppDownloadSourceKind::NzbUrl => Self::NzbUrl,
+            AppDownloadSourceKind::TorrentFile => Self::TorrentFile,
+            AppDownloadSourceKind::MagnetUri => Self::MagnetUri,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "lowercase")]
+pub enum DelayProfilePreferredProtocolValue {
+    Usenet,
+    Torrent,
+}
+
+impl DelayProfilePreferredProtocolValue {
+    pub fn into_application(self) -> scryer_application::PreferredProtocol {
+        match self {
+            Self::Usenet => scryer_application::PreferredProtocol::Usenet,
+            Self::Torrent => scryer_application::PreferredProtocol::Torrent,
+        }
+    }
+
+    pub fn from_application(value: scryer_application::PreferredProtocol) -> Self {
+        match value {
+            scryer_application::PreferredProtocol::Usenet => Self::Usenet,
+            scryer_application::PreferredProtocol::Torrent => Self::Torrent,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "snake_case")]
+pub enum DownloadQueueStateValue {
+    Queued,
+    Downloading,
+    Verifying,
+    Repairing,
+    Extracting,
+    Paused,
+    Completed,
+    ImportPending,
+    Failed,
+}
+
+impl DownloadQueueStateValue {
+    pub fn from_domain(value: DownloadQueueState) -> Self {
+        match value {
+            DownloadQueueState::Queued => Self::Queued,
+            DownloadQueueState::Downloading => Self::Downloading,
+            DownloadQueueState::Verifying => Self::Verifying,
+            DownloadQueueState::Repairing => Self::Repairing,
+            DownloadQueueState::Extracting => Self::Extracting,
+            DownloadQueueState::Paused => Self::Paused,
+            DownloadQueueState::Completed => Self::Completed,
+            DownloadQueueState::ImportPending => Self::ImportPending,
+            DownloadQueueState::Failed => Self::Failed,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "snake_case")]
+pub enum TrackedDownloadStateValue {
+    Downloading,
+    ImportPending,
+    Importing,
+    Imported,
+    ImportBlocked,
+    FailedPending,
+    Failed,
+    Ignored,
+}
+
+impl TrackedDownloadStateValue {
+    pub fn from_domain(value: TrackedDownloadState) -> Self {
+        match value {
+            TrackedDownloadState::Downloading => Self::Downloading,
+            TrackedDownloadState::ImportPending => Self::ImportPending,
+            TrackedDownloadState::Importing => Self::Importing,
+            TrackedDownloadState::Imported => Self::Imported,
+            TrackedDownloadState::ImportBlocked => Self::ImportBlocked,
+            TrackedDownloadState::FailedPending => Self::FailedPending,
+            TrackedDownloadState::Failed => Self::Failed,
+            TrackedDownloadState::Ignored => Self::Ignored,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "lowercase")]
+pub enum TrackedDownloadStatusValue {
+    Ok,
+    Warning,
+    Error,
+}
+
+impl TrackedDownloadStatusValue {
+    pub fn from_domain(value: TrackedDownloadStatus) -> Self {
+        match value {
+            TrackedDownloadStatus::Ok => Self::Ok,
+            TrackedDownloadStatus::Warning => Self::Warning,
+            TrackedDownloadStatus::Error => Self::Error,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "snake_case")]
+pub enum TitleMatchTypeValue {
+    Submission,
+    ClientParameter,
+    TitleParse,
+    IdOnly,
+    Unmatched,
+}
+
+impl TitleMatchTypeValue {
+    pub fn from_domain(value: TitleMatchType) -> Self {
+        match value {
+            TitleMatchType::Submission => Self::Submission,
+            TitleMatchType::ClientParameter => Self::ClientParameter,
+            TitleMatchType::TitleParse => Self::TitleParse,
+            TitleMatchType::IdOnly => Self::IdOnly,
+            TitleMatchType::Unmatched => Self::Unmatched,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "snake_case")]
+pub enum ImportStatusValue {
+    Pending,
+    Running,
+    Processing,
+    Completed,
+    Failed,
+    Skipped,
+}
+
+impl ImportStatusValue {
+    pub fn from_domain(value: ImportStatus) -> Self {
+        match value {
+            ImportStatus::Pending => Self::Pending,
+            ImportStatus::Running => Self::Running,
+            ImportStatus::Processing => Self::Processing,
+            ImportStatus::Completed => Self::Completed,
+            ImportStatus::Failed => Self::Failed,
+            ImportStatus::Skipped => Self::Skipped,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "snake_case")]
+pub enum ImportTypeValue {
+    MovieDownload,
+    TvDownload,
+    RenamePreview,
+    RenameApplyTitle,
+    RenameApplyFacet,
+    RenameApplyResult,
+    RenameIoFailed,
+    RenameMove,
+    RenameStalePlan,
+}
+
+impl ImportTypeValue {
+    pub fn from_domain(value: ImportType) -> Self {
+        match value {
+            ImportType::MovieDownload => Self::MovieDownload,
+            ImportType::TvDownload => Self::TvDownload,
+            ImportType::RenamePreview => Self::RenamePreview,
+            ImportType::RenameApplyTitle => Self::RenameApplyTitle,
+            ImportType::RenameApplyFacet => Self::RenameApplyFacet,
+            ImportType::RenameApplyResult => Self::RenameApplyResult,
+            ImportType::RenameIoFailed => Self::RenameIoFailed,
+            ImportType::RenameMove => Self::RenameMove,
+            ImportType::RenameStalePlan => Self::RenameStalePlan,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "snake_case")]
+pub enum ImportDecisionValue {
+    Imported,
+    Rejected,
+    Skipped,
+    Conflict,
+    Unmatched,
+    Failed,
+}
+
+impl ImportDecisionValue {
+    pub fn from_domain(value: ImportDecision) -> Self {
+        match value {
+            ImportDecision::Imported => Self::Imported,
+            ImportDecision::Rejected => Self::Rejected,
+            ImportDecision::Skipped => Self::Skipped,
+            ImportDecision::Conflict => Self::Conflict,
+            ImportDecision::Unmatched => Self::Unmatched,
+            ImportDecision::Failed => Self::Failed,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "snake_case")]
+pub enum ImportSkipReasonValue {
+    AlreadyImported,
+    DuplicateFile,
+    PostDownloadRuleBlocked,
+    PolicyMismatch,
+    UnresolvedIdentity,
+    NoVideoFiles,
+    DiskFull,
+    PermissionDenied,
+    PasswordRequired,
+}
+
+impl ImportSkipReasonValue {
+    pub fn from_domain(value: ImportSkipReason) -> Self {
+        match value {
+            ImportSkipReason::AlreadyImported => Self::AlreadyImported,
+            ImportSkipReason::DuplicateFile => Self::DuplicateFile,
+            ImportSkipReason::PostDownloadRuleBlocked => Self::PostDownloadRuleBlocked,
+            ImportSkipReason::PolicyMismatch => Self::PolicyMismatch,
+            ImportSkipReason::UnresolvedIdentity => Self::UnresolvedIdentity,
+            ImportSkipReason::NoVideoFiles => Self::NoVideoFiles,
+            ImportSkipReason::DiskFull => Self::DiskFull,
+            ImportSkipReason::PermissionDenied => Self::PermissionDenied,
+            ImportSkipReason::PasswordRequired => Self::PasswordRequired,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "snake_case")]
+pub enum ActivityKindValue {
+    SettingSaved,
+    MovieFetched,
+    MovieAdded,
+    MetadataHydrationStarted,
+    MetadataHydrationCompleted,
+    MetadataHydrationFailed,
+    MovieDownloaded,
+    SeriesEpisodeImported,
+    AcquisitionSearchCompleted,
+    AcquisitionCandidateAccepted,
+    AcquisitionCandidateRejected,
+    AcquisitionDownloadFailed,
+    PostProcessingCompleted,
+    FileUpgraded,
+    ImportRejected,
+    SubtitleDownloaded,
+    SubtitleSearchFailed,
+    SystemNotice,
+}
+
+impl ActivityKindValue {
+    pub fn from_application(value: AppActivityKind) -> Self {
+        match value {
+            AppActivityKind::SettingSaved => Self::SettingSaved,
+            AppActivityKind::MovieFetched => Self::MovieFetched,
+            AppActivityKind::MovieAdded => Self::MovieAdded,
+            AppActivityKind::MetadataHydrationStarted => Self::MetadataHydrationStarted,
+            AppActivityKind::MetadataHydrationCompleted => Self::MetadataHydrationCompleted,
+            AppActivityKind::MetadataHydrationFailed => Self::MetadataHydrationFailed,
+            AppActivityKind::MovieDownloaded => Self::MovieDownloaded,
+            AppActivityKind::SeriesEpisodeImported => Self::SeriesEpisodeImported,
+            AppActivityKind::AcquisitionSearchCompleted => Self::AcquisitionSearchCompleted,
+            AppActivityKind::AcquisitionCandidateAccepted => Self::AcquisitionCandidateAccepted,
+            AppActivityKind::AcquisitionCandidateRejected => Self::AcquisitionCandidateRejected,
+            AppActivityKind::AcquisitionDownloadFailed => Self::AcquisitionDownloadFailed,
+            AppActivityKind::PostProcessingCompleted => Self::PostProcessingCompleted,
+            AppActivityKind::FileUpgraded => Self::FileUpgraded,
+            AppActivityKind::ImportRejected => Self::ImportRejected,
+            AppActivityKind::SubtitleDownloaded => Self::SubtitleDownloaded,
+            AppActivityKind::SubtitleSearchFailed => Self::SubtitleSearchFailed,
+            AppActivityKind::SystemNotice => Self::SystemNotice,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "lowercase")]
+pub enum ActivitySeverityValue {
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+impl ActivitySeverityValue {
+    pub fn from_application(value: AppActivitySeverity) -> Self {
+        match value {
+            AppActivitySeverity::Info => Self::Info,
+            AppActivitySeverity::Success => Self::Success,
+            AppActivitySeverity::Warning => Self::Warning,
+            AppActivitySeverity::Error => Self::Error,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "snake_case")]
+pub enum ActivityChannelValue {
+    WebUi,
+    Toast,
+}
+
+impl ActivityChannelValue {
+    pub fn from_application(value: AppActivityChannel) -> Self {
+        match value {
+            AppActivityChannel::WebUi => Self::WebUi,
+            AppActivityChannel::Toast => Self::Toast,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "snake_case")]
+pub enum WantedStatusValue {
+    Wanted,
+    Grabbed,
+    Paused,
+    Completed,
+}
+
+impl WantedStatusValue {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Wanted => "wanted",
+            Self::Grabbed => "grabbed",
+            Self::Paused => "paused",
+            Self::Completed => "completed",
+        }
+    }
+
+    pub fn from_application(value: AppWantedStatus) -> Self {
+        match value {
+            AppWantedStatus::Wanted => Self::Wanted,
+            AppWantedStatus::Grabbed => Self::Grabbed,
+            AppWantedStatus::Paused => Self::Paused,
+            AppWantedStatus::Completed => Self::Completed,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "snake_case")]
+pub enum WantedMediaTypeValue {
+    Movie,
+    Episode,
+    InterstitialMovie,
+}
+
+impl WantedMediaTypeValue {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Movie => "movie",
+            Self::Episode => "episode",
+            Self::InterstitialMovie => "interstitial_movie",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "movie" => Some(Self::Movie),
+            "episode" => Some(Self::Episode),
+            "interstitial_movie" => Some(Self::InterstitialMovie),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "snake_case")]
+pub enum WantedSearchPhaseValue {
+    PreAir,
+    PreRelease,
+    Primary,
+    Secondary,
+    LongTail,
+}
+
+impl WantedSearchPhaseValue {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "pre_air" => Some(Self::PreAir),
+            "pre_release" => Some(Self::PreRelease),
+            "primary" => Some(Self::Primary),
+            "secondary" => Some(Self::Secondary),
+            "long_tail" => Some(Self::LongTail),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "snake_case")]
+pub enum PendingReleaseStatusValue {
+    Waiting,
+    Standby,
+    Processing,
+    Grabbed,
+    Superseded,
+    Expired,
+    Dismissed,
+}
+
+impl PendingReleaseStatusValue {
+    pub fn from_application(value: AppPendingReleaseStatus) -> Self {
+        match value {
+            AppPendingReleaseStatus::Waiting => Self::Waiting,
+            AppPendingReleaseStatus::Standby => Self::Standby,
+            AppPendingReleaseStatus::Processing => Self::Processing,
+            AppPendingReleaseStatus::Grabbed => Self::Grabbed,
+            AppPendingReleaseStatus::Superseded => Self::Superseded,
+            AppPendingReleaseStatus::Expired => Self::Expired,
+            AppPendingReleaseStatus::Dismissed => Self::Dismissed,
+        }
+    }
+}
 
 #[derive(InputObject)]
 pub struct LoginInput {
@@ -20,10 +616,11 @@ pub struct ExternalIdPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+#[graphql(complex)]
 pub struct TitlePayload {
     pub id: String,
     pub name: String,
-    pub facet: String,
+    pub facet: MediaFacetValue,
     pub monitored: bool,
     pub tags: Vec<String>,
     pub external_ids: Vec<ExternalIdPayload>,
@@ -53,6 +650,14 @@ pub struct TitlePayload {
     pub metadata_fetched_at: Option<String>,
     pub min_availability: Option<String>,
     pub digital_release_date: Option<String>,
+    pub quality_profile_id: Option<String>,
+    pub root_folder_path: Option<String>,
+    pub monitor_type: Option<MonitorTypeValue>,
+    pub use_season_folders: Option<bool>,
+    pub monitor_specials: Option<bool>,
+    pub inter_season_movies: Option<bool>,
+    pub filler_policy: Option<String>,
+    pub recap_policy: Option<String>,
     /// Primary collection label (quality tier), populated in list queries.
     pub quality_tier: Option<String>,
     /// Aggregated media-file size in bytes for the title, populated in list queries.
@@ -86,6 +691,7 @@ pub struct InterstitialMovieMetadataPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+#[graphql(complex)]
 pub struct CollectionPayload {
     pub id: String,
     pub title_id: String,
@@ -112,6 +718,7 @@ pub struct SetCollectionMonitoredPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+#[graphql(complex)]
 pub struct EpisodePayload {
     pub id: String,
     pub title_id: String,
@@ -152,6 +759,7 @@ pub struct SubtitleStreamDetailPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+#[graphql(complex)]
 pub struct TitleMediaFilePayload {
     pub id: String,
     pub title_id: String,
@@ -271,12 +879,12 @@ pub struct EventPayload {
 #[derive(SimpleObject, Clone)]
 pub struct ActivityEventPayload {
     pub id: String,
-    pub kind: String,
-    pub severity: String,
-    pub channels: Vec<String>,
+    pub kind: ActivityKindValue,
+    pub severity: ActivitySeverityValue,
+    pub channels: Vec<ActivityChannelValue>,
     pub actor_user_id: Option<String>,
     pub title_id: Option<String>,
-    pub facet: Option<String>,
+    pub facet: Option<MediaFacetValue>,
     pub message: String,
     pub occurred_at: String,
 }
@@ -295,7 +903,7 @@ pub struct IndexerSearchResultPayload {
     pub title: String,
     pub link: Option<String>,
     pub download_url: Option<String>,
-    pub source_kind: Option<String>,
+    pub source_kind: Option<DownloadSourceKindValue>,
     pub size_bytes: Option<i64>,
     pub published_at: Option<String>,
     pub thumbs_up: Option<i32>,
@@ -408,16 +1016,17 @@ pub struct DownloadClientConfigPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+#[graphql(complex)]
 pub struct DownloadQueueItemPayload {
     pub id: String,
     pub title_id: Option<String>,
     pub title_name: String,
-    pub facet: Option<String>,
+    pub facet: Option<MediaFacetValue>,
     pub is_scryer_origin: bool,
     pub client_id: String,
     pub client_name: String,
     pub client_type: String,
-    pub state: String,
+    pub state: DownloadQueueStateValue,
     pub progress_percent: i32,
     pub size_bytes: Option<String>,
     pub remaining_seconds: Option<i32>,
@@ -426,20 +1035,20 @@ pub struct DownloadQueueItemPayload {
     pub attention_required: bool,
     pub attention_reason: Option<String>,
     pub download_client_item_id: String,
-    pub import_status: Option<String>,
+    pub import_status: Option<ImportStatusValue>,
     pub import_error_message: Option<String>,
     pub imported_at: Option<String>,
-    pub tracked_state: Option<String>,
-    pub tracked_status: Option<String>,
+    pub tracked_state: Option<TrackedDownloadStateValue>,
+    pub tracked_status: Option<TrackedDownloadStatusValue>,
     pub tracked_status_messages: Vec<String>,
-    pub tracked_match_type: Option<String>,
+    pub tracked_match_type: Option<TitleMatchTypeValue>,
 }
 
 #[derive(SimpleObject, Clone)]
 pub struct ImportResultPayload {
     pub import_id: String,
-    pub decision: String,
-    pub skip_reason: Option<String>,
+    pub decision: ImportDecisionValue,
+    pub skip_reason: Option<ImportSkipReasonValue>,
     pub title_id: Option<String>,
     pub source_path: String,
     pub dest_path: Option<String>,
@@ -454,11 +1063,11 @@ pub struct ImportRecordPayload {
     pub source_system: String,
     pub source_ref: String,
     pub source_title: Option<String>,
-    pub import_type: String,
-    pub status: String,
+    pub import_type: ImportTypeValue,
+    pub status: ImportStatusValue,
     pub error_message: Option<String>,
-    pub decision: Option<String>,
-    pub skip_reason: Option<String>,
+    pub decision: Option<ImportDecisionValue>,
+    pub skip_reason: Option<ImportSkipReasonValue>,
     pub title_id: Option<String>,
     pub source_path: Option<String>,
     pub dest_path: Option<String>,
@@ -507,7 +1116,8 @@ pub struct AssignTrackedDownloadTitleInput {
 #[derive(SimpleObject, Clone)]
 pub struct AddTitleResult {
     pub title: TitlePayload,
-    pub download_job_id: String,
+    pub download_job_id: Option<String>,
+    pub queued_download: Option<QueueDownloadPayload>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -534,7 +1144,7 @@ pub struct MediaRenamePlanItemPayload {
 
 #[derive(SimpleObject, Clone)]
 pub struct MediaRenamePlanPayload {
-    pub facet: String,
+    pub facet: MediaFacetValue,
     pub title_id: Option<String>,
     pub template: String,
     pub collision_policy: String,
@@ -571,30 +1181,173 @@ pub struct MediaRenameApplyPayload {
 }
 
 #[derive(SimpleObject, Clone)]
-pub struct AdminSettingsItemPayload {
-    pub category: String,
-    pub scope: String,
-    pub key_name: String,
-    pub data_type: String,
-    pub default_value_json: String,
-    pub effective_value_json: Option<String>,
-    pub value_json: Option<String>,
-    pub source: Option<String>,
-    pub has_override: bool,
-    pub is_sensitive: bool,
-    pub validation_json: Option<String>,
-    pub scope_id: Option<String>,
-    pub updated_by_user_id: Option<String>,
-    pub created_at: Option<String>,
-    pub updated_at: Option<String>,
+pub struct SubtitleLanguagePreferencePayload {
+    pub code: String,
+    pub hearing_impaired: bool,
+    pub forced: bool,
 }
 
 #[derive(SimpleObject, Clone)]
-pub struct AdminSettingsPayload {
-    pub scope: String,
-    pub scope_id: Option<String>,
-    pub items: Vec<AdminSettingsItemPayload>,
-    pub quality_profiles: Option<String>,
+pub struct SubtitleSettingsPayload {
+    pub enabled: bool,
+    pub has_open_subtitles_api_key: bool,
+    pub open_subtitles_username: String,
+    pub has_open_subtitles_password: bool,
+    pub languages: Vec<SubtitleLanguagePreferencePayload>,
+    pub auto_download_on_import: bool,
+    pub minimum_score_series: i32,
+    pub minimum_score_movie: i32,
+    pub search_interval_hours: i32,
+    pub include_ai_translated: bool,
+    pub include_machine_translated: bool,
+    pub sync_enabled: bool,
+    pub sync_threshold_series: i32,
+    pub sync_threshold_movie: i32,
+    pub sync_max_offset_seconds: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct AcquisitionSettingsPayload {
+    pub enabled: bool,
+    pub upgrade_cooldown_hours: i32,
+    pub same_tier_min_delta: i32,
+    pub cross_tier_min_delta: i32,
+    pub forced_upgrade_delta_bypass: i32,
+    pub poll_interval_seconds: i32,
+    pub sync_interval_seconds: i32,
+    pub batch_size: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct DelayProfilePayload {
+    pub id: String,
+    pub name: String,
+    pub usenet_delay_minutes: i32,
+    pub torrent_delay_minutes: i32,
+    pub preferred_protocol: DelayProfilePreferredProtocolValue,
+    pub min_age_minutes: i32,
+    pub bypass_score_threshold: Option<i32>,
+    pub applies_to_facets: Vec<MediaFacetValue>,
+    pub tags: Vec<String>,
+    pub priority: i32,
+    pub enabled: bool,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct DelayProfileDeletionPayload {
+    pub id: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct ScoringOverridesPayload {
+    pub allow_x265_non4k: Option<bool>,
+    pub block_dv_without_fallback: Option<bool>,
+    pub prefer_compact_encodes: Option<bool>,
+    pub prefer_lossless_audio: Option<bool>,
+    pub block_upscaled: Option<bool>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct FacetScoringPersonaOverridePayload {
+    pub scope: ContentScopeValue,
+    pub persona: ScoringPersonaValue,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct QualityProfileCriteriaPayload {
+    pub quality_tiers: Vec<String>,
+    pub archival_quality: Option<String>,
+    pub allow_unknown_quality: bool,
+    pub source_allowlist: Vec<String>,
+    pub source_blocklist: Vec<String>,
+    pub video_codec_allowlist: Vec<String>,
+    pub video_codec_blocklist: Vec<String>,
+    pub audio_codec_allowlist: Vec<String>,
+    pub audio_codec_blocklist: Vec<String>,
+    pub atmos_preferred: bool,
+    pub dolby_vision_allowed: bool,
+    pub detected_hdr_allowed: bool,
+    pub prefer_remux: bool,
+    pub allow_bd_disk: bool,
+    pub allow_upgrades: bool,
+    pub prefer_dual_audio: bool,
+    pub required_audio_languages: Vec<String>,
+    pub scoring_persona: ScoringPersonaValue,
+    pub scoring_overrides: ScoringOverridesPayload,
+    pub cutoff_tier: Option<String>,
+    pub min_score_to_grab: Option<i32>,
+    pub facet_persona_overrides: Vec<FacetScoringPersonaOverridePayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct QualityProfilePayload {
+    pub id: String,
+    pub name: String,
+    pub criteria: QualityProfileCriteriaPayload,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct QualityProfileSelectionPayload {
+    pub scope: ContentScopeValue,
+    pub override_profile_id: Option<String>,
+    pub effective_profile_id: String,
+    pub inherits_global: bool,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct QualityProfileSettingsPayload {
+    pub profiles: Vec<QualityProfilePayload>,
+    pub global_profile_id: String,
+    pub category_selections: Vec<QualityProfileSelectionPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct DownloadClientRoutingEntryPayload {
+    pub client_id: String,
+    pub enabled: bool,
+    pub category: Option<String>,
+    pub recent_queue_priority: Option<String>,
+    pub older_queue_priority: Option<String>,
+    pub remove_completed: bool,
+    pub remove_failed: bool,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct IndexerRoutingEntryPayload {
+    pub indexer_id: String,
+    pub enabled: bool,
+    pub categories: Vec<String>,
+    pub priority: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct MediaSettingsPayload {
+    pub scope: ContentScopeValue,
+    pub library_path: String,
+    pub root_folders: Vec<RootFolderPayload>,
+    pub rename_template: String,
+    pub rename_collision_policy: String,
+    pub rename_missing_metadata_policy: String,
+    pub filler_policy: Option<String>,
+    pub recap_policy: Option<String>,
+    pub monitor_specials: Option<bool>,
+    pub inter_season_movies: Option<bool>,
+    pub monitor_filler_movies: Option<bool>,
+    pub nfo_write_on_import: bool,
+    pub plexmatch_write_on_import: Option<bool>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct LibraryPathsPayload {
+    pub movie_path: String,
+    pub series_path: String,
+    pub anime_path: String,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct ServiceSettingsPayload {
+    pub tls_cert_path: String,
+    pub tls_key_path: String,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -618,14 +1371,27 @@ pub struct ExternalIdInput {
 }
 
 #[derive(InputObject, Clone)]
+pub struct TitleOptionsInput {
+    pub quality_profile_id: Option<String>,
+    pub root_folder_path: Option<String>,
+    pub monitor_type: Option<MonitorTypeValue>,
+    pub use_season_folders: Option<bool>,
+    pub monitor_specials: Option<bool>,
+    pub inter_season_movies: Option<bool>,
+    pub filler_policy: Option<String>,
+    pub recap_policy: Option<String>,
+}
+
+#[derive(InputObject, Clone)]
 pub struct AddTitleInput {
     pub name: String,
-    pub facet: String,
+    pub facet: MediaFacetValue,
     pub monitored: bool,
     pub tags: Vec<String>,
+    pub options: Option<TitleOptionsInput>,
     pub external_ids: Option<Vec<ExternalIdInput>>,
     pub source_hint: Option<String>,
-    pub source_kind: Option<String>,
+    pub source_kind: Option<DownloadSourceKindValue>,
     pub source_title: Option<String>,
     pub min_availability: Option<String>,
     // Metadata fields the frontend can supply from the search result so the
@@ -642,20 +1408,71 @@ pub struct AddTitleInput {
 }
 
 #[derive(InputObject)]
+pub struct SearchReleasesInput {
+    pub query: Option<String>,
+    pub title_id: Option<String>,
+    pub season: Option<String>,
+    pub episode: Option<String>,
+    pub imdb_id: Option<String>,
+    pub tvdb_id: Option<String>,
+    pub anidb_id: Option<String>,
+    pub category: Option<String>,
+    pub absolute_episode: Option<i32>,
+    pub limit: Option<i32>,
+}
+
+#[derive(InputObject)]
 pub struct PolicyInputPayload {
     pub title_id: String,
-    pub facet: String,
+    pub facet: MediaFacetValue,
     pub has_existing_file: bool,
     pub candidate_quality: Option<String>,
     pub requested_mode: String,
 }
 
 #[derive(InputObject)]
+pub struct ReleaseSelectionInput {
+    pub source_hint: Option<String>,
+    pub source_kind: Option<DownloadSourceKindValue>,
+    pub source_title: Option<String>,
+}
+
+#[derive(InputObject)]
 pub struct QueueDownloadInput {
     pub title_id: String,
-    pub source_hint: Option<String>,
-    pub source_kind: Option<String>,
+    pub release: ReleaseSelectionInput,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct QueueDownloadPayload {
+    pub job_id: String,
+    pub title_id: String,
+    pub title_name: String,
     pub source_title: Option<String>,
+    pub source_kind: Option<DownloadSourceKindValue>,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "snake_case")]
+pub enum DownloadQueueActionKindValue {
+    QueuedManualImport,
+    IgnoredTrackedDownload,
+    MarkedTrackedDownloadFailed,
+    RetriedTrackedDownloadImport,
+    AssignedTrackedDownloadTitle,
+    Paused,
+    Resumed,
+    Deleted,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct DownloadQueueActionPayload {
+    pub kind: DownloadQueueActionKindValue,
+    pub download_client_item_id: String,
+    pub client_type: Option<String>,
+    pub import_id: Option<String>,
+    pub removed: bool,
+    pub queue_item: Option<DownloadQueueItemPayload>,
 }
 
 #[derive(InputObject)]
@@ -667,14 +1484,14 @@ pub struct QueueManualImportInput {
 
 #[derive(InputObject, Clone)]
 pub struct MediaRenamePreviewInput {
-    pub facet: String,
+    pub facet: MediaFacetValue,
     pub title_id: Option<String>,
     pub dry_run: Option<bool>,
 }
 
 #[derive(InputObject, Clone)]
 pub struct MediaRenameApplyInput {
-    pub facet: String,
+    pub facet: MediaFacetValue,
     pub title_id: String,
     pub fingerprint: String,
     pub idempotency_key: Option<String>,
@@ -682,27 +1499,214 @@ pub struct MediaRenameApplyInput {
 
 #[derive(InputObject, Clone)]
 pub struct MediaRenameBulkApplyInput {
-    pub facet: String,
+    pub facet: MediaFacetValue,
     pub fingerprint: String,
     pub idempotency_key: Option<String>,
 }
 
-#[derive(InputObject)]
-pub struct AdminSettingsUpdateItemInput {
-    pub key_name: String,
-    pub value: String,
+#[derive(InputObject, Clone)]
+pub struct SubtitleLanguagePreferenceInput {
+    pub code: String,
+    pub hearing_impaired: Option<bool>,
+    pub forced: Option<bool>,
 }
 
-#[derive(InputObject)]
-pub struct AdminSettingsUpdateInput {
-    pub scope: String,
-    pub scope_id: Option<String>,
-    pub items: Vec<AdminSettingsUpdateItemInput>,
+#[derive(InputObject, Clone)]
+pub struct DelayProfileInput {
+    pub id: String,
+    pub name: String,
+    pub usenet_delay_minutes: i32,
+    pub torrent_delay_minutes: i32,
+    pub preferred_protocol: DelayProfilePreferredProtocolValue,
+    pub min_age_minutes: i32,
+    pub bypass_score_threshold: Option<i32>,
+    pub applies_to_facets: Vec<MediaFacetValue>,
+    pub tags: Vec<String>,
+    pub priority: i32,
+    pub enabled: bool,
+}
+
+#[derive(InputObject, Clone)]
+pub struct RootFolderInput {
+    pub path: String,
+    pub is_default: bool,
+}
+
+#[derive(InputObject, Clone)]
+pub struct UpdateMediaSettingsInput {
+    pub scope: ContentScopeValue,
+    pub library_path: Option<String>,
+    pub root_folders: Option<Vec<RootFolderInput>>,
+    pub rename_template: Option<String>,
+    pub rename_collision_policy: Option<String>,
+    pub rename_missing_metadata_policy: Option<String>,
+    pub filler_policy: Option<String>,
+    pub recap_policy: Option<String>,
+    pub monitor_specials: Option<bool>,
+    pub inter_season_movies: Option<bool>,
+    pub monitor_filler_movies: Option<bool>,
+    pub nfo_write_on_import: Option<bool>,
+    pub plexmatch_write_on_import: Option<bool>,
+}
+
+#[derive(InputObject, Clone)]
+pub struct UpdateLibraryPathsInput {
+    pub movie_path: String,
+    pub series_path: String,
+    pub anime_path: Option<String>,
+}
+
+#[derive(InputObject, Clone)]
+pub struct UpdateServiceSettingsInput {
+    pub tls_cert_path: String,
+    pub tls_key_path: String,
+}
+
+#[derive(InputObject, Clone)]
+pub struct UpdateSubtitleSettingsInput {
+    pub enabled: bool,
+    pub open_subtitles_api_key: Option<String>,
+    pub open_subtitles_username: String,
+    pub open_subtitles_password: Option<String>,
+    pub languages: Vec<SubtitleLanguagePreferenceInput>,
+    pub auto_download_on_import: bool,
+    pub minimum_score_series: i32,
+    pub minimum_score_movie: i32,
+    pub search_interval_hours: i32,
+    pub include_ai_translated: bool,
+    pub include_machine_translated: bool,
+    pub sync_enabled: bool,
+    pub sync_threshold_series: i32,
+    pub sync_threshold_movie: i32,
+    pub sync_max_offset_seconds: i32,
+}
+
+#[derive(InputObject, Clone)]
+pub struct UpdateAcquisitionSettingsInput {
+    pub enabled: bool,
+    pub upgrade_cooldown_hours: i32,
+    pub same_tier_min_delta: i32,
+    pub cross_tier_min_delta: i32,
+    pub forced_upgrade_delta_bypass: i32,
+    pub poll_interval_seconds: i32,
+    pub sync_interval_seconds: i32,
+    pub batch_size: i32,
+}
+
+#[derive(InputObject, Clone)]
+pub struct ScoringOverridesInput {
+    pub allow_x265_non4k: Option<bool>,
+    pub block_dv_without_fallback: Option<bool>,
+    pub prefer_compact_encodes: Option<bool>,
+    pub prefer_lossless_audio: Option<bool>,
+    pub block_upscaled: Option<bool>,
+}
+
+impl ScoringOverridesInput {
+    pub fn into_application(self) -> AppScoringOverrides {
+        AppScoringOverrides {
+            allow_x265_non4k: self.allow_x265_non4k,
+            block_dv_without_fallback: self.block_dv_without_fallback,
+            prefer_compact_encodes: self.prefer_compact_encodes,
+            prefer_lossless_audio: self.prefer_lossless_audio,
+            block_upscaled: self.block_upscaled,
+        }
+    }
+}
+
+#[derive(InputObject, Clone)]
+pub struct FacetScoringPersonaOverrideInput {
+    pub scope: ContentScopeValue,
+    pub persona: ScoringPersonaValue,
+}
+
+#[derive(InputObject, Clone)]
+pub struct QualityProfileCriteriaInput {
+    pub quality_tiers: Vec<String>,
+    pub archival_quality: Option<String>,
+    pub allow_unknown_quality: bool,
+    pub source_allowlist: Vec<String>,
+    pub source_blocklist: Vec<String>,
+    pub video_codec_allowlist: Vec<String>,
+    pub video_codec_blocklist: Vec<String>,
+    pub audio_codec_allowlist: Vec<String>,
+    pub audio_codec_blocklist: Vec<String>,
+    pub atmos_preferred: bool,
+    pub dolby_vision_allowed: bool,
+    pub detected_hdr_allowed: bool,
+    pub prefer_remux: bool,
+    pub allow_bd_disk: bool,
+    pub allow_upgrades: bool,
+    pub prefer_dual_audio: bool,
+    pub required_audio_languages: Vec<String>,
+    pub scoring_persona: ScoringPersonaValue,
+    pub scoring_overrides: ScoringOverridesInput,
+    pub cutoff_tier: Option<String>,
+    pub min_score_to_grab: Option<i32>,
+    pub facet_persona_overrides: Vec<FacetScoringPersonaOverrideInput>,
+}
+
+#[derive(InputObject, Clone)]
+pub struct QualityProfileInput {
+    pub id: String,
+    pub name: String,
+    pub criteria: QualityProfileCriteriaInput,
+}
+
+#[derive(InputObject, Clone)]
+pub struct QualityProfileSelectionInput {
+    pub scope: ContentScopeValue,
+    pub profile_id: Option<String>,
+    pub inherit_global: bool,
+}
+
+#[derive(InputObject, Clone)]
+pub struct SaveQualityProfileSettingsInput {
+    pub profiles: Vec<QualityProfileInput>,
+    pub global_profile_id: Option<String>,
+    pub category_selections: Vec<QualityProfileSelectionInput>,
+    pub replace_existing: bool,
 }
 
 #[derive(InputObject)]
 pub struct DeleteQualityProfileInput {
     pub profile_id: String,
+}
+
+#[derive(InputObject, Clone)]
+pub struct DownloadClientRoutingEntryInput {
+    pub client_id: String,
+    pub enabled: bool,
+    pub category: Option<String>,
+    pub recent_queue_priority: Option<String>,
+    pub older_queue_priority: Option<String>,
+    pub remove_completed: bool,
+    pub remove_failed: bool,
+}
+
+#[derive(InputObject, Clone)]
+pub struct UpdateDownloadClientRoutingInput {
+    pub scope: ContentScopeValue,
+    pub entries: Vec<DownloadClientRoutingEntryInput>,
+}
+
+#[derive(InputObject, Clone)]
+pub struct IndexerRoutingEntryInput {
+    pub indexer_id: String,
+    pub enabled: bool,
+    pub categories: Vec<String>,
+    pub priority: i32,
+}
+
+#[derive(InputObject, Clone)]
+pub struct UpdateIndexerRoutingInput {
+    pub scope: ContentScopeValue,
+    pub entries: Vec<IndexerRoutingEntryInput>,
+}
+
+#[derive(InputObject)]
+pub struct DeleteDelayProfileInput {
+    pub id: String,
 }
 
 #[derive(InputObject)]
@@ -817,8 +1821,9 @@ pub struct SetTitleMonitoredInput {
 pub struct UpdateTitleInput {
     pub title_id: String,
     pub name: Option<String>,
-    pub facet: Option<String>,
+    pub facet: Option<MediaFacetValue>,
     pub tags: Option<Vec<String>>,
+    pub options: Option<TitleOptionsInput>,
 }
 
 #[derive(InputObject)]
@@ -976,19 +1981,20 @@ pub struct ManualImportFileResultPayload {
 // --- Wanted Items / Acquisition ---
 
 #[derive(SimpleObject, Clone)]
+#[graphql(complex)]
 pub struct WantedItemPayload {
     pub id: String,
     pub title_id: String,
     pub title_name: Option<String>,
     pub episode_id: Option<String>,
     pub collection_id: Option<String>,
-    pub media_type: String,
-    pub search_phase: String,
+    pub media_type: WantedMediaTypeValue,
+    pub search_phase: WantedSearchPhaseValue,
     pub next_search_at: Option<String>,
     pub last_search_at: Option<String>,
     pub search_count: i64,
     pub baseline_date: Option<String>,
-    pub status: String,
+    pub status: WantedStatusValue,
     pub grabbed_release: Option<String>,
     pub current_score: Option<i32>,
     pub created_at: String,
@@ -1002,6 +2008,7 @@ pub struct WantedItemsListPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+#[graphql(complex)]
 pub struct ReleaseDecisionPayload {
     pub id: String,
     pub wanted_item_id: String,
@@ -1100,8 +2107,8 @@ pub struct SetConvenienceRequiredAudioInput {
 #[derive(InputObject)]
 pub struct SetTitleRequiredAudioInput {
     pub title_id: String,
-    /// The facet of the title: "movie", "series", "anime"
-    pub facet: String,
+    /// The facet of the title: "movie", "tv", or "anime"
+    pub facet: MediaFacetValue,
     /// Language codes for this title. Empty or null = remove override (inherit from facet).
     pub languages: Option<Vec<String>>,
 }
@@ -1433,6 +2440,7 @@ pub struct RssSyncReportPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+#[graphql(complex)]
 pub struct PendingReleasePayload {
     pub id: String,
     pub wanted_item_id: String,
@@ -1445,7 +2453,7 @@ pub struct PendingReleasePayload {
     pub indexer_source: Option<String>,
     pub added_at: String,
     pub delay_until: String,
-    pub status: String,
+    pub status: PendingReleaseStatusValue,
 }
 
 #[derive(InputObject)]
@@ -1613,7 +2621,7 @@ pub struct PostProcessingScriptRunPayload {
     pub script_name: String,
     pub title_id: Option<String>,
     pub title_name: Option<String>,
-    pub facet: Option<String>,
+    pub facet: Option<MediaFacetValue>,
     pub file_path: Option<String>,
     pub status: String,
     pub exit_code: Option<i32>,

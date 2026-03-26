@@ -2,13 +2,11 @@
 import * as React from "react";
 import {
   activitySubscriptionQuery,
-  adminSettingsQuery,
   mediaRenamePreviewQuery,
+  movieOverviewSettingsInitQuery,
   searchForTitleQuery,
-  titleMediaFilesQuery,
   titleOverviewInitQuery,
   subtitleDownloadsQuery,
-  wantedItemsQuery,
 } from "@/lib/graphql/queries";
 import {
   applyMediaRenameMutation,
@@ -23,10 +21,8 @@ import {
   resetWantedItemMutation,
   updateTitleMutation,
 } from "@/lib/graphql/mutations";
-import type { AdminSetting } from "@/lib/types/admin-settings";
-import { QUALITY_PROFILE_CATALOG_KEY, MOVIE_FOLDER_KEY, DEFAULT_MOVIE_LIBRARY_PATH } from "@/lib/constants/settings";
-import { getSettingDisplayValue } from "@/lib/utils/settings";
-import { parseQualityProfileCatalog } from "@/lib/utils/quality-profiles";
+import { DEFAULT_MOVIE_LIBRARY_PATH } from "@/lib/constants/settings";
+import { qualityProfileSettingsToEntries } from "@/lib/utils/quality-profiles";
 import {
   collectActivityEventsFromPayload,
   normalizeActivityEvent,
@@ -39,6 +35,7 @@ import type { Release, WantedItem } from "@/lib/types";
 import { MovieOverviewView } from "@/components/views/movie-overview-view";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
+import type { TitleOptionUpdates } from "@/lib/types/title-options";
 
 export type TitleDetail = {
   id: string;
@@ -67,6 +64,14 @@ export type TitleDetail = {
   aliases: string[];
   metadataLanguage: string | null;
   metadataFetchedAt: string | null;
+  qualityProfileId?: string | null;
+  rootFolderPath?: string | null;
+  monitorType?: string | null;
+  useSeasonFolders?: boolean | null;
+  monitorSpecials?: boolean | null;
+  interSeasonMovies?: boolean | null;
+  fillerPolicy?: string | null;
+  recapPolicy?: string | null;
   createdAt: string;
 };
 
@@ -232,26 +237,21 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
   >(null);
 
   const refreshTitleDetail = React.useCallback(async () => {
-    const [titleResult, mediaResult, wantedResult] = await Promise.all([
-      client.query(titleOverviewInitQuery, { id: titleId, blocklistLimit: 200 }).toPromise(),
-      client.query(titleMediaFilesQuery, { titleId }).toPromise(),
-      client
-        .query(wantedItemsQuery, { titleId, limit: 1, offset: 0 }, { requestPolicy: "network-only" })
-        .toPromise(),
-    ]);
+    const titleResult = await client.query(
+      titleOverviewInitQuery,
+      { id: titleId, blocklistLimit: 200 },
+      { requestPolicy: "network-only" },
+    ).toPromise();
     if (titleResult.error) throw titleResult.error;
-    setTitle(titleResult.data.title ?? null);
-    setCollections(titleResult.data.titleCollections ?? []);
+    const nextTitle = titleResult.data.title ?? null;
+    setTitle(nextTitle);
+    setCollections(nextTitle?.collections ?? []);
     setEvents(titleResult.data.titleEvents ?? []);
     setBlocklistEntries(titleResult.data.titleReleaseBlocklist ?? []);
-    setMediaFiles(mediaResult.data?.titleMediaFiles ?? []);
-    setWantedItem(wantedResult.data?.wantedItems?.items?.[0] ?? null);
+    setMediaFiles(nextTitle?.mediaFiles ?? []);
+    setWantedItem(nextTitle?.wantedItems?.[0] ?? null);
+    setSubtitleDownloads(titleResult.data.subtitleDownloads ?? []);
     setRenamePlan(null);
-
-    // Fetch subtitle downloads (best-effort)
-    client.query(subtitleDownloadsQuery, { titleId }).toPromise().then((subResult) => {
-      setSubtitleDownloads(subResult.data?.subtitleDownloads ?? []);
-    }).catch(() => {});
   }, [titleId, client]);
 
   const refreshSubtitleDownloads = React.useCallback(() => {
@@ -319,28 +319,16 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
     let cancelled = false;
     const load = async () => {
       try {
-        const [systemResult, mediaResult] = await Promise.all([
-          client.query(adminSettingsQuery, {
-            scope: "system",
-            category: "media",
-          }).toPromise(),
-          client.query(adminSettingsQuery, {
-            scope: "media",
-            category: "media",
-          }).toPromise(),
-        ]);
-        if (systemResult.error) throw systemResult.error;
-        if (mediaResult.error) throw mediaResult.error;
+        const { data, error } = await client.query(movieOverviewSettingsInitQuery, {}).toPromise();
+        if (error) throw error;
         if (cancelled) return;
-        const catalogRecord = systemResult.data.adminSettings.items.find(
-          (item: AdminSetting) => item.keyName === QUALITY_PROFILE_CATALOG_KEY,
+        setQualityProfiles(
+          qualityProfileSettingsToEntries(data.qualityProfileSettings).map((profile) => ({
+            id: profile.id,
+            name: profile.name,
+          })),
         );
-        const catalogJson = getSettingDisplayValue(catalogRecord);
-        setQualityProfiles(parseQualityProfileCatalog(catalogJson));
-        const folderRecord = mediaResult.data.adminSettings.items.find(
-          (item: AdminSetting) => item.keyName === MOVIE_FOLDER_KEY,
-        );
-        const folder = getSettingDisplayValue(folderRecord).trim();
+        const folder = (data.mediaSettings?.libraryPath ?? "").trim();
         if (folder) setDefaultRootFolder(folder);
       } catch {
         // Settings fetch is best-effort
@@ -350,10 +338,10 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
     return () => { cancelled = true; };
   }, [client]);
 
-  const handleUpdateTitleTags = React.useCallback(
-    async (newTags: string[]) => {
+  const handleUpdateTitleOptions = React.useCallback(
+    async (options: TitleOptionUpdates) => {
       const { error } = await client.mutation(updateTitleMutation, {
-        input: { titleId, tags: newTags },
+        input: { titleId, options },
       }).toPromise();
       if (error) throw error;
       await refreshTitleDetail();
@@ -361,27 +349,17 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
     [titleId, client, refreshTitleDetail],
   );
 
-  const refreshMediaFiles = React.useCallback(async () => {
-    if (!titleId) return;
-    try {
-      const { data } = await client.query(titleMediaFilesQuery, { titleId }).toPromise();
-      setMediaFiles(data?.titleMediaFiles ?? []);
-    } catch {
-      // best-effort
-    }
-  }, [titleId, client]);
-
   const handleDeleteMediaFile = React.useCallback(async (fileId: string) => {
     try {
       const { error } = await client.mutation(deleteMediaFileMutation, {
         input: { fileId, deleteFromDisk: true },
       }).toPromise();
       if (error) throw error;
-      await refreshMediaFiles();
+      await refreshTitleDetail();
     } catch (error: unknown) {
       setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
     }
-  }, [client, refreshMediaFiles, setGlobalStatus, t]);
+  }, [client, refreshTitleDetail, setGlobalStatus, t]);
 
   const handleSetTitleMonitored = React.useCallback(
     async (monitored: boolean) => {
@@ -490,7 +468,7 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
         titleId: title.id,
       }).toPromise();
       if (error) throw error;
-      const results = data.searchIndexersForTitle ?? [];
+      const results = data.searchReleases ?? [];
       setSearchResults(results);
       setGlobalStatus(t("status.foundNzb", { count: results.length }));
     } catch (err) {
@@ -518,9 +496,11 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
         const { error } = await client.mutation(queueExistingMutation, {
           input: {
             titleId: title.id,
-            sourceHint,
-            sourceKind: release.sourceKind ?? null,
-            sourceTitle: release.title,
+            release: {
+              sourceHint,
+              sourceKind: release.sourceKind ?? null,
+              sourceTitle: release.title,
+            },
           },
         }).toPromise();
         if (error) throw error;
@@ -749,7 +729,7 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
         onBackToList={onBackToList}
         qualityProfiles={qualityProfiles}
         defaultRootFolder={defaultRootFolder}
-        onUpdateTitleTags={handleUpdateTitleTags}
+        onUpdateTitleOptions={handleUpdateTitleOptions}
         onSetTitleMonitored={handleSetTitleMonitored}
         monitoredUpdating={monitoredUpdating}
         wantedItem={wantedItem}

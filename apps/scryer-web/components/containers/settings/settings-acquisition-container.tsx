@@ -2,22 +2,10 @@ import * as React from "react";
 import { useClient } from "urql";
 import { SettingsAcquisitionSection } from "@/components/views/settings/settings-acquisition-section";
 import { acquisitionSettingsQuery } from "@/lib/graphql/queries";
-import { saveAdminSettingsMutation } from "@/lib/graphql/mutations";
-import type { AdminSetting } from "@/lib/types/admin-settings";
-import { getSettingDisplayValue } from "@/lib/utils/settings";
+import { updateAcquisitionSettingsMutation } from "@/lib/graphql/mutations";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
-
-type AcquisitionSettings = {
-  enabled: boolean;
-  upgradeCooldownHours: number;
-  sameTierMinDelta: number;
-  crossTierMinDelta: number;
-  forcedUpgradeDeltaBypass: number;
-  pollIntervalSeconds: number;
-  syncIntervalSeconds: number;
-  batchSize: number;
-};
+import type { AcquisitionSettings } from "@/lib/types/settings";
 
 const DEFAULTS: AcquisitionSettings = {
   enabled: true,
@@ -29,12 +17,6 @@ const DEFAULTS: AcquisitionSettings = {
   syncIntervalSeconds: 3600,
   batchSize: 50,
 };
-
-function parseSetting(items: AdminSetting[], key: string, fallback: string): string {
-  const record = items.find((item) => item.keyName === key);
-  const raw = getSettingDisplayValue(record).trim();
-  return raw.length > 0 ? raw : fallback;
-}
 
 export function SettingsAcquisitionContainer() {
   const setGlobalStatus = useGlobalStatus();
@@ -51,16 +33,9 @@ export function SettingsAcquisitionContainer() {
         const { data, error } = await client.query(acquisitionSettingsQuery, {}).toPromise();
         if (error) throw error;
         if (cancelled) return;
-        const items: AdminSetting[] = data?.acquisitionSettings?.items ?? [];
         setSettings({
-          enabled: parseSetting(items, "acquisition.enabled", "true") === "true",
-          upgradeCooldownHours: Number(parseSetting(items, "acquisition.upgrade_cooldown_hours", "24")),
-          sameTierMinDelta: Number(parseSetting(items, "acquisition.same_tier_min_delta", "120")),
-          crossTierMinDelta: Number(parseSetting(items, "acquisition.cross_tier_min_delta", "30")),
-          forcedUpgradeDeltaBypass: Number(parseSetting(items, "acquisition.forced_upgrade_delta_bypass", "400")),
-          pollIntervalSeconds: Number(parseSetting(items, "acquisition.poll_interval_seconds", "60")),
-          syncIntervalSeconds: Number(parseSetting(items, "acquisition.sync_interval_seconds", "3600")),
-          batchSize: Number(parseSetting(items, "acquisition.batch_size", "50")),
+          ...DEFAULTS,
+          ...data?.acquisitionSettings,
         });
       } catch {
         // Use defaults on failure
@@ -74,20 +49,8 @@ export function SettingsAcquisitionContainer() {
   const handleSave = React.useCallback(async () => {
     setSaving(true);
     try {
-      const { error } = await client.mutation(saveAdminSettingsMutation, {
-        input: {
-          scope: "system",
-          items: [
-            { keyName: "acquisition.enabled", value: String(settings.enabled) },
-            { keyName: "acquisition.upgrade_cooldown_hours", value: String(settings.upgradeCooldownHours) },
-            { keyName: "acquisition.same_tier_min_delta", value: String(settings.sameTierMinDelta) },
-            { keyName: "acquisition.cross_tier_min_delta", value: String(settings.crossTierMinDelta) },
-            { keyName: "acquisition.forced_upgrade_delta_bypass", value: String(settings.forcedUpgradeDeltaBypass) },
-            { keyName: "acquisition.poll_interval_seconds", value: String(settings.pollIntervalSeconds) },
-            { keyName: "acquisition.sync_interval_seconds", value: String(settings.syncIntervalSeconds) },
-            { keyName: "acquisition.batch_size", value: String(settings.batchSize) },
-          ],
-        },
+      const { error } = await client.mutation(updateAcquisitionSettingsMutation, {
+        input: settings,
       }).toPromise();
       if (error) throw error;
       setGlobalStatus(t("settings.acquisitionSaved"));

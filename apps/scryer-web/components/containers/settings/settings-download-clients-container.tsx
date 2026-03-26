@@ -3,13 +3,13 @@ import { type ComponentProps, useCallback, useEffect, useMemo, useState } from "
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { SettingsDownloadClientsSection } from "@/components/views/settings/settings-download-clients-section";
 import {
-  deleteDownloadClientMutation,
   createDownloadClientMutation,
+  deleteDownloadClientMutation,
   reorderDownloadClientsMutation,
   testDownloadClientConnectionMutation,
   updateDownloadClientMutation,
 } from "@/lib/graphql/mutations";
-import { downloadClientProviderTypesQuery, downloadClientsQuery } from "@/lib/graphql/queries";
+import { downloadClientsInitQuery, downloadClientsQuery } from "@/lib/graphql/queries";
 import { DEFAULT_DOWNLOAD_CLIENT_DRAFT } from "@/lib/constants/download-clients";
 import { useClient } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -78,18 +78,30 @@ export function SettingsDownloadClientsContainer() {
   }, [client, setGlobalStatus, t]);
 
   useEffect(() => {
-    void refreshDownloadClients();
-  }, [refreshDownloadClients]);
-
-  useEffect(() => {
-    client.query(downloadClientProviderTypesQuery, {}).toPromise().then(({ data }) => {
-      if (data?.downloadClientProviderTypes) {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const { data, error } = await client.query(downloadClientsInitQuery, {}).toPromise();
+        if (error && !data?.downloadClientConfigs) throw error;
+        if (cancelled) return;
+        const clients: DownloadClientRecord[] = data?.downloadClientConfigs || [];
+        setSettingsDownloadClients(clients);
+        setDownloadClientOrder(clients.map((clientRecord) => clientRecord.id));
         setDownloadClientTypeOptions(
-          buildDownloadClientTypeOptions(data.downloadClientProviderTypes as ProviderTypeInfo[]),
+          buildDownloadClientTypeOptions(
+            (data?.downloadClientProviderTypes as ProviderTypeInfo[] | undefined) ?? [],
+          ),
         );
+      } catch (error) {
+        setDownloadClientTypeOptions(buildDownloadClientTypeOptions([]));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
       }
-    }).catch(() => { /* ignore - native clients remain available */ });
-  }, [client]);
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, setGlobalStatus, t]);
 
   useEffect(() => {
     if (editingDownloadClientId) {
