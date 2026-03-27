@@ -176,6 +176,12 @@ pub struct TitleMediaFile {
     pub release_hash: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct DownloadHistoryPage {
+    pub items: Vec<scryer_domain::DownloadQueueItem>,
+    pub has_more: bool,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WantedStatus {

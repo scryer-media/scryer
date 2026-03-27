@@ -8,7 +8,7 @@ import {
   Play,
   Trash2,
 } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { type UIEvent, useCallback, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -47,6 +47,9 @@ type ActivityViewState = {
   requestDelete: (item: DownloadQueueItem) => Promise<void>;
   queueMode: QueueMode;
   setQueueMode: (queueMode: QueueMode) => void;
+  historyHasMore: boolean;
+  historyLoadingMore: boolean;
+  requestMoreHistory: () => Promise<void>;
 };
 
 const queueStateClasses: Record<string, string> = {
@@ -211,6 +214,9 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
     requestDelete,
     queueMode,
     setQueueMode,
+    historyHasMore,
+    historyLoadingMore,
+    requestMoreHistory,
   } = state;
   const [manualImportingId, setManualImportingId] = useState<string | null>(null);
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
@@ -218,6 +224,7 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
   const [deleteInProgress, setDeleteInProgress] = useState(false);
   const [rowActionBusy, setRowActionBusy] = useState<Record<string, true>>({});
   const rowActionBusyRef = useRef<Record<string, true>>({});
+  const scrollHeightClass = isMobile ? "max-h-[70vh]" : "max-h-[1700px]";
 
   const setRowBusy = useCallback((rowId: string, busy: boolean) => {
     rowActionBusyRef.current = busy
@@ -252,6 +259,25 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
       setDeleteConfirmItem(null);
     }
   }, [deleteConfirmItem, requestDelete, setRowBusy]);
+
+  const handleResultsScroll = useCallback(
+    (event: UIEvent<HTMLDivElement>) => {
+      if (
+        queueMode !== "history" ||
+        historyLoadingMore ||
+        !historyHasMore ||
+        queueLoading
+      ) {
+        return;
+      }
+
+      const element = event.currentTarget;
+      if (element.scrollHeight - element.scrollTop - element.clientHeight <= 160) {
+        void requestMoreHistory();
+      }
+    },
+    [historyHasMore, historyLoadingMore, queueLoading, queueMode, requestMoreHistory],
+  );
 
   return (
     <>
@@ -331,8 +357,12 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
             queueItems.length === 0 && !queueLoading ? (
               <p className="text-sm text-muted-foreground">{t("queue.empty")}</p>
             ) : (
-              <div className="space-y-3">
-                {queueItems.map((queueItem) => {
+              <div
+                onScroll={handleResultsScroll}
+                className={`${scrollHeightClass} overflow-y-auto pr-1`}
+              >
+                <div className="space-y-3">
+                  {queueItems.map((queueItem) => {
                     const stateKey = normalizeQueueState(queueItem.state);
                     const trackedStateKey = normalizeQueueState(queueItem.trackedState);
                     const trackedMatchTypeKey = normalizeQueueState(queueItem.trackedMatchType);
@@ -573,31 +603,42 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
                         </div>
                       </div>
                     );
-                })}
+                  })}
+                  {queueMode === "history" && historyLoadingMore ? (
+                    <div className="flex items-center justify-center py-3 text-sm text-muted-foreground">
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      {t("label.loading")}
+                    </div>
+                  ) : null}
+                </div>
               </div>
             )
           ) : (
-            <div className="overflow-x-auto">
-              <Table className="table-fixed min-w-[820px]">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-[34%] min-w-0">{t("queue.title")}</TableHead>
-                    <TableHead className="w-32 min-w-0">{t("queue.client")}</TableHead>
-                    <TableHead className="w-44 min-w-0">{t("queue.status")}</TableHead>
-                    <TableHead className="w-52 min-w-52">{t("queue.progress")}</TableHead>
-                    <TableHead className="w-24 min-w-24">{t("queue.size")}</TableHead>
-                    <TableHead className="w-44 min-w-44 text-right">{t("label.actions")}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {queueItems.length === 0 && !queueLoading ? (
+            <div
+              onScroll={handleResultsScroll}
+              className={`${scrollHeightClass} overflow-y-auto rounded-xl border border-border/60`}
+            >
+              <div className="overflow-x-auto">
+                <Table className="table-fixed min-w-[820px]">
+                  <TableHeader>
                     <TableRow>
-                      <TableCell colSpan={6} className="text-sm text-muted-foreground">
-                        {t("queue.empty")}
-                      </TableCell>
+                      <TableHead className="w-[34%] min-w-0">{t("queue.title")}</TableHead>
+                      <TableHead className="w-32 min-w-0">{t("queue.client")}</TableHead>
+                      <TableHead className="w-44 min-w-0">{t("queue.status")}</TableHead>
+                      <TableHead className="w-52 min-w-52">{t("queue.progress")}</TableHead>
+                      <TableHead className="w-24 min-w-24">{t("queue.size")}</TableHead>
+                      <TableHead className="w-44 min-w-44 text-right">{t("label.actions")}</TableHead>
                     </TableRow>
-                  ) : (
-                    queueItems.map((queueItem) => {
+                  </TableHeader>
+                  <TableBody>
+                    {queueItems.length === 0 && !queueLoading ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-sm text-muted-foreground">
+                          {t("queue.empty")}
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      queueItems.map((queueItem) => {
                     const stateKey = normalizeQueueState(queueItem.state);
                     const trackedStateKey = normalizeQueueState(queueItem.trackedState);
                     const trackedMatchTypeKey = normalizeQueueState(queueItem.trackedMatchType);
@@ -637,8 +678,8 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
                       ? "pointer-events-none opacity-45 grayscale"
                       : "";
 
-                    return (
-                      <TableRow key={queueItem.id}>
+                        return (
+                          <TableRow key={queueItem.id}>
                         <TableCell className="min-w-0">
                           <p className="break-words whitespace-normal text-sm">{queueItem.titleName || "\u2014"}</p>
                         </TableCell>
@@ -842,12 +883,23 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
                             </Button>
                           </div>
                         </TableCell>
+                          </TableRow>
+                        );
+                      })
+                    )}
+                    {queueMode === "history" && historyLoadingMore ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="py-4 text-center text-sm text-muted-foreground">
+                          <span className="inline-flex items-center">
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            {t("label.loading")}
+                          </span>
+                        </TableCell>
                       </TableRow>
-                    );
-                    })
-                  )}
-                </TableBody>
-              </Table>
+                    ) : null}
+                  </TableBody>
+                </Table>
+              </div>
             </div>
           )}
         </CardContent>

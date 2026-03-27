@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -616,6 +617,51 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         Ok(all_items)
     }
 
+    async fn list_history_page(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> AppResult<Vec<DownloadQueueItem>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let clients = self.list_enabled_clients_by_priority().await?;
+        if clients.is_empty() {
+            return self.fallback_client.list_history_page(offset, limit).await;
+        }
+
+        let fetch_limit = offset.saturating_add(limit);
+        let mut all_items = Vec::new();
+        for config in clients {
+            let client = match Self::client_from_config(&config, self.plugin_provider.as_ref()) {
+                Ok(client) => client,
+                Err(error) => {
+                    tracing::warn!(client_id = %config.id, error = %error, "skipping client for paged history listing");
+                    continue;
+                }
+            };
+            match client.list_history_page(0, fetch_limit).await {
+                Ok(mut items) => {
+                    for item in &mut items {
+                        item.client_id = config.id.clone();
+                        item.client_name = config.name.clone();
+                    }
+                    all_items.extend(items);
+                }
+                Err(error) => {
+                    tracing::warn!(client_id = %config.id, error = %error, "failed to list paged history");
+                }
+            }
+        }
+
+        let mut seen = HashSet::with_capacity(all_items.len());
+        all_items.retain(|item| seen.insert(download_queue_history_key(item)));
+        all_items.sort_by(compare_history_items_desc);
+
+        Ok(all_items.into_iter().skip(offset).take(limit).collect())
+    }
+
     async fn list_completed_downloads(&self) -> AppResult<Vec<scryer_domain::CompletedDownload>> {
         let clients = self.list_enabled_clients_by_priority().await?;
         if clients.is_empty() {
@@ -671,6 +717,29 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         }
         self.fallback_client.delete_queue_item(id, is_history).await
     }
+}
+
+fn parse_history_timestamp(value: Option<&str>) -> i64 {
+    value
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0)
+}
+
+fn compare_history_items_desc(
+    left: &DownloadQueueItem,
+    right: &DownloadQueueItem,
+) -> std::cmp::Ordering {
+    parse_history_timestamp(right.last_updated_at.as_deref())
+        .cmp(&parse_history_timestamp(left.last_updated_at.as_deref()))
+        .then_with(|| right.id.cmp(&left.id))
+}
+
+fn download_queue_history_key(item: &DownloadQueueItem) -> String {
+    if item.client_type.is_empty() && item.download_client_item_id.is_empty() {
+        return item.id.clone();
+    }
+
+    format!("{}:{}", item.client_type, item.download_client_item_id)
 }
 
 #[cfg(test)]
@@ -1476,5 +1545,55 @@ mod tests {
             sab_client.deleted.lock().unwrap().as_slice(),
             [("SABnzbd_nzo_hist01".to_string(), true)]
         );
+    }
+
+    #[tokio::test]
+    async fn list_history_page_merges_clients_before_slicing() {
+        let client_a = Arc::new(MockDownloadClient::default());
+        let client_b = Arc::new(MockDownloadClient::default());
+
+        let mut a1 = test_queue_item("a-1");
+        a1.last_updated_at = Some("300".to_string());
+        let mut a2 = test_queue_item("a-2");
+        a2.last_updated_at = Some("100".to_string());
+        client_a.history_items.lock().unwrap().extend([a1, a2]);
+
+        let mut b1 = test_queue_item("b-1");
+        b1.last_updated_at = Some("200".to_string());
+        let mut b2 = test_queue_item("b-2");
+        b2.last_updated_at = Some("50".to_string());
+        client_b.history_items.lock().unwrap().extend([b1, b2]);
+
+        let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
+            Arc::new(MockDownloadClientPluginProvider {
+                accepted_inputs: vec!["nzb_url".to_string()],
+                clients: vec![
+                    ("client-a".to_string(), client_a.clone()),
+                    ("client-b".to_string(), client_b.clone()),
+                ],
+            });
+
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: vec![
+                    test_config("client-a", "Client A", "qbittorrent", 0),
+                    test_config("client-b", "Client B", "qbittorrent", 1),
+                ],
+            }),
+            Arc::new(MockSettingsRepository::default()),
+            Arc::new(MockDownloadClient::default()),
+            Some(plugin_provider),
+        );
+
+        let page = router
+            .list_history_page(1, 2)
+            .await
+            .expect("paged history should succeed");
+
+        let ids = page
+            .into_iter()
+            .map(|item| item.download_client_item_id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["b-1".to_string(), "a-2".to_string()]);
     }
 }

@@ -1045,6 +1045,12 @@ pub struct DownloadQueueItemPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+pub struct DownloadHistoryPagePayload {
+    pub items: Vec<DownloadQueueItemPayload>,
+    pub has_more: bool,
+}
+
+#[derive(SimpleObject, Clone)]
 pub struct ImportResultPayload {
     pub import_id: String,
     pub decision: ImportDecisionValue,

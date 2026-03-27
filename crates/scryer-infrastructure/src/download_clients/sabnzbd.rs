@@ -78,6 +78,25 @@ impl SabnzbdDownloadClient {
         Ok(json)
     }
 
+    async fn history_slots_page(&self, start: usize, limit: usize) -> AppResult<Vec<Value>> {
+        let start_param = start.to_string();
+        let limit_param = limit.to_string();
+        let json = self
+            .api_get(&[
+                ("mode", "history"),
+                ("start", start_param.as_str()),
+                ("limit", limit_param.as_str()),
+            ])
+            .await?;
+
+        Ok(json
+            .get("history")
+            .and_then(|history| history.get("slots"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default())
+    }
+
     async fn fetch_nzb(&self, url: &str) -> AppResult<Vec<u8>> {
         super::fetch_nzb_bytes(&self.http_client, url).await
     }
@@ -386,20 +405,7 @@ impl DownloadClient for SabnzbdDownloadClient {
     }
 
     async fn list_history(&self) -> AppResult<Vec<DownloadQueueItem>> {
-        let json = self
-            .api_get(&[("mode", "history"), ("limit", "50")])
-            .await?;
-
-        let slots = json
-            .get("history")
-            .and_then(|h| h.get("slots"))
-            .and_then(Value::as_array);
-
-        let slots = match slots {
-            Some(s) => s,
-            None => return Ok(Vec::new()),
-        };
-
+        let slots = self.history_slots_page(0, 50).await?;
         let cutoff_ts = Utc::now().timestamp() - (7 * 24 * 60 * 60);
 
         Ok(slots
@@ -470,21 +476,82 @@ impl DownloadClient for SabnzbdDownloadClient {
             .collect())
     }
 
+    async fn list_history_page(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> AppResult<Vec<DownloadQueueItem>> {
+        let slots = self.history_slots_page(offset, limit).await?;
+        let cutoff_ts = Utc::now().timestamp() - (7 * 24 * 60 * 60);
+
+        Ok(slots
+            .iter()
+            .filter_map(|slot| {
+                let slot = slot.as_object()?;
+
+                let nzo_id = slot.get("nzo_id").and_then(Value::as_str)?.to_string();
+
+                let completed_ts = extract_i64_value(slot.get("completed"));
+                if let Some(ts) = completed_ts
+                    && ts < cutoff_ts
+                {
+                    return None;
+                }
+
+                let title_name = slot
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Unnamed download")
+                    .to_string();
+
+                let status = slot.get("status").and_then(Value::as_str).unwrap_or("");
+                let (state, mut attention_reason) = sabnzbd_history_state(status);
+
+                if state == DownloadQueueState::Failed && attention_reason.is_none() {
+                    attention_reason = slot
+                        .get("fail_message")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
+                }
+
+                Some(DownloadQueueItem {
+                    id: nzo_id.clone(),
+                    title_id: None,
+                    title_name,
+                    facet: None,
+                    client_id: String::new(),
+                    client_name: String::new(),
+                    client_type: "sabnzbd".to_string(),
+                    state,
+                    progress_percent: if state == DownloadQueueState::Completed {
+                        100
+                    } else {
+                        0
+                    },
+                    size_bytes: extract_i64_value(slot.get("bytes")),
+                    remaining_seconds: None,
+                    queued_at: extract_i64_value(slot.get("time_added"))
+                        .map(|value| value.to_string()),
+                    last_updated_at: completed_ts.map(|value| value.to_string()),
+                    attention_required: matches!(state, DownloadQueueState::Failed),
+                    attention_reason,
+                    download_client_item_id: nzo_id,
+                    import_status: None,
+                    import_error_message: None,
+                    imported_at: None,
+                    is_scryer_origin: false,
+                    tracked_state: None,
+                    tracked_status: None,
+                    tracked_status_messages: Vec::new(),
+                    tracked_match_type: None,
+                })
+            })
+            .collect())
+    }
+
     async fn list_completed_downloads(&self) -> AppResult<Vec<CompletedDownload>> {
-        let json = self
-            .api_get(&[("mode", "history"), ("limit", "50")])
-            .await?;
-
-        let slots = json
-            .get("history")
-            .and_then(|h| h.get("slots"))
-            .and_then(Value::as_array);
-
-        let slots = match slots {
-            Some(s) => s,
-            None => return Ok(Vec::new()),
-        };
-
+        let slots = self.history_slots_page(0, 50).await?;
         let cutoff_ts = Utc::now().timestamp() - (7 * 24 * 60 * 60);
 
         Ok(slots

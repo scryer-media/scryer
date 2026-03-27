@@ -87,6 +87,19 @@ fn from_delay_profile(profile: scryer_application::DelayProfile) -> DelayProfile
     }
 }
 
+fn from_download_history_page(
+    page: scryer_application::DownloadHistoryPage,
+) -> DownloadHistoryPagePayload {
+    DownloadHistoryPagePayload {
+        items: page
+            .items
+            .into_iter()
+            .map(from_download_queue_item)
+            .collect(),
+        has_more: page.has_more,
+    }
+}
+
 #[derive(Copy, Clone)]
 pub struct QueryRoot;
 
@@ -471,6 +484,23 @@ impl QueryRoot {
             .await
             .map_err(to_gql_error)?;
         Ok(items.into_iter().map(from_download_queue_item).collect())
+    }
+
+    async fn download_history(
+        &self,
+        ctx: &Context<'_>,
+        limit: Option<i32>,
+        offset: Option<i32>,
+    ) -> GqlResult<DownloadHistoryPagePayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let limit = limit.unwrap_or(50).clamp(1, 100) as usize;
+        let offset = offset.unwrap_or(0).max(0) as usize;
+        let page = app
+            .list_download_history_page(&actor, limit, offset)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_download_history_page(page))
     }
 
     async fn subtitle_settings(&self, ctx: &Context<'_>) -> GqlResult<SubtitleSettingsPayload> {

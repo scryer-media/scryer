@@ -130,21 +130,27 @@ impl WeaverDownloadClient {
         Ok(general_purpose::STANDARD.encode(bytes))
     }
 
-    /// Query weaver jobs, optionally filtering by status.
-    async fn query_jobs(&self, status_filter: Option<&[&str]>) -> AppResult<Vec<Value>> {
+    /// Query weaver jobs, optionally filtering by status and paging the result.
+    async fn query_jobs(
+        &self,
+        status_filter: Option<&[&str]>,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> AppResult<Vec<Value>> {
         let query = r#"
-            query($status: [JobStatusGql!]) {
-                jobs(status: $status) {
+            query($status: [JobStatusGql!], $limit: Int, $offset: Int) {
+                jobs(status: $status, limit: $limit, offset: $offset) {
                     id name status error progress totalBytes downloadedBytes
                     failedBytes health hasPassword category outputDir createdAt
                     metadata { key value }
                 }
             }
         "#;
-        let variables = match status_filter {
-            Some(statuses) => json!({ "status": statuses }),
-            None => json!({}),
-        };
+        let variables = json!({
+            "status": status_filter,
+            "limit": limit.and_then(|value| i32::try_from(value).ok()),
+            "offset": offset.and_then(|value| i32::try_from(value).ok()),
+        });
         let data = self.graphql_request(query, variables).await?;
         Ok(data
             .get("jobs")
@@ -400,7 +406,7 @@ impl DownloadClient for WeaverDownloadClient {
     }
 
     async fn list_queue(&self) -> AppResult<Vec<DownloadQueueItem>> {
-        let jobs = self.query_jobs(None).await?;
+        let jobs = self.query_jobs(None, None, None).await?;
         Ok(jobs
             .iter()
             .filter_map(weaver_job_to_queue_item)
@@ -414,12 +420,25 @@ impl DownloadClient for WeaverDownloadClient {
     }
 
     async fn list_history(&self) -> AppResult<Vec<DownloadQueueItem>> {
-        let jobs = self.query_jobs(Some(&["COMPLETE", "FAILED"])).await?;
+        let jobs = self
+            .query_jobs(Some(&["COMPLETE", "FAILED"]), None, None)
+            .await?;
+        Ok(jobs.iter().filter_map(weaver_job_to_queue_item).collect())
+    }
+
+    async fn list_history_page(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> AppResult<Vec<DownloadQueueItem>> {
+        let jobs = self
+            .query_jobs(Some(&["COMPLETE", "FAILED"]), Some(limit), Some(offset))
+            .await?;
         Ok(jobs.iter().filter_map(weaver_job_to_queue_item).collect())
     }
 
     async fn list_completed_downloads(&self) -> AppResult<Vec<CompletedDownload>> {
-        let jobs = self.query_jobs(Some(&["COMPLETE"])).await?;
+        let jobs = self.query_jobs(Some(&["COMPLETE"]), None, None).await?;
         Ok(jobs
             .iter()
             .filter_map(|job| {

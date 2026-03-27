@@ -670,6 +670,14 @@ export const downloadQueueQuery = `query DownloadQueue($includeAllActivity: Bool
   }
 }`;
 
+export const downloadHistoryQuery = `query DownloadHistory($limit: Int, $offset: Int) {
+  downloadHistory(limit: $limit, offset: $offset) {
+    items {${DOWNLOAD_QUEUE_ITEM_FIELDS}
+    }
+    hasMore
+  }
+}`;
+
 export const downloadQueueSubscription = `subscription DownloadQueueStream($includeAllActivity: Boolean, $includeHistoryOnly: Boolean) {
   downloadQueue(includeAllActivity: $includeAllActivity, includeHistoryOnly: $includeHistoryOnly) {${DOWNLOAD_QUEUE_ITEM_FIELDS}
   }

@@ -662,6 +662,7 @@ async fn graphql_introspection_query_root_uses_semantic_search_and_browse_fields
     assert!(!names.contains(&"titleMediaFiles"));
     assert!(names.contains(&"wantedItem"));
     assert!(names.contains(&"pendingRelease"));
+    assert!(names.contains(&"downloadHistory"));
 }
 
 #[tokio::test]
@@ -3243,6 +3244,21 @@ async fn graphql_download_queue_empty() {
     assert_no_errors(&body);
     let queue = body["data"]["downloadQueue"].as_array().unwrap();
     assert!(queue.is_empty(), "queue should start empty");
+}
+
+#[tokio::test]
+async fn graphql_download_history_empty() {
+    let ctx = TestContext::new().await;
+    let body = gql(
+        &ctx,
+        "{ downloadHistory(limit: 50, offset: 0) { items { id titleName } hasMore } }",
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&body);
+    let items = body["data"]["downloadHistory"]["items"].as_array().unwrap();
+    assert!(items.is_empty(), "history should start empty");
+    assert_eq!(body["data"]["downloadHistory"]["hasMore"], json!(false));
 }
 
 // ---------------------------------------------------------------------------

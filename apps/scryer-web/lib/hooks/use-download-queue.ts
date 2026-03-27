@@ -10,6 +10,7 @@ import type { DownloadQueueItem } from "@/lib/types";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 
 type UseDownloadQueueArgs = {
+  enabled: boolean;
   includeAllActivity: boolean;
   includeHistoryOnly: boolean;
 };
@@ -23,6 +24,7 @@ export type UseDownloadQueueResult = {
 };
 
 export function useDownloadQueue({
+  enabled,
   includeAllActivity,
   includeHistoryOnly,
 }: UseDownloadQueueArgs): UseDownloadQueueResult {
@@ -54,7 +56,7 @@ export function useDownloadQueue({
   const teardownTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (includeHistoryOnly || !initialFetchDone) {
+    if (!enabled || includeHistoryOnly || !initialFetchDone) {
       if (teardownTimer.current) {
         clearTimeout(teardownTimer.current);
         teardownTimer.current = null;
@@ -89,13 +91,17 @@ export function useDownloadQueue({
             // download client — it does NOT include terminal/historical
             // items (completed, failed, import_pending). Preserve those
             // from the existing state so the table doesn't flash empty.
-            const TERMINAL_STATES = new Set([
-              "completed",
-              "failed",
-              "import_pending",
-              "importpending",
-            ]);
             setQueueItems((prev) => {
+              if (!includeAllActivity) {
+                return items;
+              }
+
+              const TERMINAL_STATES = new Set([
+                "completed",
+                "failed",
+                "import_pending",
+                "importpending",
+              ]);
               const liveIds = new Set(
                 items.map((i) => i.downloadClientItemId),
               );
@@ -133,7 +139,7 @@ export function useDownloadQueue({
         unsubRef.current = null;
       }, 200);
     };
-  }, [includeAllActivity, includeHistoryOnly, initialFetchDone]);
+  }, [enabled, includeAllActivity, includeHistoryOnly, initialFetchDone]);
 
   // --- Query fetch (initial load + manual refresh) ---
   // The query is authoritative — it returns enriched data with import status,
@@ -143,6 +149,9 @@ export function useDownloadQueue({
   // import_pending) and the socket's version wins for active states if the
   // subscription is already running.
   const refreshQueue = useCallback(async () => {
+    if (!enabled) {
+      return;
+    }
     setQueueLoading(true);
     try {
       const { data, error } = await client
@@ -198,10 +207,18 @@ export function useDownloadQueue({
     } finally {
       setQueueLoading(false);
     }
-  }, [client, includeAllActivity, includeHistoryOnly, setGlobalStatus]);
+  }, [client, enabled, includeAllActivity, includeHistoryOnly, setGlobalStatus]);
 
   // --- Initial fetch + polling for history-only mode ---
   useEffect(() => {
+    if (!enabled) {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+      return;
+    }
+
     setInitialFetchDone(false);
     refreshQueue().finally(() => setInitialFetchDone(true));
 
@@ -214,7 +231,7 @@ export function useDownloadQueue({
         }
       };
     }
-  }, [includeAllActivity, includeHistoryOnly, refreshQueue]);
+  }, [enabled, includeAllActivity, includeHistoryOnly, refreshQueue]);
 
   return {
     queueItems,

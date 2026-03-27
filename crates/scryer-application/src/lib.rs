@@ -147,10 +147,10 @@ pub use scoring_weights::{
 };
 pub(crate) use types::JwtClaims;
 pub use types::{
-    BackupInfo, DiskSpaceInfo, DownloadGrabResult, DownloadSourceKind, HealthCheckResult,
-    HealthCheckStatus, HousekeepingReport, IndexerQueryStats, IndexerSearchResponse,
-    IndexerSearchResult, JwtAuthConfig, PendingRelease, PendingReleaseStatus,
-    PrimaryCollectionSummary, ReleaseDecision, ReleaseDownloadAttemptOutcome,
+    BackupInfo, DiskSpaceInfo, DownloadGrabResult, DownloadHistoryPage, DownloadSourceKind,
+    HealthCheckResult, HealthCheckStatus, HousekeepingReport, IndexerQueryStats,
+    IndexerSearchResponse, IndexerSearchResult, JwtAuthConfig, PendingRelease,
+    PendingReleaseStatus, PrimaryCollectionSummary, ReleaseDecision, ReleaseDownloadAttemptOutcome,
     ReleaseDownloadFailureSignature, SystemHealth, TitleImageBlob, TitleImageKind,
     TitleImageReplacement, TitleImageStorageMode, TitleImageSyncTask, TitleImageVariantRecord,
     TitleMediaFile, TitleMediaSizeSummary, TitleMetadataUpdate, TitleReleaseBlocklistEntry,
@@ -1727,6 +1727,19 @@ pub trait DownloadClient: Send + Sync {
         Err(AppError::Repository(
             "download history listing is not supported for this client".to_string(),
         ))
+    }
+
+    async fn list_history_page(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> AppResult<Vec<DownloadQueueItem>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let items = self.list_history().await?;
+        Ok(items.into_iter().skip(offset).take(limit).collect())
     }
 
     async fn list_completed_downloads(&self) -> AppResult<Vec<CompletedDownload>> {

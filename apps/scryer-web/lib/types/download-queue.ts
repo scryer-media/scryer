@@ -62,3 +62,8 @@ export type DownloadQueueItem = {
   trackedStatusMessages: string[];
   trackedMatchType: TitleMatchType | null;
 };
+
+export type DownloadHistoryPage = {
+  items: DownloadQueueItem[];
+  hasMore: boolean;
+};

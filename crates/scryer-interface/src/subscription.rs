@@ -336,9 +336,7 @@ fn filter_download_queue_items(
             item.is_scryer_origin
                 && matches!(
                     item.state,
-                    DownloadQueueState::ImportPending
-                        | DownloadQueueState::Failed
-                        | DownloadQueueState::Downloading
+                    DownloadQueueState::Downloading
                         | DownloadQueueState::Queued
                         | DownloadQueueState::Paused
                         | DownloadQueueState::Verifying
@@ -425,20 +423,19 @@ mod tests {
         let items = vec![
             item("job-1", DownloadQueueState::Completed, true),
             item("job-2", DownloadQueueState::Failed, true),
+            item("job-2b", DownloadQueueState::ImportPending, true),
             item("job-3", DownloadQueueState::Queued, true),
             item("job-4", DownloadQueueState::Queued, false),
         ];
 
         let filtered = filter_download_queue_items(items, false, false);
 
-        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered.len(), 1);
         assert!(filtered.iter().all(|item| item.is_scryer_origin));
         assert!(filtered.iter().all(|item| {
             matches!(
                 item.state,
-                DownloadQueueState::Failed
-                    | DownloadQueueState::ImportPending
-                    | DownloadQueueState::Downloading
+                DownloadQueueState::Downloading
                     | DownloadQueueState::Queued
                     | DownloadQueueState::Paused
             )

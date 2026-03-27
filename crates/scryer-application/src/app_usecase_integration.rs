@@ -373,15 +373,9 @@ impl AppUseCase {
                 if include_all_activity {
                     true
                 } else if include_history_only {
-                    item.state == DownloadQueueState::Completed
-                        || item.state == DownloadQueueState::ImportPending
-                        || item.state == DownloadQueueState::Failed
+                    is_history_download_state(&item.state)
                 } else {
-                    item.state == DownloadQueueState::ImportPending
-                        || item.state == DownloadQueueState::Failed
-                        || item.state == DownloadQueueState::Downloading
-                        || item.state == DownloadQueueState::Queued
-                        || item.state == DownloadQueueState::Paused
+                    is_active_download_state(&item.state)
                 }
             })
             .map(|item| {
@@ -487,6 +481,131 @@ impl AppUseCase {
         require(actor, &Entitlement::ManageConfig)?;
         self.collect_download_queue_items(include_all_activity, include_history_only)
             .await
+    }
+
+    pub async fn list_download_history_page(
+        &self,
+        actor: &User,
+        limit: usize,
+        offset: usize,
+    ) -> AppResult<DownloadHistoryPage> {
+        require(actor, &Entitlement::ManageConfig)?;
+
+        let limit = limit.clamp(1, 100);
+        let fetch_limit = limit.saturating_add(1);
+
+        let mut enabled_clients = self
+            .services
+            .download_client_configs
+            .list(None)
+            .await?
+            .into_iter()
+            .filter(|item| item.is_enabled)
+            .collect::<Vec<_>>();
+
+        let primary_client = if enabled_clients.is_empty() {
+            return Ok(DownloadHistoryPage {
+                items: Vec::new(),
+                has_more: false,
+            });
+        } else {
+            enabled_clients.sort_by_key(|config| config.client_priority);
+            enabled_clients.into_iter().next()
+        };
+
+        let mut items = self
+            .services
+            .download_client
+            .list_history_page(offset, fetch_limit)
+            .await?;
+
+        for item in &mut items {
+            if item.is_scryer_origin {
+                continue;
+            }
+            if let Ok(Some(submission)) = self
+                .services
+                .download_submissions
+                .find_by_client_item_id(&item.client_type, &item.download_client_item_id)
+                .await
+                && !submission.title_id.trim().is_empty()
+            {
+                item.is_scryer_origin = true;
+                item.title_id = Some(submission.title_id);
+                item.facet = Some(submission.facet);
+            }
+        }
+
+        let mut items = dedupe_download_queue_items(items)
+            .into_iter()
+            .filter(|item| is_history_download_state(&item.state))
+            .map(|item| {
+                let mut mapped = item;
+                if mapped.client_id.is_empty()
+                    && let Some(primary_client) = primary_client.as_ref()
+                {
+                    mapped.client_id = primary_client.id.clone();
+                }
+                if mapped.client_name.is_empty()
+                    && let Some(primary_client) = primary_client.as_ref()
+                {
+                    mapped.client_name = primary_client.name.clone();
+                }
+                if mapped.client_type.is_empty()
+                    && let Some(primary_client) = primary_client.as_ref()
+                {
+                    mapped.client_type = primary_client.client_type.clone();
+                }
+                mapped.attention_required = matches!(
+                    mapped.state,
+                    DownloadQueueState::Failed | DownloadQueueState::ImportPending
+                );
+                if mapped.attention_reason.is_none() {
+                    mapped.attention_reason = if mapped.attention_required {
+                        Some("requires attention".to_string())
+                    } else {
+                        None
+                    };
+                }
+                mapped
+            })
+            .collect::<Vec<_>>();
+
+        for item in &mut items {
+            if !matches!(
+                item.state,
+                DownloadQueueState::Completed
+                    | DownloadQueueState::Failed
+                    | DownloadQueueState::ImportPending
+            ) {
+                continue;
+            }
+            if let Ok(Some(record)) = self
+                .services
+                .imports
+                .get_import_by_source_ref(&item.client_type, &item.download_client_item_id)
+                .await
+            {
+                item.import_status = Some(record.status);
+                item.imported_at = record
+                    .finished_at
+                    .clone()
+                    .or(Some(record.updated_at.clone()));
+                if let Some(ref result_json) = record.result_json
+                    && let Ok(result) =
+                        serde_json::from_str::<scryer_domain::ImportResult>(result_json)
+                    && let Some(ref error_msg) = result.error_message
+                {
+                    item.import_error_message = Some(error_msg.clone());
+                    item.attention_reason = Some(error_msg.clone());
+                }
+            }
+        }
+
+        let has_more = items.len() > limit;
+        items.truncate(limit);
+
+        Ok(DownloadHistoryPage { items, has_more })
     }
 
     pub async fn find_download_queue_item(
@@ -1407,6 +1526,27 @@ fn queue_state_merge_rank(state: &DownloadQueueState) -> u8 {
         DownloadQueueState::ImportPending => 5,
         DownloadQueueState::Failed => 6,
     }
+}
+
+fn is_active_download_state(state: &DownloadQueueState) -> bool {
+    matches!(
+        state,
+        DownloadQueueState::Downloading
+            | DownloadQueueState::Queued
+            | DownloadQueueState::Paused
+            | DownloadQueueState::Verifying
+            | DownloadQueueState::Repairing
+            | DownloadQueueState::Extracting
+    )
+}
+
+fn is_history_download_state(state: &DownloadQueueState) -> bool {
+    matches!(
+        state,
+        DownloadQueueState::Completed
+            | DownloadQueueState::ImportPending
+            | DownloadQueueState::Failed
+    )
 }
 
 fn queue_state_sort_rank(state: &DownloadQueueState) -> u8 {

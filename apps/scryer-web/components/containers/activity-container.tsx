@@ -15,6 +15,7 @@ import {
   resumeDownloadMutation,
   deleteDownloadMutation,
 } from "@/lib/graphql/mutations";
+import { useDownloadHistory } from "@/lib/hooks/use-download-history";
 import { useDownloadQueue } from "@/lib/hooks/use-download-queue";
 import type { DownloadQueueItem } from "@/lib/types";
 
@@ -36,9 +37,32 @@ export const ActivityContainer = memo(function ActivityContainer() {
   const [assignTitleItem, setAssignTitleItem] = useState<DownloadQueueItem | null>(null);
 
   const { queueItems, queueLoading, queueError, lastRefreshedAt, refreshQueue } = useDownloadQueue({
-    includeAllActivity: queueMode !== "scryer",
-    includeHistoryOnly: queueMode === "history",
+    enabled: queueMode !== "history",
+    includeAllActivity: queueMode === "all",
+    includeHistoryOnly: false,
   });
+  const {
+    historyItems,
+    historyLoading,
+    historyLoadingMore,
+    historyError,
+    historyHasMore,
+    lastRefreshedAt: historyLastRefreshedAt,
+    refreshHistory,
+    loadMoreHistory,
+  } = useDownloadHistory({
+    enabled: queueMode === "history",
+  });
+
+  const visibleItems = queueMode === "history" ? historyItems : queueItems;
+  const visibleLoading = queueMode === "history" ? historyLoading : queueLoading;
+  const visibleError = queueMode === "history" ? historyError : queueError;
+  const visibleLastRefreshedAt =
+    queueMode === "history" ? historyLastRefreshedAt : lastRefreshedAt;
+
+  const refreshActivityViews = useCallback(async () => {
+    await Promise.all([refreshQueue(), refreshHistory()]);
+  }, [refreshHistory, refreshQueue]);
 
   const requestManualImport = useCallback(
     async (item: DownloadQueueItem) => {
@@ -64,9 +88,9 @@ export const ActivityContainer = memo(function ActivityContainer() {
         throw result.error;
       }
       setGlobalStatus(t("queue.manualImportQueued"));
-      await refreshQueue();
+      await refreshActivityViews();
     },
-    [executeTriggerImport, refreshQueue, setGlobalStatus, t],
+    [executeTriggerImport, refreshActivityViews, setGlobalStatus, t],
   );
 
   const requestAssignTitle = useCallback(
@@ -84,9 +108,9 @@ export const ActivityContainer = memo(function ActivityContainer() {
         throw result.error;
       }
       setGlobalStatus(t("queue.assignTitleQueued"));
-      await refreshQueue();
+      await refreshActivityViews();
     },
-    [executeAssignTrackedDownloadTitle, refreshQueue, setGlobalStatus, t],
+    [executeAssignTrackedDownloadTitle, refreshActivityViews, setGlobalStatus, t],
   );
 
   const requestIgnore = useCallback(
@@ -103,9 +127,9 @@ export const ActivityContainer = memo(function ActivityContainer() {
         throw result.error;
       }
       setGlobalStatus(t("queue.ignoreSuccess"));
-      await refreshQueue();
+      await refreshActivityViews();
     },
-    [executeIgnoreTrackedDownload, refreshQueue, setGlobalStatus, t],
+    [executeIgnoreTrackedDownload, refreshActivityViews, setGlobalStatus, t],
   );
 
   const requestPause = useCallback(
@@ -119,9 +143,9 @@ export const ActivityContainer = memo(function ActivityContainer() {
         throw result.error;
       }
       setGlobalStatus(t("queue.pauseSuccess"));
-      await refreshQueue();
+      await refreshActivityViews();
     },
-    [refreshQueue, executePauseDownload, setGlobalStatus, t],
+    [refreshActivityViews, executePauseDownload, setGlobalStatus, t],
   );
 
   const requestResume = useCallback(
@@ -135,9 +159,9 @@ export const ActivityContainer = memo(function ActivityContainer() {
         throw result.error;
       }
       setGlobalStatus(t("queue.resumeSuccess"));
-      await refreshQueue();
+      await refreshActivityViews();
     },
-    [refreshQueue, executeResumeDownload, setGlobalStatus, t],
+    [refreshActivityViews, executeResumeDownload, setGlobalStatus, t],
   );
 
   const requestDelete = useCallback(
@@ -156,19 +180,19 @@ export const ActivityContainer = memo(function ActivityContainer() {
         throw result.error;
       }
       setGlobalStatus(t("queue.deleteSuccess"));
-      await refreshQueue();
+      await refreshActivityViews();
     },
-    [refreshQueue, executeDeleteDownload, setGlobalStatus, t],
+    [refreshActivityViews, executeDeleteDownload, setGlobalStatus, t],
   );
 
   return (
     <>
       <ActivityView
         state={{
-          queueItems,
-          queueLoading,
-          queueError,
-          lastRefreshedAt,
+          queueItems: visibleItems,
+          queueLoading: visibleLoading,
+          queueError: visibleError,
+          lastRefreshedAt: visibleLastRefreshedAt,
           requestManualImport,
           requestAssignTitle: async (item) => {
             setAssignTitleItem(item);
@@ -179,6 +203,9 @@ export const ActivityContainer = memo(function ActivityContainer() {
           requestDelete,
           queueMode,
           setQueueMode,
+          historyHasMore,
+          historyLoadingMore,
+          requestMoreHistory: loadMoreHistory,
         }}
       />
       {manualImportItem?.titleId ? (
@@ -192,7 +219,7 @@ export const ActivityContainer = memo(function ActivityContainer() {
           titleId={manualImportItem.titleId}
           titleName={manualImportItem.titleName}
           downloadClientItemId={manualImportItem.downloadClientItemId}
-          onImportComplete={() => void refreshQueue()}
+          onImportComplete={() => void refreshActivityViews()}
         />
       ) : null}
       <AssignTrackedDownloadTitleDialog
