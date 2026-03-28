@@ -1193,11 +1193,13 @@ pub async fn start_download_queue_poller(
                                     state = state.as_str(),
                                     "tracked: persisting terminal state"
                                 );
-                                tracker.persist_terminal_state(&app, id, state).await;
-                                if let Some(td) = tracker.find(id) {
-                                    try_remove_from_client(&app, td, state).await;
+                                let persisted = tracker.persist_terminal_state(&app, id, state).await;
+                                if persisted {
+                                    if let Some(td) = tracker.find(id) {
+                                        try_remove_from_client(&app, td, state).await;
+                                    }
+                                    tracker.stop_tracking(id);
                                 }
-                                tracker.stop_tracking(id);
                             }
                         }
 

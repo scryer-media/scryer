@@ -182,12 +182,12 @@ impl TrackedDownloadService {
         app: &AppUseCase,
         id: &str,
         state: TrackedDownloadState,
-    ) {
+    ) -> bool {
         if !state.is_terminal() {
-            return;
+            return true;
         }
         let Some(td) = self.cache.get(id) else {
-            return;
+            return false;
         };
         if let Err(e) = app
             .services
@@ -205,7 +205,10 @@ impl TrackedDownloadService {
                 state = state.as_str(),
                 "failed to persist tracked download terminal state"
             );
+            return false;
         }
+
+        true
     }
 
     // ── Title Resolution ─────────────────────────────────────────────────
@@ -242,7 +245,7 @@ impl TrackedDownloadService {
         //
         // Insert a stub download_submissions row for foreign downloads so they
         // get a tracked_state column for restart reconstruction.
-        let _ = app
+        if let Err(error) = app
             .services
             .download_submissions
             .record_submission(DownloadSubmission {
@@ -253,7 +256,10 @@ impl TrackedDownloadService {
                 source_title: Some(td.client_item.title_name.clone()),
                 collection_id: None,
             })
-            .await;
+            .await
+        {
+            tracing::warn!(error = %error, id = %td.id, "failed to record tracked download stub submission");
+        }
     }
 
     /// Reconstruct state from persistent storage after restart.
@@ -675,6 +681,92 @@ mod tests {
                 .await
                 .as_slice(),
             ["imported"]
+        );
+    }
+
+    #[tokio::test]
+    async fn persist_terminal_state_returns_false_when_repository_write_fails() {
+        #[derive(Default)]
+        struct FailingDownloadSubmissionRepo;
+
+        #[async_trait]
+        impl DownloadSubmissionRepository for FailingDownloadSubmissionRepo {
+            async fn record_submission(&self, _: crate::DownloadSubmission) -> AppResult<()> {
+                Ok(())
+            }
+
+            async fn find_by_client_item_id(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> AppResult<Option<crate::DownloadSubmission>> {
+                Ok(None)
+            }
+
+            async fn list_for_title(&self, _: &str) -> AppResult<Vec<crate::DownloadSubmission>> {
+                Ok(vec![])
+            }
+
+            async fn delete_for_title(&self, _: &str) -> AppResult<()> {
+                Ok(())
+            }
+
+            async fn delete_by_client_item_id(&self, _: &str) -> AppResult<()> {
+                Ok(())
+            }
+
+            async fn update_tracked_state(&self, _: &str, _: &str, _: &str) -> AppResult<()> {
+                Err(AppError::Repository("boom".into()))
+            }
+
+            async fn get_tracked_state(&self, _: &str, _: &str) -> AppResult<Option<String>> {
+                Ok(None)
+            }
+        }
+
+        let mut services = AppServices::with_default_channels(
+            Arc::new(NullTitleRepository),
+            Arc::new(NullShowRepository),
+            Arc::new(NullUserRepository),
+            Arc::new(NullEventRepository),
+            Arc::new(TestIndexerConfigRepo),
+            Arc::new(NullIndexerClient),
+            Arc::new(NullDownloadClient),
+            Arc::new(NullDownloadClientConfigRepository),
+            Arc::new(NullReleaseAttemptRepository),
+            Arc::new(crate::null_repositories::NullSettingsRepository),
+            Arc::new(NullQualityProfileRepository),
+            String::new(),
+        );
+        services.download_submissions = Arc::new(FailingDownloadSubmissionRepo);
+        services.imports = Arc::new(TestImportRepo::default());
+
+        let app = AppUseCase::new(
+            services,
+            JwtAuthConfig {
+                issuer: "test".to_string(),
+                access_ttl_seconds: 3600,
+                jwt_signing_salt: "test-salt".to_string(),
+            },
+            Arc::new(FacetRegistry::new()),
+        );
+
+        let mut tracker = TrackedDownloadService::new();
+        tracker.track(&app, build_client_item()).await;
+
+        assert!(
+            tracker.find("nzbget:dl-1").is_some(),
+            "tracked download should exist before persistence attempt"
+        );
+
+        let persisted = tracker
+            .persist_terminal_state(&app, "nzbget:dl-1", TrackedDownloadState::Failed)
+            .await;
+
+        assert!(!persisted, "persistence should report failure");
+        assert!(
+            tracker.find("nzbget:dl-1").is_some(),
+            "tracked download should remain cached when persistence fails"
         );
     }
 }

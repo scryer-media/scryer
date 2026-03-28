@@ -9,6 +9,7 @@ import { RootHeader } from "@/components/root/root-header";
 import { RootSidebar } from "@/components/root/root-sidebar";
 import { ViewLoadingFallback } from "@/components/common/view-loading-fallback";
 import { buildRouteCommands } from "@/components/root/route-commands";
+import { GlobalSearchProvider } from "@/components/root/global-search-provider";
 
 import { useGlobalStatusToast } from "@/lib/hooks/use-global-status-toast";
 import { useLanguage } from "@/lib/hooks/use-language";
@@ -36,16 +37,18 @@ import {
 import { FACET_REGISTRY, isMediaView, facetForView } from "@/lib/facets/registry";
 import { BackendRestartOverlay } from "@/components/common/backend-restart-overlay";
 
+const mediaContainers = () => import("@/components/containers/media-containers");
+
 const MediaContentContainer = lazy(() =>
-  import("@/components/containers/media-content-container").then((m) => ({ default: m.MediaContentContainer })),
+  mediaContainers().then((m) => ({ default: m.MediaContentContainer })),
 );
 
 const MovieOverviewContainer = lazy(() =>
-  import("@/components/containers/movie-overview-container").then((m) => ({ default: m.MovieOverviewContainer })),
+  mediaContainers().then((m) => ({ default: m.MovieOverviewContainer })),
 );
 
 const SeriesOverviewContainer = lazy(() =>
-  import("@/components/containers/series-overview-container").then((m) => ({ default: m.SeriesOverviewContainer })),
+  mediaContainers().then((m) => ({ default: m.SeriesOverviewContainer })),
 );
 
 const SettingsContainer = lazy(() =>
@@ -66,10 +69,6 @@ const WantedContainer = lazy(() =>
 
 const ImportHistoryContainer = lazy(() =>
   import("@/components/containers/import-history-container").then((m) => ({ default: m.ImportHistoryContainer })),
-);
-
-const GlobalSearchProvider = lazy(() =>
-  import("@/components/root/global-search-provider").then((m) => ({ default: m.GlobalSearchProvider })),
 );
 
 const INSTALL_BANNER_DISMISSED_KEY = "scryer.pwa.installBannerDismissed";

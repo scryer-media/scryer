@@ -900,15 +900,20 @@ pub(crate) async fn update_tracked_state_query(
     tracked_state: &str,
 ) -> AppResult<()> {
     let now = chrono::Utc::now().to_rfc3339();
+    let id = Id::new().0;
     sqlx::query(
-        "UPDATE download_submissions
-         SET tracked_state = ?, tracked_state_at = ?
-         WHERE download_client_type = ? AND download_client_item_id = ?",
+        "INSERT INTO download_submissions
+         (id, title_id, facet, download_client_type, download_client_item_id, source_title, collection_id, tracked_state, tracked_state_at)
+         VALUES (?, '', '', ?, ?, NULL, NULL, ?, ?)
+         ON CONFLICT(download_client_type, download_client_item_id) DO UPDATE
+         SET tracked_state = excluded.tracked_state,
+             tracked_state_at = excluded.tracked_state_at",
     )
-    .bind(tracked_state)
-    .bind(&now)
+    .bind(&id)
     .bind(download_client_type)
     .bind(download_client_item_id)
+    .bind(tracked_state)
+    .bind(&now)
     .execute(pool)
     .await
     .map_err(|err| AppError::Repository(err.to_string()))?;

@@ -243,7 +243,6 @@ export function SettingsDownloadClientsContainer() {
         {
           input: {
             clientType: payload.clientType,
-            baseUrl: payload.baseUrl,
             configJson: payload.configJson,
           },
         },

@@ -22,6 +22,7 @@ import {
   qualityProfileSettingsToCatalogText,
   qualityProfileSettingsToCategoryOverrides,
   qualityProfileCatalogEntryFromDraft,
+  qualityProfileEntryToMutationInput,
   resolveQualityProfileCatalogState,
   sortStringByNumericDesc,
   toProfileOptions,
@@ -462,7 +463,10 @@ export function useQualityProfilesManager(
     setQualityProfileDraftOriginalName(nextDraft.name);
     setQualityProfileParseError("");
 
-    return { catalogText: normalized, draftEntry: nextDraftEntry };
+    return {
+      catalogText: normalized,
+      draftEntry: nextDraftEntry,
+    };
   }, [qualityProfilesText, qualityProfileDraft, qualityProfileDraftOriginalName, t, setGlobalStatus]);
 
   const addQualityTier = React.useCallback(
@@ -540,12 +544,13 @@ export function useQualityProfilesManager(
       if (committed === null) return;
 
       const normalizedCatalogText = normalizeQualityProfilesForSave(committed.catalogText.trim());
-      const parsedProfiles = parseQualityProfileCatalog(normalizedCatalogText);
-      if (!parsedProfiles.length) {
+      const parsedEntries = parseQualityProfileCatalogEntries(normalizedCatalogText);
+      if (!parsedEntries.length) {
         setQualityProfileParseError(t("settings.qualityProfileCatalogInvalid"));
         setGlobalStatus(t("settings.qualityProfileCatalogInvalid"));
         return;
       }
+      const parsedProfiles = parsedEntries.map(({ id, name }) => ({ id, name }));
 
       const normalizedGlobalProfile = resolveGlobalQualityProfileId(
         parsedProfiles,
@@ -559,45 +564,10 @@ export function useQualityProfilesManager(
           saveQualityProfileSettingsMutation,
           {
             input: {
-              profiles: [
-                {
-                  id: committed.draftEntry.id,
-                  name: committed.draftEntry.name,
-                  criteria: {
-                    qualityTiers: committed.draftEntry.criteria.quality_tiers,
-                    archivalQuality: committed.draftEntry.criteria.archival_quality,
-                    allowUnknownQuality: committed.draftEntry.criteria.allow_unknown_quality,
-                    sourceAllowlist: committed.draftEntry.criteria.source_allowlist,
-                    sourceBlocklist: committed.draftEntry.criteria.source_blocklist,
-                    videoCodecAllowlist: committed.draftEntry.criteria.video_codec_allowlist,
-                    videoCodecBlocklist: committed.draftEntry.criteria.video_codec_blocklist,
-                    audioCodecAllowlist: committed.draftEntry.criteria.audio_codec_allowlist,
-                    audioCodecBlocklist: committed.draftEntry.criteria.audio_codec_blocklist,
-                    atmosPreferred: committed.draftEntry.criteria.atmos_preferred,
-                    dolbyVisionAllowed: committed.draftEntry.criteria.dolby_vision_allowed,
-                    detectedHdrAllowed: committed.draftEntry.criteria.detected_hdr_allowed,
-                    preferRemux: committed.draftEntry.criteria.prefer_remux,
-                    allowBdDisk: committed.draftEntry.criteria.allow_bd_disk,
-                    allowUpgrades: committed.draftEntry.criteria.allow_upgrades,
-                    preferDualAudio: committed.draftEntry.criteria.prefer_dual_audio,
-                    requiredAudioLanguages:
-                      committed.draftEntry.criteria.required_audio_languages ?? [],
-                    scoringPersona: committed.draftEntry.criteria.scoring_persona,
-                    scoringOverrides: committed.draftEntry.criteria.scoring_overrides ?? {},
-                    cutoffTier: committed.draftEntry.criteria.cutoff_tier,
-                    minScoreToGrab: committed.draftEntry.criteria.min_score_to_grab,
-                    facetPersonaOverrides: Object.entries(
-                      committed.draftEntry.criteria.facet_persona_overrides ?? {},
-                    ).map(([scope, persona]) => ({
-                      scope,
-                      persona,
-                    })),
-                  },
-                },
-              ],
+              profiles: parsedEntries.map(qualityProfileEntryToMutationInput),
               globalProfileId: normalizedGlobalProfile,
               categorySelections: [],
-              replaceExisting: false,
+              replaceExisting: true,
             },
           },
         ).toPromise();

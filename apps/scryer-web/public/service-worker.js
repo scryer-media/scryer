@@ -71,34 +71,16 @@ function isStaticAssetPath(relativePath) {
   return /\.(?:css|js|mjs|woff2?|png|webp|svg|jpg|jpeg|gif|ico|txt|xml)$/i.test(relativePath);
 }
 
+function isImmutableBuildAssetPath(relativePath) {
+  return relativePath.startsWith("/assets/");
+}
+
 function isCacheableResponse(response) {
   return response && response.ok && response.type !== "error";
 }
 
 function isHtmlResponse(response) {
   return isCacheableResponse(response) && (response.headers.get("content-type") || "").includes("text/html");
-}
-
-function extractShellAssetUrls(html, shellUrl) {
-  const assetPattern = /\b(?:src|href)=["']([^"'#]+)["']/gi;
-  const urls = new Set();
-  let match;
-  while ((match = assetPattern.exec(html)) !== null) {
-    const candidate = match[1];
-    const resolved = new URL(candidate, shellUrl);
-    const relativePath = getAppRelativePath(resolved);
-    if (resolved.origin !== self.location.origin || relativePath === null) {
-      continue;
-    }
-    if (isReservedPath(relativePath) || relativePath === "/service-worker.js") {
-      continue;
-    }
-    if (isStaticAssetPath(relativePath)) {
-      urls.add(resolved.toString());
-    }
-  }
-
-  return Array.from(urls);
 }
 
 async function putIfFresh(cacheName, requestInfo, requestInit) {
@@ -128,14 +110,10 @@ async function precacheShell() {
     resolveScopeUrl("./manifest.json"),
   ];
 
-  const shellResponse = await putIfFresh(SHELL_CACHE, shellUrl, { cache: "no-store" });
-  const discoveredAssetUrls = [];
-  if (isHtmlResponse(shellResponse)) {
-    discoveredAssetUrls.push(...extractShellAssetUrls(await shellResponse.clone().text(), shellUrl));
-  }
+  await putIfFresh(SHELL_CACHE, shellUrl, { cache: "no-store" });
 
   await Promise.all(
-    [...iconUrls, ...discoveredAssetUrls].map((url) =>
+    iconUrls.map((url) =>
       putIfFresh(ASSET_CACHE, url, { cache: "no-store" }).catch(() => null),
     ),
   );
@@ -178,9 +156,14 @@ async function handleNavigation(request) {
   }
 }
 
-async function handleStaticRequest(request, event) {
+async function handleStaticRequest(request, event, relativePath) {
   const cache = await caches.open(ASSET_CACHE);
   const cachedResponse = await cache.match(request);
+
+  if (cachedResponse && isImmutableBuildAssetPath(relativePath)) {
+    return cachedResponse;
+  }
+
   const networkPromise = fetch(request)
     .then(async (response) => {
       if (isCacheableResponse(response)) {
@@ -238,6 +221,6 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (isStaticAssetPath(relativePath)) {
-    event.respondWith(handleStaticRequest(request, event));
+    event.respondWith(handleStaticRequest(request, event, relativePath));
   }
 });

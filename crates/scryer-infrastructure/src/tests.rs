@@ -7,7 +7,7 @@ use scryer_application::{
 use scryer_domain::{
     Collection, CollectionType, Entitlement, Episode, InterstitialMovieMetadata, MediaFacet, Title,
 };
-use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::{sqlite::SqlitePoolOptions, Row};
 
 #[tokio::test]
 async fn sqlite_can_initialize() {
@@ -437,6 +437,46 @@ async fn migrations_apply_then_validate_is_idempotent() {
         .await
         .expect("applied DB should pass validate mode");
 
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn tracked_state_upsert_creates_download_submission_row_when_missing() {
+    use crate::queries::workflow::get_tracked_state_query;
+
+    let db = std::env::temp_dir().join(format!(
+        "scryer_tracked_state_upsert_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let services = SqliteServices::new(db.to_string_lossy())
+        .await
+        .expect("db should initialize");
+
+    services
+        .update_tracked_state("weaver", "job-123", "failed")
+        .await
+        .expect("tracked state upsert should succeed without a preexisting submission row");
+
+    let tracked_state = get_tracked_state_query(services.pool(), "weaver", "job-123")
+        .await
+        .expect("tracked state query should succeed");
+    assert_eq!(tracked_state.as_deref(), Some("failed"));
+
+    let row = sqlx::query(
+        "SELECT title_id, facet FROM download_submissions WHERE download_client_type = ? AND download_client_item_id = ?",
+    )
+    .bind("weaver")
+    .bind("job-123")
+    .fetch_one(services.pool())
+    .await
+    .expect("download submission row should exist");
+
+    let title_id: String = row.get("title_id");
+    let facet: String = row.get("facet");
+    assert!(title_id.is_empty());
+    assert!(facet.is_empty());
+
+    drop(services);
     let _ = std::fs::remove_file(db);
 }
 

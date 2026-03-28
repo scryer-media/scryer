@@ -30,6 +30,7 @@ import {
 } from "@/lib/utils/download-clients";
 import {
   qualityProfileSettingsToEntries,
+  qualityProfileEntryToMutationInput,
 } from "@/lib/utils/quality-profiles";
 import type { DownloadClientDraft, DownloadClientTypeOption } from "@/lib/types/download-clients";
 import type { FacetQualityPrefs, ViewCategoryId } from "@/lib/types/quality-profiles";
@@ -346,39 +347,7 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
         await client
           .mutation(saveQualityProfileSettingsMutation, {
             input: {
-              profiles: keptProfiles.map((profile) => ({
-                id: profile.id,
-                name: profile.name,
-                criteria: {
-                  qualityTiers: profile.criteria.quality_tiers,
-                  archivalQuality: profile.criteria.archival_quality,
-                  allowUnknownQuality: profile.criteria.allow_unknown_quality,
-                  sourceAllowlist: profile.criteria.source_allowlist,
-                  sourceBlocklist: profile.criteria.source_blocklist,
-                  videoCodecAllowlist: profile.criteria.video_codec_allowlist,
-                  videoCodecBlocklist: profile.criteria.video_codec_blocklist,
-                  audioCodecAllowlist: profile.criteria.audio_codec_allowlist,
-                  audioCodecBlocklist: profile.criteria.audio_codec_blocklist,
-                  atmosPreferred: profile.criteria.atmos_preferred,
-                  dolbyVisionAllowed: profile.criteria.dolby_vision_allowed,
-                  detectedHdrAllowed: profile.criteria.detected_hdr_allowed,
-                  preferRemux: profile.criteria.prefer_remux,
-                  allowBdDisk: profile.criteria.allow_bd_disk,
-                  allowUpgrades: profile.criteria.allow_upgrades,
-                  preferDualAudio: profile.criteria.prefer_dual_audio,
-                  requiredAudioLanguages: profile.criteria.required_audio_languages ?? [],
-                  scoringPersona: profile.criteria.scoring_persona,
-                  scoringOverrides: profile.criteria.scoring_overrides ?? {},
-                  cutoffTier: profile.criteria.cutoff_tier,
-                  minScoreToGrab: profile.criteria.min_score_to_grab,
-                  facetPersonaOverrides: Object.entries(
-                    profile.criteria.facet_persona_overrides ?? {},
-                  ).map(([scope, persona]) => ({
-                    scope,
-                    persona,
-                  })),
-                },
-              })),
+              profiles: keptProfiles.map(qualityProfileEntryToMutationInput),
               globalProfileId: null,
               categorySelections: WIZARD_FACETS.map(({ facet }) => ({
                 scope: facet,

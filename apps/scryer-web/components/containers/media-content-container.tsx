@@ -25,6 +25,7 @@ import { useClient } from "urql";
 import type { ContentSettingsSection, ViewId } from "@/components/root/types";
 import {
   parseQualityProfileCatalogEntries,
+  qualityProfileEntryToMutationInput,
   toProfileOptions,
 } from "@/lib/utils/quality-profiles";
 import { useDownloadClientRouting } from "@/lib/hooks/use-download-client-routing";
@@ -760,47 +761,16 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         ...entry,
         criteria: { ...entry.criteria, facet_persona_overrides: nextOverrides },
       };
+      const nextEntries = entries.map((candidate) =>
+        candidate.id === updatedEntry.id ? updatedEntry : candidate,
+      );
       await client
         .mutation(saveQualityProfileSettingsMutation, {
           input: {
-            profiles: [
-              {
-                id: updatedEntry.id,
-                name: updatedEntry.name,
-                criteria: {
-                  qualityTiers: updatedEntry.criteria.quality_tiers,
-                  archivalQuality: updatedEntry.criteria.archival_quality,
-                  allowUnknownQuality: updatedEntry.criteria.allow_unknown_quality,
-                  sourceAllowlist: updatedEntry.criteria.source_allowlist,
-                  sourceBlocklist: updatedEntry.criteria.source_blocklist,
-                  videoCodecAllowlist: updatedEntry.criteria.video_codec_allowlist,
-                  videoCodecBlocklist: updatedEntry.criteria.video_codec_blocklist,
-                  audioCodecAllowlist: updatedEntry.criteria.audio_codec_allowlist,
-                  audioCodecBlocklist: updatedEntry.criteria.audio_codec_blocklist,
-                  atmosPreferred: updatedEntry.criteria.atmos_preferred,
-                  dolbyVisionAllowed: updatedEntry.criteria.dolby_vision_allowed,
-                  detectedHdrAllowed: updatedEntry.criteria.detected_hdr_allowed,
-                  preferRemux: updatedEntry.criteria.prefer_remux,
-                  allowBdDisk: updatedEntry.criteria.allow_bd_disk,
-                  allowUpgrades: updatedEntry.criteria.allow_upgrades,
-                  preferDualAudio: updatedEntry.criteria.prefer_dual_audio,
-                  requiredAudioLanguages: updatedEntry.criteria.required_audio_languages ?? [],
-                  scoringPersona: updatedEntry.criteria.scoring_persona,
-                  scoringOverrides: updatedEntry.criteria.scoring_overrides ?? {},
-                  cutoffTier: updatedEntry.criteria.cutoff_tier,
-                  minScoreToGrab: updatedEntry.criteria.min_score_to_grab,
-                  facetPersonaOverrides: Object.entries(
-                    updatedEntry.criteria.facet_persona_overrides ?? {},
-                  ).map(([scope, persona]) => ({
-                    scope,
-                    persona,
-                  })),
-                },
-              },
-            ],
+            profiles: nextEntries.map(qualityProfileEntryToMutationInput),
             globalProfileId: null,
             categorySelections: [],
-            replaceExisting: false,
+            replaceExisting: true,
           },
         })
         .toPromise();

@@ -3,6 +3,51 @@ import react from "@vitejs/plugin-react";
 import { compression } from "vite-plugin-compression2";
 import path from "path";
 
+const FOUNDATION_CHUNK_MODULES = [
+  "/components/common/backend-restart-overlay.tsx",
+  "/components/root/global-search-provider.tsx",
+  "/lib/context/global-status-context.tsx",
+  "/lib/context/search-context.tsx",
+  "/lib/context/translate-context.tsx",
+  "/lib/hooks/use-global-search.ts",
+  "/lib/hooks/use-import-history-subscription.ts",
+  "/lib/hooks/use-mobile.ts",
+  "/lib/hooks/use-settings-subscription.ts",
+  "/lib/utils/download-clients.ts",
+  "/lib/utils/formatting.ts",
+  "/lib/utils/poster-images.ts",
+  "/lib/utils/quality-profiles.ts",
+];
+
+const UI_CHUNK_MODULES = [
+  "/components/common/confirm-dialog.tsx",
+  "/components/common/info-help.tsx",
+  "/components/ui/card.tsx",
+  "/components/ui/checkbox.tsx",
+  "/components/ui/command.tsx",
+  "/components/ui/dialog.tsx",
+  "/components/ui/hover-card.tsx",
+  "/components/ui/input.tsx",
+  "/components/ui/label.tsx",
+  "/components/ui/select.tsx",
+  "/components/ui/separator.tsx",
+  "/components/ui/table.tsx",
+  "/components/ui/toggle-group.tsx",
+  "/lib/utils/action-button-styles.ts",
+];
+
+const MEDIA_CHUNK_MODULES = [
+  "/components/containers/media-containers.ts",
+  "/components/containers/media-content-container.tsx",
+  "/components/containers/movie-overview-container.tsx",
+  "/components/containers/series-overview-container.tsx",
+  "/components/views/overview-back-link.tsx",
+];
+
+function matchesChunkModule(id: string, modules: readonly string[]) {
+  return modules.some((moduleId) => id.endsWith(moduleId));
+}
+
 export default defineConfig(({ mode }) => ({
   base: "./",
   plugins: [
@@ -29,10 +74,14 @@ export default defineConfig(({ mode }) => ({
     sourcemap: false,
     rolldownOptions: {
       output: {
-        manualChunks(id) {
+        manualChunks(id: string) {
           // Heavy lazy-loaded libraries — keep isolated behind their lazy() boundary.
-          if (id.includes("@fullcalendar/")) return "vendor-calendar";
           if (id.includes("@codemirror/")) return "vendor-codemirror";
+
+          // Keep related app features together without collapsing the whole route graph.
+          if (matchesChunkModule(id, MEDIA_CHUNK_MODULES)) return "app-media";
+          if (matchesChunkModule(id, FOUNDATION_CHUNK_MODULES)) return "app-foundation";
+          if (matchesChunkModule(id, UI_CHUNK_MODULES)) return "app-ui";
 
           // Core vendor chunks — loaded on every page.
           if (

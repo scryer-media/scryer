@@ -486,6 +486,42 @@ export function qualityProfileCatalogEntryFromDraft(draft: QualityProfileDraft):
   };
 }
 
+export function qualityProfileEntryToMutationInput(entry: ParsedQualityProfileEntry) {
+  return {
+    id: entry.id,
+    name: entry.name,
+    criteria: {
+      qualityTiers: entry.criteria.quality_tiers,
+      archivalQuality: entry.criteria.archival_quality,
+      allowUnknownQuality: entry.criteria.allow_unknown_quality,
+      sourceAllowlist: entry.criteria.source_allowlist,
+      sourceBlocklist: entry.criteria.source_blocklist,
+      videoCodecAllowlist: entry.criteria.video_codec_allowlist,
+      videoCodecBlocklist: entry.criteria.video_codec_blocklist,
+      audioCodecAllowlist: entry.criteria.audio_codec_allowlist,
+      audioCodecBlocklist: entry.criteria.audio_codec_blocklist,
+      atmosPreferred: entry.criteria.atmos_preferred,
+      dolbyVisionAllowed: entry.criteria.dolby_vision_allowed,
+      detectedHdrAllowed: entry.criteria.detected_hdr_allowed,
+      preferRemux: entry.criteria.prefer_remux,
+      allowBdDisk: entry.criteria.allow_bd_disk,
+      allowUpgrades: entry.criteria.allow_upgrades,
+      preferDualAudio: entry.criteria.prefer_dual_audio,
+      requiredAudioLanguages: entry.criteria.required_audio_languages ?? [],
+      scoringPersona: entry.criteria.scoring_persona,
+      scoringOverrides: entry.criteria.scoring_overrides ?? {},
+      cutoffTier: entry.criteria.cutoff_tier,
+      minScoreToGrab: entry.criteria.min_score_to_grab,
+      facetPersonaOverrides: Object.entries(entry.criteria.facet_persona_overrides ?? {}).map(
+        ([scope, persona]) => ({
+          scope,
+          persona,
+        }),
+      ),
+    },
+  };
+}
+
 export function normalizeQualityProfilesForUi(rawValue: string): string {
   const trimmedValue = rawValue.trim();
   if (!trimmedValue) {
