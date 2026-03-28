@@ -7,7 +7,7 @@ use scryer_application::{
 use scryer_domain::{
     Collection, CollectionType, Entitlement, Episode, InterstitialMovieMetadata, MediaFacet, Title,
 };
-use sqlx::{sqlite::SqlitePoolOptions, Row};
+use sqlx::{Row, sqlite::SqlitePoolOptions};
 
 #[tokio::test]
 async fn sqlite_can_initialize() {
