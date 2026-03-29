@@ -15,10 +15,8 @@ import {
   isValidProfileSelection,
   normalizeProfileId,
   normalizeProfileIdFromName,
-  normalizeQualityProfilesForSave,
   normalizeQualityProfilesForUi,
   parseQualityProfileCatalog,
-  parseQualityProfileCatalogEntries,
   qualityProfileSettingsToCatalogText,
   qualityProfileSettingsToCategoryOverrides,
   qualityProfileCatalogEntryFromDraft,
@@ -150,7 +148,9 @@ export function useQualityProfilesManager(
   const client = useClient();
   const [mediaSettingsLoading, setMediaSettingsLoading] = React.useState(false);
   const [qualityProfilesSaving, setQualityProfilesSaving] = React.useState(false);
-  const [qualityProfilesText, setQualityProfilesText] = React.useState("");
+  const [qualityProfileCatalogEntriesState, setQualityProfileCatalogEntriesState] = React.useState<
+    ParsedQualityProfileEntry[]
+  >([]);
   const [qualityProfiles, setQualityProfiles] = React.useState<ParsedQualityProfile[]>([]);
   const [qualityProfileParseError, setQualityProfileParseError] = React.useState("");
   const [qualityProfileDraft, setQualityProfileDraft] = React.useState<QualityProfileDraft>(() =>
@@ -169,10 +169,7 @@ export function useQualityProfilesManager(
 
   const [, setSelectedQualityProfileId] = React.useState("default");
 
-  const qualityProfileCatalogEntries = React.useMemo(
-    () => parseQualityProfileCatalogEntries(qualityProfilesText),
-    [qualityProfilesText],
-  );
+  const qualityProfileCatalogEntries = qualityProfileCatalogEntriesState;
 
   const qualityProfileEntryById = React.useMemo(() => {
     const map = new Map<string, ParsedQualityProfileEntry>();
@@ -269,15 +266,12 @@ export function useQualityProfilesManager(
       payload: QualityProfileSettingsPayload | null | undefined,
       preserveProfileId?: string,
     ) => {
-      const nextProfileText = qualityProfileSettingsToCatalogText(payload);
-      const resolved = resolveQualityProfileCatalogState(nextProfileText);
+      const resolved = resolveQualityProfileCatalogState(
+        qualityProfileSettingsToCatalogText(payload),
+      );
       const resolvedProfiles = resolved.profiles;
 
-      if (!resolved.isRawValid && nextProfileText.trim().length) {
-        setQualityProfileParseError(t("settings.qualityProfileCatalogInvalid"));
-      } else {
-        setQualityProfileParseError("");
-      }
+      setQualityProfileParseError("");
 
       const validGlobalProfile = resolveGlobalQualityProfileId(
         resolvedProfiles,
@@ -301,7 +295,7 @@ export function useQualityProfilesManager(
       const nextDraftId =
         nextDraftSource?.id ?? defaultDraftSource?.id ?? resolvedProfiles[0]?.id ?? "default";
 
-      setQualityProfilesText(resolved.text);
+      setQualityProfileCatalogEntriesState(catalogEntries);
       setQualityProfiles(resolvedProfiles);
       setSelectedQualityProfileId(nextDraftId);
       setQualityProfileDraft(nextDefaultDraft);
@@ -315,7 +309,7 @@ export function useQualityProfilesManager(
           : nextOverrides,
       );
     },
-    [t],
+    [],
   );
 
   const deleteQualityProfile = React.useCallback(
@@ -375,7 +369,9 @@ export function useQualityProfilesManager(
 
   const loadQualityProfileById = React.useCallback(
     (profileId: string) => {
-      const selectedEntry = qualityProfileCatalogEntries.find((entry) => entry.id.trim() === profileId);
+      const selectedEntry = qualityProfileCatalogEntries.find(
+        (entry) => entry.id.trim() === profileId,
+      );
       if (!selectedEntry) return;
       setSelectedQualityProfileId(profileId);
       const nextDraft = toQualityProfileDraft(selectedEntry, profileId, profileId);
@@ -407,28 +403,7 @@ export function useQualityProfilesManager(
   );
 
   const commitQualityProfileDraftToCatalog = React.useCallback((): CommittedQualityProfileDraft | null => {
-    const catalogRaw = qualityProfilesText.trim();
-    if (!catalogRaw) {
-      setQualityProfileParseError(t("settings.qualityProfileCatalogInvalid"));
-      setGlobalStatus(t("settings.qualityProfileCatalogInvalid"));
-      return null;
-    }
-
-    let parsedCatalog: unknown;
-    try {
-      parsedCatalog = JSON.parse(catalogRaw);
-    } catch {
-      setQualityProfileParseError(t("settings.qualityProfileCatalogInvalid"));
-      setGlobalStatus(t("settings.qualityProfileCatalogInvalid"));
-      return null;
-    }
-    if (!Array.isArray(parsedCatalog)) {
-      setQualityProfileParseError(t("settings.qualityProfileCatalogInvalid"));
-      setGlobalStatus(t("settings.qualityProfileCatalogInvalid"));
-      return null;
-    }
-
-    const sourceEntries = parseQualityProfileCatalogEntries(catalogRaw);
+    const sourceEntries = qualityProfileCatalogEntries;
     const nextIdFromDraft = qualityProfileDraft.id;
     const nextName = qualityProfileDraft.name.trim();
     if (!nextName) {
@@ -456,7 +431,7 @@ export function useQualityProfilesManager(
       : sourceEntries.map((entry) => (entry.id === nextIdFromDraft ? nextDraftEntry : entry));
     const normalized = normalizeQualityProfilesForUi(JSON.stringify(nextEntries));
 
-    setQualityProfilesText(normalized);
+    setQualityProfileCatalogEntriesState(nextEntries);
     setQualityProfiles(parseQualityProfileCatalog(normalized));
     setSelectedQualityProfileId(nextDraft.id);
     setQualityProfileDraft(nextDraft);
@@ -464,10 +439,16 @@ export function useQualityProfilesManager(
     setQualityProfileParseError("");
 
     return {
-      catalogText: normalized,
+      catalogEntries: nextEntries,
       draftEntry: nextDraftEntry,
     };
-  }, [qualityProfilesText, qualityProfileDraft, qualityProfileDraftOriginalName, t, setGlobalStatus]);
+  }, [
+    qualityProfileCatalogEntries,
+    qualityProfileDraft,
+    qualityProfileDraftOriginalName,
+    setGlobalStatus,
+    t,
+  ]);
 
   const addQualityTier = React.useCallback(
     (qualityTier: string) => {
@@ -542,14 +523,7 @@ export function useQualityProfilesManager(
 
       const committed = commitQualityProfileDraftToCatalog();
       if (committed === null) return;
-
-      const normalizedCatalogText = normalizeQualityProfilesForSave(committed.catalogText.trim());
-      const parsedEntries = parseQualityProfileCatalogEntries(normalizedCatalogText);
-      if (!parsedEntries.length) {
-        setQualityProfileParseError(t("settings.qualityProfileCatalogInvalid"));
-        setGlobalStatus(t("settings.qualityProfileCatalogInvalid"));
-        return;
-      }
+      const parsedEntries = committed.catalogEntries;
       const parsedProfiles = parsedEntries.map(({ id, name }) => ({ id, name }));
 
       const normalizedGlobalProfile = resolveGlobalQualityProfileId(

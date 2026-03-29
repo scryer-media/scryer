@@ -97,7 +97,7 @@ export type QualityProfileSettingsPayload = {
 };
 
 export type CommittedQualityProfileDraft = {
-  catalogText: string;
+  catalogEntries: ParsedQualityProfileEntry[];
   draftEntry: ParsedQualityProfileEntry;
 };
 
