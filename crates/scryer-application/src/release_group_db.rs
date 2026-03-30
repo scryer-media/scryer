@@ -99,6 +99,7 @@ fn source_to_context(
 ///
 /// Uses the group database to look up the release group's tier for its source
 /// context, then applies the corresponding weight from the persona.
+#[cfg(test)]
 pub fn apply_release_group_scoring(
     weights: &ScoringWeights,
     group: Option<&str>,
