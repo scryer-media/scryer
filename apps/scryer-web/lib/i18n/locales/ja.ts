@@ -687,13 +687,11 @@ const ja: LocaleDictionary = {
   "settings.refProfileVCodecBlock": "ブロック映像コーデック",
   "settings.refProfileACodecAllow": "許可音声コーデック（空の場合すべて許可）",
   "settings.refProfileACodecBlock": "ブロック音声コーデック",
-  "settings.refProfileAtmosPreferred": "プロファイルがDolby Atmosを優先",
   "settings.refProfileDVAllowed": "Dolby Visionリリースを許可",
   "settings.refProfileHdrAllowed": "HDRリリースを許可",
   "settings.refProfilePreferRemux": "プロファイルがフルリマックスを優先",
   "settings.refProfileAllowBdDisk": "ブルーレイディスクソースを許可",
   "settings.refProfileAllowUpgrades": "既存ファイルのアップグレードを許可",
-  "settings.refProfilePreferDualAudio": "プロファイルがデュアルオーディオを優先",
   "settings.refProfileRequiredLangs": "必須音声言語（ISO 639-3コード）",
   "settings.refSectionContext": "— タイトルと検索コンテキスト",
   "settings.refCtxTitleId": "具体的なタイトルが既知の場合の内部ScryerタイトルID",
@@ -851,12 +849,8 @@ const ja: LocaleDictionary = {
   "qualityProfile.allowUnknownQualityInfo": "パーサールールで品質を識別できないリリースを許可します。非一般的なエンコードに役立ちますが、低信頼度のマッチを許可する可能性があります。",
   "qualityProfile.dolbyVisionAllowed": "Dolby Vision",
   "qualityProfile.dolbyVisionInfo": "Dolby Visionリリースを許可します。一部のディスプレイはDolby Visionコンテンツを正しくレンダリングできないため、すべてのユーザーに適しているとは限りません。",
-  "qualityProfile.atmosPreferred": "Atmos優先",
-  "qualityProfile.atmosPreferredInfo": "Atmosを含むリリースを優先しつつ、非Atmosオプションも許可します。",
   "qualityProfile.preferRemux": "Remux優先",
   "qualityProfile.preferRemuxInfo": "Remuxは物理メディアの完全品質コピーです。主にAudiophileペルソナで有用です。",
-  "qualityProfile.preferDualAudio": "デュアルオーディオ優先",
-  "qualityProfile.preferDualAudioInfo": "デュアルオーディオトラック（例: 日本語＋英語）のリリースを強く優先します。非デュアルオーディオリリースはスコアが減点されます。",
   "qualityProfile.allowBdDisk": "BDディスク",
   "qualityProfile.allowBdDiskInfo": "BD/ディスクイメージリリース（ISO/ブルーレイディスクスタイル）がプロファイルを通過することを許可します。",
   "qualityProfile.allowDv": "Dolby Vision",
@@ -1308,9 +1302,6 @@ const ja: LocaleDictionary = {
   "convenience.requiredAudioLabel": "必須オーディオ言語",
   "convenience.requiredAudioHelp":
     "これらのオーディオ言語を含まないリリースはブロックされます。設定 > ルールに表示される管理ルールを作成します。",
-  "convenience.preferDualAudioLabel": "デュアルオーディオを優先",
-  "convenience.preferDualAudioHelp":
-    "複数のオーディオトラックを含むリリースを優先します。設定 > ルールに表示される管理ルールを作成します。",
 };
 
 export default ja;

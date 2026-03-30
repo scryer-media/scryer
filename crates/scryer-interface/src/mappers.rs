@@ -1032,6 +1032,7 @@ pub(crate) fn from_housekeeping_report(report: HousekeepingReport) -> Housekeepi
         stale_release_attempts: report.stale_release_attempts as i32,
         expired_event_outboxes: report.expired_event_outboxes as i32,
         stale_history_events: report.stale_history_events as i32,
+        staged_nzb_artifacts_pruned: report.staged_nzb_artifacts_pruned as i32,
         recycled_purged: report.recycled_purged as i32,
         ran_at: report.ran_at,
     }

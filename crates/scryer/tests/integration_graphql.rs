@@ -2,6 +2,7 @@
 
 mod common;
 
+use chrono::{Duration, Utc};
 use scryer_application::{
     InsertMediaFileInput, PendingRelease, ReleaseDecision, ShowRepository, TitleRepository,
     WantedItem,
@@ -3259,6 +3260,38 @@ async fn graphql_download_history_empty() {
     let items = body["data"]["downloadHistory"]["items"].as_array().unwrap();
     assert!(items.is_empty(), "history should start empty");
     assert_eq!(body["data"]["downloadHistory"]["hasMore"], json!(false));
+}
+
+#[tokio::test]
+async fn graphql_run_housekeeping_reports_pruned_staged_nzb_artifacts() {
+    let ctx = TestContext::new().await;
+    let nzb_xml = load_fixture("nzbgeek/nzb_content.xml");
+    let staged = ctx
+        .staged_nzb_store
+        .stage_nzb_bytes_for_test(nzb_xml.as_bytes())
+        .await
+        .expect("staged artifact should insert");
+    ctx.staged_nzb_store
+        .set_staged_nzb_updated_at(&staged, Utc::now() - Duration::hours(2))
+        .await
+        .expect("staged artifact timestamp should update");
+
+    let body = gql(
+        &ctx,
+        "mutation { runHousekeeping { stagedNzbArtifactsPruned } }",
+        json!({}),
+    )
+    .await;
+
+    assert_no_errors(&body);
+    assert_eq!(
+        body["data"]["runHousekeeping"]["stagedNzbArtifactsPruned"],
+        1
+    );
+    assert_eq!(
+        ctx.staged_nzb_store.count_staged_artifacts().await.unwrap(),
+        0
+    );
 }
 
 // ---------------------------------------------------------------------------

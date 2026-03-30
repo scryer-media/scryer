@@ -736,13 +736,11 @@ const en: LocaleDictionary = {
   "settings.refProfileACodecAllow":
     "Allowed audio codecs (empty means all allowed)",
   "settings.refProfileACodecBlock": "Blocked audio codecs",
-  "settings.refProfileAtmosPreferred": "Profile prefers Dolby Atmos releases",
   "settings.refProfileDVAllowed": "Dolby Vision releases are accepted",
   "settings.refProfileHdrAllowed": "HDR releases are accepted",
   "settings.refProfilePreferRemux": "Profile prefers full remux releases",
   "settings.refProfileAllowBdDisk": "Blu-ray disc sources are accepted",
   "settings.refProfileAllowUpgrades": "Upgrading existing files is allowed",
-  "settings.refProfilePreferDualAudio": "Profile prefers dual audio releases",
   "settings.refProfileRequiredLangs":
     "Mandatory audio languages (ISO 639-3 codes)",
 
@@ -1011,15 +1009,9 @@ const en: LocaleDictionary = {
   "qualityProfile.dolbyVisionAllowed": "Dolby Vision",
   "qualityProfile.dolbyVisionInfo":
     "Allow Dolby Vision releases. Some displays cannot render Dolby Vision content correctly, so this may not be desired for everyone.",
-  "qualityProfile.atmosPreferred": "Atmos preferred",
-  "qualityProfile.atmosPreferredInfo":
-    "Prefer releases that include Atmos when available while still allowing non-Atmos options.",
   "qualityProfile.preferRemux": "Remux preferred",
   "qualityProfile.preferRemuxInfo":
     "Remux are full-quality copies of physical media. This is mainly useful with the Audiophile persona.",
-  "qualityProfile.preferDualAudio": "Dual audio preferred",
-  "qualityProfile.preferDualAudioInfo":
-    "Strongly prefer releases with dual audio tracks (e.g. Japanese + English). Non-dual-audio releases receive a score penalty.",
   "qualityProfile.allowBdDisk": "BD disk",
   "qualityProfile.allowBdDiskInfo":
     "Allow BD/Disc image releases (ISO/Blu-ray disk style releases) to pass the profile.",
@@ -1578,9 +1570,6 @@ const en: LocaleDictionary = {
   "convenience.requiredAudioLabel": "Required Audio Languages",
   "convenience.requiredAudioHelp":
     "Releases without these audio languages will be blocked. Creates a managed rule visible in Settings > Rules.",
-  "convenience.preferDualAudioLabel": "Prefer dual audio",
-  "convenience.preferDualAudioHelp":
-    "Boost releases that contain multiple audio tracks. Creates a managed rule visible in Settings > Rules.",
 
   // Recycle Bin
   "settings.recycleBin": "Recycle Bin",

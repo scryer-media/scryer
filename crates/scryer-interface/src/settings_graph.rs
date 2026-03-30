@@ -258,7 +258,10 @@ pub(crate) async fn load_quality_profile_settings_payload(
     })
 }
 
-pub(crate) fn quality_profile_from_input(input: QualityProfileInput) -> GqlResult<QualityProfile> {
+pub(crate) fn quality_profile_from_input(
+    input: QualityProfileInput,
+    existing: Option<&QualityProfile>,
+) -> GqlResult<QualityProfile> {
     let criteria = input.criteria;
     let mut facet_persona_overrides = HashMap::new();
     for override_entry in criteria.facet_persona_overrides {
@@ -281,13 +284,21 @@ pub(crate) fn quality_profile_from_input(input: QualityProfileInput) -> GqlResul
             video_codec_blocklist: criteria.video_codec_blocklist,
             audio_codec_allowlist: criteria.audio_codec_allowlist,
             audio_codec_blocklist: criteria.audio_codec_blocklist,
-            atmos_preferred: criteria.atmos_preferred,
+            atmos_preferred: criteria.atmos_preferred.unwrap_or(
+                existing
+                    .map(|profile| profile.criteria.atmos_preferred)
+                    .unwrap_or(false),
+            ),
             dolby_vision_allowed: criteria.dolby_vision_allowed,
             detected_hdr_allowed: criteria.detected_hdr_allowed,
             prefer_remux: criteria.prefer_remux,
             allow_bd_disk: criteria.allow_bd_disk,
             allow_upgrades: criteria.allow_upgrades,
-            prefer_dual_audio: criteria.prefer_dual_audio,
+            prefer_dual_audio: criteria.prefer_dual_audio.unwrap_or(
+                existing
+                    .map(|profile| profile.criteria.prefer_dual_audio)
+                    .unwrap_or(false),
+            ),
             required_audio_languages: criteria.required_audio_languages,
             scoring_persona: criteria.scoring_persona.into_application(),
             scoring_overrides: criteria.scoring_overrides.into_application(),

@@ -85,6 +85,7 @@ pub struct ScoringWeights {
     pub remux_missing_penalty: i32,
     pub atmos_bonus: i32,
     pub atmos_missing_penalty: i32,
+    pub block_dv_without_fallback: bool,
     pub dual_audio_bonus: i32,
     pub dual_audio_missing_penalty: i32,
     pub dual_audio_present: i32,
@@ -166,6 +167,7 @@ pub fn build_weights_for_category(
 
 struct OverrideDefaults {
     allow_x265_non4k: bool,
+    block_dv_without_fallback: bool,
     prefer_compact_encodes: bool,
     prefer_lossless_audio: bool,
     block_upscaled: bool,
@@ -175,24 +177,28 @@ fn override_defaults(persona: &ScoringPersona) -> OverrideDefaults {
     match persona {
         ScoringPersona::Balanced => OverrideDefaults {
             allow_x265_non4k: false,
+            block_dv_without_fallback: false,
             prefer_compact_encodes: false,
             prefer_lossless_audio: false,
             block_upscaled: true,
         },
         ScoringPersona::Audiophile => OverrideDefaults {
             allow_x265_non4k: false,
+            block_dv_without_fallback: false,
             prefer_compact_encodes: false,
             prefer_lossless_audio: true,
             block_upscaled: true,
         },
         ScoringPersona::Efficient => OverrideDefaults {
             allow_x265_non4k: true,
+            block_dv_without_fallback: false,
             prefer_compact_encodes: true,
             prefer_lossless_audio: false,
             block_upscaled: true,
         },
         ScoringPersona::Compatible => OverrideDefaults {
             allow_x265_non4k: false,
+            block_dv_without_fallback: false,
             prefer_compact_encodes: false,
             prefer_lossless_audio: false,
             block_upscaled: true,
@@ -214,6 +220,10 @@ fn apply_overrides(
     if allow_x265 {
         weights.x265_non4k_penalty = weights.x265_non4k_penalty.max(0);
     }
+
+    weights.block_dv_without_fallback = overrides
+        .block_dv_without_fallback
+        .unwrap_or(defaults.block_dv_without_fallback);
 
     // prefer_compact_encodes: swap size curve
     let compact = overrides
@@ -320,8 +330,9 @@ pub(crate) fn balanced_weights() -> ScoringWeights {
         // Features
         remux_bonus: 0,
         remux_missing_penalty: 0,
-        atmos_bonus: 100,
-        atmos_missing_penalty: -20,
+        atmos_bonus: 0,
+        atmos_missing_penalty: 0,
+        block_dv_without_fallback: false,
         dual_audio_bonus: 150,
         dual_audio_missing_penalty: -30,
         dual_audio_present: 40,
@@ -412,6 +423,7 @@ fn audiophile_weights() -> ScoringWeights {
         remux_missing_penalty: -80,
         atmos_bonus: 150,
         atmos_missing_penalty: -30,
+        block_dv_without_fallback: false,
         dual_audio_bonus: 200,
         dual_audio_missing_penalty: -40,
         dual_audio_present: 50,
@@ -494,8 +506,9 @@ fn efficient_weights() -> ScoringWeights {
 
         remux_bonus: 0,
         remux_missing_penalty: 0,
-        atmos_bonus: 40,
-        atmos_missing_penalty: -5,
+        atmos_bonus: 0,
+        atmos_missing_penalty: 0,
+        block_dv_without_fallback: false,
         dual_audio_bonus: 80,
         dual_audio_missing_penalty: -15,
         dual_audio_present: 30,
@@ -579,8 +592,9 @@ fn compatible_weights() -> ScoringWeights {
 
         remux_bonus: 0,
         remux_missing_penalty: 0,
-        atmos_bonus: 50,
-        atmos_missing_penalty: -10,
+        atmos_bonus: 0,
+        atmos_missing_penalty: 0,
+        block_dv_without_fallback: false,
         dual_audio_bonus: 100,
         dual_audio_missing_penalty: -20,
         dual_audio_present: 30,

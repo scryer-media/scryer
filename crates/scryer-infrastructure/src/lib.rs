@@ -13,6 +13,7 @@ pub mod queries;
 mod repositories;
 pub mod smg_enrollment;
 mod sqlite_services;
+mod staged_nzb_store;
 mod title_images;
 mod types;
 
@@ -32,6 +33,7 @@ pub use library_scanner::FileSystemLibraryScanner;
 pub use metadata_gateway::{MetadataGatewayClient, SmgEnrollmentConfig};
 pub use migrations::{list_embedded_migration_keys, list_embedded_migrations};
 pub use sqlite_services::SqliteServices;
+pub use staged_nzb_store::FileSystemStagedNzbStore;
 pub use title_images::SqliteTitleImageProcessor;
 pub(crate) use types::sqlite_url_with_create;
 pub use types::{

@@ -60,11 +60,9 @@ type QualityProfileCriteriaPayload = {
   video_codec_blocklist: string[];
   audio_codec_allowlist: string[];
   audio_codec_blocklist: string[];
-  atmos_preferred: boolean;
   dolby_vision_allowed: boolean;
   detected_hdr_allowed: boolean;
   prefer_remux: boolean;
-  prefer_dual_audio: boolean;
   required_audio_languages: string[];
   allow_bd_disk: boolean;
   allow_upgrades: boolean;
@@ -87,11 +85,9 @@ type QualityProfileDraft = {
   video_codec_blocklist: string[];
   audio_codec_allowlist: string[];
   audio_codec_blocklist: string[];
-  atmos_preferred: boolean;
   dolby_vision_allowed: boolean;
   detected_hdr_allowed: boolean;
   prefer_remux: boolean;
-  prefer_dual_audio: boolean;
   required_audio_languages: string[];
   allow_bd_disk: boolean;
   allow_upgrades: boolean;
@@ -855,23 +851,6 @@ export function SettingsQualityProfilesSection({
                     </span>
                   </div>
                 </div>
-                <label className="mb-2 flex items-center gap-3">
-                  <Checkbox
-                    checked={qualityProfileDraft.atmos_preferred}
-                    onCheckedChange={(checked) =>
-                      updateQualityProfileDraft({
-                        atmos_preferred: checked === true,
-                      })
-                    }
-                  />
-                  <span className="inline-flex items-center gap-2 text-sm">
-                    {t("qualityProfile.atmosPreferred")}
-                    <InfoHelp
-                      ariaLabel={t("qualityProfile.atmosPreferred")}
-                      text={t("qualityProfile.atmosPreferredInfo")}
-                    />
-                  </span>
-                </label>
                 <label className="mb-2 flex items-center gap-3">
                   <Checkbox
                     checked={qualityProfileDraft.prefer_remux}

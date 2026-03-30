@@ -231,11 +231,6 @@ const PROFILE_FIELDS: RefField[] = [
     descKey: "settings.refProfileACodecBlock",
   },
   {
-    field: "atmos_preferred",
-    type: "bool",
-    descKey: "settings.refProfileAtmosPreferred",
-  },
-  {
     field: "dolby_vision_allowed",
     type: "bool",
     descKey: "settings.refProfileDVAllowed",
@@ -259,11 +254,6 @@ const PROFILE_FIELDS: RefField[] = [
     field: "allow_upgrades",
     type: "bool",
     descKey: "settings.refProfileAllowUpgrades",
-  },
-  {
-    field: "prefer_dual_audio",
-    type: "bool",
-    descKey: "settings.refProfilePreferDualAudio",
   },
   {
     field: "required_audio_languages",

@@ -1718,6 +1718,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "filetime"
+version = "0.2.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f98844151eee8917efc50bd9e8318cb963ae8b297431495d3f758616ea5c57db"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "libredox",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4050,12 +4061,14 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
+ "tokio-util",
  "tower",
  "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams",
  "web-sys",
 ]
 
@@ -4392,10 +4405,12 @@ dependencies = [
 name = "scryer-infrastructure"
 version = "0.10.0"
 dependencies = [
+ "async-compression",
  "async-trait",
  "base64",
  "chrono",
  "fast_image_resize",
+ "filetime",
  "flate2",
  "futures-util",
  "image",
@@ -4403,6 +4418,7 @@ dependencies = [
  "keyring",
  "metrics",
  "p256",
+ "quick-xml",
  "ravif",
  "rcgen",
  "reqwest",
@@ -4416,12 +4432,14 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "tempfile",
  "tokio",
  "tokio-tungstenite 0.29.0",
  "tokio-util",
  "tracing",
  "uuid",
  "x509-parser",
+ "zstd",
 ]
 
 [[package]]
@@ -6183,6 +6201,19 @@ dependencies = [
  "indexmap",
  "wasm-encoder 0.244.0",
  "wasmparser 0.244.0",
+]
+
+[[package]]
+name = "wasm-streams"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d1ec4f6517c9e11ae630e200b2b65d193279042e28edd4a2cda233e46670bbb"
+dependencies = [
+ "futures-util",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

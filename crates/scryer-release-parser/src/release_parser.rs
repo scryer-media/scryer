@@ -62,8 +62,10 @@ pub struct ParsedReleaseMetadata {
     pub is_atmos: bool,
     pub is_dolby_vision: bool,
     pub detected_hdr: bool,
+    pub has_hdr_fallback: bool,
     pub is_hdr10plus: bool,
     pub is_hlg: bool,
+    pub is_10bit: bool,
     pub fps: Option<f32>,
     pub is_proper_upload: bool,
     pub is_repack: bool,
@@ -71,6 +73,8 @@ pub struct ParsedReleaseMetadata {
     pub is_bd_disk: bool,
     pub is_ai_enhanced: bool,
     pub is_hardcoded_subs: bool,
+    pub is_uncensored: bool,
+    pub is_dubs_only: bool,
     pub streaming_service: Option<String>,
     pub edition: Option<String>,
     pub anime_version: Option<u32>,
@@ -120,6 +124,8 @@ const LANG_SUBTITLE_MARKERS: &[&str] = &[
     "CC",
 ];
 
+const DUB_ONLY_MARKERS: &[&str] = &["DUB", "DUBS", "DUBBED"];
+
 fn dedupe_keep_order(mut values: Vec<String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
 
@@ -138,6 +144,10 @@ fn dedupe_keep_order(mut values: Vec<String>) -> Vec<String> {
     }
 
     out
+}
+
+fn is_dub_only_marker(token: &str) -> bool {
+    DUB_ONLY_MARKERS.contains(&token)
 }
 
 pub fn normalize_language_token(token: &str) -> Option<&'static str> {
@@ -3228,8 +3238,10 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
         is_dual_audio: false,
         is_dolby_vision: false,
         detected_hdr: false,
+        has_hdr_fallback: false,
         is_hdr10plus: false,
         is_hlg: false,
+        is_10bit: false,
         fps: parse_fps(&cleaned_title),
         is_proper_upload: false,
         is_repack: false,
@@ -3237,6 +3249,8 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
         is_bd_disk: false,
         is_ai_enhanced: false,
         is_hardcoded_subs: false,
+        is_uncensored: false,
+        is_dubs_only: false,
         streaming_service: None,
         edition: None,
         anime_version: None,
@@ -3353,6 +3367,22 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
             continue;
         }
 
+        if token == "10BIT" {
+            parsed.is_10bit = true;
+            i += 1;
+            continue;
+        }
+
+        if token == "UNCENSORED" {
+            parsed.is_uncensored = true;
+            i += 1;
+            continue;
+        }
+
+        if is_dub_only_marker(token) {
+            parsed.is_dubs_only = true;
+        }
+
         if token == "ATMOS" || token == "ATMOSPHERE" {
             parsed.is_atmos = true;
             i += 1;
@@ -3429,6 +3459,7 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
             || token == "HLG"
         {
             parsed.detected_hdr = true;
+            parsed.has_hdr_fallback = true;
             if token == "HDR10PLUS" || token == "HDR10+" || token == "HDR10P" {
                 parsed.is_hdr10plus = true;
             }
@@ -3571,6 +3602,10 @@ pub fn parse_release_metadata(raw_title: &str) -> ParsedReleaseMetadata {
         && parsed.languages_subtitles.is_empty()
     {
         parsed.languages_audio = vec!["eng".to_string(), "jpn".to_string()];
+    }
+
+    if parsed.is_dual_audio || parsed.languages_audio.len() > 1 {
+        parsed.is_dubs_only = false;
     }
 
     let mut confidence = 0.35f32;

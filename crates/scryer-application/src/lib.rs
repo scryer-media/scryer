@@ -67,9 +67,9 @@ use scryer_domain::{
     TitleHistoryEventType, TitleHistoryRecord, User,
 };
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::broadcast;
+use tokio::sync::{Semaphore, broadcast};
 
 pub type AppResult<T> = Result<T, AppError>;
 
@@ -93,7 +93,7 @@ pub use app_usecase_integration::start_download_queue_poller;
 pub use app_usecase_plugins::{RegistryPlugin, RulePackRegistryEntry, RulePackTemplate};
 pub use app_usecase_post_processing::{PostProcessingContext, run_post_processing};
 pub use app_usecase_rss::RssSyncReport;
-pub use app_usecase_rules::{ConvenienceAudioSetting, ConvenienceBoolSetting, ConvenienceSettings};
+pub use app_usecase_rules::{ConvenienceAudioSetting, ConvenienceSettings};
 pub use app_usecase_settings::{AcquisitionSettings, SubtitleSettings, UpdateSubtitleSettings};
 pub use app_usecase_subtitles::{spawn_subtitle_search_for_file, start_background_subtitle_poller};
 pub use app_usecase_title_images::start_background_banner_loop;
@@ -128,7 +128,7 @@ pub use null_repositories::{
     NullMediaFileRepository, NullNotificationChannelRepository,
     NullNotificationSubscriptionRepository, NullPendingReleaseRepository,
     NullPluginInstallationRepository, NullPostProcessingScriptRepository, NullRuleSetRepository,
-    NullSettingsRepository, NullSystemInfoProvider, NullTitleHistoryRepository,
+    NullSettingsRepository, NullStagedNzbStore, NullSystemInfoProvider, NullTitleHistoryRepository,
     NullTitleImageProcessor, NullTitleImageRepository, NullWantedItemRepository,
 };
 pub use quality_profile::{
@@ -286,6 +286,8 @@ pub struct AppServices {
     pub rss_seen_guids: Arc<tokio::sync::RwLock<HashSet<String>>>,
     pub subtitle_downloads: Arc<dyn SubtitleDownloadRepository>,
     pub import_artifacts: Arc<dyn ImportArtifactRepository>,
+    pub staged_nzb_store: Arc<dyn StagedNzbStore>,
+    pub staged_nzb_pipeline_limit: Arc<Semaphore>,
     pub tracked_download_handle: Option<tracked_downloads::TrackedDownloadHandle>,
 }
 
@@ -365,6 +367,8 @@ impl AppServices {
             health_check_results: Arc::new(tokio::sync::RwLock::new(Vec::new())),
             rss_seen_guids: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
             import_artifacts: Arc::new(null_repositories::NullImportArtifactRepository),
+            staged_nzb_store: Arc::new(null_repositories::NullStagedNzbStore),
+            staged_nzb_pipeline_limit: Arc::new(Semaphore::new(4)),
             tracked_download_handle: None,
         }
     }
@@ -895,6 +899,20 @@ pub struct ImportArtifact {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StagedNzbRef {
+    pub id: String,
+    pub compressed_path: PathBuf,
+    pub raw_size_bytes: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct PendingStagedNzb {
+    pub id: String,
+    pub compressed_path: PathBuf,
+    pub partial_path: PathBuf,
+}
+
 #[async_trait]
 pub trait ImportArtifactRepository: Send + Sync {
     async fn insert_artifact(&self, artifact: ImportArtifact) -> AppResult<()>;
@@ -913,6 +931,29 @@ pub trait ImportArtifactRepository: Send + Sync {
         source_ref: &str,
         result: &str,
     ) -> AppResult<u64>;
+}
+
+#[async_trait]
+pub trait StagedNzbStore: Send + Sync {
+    async fn create_pending_staged_nzb(
+        &self,
+        source_url: &str,
+        title_id: Option<&str>,
+    ) -> AppResult<PendingStagedNzb>;
+
+    async fn finalize_pending_staged_nzb(
+        &self,
+        pending: PendingStagedNzb,
+        raw_size_bytes: u64,
+    ) -> AppResult<StagedNzbRef>;
+
+    async fn delete_staged_nzb(&self, staged_nzb: &StagedNzbRef) -> AppResult<bool>;
+
+    async fn prune_staged_nzbs_older_than(&self, older_than: DateTime<Utc>) -> AppResult<u32>;
+
+    fn mark_artifact_active(&self, path: &Path) -> AppResult<()>;
+
+    fn mark_artifact_inactive(&self, path: &Path) -> AppResult<()>;
 }
 
 #[async_trait]
@@ -1525,6 +1566,7 @@ pub trait IndexerPluginProvider: Send + Sync {
 pub struct DownloadClientAddRequest {
     pub title: Title,
     pub source_hint: Option<String>,
+    pub staged_nzb: Option<StagedNzbRef>,
     pub source_kind: Option<DownloadSourceKind>,
     pub source_title: Option<String>,
     pub source_password: Option<String>,
@@ -1552,6 +1594,7 @@ impl DownloadClientAddRequest {
         Self {
             title: title.clone(),
             source_hint,
+            staged_nzb: None,
             source_kind,
             source_title,
             source_password,

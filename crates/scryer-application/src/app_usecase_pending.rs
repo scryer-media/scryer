@@ -406,6 +406,7 @@ impl AppUseCase {
             wanted.last_search_at.as_deref(),
             now,
             &thresholds,
+            profile.criteria.min_score_to_grab,
         );
 
         if !decision.is_accept() {
@@ -455,6 +456,7 @@ impl AppUseCase {
             .submit_download(&DownloadClientAddRequest {
                 title: title.clone(),
                 source_hint: source_hint.clone(),
+                staged_nzb: None,
                 source_kind,
                 source_title: source_title.clone(),
                 source_password: pr.source_password.clone(),

@@ -1270,12 +1270,18 @@ pub struct QualityProfileCriteriaPayload {
     pub video_codec_blocklist: Vec<String>,
     pub audio_codec_allowlist: Vec<String>,
     pub audio_codec_blocklist: Vec<String>,
+    #[graphql(
+        deprecation = "Deprecated compatibility field. Use persona scoring or user rules instead."
+    )]
     pub atmos_preferred: bool,
     pub dolby_vision_allowed: bool,
     pub detected_hdr_allowed: bool,
     pub prefer_remux: bool,
     pub allow_bd_disk: bool,
     pub allow_upgrades: bool,
+    #[graphql(
+        deprecation = "Deprecated compatibility field. Use required audio languages or user rules instead."
+    )]
     pub prefer_dual_audio: bool,
     pub required_audio_languages: Vec<String>,
     pub scoring_persona: ScoringPersonaValue,
@@ -1637,13 +1643,19 @@ pub struct QualityProfileCriteriaInput {
     pub video_codec_blocklist: Vec<String>,
     pub audio_codec_allowlist: Vec<String>,
     pub audio_codec_blocklist: Vec<String>,
-    pub atmos_preferred: bool,
+    #[graphql(
+        deprecation = "Deprecated compatibility field. Use persona scoring or user rules instead."
+    )]
+    pub atmos_preferred: Option<bool>,
     pub dolby_vision_allowed: bool,
     pub detected_hdr_allowed: bool,
     pub prefer_remux: bool,
     pub allow_bd_disk: bool,
     pub allow_upgrades: bool,
-    pub prefer_dual_audio: bool,
+    #[graphql(
+        deprecation = "Deprecated compatibility field. Use required audio languages or user rules instead."
+    )]
+    pub prefer_dual_audio: Option<bool>,
     pub required_audio_languages: Vec<String>,
     pub scoring_persona: ScoringPersonaValue,
     pub scoring_overrides: ScoringOverridesInput,
@@ -2119,30 +2131,15 @@ pub struct SetTitleRequiredAudioInput {
     pub languages: Option<Vec<String>>,
 }
 
-#[derive(InputObject)]
-pub struct SetConveniencePreferDualAudioInput {
-    /// "global", "movie", "series", or "anime"
-    pub scope: String,
-    pub enabled: bool,
-}
-
 #[derive(SimpleObject)]
 pub struct ConvenienceSettingsPayload {
     pub required_audio: Vec<ConvenienceAudioSettingPayload>,
-    pub prefer_dual_audio: Vec<ConvenienceBoolSettingPayload>,
 }
 
 #[derive(SimpleObject)]
 pub struct ConvenienceAudioSettingPayload {
     pub scope: String,
     pub languages: Vec<String>,
-    pub rule_set_id: Option<String>,
-}
-
-#[derive(SimpleObject)]
-pub struct ConvenienceBoolSettingPayload {
-    pub scope: String,
-    pub enabled: bool,
     pub rule_set_id: Option<String>,
 }
 
@@ -2474,6 +2471,7 @@ pub struct HousekeepingReportPayload {
     pub stale_release_attempts: i32,
     pub expired_event_outboxes: i32,
     pub stale_history_events: i32,
+    pub staged_nzb_artifacts_pruned: i32,
     pub recycled_purged: i32,
     pub ran_at: String,
 }

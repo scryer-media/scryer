@@ -709,13 +709,11 @@ const de: LocaleDictionary = {
   "settings.refProfileACodecAllow":
     "Erlaubte Audio-Codecs (leer = alle erlaubt)",
   "settings.refProfileACodecBlock": "Blockierte Audio-Codecs",
-  "settings.refProfileAtmosPreferred": "Profil bevorzugt Dolby-Atmos-Releases",
   "settings.refProfileDVAllowed": "Dolby-Vision-Releases werden akzeptiert",
   "settings.refProfileHdrAllowed": "HDR-Releases werden akzeptiert",
   "settings.refProfilePreferRemux": "Profil bevorzugt vollständige Remux-Releases",
   "settings.refProfileAllowBdDisk": "Blu-ray-Disc-Quellen werden akzeptiert",
   "settings.refProfileAllowUpgrades": "Upgrade vorhandener Dateien erlaubt",
-  "settings.refProfilePreferDualAudio": "Profil bevorzugt Dual-Audio-Releases",
   "settings.refProfileRequiredLangs":
     "Pflicht-Audiosprachen (ISO 639-3 Codes)",
 
@@ -934,15 +932,9 @@ const de: LocaleDictionary = {
   "qualityProfile.dolbyVisionAllowed": "Dolby Vision",
   "qualityProfile.dolbyVisionInfo":
     "Dolby-Vision-Releases erlauben. Einige Displays können Dolby-Vision-Inhalte nicht korrekt wiedergeben, daher ist dies möglicherweise nicht für jeden gewünscht.",
-  "qualityProfile.atmosPreferred": "Atmos bevorzugt",
-  "qualityProfile.atmosPreferredInfo":
-    "Releases mit Atmos bevorzugen wenn verfügbar, wobei Nicht-Atmos-Optionen weiterhin erlaubt sind.",
   "qualityProfile.preferRemux": "Remux bevorzugt",
   "qualityProfile.preferRemuxInfo":
     "Remux sind vollqualitative Kopien physischer Medien. Hauptsächlich nützlich mit der Audiophile-Persona.",
-  "qualityProfile.preferDualAudio": "Dual Audio bevorzugt",
-  "qualityProfile.preferDualAudioInfo":
-    "Releases mit dualer Audiospur stark bevorzugen (z.B. Japanisch + Englisch). Nicht-Dual-Audio-Releases erhalten eine Score-Strafe.",
   "qualityProfile.allowBdDisk": "BD-Disk",
   "qualityProfile.allowBdDiskInfo":
     "BD/Disc-Image-Releases (ISO/Blu-ray-Disk-Releases) im Profil erlauben.",
@@ -1478,9 +1470,6 @@ const de: LocaleDictionary = {
   "convenience.requiredAudioLabel": "Erforderliche Audiosprachen",
   "convenience.requiredAudioHelp":
     "Releases ohne diese Audiosprachen werden blockiert. Erstellt eine verwaltete Regel, sichtbar unter Einstellungen > Regeln.",
-  "convenience.preferDualAudioLabel": "Dual-Audio bevorzugen",
-  "convenience.preferDualAudioHelp":
-    "Releases mit mehreren Audiospuren bevorzugen. Erstellt eine verwaltete Regel, sichtbar unter Einstellungen > Regeln.",
 };
 
 export default de;

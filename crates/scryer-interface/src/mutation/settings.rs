@@ -324,10 +324,24 @@ impl SettingsMutations {
         }
         let db = settings_db_from_ctx(ctx)?;
 
+        let existing_profiles = app
+            .services
+            .quality_profiles
+            .list_quality_profiles("system", None)
+            .await
+            .map_err(to_gql_error)?;
+        let existing_by_id = existing_profiles
+            .iter()
+            .map(|profile| (profile.id.as_str(), profile))
+            .collect::<std::collections::HashMap<_, _>>();
+
         let profiles = input
             .profiles
             .into_iter()
-            .map(quality_profile_from_input)
+            .map(|profile| {
+                let existing = existing_by_id.get(profile.id.as_str()).copied();
+                quality_profile_from_input(profile, existing)
+            })
             .collect::<GqlResult<Vec<_>>>()?;
 
         if !profiles.is_empty() {

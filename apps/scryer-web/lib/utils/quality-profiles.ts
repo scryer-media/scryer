@@ -68,11 +68,9 @@ export function normalizeQualityProfileEntry(rawEntry: unknown): ParsedQualityPr
       video_codec_blocklist: readList(criteria.video_codec_blocklist),
       audio_codec_allowlist: readList(criteria.audio_codec_allowlist),
       audio_codec_blocklist: readList(criteria.audio_codec_blocklist),
-      atmos_preferred: readBoolean(criteria.atmos_preferred, false),
       dolby_vision_allowed: readBoolean(criteria.dolby_vision_allowed, false),
       detected_hdr_allowed: readBoolean(criteria.detected_hdr_allowed, false),
       prefer_remux: readBoolean(criteria.prefer_remux, false),
-      prefer_dual_audio: readBoolean(criteria.prefer_dual_audio, false),
       required_audio_languages: readList(criteria.required_audio_languages),
       allow_bd_disk: readBoolean(criteria.allow_bd_disk, false),
       allow_upgrades: readBoolean(criteria.allow_upgrades, false),
@@ -87,6 +85,43 @@ export function normalizeQualityProfileEntry(rawEntry: unknown): ParsedQualityPr
       facet_persona_overrides: readFacetPersonaOverrides(criteria.facet_persona_overrides),
     },
   };
+}
+
+function scoringOverridesFromGraph(raw: unknown): ScoringOverridesPayload {
+  if (!raw || typeof raw !== "object") return {};
+  const obj = raw as Record<string, unknown>;
+  const result: ScoringOverridesPayload = {};
+  const mapping: [string, keyof ScoringOverridesPayload][] = [
+    ["allowX265Non4K", "allow_x265_non4k"],
+    ["blockDvWithoutFallback", "block_dv_without_fallback"],
+    ["preferCompactEncodes", "prefer_compact_encodes"],
+    ["preferLosslessAudio", "prefer_lossless_audio"],
+    ["blockUpscaled", "block_upscaled"],
+  ];
+  for (const [camel, snake] of mapping) {
+    if (typeof obj[camel] === "boolean") {
+      result[snake] = obj[camel] as boolean;
+    }
+  }
+  return result;
+}
+
+function scoringOverridesToGraphInput(overrides: ScoringOverridesPayload | undefined | null): Record<string, boolean | null> {
+  if (!overrides) return {};
+  const result: Record<string, boolean | null> = {};
+  const mapping: [keyof ScoringOverridesPayload, string][] = [
+    ["allow_x265_non4k", "allowX265Non4K"],
+    ["block_dv_without_fallback", "blockDvWithoutFallback"],
+    ["prefer_compact_encodes", "preferCompactEncodes"],
+    ["prefer_lossless_audio", "preferLosslessAudio"],
+    ["block_upscaled", "blockUpscaled"],
+  ];
+  for (const [snake, camel] of mapping) {
+    if (typeof overrides[snake] === "boolean") {
+      result[camel] = overrides[snake] as boolean;
+    }
+  }
+  return result;
 }
 
 export function qualityProfileEntryFromGraph(
@@ -115,18 +150,16 @@ export function qualityProfileEntryFromGraph(
       audio_codec_blocklist: dedupeOrdered(
         profile.criteria.audioCodecBlocklist.map((value) => value.trim()),
       ),
-      atmos_preferred: profile.criteria.atmosPreferred,
       dolby_vision_allowed: profile.criteria.dolbyVisionAllowed,
       detected_hdr_allowed: profile.criteria.detectedHdrAllowed,
       prefer_remux: profile.criteria.preferRemux,
-      prefer_dual_audio: profile.criteria.preferDualAudio,
       required_audio_languages: dedupeOrdered(
         profile.criteria.requiredAudioLanguages.map((value) => value.trim()),
       ),
       allow_bd_disk: profile.criteria.allowBdDisk,
       allow_upgrades: profile.criteria.allowUpgrades,
       scoring_persona: profile.criteria.scoringPersona,
-      scoring_overrides: profile.criteria.scoringOverrides,
+      scoring_overrides: scoringOverridesFromGraph(profile.criteria.scoringOverrides),
       cutoff_tier: profile.criteria.cutoffTier?.trim().toUpperCase() || null,
       min_score_to_grab: profile.criteria.minScoreToGrab,
       facet_persona_overrides: Object.fromEntries(
@@ -352,11 +385,9 @@ export function buildQualityProfileTemplate(profileId: string, profileName: stri
     video_codec_blocklist: [],
     audio_codec_allowlist: [],
     audio_codec_blocklist: [],
-    atmos_preferred: true,
     dolby_vision_allowed: true,
     detected_hdr_allowed: true,
     prefer_remux: false,
-    prefer_dual_audio: false,
     required_audio_languages: [],
     allow_bd_disk: true,
     allow_upgrades: true,
@@ -414,8 +445,6 @@ export function toQualityProfileDraft(
       typeof entry.criteria.allow_unknown_quality === "boolean"
         ? entry.criteria.allow_unknown_quality
         : false,
-    atmos_preferred:
-      typeof entry.criteria.atmos_preferred === "boolean" ? entry.criteria.atmos_preferred : true,
     dolby_vision_allowed:
       typeof entry.criteria.dolby_vision_allowed === "boolean"
         ? entry.criteria.dolby_vision_allowed
@@ -426,7 +455,6 @@ export function toQualityProfileDraft(
         : true,
     prefer_remux:
       typeof entry.criteria.prefer_remux === "boolean" ? entry.criteria.prefer_remux : false,
-    prefer_dual_audio: typeof entry.criteria.prefer_dual_audio === "boolean" ? entry.criteria.prefer_dual_audio : false,
     required_audio_languages: parseStringArrayValue(entry.criteria.required_audio_languages),
     allow_bd_disk: typeof entry.criteria.allow_bd_disk === "boolean" ? entry.criteria.allow_bd_disk : true,
     allow_upgrades:
@@ -469,11 +497,9 @@ export function qualityProfileCatalogEntryFromDraft(draft: QualityProfileDraft):
       video_codec_blocklist: videoCodecLists.denied,
       audio_codec_allowlist: audioCodecLists.allowed,
       audio_codec_blocklist: audioCodecLists.denied,
-      atmos_preferred: draft.atmos_preferred,
       dolby_vision_allowed: draft.dolby_vision_allowed,
       detected_hdr_allowed: draft.detected_hdr_allowed,
       prefer_remux: draft.prefer_remux,
-      prefer_dual_audio: draft.prefer_dual_audio,
       required_audio_languages: draft.required_audio_languages,
       allow_bd_disk: draft.allow_bd_disk,
       allow_upgrades: draft.allow_upgrades,
@@ -500,16 +526,14 @@ export function qualityProfileEntryToMutationInput(entry: ParsedQualityProfileEn
       videoCodecBlocklist: entry.criteria.video_codec_blocklist,
       audioCodecAllowlist: entry.criteria.audio_codec_allowlist,
       audioCodecBlocklist: entry.criteria.audio_codec_blocklist,
-      atmosPreferred: entry.criteria.atmos_preferred,
       dolbyVisionAllowed: entry.criteria.dolby_vision_allowed,
       detectedHdrAllowed: entry.criteria.detected_hdr_allowed,
       preferRemux: entry.criteria.prefer_remux,
       allowBdDisk: entry.criteria.allow_bd_disk,
       allowUpgrades: entry.criteria.allow_upgrades,
-      preferDualAudio: entry.criteria.prefer_dual_audio,
       requiredAudioLanguages: entry.criteria.required_audio_languages ?? [],
       scoringPersona: entry.criteria.scoring_persona,
-      scoringOverrides: entry.criteria.scoring_overrides ?? {},
+      scoringOverrides: scoringOverridesToGraphInput(entry.criteria.scoring_overrides),
       cutoffTier: entry.criteria.cutoff_tier,
       minScoreToGrab: entry.criteria.min_score_to_grab,
       facetPersonaOverrides: Object.entries(entry.criteria.facet_persona_overrides ?? {}).map(

@@ -297,17 +297,15 @@ const qualityProfileCriteriaFields = `
       videoCodecBlocklist
       audioCodecAllowlist
       audioCodecBlocklist
-      atmosPreferred
       dolbyVisionAllowed
       detectedHdrAllowed
       preferRemux
       allowBdDisk
       allowUpgrades
-      preferDualAudio
       requiredAudioLanguages
       scoringPersona
       scoringOverrides {
-        allowX265Non4k
+        allowX265Non4K
         blockDvWithoutFallback
         preferCompactEncodes
         preferLosslessAudio
@@ -815,10 +813,6 @@ export const setConvenienceRequiredAudioMutation = `mutation SetConvenienceRequi
 
 export const setTitleRequiredAudioMutation = `mutation SetTitleRequiredAudio($input: SetTitleRequiredAudioInput!) {
   setTitleRequiredAudio(input: $input)
-}`;
-
-export const setConveniencePreferDualAudioMutation = `mutation SetConveniencePreferDualAudio($input: SetConveniencePreferDualAudioInput!) {
-  setConveniencePreferDualAudio(input: $input)
 }`;
 
 // ── Setup Wizard ──────────────────────────────────────────────────────

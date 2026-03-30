@@ -124,6 +124,9 @@ pub fn generate_title_required_audio_rego(title_id: &str, languages: &[String]) 
 ///
 /// Awards a bonus when `is_dual_audio` is true. No penalty when false —
 /// this is a preference, not a requirement.
+///
+/// The `+200` score preserves the historical convenience-rule behavior so
+/// legacy managed rules can migrate without silently changing ranking.
 pub fn generate_prefer_dual_audio_rego() -> String {
     "\
 import rego.v1

@@ -14,8 +14,11 @@ serde = { workspace = true }
 tokio = { workspace = true }
 sqlx = { workspace = true }
 chrono = { workspace = true }
+quick-xml = { workspace = true }
+zstd = "0.13"
 flate2 = "1"
-reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "query", "rustls", "gzip", "brotli", "zstd", "deflate"] }
+async-compression = { version = "0.4", features = ["tokio", "zstd", "gzip"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "query", "rustls", "gzip", "brotli", "zstd", "deflate", "stream"] }
 p256 = { workspace = true }
 rcgen = "0.14"
 ring = { workspace = true }
@@ -25,11 +28,12 @@ metrics = { workspace = true }
 x509-parser = "0.18"
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = "0.3"
-tokio-util = { version = "0.7", features = ["rt"] }
+tokio-util = { version = "0.7", features = ["rt", "io"] }
 image = { version = "0.25", default-features = false, features = ["avif", "jpeg", "png", "webp"] }
 ravif = { version = "0.13", features = ["threading"] }
 fast_image_resize = "6"
 kamadak-exif = "0.6"
+filetime = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = { workspace = true }
@@ -41,3 +45,4 @@ keyring = { workspace = true }
 
 [dev-dependencies]
 scryer-rules = { path = "../scryer-rules" }
+tempfile = "3"

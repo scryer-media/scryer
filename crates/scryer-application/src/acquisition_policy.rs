@@ -82,6 +82,7 @@ pub fn evaluate_upgrade(
     last_import_at: Option<&str>,
     now: &DateTime<Utc>,
     thresholds: &AcquisitionThresholds,
+    min_score_to_grab: Option<i32>,
 ) -> UpgradeDecision {
     let Some(current) = current_score else {
         return UpgradeDecision::AcceptInitial;
@@ -110,7 +111,12 @@ pub fn evaluate_upgrade(
     }
 
     // Cross-tier upgrades (delta >= 1000 due to tier_weight) use the lower threshold.
-    let min_delta = if delta >= 1000 {
+    let is_cross_tier = delta >= 1000;
+    if !is_cross_tier && min_score_to_grab.is_some_and(|minimum| current >= minimum) {
+        return UpgradeDecision::RejectInsufficientDelta;
+    }
+
+    let min_delta = if is_cross_tier {
         thresholds.cross_tier_min_delta
     } else {
         thresholds.same_tier_min_delta
@@ -298,28 +304,28 @@ mod tests {
     #[test]
     fn test_accept_initial_when_no_current() {
         let now = Utc::now();
-        let decision = evaluate_upgrade(1000, None, true, None, &now, &t());
+        let decision = evaluate_upgrade(1000, None, true, None, &now, &t(), None);
         assert_eq!(decision, UpgradeDecision::AcceptInitial);
     }
 
     #[test]
     fn test_reject_lower_score() {
         let now = Utc::now();
-        let decision = evaluate_upgrade(500, Some(1000), true, None, &now, &t());
+        let decision = evaluate_upgrade(500, Some(1000), true, None, &now, &t(), None);
         assert_eq!(decision, UpgradeDecision::RejectInsufficientDelta);
     }
 
     #[test]
     fn test_accept_sufficient_delta() {
         let now = Utc::now();
-        let decision = evaluate_upgrade(1200, Some(1000), true, None, &now, &t());
+        let decision = evaluate_upgrade(1200, Some(1000), true, None, &now, &t(), None);
         assert_eq!(decision, UpgradeDecision::AcceptUpgrade);
     }
 
     #[test]
     fn test_reject_insufficient_delta() {
         let now = Utc::now();
-        let decision = evaluate_upgrade(1050, Some(1000), true, None, &now, &t());
+        let decision = evaluate_upgrade(1050, Some(1000), true, None, &now, &t(), None);
         assert_eq!(decision, UpgradeDecision::RejectInsufficientDelta);
     }
 
@@ -327,7 +333,15 @@ mod tests {
     fn test_reject_cooldown() {
         let now = Utc::now();
         let recent_import = (now - Duration::hours(1)).to_rfc3339();
-        let decision = evaluate_upgrade(1200, Some(1000), true, Some(&recent_import), &now, &t());
+        let decision = evaluate_upgrade(
+            1200,
+            Some(1000),
+            true,
+            Some(&recent_import),
+            &now,
+            &t(),
+            None,
+        );
         assert_eq!(decision, UpgradeDecision::RejectCooldown);
     }
 
@@ -335,14 +349,22 @@ mod tests {
     fn test_accept_forced_bypass_during_cooldown() {
         let now = Utc::now();
         let recent_import = (now - Duration::hours(1)).to_rfc3339();
-        let decision = evaluate_upgrade(1500, Some(1000), true, Some(&recent_import), &now, &t());
+        let decision = evaluate_upgrade(
+            1500,
+            Some(1000),
+            true,
+            Some(&recent_import),
+            &now,
+            &t(),
+            None,
+        );
         assert_eq!(decision, UpgradeDecision::AcceptUpgrade);
     }
 
     #[test]
     fn test_reject_upgrades_not_allowed() {
         let now = Utc::now();
-        let decision = evaluate_upgrade(2000, Some(1000), false, None, &now, &t());
+        let decision = evaluate_upgrade(2000, Some(1000), false, None, &now, &t(), None);
         assert_eq!(decision, UpgradeDecision::RejectNotAllowed);
     }
 
@@ -350,7 +372,7 @@ mod tests {
     fn test_cross_tier_upgrade_uses_lower_delta() {
         let now = Utc::now();
         // Cross-tier: delta >= 1000, so cross_tier_min_delta (30) applies
-        let decision = evaluate_upgrade(2050, Some(1000), true, None, &now, &t());
+        let decision = evaluate_upgrade(2050, Some(1000), true, None, &now, &t(), None);
         assert_eq!(decision, UpgradeDecision::AcceptUpgrade);
     }
 
@@ -414,7 +436,7 @@ mod tests {
         let now = Utc::now();
         let thresholds = AcquisitionThresholds::for_persona(&ScoringPersona::Audiophile);
         // 60pt delta: audiophile accepts (threshold 50), balanced would reject (threshold 200)
-        let decision = evaluate_upgrade(1060, Some(1000), true, None, &now, &thresholds);
+        let decision = evaluate_upgrade(1060, Some(1000), true, None, &now, &thresholds, None);
         assert_eq!(decision, UpgradeDecision::AcceptUpgrade);
     }
 
@@ -423,8 +445,22 @@ mod tests {
         let now = Utc::now();
         let thresholds = AcquisitionThresholds::for_persona(&ScoringPersona::Balanced);
         // 60pt delta: balanced rejects (threshold 200)
-        let decision = evaluate_upgrade(1060, Some(1000), true, None, &now, &thresholds);
+        let decision = evaluate_upgrade(1060, Some(1000), true, None, &now, &thresholds, None);
         assert_eq!(decision, UpgradeDecision::RejectInsufficientDelta);
+    }
+
+    #[test]
+    fn test_same_tier_upgrade_rejected_when_current_already_meets_min_score_to_grab() {
+        let now = Utc::now();
+        let decision = evaluate_upgrade(1200, Some(1100), true, None, &now, &t(), Some(1000));
+        assert_eq!(decision, UpgradeDecision::RejectInsufficientDelta);
+    }
+
+    #[test]
+    fn test_cross_tier_upgrade_still_allowed_above_min_score_to_grab() {
+        let now = Utc::now();
+        let decision = evaluate_upgrade(2200, Some(1100), true, None, &now, &t(), Some(1000));
+        assert_eq!(decision, UpgradeDecision::AcceptUpgrade);
     }
 }
 

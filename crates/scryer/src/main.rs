@@ -25,10 +25,10 @@ use scryer_application::{
     tracked_downloads::TrackedDownloadHandle,
 };
 use scryer_infrastructure::{
-    FileSystemLibraryRenamer, FileSystemLibraryScanner, MetadataGatewayClient, MigrationMode,
-    MultiIndexerSearchClient, NzbgetDownloadClient, PrioritizedDownloadClientRouter,
-    SmgEnrollmentConfig, SqliteServices, SqliteTitleImageProcessor, WeaverDownloadClient,
-    start_weaver_subscription_bridge,
+    FileSystemLibraryRenamer, FileSystemLibraryScanner, FileSystemStagedNzbStore,
+    MetadataGatewayClient, MigrationMode, MultiIndexerSearchClient, NzbgetDownloadClient,
+    PrioritizedDownloadClientRouter, SmgEnrollmentConfig, SqliteServices,
+    SqliteTitleImageProcessor, WeaverDownloadClient, start_weaver_subscription_bridge,
 };
 use scryer_interface::{LogBuffer, build_schema_with_log_buffer};
 use tokio::net::TcpListener;
@@ -386,20 +386,33 @@ async fn bootstrap_application(
     let release_attempts = Arc::new(db.clone());
     let download_client_configs = Arc::new(db.clone());
     let settings_for_router: Arc<dyn scryer_application::SettingsRepository> = Arc::new(db.clone());
+    let staged_nzb_store = Arc::new(
+        FileSystemStagedNzbStore::new_with_startup_purge(
+            FileSystemStagedNzbStore::path_for_main_db(&db_path),
+            true,
+        )
+        .await
+        .map_err(|e| format!("failed to initialize staged nzb store: {e}"))?,
+    );
+    let staged_nzb_pipeline_limit = Arc::new(tokio::sync::Semaphore::new(4));
     let download_client_plugin_provider: Arc<dyn DownloadClientPluginProvider> =
         Arc::new(scryer_plugins::DynamicDownloadClientPluginProvider::new(
             scryer_plugins::WasmDownloadClientPluginProvider::empty(),
         ));
-    let fallback_download_client = Arc::new(NzbgetDownloadClient::new(
+    let fallback_download_client = Arc::new(NzbgetDownloadClient::with_staged_nzb_store(
         runtime_settings.nzbget_url,
         runtime_settings.nzbget_username,
         runtime_settings.nzbget_password,
         runtime_settings.nzbget_dupe_mode,
+        staged_nzb_store.clone(),
+        staged_nzb_pipeline_limit.clone(),
     ));
     let download_client = Arc::new(PrioritizedDownloadClientRouter::new(
         download_client_configs.clone(),
         settings_for_router,
         fallback_download_client,
+        staged_nzb_store.clone(),
+        staged_nzb_pipeline_limit.clone(),
         Some(download_client_plugin_provider.clone()),
     ));
     let indexer_stats: Arc<dyn scryer_application::IndexerStatsTracker> = Arc::new(
@@ -567,6 +580,8 @@ async fn bootstrap_application(
     services.title_image_processor = title_image_processor;
     services.housekeeping = Arc::new(db.clone());
     services.subtitle_downloads = Arc::new(db.clone());
+    services.staged_nzb_store = staged_nzb_store;
+    services.staged_nzb_pipeline_limit = staged_nzb_pipeline_limit;
     services.indexer_stats = indexer_stats;
     services.plugin_provider = Some(plugin_provider);
     services.download_client_plugin_provider = Some(download_client_plugin_provider.clone());
@@ -593,6 +608,9 @@ async fn bootstrap_application(
     // This ensures user enable/disable toggles are respected after restart.
     if let Err(e) = app_use_case.seed_builtin_plugins().await {
         tracing::warn!(error = %e, "failed to seed built-in plugin installations");
+    }
+    if let Err(e) = app_use_case.migrate_legacy_persona_preferences().await {
+        tracing::warn!(error = %e, "failed to migrate legacy persona preferences on startup");
     }
     if let Err(e) = app_use_case.rebuild_plugin_provider().await {
         tracing::warn!(error = %e, "failed to rebuild plugin provider from DB state");

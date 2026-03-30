@@ -1,5 +1,6 @@
 use super::*;
 use crate::quality_profile::ScoringSource;
+use crate::quality_profile::evaluate_against_profile_for_category;
 use scryer_domain::TaggedAlias;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -401,11 +402,12 @@ impl AppUseCase {
                 &quality_profile.criteria.scoring_overrides,
                 category.as_deref(),
             );
-            let mut decision = evaluate_against_profile(
+            let mut decision = evaluate_against_profile_for_category(
                 &quality_profile,
                 &parsed_release_metadata,
                 false,
                 &weights,
+                category.as_deref(),
             );
             apply_age_scoring(&mut decision, result.published_at.as_deref());
             crate::quality_profile::apply_size_scoring_for_category(

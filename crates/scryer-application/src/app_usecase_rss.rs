@@ -677,7 +677,13 @@ impl AppUseCase {
                 &quality_profile.criteria.scoring_overrides,
                 category.as_deref(),
             );
-            let mut decision = evaluate_against_profile(&quality_profile, &parsed, false, &weights);
+            let mut decision = crate::quality_profile::evaluate_against_profile_for_category(
+                &quality_profile,
+                &parsed,
+                false,
+                &weights,
+                category.as_deref(),
+            );
             apply_age_scoring(&mut decision, result.published_at.as_deref());
             crate::quality_profile::apply_size_scoring_for_category(
                 &mut decision,
@@ -857,6 +863,7 @@ impl AppUseCase {
             wanted.last_search_at.as_deref(),
             now,
             &thresholds,
+            profile.criteria.min_score_to_grab,
         );
 
         // Record the decision
@@ -1000,6 +1007,7 @@ impl AppUseCase {
             .submit_download(&DownloadClientAddRequest {
                 title: title.clone(),
                 source_hint: source_hint.clone(),
+                staged_nzb: None,
                 source_kind: best.source_kind,
                 source_title: source_title.clone(),
                 source_password: source_password.clone(),

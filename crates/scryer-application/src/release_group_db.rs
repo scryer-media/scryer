@@ -42,10 +42,12 @@ pub struct GroupEntry {
 pub fn lookup_group(
     name: &str,
     source: Option<&str>,
+    quality: Option<&str>,
     is_remux: bool,
+    category_hint: Option<&str>,
 ) -> Option<&'static GroupEntry> {
     let name_upper = name.to_ascii_uppercase();
-    let ctx = source_to_context(source, is_remux);
+    let ctx = source_to_context(source, quality, is_remux, category_hint);
 
     // Try source-specific match first
     if let Some(entry) = GROUPS
@@ -62,13 +64,32 @@ pub fn lookup_group(
 }
 
 /// Map a parsed source string + remux flag to our SourceContext.
-fn source_to_context(source: Option<&str>, is_remux: bool) -> SourceContext {
+fn source_to_context(
+    source: Option<&str>,
+    quality: Option<&str>,
+    is_remux: bool,
+    category_hint: Option<&str>,
+) -> SourceContext {
+    if matches!(
+        category_hint
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref(),
+        Some("anime")
+    ) {
+        return SourceContext::Anime;
+    }
     if is_remux {
         return SourceContext::Remux;
     }
     match source.map(|value| value.trim().to_ascii_uppercase()) {
         Some(value) if matches!(value.as_str(), "WEB-DL" | "WEBRIP") => SourceContext::Web,
-        Some(value) if matches!(value.as_str(), "BLURAY" | "BRDISK") => SourceContext::BluRay,
+        Some(value) if matches!(value.as_str(), "BLURAY" | "BRDISK") => {
+            if quality.is_some_and(|value| value.trim().eq_ignore_ascii_case("2160P")) {
+                SourceContext::UhdBluRay
+            } else {
+                SourceContext::BluRay
+            }
+        }
         Some(value) if value == "RAWHD" => SourceContext::Any,
         _ => SourceContext::Any,
     }
@@ -84,6 +105,17 @@ pub fn apply_release_group_scoring(
     source: Option<&str>,
     is_remux: bool,
 ) -> (&'static str, i32) {
+    apply_release_group_scoring_with_context(weights, group, source, None, is_remux, None)
+}
+
+pub fn apply_release_group_scoring_with_context(
+    weights: &ScoringWeights,
+    group: Option<&str>,
+    source: Option<&str>,
+    quality: Option<&str>,
+    is_remux: bool,
+    category_hint: Option<&str>,
+) -> (&'static str, i32) {
     let Some(name) = group else {
         return ("group_unknown", weights.group_unknown_penalty);
     };
@@ -92,7 +124,7 @@ pub fn apply_release_group_scoring(
         return ("group_unknown", weights.group_unknown_penalty);
     }
 
-    match lookup_group(name, source, is_remux) {
+    match lookup_group(name, source, quality, is_remux, category_hint) {
         Some(entry) => match entry.tier {
             GroupTier::Gold => ("group_gold", weights.group_gold),
             GroupTier::Silver => ("group_silver", weights.group_silver),

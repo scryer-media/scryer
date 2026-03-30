@@ -38,6 +38,13 @@ pub(crate) fn build_rule_input(
         .iter()
         .any(|tag| tag.eq_ignore_ascii_case("anime"))
         || category.eq_ignore_ascii_case("anime");
+    let has_release_group = parsed
+        .release_group
+        .as_ref()
+        .is_some_and(|group| !group.trim().is_empty());
+    let is_obfuscated = is_obfuscated_release(parsed);
+    let is_retagged = is_retagged_release(parsed);
+    let (episode_release_type, is_season_pack, is_multi_episode) = release_type_details(parsed);
 
     // Merge indexer-reported languages (e.g. NZBGeek "English") into the
     // title-parsed set so that convenience rules like required_audio_languages
@@ -77,9 +84,18 @@ pub(crate) fn build_rule_input(
             is_hardcoded_subs: parsed.is_hardcoded_subs,
             is_hdr10plus: parsed.is_hdr10plus,
             is_hlg: parsed.is_hlg,
+            is_10bit: parsed.is_10bit,
+            is_uncensored: parsed.is_uncensored,
+            is_dubs_only: parsed.is_dubs_only,
+            has_release_group,
+            is_obfuscated,
+            is_retagged,
             streaming_service: parsed.streaming_service.clone(),
             edition: parsed.edition.clone(),
             anime_version: parsed.anime_version,
+            episode_release_type,
+            is_season_pack,
+            is_multi_episode,
             release_group: parsed.release_group.clone(),
             year: parsed.year,
             parse_confidence: parsed.parse_confidence,
@@ -136,6 +152,65 @@ pub(crate) fn build_rule_input(
         },
         file,
     }
+}
+
+fn release_type_details(parsed: &ParsedReleaseMetadata) -> (Option<String>, bool, bool) {
+    let Some(ref episode) = parsed.episode else {
+        return (None, false, false);
+    };
+
+    let kind = match episode.release_type {
+        scryer_release_parser::ParsedEpisodeReleaseType::SingleEpisode => "single_episode",
+        scryer_release_parser::ParsedEpisodeReleaseType::MultiEpisode => "multi_episode",
+        scryer_release_parser::ParsedEpisodeReleaseType::SeasonPack => "season_pack",
+        scryer_release_parser::ParsedEpisodeReleaseType::Unknown => "unknown",
+    };
+
+    (
+        Some(kind.to_string()),
+        matches!(
+            episode.release_type,
+            scryer_release_parser::ParsedEpisodeReleaseType::SeasonPack
+        ) || episode.full_season
+            || episode.is_partial_season
+            || episode.is_multi_season,
+        matches!(
+            episode.release_type,
+            scryer_release_parser::ParsedEpisodeReleaseType::MultiEpisode
+                | scryer_release_parser::ParsedEpisodeReleaseType::SeasonPack
+        ) || episode.episode_numbers.len() > 1
+            || episode.absolute_episode_numbers.len() > 1,
+    )
+}
+
+fn is_obfuscated_release(parsed: &ParsedReleaseMetadata) -> bool {
+    if parsed
+        .release_group
+        .as_ref()
+        .is_some_and(|group| !group.trim().is_empty())
+    {
+        return false;
+    }
+
+    parsed
+        .raw_title
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| token.len() >= 8)
+        .any(|token| {
+            let has_alpha = token.chars().any(|ch| ch.is_ascii_alphabetic());
+            let has_digit = token.chars().any(|ch| ch.is_ascii_digit());
+            let hex_like = token.chars().all(|ch| ch.is_ascii_hexdigit());
+            (has_alpha && has_digit) || hex_like
+        })
+}
+
+fn is_retagged_release(parsed: &ParsedReleaseMetadata) -> bool {
+    let lower = parsed.raw_title.to_ascii_lowercase();
+    [
+        "[rartv]", "rarbg", "[tgx]", "eztvx", "ettv", "yts.mx", "yts",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
 }
 
 pub(crate) fn build_search_rule_input(
@@ -428,5 +503,76 @@ mod tests {
             .filter(|l| *l == "fra")
             .count();
         assert_eq!(fra_count, 1, "French should not be duplicated");
+    }
+
+    #[test]
+    fn build_rule_input_exposes_episode_release_type_fields() {
+        let parsed = crate::parse_release_metadata("Test.Show.S01.COMPLETE.1080p.WEB-DL-Group");
+        let input = build_rule_input(
+            &parsed,
+            &test_profile(),
+            &test_decision(),
+            ReleaseRuntimeInfo {
+                size_bytes: None,
+                published_at: None,
+                thumbs_up: None,
+                thumbs_down: None,
+                extra: None,
+                indexer_languages: None,
+            },
+            RuleContextInfo {
+                title_id: Some("series-1"),
+                category: Some("series"),
+                title_tags: &[],
+                has_existing_file: false,
+                existing_score: None,
+                search_mode: "auto",
+                runtime_minutes: None,
+                is_filler: false,
+            },
+            None,
+        );
+
+        let value = serde_json::to_value(input).unwrap();
+        assert_eq!(value["release"]["episode_release_type"], "season_pack");
+        assert_eq!(value["release"]["is_season_pack"], true);
+        assert_eq!(value["release"]["is_multi_episode"], true);
+    }
+
+    #[test]
+    fn build_rule_input_exposes_release_provenance_flags() {
+        let mut parsed = test_parsed();
+        parsed.raw_title = "Test.Movie.2024.1080p.WEB-DL.A1B2C3D4E5.RARBG".to_string();
+        parsed.release_group = None;
+
+        let input = build_rule_input(
+            &parsed,
+            &test_profile(),
+            &test_decision(),
+            ReleaseRuntimeInfo {
+                size_bytes: None,
+                published_at: None,
+                thumbs_up: None,
+                thumbs_down: None,
+                extra: None,
+                indexer_languages: None,
+            },
+            RuleContextInfo {
+                title_id: None,
+                category: Some("movie"),
+                title_tags: &[],
+                has_existing_file: false,
+                existing_score: None,
+                search_mode: "auto",
+                runtime_minutes: None,
+                is_filler: false,
+            },
+            None,
+        );
+
+        let value = serde_json::to_value(input).unwrap();
+        assert_eq!(value["release"]["has_release_group"], false);
+        assert_eq!(value["release"]["is_obfuscated"], true);
+        assert_eq!(value["release"]["is_retagged"], true);
     }
 }

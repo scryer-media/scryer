@@ -974,15 +974,6 @@ impl QueryRoot {
                     rule_set_id: s.rule_set_id,
                 })
                 .collect(),
-            prefer_dual_audio: settings
-                .prefer_dual_audio
-                .into_iter()
-                .map(|s| ConvenienceBoolSettingPayload {
-                    scope: s.scope,
-                    enabled: s.enabled,
-                    rule_set_id: s.rule_set_id,
-                })
-                .collect(),
         })
     }
 

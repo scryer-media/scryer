@@ -2,19 +2,22 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use reqwest::Client;
 use scryer_application::{
     AppError, AppResult, DownloadClient, DownloadClientAddRequest, DownloadClientConfigRepository,
     DownloadClientPluginProvider, DownloadGrabResult, DownloadSourceKind, SettingsRepository,
-    accepted_inputs_for_client,
+    StagedNzbRef, StagedNzbStore, accepted_inputs_for_client,
 };
 use scryer_domain::{DownloadClientConfig, DownloadQueueItem, MediaFacet};
+use tokio::sync::Semaphore;
 use tracing::warn;
 
 use super::nzbget::NzbgetDownloadClient;
 use super::sabnzbd::SabnzbdDownloadClient;
 use super::weaver::WeaverDownloadClient;
 use super::{
-    parse_download_client_config_json, read_config_string, resolve_download_client_base_url,
+    parse_download_client_config_json, read_config_string, request_source_hint_for_nzb,
+    resolve_download_client_base_url, stage_nzb_from_url,
 };
 
 const DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY: &str = "download_client.routing";
@@ -25,7 +28,10 @@ pub struct PrioritizedDownloadClientRouter {
     download_client_configs: Arc<dyn DownloadClientConfigRepository>,
     settings: Arc<dyn SettingsRepository>,
     fallback_client: Arc<dyn DownloadClient>,
+    staged_nzb_store: Arc<dyn StagedNzbStore>,
+    staged_nzb_pipeline_limit: Arc<Semaphore>,
     plugin_provider: Option<Arc<dyn DownloadClientPluginProvider>>,
+    http_client: Client,
 }
 
 struct FacetClientSelection {
@@ -48,13 +54,18 @@ impl PrioritizedDownloadClientRouter {
         download_client_configs: Arc<dyn DownloadClientConfigRepository>,
         settings: Arc<dyn SettingsRepository>,
         fallback_client: Arc<dyn DownloadClient>,
+        staged_nzb_store: Arc<dyn StagedNzbStore>,
+        staged_nzb_pipeline_limit: Arc<Semaphore>,
         plugin_provider: Option<Arc<dyn DownloadClientPluginProvider>>,
     ) -> Self {
         Self {
             download_client_configs,
             settings,
             fallback_client,
+            staged_nzb_store,
+            staged_nzb_pipeline_limit,
             plugin_provider,
+            http_client: Client::new(),
         }
     }
 
@@ -307,8 +318,36 @@ impl PrioritizedDownloadClientRouter {
         Ok(effective_request)
     }
 
+    fn is_native_nzb_client_type(client_type: &str) -> bool {
+        matches!(client_type, "nzbget" | "sabnzbd" | "weaver")
+    }
+
+    fn request_uses_nzb_payload(request: &DownloadClientAddRequest) -> bool {
+        matches!(
+            Self::request_source_kind(request),
+            Some(DownloadSourceKind::NzbFile | DownloadSourceKind::NzbUrl)
+        )
+    }
+
+    async fn delete_staged_nzb(&self, staged_nzb: Option<&StagedNzbRef>, reason: &str) {
+        let Some(staged_nzb) = staged_nzb else {
+            return;
+        };
+
+        if let Err(error) = self.staged_nzb_store.delete_staged_nzb(staged_nzb).await {
+            warn!(
+                staged_nzb_id = staged_nzb.id.as_str(),
+                error = %error,
+                reason,
+                "failed to delete staged nzb artifact"
+            );
+        }
+    }
+
     fn client_from_config(
         config: &DownloadClientConfig,
+        staged_nzb_store: Arc<dyn StagedNzbStore>,
+        staged_nzb_pipeline_limit: Arc<Semaphore>,
         plugin_provider: Option<&Arc<dyn DownloadClientPluginProvider>>,
     ) -> AppResult<Arc<dyn DownloadClient>> {
         if let Some(provider) = plugin_provider
@@ -331,7 +370,14 @@ impl PrioritizedDownloadClientRouter {
                 let password = read_config_string(&parsed_config, &["password"]);
                 let dupe_mode = read_config_string(&parsed_config, &["dupe_mode", "dupeMode"])
                     .unwrap_or_else(|| "SCORE".to_string());
-                let client = NzbgetDownloadClient::new(base_url, username, password, dupe_mode);
+                let client = NzbgetDownloadClient::with_staged_nzb_store(
+                    base_url,
+                    username,
+                    password,
+                    dupe_mode,
+                    staged_nzb_store,
+                    staged_nzb_pipeline_limit,
+                );
                 Ok(Arc::new(client))
             }
             "sabnzbd" => {
@@ -350,11 +396,20 @@ impl PrioritizedDownloadClientRouter {
                             config.id
                         ))
                     })?;
-                let client = SabnzbdDownloadClient::new(base_url, api_key);
+                let client = SabnzbdDownloadClient::with_staged_nzb_store(
+                    base_url,
+                    api_key,
+                    staged_nzb_store,
+                    staged_nzb_pipeline_limit,
+                );
                 Ok(Arc::new(client))
             }
             "weaver" => {
-                let client = WeaverDownloadClient::from_config(config)?;
+                let client = WeaverDownloadClient::from_config_with_staged_nzb_store(
+                    config,
+                    staged_nzb_store,
+                    staged_nzb_pipeline_limit,
+                )?;
                 Ok(Arc::new(client))
             }
             _ => Err(AppError::Validation(format!(
@@ -376,7 +431,12 @@ impl PrioritizedDownloadClientRouter {
 
         let mut clients = Vec::new();
         for config in configs {
-            match Self::client_from_config(&config, self.plugin_provider.as_ref()) {
+            match Self::client_from_config(
+                &config,
+                self.staged_nzb_store.clone(),
+                self.staged_nzb_pipeline_limit.clone(),
+                self.plugin_provider.as_ref(),
+            ) {
                 Ok(client) => clients.push((config, client)),
                 Err(error) => {
                     warn!(
@@ -490,8 +550,25 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         }
 
         let mut last_error: Option<AppError> = None;
+        let mut staged_nzb = if let Some(staged_nzb) = request.staged_nzb.clone() {
+            self.staged_nzb_store
+                .mark_artifact_active(&staged_nzb.compressed_path)?;
+            Some(super::StagedNzbLease {
+                staged_nzb,
+                self_staged: false,
+                store: self.staged_nzb_store.clone(),
+                _permit: None,
+            })
+        } else {
+            None
+        };
         for config in clients {
-            let client = match Self::client_from_config(&config, self.plugin_provider.as_ref()) {
+            let client = match Self::client_from_config(
+                &config,
+                self.staged_nzb_store.clone(),
+                self.staged_nzb_pipeline_limit.clone(),
+                self.plugin_provider.as_ref(),
+            ) {
                 Ok(client) => client,
                 Err(error) => {
                     warn!(
@@ -510,7 +587,28 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 .apply_selected_client_routing(request, &config.id)
                 .await
             {
-                Ok(effective_request) => effective_request,
+                Ok(mut effective_request) => {
+                    if Self::is_native_nzb_client_type(&config.client_type)
+                        && Self::request_uses_nzb_payload(&effective_request)
+                    {
+                        if staged_nzb.is_none() {
+                            let source_hint = request_source_hint_for_nzb(&effective_request)?;
+                            staged_nzb = Some(
+                                stage_nzb_from_url(
+                                    &self.http_client,
+                                    &self.staged_nzb_store,
+                                    &self.staged_nzb_pipeline_limit,
+                                    &source_hint,
+                                    Some(&request.title.id),
+                                )
+                                .await?,
+                            );
+                        }
+                        effective_request.staged_nzb =
+                            staged_nzb.as_ref().map(|lease| lease.staged_nzb.clone());
+                    }
+                    effective_request
+                }
                 Err(error) => {
                     warn!(
                         client_id = config.id.as_str(),
@@ -526,6 +624,11 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
 
             match client.submit_download(&effective_request).await {
                 Ok(result) => {
+                    self.delete_staged_nzb(
+                        staged_nzb.as_ref().map(|lease| &lease.staged_nzb),
+                        "submit_success",
+                    )
+                    .await;
                     return Ok(DownloadGrabResult {
                         job_id: result.job_id,
                         client_type: config.client_type.clone(),
@@ -545,10 +648,21 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                         last_error = Some(error);
                         continue;
                     }
+                    self.delete_staged_nzb(
+                        staged_nzb.as_ref().map(|lease| &lease.staged_nzb),
+                        "submit_failure",
+                    )
+                    .await;
                     return Err(error);
                 }
             }
         }
+
+        self.delete_staged_nzb(
+            staged_nzb.as_ref().map(|lease| &lease.staged_nzb),
+            "submit_failure",
+        )
+        .await;
 
         Err(last_error.unwrap_or_else(|| {
             AppError::Repository(
@@ -564,7 +678,12 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         }
         let mut all_items = Vec::new();
         for config in clients {
-            let client = match Self::client_from_config(&config, self.plugin_provider.as_ref()) {
+            let client = match Self::client_from_config(
+                &config,
+                self.staged_nzb_store.clone(),
+                self.staged_nzb_pipeline_limit.clone(),
+                self.plugin_provider.as_ref(),
+            ) {
                 Ok(client) => client,
                 Err(error) => {
                     tracing::warn!(client_id = %config.id, error = %error, "skipping client for queue listing");
@@ -594,7 +713,12 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         }
         let mut all_items = Vec::new();
         for config in clients {
-            let client = match Self::client_from_config(&config, self.plugin_provider.as_ref()) {
+            let client = match Self::client_from_config(
+                &config,
+                self.staged_nzb_store.clone(),
+                self.staged_nzb_pipeline_limit.clone(),
+                self.plugin_provider.as_ref(),
+            ) {
                 Ok(client) => client,
                 Err(error) => {
                     tracing::warn!(client_id = %config.id, error = %error, "skipping client for history listing");
@@ -634,7 +758,12 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         let fetch_limit = offset.saturating_add(limit);
         let mut all_items = Vec::new();
         for config in clients {
-            let client = match Self::client_from_config(&config, self.plugin_provider.as_ref()) {
+            let client = match Self::client_from_config(
+                &config,
+                self.staged_nzb_store.clone(),
+                self.staged_nzb_pipeline_limit.clone(),
+                self.plugin_provider.as_ref(),
+            ) {
                 Ok(client) => client,
                 Err(error) => {
                     tracing::warn!(client_id = %config.id, error = %error, "skipping client for paged history listing");
@@ -669,7 +798,12 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         }
         let mut all_items = Vec::new();
         for config in clients {
-            let client = match Self::client_from_config(&config, self.plugin_provider.as_ref()) {
+            let client = match Self::client_from_config(
+                &config,
+                self.staged_nzb_store.clone(),
+                self.staged_nzb_pipeline_limit.clone(),
+                self.plugin_provider.as_ref(),
+            ) {
                 Ok(client) => client,
                 Err(error) => {
                     tracing::warn!(client_id = %config.id, error = %error, "skipping client for completed downloads");
@@ -954,6 +1088,14 @@ mod tests {
         }
     }
 
+    fn null_staged_nzb_store() -> Arc<dyn StagedNzbStore> {
+        Arc::new(scryer_application::NullStagedNzbStore)
+    }
+
+    fn test_pipeline_limit() -> Arc<Semaphore> {
+        Arc::new(Semaphore::new(4))
+    }
+
     fn disabled_test_config(
         id: &str,
         name: &str,
@@ -1012,6 +1154,8 @@ mod tests {
             }),
             Arc::new(MockSettingsRepository::default()),
             Arc::new(MockDownloadClient::default()),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
             Some(plugin_provider),
         );
 
@@ -1019,6 +1163,7 @@ mod tests {
             .submit_download(&DownloadClientAddRequest {
                 title: test_title(),
                 source_hint: Some("https://tracker.example/file.torrent".to_string()),
+                staged_nzb: None,
                 source_kind: Some(DownloadSourceKind::TorrentFile),
                 source_title: Some("Test Release".to_string()),
                 source_password: None,
@@ -1048,6 +1193,8 @@ mod tests {
             }),
             Arc::new(MockSettingsRepository::default()),
             Arc::new(MockDownloadClient::default()),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
             None,
         );
 
@@ -1055,6 +1202,7 @@ mod tests {
             .submit_download(&DownloadClientAddRequest {
                 title: test_title(),
                 source_hint: Some("magnet:?xt=urn:btih:abcdef".to_string()),
+                staged_nzb: None,
                 source_kind: Some(DownloadSourceKind::MagnetUri),
                 source_title: Some("Test Release".to_string()),
                 source_password: None,
@@ -1110,6 +1258,8 @@ mod tests {
                 )]),
             }),
             Arc::new(MockDownloadClient::default()),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
             Some(plugin_provider),
         );
 
@@ -1117,6 +1267,7 @@ mod tests {
             .submit_download(&DownloadClientAddRequest {
                 title: test_title(),
                 source_hint: Some("https://example.invalid/release.nzb".to_string()),
+                staged_nzb: None,
                 source_kind: Some(DownloadSourceKind::NzbUrl),
                 source_title: Some("Test Release".to_string()),
                 source_password: None,
@@ -1179,6 +1330,8 @@ mod tests {
                 ]),
             }),
             Arc::new(MockDownloadClient::default()),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
             Some(plugin_provider),
         );
 
@@ -1186,6 +1339,7 @@ mod tests {
             .submit_download(&DownloadClientAddRequest {
                 title: test_title_for_facet(MediaFacet::Movie),
                 source_hint: Some("https://example.invalid/movie.nzb".to_string()),
+                staged_nzb: None,
                 source_kind: Some(DownloadSourceKind::NzbUrl),
                 source_title: Some("Movie Release".to_string()),
                 source_password: None,
@@ -1207,6 +1361,7 @@ mod tests {
             .submit_download(&DownloadClientAddRequest {
                 title: test_title_for_facet(MediaFacet::Anime),
                 source_hint: Some("https://example.invalid/anime.nzb".to_string()),
+                staged_nzb: None,
                 source_kind: Some(DownloadSourceKind::NzbUrl),
                 source_title: Some("Anime Release".to_string()),
                 source_password: None,
@@ -1254,6 +1409,8 @@ mod tests {
                 )]),
             }),
             Arc::new(MockDownloadClient::default()),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
             Some(plugin_provider),
         );
 
@@ -1261,6 +1418,7 @@ mod tests {
             .submit_download(&DownloadClientAddRequest {
                 title: test_title(),
                 source_hint: Some("https://example.invalid/release.nzb".to_string()),
+                staged_nzb: None,
                 source_kind: Some(DownloadSourceKind::NzbUrl),
                 source_title: Some("Test Release".to_string()),
                 source_password: None,
@@ -1308,6 +1466,8 @@ mod tests {
                 )]),
             }),
             Arc::new(MockDownloadClient::default()),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
             Some(plugin_provider),
         );
 
@@ -1315,6 +1475,7 @@ mod tests {
             .submit_download(&DownloadClientAddRequest {
                 title: test_title(),
                 source_hint: Some("https://example.invalid/release.nzb".to_string()),
+                staged_nzb: None,
                 source_kind: Some(DownloadSourceKind::NzbUrl),
                 source_title: Some("Test Release".to_string()),
                 source_password: None,
@@ -1363,6 +1524,8 @@ mod tests {
                 )]),
             }),
             Arc::new(MockDownloadClient::default()),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
             Some(plugin_provider),
         );
 
@@ -1370,6 +1533,7 @@ mod tests {
             .submit_download(&DownloadClientAddRequest {
                 title: test_title(),
                 source_hint: Some("https://example.invalid/release.nzb".to_string()),
+                staged_nzb: None,
                 source_kind: Some(DownloadSourceKind::NzbUrl),
                 source_title: Some("Test Release".to_string()),
                 source_password: None,
@@ -1409,6 +1573,8 @@ mod tests {
                 )]),
             }),
             fallback.clone(),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
             Some(Arc::new(MockDownloadClientPluginProvider {
                 accepted_inputs: vec!["nzb_url".to_string()],
                 clients: vec![(
@@ -1422,6 +1588,7 @@ mod tests {
             .submit_download(&DownloadClientAddRequest {
                 title: test_title(),
                 source_hint: Some("https://example.invalid/release.nzb".to_string()),
+                staged_nzb: None,
                 source_kind: Some(DownloadSourceKind::NzbUrl),
                 source_title: Some("Test Release".to_string()),
                 source_password: None,
@@ -1483,6 +1650,8 @@ mod tests {
             }),
             Arc::new(MockSettingsRepository::default()),
             Arc::new(MockDownloadClient::default()),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
             Some(plugin_provider),
         );
 
@@ -1532,6 +1701,8 @@ mod tests {
             }),
             Arc::new(MockSettingsRepository::default()),
             Arc::new(MockDownloadClient::default()),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
             Some(plugin_provider),
         );
 
@@ -1582,6 +1753,8 @@ mod tests {
             }),
             Arc::new(MockSettingsRepository::default()),
             Arc::new(MockDownloadClient::default()),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
             Some(plugin_provider),
         );
 

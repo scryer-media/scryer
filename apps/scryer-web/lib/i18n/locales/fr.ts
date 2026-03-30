@@ -709,13 +709,11 @@ const fr: LocaleDictionary = {
   "settings.refProfileACodecAllow":
     "Codecs audio autorisés (vide = tous autorisés)",
   "settings.refProfileACodecBlock": "Codecs audio bloqués",
-  "settings.refProfileAtmosPreferred": "Le profil préfère les versions Dolby Atmos",
   "settings.refProfileDVAllowed": "Les versions Dolby Vision sont acceptées",
   "settings.refProfileHdrAllowed": "Les versions HDR sont acceptées",
   "settings.refProfilePreferRemux": "Le profil préfère les versions remux complètes",
   "settings.refProfileAllowBdDisk": "Les sources disque Blu-ray sont acceptées",
   "settings.refProfileAllowUpgrades": "La mise à niveau des fichiers existants est autorisée",
-  "settings.refProfilePreferDualAudio": "Le profil préfère les versions en double audio",
   "settings.refProfileRequiredLangs":
     "Langues audio obligatoires (codes ISO 639-3)",
 
@@ -934,15 +932,9 @@ const fr: LocaleDictionary = {
   "qualityProfile.dolbyVisionAllowed": "Dolby Vision",
   "qualityProfile.dolbyVisionInfo":
     "Autoriser les versions Dolby Vision. Certains écrans ne peuvent pas restituer correctement le contenu Dolby Vision, ce qui peut ne pas convenir à tout le monde.",
-  "qualityProfile.atmosPreferred": "Atmos préféré",
-  "qualityProfile.atmosPreferredInfo":
-    "Préférer les versions incluant Atmos lorsque disponible, tout en autorisant les options sans Atmos.",
   "qualityProfile.preferRemux": "Remux préféré",
   "qualityProfile.preferRemuxInfo":
     "Les remux sont des copies en qualité intégrale du média physique. Principalement utile avec la persona Audiophile.",
-  "qualityProfile.preferDualAudio": "Double audio préféré",
-  "qualityProfile.preferDualAudioInfo":
-    "Préférer fortement les versions avec double piste audio (ex. japonais + anglais). Les versions sans double audio reçoivent une pénalité de score.",
   "qualityProfile.allowBdDisk": "Disque BD",
   "qualityProfile.allowBdDiskInfo":
     "Autoriser les versions image BD/Disc (versions de type ISO/disque Blu-ray) à passer le profil.",
@@ -1478,9 +1470,6 @@ const fr: LocaleDictionary = {
   "convenience.requiredAudioLabel": "Langues audio requises",
   "convenience.requiredAudioHelp":
     "Les releases sans ces langues audio seront bloquées. Crée une règle gérée visible dans Paramètres > Règles.",
-  "convenience.preferDualAudioLabel": "Préférer le double audio",
-  "convenience.preferDualAudioHelp":
-    "Favoriser les releases avec plusieurs pistes audio. Crée une règle gérée visible dans Paramètres > Règles.",
 };
 
 export default fr;

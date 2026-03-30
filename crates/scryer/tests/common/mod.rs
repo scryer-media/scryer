@@ -14,8 +14,8 @@ use scryer_application::{
     MovieFacetHandler, SeriesFacetHandler,
 };
 use scryer_infrastructure::{
-    FileSystemLibraryScanner, MetadataGatewayClient, MultiIndexerSearchClient,
-    NzbgetDownloadClient, SmgEnrollmentConfig, SqliteServices,
+    FileSystemLibraryScanner, FileSystemStagedNzbStore, MetadataGatewayClient,
+    MultiIndexerSearchClient, NzbgetDownloadClient, SmgEnrollmentConfig, SqliteServices,
 };
 use scryer_interface::{ApiSchema, build_schema};
 
@@ -33,6 +33,8 @@ pub struct TestContext {
     pub schema: ApiSchema,
     pub app: AppUseCase,
     pub db: SqliteServices,
+    pub staged_nzb_store: Arc<FileSystemStagedNzbStore>,
+    pub staged_nzb_dir: tempfile::TempDir,
 }
 
 impl TestContext {
@@ -46,13 +48,22 @@ impl TestContext {
         let db = SqliteServices::new(":memory:")
             .await
             .expect("failed to create in-memory SQLite");
+        let staged_nzb_dir = tempfile::TempDir::new().expect("failed to create staged nzb tempdir");
+        let staged_nzb_store = Arc::new(
+            FileSystemStagedNzbStore::new(staged_nzb_dir.path())
+                .await
+                .expect("failed to create staged nzb store"),
+        );
+        let staged_nzb_pipeline_limit = Arc::new(tokio::sync::Semaphore::new(4));
 
         // Real clients pointed at wiremock URLs
-        let nzbget = NzbgetDownloadClient::new(
+        let nzbget = NzbgetDownloadClient::with_staged_nzb_store(
             nzbget_server.uri(),
             Some("test-user".to_string()),
             Some("test-pass".to_string()),
             "SCORE".to_string(),
+            staged_nzb_store.clone(),
+            staged_nzb_pipeline_limit.clone(),
         );
 
         // Build indexer client backed by built-in WASM plugins (using DynamicPluginProvider
@@ -123,6 +134,8 @@ impl TestContext {
         services.download_submissions = Arc::new(db.clone());
         services.pending_releases = Arc::new(db.clone());
         services.pp_scripts = Arc::new(db.clone());
+        services.staged_nzb_store = staged_nzb_store.clone();
+        services.staged_nzb_pipeline_limit = staged_nzb_pipeline_limit;
 
         // Facet registry with all built-in facets
         let mut registry = FacetRegistry::new();
@@ -170,6 +183,8 @@ impl TestContext {
             schema,
             app,
             db,
+            staged_nzb_store,
+            staged_nzb_dir,
         }
     }
 

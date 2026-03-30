@@ -30,11 +30,9 @@ export type QualityProfileCriteriaPayload = {
   video_codec_blocklist: string[];
   audio_codec_allowlist: string[];
   audio_codec_blocklist: string[];
-  atmos_preferred: boolean;
   dolby_vision_allowed: boolean;
   detected_hdr_allowed: boolean;
   prefer_remux: boolean;
-  prefer_dual_audio: boolean;
   required_audio_languages: string[];
   allow_bd_disk: boolean;
   allow_upgrades: boolean;
@@ -66,13 +64,11 @@ export type QualityProfileGraphCriteriaPayload = {
   videoCodecBlocklist: string[];
   audioCodecAllowlist: string[];
   audioCodecBlocklist: string[];
-  atmosPreferred: boolean;
   dolbyVisionAllowed: boolean;
   detectedHdrAllowed: boolean;
   preferRemux: boolean;
   allowBdDisk: boolean;
   allowUpgrades: boolean;
-  preferDualAudio: boolean;
   requiredAudioLanguages: string[];
   scoringPersona: ScoringPersonaId;
   scoringOverrides: ScoringOverridesPayload;
@@ -113,11 +109,9 @@ export type QualityProfileDraft = {
   video_codec_blocklist: string[];
   audio_codec_allowlist: string[];
   audio_codec_blocklist: string[];
-  atmos_preferred: boolean;
   dolby_vision_allowed: boolean;
   detected_hdr_allowed: boolean;
   prefer_remux: boolean;
-  prefer_dual_audio: boolean;
   required_audio_languages: string[];
   allow_bd_disk: boolean;
   allow_upgrades: boolean;

@@ -1,4 +1,4 @@
-use crate::release_group_db::apply_release_group_scoring;
+use crate::release_group_db::apply_release_group_scoring_with_context;
 use crate::release_parser::ParsedReleaseMetadata;
 use crate::scoring_weights::{
     ScoringOverrides, ScoringPersona, ScoringWeights, audio_weight_for_codec,
@@ -220,7 +220,7 @@ pub fn default_quality_profile_for_search() -> QualityProfile {
             video_codec_blocklist: Vec::new(),
             audio_codec_allowlist: Vec::new(),
             audio_codec_blocklist: Vec::new(),
-            atmos_preferred: true,
+            atmos_preferred: false,
             dolby_vision_allowed: true,
             detected_hdr_allowed: true,
             prefer_remux: false,
@@ -251,7 +251,7 @@ pub fn default_quality_profile_1080p_for_search() -> QualityProfile {
             video_codec_blocklist: Vec::new(),
             audio_codec_allowlist: Vec::new(),
             audio_codec_blocklist: Vec::new(),
-            atmos_preferred: true,
+            atmos_preferred: false,
             dolby_vision_allowed: true,
             detected_hdr_allowed: true,
             prefer_remux: false,
@@ -511,6 +511,16 @@ pub fn evaluate_against_profile(
     has_existing_file: bool,
     weights: &ScoringWeights,
 ) -> QualityProfileDecision {
+    evaluate_against_profile_for_category(profile, release, has_existing_file, weights, None)
+}
+
+pub fn evaluate_against_profile_for_category(
+    profile: &QualityProfile,
+    release: &ParsedReleaseMetadata,
+    has_existing_file: bool,
+    weights: &ScoringWeights,
+    category_hint: Option<&str>,
+) -> QualityProfileDecision {
     let mut d = QualityProfileDecision::new();
     let c = &profile.criteria;
 
@@ -671,6 +681,9 @@ pub fn evaluate_against_profile(
         } else {
             d.log("dolby_vision_not_allowed", BLOCK_SCORE);
         }
+        if weights.block_dv_without_fallback && !has_dv_hdr_fallback(release) {
+            d.log("dolby_vision_missing_hdr_fallback", BLOCK_SCORE);
+        }
     }
 
     // ── HDR ──────────────────────────────────────────────────────────────────
@@ -700,11 +713,15 @@ pub fn evaluate_against_profile(
     }
 
     // ── Atmos preference ─────────────────────────────────────────────────────
-    if c.atmos_preferred {
+    if weights.atmos_bonus != 0 || weights.atmos_missing_penalty != 0 {
         if release.is_atmos {
-            d.log("atmos_preferred_match", weights.atmos_bonus);
+            if weights.atmos_bonus != 0 {
+                d.log("atmos_preferred_match", weights.atmos_bonus);
+            }
         } else {
-            d.log("atmos_preferred_missing", weights.atmos_missing_penalty);
+            if weights.atmos_missing_penalty != 0 {
+                d.log("atmos_preferred_missing", weights.atmos_missing_penalty);
+            }
         }
     }
 
@@ -782,19 +799,37 @@ pub fn evaluate_against_profile(
     }
 
     // ── Anime-specific ───────────────────────────────────────────────────────
-    if let Some(ver) = release.anime_version
-        && ver >= 2
-    {
-        d.log("anime_version_bonus", weights.anime_v2_bonus);
+    if matches!(
+        category_hint
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref(),
+        Some("anime")
+    ) {
+        if let Some(ver) = release.anime_version
+            && ver >= 2
+        {
+            d.log("anime_version_bonus", weights.anime_v2_bonus);
+        }
+        if release.is_10bit {
+            d.log("anime_10bit_bonus", weights.anime_10bit_bonus);
+        }
+        if release.is_uncensored {
+            d.log("anime_uncensored_bonus", weights.anime_uncensored_bonus);
+        }
+        if release.is_dubs_only {
+            d.log("anime_dubs_only", weights.anime_dubs_only_penalty);
+        }
     }
 
     // ── Release group reputation ─────────────────────────────────────────────
     {
-        let (code, delta) = apply_release_group_scoring(
+        let (code, delta) = apply_release_group_scoring_with_context(
             weights,
             release.release_group.as_deref(),
             release.source.as_deref(),
+            release.quality.as_deref(),
             release.is_remux,
+            category_hint,
         );
         if delta != 0 {
             d.log(code, delta);
@@ -817,6 +852,10 @@ pub fn evaluate_against_profile(
     }
 
     d
+}
+
+fn has_dv_hdr_fallback(release: &ParsedReleaseMetadata) -> bool {
+    release.has_hdr_fallback || release.is_hdr10plus || release.is_hlg
 }
 
 /// Apply an age-based scoring adjustment to a release decision.

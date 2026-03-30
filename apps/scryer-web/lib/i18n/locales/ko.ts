@@ -708,13 +708,11 @@ const ko: LocaleDictionary = {
   "settings.refProfileACodecAllow":
     "허용 오디오 코덱 (비어있으면 모두 허용)",
   "settings.refProfileACodecBlock": "차단 오디오 코덱",
-  "settings.refProfileAtmosPreferred": "프로필이 Dolby Atmos를 선호함",
   "settings.refProfileDVAllowed": "Dolby Vision 릴리스 허용",
   "settings.refProfileHdrAllowed": "HDR 릴리스 허용",
   "settings.refProfilePreferRemux": "프로필이 전체 리먹스를 선호함",
   "settings.refProfileAllowBdDisk": "블루레이 디스크 소스 허용",
   "settings.refProfileAllowUpgrades": "기존 파일 업그레이드 허용",
-  "settings.refProfilePreferDualAudio": "프로필이 듀얼 오디오를 선호함",
   "settings.refProfileRequiredLangs":
     "필수 오디오 언어 (ISO 639-3 코드)",
   "settings.refSectionContext": "— 타이틀 및 검색 컨텍스트",
@@ -923,15 +921,9 @@ const ko: LocaleDictionary = {
   "qualityProfile.dolbyVisionAllowed": "Dolby Vision",
   "qualityProfile.dolbyVisionInfo":
     "Dolby Vision 릴리스를 허용합니다. 일부 디스플레이는 Dolby Vision 콘텐츠를 올바르게 렌더링하지 못하므로 모든 사용자에게 적합하지 않을 수 있습니다.",
-  "qualityProfile.atmosPreferred": "Atmos 선호",
-  "qualityProfile.atmosPreferredInfo":
-    "Atmos가 포함된 릴리스를 선호하면서도 비Atmos 옵션도 허용합니다.",
   "qualityProfile.preferRemux": "Remux 선호",
   "qualityProfile.preferRemuxInfo":
     "Remux는 물리적 미디어의 전체 품질 복사본입니다. 주로 Audiophile 페르소나에서 유용합니다.",
-  "qualityProfile.preferDualAudio": "듀얼 오디오 선호",
-  "qualityProfile.preferDualAudioInfo":
-    "듀얼 오디오 트랙이 있는 릴리스를 강력히 선호합니다 (예: 일본어 + 영어). 비듀얼 오디오 릴리스는 점수 감점을 받습니다.",
   "qualityProfile.allowBdDisk": "BD 디스크",
   "qualityProfile.allowBdDiskInfo":
     "BD/디스크 이미지 릴리스 (ISO/블루레이 디스크 형태)가 프로필을 통과하도록 허용합니다.",
@@ -1480,9 +1472,6 @@ const ko: LocaleDictionary = {
   "convenience.requiredAudioLabel": "필수 오디오 언어",
   "convenience.requiredAudioHelp":
     "이 오디오 언어가 없는 릴리스는 차단됩니다. 설정 > 규칙에 표시되는 관리 규칙을 생성합니다.",
-  "convenience.preferDualAudioLabel": "듀얼 오디오 선호",
-  "convenience.preferDualAudioHelp":
-    "여러 오디오 트랙이 포함된 릴리스를 우선합니다. 설정 > 규칙에 표시되는 관리 규칙을 생성합니다.",
 };
 
 export default ko;

@@ -708,13 +708,11 @@ const zh_CN: LocaleDictionary = {
   "settings.refProfileACodecAllow":
     "允许的音频编码器（为空表示全部允许）",
   "settings.refProfileACodecBlock": "阻止的音频编码器",
-  "settings.refProfileAtmosPreferred": "配置偏好 Dolby Atmos 版本",
   "settings.refProfileDVAllowed": "接受 Dolby Vision 版本",
   "settings.refProfileHdrAllowed": "接受 HDR 版本",
   "settings.refProfilePreferRemux": "配置偏好完整 Remux 版本",
   "settings.refProfileAllowBdDisk": "接受蓝光光盘来源",
   "settings.refProfileAllowUpgrades": "允许升级现有文件",
-  "settings.refProfilePreferDualAudio": "配置偏好双音轨版本",
   "settings.refProfileRequiredLangs":
     "必需的音频语言（ISO 639-3 代码）",
   "settings.refSectionContext": "— 标题和搜索上下文",
@@ -923,15 +921,9 @@ const zh_CN: LocaleDictionary = {
   "qualityProfile.dolbyVisionAllowed": "Dolby Vision",
   "qualityProfile.dolbyVisionInfo":
     "允许 Dolby Vision 版本。某些显示器无法正确渲染 Dolby Vision 内容，因此可能并非所有人都需要。",
-  "qualityProfile.atmosPreferred": "偏好 Atmos",
-  "qualityProfile.atmosPreferredInfo":
-    "在有 Atmos 时优先选择，同时仍允许非 Atmos 选项。",
   "qualityProfile.preferRemux": "偏好 Remux",
   "qualityProfile.preferRemuxInfo":
     "Remux 是物理媒体的完整质量副本。主要适用于 Audiophile 人格。",
-  "qualityProfile.preferDualAudio": "偏好双音轨",
-  "qualityProfile.preferDualAudioInfo":
-    "强烈偏好双音轨版本（例如日语 + 英语）。非双音轨版本将被扣分。",
   "qualityProfile.allowBdDisk": "BD 光盘",
   "qualityProfile.allowBdDiskInfo":
     "允许 BD/光盘映像版本（ISO/蓝光光盘样式）通过配置。",
@@ -1476,9 +1468,6 @@ const zh_CN: LocaleDictionary = {
   "convenience.requiredAudioLabel": "必需音频语言",
   "convenience.requiredAudioHelp":
     "不包含这些音频语言的发布将被屏蔽。会创建一条托管规则，可在设置 > 规则中查看。",
-  "convenience.preferDualAudioLabel": "偏好双音轨",
-  "convenience.preferDualAudioHelp":
-    "优先选择包含多条音轨的发布。会创建一条托管规则，可在设置 > 规则中查看。",
 };
 
 export default zh_CN;

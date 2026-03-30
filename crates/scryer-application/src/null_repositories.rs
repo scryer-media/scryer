@@ -17,12 +17,12 @@ use crate::{
     FileImporter, HousekeepingRepository, ImportArtifact, ImportArtifactRepository,
     ImportRepository, IndexerQueryStats, IndexerStatsTracker, MediaFileRepository,
     NewBlocklistEntry, NewTitleHistoryEvent, NotificationChannelRepository,
-    NotificationSubscriptionRepository, PendingRelease, PendingReleaseRepository,
+    NotificationSubscriptionRepository, PendingRelease, PendingReleaseRepository, PendingStagedNzb,
     PluginInstallationRepository, PostProcessingScriptRepository, ReleaseDecision,
-    RuleSetRepository, SettingsRepository, SystemInfoProvider, TitleHistoryFilter,
-    TitleHistoryPage, TitleHistoryRepository, TitleImageBlob, TitleImageKind, TitleImageProcessor,
-    TitleImageReplacement, TitleImageRepository, TitleImageSyncTask, TitleMediaFile,
-    TitleMediaSizeSummary, WantedItem, WantedItemRepository,
+    RuleSetRepository, SettingsRepository, StagedNzbRef, StagedNzbStore, SystemInfoProvider,
+    TitleHistoryFilter, TitleHistoryPage, TitleHistoryRepository, TitleImageBlob, TitleImageKind,
+    TitleImageProcessor, TitleImageReplacement, TitleImageRepository, TitleImageSyncTask,
+    TitleMediaFile, TitleMediaSizeSummary, WantedItem, WantedItemRepository,
 };
 
 #[derive(Default)]
@@ -639,6 +639,51 @@ impl ImportArtifactRepository for NullImportArtifactRepository {
     }
     async fn count_by_result(&self, _: &str, _: &str, _: &str) -> AppResult<u64> {
         Ok(0)
+    }
+}
+
+#[derive(Default)]
+pub struct NullStagedNzbStore;
+
+#[async_trait]
+impl StagedNzbStore for NullStagedNzbStore {
+    async fn create_pending_staged_nzb(
+        &self,
+        _source_url: &str,
+        _title_id: Option<&str>,
+    ) -> AppResult<PendingStagedNzb> {
+        Err(AppError::Repository(
+            "staged nzb store is not configured".to_string(),
+        ))
+    }
+
+    async fn finalize_pending_staged_nzb(
+        &self,
+        _pending: PendingStagedNzb,
+        _raw_size_bytes: u64,
+    ) -> AppResult<StagedNzbRef> {
+        Err(AppError::Repository(
+            "staged nzb store is not configured".to_string(),
+        ))
+    }
+
+    async fn delete_staged_nzb(&self, _: &StagedNzbRef) -> AppResult<bool> {
+        Ok(false)
+    }
+
+    async fn prune_staged_nzbs_older_than(
+        &self,
+        _older_than: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<u32> {
+        Ok(0)
+    }
+
+    fn mark_artifact_active(&self, _path: &std::path::Path) -> AppResult<()> {
+        Ok(())
+    }
+
+    fn mark_artifact_inactive(&self, _path: &std::path::Path) -> AppResult<()> {
+        Ok(())
     }
 }
 

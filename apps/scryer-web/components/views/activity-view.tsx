@@ -19,7 +19,7 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from "@/components/ui/hover-card";
-import { Progress } from "@/components/ui/progress";
+import { ActivityProgressBar } from "@/components/views/activity-progress-bar";
 import {
   Table,
   TableBody,
@@ -442,15 +442,11 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
                         {queueItem.importErrorMessage && !failedReason ? (
                           <p className="mt-2 break-words text-xs text-rose-400">{queueItem.importErrorMessage}</p>
                         ) : null}
-                        <div className="mt-3 space-y-1">
-                          <div className="flex items-center justify-between text-xs">
-                            <p className="font-semibold text-foreground">{percent}%</p>
-                            <p className="text-muted-foreground">{remainingLabel ?? "\u2014"}</p>
-                          </div>
-                          <Progress
-                            value={percent}
-                            className="h-2.5 bg-muted/90"
-                            indicatorClassName={getProgressBarColor(displayStateKey)}
+                        <div className="mt-3">
+                          <ActivityProgressBar
+                            percent={percent}
+                            remainingLabel={remainingLabel}
+                            colorClass={getProgressBarColor(displayStateKey)}
                           />
                         </div>
                         <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
@@ -723,14 +719,10 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
                           )}
                         </TableCell>
                         <TableCell className="w-52 min-w-52 align-middle">
-                          <div className="mb-1 flex items-center justify-between text-xs">
-                            <p className="font-semibold text-foreground">{percent}%</p>
-                            <p className="text-muted-foreground">{remainingLabel ?? "\u2014"}</p>
-                          </div>
-                          <Progress
-                            value={percent}
-                            className="h-2.5 bg-muted/90"
-                            indicatorClassName={getProgressBarColor(displayStateKey)}
+                          <ActivityProgressBar
+                            percent={percent}
+                            remainingLabel={remainingLabel}
+                            colorClass={getProgressBarColor(displayStateKey)}
                           />
                         </TableCell>
                         <TableCell className="w-24 min-w-24 align-middle">{formatBytes(queueItem.sizeBytes)}</TableCell>

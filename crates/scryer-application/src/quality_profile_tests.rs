@@ -362,17 +362,18 @@ fn audiophile_profile_penalizes_missing_remux() {
 }
 
 #[test]
-fn atmos_preference_bonus() {
-    let profile = QualityProfile::parse(
-        r#"{"id":"t","name":"T","criteria":{"atmos_preferred":true,"allow_unknown_quality":true,"allow_upgrades":true}}"#,
-    ).unwrap();
-    let w = balanced_weights();
+fn audiophile_persona_applies_atmos_bonus() {
+    let profile = QualityProfile::default();
+    let w = crate::scoring_weights::build_weights(
+        &crate::scoring_weights::ScoringPersona::Audiophile,
+        &crate::scoring_weights::ScoringOverrides::default(),
+    );
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.DDP.Atmos.H.265");
     let d = evaluate_against_profile(&profile, &release, false, &w);
     assert!(
         d.scoring_log
             .iter()
-            .any(|e| e.code == "atmos_preferred_match" && e.delta == 100)
+            .any(|e| e.code == "atmos_preferred_match" && e.delta == 150)
     );
 }
 
@@ -784,10 +785,8 @@ fn balanced_truehd_atmos_same_as_truehd() {
     let d_atmos = evaluate_against_profile(&profile, &with_atmos, false, &w);
     let d_plain = evaluate_against_profile(&profile, &no_atmos, false, &w);
 
-    // Balanced treats Atmos+TrueHD same as TrueHD for audio codec weight,
-    // but the atmos_preferred feature may add a bonus if the profile has it enabled.
-    // With default profile (atmos_preferred=true), atmos gets the atmos_preferred_match bonus.
-    // The audio codec weight itself should be equal.
+    // Balanced treats Atmos+TrueHD the same as TrueHD. Atmos is now persona-native
+    // for Audiophile only, so Balanced should not add a separate Atmos bias.
     let atmos_codec_score: i32 = d_atmos
         .scoring_log
         .iter()
@@ -801,6 +800,12 @@ fn balanced_truehd_atmos_same_as_truehd() {
         .map(|e| e.delta)
         .sum();
     assert_eq!(atmos_codec_score, plain_codec_score);
+    assert!(
+        !d_atmos
+            .scoring_log
+            .iter()
+            .any(|e| e.code.starts_with("atmos_preferred"))
+    );
 }
 
 // ── Phase B: DTS-X scoring ──────────────────────────────────────────────
@@ -1000,14 +1005,56 @@ fn sdr_at_1080p_no_penalty() {
     assert!(!d.scoring_log.iter().any(|e| e.code == "sdr_at_4k"));
 }
 
+#[test]
+fn dv_without_hdr_fallback_blocks_when_override_enabled() {
+    let profile = QualityProfile::default();
+    let w = crate::scoring_weights::build_weights(
+        &crate::scoring_weights::ScoringPersona::Balanced,
+        &crate::scoring_weights::ScoringOverrides {
+            block_dv_without_fallback: Some(true),
+            ..crate::scoring_weights::ScoringOverrides::default()
+        },
+    );
+    let release = parse_release_metadata("Movie.2024.2160p.WEB-DL.DV.H.265");
+    let d = evaluate_against_profile(&profile, &release, false, &w);
+    assert!(!d.allowed);
+    assert!(
+        d.block_codes
+            .contains(&"dolby_vision_missing_hdr_fallback".to_string())
+    );
+}
+
+#[test]
+fn dv_with_hdr_fallback_is_allowed_when_override_enabled() {
+    let profile = QualityProfile::default();
+    let w = crate::scoring_weights::build_weights(
+        &crate::scoring_weights::ScoringPersona::Balanced,
+        &crate::scoring_weights::ScoringOverrides {
+            block_dv_without_fallback: Some(true),
+            ..crate::scoring_weights::ScoringOverrides::default()
+        },
+    );
+    let release = parse_release_metadata("Movie.2024.2160p.WEB-DL.DV.HDR.H.265");
+    let d = evaluate_against_profile(&profile, &release, false, &w);
+    assert!(d.allowed);
+    assert!(
+        !d.block_codes
+            .contains(&"dolby_vision_missing_hdr_fallback".to_string())
+    );
+}
+
 // ── Phase E: anime version bonus ─────────────────────────────────────────
 
 #[test]
 fn anime_v2_gets_bonus() {
     let profile = QualityProfile::default();
-    let w = balanced_weights();
+    let w = crate::scoring_weights::build_weights_for_category(
+        &crate::scoring_weights::ScoringPersona::Balanced,
+        &crate::scoring_weights::ScoringOverrides::default(),
+        Some("anime"),
+    );
     let release = parse_release_metadata("[Group] Anime Title - 01v2 [1080p] [HEVC]");
-    let d = evaluate_against_profile(&profile, &release, false, &w);
+    let d = evaluate_against_profile_for_category(&profile, &release, false, &w, Some("anime"));
     assert!(
         d.scoring_log
             .iter()
@@ -1018,13 +1065,65 @@ fn anime_v2_gets_bonus() {
 #[test]
 fn no_anime_version_no_entry() {
     let profile = QualityProfile::default();
-    let w = balanced_weights();
-    let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.H.265");
-    let d = evaluate_against_profile(&profile, &release, false, &w);
+    let w = crate::scoring_weights::build_weights_for_category(
+        &crate::scoring_weights::ScoringPersona::Balanced,
+        &crate::scoring_weights::ScoringOverrides::default(),
+        Some("anime"),
+    );
+    let release = parse_release_metadata("[Group] Anime Title - 01 [1080p] [HEVC]");
+    let d = evaluate_against_profile_for_category(&profile, &release, false, &w, Some("anime"));
     assert!(
         !d.scoring_log
             .iter()
             .any(|e| e.code == "anime_version_bonus")
+    );
+}
+
+#[test]
+fn anime_10bit_uncensored_and_dubs_only_are_scored() {
+    let profile = QualityProfile::default();
+    let w = crate::scoring_weights::build_weights_for_category(
+        &crate::scoring_weights::ScoringPersona::Balanced,
+        &crate::scoring_weights::ScoringOverrides::default(),
+        Some("anime"),
+    );
+    let mut release = parse_release_metadata("[Group] Anime Title - 01v2 [1080p] [HEVC]");
+    release.is_10bit = true;
+    release.is_uncensored = true;
+    release.is_dubs_only = true;
+
+    let d = evaluate_against_profile_for_category(&profile, &release, false, &w, Some("anime"));
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "anime_10bit_bonus" && e.delta == 40)
+    );
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "anime_uncensored_bonus" && e.delta == 30)
+    );
+    assert!(
+        d.scoring_log
+            .iter()
+            .any(|e| e.code == "anime_dubs_only" && e.delta == -100)
+    );
+}
+
+#[test]
+fn anime_audiophile_has_no_missing_atmos_penalty() {
+    let profile = QualityProfile::default();
+    let w = crate::scoring_weights::build_weights_for_category(
+        &crate::scoring_weights::ScoringPersona::Audiophile,
+        &crate::scoring_weights::ScoringOverrides::default(),
+        Some("anime"),
+    );
+    let release = parse_release_metadata("[Group] Anime Title - 01 [1080p] [HEVC]");
+    let d = evaluate_against_profile_for_category(&profile, &release, false, &w, Some("anime"));
+    assert!(
+        !d.scoring_log
+            .iter()
+            .any(|e| e.code == "atmos_preferred_missing")
     );
 }
 

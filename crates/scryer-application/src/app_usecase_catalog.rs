@@ -1442,6 +1442,7 @@ impl AppUseCase {
             .submit_download(&DownloadClientAddRequest {
                 title: title.clone(),
                 source_hint,
+                staged_nzb: None,
                 source_kind,
                 source_title,
                 source_password: source_password.clone(),
@@ -1602,6 +1603,7 @@ impl AppUseCase {
             .submit_download(&DownloadClientAddRequest {
                 title: title.clone(),
                 source_hint,
+                staged_nzb: None,
                 source_kind,
                 source_title,
                 source_password: source_password.clone(),

@@ -674,13 +674,11 @@ const pt_BR: LocaleDictionary = {
   "settings.refProfileVCodecBlock": "Codecs de vídeo bloqueados",
   "settings.refProfileACodecAllow": "Codecs de áudio permitidos (vazio = todos permitidos)",
   "settings.refProfileACodecBlock": "Codecs de áudio bloqueados",
-  "settings.refProfileAtmosPreferred": "O perfil prefere lançamentos Dolby Atmos",
   "settings.refProfileDVAllowed": "Lançamentos Dolby Vision são aceitos",
   "settings.refProfileHdrAllowed": "Lançamentos HDR são aceitos",
   "settings.refProfilePreferRemux": "O perfil prefere lançamentos remux completos",
   "settings.refProfileAllowBdDisk": "Fontes de disco Blu-ray são aceitas",
   "settings.refProfileAllowUpgrades": "Upgrade de arquivos existentes é permitido",
-  "settings.refProfilePreferDualAudio": "O perfil prefere lançamentos com áudio duplo",
   "settings.refProfileRequiredLangs": "Idiomas de áudio obrigatórios (códigos ISO 639-3)",
   "settings.refSectionContext": "— Contexto do título e da pesquisa",
   "settings.refCtxTitleId": "ID interno do scryer do título quando um título concreto já é conhecido",
@@ -856,15 +854,9 @@ const pt_BR: LocaleDictionary = {
   "qualityProfile.dolbyVisionAllowed": "Dolby Vision",
   "qualityProfile.dolbyVisionInfo":
     "Permitir lançamentos Dolby Vision. Algumas telas não conseguem renderizar conteúdo Dolby Vision corretamente.",
-  "qualityProfile.atmosPreferred": "Atmos preferido",
-  "qualityProfile.atmosPreferredInfo":
-    "Preferir lançamentos que incluam Atmos quando disponíveis, permitindo opções sem Atmos.",
   "qualityProfile.preferRemux": "Remux preferido",
   "qualityProfile.preferRemuxInfo":
     "Remux são cópias de qualidade total de mídia física. Útil principalmente com a persona Audiophile.",
-  "qualityProfile.preferDualAudio": "Áudio duplo preferido",
-  "qualityProfile.preferDualAudioInfo":
-    "Preferir fortemente lançamentos com faixas de áudio duplo (ex: japonês + inglês). Lançamentos sem áudio duplo recebem penalidade de pontuação.",
   "qualityProfile.allowBdDisk": "Disco BD",
   "qualityProfile.allowBdDiskInfo":
     "Permitir lançamentos de imagem de disco BD/Blu-ray (estilo ISO) que passem pelo perfil.",
@@ -1333,9 +1325,6 @@ const pt_BR: LocaleDictionary = {
   "convenience.requiredAudioLabel": "Idiomas de áudio obrigatórios",
   "convenience.requiredAudioHelp":
     "Releases sem esses idiomas de áudio serão bloqueadas. Cria uma regra gerenciada visível em Configurações > Regras.",
-  "convenience.preferDualAudioLabel": "Preferir áudio duplo",
-  "convenience.preferDualAudioHelp":
-    "Priorizar releases com múltiplas faixas de áudio. Cria uma regra gerenciada visível em Configurações > Regras.",
 };
 
 export default pt_BR;

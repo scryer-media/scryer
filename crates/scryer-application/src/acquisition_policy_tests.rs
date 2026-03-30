@@ -36,7 +36,7 @@ fn upgrade_decision_is_accept() {
 fn accept_initial_when_no_current_score() {
     let now = Utc::now();
     assert_eq!(
-        evaluate_upgrade(500, None, true, None, &now, &t()),
+        evaluate_upgrade(500, None, true, None, &now, &t(), None),
         UpgradeDecision::AcceptInitial
     );
 }
@@ -45,7 +45,7 @@ fn accept_initial_when_no_current_score() {
 fn reject_not_allowed_when_upgrades_disabled() {
     let now = Utc::now();
     assert_eq!(
-        evaluate_upgrade(2000, Some(1000), false, None, &now, &t()),
+        evaluate_upgrade(2000, Some(1000), false, None, &now, &t(), None),
         UpgradeDecision::RejectNotAllowed
     );
 }
@@ -54,7 +54,7 @@ fn reject_not_allowed_when_upgrades_disabled() {
 fn reject_when_candidate_score_lower() {
     let now = Utc::now();
     assert_eq!(
-        evaluate_upgrade(500, Some(1000), true, None, &now, &t()),
+        evaluate_upgrade(500, Some(1000), true, None, &now, &t(), None),
         UpgradeDecision::RejectInsufficientDelta
     );
 }
@@ -63,7 +63,7 @@ fn reject_when_candidate_score_lower() {
 fn reject_when_candidate_score_equal() {
     let now = Utc::now();
     assert_eq!(
-        evaluate_upgrade(1000, Some(1000), true, None, &now, &t()),
+        evaluate_upgrade(1000, Some(1000), true, None, &now, &t(), None),
         UpgradeDecision::RejectInsufficientDelta
     );
 }
@@ -73,7 +73,7 @@ fn accept_same_tier_upgrade_with_sufficient_delta() {
     let now = Utc::now();
     // delta = 200, same_tier_min_delta = 200 (Balanced) → accept
     assert_eq!(
-        evaluate_upgrade(1200, Some(1000), true, None, &now, &t()),
+        evaluate_upgrade(1200, Some(1000), true, None, &now, &t(), None),
         UpgradeDecision::AcceptUpgrade
     );
 }
@@ -83,7 +83,7 @@ fn reject_same_tier_upgrade_with_insufficient_delta() {
     let now = Utc::now();
     // delta = 50, same_tier_min_delta = 200 (Balanced) → reject
     assert_eq!(
-        evaluate_upgrade(1050, Some(1000), true, None, &now, &t()),
+        evaluate_upgrade(1050, Some(1000), true, None, &now, &t(), None),
         UpgradeDecision::RejectInsufficientDelta
     );
 }
@@ -93,7 +93,7 @@ fn accept_cross_tier_upgrade_with_lower_threshold() {
     let now = Utc::now();
     // delta = 1050, cross_tier_min_delta = 30 → accept
     assert_eq!(
-        evaluate_upgrade(2050, Some(1000), true, None, &now, &t()),
+        evaluate_upgrade(2050, Some(1000), true, None, &now, &t(), None),
         UpgradeDecision::AcceptUpgrade
     );
 }
@@ -104,7 +104,15 @@ fn reject_cooldown_when_recently_imported() {
     let recent_import = (now - Duration::hours(1)).to_rfc3339();
     // delta = 200 (sufficient), but within 24h cooldown and < 400 bypass
     assert_eq!(
-        evaluate_upgrade(1200, Some(1000), true, Some(&recent_import), &now, &t()),
+        evaluate_upgrade(
+            1200,
+            Some(1000),
+            true,
+            Some(&recent_import),
+            &now,
+            &t(),
+            None
+        ),
         UpgradeDecision::RejectCooldown
     );
 }
@@ -115,7 +123,15 @@ fn forced_bypass_during_cooldown() {
     let recent_import = (now - Duration::hours(1)).to_rfc3339();
     // delta = 500 >= forced_upgrade_delta_bypass (400) → accept even during cooldown
     assert_eq!(
-        evaluate_upgrade(1500, Some(1000), true, Some(&recent_import), &now, &t()),
+        evaluate_upgrade(
+            1500,
+            Some(1000),
+            true,
+            Some(&recent_import),
+            &now,
+            &t(),
+            None
+        ),
         UpgradeDecision::AcceptUpgrade
     );
 }
@@ -126,7 +142,7 @@ fn accept_after_cooldown_expires() {
     let old_import = (now - Duration::hours(25)).to_rfc3339();
     // delta = 200, cooldown expired → accept
     assert_eq!(
-        evaluate_upgrade(1200, Some(1000), true, Some(&old_import), &now, &t()),
+        evaluate_upgrade(1200, Some(1000), true, Some(&old_import), &now, &t(), None),
         UpgradeDecision::AcceptUpgrade
     );
 }
@@ -136,7 +152,7 @@ fn bad_import_time_treated_as_no_cooldown() {
     let now = Utc::now();
     // Invalid RFC3339 → treated as no cooldown
     assert_eq!(
-        evaluate_upgrade(1200, Some(1000), true, Some("not-a-date"), &now, &t()),
+        evaluate_upgrade(1200, Some(1000), true, Some("not-a-date"), &now, &t(), None),
         UpgradeDecision::AcceptUpgrade
     );
 }
@@ -152,7 +168,7 @@ fn custom_thresholds_same_tier() {
     };
     // delta = 60, custom same_tier_min_delta = 50 → accept
     assert_eq!(
-        evaluate_upgrade(1060, Some(1000), true, None, &now, &thresholds),
+        evaluate_upgrade(1060, Some(1000), true, None, &now, &thresholds, None),
         UpgradeDecision::AcceptUpgrade
     );
 }
@@ -167,7 +183,33 @@ fn custom_thresholds_short_cooldown() {
     let old_import = (now - Duration::hours(2)).to_rfc3339();
     // cooldown = 1h, import was 2h ago → cooldown expired
     assert_eq!(
-        evaluate_upgrade(1200, Some(1000), true, Some(&old_import), &now, &thresholds),
+        evaluate_upgrade(
+            1200,
+            Some(1000),
+            true,
+            Some(&old_import),
+            &now,
+            &thresholds,
+            None
+        ),
+        UpgradeDecision::AcceptUpgrade
+    );
+}
+
+#[test]
+fn same_tier_upgrade_stops_once_current_meets_min_score_to_grab() {
+    let now = Utc::now();
+    assert_eq!(
+        evaluate_upgrade(1200, Some(1100), true, None, &now, &t(), Some(1000)),
+        UpgradeDecision::RejectInsufficientDelta
+    );
+}
+
+#[test]
+fn cross_tier_upgrade_still_allowed_after_min_score_to_grab() {
+    let now = Utc::now();
+    assert_eq!(
+        evaluate_upgrade(2200, Some(1100), true, None, &now, &t(), Some(1000)),
         UpgradeDecision::AcceptUpgrade
     );
 }

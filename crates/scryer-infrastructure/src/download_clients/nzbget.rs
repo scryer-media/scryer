@@ -1,19 +1,26 @@
 use std::collections::HashMap;
 
+use async_compression::tokio::bufread::ZstdDecoder;
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose};
 use chrono::{DateTime, Utc};
+use futures_util::stream;
 use reqwest::Client;
 use scryer_application::{
     AppError, AppResult, DownloadClient, DownloadClientAddRequest, DownloadGrabResult,
+    NullStagedNzbStore, StagedNzbRef, StagedNzbStore,
 };
 use scryer_domain::{DownloadQueueItem, DownloadQueueState};
 use serde_json::{Value, json};
+use std::sync::Arc;
+use tokio::fs::File;
+use tokio::io::{AsyncReadExt, BufReader};
+use tokio::sync::Semaphore;
 use tracing::{debug, info, trace, warn};
 
 use super::{
-    extract_f64_value, extract_i64_value, is_http_url, parse_duration_seconds,
-    progress_percent_from_sizes, size_to_bytes,
+    extract_f64_value, extract_i64_value, parse_duration_seconds, progress_percent_from_sizes,
+    resolve_staged_nzb_for_request, size_to_bytes,
 };
 
 #[derive(Clone)]
@@ -23,6 +30,8 @@ pub struct NzbgetDownloadClient {
     password: Option<String>,
     dupe_mode: String,
     http_client: Client,
+    staged_nzb_store: Arc<dyn StagedNzbStore>,
+    staged_nzb_pipeline_limit: Arc<Semaphore>,
 }
 
 #[derive(Clone, Copy)]
@@ -45,6 +54,24 @@ impl NzbgetDownloadClient {
         password: Option<String>,
         dupe_mode: String,
     ) -> Self {
+        Self::with_staged_nzb_store(
+            rpc_url,
+            username,
+            password,
+            dupe_mode,
+            Arc::new(NullStagedNzbStore),
+            Arc::new(Semaphore::new(4)),
+        )
+    }
+
+    pub fn with_staged_nzb_store(
+        rpc_url: String,
+        username: Option<String>,
+        password: Option<String>,
+        dupe_mode: String,
+        staged_nzb_store: Arc<dyn StagedNzbStore>,
+        staged_nzb_pipeline_limit: Arc<Semaphore>,
+    ) -> Self {
         let dupe_mode = match dupe_mode.to_uppercase().as_str() {
             "ALL" | "FORCE" => dupe_mode.to_uppercase(),
             _ => "SCORE".to_string(),
@@ -55,6 +82,8 @@ impl NzbgetDownloadClient {
             password,
             dupe_mode,
             http_client: Client::new(),
+            staged_nzb_store,
+            staged_nzb_pipeline_limit,
         }
     }
 
@@ -240,11 +269,6 @@ impl NzbgetDownloadClient {
         Ok(version)
     }
 
-    async fn fetch_and_encode_nzb(&self, source_hint: &str) -> AppResult<String> {
-        let bytes = super::fetch_nzb_bytes(&self.http_client, source_hint).await?;
-        Ok(general_purpose::STANDARD.encode(bytes))
-    }
-
     async fn append_requires_auto_category(&self) -> bool {
         match self.rpc_call("version", vec![]).await {
             Ok(Value::String(version)) => supports_nzbget_append_auto_category(&version),
@@ -262,10 +286,17 @@ impl NzbgetDownloadClient {
     async fn send_append_request(
         &self,
         append_request: &NzbgetAppendRequest<'_>,
+        staged_nzb: &StagedNzbRef,
     ) -> AppResult<i64> {
-        let request_payload = build_nzbget_append_payload(append_request, &self.dupe_mode);
+        const STREAM_PLACEHOLDER: &str = "__SCRYER_STREAMED_NZB_BASE64__";
+        let placeholder_request = NzbgetAppendRequest {
+            source_for_payload: STREAM_PLACEHOLDER,
+            ..*append_request
+        };
+        let request_payload = build_nzbget_append_payload(&placeholder_request, &self.dupe_mode);
 
-        let mut request_payload_for_log = request_payload.clone();
+        let mut request_payload_for_log =
+            build_nzbget_append_payload(append_request, &self.dupe_mode);
         if let Some(params) = request_payload_for_log
             .get_mut("params")
             .and_then(Value::as_array_mut)
@@ -281,11 +312,27 @@ impl NzbgetDownloadClient {
             payload = %request_payload_for_log,
             "nzbget append request payload"
         );
+        let (prefix, suffix) =
+            split_streaming_payload(&request_payload, STREAM_PLACEHOLDER.as_bytes())?;
+        let content_length = prefix.len() as u64
+            + base64_encoded_len(staged_nzb.raw_size_bytes)
+            + suffix.len() as u64;
+        let staged_file = File::open(&staged_nzb.compressed_path)
+            .await
+            .map_err(|error| {
+                AppError::Repository(format!(
+                    "failed to open staged nzb {}: {error}",
+                    staged_nzb.compressed_path.display()
+                ))
+            })?;
         let mut request = self
             .http_client
             .post(&endpoint)
             .header("Content-Type", "application/json")
-            .json(&request_payload);
+            .header(reqwest::header::CONTENT_LENGTH, content_length.to_string())
+            .body(reqwest::Body::wrap_stream(
+                Self::build_streaming_append_body(staged_file, prefix, suffix),
+            ));
 
         if let Some(username) = self.username.clone() {
             request = request.basic_auth(username, self.password.as_deref());
@@ -355,6 +402,77 @@ impl NzbgetDownloadClient {
         );
 
         Ok(result)
+    }
+
+    fn build_streaming_append_body(
+        staged_file: File,
+        prefix: Vec<u8>,
+        suffix: Vec<u8>,
+    ) -> impl futures_util::Stream<Item = Result<Vec<u8>, std::io::Error>> + Send {
+        struct AppendBodyState {
+            prefix: Option<Vec<u8>>,
+            suffix: Option<Vec<u8>>,
+            decoder: ZstdDecoder<BufReader<File>>,
+            read_buf: [u8; 16 * 1024],
+            remainder: Vec<u8>,
+            finished_source: bool,
+        }
+
+        impl AppendBodyState {
+            async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>, std::io::Error> {
+                if let Some(prefix) = self.prefix.take() {
+                    return Ok(Some(prefix));
+                }
+
+                loop {
+                    if self.finished_source {
+                        if !self.remainder.is_empty() {
+                            let encoded = general_purpose::STANDARD.encode(&self.remainder);
+                            self.remainder.clear();
+                            return Ok(Some(encoded.into_bytes()));
+                        }
+                        return Ok(self.suffix.take());
+                    }
+
+                    let bytes_read = self.decoder.read(&mut self.read_buf).await?;
+                    if bytes_read == 0 {
+                        self.finished_source = true;
+                        continue;
+                    }
+
+                    let mut combined = Vec::with_capacity(self.remainder.len() + bytes_read);
+                    combined.extend_from_slice(&self.remainder);
+                    combined.extend_from_slice(&self.read_buf[..bytes_read]);
+
+                    let remainder_len = combined.len() % 3;
+                    let emit_len = combined.len() - remainder_len;
+                    if emit_len == 0 {
+                        self.remainder = combined;
+                        continue;
+                    }
+
+                    let encoded = general_purpose::STANDARD.encode(&combined[..emit_len]);
+                    self.remainder = combined[emit_len..].to_vec();
+                    return Ok(Some(encoded.into_bytes()));
+                }
+            }
+        }
+
+        let state = AppendBodyState {
+            prefix: Some(prefix),
+            suffix: Some(suffix),
+            decoder: ZstdDecoder::new(BufReader::new(staged_file)),
+            read_buf: [0u8; 16 * 1024],
+            remainder: Vec::new(),
+            finished_source: false,
+        };
+
+        stream::try_unfold(state, |mut state| async move {
+            match state.next_chunk().await? {
+                Some(chunk) => Ok(Some((chunk, state))),
+                None => Ok(None),
+            }
+        })
     }
 
     async fn edit_queue(&self, command: &str, ids: Vec<i64>) -> AppResult<()> {
@@ -721,20 +839,10 @@ impl DownloadClient for NzbgetDownloadClient {
         let request_id = scryer_domain::Id::new().0;
         let source_hint = request
             .source_hint
-            .clone()
-            .and_then(|value| {
-                let value = value.trim().to_string();
-                (!value.is_empty()).then_some(value)
-            })
-            .ok_or_else(|| {
-                AppError::Validation("source hint is required to queue a download".into())
-            })?;
-
-        if !is_http_url(&source_hint) {
-            return Err(AppError::Validation(format!(
-                "source hint must be an NZB URL; got {source_hint}"
-            )));
-        }
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string();
 
         let normalized_source_title = request.source_title.clone().and_then(|value| {
             let trimmed = value.trim().to_string();
@@ -754,7 +862,13 @@ impl DownloadClient for NzbgetDownloadClient {
             })
             .unwrap_or_default();
 
-        let source_for_payload = self.fetch_and_encode_nzb(&source_hint).await?;
+        let staged = resolve_staged_nzb_for_request(
+            &self.http_client,
+            &self.staged_nzb_store,
+            &self.staged_nzb_pipeline_limit,
+            request,
+        )
+        .await?;
         let source_password = request
             .source_password
             .as_deref()
@@ -788,45 +902,67 @@ impl DownloadClient for NzbgetDownloadClient {
             parameters.push(json!({"*Unpack:Password": password}));
         }
 
-        let use_auto_category = self.append_requires_auto_category().await;
-        let queue_priority = nzbget_queue_priority(request.queue_priority.as_deref());
-        let append_request = NzbgetAppendRequest {
-            request_id: &request_id,
-            title_name: title.name.as_str(),
-            nzb_filename: &nzb_filename,
-            source_for_payload: &source_for_payload,
-            category: &category,
-            queue_priority,
-            parameters: &parameters,
-            use_auto_category,
-        };
+        let result: AppResult<DownloadGrabResult> = async {
+            let use_auto_category = self.append_requires_auto_category().await;
+            let queue_priority = nzbget_queue_priority(request.queue_priority.as_deref());
+            let append_request = NzbgetAppendRequest {
+                request_id: &request_id,
+                title_name: title.name.as_str(),
+                nzb_filename: &nzb_filename,
+                source_for_payload: "",
+                category: &category,
+                queue_priority,
+                parameters: &parameters,
+                use_auto_category,
+            };
 
-        let nzbget_id = match self.send_append_request(&append_request).await {
-            Ok(queue_id) => queue_id,
-            Err(err) if is_nzbget_invalid_procedure_error(&err) => {
-                let retry_use_auto_category = !append_request.use_auto_category;
-                warn!(
-                    error = %err,
-                    retry_auto_category = retry_use_auto_category,
-                    title = title.name.as_str(),
-                    "nzbget append rejected payload shape; retrying alternate append signature"
-                );
-                let retry_request = NzbgetAppendRequest {
-                    use_auto_category: retry_use_auto_category,
-                    ..append_request
-                };
-                self.send_append_request(&retry_request).await?
-            }
-            Err(err) => return Err(err),
-        };
+            let nzbget_id = match self
+                .send_append_request(&append_request, &staged.staged_nzb)
+                .await
+            {
+                Ok(queue_id) => queue_id,
+                Err(err) if is_nzbget_invalid_procedure_error(&err) => {
+                    let retry_use_auto_category = !append_request.use_auto_category;
+                    warn!(
+                        error = %err,
+                        retry_auto_category = retry_use_auto_category,
+                        title = title.name.as_str(),
+                        "nzbget append rejected payload shape; retrying alternate append signature"
+                    );
+                    let retry_request = NzbgetAppendRequest {
+                        use_auto_category: retry_use_auto_category,
+                        ..append_request
+                    };
+                    self.send_append_request(&retry_request, &staged.staged_nzb)
+                        .await?
+                }
+                Err(err) => return Err(err),
+            };
 
-        // Use the NZBGet queue ID (integer) as the job_id so it matches
-        // the NZBID in NZBGet's history — required for failure detection
-        // in check_grabbed_for_failures.
-        Ok(DownloadGrabResult {
-            job_id: nzbget_id.to_string(),
-            client_type: "nzbget".to_string(),
-        })
+            // Use the NZBGet queue ID (integer) as the job_id so it matches
+            // the NZBID in NZBGet's history — required for failure detection
+            // in check_grabbed_for_failures.
+            Ok(DownloadGrabResult {
+                job_id: nzbget_id.to_string(),
+                client_type: "nzbget".to_string(),
+            })
+        }
+        .await;
+
+        if staged.self_staged
+            && let Err(error) = self
+                .staged_nzb_store
+                .delete_staged_nzb(&staged.staged_nzb)
+                .await
+        {
+            warn!(
+                staged_nzb_id = staged.staged_nzb.id.as_str(),
+                error = %error,
+                "failed to delete self-staged nzbget nzb artifact"
+            );
+        }
+
+        result
     }
 
     async fn test_connection(&self) -> AppResult<String> {
@@ -1472,6 +1608,28 @@ fn build_nzbget_append_payload(append_request: &NzbgetAppendRequest<'_>, dupe_mo
     })
 }
 
+fn base64_encoded_len(raw_len: u64) -> u64 {
+    raw_len.div_ceil(3) * 4
+}
+
+fn split_streaming_payload(payload: &Value, placeholder: &[u8]) -> AppResult<(Vec<u8>, Vec<u8>)> {
+    let payload_json = serde_json::to_vec(payload).map_err(|error| {
+        AppError::Repository(format!("failed to encode nzbget append payload: {error}"))
+    })?;
+    let Some(position) = payload_json
+        .windows(placeholder.len())
+        .position(|window| window == placeholder)
+    else {
+        return Err(AppError::Repository(
+            "failed to locate streaming payload placeholder in nzbget request".into(),
+        ));
+    };
+
+    let prefix = payload_json[..position].to_vec();
+    let suffix = payload_json[position + placeholder.len()..].to_vec();
+    Ok((prefix, suffix))
+}
+
 fn nzbget_queue_priority(raw_priority: Option<&str>) -> i32 {
     match raw_priority
         .map(str::trim)
@@ -1648,6 +1806,32 @@ mod tests {
         assert_eq!(params[8], json!("SCORE"));
         assert_eq!(params[9], json!(false));
         assert_eq!(params[10], json!(parameters));
+    }
+
+    #[test]
+    fn split_streaming_payload_preserves_json_string_quotes() {
+        let placeholder = "__SCRYER_STREAMED_NZB_BASE64__";
+        let parameters = vec![json!({"*scryer_title_id": "title-1"})];
+        let append_request = NzbgetAppendRequest {
+            request_id: "req-1",
+            title_name: "Example",
+            nzb_filename: "Example.nzb",
+            source_for_payload: placeholder,
+            category: "movies",
+            queue_priority: 0,
+            parameters: &parameters,
+            use_auto_category: false,
+        };
+        let payload = build_nzbget_append_payload(&append_request, "SCORE");
+        let (prefix, suffix) =
+            split_streaming_payload(&payload, placeholder.as_bytes()).expect("split should work");
+        let body = [prefix, b"YmFzZTY0LWRhdGE=".to_vec(), suffix].concat();
+        let body_json: Value = serde_json::from_slice(&body).expect("body should remain valid json");
+        let params = body_json
+            .get("params")
+            .and_then(Value::as_array)
+            .expect("append payload should include params");
+        assert_eq!(params[1], json!("YmFzZTY0LWRhdGE="));
     }
 
     #[test]

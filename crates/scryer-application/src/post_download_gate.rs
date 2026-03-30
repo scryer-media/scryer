@@ -46,8 +46,13 @@ pub(crate) fn build_import_profile_decision(
         &profile.criteria.scoring_overrides,
         Some(category_hint),
     );
-    let mut decision =
-        crate::evaluate_against_profile(profile, parsed, has_existing_file, &weights);
+    let mut decision = crate::quality_profile::evaluate_against_profile_for_category(
+        profile,
+        parsed,
+        has_existing_file,
+        &weights,
+        Some(category_hint),
+    );
     crate::quality_profile::apply_size_scoring_for_category(
         &mut decision,
         parsed,
@@ -308,12 +313,21 @@ pub(crate) fn rescore_from_mediainfo(
         }
     }
 
+    if analysis.video_bit_depth.unwrap_or_default() >= 10 && !merged.is_10bit {
+        changes.push("video_bit_depth: detected 10-bit".to_string());
+        merged.is_10bit = true;
+    }
+
     // Override HDR format
     if let Some(ref hdr_format) = analysis.video_hdr_format {
         let hdr_upper = hdr_format.to_ascii_uppercase();
         if hdr_upper.contains("DOLBY VISION") && !merged.is_dolby_vision {
             changes.push("hdr: detected Dolby Vision".to_string());
             merged.is_dolby_vision = true;
+        }
+        if hdr_upper.contains("HDR10") && !merged.has_hdr_fallback {
+            changes.push("hdr: detected HDR fallback".to_string());
+            merged.has_hdr_fallback = true;
         }
         if (hdr_upper.contains("HDR10+") || hdr_upper.contains("HDR10PLUS")) && !merged.is_hdr10plus
         {

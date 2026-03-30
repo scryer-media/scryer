@@ -724,17 +724,15 @@ const qualityProfileCriteriaFields = `
       videoCodecBlocklist
       audioCodecAllowlist
       audioCodecBlocklist
-      atmosPreferred
       dolbyVisionAllowed
       detectedHdrAllowed
       preferRemux
       allowBdDisk
       allowUpgrades
-      preferDualAudio
       requiredAudioLanguages
       scoringPersona
       scoringOverrides {
-        allowX265Non4k
+        allowX265Non4K
         blockDvWithoutFallback
         preferCompactEncodes
         preferLosslessAudio
@@ -1176,7 +1174,6 @@ export const ruleSetsQuery = `query RuleSets {
 export const convenienceSettingsQuery = `query ConvenienceSettings {
   convenienceSettings {
     requiredAudio { scope languages ruleSetId }
-    preferDualAudio { scope enabled ruleSetId }
   }
 }`;
 

@@ -77,7 +77,14 @@ impl AppUseCase {
             .delete_history_events_older_than(365)
             .await?;
 
-        // 6. Purge expired recycle bin entries (per media root)
+        // 6. Stale staged NZB artifacts (> 1 hour old)
+        let staged_nzb_artifacts_pruned = self
+            .services
+            .staged_nzb_store
+            .prune_staged_nzbs_older_than(chrono::Utc::now() - chrono::Duration::hours(1))
+            .await?;
+
+        // 7. Purge expired recycle bin entries (per media root)
         let mut recycled_purged = 0u32;
         for (media_root, config) in self.resolve_all_recycle_configs().await {
             match crate::recycle_bin::purge_expired(&config).await {
@@ -92,6 +99,7 @@ impl AppUseCase {
             stale_release_attempts,
             expired_event_outboxes,
             stale_history_events,
+            staged_nzb_artifacts_pruned,
             recycled_purged,
             ran_at: chrono::Utc::now().to_rfc3339(),
         };
@@ -102,6 +110,7 @@ impl AppUseCase {
             stale_release_attempts,
             expired_event_outboxes,
             stale_history_events,
+            staged_nzb_artifacts_pruned,
             recycled_purged,
             "housekeeping completed"
         );

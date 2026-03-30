@@ -119,19 +119,6 @@ impl RulesMutations {
         Ok(true)
     }
 
-    async fn set_convenience_prefer_dual_audio(
-        &self,
-        ctx: &Context<'_>,
-        input: SetConveniencePreferDualAudioInput,
-    ) -> GqlResult<bool> {
-        let app = app_from_ctx(ctx)?;
-        let actor = actor_from_ctx(ctx)?;
-        app.set_convenience_prefer_dual_audio(&actor, &input.scope, input.enabled)
-            .await
-            .map_err(to_gql_error)?;
-        Ok(true)
-    }
-
     async fn validate_rule_set(
         &self,
         ctx: &Context<'_>,

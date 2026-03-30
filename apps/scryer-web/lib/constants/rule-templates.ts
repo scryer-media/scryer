@@ -168,6 +168,38 @@ has_english_audio if {
     scryer.lang_matches(lang, "en")
 }`,
   },
+  {
+    id: "prefer-multi-audio",
+    title: "Prefer multi-audio releases",
+    description: "Boost releases that advertise dual audio or contain multiple audio tracks",
+    category: "Audio",
+    regoSource: `import rego.v1
+
+score_entry["multi_audio_release_bonus"] := 200 if {
+    input.release.is_dual_audio
+}
+
+score_entry["multi_audio_file_bonus"] := 200 if {
+    not input.release.is_dual_audio
+    input.file != null
+    input.file.has_multiaudio
+}`,
+  },
+  {
+    id: "prefer-atmos-audio",
+    title: "Prefer Atmos audio",
+    description: "Add a small bonus for Atmos releases and a light penalty when Atmos is missing",
+    category: "Audio",
+    regoSource: `import rego.v1
+
+score_entry["atmos_bonus"] := 100 if {
+    input.release.is_atmos
+}
+
+score_entry["atmos_missing"] := -20 if {
+    not input.release.is_atmos
+}`,
+  },
 
   // ── Anime ──────────────────────────────────────────────────────
   {
@@ -223,6 +255,32 @@ score_entry["too_old"] := scryer.block_score() if {
 score_entry["password_protected"] := scryer.block_score() if {
     input.release.password_protected != null
     input.release.password_protected != "0"
+}`,
+  },
+  {
+    id: "require-release-group",
+    title: "Require release group",
+    description: "Block releases that do not expose a normalized release-group tag",
+    category: "Blocking",
+    regoSource: `import rego.v1
+
+score_entry["missing_release_group"] := scryer.block_score() if {
+    not input.release.has_release_group
+}`,
+  },
+  {
+    id: "block-obfuscated-retagged",
+    title: "Block obfuscated or retagged releases",
+    description: "Hard-block releases with normalized obfuscation or retagging signals",
+    category: "Blocking",
+    regoSource: `import rego.v1
+
+score_entry["obfuscated_release"] := scryer.block_score() if {
+    input.release.is_obfuscated
+}
+
+score_entry["retagged_release"] := scryer.block_score() if {
+    input.release.is_retagged
 }`,
   },
   {

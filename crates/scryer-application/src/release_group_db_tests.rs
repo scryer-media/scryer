@@ -9,67 +9,67 @@ fn balanced_weights() -> ScoringWeights {
 
 #[test]
 fn gold_web_group_found() {
-    let entry = lookup_group("FLUX", Some("WEB-DL"), false).unwrap();
+    let entry = lookup_group("FLUX", Some("WEB-DL"), None, false, None).unwrap();
     assert_eq!(entry.tier, GroupTier::Gold);
     assert_eq!(entry.source_context, SourceContext::Web);
 }
 
 #[test]
 fn silver_web_group_found() {
-    let entry = lookup_group("SMURF", Some("WEB-DL"), false).unwrap();
+    let entry = lookup_group("SMURF", Some("WEB-DL"), None, false, None).unwrap();
     assert_eq!(entry.tier, GroupTier::Silver);
 }
 
 #[test]
 fn bronze_web_group_found() {
-    let entry = lookup_group("BLOOM", Some("WEB-DL"), false).unwrap();
+    let entry = lookup_group("BLOOM", Some("WEB-DL"), None, false, None).unwrap();
     assert_eq!(entry.tier, GroupTier::Bronze);
 }
 
 #[test]
 fn banned_lq_group_found_any_source() {
-    let entry = lookup_group("YIFY", Some("BLURAY"), false).unwrap();
+    let entry = lookup_group("YIFY", Some("BLURAY"), None, false, None).unwrap();
     assert_eq!(entry.tier, GroupTier::Banned);
     assert_eq!(entry.source_context, SourceContext::Any);
 }
 
 #[test]
 fn banned_group_found_without_source() {
-    let entry = lookup_group("RARBG", None, false).unwrap();
+    let entry = lookup_group("RARBG", None, None, false, None).unwrap();
     assert_eq!(entry.tier, GroupTier::Banned);
 }
 
 #[test]
 fn unknown_group_returns_none() {
-    assert!(lookup_group("SomeRandomGroup2025", Some("WEB-DL"), false).is_none());
+    assert!(lookup_group("SomeRandomGroup2025", Some("WEB-DL"), None, false, None).is_none());
 }
 
 // ── Source context matching ──────────────────────────────────────────────────
 
 #[test]
 fn ctrlhd_gold_for_web() {
-    let entry = lookup_group("CtrlHD", Some("WEB-DL"), false).unwrap();
+    let entry = lookup_group("CtrlHD", Some("WEB-DL"), None, false, None).unwrap();
     assert_eq!(entry.tier, GroupTier::Gold);
     assert_eq!(entry.source_context, SourceContext::Web);
 }
 
 #[test]
 fn ctrlhd_gold_for_bluray() {
-    let entry = lookup_group("CtrlHD", Some("BLURAY"), false).unwrap();
+    let entry = lookup_group("CtrlHD", Some("BLURAY"), Some("1080P"), false, None).unwrap();
     assert_eq!(entry.tier, GroupTier::Gold);
     assert_eq!(entry.source_context, SourceContext::BluRay);
 }
 
 #[test]
 fn ctrlhd_gold_for_uhd_bluray_via_remux_false() {
-    // UHD BluRay without remux flag — source is BLURAY, matches BluRay context
-    let entry = lookup_group("CtrlHD", Some("BLURAY"), false).unwrap();
+    let entry = lookup_group("CtrlHD", Some("BLURAY"), Some("2160P"), false, None).unwrap();
     assert_eq!(entry.tier, GroupTier::Gold);
+    assert_eq!(entry.source_context, SourceContext::UhdBluRay);
 }
 
 #[test]
 fn remux_group_found_with_remux_flag() {
-    let entry = lookup_group("FraMeSToR", Some("BLURAY"), true).unwrap();
+    let entry = lookup_group("FraMeSToR", Some("BLURAY"), Some("2160P"), true, None).unwrap();
     assert_eq!(entry.tier, GroupTier::Gold);
     assert_eq!(entry.source_context, SourceContext::Remux);
 }
@@ -77,7 +77,7 @@ fn remux_group_found_with_remux_flag() {
 #[test]
 fn remux_group_not_found_without_remux_flag() {
     // FraMeSToR is only in Remux context, not BluRay
-    assert!(lookup_group("FraMeSToR", Some("BLURAY"), false).is_none());
+    assert!(lookup_group("FraMeSToR", Some("BLURAY"), Some("2160P"), false, None).is_none());
 }
 
 // ── Anime context ────────────────────────────────────────────────────────────
@@ -86,13 +86,20 @@ fn remux_group_not_found_without_remux_flag() {
 fn anime_banned_group_not_found_for_non_anime_source() {
     // AnimeRG is banned in Anime context only
     // With a WEB-DL source, it tries Web context first, then Any — neither has AnimeRG
-    assert!(lookup_group("AnimeRG", Some("WEB-DL"), false).is_none());
+    assert!(lookup_group("AnimeRG", Some("WEB-DL"), None, false, None).is_none());
+}
+
+#[test]
+fn anime_banned_group_found_for_anime_context() {
+    let entry = lookup_group("AnimeRG", Some("WEB-DL"), None, false, Some("anime")).unwrap();
+    assert_eq!(entry.tier, GroupTier::Banned);
+    assert_eq!(entry.source_context, SourceContext::Anime);
 }
 
 #[test]
 fn global_banned_group_found_for_any_source() {
     // YIFY is banned in Any context — found regardless of source
-    let entry = lookup_group("YIFY", Some("WEB-DL"), false).unwrap();
+    let entry = lookup_group("YIFY", Some("WEB-DL"), None, false, None).unwrap();
     assert_eq!(entry.tier, GroupTier::Banned);
 }
 
@@ -100,10 +107,10 @@ fn global_banned_group_found_for_any_source() {
 
 #[test]
 fn lookup_is_case_insensitive() {
-    let entry = lookup_group("flux", Some("WEB-DL"), false).unwrap();
+    let entry = lookup_group("flux", Some("WEB-DL"), None, false, None).unwrap();
     assert_eq!(entry.tier, GroupTier::Gold);
 
-    let entry = lookup_group("FLUX", Some("WEB-DL"), false).unwrap();
+    let entry = lookup_group("FLUX", Some("WEB-DL"), None, false, None).unwrap();
     assert_eq!(entry.tier, GroupTier::Gold);
 }
 
@@ -188,6 +195,21 @@ fn bad_dual_audio_group_is_banned() {
 fn remux_tier_01_scores_gold() {
     let w = balanced_weights();
     let (code, delta) = apply_release_group_scoring(&w, Some("FraMeSToR"), Some("BLURAY"), true);
+    assert_eq!(code, "group_gold");
+    assert_eq!(delta, w.group_gold);
+}
+
+#[test]
+fn uhd_bluray_scoring_uses_uhd_context() {
+    let w = balanced_weights();
+    let (code, delta) = apply_release_group_scoring_with_context(
+        &w,
+        Some("CtrlHD"),
+        Some("BLURAY"),
+        Some("2160P"),
+        false,
+        None,
+    );
     assert_eq!(code, "group_gold");
     assert_eq!(delta, w.group_gold);
 }

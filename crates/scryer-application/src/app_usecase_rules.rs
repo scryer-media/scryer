@@ -297,40 +297,6 @@ impl AppUseCase {
         self.rebuild_user_rules_engine().await
     }
 
-    /// Set or remove a facet-level "prefer dual audio" rule.
-    pub async fn set_convenience_prefer_dual_audio(
-        &self,
-        actor: &User,
-        scope: &str,
-        enabled: bool,
-    ) -> AppResult<()> {
-        require(actor, &Entitlement::ManageTitle)?;
-
-        let key = managed_rules::managed_key_prefer_dual_audio(scope);
-
-        if !enabled {
-            self.services
-                .rule_sets
-                .delete_rule_set_by_managed_key(&key)
-                .await?;
-            self.rebuild_user_rules_engine().await?;
-            return Ok(());
-        }
-
-        let rego = managed_rules::generate_prefer_dual_audio_rego();
-        let applied_facets = scope_to_facets(scope);
-
-        self.upsert_managed_rule(
-            &key,
-            &managed_rules::managed_rule_display_name(&key),
-            &rego,
-            applied_facets,
-        )
-        .await?;
-
-        self.rebuild_user_rules_engine().await
-    }
-
     /// Get the current state of all convenience settings by inspecting managed rules.
     pub async fn get_convenience_settings(&self, actor: &User) -> AppResult<ConvenienceSettings> {
         require(actor, &Entitlement::ViewCatalog)?;
@@ -342,8 +308,6 @@ impl AppUseCase {
             .await?;
 
         let mut required_audio = Vec::new();
-        let mut prefer_dual_audio = Vec::new();
-
         for rs in &all_managed {
             let Some(key) = rs.managed_key.as_deref() else {
                 continue;
@@ -364,19 +328,91 @@ impl AppUseCase {
                     languages,
                     rule_set_id: Some(rs.id.clone()),
                 });
-            } else if let Some(scope) = key.strip_prefix("convenience:prefer-dual-audio:") {
-                prefer_dual_audio.push(ConvenienceBoolSetting {
-                    scope: scope.to_string(),
-                    enabled: rs.enabled,
-                    rule_set_id: Some(rs.id.clone()),
-                });
             }
         }
 
-        Ok(ConvenienceSettings {
-            required_audio,
-            prefer_dual_audio,
-        })
+        Ok(ConvenienceSettings { required_audio })
+    }
+
+    pub async fn migrate_legacy_persona_preferences(&self) -> AppResult<()> {
+        const SYSTEM_SCOPE: &str = "system";
+
+        let mut existing_rules = self.services.rule_sets.list_rule_sets().await?;
+        let profiles = self
+            .services
+            .quality_profiles
+            .list_quality_profiles(SYSTEM_SCOPE, None)
+            .await?;
+
+        for profile in &profiles {
+            if profile.criteria.prefer_dual_audio {
+                let marker = format!("legacy-prefer-dual-audio:profile:{}", profile.id);
+                self.ensure_migrated_rule(
+                    &mut existing_rules,
+                    &marker,
+                    &format!("Migrated: Prefer Multi-Audio ({})", profile.name),
+                    "Auto-migrated from the deprecated dual-audio profile preference.",
+                    &generate_profile_prefer_multi_audio_rego(&profile.id),
+                    Vec::new(),
+                )
+                .await?;
+            }
+
+            if profile.criteria.scoring_persona == ScoringPersona::Audiophile {
+                if !profile.criteria.atmos_preferred {
+                    let marker = format!("legacy-atmos-disabled:profile:{}", profile.id);
+                    self.ensure_migrated_rule(
+                        &mut existing_rules,
+                        &marker,
+                        &format!("Migrated: Disable Atmos Persona Bias ({})", profile.name),
+                        "Auto-migrated from the deprecated Atmos preference toggle.",
+                        &generate_profile_cancel_atmos_rego(&profile.id, 150, 30),
+                        Vec::new(),
+                    )
+                    .await?;
+                }
+            } else if profile.criteria.atmos_preferred {
+                let (bonus, penalty) = legacy_atmos_rule_values(&profile.criteria.scoring_persona);
+                let marker = format!("legacy-atmos-preferred:profile:{}", profile.id);
+                self.ensure_migrated_rule(
+                    &mut existing_rules,
+                    &marker,
+                    &format!("Migrated: Prefer Atmos ({})", profile.name),
+                    "Auto-migrated from the deprecated Atmos preference toggle.",
+                    &generate_profile_prefer_atmos_rego(&profile.id, bonus, penalty),
+                    Vec::new(),
+                )
+                .await?;
+            }
+        }
+
+        let legacy_managed = self
+            .services
+            .rule_sets
+            .list_rule_sets_by_managed_key_prefix("convenience:prefer-dual-audio:")
+            .await?;
+        for rule_set in legacy_managed {
+            let marker = format!(
+                "legacy-convenience-prefer-dual-audio:{}",
+                rule_set.managed_key.as_deref().unwrap_or(&rule_set.id)
+            );
+            self.ensure_migrated_rule(
+                &mut existing_rules,
+                &marker,
+                &format!("Migrated: {}", rule_set.name),
+                "Auto-migrated from the removed dual-audio convenience rule.",
+                &rule_set.rego_source,
+                rule_set.applied_facets.clone(),
+            )
+            .await?;
+
+            self.services
+                .rule_sets
+                .delete_rule_set(&rule_set.id)
+                .await?;
+        }
+
+        Ok(())
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────
@@ -473,6 +509,42 @@ impl AppUseCase {
         Ok(())
     }
 
+    async fn ensure_migrated_rule(
+        &self,
+        existing_rules: &mut Vec<RuleSet>,
+        migration_key: &str,
+        name: &str,
+        description_prefix: &str,
+        rego_source: &str,
+        applied_facets: Vec<MediaFacet>,
+    ) -> AppResult<()> {
+        if existing_rules.iter().any(|rule| {
+            rule.description.contains(migration_key) || rule.rego_source.contains(migration_key)
+        }) {
+            return Ok(());
+        }
+
+        let now = Utc::now();
+        let id = Id::new_rego_safe().0;
+        let rewritten = scryer_rules::rewrite_package_declaration(rego_source, &id);
+        let rule_set = RuleSet {
+            id,
+            name: name.to_string(),
+            description: format!("{description_prefix} [scryer-migration:{migration_key}]"),
+            rego_source: rewritten,
+            enabled: true,
+            priority: 0,
+            applied_facets,
+            created_at: now,
+            updated_at: now,
+            is_managed: false,
+            managed_key: None,
+        };
+        self.services.rule_sets.create_rule_set(&rule_set).await?;
+        existing_rules.push(rule_set);
+        Ok(())
+    }
+
     pub async fn rebuild_user_rules_engine(&self) -> AppResult<()> {
         let enabled = self.services.rule_sets.list_enabled_rule_sets().await?;
 
@@ -534,20 +606,12 @@ impl AppUseCase {
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct ConvenienceSettings {
     pub required_audio: Vec<ConvenienceAudioSetting>,
-    pub prefer_dual_audio: Vec<ConvenienceBoolSetting>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct ConvenienceAudioSetting {
     pub scope: String,
     pub languages: Vec<String>,
-    pub rule_set_id: Option<String>,
-}
-
-#[derive(Clone, Debug, serde::Serialize)]
-pub struct ConvenienceBoolSetting {
-    pub scope: String,
-    pub enabled: bool,
     pub rule_set_id: Option<String>,
 }
 
@@ -580,4 +644,550 @@ fn extract_languages_from_rego(rego: &str) -> Vec<String> {
         }
     }
     vec![]
+}
+
+fn generate_profile_prefer_multi_audio_rego(profile_id: &str) -> String {
+    format!(
+        "import rego.v1\n\n# scryer-migration:legacy-prefer-dual-audio:profile:{profile_id}\n\nscore_entry[\"migrated_prefer_multi_audio\"] := 200 if {{\n    input.profile.id == \"{profile_id}\"\n    input.release.is_dual_audio\n}}\n\nscore_entry[\"migrated_prefer_multi_audio_file\"] := 200 if {{\n    input.profile.id == \"{profile_id}\"\n    not input.release.is_dual_audio\n    input.file != null\n    input.file.has_multiaudio\n}}\n"
+    )
+}
+
+fn generate_profile_prefer_atmos_rego(profile_id: &str, bonus: i32, penalty: i32) -> String {
+    format!(
+        "import rego.v1\n\n# scryer-migration:legacy-atmos-preferred:profile:{profile_id}\n\nscore_entry[\"migrated_atmos_match\"] := {bonus} if {{\n    input.profile.id == \"{profile_id}\"\n    input.release.is_atmos\n}}\n\nscore_entry[\"migrated_atmos_missing\"] := {penalty} if {{\n    input.profile.id == \"{profile_id}\"\n    not input.release.is_atmos\n}}\n"
+    )
+}
+
+fn generate_profile_cancel_atmos_rego(
+    profile_id: &str,
+    match_penalty: i32,
+    missing_bonus: i32,
+) -> String {
+    format!(
+        "import rego.v1\n\n# scryer-migration:legacy-atmos-disabled:profile:{profile_id}\n\nscore_entry[\"migrated_atmos_cancel_match\"] := -{match_penalty} if {{\n    input.profile.id == \"{profile_id}\"\n    input.release.is_atmos\n}}\n\nscore_entry[\"migrated_atmos_cancel_missing\"] := {missing_bonus} if {{\n    input.profile.id == \"{profile_id}\"\n    not input.release.is_atmos\n}}\n"
+    )
+}
+
+fn legacy_atmos_rule_values(persona: &ScoringPersona) -> (i32, i32) {
+    match persona {
+        ScoringPersona::Balanced => (100, -20),
+        ScoringPersona::Audiophile => (150, -30),
+        ScoringPersona::Efficient => (40, -5),
+        ScoringPersona::Compatible => (50, -10),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::null_repositories::test_nulls::{
+        NullDownloadClient, NullDownloadClientConfigRepository, NullEventRepository,
+        NullIndexerClient, NullReleaseAttemptRepository, NullShowRepository, NullTitleRepository,
+        NullUserRepository,
+    };
+    use async_trait::async_trait;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    #[derive(Default)]
+    struct TestQualityProfileRepo {
+        profiles: Vec<QualityProfile>,
+    }
+
+    #[derive(Default)]
+    struct TestIndexerConfigRepo;
+
+    #[async_trait]
+    impl IndexerConfigRepository for TestIndexerConfigRepo {
+        async fn list(&self, _provider_filter: Option<String>) -> AppResult<Vec<IndexerConfig>> {
+            Ok(vec![])
+        }
+
+        async fn get_by_id(&self, _id: &str) -> AppResult<Option<IndexerConfig>> {
+            Ok(None)
+        }
+
+        async fn touch_last_error(&self, _provider_type: &str) -> AppResult<()> {
+            Ok(())
+        }
+
+        async fn create(&self, config: IndexerConfig) -> AppResult<IndexerConfig> {
+            Ok(config)
+        }
+
+        async fn update(
+            &self,
+            _id: &str,
+            _name: Option<String>,
+            _provider_type: Option<String>,
+            _base_url: Option<String>,
+            _api_key_encrypted: Option<String>,
+            _rate_limit_seconds: Option<i64>,
+            _rate_limit_burst: Option<i64>,
+            _is_enabled: Option<bool>,
+            _enable_interactive_search: Option<bool>,
+            _enable_auto_search: Option<bool>,
+            _config_json: Option<String>,
+        ) -> AppResult<IndexerConfig> {
+            Err(AppError::Repository("not configured".into()))
+        }
+
+        async fn delete(&self, _id: &str) -> AppResult<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl QualityProfileRepository for TestQualityProfileRepo {
+        async fn list_quality_profiles(
+            &self,
+            _scope: &str,
+            _scope_id: Option<String>,
+        ) -> AppResult<Vec<QualityProfile>> {
+            Ok(self.profiles.clone())
+        }
+    }
+
+    struct TestRuleSetRepo {
+        rules: Mutex<Vec<RuleSet>>,
+    }
+
+    impl TestRuleSetRepo {
+        fn new(rules: Vec<RuleSet>) -> Self {
+            Self {
+                rules: Mutex::new(rules),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl RuleSetRepository for TestRuleSetRepo {
+        async fn list_rule_sets(&self) -> AppResult<Vec<RuleSet>> {
+            Ok(self.rules.lock().await.clone())
+        }
+
+        async fn list_enabled_rule_sets(&self) -> AppResult<Vec<RuleSet>> {
+            Ok(self
+                .rules
+                .lock()
+                .await
+                .iter()
+                .filter(|rule| rule.enabled)
+                .cloned()
+                .collect())
+        }
+
+        async fn get_rule_set(&self, id: &str) -> AppResult<Option<RuleSet>> {
+            Ok(self
+                .rules
+                .lock()
+                .await
+                .iter()
+                .find(|rule| rule.id == id)
+                .cloned())
+        }
+
+        async fn create_rule_set(&self, rule_set: &RuleSet) -> AppResult<()> {
+            self.rules.lock().await.push(rule_set.clone());
+            Ok(())
+        }
+
+        async fn update_rule_set(&self, rule_set: &RuleSet) -> AppResult<()> {
+            let mut rules = self.rules.lock().await;
+            let existing = rules
+                .iter_mut()
+                .find(|candidate| candidate.id == rule_set.id)
+                .ok_or_else(|| AppError::NotFound(rule_set.id.clone()))?;
+            *existing = rule_set.clone();
+            Ok(())
+        }
+
+        async fn delete_rule_set(&self, id: &str) -> AppResult<()> {
+            self.rules.lock().await.retain(|rule| rule.id != id);
+            Ok(())
+        }
+
+        async fn record_rule_set_history(
+            &self,
+            _rule_set_id: &str,
+            _action: &str,
+            _rego_source: Option<&str>,
+            _actor_id: Option<&str>,
+        ) -> AppResult<()> {
+            Ok(())
+        }
+
+        async fn get_rule_set_by_managed_key(&self, key: &str) -> AppResult<Option<RuleSet>> {
+            Ok(self
+                .rules
+                .lock()
+                .await
+                .iter()
+                .find(|rule| rule.managed_key.as_deref() == Some(key))
+                .cloned())
+        }
+
+        async fn delete_rule_set_by_managed_key(&self, key: &str) -> AppResult<()> {
+            self.rules
+                .lock()
+                .await
+                .retain(|rule| rule.managed_key.as_deref() != Some(key));
+            Ok(())
+        }
+
+        async fn list_rule_sets_by_managed_key_prefix(
+            &self,
+            prefix: &str,
+        ) -> AppResult<Vec<RuleSet>> {
+            Ok(self
+                .rules
+                .lock()
+                .await
+                .iter()
+                .filter(|rule| {
+                    rule.managed_key
+                        .as_deref()
+                        .is_some_and(|key| key.starts_with(prefix))
+                })
+                .cloned()
+                .collect())
+        }
+    }
+
+    fn build_test_app(profiles: Vec<QualityProfile>, rules: Vec<RuleSet>) -> AppUseCase {
+        let mut services = AppServices::with_default_channels(
+            Arc::new(NullTitleRepository),
+            Arc::new(NullShowRepository),
+            Arc::new(NullUserRepository),
+            Arc::new(NullEventRepository),
+            Arc::new(TestIndexerConfigRepo),
+            Arc::new(NullIndexerClient),
+            Arc::new(NullDownloadClient),
+            Arc::new(NullDownloadClientConfigRepository),
+            Arc::new(NullReleaseAttemptRepository),
+            Arc::new(crate::null_repositories::NullSettingsRepository),
+            Arc::new(TestQualityProfileRepo { profiles }),
+            String::new(),
+        );
+        services.rule_sets = Arc::new(TestRuleSetRepo::new(rules));
+
+        AppUseCase::new(
+            services,
+            JwtAuthConfig {
+                issuer: "scryer-test".to_string(),
+                access_ttl_seconds: 3600,
+                jwt_signing_salt: "test-salt".to_string(),
+            },
+            Arc::new(FacetRegistry::new()),
+        )
+    }
+
+    fn test_profile(
+        id: &str,
+        name: &str,
+        persona: ScoringPersona,
+        atmos_preferred: bool,
+        prefer_dual_audio: bool,
+    ) -> QualityProfile {
+        QualityProfile {
+            id: id.to_string(),
+            name: name.to_string(),
+            criteria: QualityProfileCriteria {
+                scoring_persona: persona,
+                atmos_preferred,
+                prefer_dual_audio,
+                ..QualityProfileCriteria::default()
+            },
+        }
+    }
+
+    fn legacy_managed_rule(id: &str, managed_key: &str, name: &str, rego_source: &str) -> RuleSet {
+        let now = Utc::now();
+        RuleSet {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: String::new(),
+            rego_source: rego_source.to_string(),
+            enabled: true,
+            priority: -100,
+            applied_facets: vec![MediaFacet::Anime],
+            created_at: now,
+            updated_at: now,
+            is_managed: true,
+            managed_key: Some(managed_key.to_string()),
+        }
+    }
+
+    fn multi_audio_rule_input(
+        profile_id: &str,
+        release_is_dual_audio: bool,
+        file_has_multiaudio: bool,
+    ) -> scryer_rules::UserRuleInput {
+        scryer_rules::UserRuleInput {
+            release: scryer_rules::ReleaseDoc {
+                raw_title: "Test.Movie.2024.2160p.WEB-DL.H.265".to_string(),
+                quality: Some("2160P".to_string()),
+                source: Some("WEB-DL".to_string()),
+                video_codec: Some("H.265".to_string()),
+                audio: Some("DDP".to_string()),
+                audio_codecs: vec!["DDP".to_string()],
+                audio_channels: Some("5.1".to_string()),
+                languages_audio: vec!["eng".to_string()],
+                languages_subtitles: vec![],
+                is_dual_audio: release_is_dual_audio,
+                is_atmos: false,
+                is_dolby_vision: false,
+                detected_hdr: false,
+                is_remux: false,
+                is_bd_disk: false,
+                is_proper_upload: false,
+                is_repack: false,
+                is_ai_enhanced: false,
+                is_hardcoded_subs: false,
+                is_hdr10plus: false,
+                is_hlg: false,
+                is_10bit: false,
+                is_uncensored: false,
+                is_dubs_only: false,
+                has_release_group: true,
+                is_obfuscated: false,
+                is_retagged: false,
+                streaming_service: None,
+                edition: None,
+                anime_version: None,
+                episode_release_type: Some("single_episode".to_string()),
+                is_season_pack: false,
+                is_multi_episode: false,
+                release_group: Some("TestGroup".to_string()),
+                year: Some(2024),
+                parse_confidence: 0.9,
+                size_bytes: Some(8_000_000_000),
+                age_days: Some(5),
+                thumbs_up: None,
+                thumbs_down: None,
+                extra: Default::default(),
+            },
+            profile: scryer_rules::ProfileDoc {
+                id: profile_id.to_string(),
+                name: "Test Profile".to_string(),
+                quality_tiers: vec!["2160P".to_string(), "1080P".to_string(), "720P".to_string()],
+                archival_quality: Some("2160P".to_string()),
+                allow_unknown_quality: false,
+                source_allowlist: vec![],
+                source_blocklist: vec![],
+                video_codec_allowlist: vec![],
+                video_codec_blocklist: vec![],
+                audio_codec_allowlist: vec![],
+                audio_codec_blocklist: vec![],
+                atmos_preferred: false,
+                dolby_vision_allowed: true,
+                detected_hdr_allowed: true,
+                prefer_remux: false,
+                allow_bd_disk: false,
+                allow_upgrades: true,
+                prefer_dual_audio: false,
+                required_audio_languages: vec![],
+            },
+            context: scryer_rules::ContextDoc {
+                title_id: Some("tt1234567".to_string()),
+                media_type: "movie".to_string(),
+                category: "movie".to_string(),
+                tags: vec![],
+                has_existing_file: false,
+                existing_score: None,
+                search_mode: "auto".to_string(),
+                runtime_minutes: Some(120),
+                is_anime: false,
+                is_filler: false,
+            },
+            builtin_score: scryer_rules::BuiltinScoreDoc {
+                total: 0,
+                blocked: false,
+                codes: vec![],
+            },
+            file: Some(scryer_rules::FileDoc {
+                video_codec: Some("hevc".to_string()),
+                video_width: Some(3840),
+                video_height: Some(2160),
+                video_bitrate_kbps: Some(40000),
+                video_bit_depth: Some(10),
+                video_hdr_format: Some("HDR10".to_string()),
+                dovi_profile: Some(8),
+                dovi_bl_compat_id: Some(1),
+                video_frame_rate: Some("23.976".to_string()),
+                video_profile: Some("Main 10".to_string()),
+                audio_codec: Some("eac3".to_string()),
+                audio_channels: Some(6),
+                audio_bitrate_kbps: Some(640),
+                audio_languages: vec!["eng".to_string(), "jpn".to_string()],
+                audio_streams: vec![scryer_rules::AudioStreamDoc {
+                    codec: Some("eac3".to_string()),
+                    channels: Some(6),
+                    language: Some("eng".to_string()),
+                    bitrate_kbps: Some(640),
+                }],
+                subtitle_languages: vec!["eng".to_string()],
+                subtitle_codecs: vec!["subrip".to_string()],
+                subtitle_streams: vec![scryer_rules::SubtitleStreamDoc {
+                    codec: Some("subrip".to_string()),
+                    language: Some("eng".to_string()),
+                    name: Some("English".to_string()),
+                    forced: false,
+                    default: true,
+                }],
+                has_multiaudio: file_has_multiaudio,
+                duration_seconds: Some(7200),
+                num_chapters: Some(12),
+                container_format: Some("matroska".to_string()),
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn migration_creates_profile_scoped_multi_audio_rule() {
+        let app = build_test_app(
+            vec![test_profile(
+                "balanced-legacy",
+                "Balanced Legacy",
+                ScoringPersona::Balanced,
+                false,
+                true,
+            )],
+            vec![],
+        );
+
+        app.migrate_legacy_persona_preferences().await.unwrap();
+
+        let rules = app.services.rule_sets.list_rule_sets().await.unwrap();
+        let migrated = rules
+            .iter()
+            .find(|rule| rule.name == "Migrated: Prefer Multi-Audio (Balanced Legacy)")
+            .expect("expected migrated multi-audio rule");
+        assert!(
+            migrated
+                .description
+                .contains("scryer-migration:legacy-prefer-dual-audio:profile:balanced-legacy")
+        );
+        assert!(migrated.rego_source.contains("input.release.is_dual_audio"));
+        assert!(
+            migrated
+                .rego_source
+                .contains("not input.release.is_dual_audio")
+        );
+        assert!(migrated.rego_source.contains("input.file.has_multiaudio"));
+        assert!(!migrated.is_managed);
+    }
+
+    #[tokio::test]
+    async fn migration_creates_profile_scoped_atmos_rule_for_non_audiophile_profiles() {
+        let app = build_test_app(
+            vec![test_profile(
+                "balanced-atmos",
+                "Balanced Atmos",
+                ScoringPersona::Balanced,
+                true,
+                false,
+            )],
+            vec![],
+        );
+
+        app.migrate_legacy_persona_preferences().await.unwrap();
+
+        let rules = app.services.rule_sets.list_rule_sets().await.unwrap();
+        let migrated = rules
+            .iter()
+            .find(|rule| rule.name == "Migrated: Prefer Atmos (Balanced Atmos)")
+            .expect("expected migrated atmos rule");
+        assert!(
+            migrated
+                .description
+                .contains("scryer-migration:legacy-atmos-preferred:profile:balanced-atmos")
+        );
+        assert!(migrated.rego_source.contains("migrated_atmos_match"));
+        assert!(migrated.rego_source.contains(":= 100 if"));
+        assert!(migrated.rego_source.contains(":= -20 if"));
+    }
+
+    #[tokio::test]
+    async fn migration_creates_cancel_rule_for_audiophile_profiles_that_disabled_atmos() {
+        let app = build_test_app(
+            vec![test_profile(
+                "audiophile-no-atmos",
+                "Audiophile No Atmos",
+                ScoringPersona::Audiophile,
+                false,
+                false,
+            )],
+            vec![],
+        );
+
+        app.migrate_legacy_persona_preferences().await.unwrap();
+
+        let rules = app.services.rule_sets.list_rule_sets().await.unwrap();
+        let migrated = rules
+            .iter()
+            .find(|rule| rule.name == "Migrated: Disable Atmos Persona Bias (Audiophile No Atmos)")
+            .expect("expected cancel-atmos migration rule");
+        assert!(
+            migrated
+                .description
+                .contains("scryer-migration:legacy-atmos-disabled:profile:audiophile-no-atmos")
+        );
+        assert!(migrated.rego_source.contains("migrated_atmos_cancel_match"));
+        assert!(migrated.rego_source.contains(":= -150 if"));
+        assert!(migrated.rego_source.contains(":= 30 if"));
+    }
+
+    #[tokio::test]
+    async fn migration_converts_legacy_managed_multi_audio_rules_once() {
+        let legacy = legacy_managed_rule(
+            "legacy-rule",
+            "convenience:prefer-dual-audio:anime",
+            "Prefer Dual Audio (Anime)",
+            "import rego.v1\n\nscore_entry[\"managed_dual_audio_preferred\"] := 200 if {\n    input.release.is_dual_audio\n}\n",
+        );
+        let app = build_test_app(vec![], vec![legacy]);
+
+        app.migrate_legacy_persona_preferences().await.unwrap();
+        app.migrate_legacy_persona_preferences().await.unwrap();
+
+        let rules = app.services.rule_sets.list_rule_sets().await.unwrap();
+        assert_eq!(
+            rules.iter().filter(|rule| rule.is_managed).count(),
+            0,
+            "legacy managed rule should be removed"
+        );
+        let migrated: Vec<_> = rules
+            .iter()
+            .filter(|rule| rule.name == "Migrated: Prefer Dual Audio (Anime)")
+            .collect();
+        assert_eq!(migrated.len(), 1, "migration should be idempotent");
+        assert!(
+            migrated[0].description.contains(
+                "legacy-convenience-prefer-dual-audio:convenience:prefer-dual-audio:anime"
+            )
+        );
+    }
+
+    #[test]
+    fn migrated_multi_audio_rule_scores_once_when_both_release_and_file_match() {
+        let policy = scryer_rules::UserPolicy {
+            id: "legacy_multi_audio".to_string(),
+            name: "Legacy Multi-Audio".to_string(),
+            rego_source: scryer_rules::rewrite_package_declaration(
+                &generate_profile_prefer_multi_audio_rego("profile-1"),
+                "legacy_multi_audio",
+            ),
+            applied_facets: vec![],
+        };
+
+        let engine = scryer_rules::UserRulesEngine::build(&[policy]).unwrap();
+        let mut evaluator = engine.evaluator();
+        let result = evaluator
+            .evaluate(&multi_audio_rule_input("profile-1", true, true), "movie")
+            .unwrap();
+
+        assert_eq!(result.entries.len(), 1);
+        assert_eq!(result.entries[0].delta, 200);
+    }
 }

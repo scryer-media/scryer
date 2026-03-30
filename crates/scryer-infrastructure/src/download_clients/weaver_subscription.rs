@@ -19,20 +19,85 @@ use tokio_tungstenite::tungstenite::{ClientRequestBuilder, Message};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use super::weaver::weaver_job_to_queue_item;
+use super::weaver::{WeaverQueueItem, weaver_item_to_queue_item};
 
-const JOB_UPDATES_QUERY: &str = r#"
+const QUEUE_SNAPSHOTS_QUERY: &str = r#"
     subscription {
-        jobUpdates {
-            jobs {
-                id name status error progress totalBytes downloadedBytes
-                failedBytes health hasPassword category outputDir createdAt
-                metadata { key value }
+        queueSnapshots {
+            items {
+                id
+                name
+                state
+                error
+                progressPercent
+                totalBytes
+                downloadedBytes
+                failedBytes
+                health
+                category
+                outputDir
+                createdAt
+                clientRequestId
+                attributes { key value }
+                attention { code message }
             }
-            isPaused
+            latestCursor
         }
     }
 "#;
+
+const QUEUE_EVENTS_QUERY: &str = r#"
+    subscription($after: String) {
+        queueEvents(after: $after) {
+            cursor
+            kind
+            itemId
+            item {
+                id
+                name
+                state
+                error
+                progressPercent
+                totalBytes
+                downloadedBytes
+                failedBytes
+                health
+                category
+                outputDir
+                createdAt
+                clientRequestId
+                attributes { key value }
+                attention { code message }
+            }
+        }
+    }
+"#;
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QueueSnapshotsPayload {
+    queue_snapshots: QueueSnapshotPayload,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QueueSnapshotPayload {
+    items: Vec<WeaverQueueItem>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QueueEventsPayload {
+    queue_events: QueueEventPayload,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QueueEventPayload {
+    cursor: String,
+    kind: String,
+    item: Option<WeaverQueueItem>,
+}
 
 /// Number of consecutive WebSocket failures before falling back to HTTP polling.
 const POLL_FALLBACK_THRESHOLD: u32 = 3;
@@ -71,6 +136,7 @@ pub async fn start_weaver_subscription_bridge(
     let mut backoff_secs: u64 = 5;
     let max_backoff: u64 = 60;
     let mut consecutive_failures: u32 = 0;
+    let mut last_cursor: Option<String> = None;
     // Token used to stop fallback polling when WS reconnects.
     let mut poll_cancel: Option<CancellationToken> = None;
 
@@ -82,7 +148,16 @@ pub async fn start_weaver_subscription_bridge(
 
         info!(url = ws_url.as_str(), "connecting to weaver WebSocket");
 
-        match run_subscription(&app, &actor, &ws_url, api_key.as_deref(), &token).await {
+        match run_subscription(
+            &app,
+            &actor,
+            &ws_url,
+            api_key.as_deref(),
+            &token,
+            &mut last_cursor,
+        )
+        .await
+        {
             SubscriptionOutcome::Shutdown => {
                 stop_fallback_poller(&mut poll_cancel);
                 info!("weaver subscription bridge stopped cleanly");
@@ -197,6 +272,7 @@ async fn run_subscription(
     ws_url: &str,
     api_key: Option<&str>,
     token: &CancellationToken,
+    last_cursor: &mut Option<String>,
 ) -> SubscriptionOutcome {
     let uri: tokio_tungstenite::tungstenite::http::Uri = match ws_url.parse() {
         Ok(uri) => uri,
@@ -204,7 +280,7 @@ async fn run_subscription(
     };
     let mut request = ClientRequestBuilder::new(uri).with_sub_protocol("graphql-transport-ws");
     if let Some(api_key) = api_key {
-        request = request.with_header("x-api-key", api_key);
+        request = request.with_header("Authorization", format!("Bearer {api_key}"));
     }
 
     let (ws_stream, _response) = match tokio_tungstenite::connect_async(request).await {
@@ -223,7 +299,7 @@ async fn run_subscription(
                 Some(api_key) => json!({
                     "type": "connection_init",
                     "payload": {
-                        "api_key": api_key,
+                        "authorization": format!("Bearer {api_key}"),
                     }
                 }),
                 None => json!({
@@ -278,19 +354,40 @@ async fn run_subscription(
 
     debug!("weaver WebSocket connection_ack received");
 
-    // --- Subscribe to jobUpdates ---
-    let subscribe_msg = json!({
-        "id": "1",
+    // --- Subscribe to queueSnapshots ---
+    let snapshot_subscribe_msg = json!({
+        "id": "snapshot",
         "type": "subscribe",
         "payload": {
-            "query": JOB_UPDATES_QUERY,
+            "query": QUEUE_SNAPSHOTS_QUERY,
         }
     });
     if let Err(e) = write
-        .send(Message::Text(subscribe_msg.to_string().into()))
+        .send(Message::Text(snapshot_subscribe_msg.to_string().into()))
         .await
     {
-        return SubscriptionOutcome::ConnectError(format!("failed to send subscribe: {e}"));
+        return SubscriptionOutcome::ConnectError(format!(
+            "failed to subscribe to queueSnapshots: {e}"
+        ));
+    }
+
+    let events_subscribe_msg = json!({
+        "id": "events",
+        "type": "subscribe",
+        "payload": {
+            "query": QUEUE_EVENTS_QUERY,
+            "variables": {
+                "after": last_cursor,
+            }
+        }
+    });
+    if let Err(e) = write
+        .send(Message::Text(events_subscribe_msg.to_string().into()))
+        .await
+    {
+        return SubscriptionOutcome::ConnectError(format!(
+            "failed to subscribe to queueEvents: {e}"
+        ));
     }
 
     info!("weaver subscription active");
@@ -313,9 +410,15 @@ async fn run_subscription(
 
         match msg {
             Message::Text(text) => {
-                if let Err(e) =
-                    handle_ws_message(text.as_ref(), app, actor, &mut write, &mut imported_job_ids)
-                        .await
+                if let Err(e) = handle_ws_message(
+                    text.as_ref(),
+                    app,
+                    actor,
+                    &mut write,
+                    &mut imported_job_ids,
+                    last_cursor,
+                )
+                .await
                 {
                     return SubscriptionOutcome::Disconnected(e);
                 }
@@ -337,6 +440,7 @@ async fn handle_ws_message<S>(
     actor: &scryer_domain::User,
     write: &mut futures_util::stream::SplitSink<S, Message>,
     imported_job_ids: &mut HashSet<String>,
+    last_cursor: &mut Option<String>,
 ) -> Result<(), String>
 where
     S: futures_util::Sink<Message> + Unpin,
@@ -348,13 +452,38 @@ where
 
     match msg_type {
         "next" => {
-            let snapshot = json
-                .get("payload")
-                .and_then(|p| p.get("data"))
-                .and_then(|d| d.get("jobUpdates"));
+            let subscription_id = json.get("id").and_then(Value::as_str).unwrap_or("");
+            let payload = json.get("payload").and_then(|p| p.get("data")).cloned();
 
-            if let Some(snapshot) = snapshot {
-                process_job_snapshot(snapshot, app, actor, imported_job_ids).await;
+            if let Some(payload) = payload {
+                match subscription_id {
+                    "snapshot" => {
+                        let parsed: QueueSnapshotsPayload = serde_json::from_value(payload)
+                            .map_err(|e| format!("invalid queueSnapshots payload: {e}"))?;
+                        process_job_snapshot(
+                            &parsed.queue_snapshots.items,
+                            app,
+                            actor,
+                            imported_job_ids,
+                        )
+                        .await;
+                    }
+                    "events" => {
+                        let parsed: QueueEventsPayload = serde_json::from_value(payload)
+                            .map_err(|e| format!("invalid queueEvents payload: {e}"))?;
+                        *last_cursor = Some(parsed.queue_events.cursor.clone());
+                        if parsed.queue_events.kind == "ITEM_COMPLETED"
+                            && let Some(item) = parsed.queue_events.item.as_ref()
+                        {
+                            let items = vec![weaver_item_to_queue_item(item)];
+                            maybe_import_completed_items(&items, app, actor, imported_job_ids)
+                                .await;
+                        }
+                    }
+                    _ => {
+                        debug!(subscription_id, "ignoring unknown subscription id");
+                    }
+                }
             }
         }
         "ping" => {
@@ -410,18 +539,13 @@ fn emit_queue_metrics(items: &[scryer_domain::DownloadQueueItem]) {
 }
 
 async fn process_job_snapshot(
-    snapshot: &Value,
+    jobs: &[WeaverQueueItem],
     app: &AppUseCase,
     actor: &scryer_domain::User,
     imported_job_ids: &mut HashSet<String>,
 ) {
-    let jobs = match snapshot.get("jobs").and_then(Value::as_array) {
-        Some(jobs) => jobs,
-        None => return,
-    };
-
     let mut items: Vec<scryer_domain::DownloadQueueItem> =
-        jobs.iter().filter_map(weaver_job_to_queue_item).collect();
+        jobs.iter().map(weaver_item_to_queue_item).collect();
 
     // Enrich items from the download_submissions table so that is_scryer_origin,
     // title_id, and facet are populated even when the Weaver job metadata is
@@ -447,6 +571,15 @@ async fn process_job_snapshot(
     // Broadcast to scryer's download queue channel (feeds the UI subscription).
     let _ = app.services.download_queue_broadcast.send(items.clone());
 
+    maybe_import_completed_items(&items, app, actor, imported_job_ids).await;
+}
+
+async fn maybe_import_completed_items(
+    items: &[scryer_domain::DownloadQueueItem],
+    app: &AppUseCase,
+    actor: &scryer_domain::User,
+    imported_job_ids: &mut HashSet<String>,
+) {
     // Trigger import for newly completed downloads.
     let newly_completed: Vec<&scryer_domain::DownloadQueueItem> = items
         .iter()

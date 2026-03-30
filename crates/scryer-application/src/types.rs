@@ -670,6 +670,7 @@ pub struct HousekeepingReport {
     pub stale_release_attempts: u32,
     pub expired_event_outboxes: u32,
     pub stale_history_events: u32,
+    pub staged_nzb_artifacts_pruned: u32,
     pub recycled_purged: u32,
     pub ran_at: String,
 }

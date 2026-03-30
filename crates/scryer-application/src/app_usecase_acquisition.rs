@@ -1325,6 +1325,7 @@ async fn process_single_wanted_item(
                             .submit_download(&DownloadClientAddRequest {
                                 title: title.clone(),
                                 source_hint: pack_url.clone(),
+                                staged_nzb: None,
                                 source_kind: best_pack.source_kind,
                                 source_title: pack_title.clone(),
                                 source_password: pack_password.clone(),
@@ -1703,6 +1704,7 @@ async fn process_single_wanted_item(
             item.last_search_at.as_deref(),
             now,
             &thresholds,
+            profile.criteria.min_score_to_grab,
         );
 
         // Record the decision for every candidate we evaluate.
@@ -1916,6 +1918,7 @@ async fn process_single_wanted_item(
             .submit_download(&DownloadClientAddRequest {
                 title: title.clone(),
                 source_hint: source_hint.clone(),
+                staged_nzb: None,
                 source_kind: candidate.source_kind,
                 source_title: source_title.clone(),
                 source_password: source_password.clone(),
@@ -2048,6 +2051,7 @@ async fn process_single_wanted_item(
                     app,
                     item,
                     &title,
+                    &profile,
                     &results,
                     candidate_index + 1,
                     now,
@@ -2331,6 +2335,7 @@ async fn persist_standby_candidates(
     app: &AppUseCase,
     item: &WantedItem,
     title: &Title,
+    profile: &QualityProfile,
     results: &[IndexerSearchResult],
     start_index: usize,
     now: &DateTime<Utc>,
@@ -2384,6 +2389,7 @@ async fn persist_standby_candidates(
             item.last_search_at.as_deref(),
             now,
             thresholds,
+            profile.criteria.min_score_to_grab,
         );
         if !decision.is_accept() {
             continue;
@@ -3211,6 +3217,7 @@ pub async fn start_background_acquisition_poller(
     let mut metadata_refresh_interval = tokio::time::interval(std::time::Duration::from_hours(12));
     let mut registry_refresh_interval = tokio::time::interval(std::time::Duration::from_hours(24));
     let mut health_check_interval = tokio::time::interval(std::time::Duration::from_hours(6));
+    let mut staged_nzb_prune_interval = tokio::time::interval(std::time::Duration::from_hours(1));
     let mut housekeeping_interval = tokio::time::interval(std::time::Duration::from_hours(24));
     let mut rss_sync_interval = tokio::time::interval(std::time::Duration::from_mins(15));
     let mut pending_release_interval = tokio::time::interval(std::time::Duration::from_mins(1));
@@ -3221,6 +3228,7 @@ pub async fn start_background_acquisition_poller(
     metadata_refresh_interval.tick().await;
     registry_refresh_interval.tick().await;
     health_check_interval.tick().await;
+    staged_nzb_prune_interval.tick().await;
     housekeeping_interval.tick().await;
     rss_sync_interval.tick().await;
     pending_release_interval.tick().await;
@@ -3300,6 +3308,22 @@ pub async fn start_background_acquisition_poller(
                     let results = app.run_health_checks().await;
                     *app.services.health_check_results.write().await = results;
                     info!("periodic health checks completed");
+                }).await;
+            }
+            _ = staged_nzb_prune_interval.tick() => {
+                let app = app.clone();
+                run_task("staged_nzb_prune", async move {
+                    match app.services.staged_nzb_store.prune_staged_nzbs_older_than(chrono::Utc::now() - chrono::Duration::hours(1)).await {
+                        Ok(pruned) => {
+                            if pruned > 0 {
+                                info!(staged_nzb_artifacts_pruned = pruned, "periodic staged nzb prune completed");
+                            }
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "periodic staged nzb prune failed");
+                            metrics::counter!("scryer_task_errors_total", "task" => "staged_nzb_prune").increment(1);
+                        }
+                    }
                 }).await;
             }
             _ = housekeeping_interval.tick() => {

@@ -5,14 +5,19 @@ mod common;
 use std::sync::Arc;
 
 use serde_json::json;
+use tokio::sync::Semaphore;
 use wiremock::matchers::{body_json_string, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use common::{TestContext, load_fixture};
-use scryer_application::{DownloadClient, DownloadClientConfigRepository, NullSettingsRepository};
+use scryer_application::{
+    DownloadClient, DownloadClientAddRequest, DownloadClientConfigRepository, DownloadSourceKind,
+    NullSettingsRepository, NullStagedNzbStore, StagedNzbRef,
+};
 use scryer_domain::DownloadClientConfig;
 use scryer_infrastructure::{
-    NzbgetDownloadClient, PrioritizedDownloadClientRouter, SabnzbdDownloadClient,
+    FileSystemStagedNzbStore, NzbgetDownloadClient, PrioritizedDownloadClientRouter,
+    SabnzbdDownloadClient, WeaverDownloadClient,
 };
 
 fn new_nzbget_client(uri: &str) -> scryer_infrastructure::NzbgetDownloadClient {
@@ -22,6 +27,93 @@ fn new_nzbget_client(uri: &str) -> scryer_infrastructure::NzbgetDownloadClient {
         Some("test-pass".to_string()),
         "SCORE".to_string(),
     )
+}
+
+async fn new_submit_nzbget_client(uri: &str) -> scryer_infrastructure::NzbgetDownloadClient {
+    scryer_infrastructure::NzbgetDownloadClient::with_staged_nzb_store(
+        uri.to_string(),
+        Some("test-user".to_string()),
+        Some("test-pass".to_string()),
+        "SCORE".to_string(),
+        new_staged_nzb_store().await,
+        Arc::new(Semaphore::new(4)),
+    )
+}
+
+async fn new_staged_nzb_store() -> Arc<FileSystemStagedNzbStore> {
+    let dir = std::env::temp_dir().join(format!(
+        "scryer-test-staged-nzb-{}",
+        scryer_domain::Id::new().0
+    ));
+    Arc::new(
+        FileSystemStagedNzbStore::new(&dir)
+            .await
+            .expect("staged nzb store"),
+    )
+}
+
+fn test_title(name: &str) -> scryer_domain::Title {
+    scryer_domain::Title {
+        id: format!("title-{}", name.replace(' ', "-").to_ascii_lowercase()),
+        name: name.to_string(),
+        facet: scryer_domain::MediaFacet::Movie,
+        monitored: true,
+        tags: vec![],
+        external_ids: vec![],
+        created_by: None,
+        created_at: chrono::Utc::now(),
+        year: Some(2024),
+        overview: None,
+        poster_url: None,
+        poster_source_url: None,
+        banner_url: None,
+        banner_source_url: None,
+        background_url: None,
+        background_source_url: None,
+        sort_title: None,
+        slug: None,
+        imdb_id: None,
+        runtime_minutes: None,
+        genres: vec![],
+        content_status: None,
+        language: None,
+        first_aired: None,
+        network: None,
+        studio: None,
+        country: None,
+        aliases: vec![],
+        tagged_aliases: vec![],
+        metadata_language: None,
+        metadata_fetched_at: None,
+        min_availability: None,
+        digital_release_date: None,
+        folder_path: None,
+    }
+}
+
+fn request_with_staged_nzb(
+    title: scryer_domain::Title,
+    staged_nzb: StagedNzbRef,
+    source_title: &str,
+) -> DownloadClientAddRequest {
+    DownloadClientAddRequest {
+        title,
+        source_hint: None,
+        staged_nzb: Some(staged_nzb),
+        source_kind: Some(DownloadSourceKind::NzbFile),
+        source_title: Some(source_title.to_string()),
+        source_password: None,
+        category: Some("movies".to_string()),
+        queue_priority: None,
+        download_directory: None,
+        release_title: None,
+        indexer_name: None,
+        info_hash_hint: None,
+        seed_goal_ratio: None,
+        seed_goal_seconds: None,
+        is_recent: None,
+        season_pack: None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -507,7 +599,8 @@ async fn nzbget_submit_download() {
     };
 
     let source_hint = format!("{}/getnzb/test.nzb", ctx.nzbget_server.uri());
-    let result = new_nzbget_client(&ctx.nzbget_server.uri())
+    let result = new_submit_nzbget_client(&ctx.nzbget_server.uri())
+        .await
         .submit_to_download_queue(&title, Some(source_hint), None, None, None, None)
         .await;
 
@@ -593,7 +686,8 @@ async fn nzbget_submit_download_supports_v25_3_append_signature() {
     };
 
     let source_hint = format!("{}/getnzb/test.nzb", ctx.nzbget_server.uri());
-    let result = new_nzbget_client(&ctx.nzbget_server.uri())
+    let result = new_submit_nzbget_client(&ctx.nzbget_server.uri())
+        .await
         .submit_to_download_queue(&title, Some(source_hint), None, None, None, None)
         .await;
 
@@ -644,10 +738,109 @@ async fn nzbget_submit_download_no_source_hint() {
         folder_path: None,
     };
 
-    let result = new_nzbget_client(&ctx.nzbget_server.uri())
+    let result = new_submit_nzbget_client(&ctx.nzbget_server.uri())
+        .await
         .submit_to_download_queue(&title, None, None, None, None, None)
         .await;
     assert!(result.is_err(), "should fail without source_hint");
+}
+
+#[tokio::test]
+async fn nzbget_submit_download_deletes_self_staged_nzb_on_failure() {
+    let ctx = TestContext::new().await;
+    let nzb_xml = load_fixture("nzbgeek/nzb_content.xml");
+    let staged_nzb_store = new_staged_nzb_store().await;
+
+    Mock::given(method("GET"))
+        .and(path("/getnzb/test.nzb"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(nzb_xml)
+                .insert_header("content-type", "application/x-nzb"),
+        )
+        .mount(&ctx.nzbget_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/jsonrpc"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("append failed"))
+        .mount(&ctx.nzbget_server)
+        .await;
+
+    let client = NzbgetDownloadClient::with_staged_nzb_store(
+        ctx.nzbget_server.uri(),
+        Some("test-user".to_string()),
+        Some("test-pass".to_string()),
+        "SCORE".to_string(),
+        staged_nzb_store.clone(),
+        Arc::new(Semaphore::new(4)),
+    );
+
+    let error = client
+        .submit_to_download_queue(
+            &test_title("Broken NZBGet Submit"),
+            Some(format!("{}/getnzb/test.nzb", ctx.nzbget_server.uri())),
+            Some(DownloadSourceKind::NzbUrl),
+            Some("Broken.Release".to_string()),
+            None,
+            None,
+        )
+        .await
+        .expect_err("submit should fail");
+
+    assert!(error.to_string().contains("500") || error.to_string().contains("failed"));
+    assert_eq!(staged_nzb_store.count_staged_artifacts().await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn nzbget_submit_download_uses_staged_cache_entry_without_refetch() {
+    let server = MockServer::start().await;
+    let staged_nzb_store = new_staged_nzb_store().await;
+    let nzb_xml = load_fixture("nzbgeek/nzb_content.xml");
+
+    Mock::given(method("POST"))
+        .and(path("/jsonrpc"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(load_fixture("nzbget/append.json")),
+        )
+        .mount(&server)
+        .await;
+
+    let staged = staged_nzb_store
+        .stage_nzb_bytes_for_test(nzb_xml.as_bytes())
+        .await
+        .expect("staged artifact should insert");
+
+    let client = NzbgetDownloadClient::with_staged_nzb_store(
+        server.uri(),
+        Some("test-user".to_string()),
+        Some("test-pass".to_string()),
+        "SCORE".to_string(),
+        staged_nzb_store.clone(),
+        Arc::new(Semaphore::new(4)),
+    );
+
+    let result = client
+        .submit_download(&request_with_staged_nzb(
+            test_title("Staged NZBGet"),
+            staged,
+            "Staged.NZBGet.Release",
+        ))
+        .await
+        .expect("submit should use staged nzb");
+
+    assert!(!result.job_id.is_empty());
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.method.as_str() == "GET")
+            .count(),
+        0
+    );
+    assert_eq!(staged_nzb_store.count_staged_artifacts().await.unwrap(), 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -749,11 +942,21 @@ async fn mount_list_queue_mocks(server: &MockServer) {
 
 /// Create a router backed by the test DB, with `fallback_uri` as the fallback client.
 fn build_router(ctx: &TestContext, fallback_uri: String) -> PrioritizedDownloadClientRouter {
+    build_router_with_cache(ctx, fallback_uri, Arc::new(NullStagedNzbStore))
+}
+
+fn build_router_with_cache(
+    ctx: &TestContext,
+    fallback_uri: String,
+    staged_nzb_store: Arc<dyn scryer_application::StagedNzbStore>,
+) -> PrioritizedDownloadClientRouter {
     let fallback = NzbgetDownloadClient::new(fallback_uri, None, None, "SCORE".to_string());
     PrioritizedDownloadClientRouter::new(
         Arc::new(ctx.db.clone()),
         Arc::new(NullSettingsRepository),
         Arc::new(fallback),
+        staged_nzb_store,
+        Arc::new(Semaphore::new(4)),
         None,
     )
 }
@@ -841,6 +1044,8 @@ async fn router_uses_fallback_when_no_clients_configured() {
         Arc::new(ctx.db.clone()),
         Arc::new(NullSettingsRepository),
         Arc::new(fallback),
+        Arc::new(NullStagedNzbStore),
+        Arc::new(Semaphore::new(4)),
         None,
     );
 
@@ -949,6 +1154,8 @@ async fn router_disabled_clients_are_not_used() {
         Arc::new(ctx.db.clone()),
         Arc::new(NullSettingsRepository),
         Arc::new(fallback),
+        Arc::new(NullStagedNzbStore),
+        Arc::new(Semaphore::new(4)),
         None,
     );
 
@@ -968,12 +1175,151 @@ async fn router_disabled_clients_are_not_used() {
     );
 }
 
+#[tokio::test]
+async fn router_reuses_single_staged_nzb_across_client_failover() {
+    let ctx = TestContext::new().await;
+    let source_server = MockServer::start().await;
+    let second_client_server = MockServer::start().await;
+    let nzb_xml = load_fixture("nzbgeek/nzb_content.xml");
+    let staged_nzb_store = new_staged_nzb_store().await;
+
+    Mock::given(method("GET"))
+        .and(path("/release.nzb"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(nzb_xml)
+                .insert_header("content-type", "application/x-nzb"),
+        )
+        .mount(&source_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/jsonrpc"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("append failed"))
+        .mount(&ctx.nzbget_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/jsonrpc"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(load_fixture("nzbget/append.json")),
+        )
+        .mount(&second_client_server)
+        .await;
+
+    ctx.db
+        .create(router_config("primary", &ctx.nzbget_server.uri(), 1, true))
+        .await
+        .unwrap();
+    ctx.db
+        .create(router_config(
+            "secondary",
+            &second_client_server.uri(),
+            2,
+            true,
+        ))
+        .await
+        .unwrap();
+
+    let router = build_router_with_cache(
+        &ctx,
+        "http://127.0.0.1:1".to_string(),
+        staged_nzb_store.clone(),
+    );
+    let result = router
+        .submit_to_download_queue(
+            &test_title("Router Failover"),
+            Some(format!("{}/release.nzb", source_server.uri())),
+            Some(DownloadSourceKind::NzbUrl),
+            Some("Router.Failover.Release".to_string()),
+            None,
+            None,
+        )
+        .await
+        .expect("secondary client should succeed after failover");
+
+    assert_eq!(result.client_type, "nzbget");
+    assert_eq!(source_server.received_requests().await.unwrap().len(), 1);
+    assert_eq!(staged_nzb_store.count_staged_artifacts().await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn router_deletes_staged_nzb_after_final_failure() {
+    let ctx = TestContext::new().await;
+    let source_server = MockServer::start().await;
+    let second_client_server = MockServer::start().await;
+    let nzb_xml = load_fixture("nzbgeek/nzb_content.xml");
+    let staged_nzb_store = new_staged_nzb_store().await;
+
+    Mock::given(method("GET"))
+        .and(path("/release.nzb"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(nzb_xml)
+                .insert_header("content-type", "application/x-nzb"),
+        )
+        .mount(&source_server)
+        .await;
+
+    for server in [&ctx.nzbget_server, &second_client_server] {
+        Mock::given(method("POST"))
+            .and(path("/jsonrpc"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("append failed"))
+            .mount(server)
+            .await;
+    }
+
+    ctx.db
+        .create(router_config("primary", &ctx.nzbget_server.uri(), 1, true))
+        .await
+        .unwrap();
+    ctx.db
+        .create(router_config(
+            "secondary",
+            &second_client_server.uri(),
+            2,
+            true,
+        ))
+        .await
+        .unwrap();
+
+    let router = build_router_with_cache(
+        &ctx,
+        "http://127.0.0.1:1".to_string(),
+        staged_nzb_store.clone(),
+    );
+    let error = router
+        .submit_to_download_queue(
+            &test_title("Router Failure"),
+            Some(format!("{}/release.nzb", source_server.uri())),
+            Some(DownloadSourceKind::NzbUrl),
+            Some("Router.Failure.Release".to_string()),
+            None,
+            None,
+        )
+        .await
+        .expect_err("all clients should fail");
+
+    assert!(error.to_string().contains("500") || error.to_string().contains("failed"));
+    assert_eq!(source_server.received_requests().await.unwrap().len(), 1);
+    assert_eq!(staged_nzb_store.count_staged_artifacts().await.unwrap(), 0);
+}
+
 // ===========================================================================
 // SABnzbd integration tests
 // ===========================================================================
 
 fn new_sabnzbd_client(uri: &str) -> SabnzbdDownloadClient {
     SabnzbdDownloadClient::new(uri.to_string(), "test-api-key".to_string())
+}
+
+async fn new_submit_sabnzbd_client(uri: &str) -> SabnzbdDownloadClient {
+    SabnzbdDownloadClient::with_staged_nzb_store(
+        uri.to_string(),
+        "test-api-key".to_string(),
+        new_staged_nzb_store().await,
+        Arc::new(Semaphore::new(4)),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1393,7 +1739,8 @@ async fn sabnzbd_submit_download() {
     };
 
     let nzb_url = format!("{}/getnzb?id=abc123&apikey=xyz", server.uri());
-    let result = new_sabnzbd_client(&server.uri())
+    let result = new_submit_sabnzbd_client(&server.uri())
+        .await
         .submit_to_download_queue(
             &title,
             Some(nzb_url),
@@ -1450,8 +1797,164 @@ async fn sabnzbd_submit_download_no_source_hint() {
     };
 
     let server = MockServer::start().await;
-    let result = new_sabnzbd_client(&server.uri())
+    let result = new_submit_sabnzbd_client(&server.uri())
+        .await
         .submit_to_download_queue(&title, None, None, None, None, None)
         .await;
     assert!(result.is_err(), "should fail without source_hint");
+}
+
+#[tokio::test]
+async fn sabnzbd_submit_download_deletes_self_staged_nzb_on_failure() {
+    let server = MockServer::start().await;
+    let staged_nzb_store = new_staged_nzb_store().await;
+
+    Mock::given(method("GET"))
+        .and(path("/getnzb"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_bytes(load_fixture("nzbgeek/nzb_content.xml").into_bytes()),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/api"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("addfile failed"))
+        .mount(&server)
+        .await;
+
+    let client = SabnzbdDownloadClient::with_staged_nzb_store(
+        server.uri(),
+        "test-api-key".to_string(),
+        staged_nzb_store.clone(),
+        Arc::new(Semaphore::new(4)),
+    );
+
+    let error = client
+        .submit_to_download_queue(
+            &test_title("Broken SAB Submit"),
+            Some(format!("{}/getnzb?id=broken", server.uri())),
+            Some(DownloadSourceKind::NzbUrl),
+            Some("Broken.SAB.Release".to_string()),
+            None,
+            Some("movies".to_string()),
+        )
+        .await
+        .expect_err("submit should fail");
+
+    assert!(error.to_string().contains("500") || error.to_string().contains("failed"));
+    assert_eq!(staged_nzb_store.count_staged_artifacts().await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn sabnzbd_submit_download_uses_staged_cache_entry_without_refetch() {
+    let server = MockServer::start().await;
+    let staged_nzb_store = new_staged_nzb_store().await;
+    let nzb_xml = load_fixture("nzbgeek/nzb_content.xml");
+
+    Mock::given(method("POST"))
+        .and(path("/api"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(load_fixture("sabnzbd/addurl.json")),
+        )
+        .mount(&server)
+        .await;
+
+    let staged = staged_nzb_store
+        .stage_nzb_bytes_for_test(nzb_xml.as_bytes())
+        .await
+        .expect("staged artifact should insert");
+
+    let client = SabnzbdDownloadClient::with_staged_nzb_store(
+        server.uri(),
+        "test-api-key".to_string(),
+        staged_nzb_store.clone(),
+        Arc::new(Semaphore::new(4)),
+    );
+
+    let result = client
+        .submit_download(&request_with_staged_nzb(
+            test_title("Staged SAB"),
+            staged,
+            "Staged.SAB.Release",
+        ))
+        .await
+        .expect("submit should use staged nzb");
+
+    assert_eq!(result.client_type, "sabnzbd");
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.method.as_str() == "GET")
+            .count(),
+        0
+    );
+    assert_eq!(staged_nzb_store.count_staged_artifacts().await.unwrap(), 1);
+}
+
+// ===========================================================================
+// Weaver integration tests
+// ===========================================================================
+
+#[tokio::test]
+async fn weaver_submit_download_uses_staged_cache_entry_without_refetch() {
+    let server = MockServer::start().await;
+    let staged_nzb_store = new_staged_nzb_store().await;
+    let nzb_xml = load_fixture("nzbgeek/nzb_content.xml");
+
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": {
+                "submitNzb": {
+                    "accepted": true,
+                    "clientRequestId": "scryer:title-staged-weaver:Staged.Weaver.Release",
+                    "item": {
+                        "id": 42,
+                        "name": "Staged.Weaver.Release",
+                        "state": "QUEUED"
+                    }
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let staged = staged_nzb_store
+        .stage_nzb_bytes_for_test(nzb_xml.as_bytes())
+        .await
+        .expect("staged artifact should insert");
+
+    let client = WeaverDownloadClient::with_staged_nzb_store(
+        server.uri(),
+        Some("test-api-key".to_string()),
+        staged_nzb_store.clone(),
+        Arc::new(Semaphore::new(4)),
+    );
+
+    let result = client
+        .submit_download(&request_with_staged_nzb(
+            test_title("Staged Weaver"),
+            staged,
+            "Staged.Weaver.Release",
+        ))
+        .await
+        .expect("submit should use staged nzb");
+
+    assert_eq!(result.client_type, "weaver");
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.method.as_str() == "GET")
+            .count(),
+        0
+    );
+    assert_eq!(staged_nzb_store.count_staged_artifacts().await.unwrap(), 1);
 }

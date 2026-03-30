@@ -46,8 +46,8 @@ fn balanced_features_match_current_defaults() {
     let w = build_weights(&ScoringPersona::Balanced, &ScoringOverrides::default());
     assert_eq!(w.remux_bonus, 0);
     assert_eq!(w.remux_missing_penalty, 0);
-    assert_eq!(w.atmos_bonus, 100);
-    assert_eq!(w.atmos_missing_penalty, -20);
+    assert_eq!(w.atmos_bonus, 0);
+    assert_eq!(w.atmos_missing_penalty, 0);
     assert_eq!(w.dual_audio_bonus, 150);
     assert_eq!(w.dual_audio_missing_penalty, -30);
     assert_eq!(w.dual_audio_present, 40);
@@ -75,6 +75,23 @@ fn audiophile_has_higher_bluray_bonus() {
     let bal = build_weights(&ScoringPersona::Balanced, &ScoringOverrides::default());
     let aud = build_weights(&ScoringPersona::Audiophile, &ScoringOverrides::default());
     assert!(aud.source_bluray > bal.source_bluray);
+}
+
+#[test]
+fn only_audiophile_has_default_atmos_bias() {
+    let balanced = build_weights(&ScoringPersona::Balanced, &ScoringOverrides::default());
+    let audiophile = build_weights(&ScoringPersona::Audiophile, &ScoringOverrides::default());
+    let efficient = build_weights(&ScoringPersona::Efficient, &ScoringOverrides::default());
+    let compatible = build_weights(&ScoringPersona::Compatible, &ScoringOverrides::default());
+
+    assert_eq!(balanced.atmos_bonus, 0);
+    assert_eq!(balanced.atmos_missing_penalty, 0);
+    assert!(audiophile.atmos_bonus > 0);
+    assert!(audiophile.atmos_missing_penalty < 0);
+    assert_eq!(efficient.atmos_bonus, 0);
+    assert_eq!(efficient.atmos_missing_penalty, 0);
+    assert_eq!(compatible.atmos_bonus, 0);
+    assert_eq!(compatible.atmos_missing_penalty, 0);
 }
 
 #[test]

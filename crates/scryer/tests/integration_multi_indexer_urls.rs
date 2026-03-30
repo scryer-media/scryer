@@ -135,11 +135,19 @@ async fn setup() -> (
     }
 
     // Build a minimal download client so AppServices doesn't panic
-    let nzbget = scryer_infrastructure::NzbgetDownloadClient::new(
+    let staged_nzb_dir = tempfile::TempDir::new().expect("failed to create staged nzb tempdir");
+    let staged_nzb_store = Arc::new(
+        scryer_infrastructure::FileSystemStagedNzbStore::new(staged_nzb_dir.path())
+            .await
+            .expect("staged nzb store"),
+    );
+    let nzbget = scryer_infrastructure::NzbgetDownloadClient::with_staged_nzb_store(
         "http://localhost:1".to_string(),
         None,
         None,
         "SCORE".to_string(),
+        staged_nzb_store.clone(),
+        Arc::new(tokio::sync::Semaphore::new(4)),
     );
 
     let smg = scryer_infrastructure::MetadataGatewayClient::new(
@@ -192,6 +200,7 @@ async fn setup() -> (
     services.download_submissions = Arc::new(db.clone());
     services.pending_releases = Arc::new(db.clone());
     services.pp_scripts = Arc::new(db.clone());
+    services.staged_nzb_store = staged_nzb_store;
 
     let mut registry = FacetRegistry::new();
     registry.register(Arc::new(MovieFacetHandler));

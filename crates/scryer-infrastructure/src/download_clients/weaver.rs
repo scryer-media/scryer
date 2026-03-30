@@ -1,19 +1,27 @@
 use async_trait::async_trait;
-use base64::{Engine as _, engine::general_purpose};
+use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use reqwest::Client;
+use reqwest::multipart;
 use scryer_application::{
     AppError, AppResult, DownloadClient, DownloadClientAddRequest, DownloadGrabResult,
+    NullStagedNzbStore, StagedNzbStore,
 };
 use scryer_domain::{
     CompletedDownload, DownloadClientConfig, DownloadQueueItem, DownloadQueueState,
 };
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use tracing::debug;
+use std::sync::Arc;
+use tokio::fs::File;
+use tokio::sync::Semaphore;
+use tokio_util::io::ReaderStream;
+use tracing::{debug, warn};
 
 use super::{
-    is_http_url, parse_download_client_config_json, read_config_string,
-    resolve_download_client_base_url,
+    parse_download_client_config_json, read_config_string, resolve_download_client_base_url,
+    resolve_staged_nzb_for_request,
 };
 
 #[derive(Clone)]
@@ -21,20 +29,186 @@ pub struct WeaverDownloadClient {
     graphql_url: String,
     api_key: Option<String>,
     http_client: Client,
+    staged_nzb_store: Arc<dyn StagedNzbStore>,
+    staged_nzb_pipeline_limit: Arc<Semaphore>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphqlResponse<T> {
+    data: Option<T>,
+    errors: Option<Vec<GraphqlError>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphqlError {
+    message: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WeaverAttribute {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WeaverAttention {
+    pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum WeaverQueueState {
+    Queued,
+    Downloading,
+    Checking,
+    Verifying,
+    Repairing,
+    Extracting,
+    Finalizing,
+    Completed,
+    Failed,
+    Paused,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WeaverQueueItem {
+    pub id: u64,
+    pub name: String,
+    pub state: WeaverQueueState,
+    pub error: Option<String>,
+    pub progress_percent: f64,
+    pub total_bytes: u64,
+    pub category: Option<String>,
+    pub attributes: Vec<WeaverAttribute>,
+    pub client_request_id: Option<String>,
+    pub output_dir: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub attention: Option<WeaverAttention>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemMetricsPayload {
+    _system_metrics: MinimalMetrics,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MinimalMetrics {
+    _bytes_downloaded: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QueueItemsPayload {
+    queue_items: Vec<WeaverQueueItem>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryItemsPayload {
+    history_items: Vec<WeaverQueueItem>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubmissionPayload {
+    submit_nzb: SubmissionResultPayload,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubmissionResultPayload {
+    accepted: bool,
+    item: SubmissionQueueItemPayload,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubmissionQueueItemPayload {
+    id: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QueueCommandAckPayload {
+    success: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PauseQueueItemPayload {
+    pause_queue_item: QueueCommandAckPayload,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResumeQueueItemPayload {
+    resume_queue_item: QueueCommandAckPayload,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CancelQueueItemPayload {
+    cancel_queue_item: QueueCommandAckPayload,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoveHistoryItemsPayload {
+    remove_history_items: HistoryCommandAckPayload,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryCommandAckPayload {
+    success: bool,
 }
 
 impl WeaverDownloadClient {
     pub fn new(base_url: String, api_key: Option<String>) -> Self {
+        Self::with_staged_nzb_store(
+            base_url,
+            api_key,
+            Arc::new(NullStagedNzbStore),
+            Arc::new(Semaphore::new(4)),
+        )
+    }
+
+    pub fn with_staged_nzb_store(
+        base_url: String,
+        api_key: Option<String>,
+        staged_nzb_store: Arc<dyn StagedNzbStore>,
+        staged_nzb_pipeline_limit: Arc<Semaphore>,
+    ) -> Self {
         let base = base_url.trim_end_matches('/').to_string();
         let graphql_url = format!("{base}/graphql");
         Self {
             graphql_url,
             api_key,
             http_client: Client::new(),
+            staged_nzb_store,
+            staged_nzb_pipeline_limit,
         }
     }
 
     pub fn from_config(config: &DownloadClientConfig) -> AppResult<Self> {
+        Self::from_config_with_staged_nzb_store(
+            config,
+            Arc::new(NullStagedNzbStore),
+            Arc::new(Semaphore::new(4)),
+        )
+    }
+
+    pub fn from_config_with_staged_nzb_store(
+        config: &DownloadClientConfig,
+        staged_nzb_store: Arc<dyn StagedNzbStore>,
+        staged_nzb_pipeline_limit: Arc<Semaphore>,
+    ) -> AppResult<Self> {
         let parsed_config = parse_download_client_config_json(&config.config_json)?;
         let base_url = resolve_download_client_base_url(&parsed_config).ok_or_else(|| {
             AppError::Validation(format!(
@@ -43,7 +217,12 @@ impl WeaverDownloadClient {
             ))
         })?;
         let api_key = read_config_string(&parsed_config, &["api_key", "apiKey", "apikey"]);
-        Ok(Self::new(base_url, api_key))
+        Ok(Self::with_staged_nzb_store(
+            base_url,
+            api_key,
+            staged_nzb_store,
+            staged_nzb_pipeline_limit,
+        ))
     }
 
     pub fn graphql_url(&self) -> &str {
@@ -65,12 +244,15 @@ impl WeaverDownloadClient {
 
     fn with_auth_headers(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         match self.api_key.as_deref() {
-            Some(api_key) => request.header("x-api-key", api_key),
+            Some(api_key) => request.header("Authorization", format!("Bearer {api_key}")),
             None => request,
         }
     }
 
-    async fn graphql_request(&self, query: &str, variables: Value) -> AppResult<Value> {
+    async fn graphql_request<T>(&self, query: &str, variables: Value) -> AppResult<T>
+    where
+        T: DeserializeOwned,
+    {
         let payload = json!({ "query": query, "variables": variables });
 
         let response = self
@@ -90,6 +272,67 @@ impl WeaverDownloadClient {
             .await
             .map_err(|err| AppError::Repository(format!("weaver response read failed: {err}")))?;
 
+        Self::parse_graphql_response(status, &body)
+    }
+
+    async fn graphql_multipart_request<T>(
+        &self,
+        query: &str,
+        variables: Value,
+        upload_variable_path: &str,
+        filename: String,
+        upload_path: &std::path::Path,
+        content_type: &str,
+        content_length: u64,
+    ) -> AppResult<T>
+    where
+        T: DeserializeOwned,
+    {
+        let file = File::open(upload_path).await.map_err(|error| {
+            AppError::Repository(format!(
+                "failed to open weaver upload artifact {}: {error}",
+                upload_path.display()
+            ))
+        })?;
+        let part = multipart::Part::stream_with_length(
+            reqwest::Body::wrap_stream(ReaderStream::new(file)),
+            content_length,
+        )
+        .file_name(filename)
+        .mime_str(content_type)
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to build weaver multipart file part: {error}"
+            ))
+        })?;
+        let form = multipart::Form::new()
+            .text(
+                "operations",
+                json!({ "query": query, "variables": variables }).to_string(),
+            )
+            .text("map", json!({ "0": [upload_variable_path] }).to_string())
+            .part("0", part);
+
+        let response = self
+            .with_auth_headers(self.http_client.post(&self.graphql_url).multipart(form))
+            .send()
+            .await
+            .map_err(|err| {
+                AppError::Repository(format!("weaver multipart request failed: {err}"))
+            })?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|err| {
+            AppError::Repository(format!("weaver multipart response read failed: {err}"))
+        })?;
+
+        Self::parse_graphql_response(status, &body)
+    }
+
+    fn parse_graphql_response<T>(status: reqwest::StatusCode, body: &str) -> AppResult<T>
+    where
+        T: DeserializeOwned,
+    {
         if !status.is_success() {
             let preview: String = body.chars().take(500).collect();
             return Err(AppError::Repository(format!(
@@ -97,147 +340,177 @@ impl WeaverDownloadClient {
             )));
         }
 
-        let json: Value = serde_json::from_str(&body).map_err(|err| {
+        let json: GraphqlResponse<T> = serde_json::from_str(body).map_err(|err| {
             AppError::Repository(format!("weaver returned non-json response: {err}"))
         })?;
 
-        if let Some(errors) = json.get("errors").and_then(Value::as_array)
+        if let Some(errors) = json.errors
             && let Some(first) = errors.first()
         {
-            let message = first
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown error");
             return Err(AppError::Repository(format!(
-                "weaver GraphQL error: {message}"
+                "weaver GraphQL error: {}",
+                first.message
             )));
         }
 
-        json.get("data")
-            .cloned()
+        json.data
             .ok_or_else(|| AppError::Repository("weaver response missing data field".into()))
     }
 
     /// Test connectivity by querying metrics.
     pub async fn test_connection(&self) -> AppResult<String> {
-        let query = "query { metrics { bytesDownloaded } }";
-        self.graphql_request(query, json!({})).await?;
+        let query = "query { systemMetrics { bytesDownloaded } }";
+        let _: SystemMetricsPayload = self.graphql_request(query, json!({})).await?;
         Ok("weaver".to_string())
     }
 
-    async fn fetch_and_encode_nzb(&self, source_hint: &str) -> AppResult<String> {
-        let bytes = super::fetch_nzb_bytes(&self.http_client, source_hint).await?;
-        Ok(general_purpose::STANDARD.encode(bytes))
-    }
-
-    /// Query weaver jobs, optionally filtering by status and paging the result.
-    async fn query_jobs(
-        &self,
-        status_filter: Option<&[&str]>,
-        limit: Option<usize>,
-        offset: Option<usize>,
-    ) -> AppResult<Vec<Value>> {
+    async fn query_queue_items(&self) -> AppResult<Vec<WeaverQueueItem>> {
         let query = r#"
-            query($status: [JobStatusGql!], $limit: Int, $offset: Int) {
-                jobs(status: $status, limit: $limit, offset: $offset) {
-                    id name status error progress totalBytes downloadedBytes
-                    failedBytes health hasPassword category outputDir createdAt
-                    metadata { key value }
+            query {
+                queueItems {
+                    id
+                    name
+                    state
+                    error
+                    progressPercent
+                    totalBytes
+                    downloadedBytes
+                    failedBytes
+                    health
+                    category
+                    outputDir
+                    createdAt
+                    clientRequestId
+                    attributes { key value }
+                    attention { code message }
                 }
             }
         "#;
-        let variables = json!({
-            "status": status_filter,
-            "limit": limit.and_then(|value| i32::try_from(value).ok()),
-            "offset": offset.and_then(|value| i32::try_from(value).ok()),
+        let data: QueueItemsPayload = self.graphql_request(query, json!({})).await?;
+        Ok(data.queue_items)
+    }
+
+    async fn query_history_items(
+        &self,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> AppResult<Vec<WeaverQueueItem>> {
+        let query = r#"
+            query($first: Int, $after: String) {
+                historyItems(first: $first, after: $after) {
+                    id
+                    name
+                    state
+                    error
+                    progressPercent
+                    totalBytes
+                    downloadedBytes
+                    failedBytes
+                    health
+                    category
+                    outputDir
+                    createdAt
+                    completedAt
+                    clientRequestId
+                    attributes { key value }
+                    attention { code message }
+                }
+            }
+        "#;
+        let after = offset.map(|value| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!("off:{value}"))
         });
-        let data = self.graphql_request(query, variables).await?;
-        Ok(data
-            .get("jobs")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default())
+        let data: HistoryItemsPayload = self
+            .graphql_request(
+                query,
+                json!({
+                    "first": limit.and_then(|value| i32::try_from(value).ok()),
+                    "after": after,
+                }),
+            )
+            .await?;
+        Ok(data.history_items)
     }
 }
 
-/// Extract scryer metadata from weaver job metadata entries.
-fn extract_scryer_metadata(job: &Value) -> (Option<String>, Option<String>, bool) {
-    let metadata = match job.get("metadata").and_then(Value::as_array) {
-        Some(m) => m,
-        None => return (None, None, false),
-    };
+/// Extract scryer metadata from Weaver attributes.
+fn parse_scryer_client_request_id(client_request_id: Option<&str>) -> Option<String> {
+    let value = client_request_id?.trim();
+    let mut parts = value.splitn(3, ':');
+    let prefix = parts.next()?;
+    let title_id = parts.next()?;
+    if prefix.eq_ignore_ascii_case("scryer") && !title_id.trim().is_empty() {
+        Some(title_id.trim().to_string())
+    } else {
+        None
+    }
+}
 
+fn extract_scryer_metadata(
+    attributes: &[WeaverAttribute],
+    client_request_id: Option<&str>,
+) -> (Option<String>, Option<String>, bool) {
     let mut title_id = None;
     let mut facet = None;
-    for entry in metadata {
-        let key = entry.get("key").and_then(Value::as_str).unwrap_or("");
-        let value = entry
-            .get("value")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        match key {
+    for entry in attributes {
+        let value = entry.value.clone();
+        match entry.key.as_str() {
             "*scryer_title_id" => title_id = Some(value),
             "*scryer_facet" => facet = Some(value),
             _ => {}
         }
     }
 
-    let is_scryer = title_id.is_some();
+    if title_id.is_none() {
+        title_id = parse_scryer_client_request_id(client_request_id);
+    }
+
+    let is_scryer = title_id.is_some()
+        || client_request_id
+            .map(|value| value.trim_start().starts_with("scryer:"))
+            .unwrap_or(false);
     (title_id, facet, is_scryer)
 }
 
 /// Map a weaver job status string to scryer's DownloadQueueState.
-fn map_weaver_status(status: &str) -> DownloadQueueState {
+fn map_weaver_status(status: WeaverQueueState) -> DownloadQueueState {
     match status {
-        "QUEUED" => DownloadQueueState::Queued,
-        "DOWNLOADING" | "CHECKING" => DownloadQueueState::Downloading,
-        "VERIFYING" => DownloadQueueState::Verifying,
-        "REPAIRING" => DownloadQueueState::Repairing,
-        "EXTRACTING" => DownloadQueueState::Extracting,
-        "COMPLETE" => DownloadQueueState::Completed,
-        "FAILED" => DownloadQueueState::Failed,
-        "PAUSED" => DownloadQueueState::Paused,
-        _ => DownloadQueueState::Queued,
+        WeaverQueueState::Queued => DownloadQueueState::Queued,
+        WeaverQueueState::Downloading | WeaverQueueState::Checking => {
+            DownloadQueueState::Downloading
+        }
+        WeaverQueueState::Verifying => DownloadQueueState::Verifying,
+        WeaverQueueState::Repairing => DownloadQueueState::Repairing,
+        WeaverQueueState::Extracting | WeaverQueueState::Finalizing => {
+            DownloadQueueState::Extracting
+        }
+        WeaverQueueState::Completed => DownloadQueueState::Completed,
+        WeaverQueueState::Failed => DownloadQueueState::Failed,
+        WeaverQueueState::Paused => DownloadQueueState::Paused,
     }
 }
 
-/// Map a weaver job JSON object to a scryer DownloadQueueItem.
-pub(crate) fn weaver_job_to_queue_item(job: &Value) -> Option<DownloadQueueItem> {
-    let id = job.get("id")?.as_u64()?;
-    let name = job
-        .get("name")
-        .and_then(Value::as_str)
-        .unwrap_or("Unnamed download")
-        .to_string();
-    let status_str = job
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("QUEUED");
-    let state = map_weaver_status(status_str);
+/// Map a Weaver queue/history item to a scryer DownloadQueueItem.
+pub(crate) fn weaver_item_to_queue_item(job: &WeaverQueueItem) -> DownloadQueueItem {
+    let state = map_weaver_status(job.state);
 
     let attention_reason = if state == DownloadQueueState::Failed {
-        job.get("error").and_then(Value::as_str).map(String::from)
+        job.error
+            .clone()
+            .or_else(|| job.attention.as_ref().map(|value| value.message.clone()))
     } else {
-        None
+        job.attention.as_ref().map(|value| value.message.clone())
     };
 
-    let progress = job.get("progress").and_then(Value::as_f64).unwrap_or(0.0);
-    let total_bytes = job.get("totalBytes").and_then(Value::as_u64).unwrap_or(0);
-
-    let (title_id, facet, is_scryer) = extract_scryer_metadata(job);
-
-    let created_at = job
-        .get("createdAt")
-        .and_then(Value::as_f64)
-        .map(|ms| (ms as i64).to_string());
+    let (title_id, facet, is_scryer) =
+        extract_scryer_metadata(&job.attributes, job.client_request_id.as_deref());
 
     // Calculate remaining seconds from progress and download speed.
     // We don't have per-job speed, so leave it as None.
-    Some(DownloadQueueItem {
-        id: id.to_string(),
+    DownloadQueueItem {
+        id: job.id.to_string(),
         title_id,
-        title_name: name,
+        title_name: job.name.clone(),
         facet,
         client_id: String::new(),
         client_name: String::new(),
@@ -246,15 +519,15 @@ pub(crate) fn weaver_job_to_queue_item(job: &Value) -> Option<DownloadQueueItem>
         progress_percent: if state == DownloadQueueState::Completed {
             100
         } else {
-            (progress * 100.0).round().clamp(0.0, 100.0) as u8
+            job.progress_percent.round().clamp(0.0, 100.0) as u8
         },
-        size_bytes: Some(total_bytes as i64),
+        size_bytes: Some(job.total_bytes as i64),
         remaining_seconds: None,
-        queued_at: created_at,
+        queued_at: Some(job.created_at.to_rfc3339()),
         last_updated_at: None,
-        attention_required: matches!(state, DownloadQueueState::Failed),
+        attention_required: job.attention.is_some() || matches!(state, DownloadQueueState::Failed),
         attention_reason,
-        download_client_item_id: id.to_string(),
+        download_client_item_id: job.id.to_string(),
         import_status: None,
         import_error_message: None,
         imported_at: None,
@@ -263,7 +536,7 @@ pub(crate) fn weaver_job_to_queue_item(job: &Value) -> Option<DownloadQueueItem>
         tracked_status: None,
         tracked_status_messages: Vec::new(),
         tracked_match_type: None,
-    })
+    }
 }
 
 fn derive_nzb_filename(source_title: Option<&str>, source_hint: &str, title_name: &str) -> String {
@@ -298,20 +571,10 @@ impl DownloadClient for WeaverDownloadClient {
         let title = &request.title;
         let source_hint = request
             .source_hint
-            .clone()
-            .and_then(|v| {
-                let v = v.trim().to_string();
-                (!v.is_empty()).then_some(v)
-            })
-            .ok_or_else(|| {
-                AppError::Validation("source hint is required to queue a download".into())
-            })?;
-
-        if !is_http_url(&source_hint) {
-            return Err(AppError::Validation(format!(
-                "source hint must be an NZB URL; got {source_hint}"
-            )));
-        }
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string();
 
         let normalized_source_title = request.source_title.clone().and_then(|v| {
             let t = v.trim().to_string();
@@ -323,7 +586,13 @@ impl DownloadClient for WeaverDownloadClient {
             &title.name,
         );
 
-        let nzb_base64 = self.fetch_and_encode_nzb(&source_hint).await?;
+        let staged = resolve_staged_nzb_for_request(
+            &self.http_client,
+            &self.staged_nzb_store,
+            &self.staged_nzb_pipeline_limit,
+            request,
+        )
+        .await?;
 
         let password = request
             .source_password
@@ -341,7 +610,7 @@ impl DownloadClient for WeaverDownloadClient {
             serde_json::to_string(&title.facet).unwrap_or_else(|_| "\"other\"".to_string());
         let facet_str = facet_str.trim_matches('"');
 
-        let mut metadata = vec![
+        let mut attributes = vec![
             json!({"key": "*scryer_title_id", "value": title.id.clone()}),
             json!({"key": "*scryer_facet", "value": facet_str}),
         ];
@@ -353,52 +622,102 @@ impl DownloadClient for WeaverDownloadClient {
             .map(|id| id.value.trim().to_string())
             .filter(|v| !v.is_empty())
         {
-            metadata.push(json!({"key": "*scryer_imdb_id", "value": imdb_id}));
+            attributes.push(json!({"key": "*scryer_imdb_id", "value": imdb_id}));
         }
 
-        let query = r#"
-            mutation($source: NzbSourceInput!, $filename: String, $password: String, $category: String, $metadata: [MetadataInput!]) {
-                submitNzb(source: $source, filename: $filename, password: $password, category: $category, metadata: $metadata) {
-                    id name status
+        let client_request_id = format!(
+            "scryer:{}:{}",
+            title.id,
+            request
+                .release_title
+                .clone()
+                .or_else(|| normalized_source_title.clone())
+                .unwrap_or_else(|| title.name.clone())
+        );
+
+        let result: AppResult<DownloadGrabResult> = async {
+            let query = r#"
+                mutation($input: SubmitNzbInput!) {
+                    submitNzb(input: $input) {
+                        accepted
+                        clientRequestId
+                        item { id name state }
+                    }
                 }
+            "#;
+
+            let variables = json!({
+                "input": {
+                    "nzbUpload": Value::Null,
+                    "filename": nzb_filename,
+                    "password": password,
+                    "category": category,
+                    "attributes": attributes,
+                    "clientRequestId": client_request_id,
+                }
+            });
+
+            debug!(
+                endpoint = self.graphql_url.as_str(),
+                title = title.name.as_str(),
+                filename = nzb_filename.as_str(),
+                "weaver submitNzb multipart request"
+            );
+
+            let data: SubmissionPayload = self
+                .graphql_multipart_request(
+                    query,
+                    variables,
+                    "variables.input.nzbUpload",
+                    format!("{nzb_filename}.zst"),
+                    &staged.staged_nzb.compressed_path,
+                    "application/zstd",
+                    tokio::fs::metadata(&staged.staged_nzb.compressed_path)
+                        .await
+                        .map_err(|error| {
+                            AppError::Repository(format!(
+                                "failed to stat staged nzb {}: {error}",
+                                staged.staged_nzb.compressed_path.display()
+                            ))
+                        })?
+                        .len(),
+                )
+                .await?;
+            if !data.submit_nzb.accepted {
+                return Err(AppError::Repository(
+                    "weaver submitNzb did not accept the submission".into(),
+                ));
             }
-        "#;
+            let job_id = data.submit_nzb.item.id;
 
-        let variables = json!({
-            "source": { "nzbBase64": nzb_base64 },
-            "filename": nzb_filename,
-            "password": password,
-            "category": category,
-            "metadata": metadata,
-        });
+            debug!(
+                endpoint = self.graphql_url.as_str(),
+                job_id,
+                title = title.name.as_str(),
+                "weaver submitNzb succeeded"
+            );
 
-        debug!(
-            endpoint = self.graphql_url.as_str(),
-            title = title.name.as_str(),
-            filename = nzb_filename.as_str(),
-            "weaver submitNzb request"
-        );
+            Ok(DownloadGrabResult {
+                job_id: job_id.to_string(),
+                client_type: "weaver".to_string(),
+            })
+        }
+        .await;
 
-        let data = self.graphql_request(query, variables).await?;
-        let job = data
-            .get("submitNzb")
-            .ok_or_else(|| AppError::Repository("weaver submitNzb response missing job".into()))?;
-        let job_id = job
-            .get("id")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| AppError::Repository("weaver submitNzb returned no job id".into()))?;
+        if staged.self_staged
+            && let Err(error) = self
+                .staged_nzb_store
+                .delete_staged_nzb(&staged.staged_nzb)
+                .await
+        {
+            warn!(
+                staged_nzb_id = staged.staged_nzb.id.as_str(),
+                error = %error,
+                "failed to delete self-staged weaver nzb artifact"
+            );
+        }
 
-        debug!(
-            endpoint = self.graphql_url.as_str(),
-            job_id,
-            title = title.name.as_str(),
-            "weaver submitNzb succeeded"
-        );
-
-        Ok(DownloadGrabResult {
-            job_id: job_id.to_string(),
-            client_type: "weaver".to_string(),
-        })
+        result
     }
 
     async fn test_connection(&self) -> AppResult<String> {
@@ -406,24 +725,13 @@ impl DownloadClient for WeaverDownloadClient {
     }
 
     async fn list_queue(&self) -> AppResult<Vec<DownloadQueueItem>> {
-        let jobs = self.query_jobs(None, None, None).await?;
-        Ok(jobs
-            .iter()
-            .filter_map(weaver_job_to_queue_item)
-            .filter(|item| {
-                !matches!(
-                    item.state,
-                    DownloadQueueState::Completed | DownloadQueueState::Failed
-                )
-            })
-            .collect())
+        let jobs = self.query_queue_items().await?;
+        Ok(jobs.iter().map(weaver_item_to_queue_item).collect())
     }
 
     async fn list_history(&self) -> AppResult<Vec<DownloadQueueItem>> {
-        let jobs = self
-            .query_jobs(Some(&["COMPLETE", "FAILED"]), None, None)
-            .await?;
-        Ok(jobs.iter().filter_map(weaver_job_to_queue_item).collect())
+        let jobs = self.query_history_items(None, None).await?;
+        Ok(jobs.iter().map(weaver_item_to_queue_item).collect())
     }
 
     async fn list_history_page(
@@ -431,58 +739,36 @@ impl DownloadClient for WeaverDownloadClient {
         offset: usize,
         limit: usize,
     ) -> AppResult<Vec<DownloadQueueItem>> {
-        let jobs = self
-            .query_jobs(Some(&["COMPLETE", "FAILED"]), Some(limit), Some(offset))
-            .await?;
-        Ok(jobs.iter().filter_map(weaver_job_to_queue_item).collect())
+        let jobs = self.query_history_items(Some(limit), Some(offset)).await?;
+        Ok(jobs.iter().map(weaver_item_to_queue_item).collect())
     }
 
     async fn list_completed_downloads(&self) -> AppResult<Vec<CompletedDownload>> {
-        let jobs = self.query_jobs(Some(&["COMPLETE"]), None, None).await?;
+        let jobs = self.query_history_items(None, None).await?;
         Ok(jobs
             .iter()
             .filter_map(|job| {
-                let id = job.get("id")?.as_u64()?;
-                let name = job
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or("Unnamed")
-                    .to_string();
+                if job.state != WeaverQueueState::Completed {
+                    return None;
+                }
                 let output_dir = job
-                    .get("outputDir")
-                    .and_then(Value::as_str)
+                    .output_dir
+                    .as_ref()
                     .filter(|v| !v.is_empty())?
                     .to_string();
-                let total_bytes = job.get("totalBytes").and_then(Value::as_u64).unwrap_or(0);
-                let category = job
-                    .get("category")
-                    .and_then(Value::as_str)
-                    .filter(|v| !v.is_empty())
-                    .map(String::from);
-
                 let parameters = job
-                    .get("metadata")
-                    .and_then(Value::as_array)
-                    .map(|entries| {
-                        entries
-                            .iter()
-                            .filter_map(|e| {
-                                let key = e.get("key").and_then(Value::as_str)?.to_string();
-                                let value = e.get("value").and_then(Value::as_str)?.to_string();
-                                Some((key, value))
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-
-                let completed_at = job
-                    .get("createdAt")
-                    .and_then(Value::as_f64)
-                    .and_then(|ms| DateTime::from_timestamp_millis(ms as i64))
-                    .or_else(|| Some(Utc::now()));
+                    .attributes
+                    .iter()
+                    .map(|entry| (entry.key.clone(), entry.value.clone()))
+                    .collect::<Vec<_>>();
 
                 // Only return jobs submitted by scryer (have *scryer_title_id metadata).
-                let is_scryer = parameters.iter().any(|(k, _)| k == "*scryer_title_id");
+                let is_scryer = parameters.iter().any(|(k, _)| k == "*scryer_title_id")
+                    || job
+                        .client_request_id
+                        .as_deref()
+                        .map(|value| value.trim_start().starts_with("scryer:"))
+                        .unwrap_or(false);
                 if !is_scryer {
                     return None;
                 }
@@ -490,12 +776,12 @@ impl DownloadClient for WeaverDownloadClient {
                 Some(CompletedDownload {
                     client_type: "weaver".to_string(),
                     client_id: String::new(),
-                    download_client_item_id: id.to_string(),
-                    name,
+                    download_client_item_id: job.id.to_string(),
+                    name: job.name.clone(),
                     dest_dir: output_dir,
-                    category,
-                    size_bytes: Some(total_bytes as i64),
-                    completed_at,
+                    category: job.category.clone(),
+                    size_bytes: Some(job.total_bytes as i64),
+                    completed_at: job.completed_at.or(Some(Utc::now())),
                     parameters,
                 })
             })
@@ -506,8 +792,14 @@ impl DownloadClient for WeaverDownloadClient {
         let job_id: u64 = id
             .parse()
             .map_err(|_| AppError::Validation(format!("invalid weaver job id: {id}")))?;
-        let query = "mutation($id: Int!) { pauseJob(id: $id) }";
-        self.graphql_request(query, json!({ "id": job_id })).await?;
+        let query = "mutation($id: Int!) { pauseQueueItem(id: $id) { success } }";
+        let data: PauseQueueItemPayload =
+            self.graphql_request(query, json!({ "id": job_id })).await?;
+        if !data.pause_queue_item.success {
+            return Err(AppError::Repository(
+                "weaver pauseQueueItem did not succeed".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -515,8 +807,14 @@ impl DownloadClient for WeaverDownloadClient {
         let job_id: u64 = id
             .parse()
             .map_err(|_| AppError::Validation(format!("invalid weaver job id: {id}")))?;
-        let query = "mutation($id: Int!) { resumeJob(id: $id) }";
-        self.graphql_request(query, json!({ "id": job_id })).await?;
+        let query = "mutation($id: Int!) { resumeQueueItem(id: $id) { success } }";
+        let data: ResumeQueueItemPayload =
+            self.graphql_request(query, json!({ "id": job_id })).await?;
+        if !data.resume_queue_item.success {
+            return Err(AppError::Repository(
+                "weaver resumeQueueItem did not succeed".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -525,11 +823,28 @@ impl DownloadClient for WeaverDownloadClient {
             .parse()
             .map_err(|_| AppError::Validation(format!("invalid weaver job id: {id}")))?;
         let query = if is_history {
-            "mutation($id: Int!) { deleteHistory(id: $id) { id } }"
+            "mutation($ids: [Int!]!) { removeHistoryItems(ids: $ids) { success removedIds } }"
         } else {
-            "mutation($id: Int!) { cancelJob(id: $id) }"
+            "mutation($id: Int!) { cancelQueueItem(id: $id) { success } }"
         };
-        self.graphql_request(query, json!({ "id": job_id })).await?;
+        if is_history {
+            let data: RemoveHistoryItemsPayload = self
+                .graphql_request(query, json!({ "ids": [job_id] }))
+                .await?;
+            if !data.remove_history_items.success {
+                return Err(AppError::Repository(
+                    "weaver removeHistoryItems did not succeed".into(),
+                ));
+            }
+        } else {
+            let data: CancelQueueItemPayload =
+                self.graphql_request(query, json!({ "id": job_id })).await?;
+            if !data.cancel_queue_item.success {
+                return Err(AppError::Repository(
+                    "weaver cancelQueueItem did not succeed".into(),
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -539,7 +854,7 @@ mod tests {
     use chrono::Utc;
     use serde_json::json;
 
-    use super::{WeaverDownloadClient, weaver_job_to_queue_item};
+    use super::{WeaverDownloadClient, WeaverQueueItem, weaver_item_to_queue_item};
     use scryer_domain::{DownloadClientConfig, DownloadQueueState};
 
     fn test_config(config_json: &str) -> DownloadClientConfig {
@@ -572,26 +887,64 @@ mod tests {
     }
 
     #[test]
-    fn weaver_job_to_queue_item_marks_failed_job_attention() {
+    fn weaver_item_to_queue_item_marks_failed_job_attention() {
         let job = json!({
             "id": 42,
             "name": "Example Job",
-            "status": "FAILED",
+            "state": "FAILED",
             "error": "archive corrupt",
-            "progress": 0.25,
+            "progressPercent": 25.0,
             "totalBytes": 4000,
-            "createdAt": 1_700_000_000_000_f64,
-            "metadata": [
+            "downloadedBytes": 1000,
+            "failedBytes": 0,
+            "health": 800,
+            "category": null,
+            "outputDir": null,
+            "createdAt": "2024-01-01T00:00:00Z",
+            "completedAt": null,
+            "clientRequestId": null,
+            "attributes": [
                 { "key": "*scryer_title_id", "value": "title-1" },
                 { "key": "*scryer_facet", "value": "anime" }
-            ]
+            ],
+            "attention": { "code": "JOB_FAILED", "message": "archive corrupt" }
         });
 
-        let item = weaver_job_to_queue_item(&job).expect("job should map");
+        let job: WeaverQueueItem = serde_json::from_value(job).expect("job should deserialize");
+        let item = weaver_item_to_queue_item(&job);
 
         assert_eq!(item.state, DownloadQueueState::Failed);
         assert_eq!(item.title_id.as_deref(), Some("title-1"));
         assert!(item.is_scryer_origin);
         assert_eq!(item.attention_reason.as_deref(), Some("archive corrupt"));
     }
+
+    #[test]
+    fn weaver_item_to_queue_item_uses_client_request_id_as_origin_fallback() {
+        let job = json!({
+            "id": 77,
+            "name": "Origin Fallback",
+            "state": "DOWNLOADING",
+            "error": null,
+            "progressPercent": 10.0,
+            "totalBytes": 1000,
+            "downloadedBytes": 100,
+            "failedBytes": 0,
+            "health": 1000,
+            "category": null,
+            "outputDir": null,
+            "createdAt": "2024-01-01T00:00:00Z",
+            "completedAt": null,
+            "clientRequestId": "scryer:title-77:Origin Fallback",
+            "attributes": [],
+            "attention": null
+        });
+
+        let job: WeaverQueueItem = serde_json::from_value(job).expect("job should deserialize");
+        let item = weaver_item_to_queue_item(&job);
+
+        assert_eq!(item.title_id.as_deref(), Some("title-77"));
+        assert!(item.is_scryer_origin);
+    }
+
 }
