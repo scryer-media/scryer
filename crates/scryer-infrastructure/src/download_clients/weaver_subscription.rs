@@ -596,8 +596,7 @@ async fn maybe_import_completed_items(
             "weaver: newly completed downloads detected via WS subscription"
         );
 
-        let processed =
-            scryer_application::try_import_completed_downloads(app, actor, items).await;
+        let processed = scryer_application::try_import_completed_downloads(app, actor, items).await;
 
         tracing::debug!(
             processed_count = processed.len(),
