@@ -597,7 +597,7 @@ async fn maybe_import_completed_items(
         );
 
         let processed =
-            scryer_application::try_import_completed_downloads(app, actor, &items).await;
+            scryer_application::try_import_completed_downloads(app, actor, items).await;
 
         tracing::debug!(
             processed_count = processed.len(),

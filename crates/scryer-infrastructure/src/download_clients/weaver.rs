@@ -345,6 +345,7 @@ impl WeaverDownloadClient {
         Self::parse_graphql_response(status, &body)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn graphql_multipart_request<T>(
         &self,
         query: &str,
@@ -565,7 +566,7 @@ impl WeaverDownloadClient {
             .graphql_request(
                 query,
                 json!({
-                    "status": statuses.map(|values| values.iter().copied().collect::<Vec<_>>()),
+                    "status": statuses.map(|values| values.to_vec()),
                     "limit": limit.and_then(|value| i32::try_from(value).ok()),
                     "offset": offset.and_then(|value| i32::try_from(value).ok()),
                 }),
