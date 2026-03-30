@@ -1118,7 +1118,9 @@ pub fn apply_size_scoring_for_category(
 mod tests {
     use super::*;
     use crate::release_parser::parse_release_metadata;
-    use crate::scoring_weights::balanced_weights;
+    use crate::scoring_weights::{
+        ScoringOverrides, ScoringPersona, balanced_weights, build_weights,
+    };
 
     #[test]
     fn parse_profile_json() {
@@ -1201,11 +1203,11 @@ mod tests {
     }
 
     #[test]
-    fn profile_prefers_atmos_candidates() {
+    fn audiophile_profile_prefers_atmos_candidates() {
         let profile = QualityProfile::parse(
             r#"{
-                "id":"anime",
-                "name":"Anime",
+                "id":"atmos-test",
+                "name":"Atmos test",
                 "criteria": {
                     "atmos_preferred":true,
                     "prefer_remux":false,
@@ -1215,7 +1217,8 @@ mod tests {
         )
         .expect("profile must parse");
 
-        let w = balanced_weights();
+        // Atmos preference is persona-native to Audiophile — Balanced has no atmos bias.
+        let w = build_weights(&ScoringPersona::Audiophile, &ScoringOverrides::default());
         let with_atmos =
             parse_release_metadata("Show.2021.1080p.WEB-DL.H.265.DDP.Atmos.5.1.AAC2.0");
         let no_atmos = parse_release_metadata("Show.2021.1080p.WEB-DL.H.265.DDP.5.1.AAC2.0");
