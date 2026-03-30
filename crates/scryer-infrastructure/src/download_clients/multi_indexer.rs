@@ -1185,7 +1185,6 @@ mod tests {
         assert!(response.results.is_empty());
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn anime_strategies_try_abs_and_sxex_in_parallel() {
         let caps = IndexerProviderCapabilities {

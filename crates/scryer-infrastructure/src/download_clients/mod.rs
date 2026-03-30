@@ -283,11 +283,12 @@ impl<R: Read> TeeZstdReader<R> {
             ))
         })?;
         let writer = std::io::BufWriter::new(file);
-        let encoder = zstd::stream::Encoder::new(writer, STAGED_NZB_ZSTD_LEVEL).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to initialize staged nzb zstd stream: {error}"
-            ))
-        })?;
+        let encoder =
+            zstd::stream::Encoder::new(writer, STAGED_NZB_ZSTD_LEVEL).map_err(|error| {
+                AppError::Repository(format!(
+                    "failed to initialize staged nzb zstd stream: {error}"
+                ))
+            })?;
         Ok(Self { inner, encoder })
     }
 
@@ -519,9 +520,7 @@ pub(crate) async fn stage_nzb_from_url(
                     .expect("validator task should exist")
                     .await
                     .map_err(|error| {
-                        AppError::Repository(format!(
-                            "nzb validation task failed to join: {error}"
-                        ))
+                        AppError::Repository(format!("nzb validation task failed to join: {error}"))
                     })?;
                 stream_result = match validator_result {
                     Ok(()) => Err(AppError::Repository(

@@ -1826,7 +1826,8 @@ mod tests {
         let (prefix, suffix) =
             split_streaming_payload(&payload, placeholder.as_bytes()).expect("split should work");
         let body = [prefix, b"YmFzZTY0LWRhdGE=".to_vec(), suffix].concat();
-        let body_json: Value = serde_json::from_slice(&body).expect("body should remain valid json");
+        let body_json: Value =
+            serde_json::from_slice(&body).expect("body should remain valid json");
         let params = body_json
             .get("params")
             .and_then(Value::as_array)

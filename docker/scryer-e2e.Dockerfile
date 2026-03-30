@@ -57,13 +57,14 @@ RUN apt-get update \
 RUN useradd --create-home --home-dir /home/scryer --uid 1000 scryer
 
 COPY --from=builder /workspace/target/release/scryer /usr/local/bin/scryer
+COPY docker/scryer-e2e-entrypoint.sh /usr/local/bin/scryer-e2e-entrypoint
 
-RUN mkdir -p /data /media /weaver-downloads /nzbget-downloads /sabnzbd-downloads \
- && chown -R scryer:scryer /data /media /weaver-downloads /nzbget-downloads /sabnzbd-downloads /home/scryer
+RUN mkdir -p /data /media /weaver-downloads /nzbget-downloads /sabnzbd-downloads /scryer-data \
+ && chown -R scryer:scryer /data /media /weaver-downloads /nzbget-downloads /sabnzbd-downloads /scryer-data /home/scryer \
+ && chmod +x /usr/local/bin/scryer-e2e-entrypoint
 
-USER scryer
 WORKDIR /home/scryer
 
 EXPOSE 8080
 
-ENTRYPOINT ["scryer"]
+ENTRYPOINT ["/usr/local/bin/scryer-e2e-entrypoint"]

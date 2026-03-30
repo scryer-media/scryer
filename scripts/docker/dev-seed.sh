@@ -206,7 +206,24 @@ seed_indexers() {
       "$input_json"
   done < "$ENTRIES_FILE"
 
-  batch_execute 'indexer create' >/dev/null
+  response=$(batch_execute 'indexer create')
+
+  batch_index=0
+  while IFS= read -r entry_json; do
+    [ -n "$entry_json" ] || continue
+
+    name=$(printf '%s' "$entry_json" | jq -r '.name')
+    indexer_id=$(printf '%s' "$response" | jq -r --arg alias "op$batch_index" '.data[$alias].id')
+    seed_id=$(printf '%s' "$entry_json" | jq -r '.seedId // ""')
+    name_slug=$(slugify "$name")
+
+    add_client_alias "$indexer_id" "$indexer_id"
+    add_client_alias "$name" "$indexer_id"
+    add_client_alias "$name_slug" "$indexer_id"
+    add_client_alias "$seed_id" "$indexer_id"
+
+    batch_index=$((batch_index + 1))
+  done < "$ENTRIES_FILE"
 }
 
 seed_download_clients() {
@@ -355,6 +372,57 @@ seed_settings() {
           'UpdateDownloadClientRoutingInput' \
           'updateDownloadClientRouting' \
           '{ clientId }' \
+          "$variables"
+        ;;
+      indexer.routing)
+        if [ -z "$scope_id" ]; then
+          echo "seed: indexer.routing requires scopeId" >&2
+          exit 1
+        fi
+        entries=$(printf '%s' "$entry_json" | jq -c --slurpfile aliases "$CLIENT_ALIAS_FILE" '
+          (
+            if has("valueJson") then
+              .valueJson
+            else
+              .value | fromjson
+            end
+          )
+          | with_entries(.key = ($aliases[0][.key] // .key))
+          | to_entries
+          | map({
+              indexerId: .key,
+              enabled: (
+                if .value | has("enabled") then .value.enabled
+                elif .value | has("is_enabled") then .value.is_enabled
+                elif .value | has("isEnabled") then .value.isEnabled
+                else true
+                end
+              ),
+              categories: (
+                if (.value.categories | type) == "array" then .value.categories
+                elif (.value.category | type) == "array" then .value.category
+                elif (.value.category | type) == "string" then [ .value.category ]
+                else []
+                end
+              ),
+              priority: (
+                .value.priority
+                // .value.order
+                // 1
+              )
+            })
+        ')
+        variables=$(jq -nc \
+          --arg scope "$scope_id" \
+          --argjson entries "$entries" '
+          { scope: $scope, entries: $entries }
+        ')
+
+        echo "seed: saving setting '$key' (system/$scope_id)"
+        batch_add \
+          'UpdateIndexerRoutingInput' \
+          'updateIndexerRouting' \
+          '{ indexerId }' \
           "$variables"
         ;;
       *)
