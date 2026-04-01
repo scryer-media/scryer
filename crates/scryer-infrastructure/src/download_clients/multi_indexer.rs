@@ -1292,9 +1292,11 @@ fn filter_strategy_results(
 
         if title_guard_mode == TitleGuardMode::ExactTitleMatch && !expected_titles.is_empty() {
             let release_titles = parsed_title_candidates(parsed);
-            let title_ok = release_titles
-                .iter()
-                .any(|release_title| expected_titles.iter().any(|expected| expected == release_title));
+            let title_ok = release_titles.iter().any(|release_title| {
+                expected_titles
+                    .iter()
+                    .any(|expected| expected == release_title)
+            });
             if !title_ok {
                 tracing::debug!(
                     strategy = strategy_label,
@@ -1435,10 +1437,7 @@ mod tests {
 
     impl IndexerStatsTracker for RecordingIndexerStatsTracker {
         fn record_query(&self, _indexer_id: &str, _indexer_name: &str, success: bool) {
-            self.queries
-                .lock()
-                .expect("stats log mutex")
-                .push(success);
+            self.queries.lock().expect("stats log mutex").push(success);
         }
 
         fn record_api_limits(

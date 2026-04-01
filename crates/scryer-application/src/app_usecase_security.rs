@@ -141,11 +141,7 @@ impl AppUseCase {
         Ok(Some(self.derive_jwt_key(password_hash, &user.entitlements)))
     }
 
-    async fn write_cached_jwt_signing_key(
-        &self,
-        user: &User,
-        evict_first: bool,
-    ) -> AppResult<()> {
+    async fn write_cached_jwt_signing_key(&self, user: &User, evict_first: bool) -> AppResult<()> {
         let _seed_guard = self.jwt_signing_keys_seed_lock.lock().await;
         let mut cache = self.jwt_signing_keys.write().await;
 

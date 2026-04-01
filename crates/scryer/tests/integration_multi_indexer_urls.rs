@@ -432,7 +432,10 @@ async fn multi_indexer_url_trace_movie_spirited_away() {
             .iter()
             .any(|result| result.title.contains("Sen.to.Chihiro.no.Kamikakushi")),
         "ID-backed alternate title should survive the title guard, got {:?}, urls: tosho={:?}, nzbgeek={:?}, torznab={:?}",
-        results.iter().map(|result| result.title.clone()).collect::<Vec<_>>(),
+        results
+            .iter()
+            .map(|result| result.title.clone())
+            .collect::<Vec<_>>(),
         tosho_urls,
         nzbgeek_urls,
         torznab_urls

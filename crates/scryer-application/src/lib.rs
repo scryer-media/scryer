@@ -5641,7 +5641,10 @@ mod tests {
             .expect("rotate password");
 
         let result = app.authenticate_token(&token).await;
-        assert!(result.is_err(), "old token should be rejected after password change");
+        assert!(
+            result.is_err(),
+            "old token should be rejected after password change"
+        );
     }
 
     #[tokio::test]
@@ -5677,7 +5680,9 @@ mod tests {
             .authenticate_credentials("ent_rotate", "same-pass")
             .await
             .expect("re-login after entitlement change");
-        let new_token = app.issue_access_token(&relogged).expect("issue refreshed token");
+        let new_token = app
+            .issue_access_token(&relogged)
+            .expect("issue refreshed token");
         let decoded = app
             .authenticate_token(&new_token)
             .await
@@ -5756,6 +5761,9 @@ mod tests {
         let token = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
 
         let result = app.authenticate_token(&token).await;
-        assert!(result.is_err(), "malformed entitlement claims should be rejected");
+        assert!(
+            result.is_err(),
+            "malformed entitlement claims should be rejected"
+        );
     }
 }
