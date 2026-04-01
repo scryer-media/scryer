@@ -135,6 +135,28 @@ async fn setup() -> (
         db.create(config).await.expect("create indexer config");
     }
 
+    scryer_application::DownloadClientConfigRepository::create(
+        &db,
+        scryer_domain::DownloadClientConfig {
+            id: "nzbget-1".into(),
+            name: "NZBGet".into(),
+            client_type: "nzbget".into(),
+            config_json: serde_json::json!({
+                "base_url": "http://localhost:1"
+            })
+            .to_string(),
+            client_priority: 1,
+            is_enabled: true,
+            status: scryer_domain::DownloadClientStatus::default(),
+            last_error: None,
+            last_seen_at: None,
+            created_at: now,
+            updated_at: now,
+        },
+    )
+    .await
+    .expect("create download client config");
+
     // Build a minimal download client so AppServices doesn't panic
     let staged_nzb_dir = tempfile::TempDir::new().expect("failed to create staged nzb tempdir");
     let staged_nzb_store = Arc::new(
