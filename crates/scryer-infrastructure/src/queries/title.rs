@@ -118,6 +118,43 @@ pub(crate) async fn get_title_by_id_query(pool: &SqlitePool, id: &str) -> AppRes
     }
 }
 
+pub(crate) async fn get_title_by_external_id_query(
+    pool: &SqlitePool,
+    source: &str,
+    value: &str,
+) -> AppResult<Option<Title>> {
+    let sql = format!(
+        "SELECT {} FROM titles
+         WHERE EXISTS (
+             SELECT 1
+             FROM json_each(titles.external_ids) AS external_id
+             WHERE LOWER(json_extract(external_id.value, '$.source')) = LOWER(?)
+               AND json_extract(external_id.value, '$.value') = ?
+         )
+         ORDER BY id ASC
+         LIMIT 1",
+        TITLE_COLUMNS
+    );
+
+    let row = sqlx::query(&sql)
+        .bind(source)
+        .bind(value)
+        .fetch_optional(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    match row {
+        Some(row) => {
+            let mut titles = vec![row_to_title(&row)?];
+            apply_local_poster_urls(pool, &mut titles).await?;
+            apply_local_image_urls(pool, TitleImageKind::Banner, "master", &mut titles).await?;
+            apply_local_image_urls(pool, TitleImageKind::Fanart, "master", &mut titles).await?;
+            Ok(titles.into_iter().next())
+        }
+        None => Ok(None),
+    }
+}
+
 fn row_to_title(row: &sqlx::sqlite::SqliteRow) -> AppResult<Title> {
     let id: String = row
         .try_get("id")
@@ -658,6 +695,28 @@ pub(crate) async fn list_episodes_for_collection_query(
     Ok(out)
 }
 
+pub(crate) async fn list_episodes_for_title_query(
+    pool: &SqlitePool,
+    title_id: &str,
+) -> AppResult<Vec<Episode>> {
+    let rows = sqlx::query(
+        "SELECT id, title_id, collection_id, episode_type, episode_number, season_number,
+                episode_label, title, air_date, duration_seconds, has_multi_audio,
+                has_subtitle, is_filler, is_recap, absolute_number, overview, tvdb_id, monitored, created_at
+         FROM episodes WHERE title_id = ? ORDER BY season_number ASC, episode_number ASC, id ASC",
+    )
+    .bind(title_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        out.push(row_to_episode(&row)?);
+    }
+    Ok(out)
+}
+
 pub(crate) async fn get_episode_by_id_query(
     pool: &SqlitePool,
     episode_id: &str,
@@ -862,6 +921,19 @@ pub(crate) async fn delete_collection_query(
     Ok(())
 }
 
+pub(crate) async fn delete_collections_for_title_query(
+    pool: &SqlitePool,
+    title_id: &str,
+) -> AppResult<()> {
+    sqlx::query("DELETE FROM collections WHERE title_id = ?")
+        .bind(title_id)
+        .execute(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(())
+}
+
 pub(crate) async fn delete_episode_query(pool: &SqlitePool, episode_id: &str) -> AppResult<()> {
     let result = sqlx::query("DELETE FROM episodes WHERE id = ?")
         .bind(episode_id)
@@ -872,6 +944,19 @@ pub(crate) async fn delete_episode_query(pool: &SqlitePool, episode_id: &str) ->
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound(format!("episode {}", episode_id)));
     }
+
+    Ok(())
+}
+
+pub(crate) async fn delete_episodes_for_title_query(
+    pool: &SqlitePool,
+    title_id: &str,
+) -> AppResult<()> {
+    sqlx::query("DELETE FROM episodes WHERE title_id = ?")
+        .bind(title_id)
+        .execute(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
 
     Ok(())
 }
@@ -1336,6 +1421,60 @@ pub(crate) async fn update_title_metadata_query(
         .execute(pool)
         .await
         .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound(format!("title {}", id)));
+    }
+
+    get_title_by_id_query(pool, id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("title {}", id)))
+}
+
+pub(crate) async fn replace_title_match_state_query(
+    pool: &SqlitePool,
+    id: &str,
+    external_ids: Vec<ExternalId>,
+    tags: Vec<String>,
+) -> AppResult<Title> {
+    let external_ids_json = serde_json::to_string(&external_ids)
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+    let tags_json =
+        serde_json::to_string(&tags).map_err(|err| AppError::Repository(err.to_string()))?;
+
+    let result = sqlx::query(
+        "UPDATE titles SET
+            external_ids = ?,
+            tags = ?,
+            year = NULL,
+            overview = NULL,
+            poster_url = NULL,
+            banner_url = NULL,
+            background_url = NULL,
+            sort_title = NULL,
+            slug = NULL,
+            imdb_id = NULL,
+            runtime_minutes = NULL,
+            genres = '[]',
+            content_status = NULL,
+            language = NULL,
+            first_aired = NULL,
+            network = NULL,
+            studio = NULL,
+            country = NULL,
+            aliases = '[]',
+            tagged_aliases_json = '[]',
+            metadata_language = NULL,
+            metadata_fetched_at = NULL,
+            digital_release_date = NULL
+         WHERE id = ?",
+    )
+    .bind(&external_ids_json)
+    .bind(&tags_json)
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound(format!("title {}", id)));

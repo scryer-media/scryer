@@ -30,9 +30,11 @@ import {
 import { useClient, useSubscription } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { handleFixTitleMatchComplete as applyFixTitleMatchCompletion } from "@/lib/fix-title-match";
 import { useImportHistorySubscription } from "@/lib/hooks/use-import-history-subscription";
 import { SeriesOverviewView } from "@/components/views/series-overview-view";
 import { ManualImportDialog } from "@/components/dialogs/manual-import-dialog";
+import { FixTitleMatchDialog } from "@/components/dialogs/fix-title-match-dialog";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
@@ -251,6 +253,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
   const [deleteFilesOnDisk, setDeleteFilesOnDisk] = React.useState(false);
   const [deleteLoading, setDeleteLoading] = React.useState(false);
+  const [fixMatchOpen, setFixMatchOpen] = React.useState(false);
 
   const refreshTitleDetail = React.useCallback(async (_options?: { quiet?: boolean }) => {
     const { data, error } = await client.query(titleOverviewInitQuery, { id: titleId, blocklistLimit: 300 }, { requestPolicy: "network-only" }).toPromise();
@@ -515,6 +518,19 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     setDeleteFilesOnDisk(false);
     setDeleteDialogOpen(true);
   }, []);
+
+  const handleFixMatchComplete = React.useCallback(
+    async (warnings: string[]) => {
+      await applyFixTitleMatchCompletion({
+        warnings,
+        refreshTitleDetail,
+        setGlobalStatus,
+        t,
+        titleName: title?.name,
+      });
+    },
+    [refreshTitleDetail, setGlobalStatus, t, title?.name],
+  );
 
   const handleCancelDeleteTitle = React.useCallback(() => {
     if (deleteLoading) return;
@@ -849,6 +865,13 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         onRequestDeleteTitle={handleRequestDeleteTitle}
         deleteLoading={deleteLoading}
         onDeleteFile={handleDeleteMediaFile}
+        onOpenFixMatch={() => setFixMatchOpen(true)}
+      />
+      <FixTitleMatchDialog
+        open={fixMatchOpen}
+        onOpenChange={setFixMatchOpen}
+        title={title}
+        onFixed={handleFixMatchComplete}
       />
       <ConfirmDialog
         open={deleteDialogOpen && title !== null}

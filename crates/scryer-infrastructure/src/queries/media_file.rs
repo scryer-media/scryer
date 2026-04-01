@@ -17,12 +17,14 @@ pub(crate) async fn insert_media_file_query(
     sqlx::query(
         "INSERT INTO media_files
          (id, title_id, file_path, size_bytes, quality_id, scan_status, created_at,
+          source_signature_scheme, source_signature_value,
           scene_name, release_group, source_type, resolution,
           video_codec_parsed, audio_codec_parsed,
           acquisition_score, scoring_log,
           indexer_source, grabbed_release_title, grabbed_at,
           edition, original_file_path, release_hash)
          VALUES (?, ?, ?, ?, ?, 'imported', ?,
+                 ?, ?,
                  ?, ?, ?, ?,
                  ?, ?,
                  ?, ?,
@@ -33,6 +35,8 @@ pub(crate) async fn insert_media_file_query(
             size_bytes = excluded.size_bytes,
             quality_id = excluded.quality_id,
             scan_status = excluded.scan_status,
+            source_signature_scheme = excluded.source_signature_scheme,
+            source_signature_value = excluded.source_signature_value,
             scene_name = excluded.scene_name,
             release_group = excluded.release_group,
             source_type = excluded.source_type,
@@ -54,6 +58,8 @@ pub(crate) async fn insert_media_file_query(
     .bind(input.size_bytes)
     .bind(&input.quality_label)
     .bind(&now)
+    .bind(&input.source_signature_scheme)
+    .bind(&input.source_signature_value)
     .bind(&input.scene_name)
     .bind(&input.release_group)
     .bind(&input.source_type)
@@ -100,7 +106,8 @@ pub(crate) async fn list_media_files_for_title_query(
 ) -> AppResult<Vec<TitleMediaFile>> {
     let rows: Vec<SqliteRow> = sqlx::query(
         "SELECT mf.id, mf.title_id, fem.episode_id, mf.file_path,
-                mf.size_bytes, mf.quality_id, mf.scan_status, mf.created_at,
+                mf.size_bytes, mf.source_signature_scheme, mf.source_signature_value,
+                mf.quality_id, mf.scan_status, mf.created_at,
                 mf.video_codec, mf.video_width, mf.video_height,
                 mf.video_bitrate_kbps, mf.video_bit_depth,
                 mf.video_hdr_format, mf.video_frame_rate, mf.video_profile,
@@ -187,6 +194,10 @@ fn row_to_title_media_file(row: &SqliteRow) -> AppResult<TitleMediaFile> {
     let size_bytes: i64 = row
         .try_get("size_bytes")
         .map_err(|err| AppError::Repository(err.to_string()))?;
+    let source_signature_scheme: Option<String> =
+        row.try_get("source_signature_scheme").unwrap_or(None);
+    let source_signature_value: Option<String> =
+        row.try_get("source_signature_value").unwrap_or(None);
     let quality_label: Option<String> = row.try_get("quality_id").unwrap_or(None);
     let scan_status: String = row
         .try_get("scan_status")
@@ -260,6 +271,8 @@ fn row_to_title_media_file(row: &SqliteRow) -> AppResult<TitleMediaFile> {
         episode_id,
         file_path,
         size_bytes,
+        source_signature_scheme,
+        source_signature_value,
         quality_label,
         scan_status,
         created_at,
@@ -371,6 +384,31 @@ pub(crate) async fn update_media_file_analysis_query(
     Ok(())
 }
 
+pub(crate) async fn update_media_file_source_signature_query(
+    pool: &SqlitePool,
+    file_id: &str,
+    size_bytes: i64,
+    source_signature_scheme: Option<&str>,
+    source_signature_value: Option<&str>,
+) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE media_files SET
+            size_bytes = ?,
+            source_signature_scheme = ?,
+            source_signature_value = ?
+         WHERE id = ?",
+    )
+    .bind(size_bytes)
+    .bind(source_signature_scheme)
+    .bind(source_signature_value)
+    .bind(file_id)
+    .execute(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(())
+}
+
 pub(crate) async fn mark_scan_failed_query(
     pool: &SqlitePool,
     file_id: &str,
@@ -392,7 +430,8 @@ pub(crate) async fn get_media_file_by_id_query(
 ) -> AppResult<Option<TitleMediaFile>> {
     let row: Option<SqliteRow> = sqlx::query(
         "SELECT mf.id, mf.title_id, NULL AS episode_id, mf.file_path,
-                mf.size_bytes, mf.quality_id, mf.scan_status, mf.created_at,
+                mf.size_bytes, mf.source_signature_scheme, mf.source_signature_value,
+                mf.quality_id, mf.scan_status, mf.created_at,
                 mf.video_codec, mf.video_width, mf.video_height,
                 mf.video_bitrate_kbps, mf.video_bit_depth,
                 mf.video_hdr_format, mf.video_frame_rate, mf.video_profile,

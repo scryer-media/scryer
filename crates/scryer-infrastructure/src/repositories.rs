@@ -59,6 +59,10 @@ impl TitleRepository for SqliteServices {
         db_call!(self, GetTitleById { id })
     }
 
+    async fn find_by_external_id(&self, source: &str, value: &str) -> AppResult<Option<Title>> {
+        crate::queries::title::get_title_by_external_id_query(&self.pool, source, value).await
+    }
+
     async fn create(&self, title: Title) -> AppResult<Title> {
         db_call!(self, CreateTitle { title })
     }
@@ -101,6 +105,16 @@ impl TitleRepository for SqliteServices {
     ) -> AppResult<Title> {
         let id = id.to_string();
         db_call!(self, UpdateTitleHydratedMetadata { id, metadata })
+    }
+
+    async fn replace_match_state(
+        &self,
+        id: &str,
+        external_ids: Vec<scryer_domain::ExternalId>,
+        tags: Vec<String>,
+    ) -> AppResult<Title> {
+        crate::queries::title::replace_title_match_state_query(&self.pool, id, external_ids, tags)
+            .await
     }
 
     async fn delete(&self, id: &str) -> AppResult<()> {
@@ -208,9 +222,18 @@ impl ShowRepository for SqliteServices {
         db_call!(self, DeleteCollection { collection_id })
     }
 
+    async fn delete_collections_for_title(&self, title_id: &str) -> AppResult<()> {
+        crate::queries::title::delete_collections_for_title_query(&self.pool, title_id).await
+    }
+
     async fn list_episodes_for_collection(&self, collection_id: &str) -> AppResult<Vec<Episode>> {
         let collection_id = collection_id.to_string();
         db_call!(self, ListEpisodesForCollection { collection_id })
+    }
+
+    async fn list_episodes_for_title(&self, title_id: &str) -> AppResult<Vec<Episode>> {
+        let title_id = title_id.to_string();
+        db_call!(self, ListEpisodesForTitle { title_id })
     }
 
     async fn get_episode_by_id(&self, episode_id: &str) -> AppResult<Option<Episode>> {
@@ -264,6 +287,10 @@ impl ShowRepository for SqliteServices {
     async fn delete_episode(&self, episode_id: &str) -> AppResult<()> {
         let episode_id = episode_id.to_string();
         db_call!(self, DeleteEpisode { episode_id })
+    }
+
+    async fn delete_episodes_for_title(&self, title_id: &str) -> AppResult<()> {
+        crate::queries::title::delete_episodes_for_title_query(&self.pool, title_id).await
     }
 
     async fn find_episode_by_title_and_numbers(
@@ -795,6 +822,22 @@ impl MediaFileRepository for SqliteServices {
         analysis: scryer_application::MediaFileAnalysis,
     ) -> AppResult<()> {
         self.update_media_file_analysis(file_id, analysis).await
+    }
+
+    async fn update_media_file_source_signature(
+        &self,
+        file_id: &str,
+        size_bytes: i64,
+        source_signature_scheme: Option<String>,
+        source_signature_value: Option<String>,
+    ) -> AppResult<()> {
+        self.update_media_file_source_signature(
+            file_id,
+            size_bytes,
+            source_signature_scheme,
+            source_signature_value,
+        )
+        .await
     }
 
     async fn mark_scan_failed(&self, file_id: &str, error: &str) -> AppResult<()> {

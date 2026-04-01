@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use tokio::sync::mpsc;
 
 use crate::{AppError, AppResult};
 
@@ -10,6 +11,9 @@ pub struct LibraryFile {
     /// alongside this video file during scanning.
     pub nfo_path: Option<String>,
 }
+
+pub type LibraryFileBatch = Vec<LibraryFile>;
+pub type LibraryFileBatchReceiver = mpsc::Receiver<AppResult<LibraryFileBatch>>;
 
 #[derive(Debug, Clone, Default)]
 pub struct LibraryScanSummary {
@@ -235,6 +239,18 @@ pub trait LibraryScanner: Send + Sync {
     async fn scan_directory(&self, root: &str) -> AppResult<Vec<LibraryFile>> {
         self.scan_library(root).await
     }
+
+    async fn scan_library_batched(
+        &self,
+        root: &str,
+        batch_size: usize,
+    ) -> AppResult<LibraryFileBatchReceiver>;
+
+    async fn scan_directory_batched(
+        &self,
+        root: &str,
+        batch_size: usize,
+    ) -> AppResult<LibraryFileBatchReceiver>;
 }
 
 #[derive(Default)]
@@ -243,6 +259,38 @@ pub struct NullLibraryScanner;
 #[async_trait]
 impl LibraryScanner for NullLibraryScanner {
     async fn scan_library(&self, _root: &str) -> AppResult<Vec<LibraryFile>> {
+        Err(AppError::Repository(
+            "library scanner is not configured".into(),
+        ))
+    }
+
+    async fn scan_library_batched(
+        &self,
+        _root: &str,
+        batch_size: usize,
+    ) -> AppResult<LibraryFileBatchReceiver> {
+        if batch_size == 0 {
+            return Err(AppError::Validation(
+                "batch size must be greater than 0".into(),
+            ));
+        }
+
+        Err(AppError::Repository(
+            "library scanner is not configured".into(),
+        ))
+    }
+
+    async fn scan_directory_batched(
+        &self,
+        _root: &str,
+        batch_size: usize,
+    ) -> AppResult<LibraryFileBatchReceiver> {
+        if batch_size == 0 {
+            return Err(AppError::Validation(
+                "batch size must be greater than 0".into(),
+            ));
+        }
+
         Err(AppError::Repository(
             "library scanner is not configured".into(),
         ))

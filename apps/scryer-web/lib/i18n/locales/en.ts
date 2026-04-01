@@ -439,6 +439,27 @@ const en: LocaleDictionary = {
   "title.requiredAudioLanguages": "Required Audio Languages",
   "title.requiredAudioInherited": "Inherited from {{facet}} settings",
   "title.requiredAudioResetInherit": "Reset to inherit",
+  "title.fixMatchHeading": "Fix metadata match",
+  "title.fixMatchAction": "Fix Match",
+  "title.fixMatchDescriptionMovie":
+    "Repair the TVDB match for this movie while keeping the local title and folder name unchanged.",
+  "title.fixMatchDescriptionSeries":
+    "Repair the TVDB match for this title. Local title and folder naming stay the same.",
+  "title.fixMatchDialogTitle": "Fix Match",
+  "title.fixMatchDialogDescription":
+    "Repair the TVDB match for {{name}}. The local title and folder name stay the same. Series and anime will rebuild seasons and episodes internally.",
+  "title.fixMatchUnnamed": "this title",
+  "title.fixMatchSearchPlaceholder": "Search TVDB titles",
+  "title.fixMatchCurrentTvdbId": "Current TVDB ID",
+  "title.fixMatchCurrentTvdbNone": "none",
+  "title.fixMatchSearching": "Searching metadata…",
+  "title.fixMatchNoResults": "No metadata matches found.",
+  "title.fixMatchSelected": "Selected",
+  "title.fixMatchChoose": "Choose",
+  "title.fixMatchApplying": "Fixing Match…",
+  "title.fixMatchApply": "Apply Match",
+  "title.fixMatchSearchFailed": "Failed to search metadata.",
+  "title.fixMatchApplyFailed": "Failed to fix title match.",
 
   "tvdb.searchResults": "TVDB Search Results",
   "tvdb.searchPrompt": "Search TVDB by entering a title above.",
@@ -1221,6 +1242,7 @@ const en: LocaleDictionary = {
   "status.deleteCatalogConfirm":
     "Remove {{name}} from catalog? Use the option below to also remove local files.",
   "status.titleDeleted": "{{name}} removed from catalog.",
+  "status.titleMatchUpdated": "Updated match for {{name}}.",
   "status.qualityProfileBlocked":
     "Skipped: blocked by quality profile ({{reason}})",
   "status.tvdbRequiredImdb": "Selected movie match has no usable IMDb ID.",

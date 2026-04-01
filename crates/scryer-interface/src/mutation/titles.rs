@@ -1,7 +1,7 @@
 use async_graphql::{Context, Error, Object, Result as GqlResult};
 
 use crate::context::{actor_from_ctx, app_from_ctx, to_gql_error};
-use crate::mappers::from_title;
+use crate::mappers::{from_library_scan_summary, from_title};
 use crate::types::*;
 use crate::utils::{
     map_add_input, merge_title_option_tags, normalize_title_tags, parse_download_source_kind,
@@ -112,6 +112,26 @@ impl TitleMutations {
             .await
             .map_err(to_gql_error)?;
         Ok(from_title(title))
+    }
+
+    async fn fix_title_match(
+        &self,
+        ctx: &Context<'_>,
+        input: FixTitleMatchInput,
+    ) -> GqlResult<FixTitleMatchPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let result = app
+            .fix_title_match(&actor, &input.title_id, &input.tvdb_id)
+            .await
+            .map_err(to_gql_error)?;
+
+        Ok(FixTitleMatchPayload {
+            title: from_title(result.title),
+            hydrated: result.hydrated,
+            library_scan: result.library_scan.map(from_library_scan_summary),
+            warnings: result.warnings,
+        })
     }
 
     async fn delete_title(&self, ctx: &Context<'_>, input: DeleteTitleInput) -> GqlResult<bool> {

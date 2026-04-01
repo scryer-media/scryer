@@ -979,6 +979,30 @@ impl SqliteServices {
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
+    pub async fn update_media_file_source_signature(
+        &self,
+        file_id: &str,
+        size_bytes: i64,
+        source_signature_scheme: Option<String>,
+        source_signature_value: Option<String>,
+    ) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::UpdateMediaFileSourceSignature {
+                file_id: file_id.to_string(),
+                size_bytes,
+                source_signature_scheme,
+                source_signature_value,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
     pub async fn mark_scan_failed(&self, file_id: &str, error: &str) -> AppResult<()> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
@@ -1018,6 +1042,21 @@ impl SqliteServices {
         self.sender
             .send(DbCommand::DeleteMediaFile {
                 file_id: file_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn list_episodes_for_title(&self, title_id: &str) -> AppResult<Vec<Episode>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::ListEpisodesForTitle {
+                title_id: title_id.to_string(),
                 reply: reply_tx,
             })
             .await

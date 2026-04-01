@@ -474,6 +474,13 @@ pub(crate) enum DbCommand {
         analysis: Box<scryer_application::MediaFileAnalysis>,
         reply: Sender<AppResult<()>>,
     },
+    UpdateMediaFileSourceSignature {
+        file_id: String,
+        size_bytes: i64,
+        source_signature_scheme: Option<String>,
+        source_signature_value: Option<String>,
+        reply: Sender<AppResult<()>>,
+    },
     MarkMediaFileScanFailed {
         file_id: String,
         error: String,
@@ -486,6 +493,10 @@ pub(crate) enum DbCommand {
     DeleteMediaFile {
         file_id: String,
         reply: Sender<AppResult<()>>,
+    },
+    ListEpisodesForTitle {
+        title_id: String,
+        reply: Sender<AppResult<Vec<scryer_domain::Episode>>>,
     },
     FindEpisodeByTitleAndNumbers {
         title_id: String,
@@ -1681,6 +1692,24 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                         .await,
                     );
                 }
+                DbCommand::UpdateMediaFileSourceSignature {
+                    file_id,
+                    size_bytes,
+                    source_signature_scheme,
+                    source_signature_value,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        crate::queries::media_file::update_media_file_source_signature_query(
+                            &pool,
+                            &file_id,
+                            size_bytes,
+                            source_signature_scheme.as_deref(),
+                            source_signature_value.as_deref(),
+                        )
+                        .await,
+                    );
+                }
                 DbCommand::MarkMediaFileScanFailed {
                     file_id,
                     error,
@@ -1701,6 +1730,9 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     let _ = reply.send(
                         crate::queries::media_file::delete_media_file_query(&pool, &file_id).await,
                     );
+                }
+                DbCommand::ListEpisodesForTitle { title_id, reply } => {
+                    let _ = reply.send(list_episodes_for_title_query(&pool, &title_id).await);
                 }
                 DbCommand::FindEpisodeByTitleAndNumbers {
                     title_id,
@@ -2473,8 +2505,8 @@ fn th_row_to_record(row: th_queries::TitleHistoryRow) -> TitleHistoryRecord {
         title_id: row.title_id,
         episode_id: row.episode_id,
         collection_id: row.collection_id,
-        event_type: scryer_domain::HistoryEventType::parse(&row.event_type)
-            .unwrap_or(scryer_domain::HistoryEventType::Grabbed),
+        event_type: scryer_domain::TitleHistoryEventType::parse(&row.event_type)
+            .unwrap_or(scryer_domain::TitleHistoryEventType::Grabbed),
         source_title: row.source_title,
         quality: row.quality,
         download_id: row.download_id,

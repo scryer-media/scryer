@@ -7,7 +7,7 @@ use scryer_application::{
     InsertMediaFileInput, PendingRelease, ReleaseDecision, ShowRepository, TitleRepository,
     WantedItem,
 };
-use scryer_domain::{Collection, Episode, Id, MediaFacet, Title};
+use scryer_domain::{Collection, Episode, ExternalId, Id, MediaFacet, Title};
 use scryer_infrastructure::SettingDefinitionSeed;
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
@@ -586,7 +586,6 @@ async fn seed_typed_settings_definitions(ctx: &TestContext) {
         .expect("settings definitions should seed");
 }
 
-#[expect(dead_code)]
 async fn mount_smg_mocks(ctx: &TestContext, fixture_path: &str) {
     let fixture = load_fixture(fixture_path);
     Mock::given(method("GET"))
@@ -671,6 +670,54 @@ async fn create_series_scan_title(
         .expect("create season collection");
 
     (title, collection)
+}
+
+async fn create_catalog_title(
+    ctx: &TestContext,
+    name: &str,
+    facet: MediaFacet,
+    external_ids: Vec<ExternalId>,
+    tags: Vec<String>,
+    monitored: bool,
+) -> Title {
+    let title = Title {
+        id: Id::new().0,
+        name: name.to_string(),
+        facet,
+        monitored,
+        tags,
+        external_ids,
+        created_by: None,
+        created_at: chrono::Utc::now(),
+        year: Some(2024),
+        overview: Some("Original overview".to_string()),
+        poster_url: Some("https://example.com/old-poster.jpg".to_string()),
+        poster_source_url: None,
+        banner_url: Some("https://example.com/old-banner.jpg".to_string()),
+        banner_source_url: None,
+        background_url: Some("https://example.com/old-background.jpg".to_string()),
+        background_source_url: None,
+        sort_title: Some(name.to_string()),
+        slug: Some("old-slug".to_string()),
+        imdb_id: Some("tt0000001".to_string()),
+        runtime_minutes: Some(100),
+        genres: vec!["Drama".to_string()],
+        content_status: Some("ended".to_string()),
+        language: Some("eng".to_string()),
+        first_aired: Some("2020-01-01".to_string()),
+        network: Some("Old Network".to_string()),
+        studio: Some("Old Studio".to_string()),
+        country: Some("usa".to_string()),
+        aliases: vec!["Legacy Alias".to_string()],
+        tagged_aliases: vec![],
+        metadata_language: Some("eng".to_string()),
+        metadata_fetched_at: Some(Utc::now()),
+        min_availability: None,
+        digital_release_date: Some("2020-01-01".to_string()),
+        folder_path: None,
+    };
+
+    ctx.db.create(title).await.expect("create title")
 }
 
 async fn create_series_scan_episode(
@@ -3063,6 +3110,90 @@ async fn graphql_scan_title_library() {
 }
 
 #[tokio::test]
+async fn graphql_scan_title_library_matches_daily_episodes_by_air_date() {
+    let ctx = TestContext::new().await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let (title, collection) =
+        create_series_scan_title(&ctx, media_root.path(), "Daily Show", vec![]).await;
+    let episode = Episode {
+        id: Id::new().0,
+        title_id: title.id.clone(),
+        collection_id: Some(collection.id.clone()),
+        episode_type: scryer_domain::EpisodeType::Standard,
+        episode_number: Some("1".to_string()),
+        season_number: Some("1".to_string()),
+        episode_label: Some("S01E01".to_string()),
+        title: Some("Daily Episode".to_string()),
+        air_date: Some("2024-03-15".to_string()),
+        duration_seconds: Some(1440),
+        has_multi_audio: false,
+        has_subtitle: false,
+        is_filler: false,
+        is_recap: false,
+        absolute_number: None,
+        overview: None,
+        tvdb_id: None,
+        monitored: true,
+        created_at: chrono::Utc::now(),
+    };
+    let episode = ctx
+        .db
+        .create_episode(episode)
+        .await
+        .expect("create episode");
+
+    let season_dir = media_root.path().join(&title.name).join("Season 01");
+    std::fs::create_dir_all(&season_dir).expect("create season dir");
+    let file_path = season_dir.join("Daily.Show.2024.03.15.1080p.WEB-DL.mkv");
+    std::fs::write(&file_path, b"not-a-real-video").expect("write fake video");
+
+    let body = gql(
+        &ctx,
+        r#"mutation($input: TitleIdInput!) {
+            scanTitleLibrary(input: $input) {
+                scanned
+                matched
+                imported
+                skipped
+                unmatched
+            }
+        }"#,
+        json!({ "input": { "titleId": title.id.clone() } }),
+    )
+    .await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["scanTitleLibrary"]["scanned"], 1);
+    assert_eq!(body["data"]["scanTitleLibrary"]["matched"], 1);
+    assert_eq!(body["data"]["scanTitleLibrary"]["imported"], 1);
+    assert_eq!(body["data"]["scanTitleLibrary"]["skipped"], 0);
+    assert_eq!(body["data"]["scanTitleLibrary"]["unmatched"], 0);
+
+    let body = gql(
+        &ctx,
+        r#"query($id: String!) {
+            title(id: $id) {
+                mediaFiles {
+                    episodeId
+                    filePath
+                }
+            }
+        }"#,
+        json!({ "id": title.id.clone() }),
+    )
+    .await;
+    assert_no_errors(&body);
+    let files = body["data"]["title"]["mediaFiles"]
+        .as_array()
+        .expect("media files array");
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0]["episodeId"], episode.id);
+    assert_eq!(
+        files[0]["filePath"],
+        file_path.to_string_lossy().to_string()
+    );
+}
+
+#[tokio::test]
 async fn graphql_scan_title_library_disables_season_folders_for_flat_layout() {
     let ctx = TestContext::new().await;
     let media_root = tempfile::tempdir().expect("media root tempdir");
@@ -3357,6 +3488,246 @@ async fn library_series_scan_creates_unmonitored_titles() {
 }
 
 #[tokio::test]
+async fn library_movie_scan_creates_unmonitored_title_and_collection() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+
+    let fixture = load_fixture("smg/get_movie.json");
+    Mock::given(method("GET"))
+        .and(path("/graphql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(fixture.clone()))
+        .mount(&ctx.smg_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(fixture))
+        .mount(&ctx.smg_server)
+        .await;
+
+    let token = tokio_util::sync::CancellationToken::new();
+    let hydration_token = token.clone();
+    let hydration_app = ctx.app.clone();
+    tokio::spawn(async move {
+        scryer_application::start_background_hydration_loop(hydration_app, hydration_token).await;
+    });
+
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let movie_dir = media_root.path().join("Test Movie Title (2024)");
+    std::fs::create_dir_all(&movie_dir).expect("create movie dir");
+    let movie_path = movie_dir.join("Test.Movie.Title.2024.1080p.WEB-DL.mkv");
+    let movie_file = std::fs::File::create(&movie_path).expect("create movie file");
+    movie_file
+        .set_len(60 * 1024 * 1024)
+        .expect("set movie file size");
+    std::fs::write(
+        movie_dir.join("movie.nfo"),
+        r#"<movie><title>Test Movie Title</title><tvdbid>123456</tvdbid><year>2024</year></movie>"#,
+    )
+    .expect("write movie.nfo");
+
+    let update = gql(
+        &ctx,
+        r#"
+        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
+          updateLibraryPaths(input: $input) {
+            moviePath
+            seriesPath
+            animePath
+          }
+        }
+        "#,
+        json!({
+          "input": {
+            "moviePath": media_root.path().display().to_string(),
+            "seriesPath": "/tmp/series-unused",
+            "animePath": "/tmp/anime-unused"
+          }
+        }),
+    )
+    .await;
+    assert_no_errors(&update);
+
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let summary = ctx
+        .app
+        .scan_library(&admin, MediaFacet::Movie)
+        .await
+        .expect("scan movie library");
+
+    assert_eq!(summary.scanned, 1);
+    assert_eq!(summary.matched, 1);
+    assert_eq!(summary.imported, 1);
+    assert_eq!(summary.skipped, 0);
+    assert_eq!(summary.unmatched, 0);
+
+    let mut hydrated_title = None;
+    for _ in 0..20 {
+        let titles = ctx
+            .db
+            .list(Some(MediaFacet::Movie), None)
+            .await
+            .expect("list titles");
+        assert_eq!(titles.len(), 1);
+        if titles[0].metadata_fetched_at.is_some() {
+            hydrated_title = Some(titles[0].clone());
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    token.cancel();
+
+    let hydrated_title = hydrated_title.expect("movie title should hydrate");
+    assert_eq!(hydrated_title.name, "Test Movie Title");
+    assert!(!hydrated_title.monitored);
+
+    let collections = ctx
+        .db
+        .list_collections_for_title(&hydrated_title.id)
+        .await
+        .expect("list collections");
+    assert_eq!(collections.len(), 1);
+    assert!(!collections[0].monitored);
+    assert_eq!(
+        collections[0].ordered_path.as_deref(),
+        Some(movie_path.to_string_lossy().as_ref())
+    );
+
+    let (wanted_items, total) = ctx
+        .app
+        .list_wanted_items(None, None, Some(&hydrated_title.id), 10, 0)
+        .await
+        .expect("list wanted items");
+    assert!(wanted_items.is_empty());
+    assert_eq!(total, 0);
+}
+
+#[tokio::test]
+async fn library_series_scan_handles_more_than_one_batch_of_titles() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    for index in 0..300 {
+        let folder = media_root.path().join(format!("Show {index:04}"));
+        std::fs::create_dir_all(&folder).expect("create show dir");
+        std::fs::write(
+            folder.join("tvshow.nfo"),
+            format!(
+                "<tvshow><title>Show {index:04}</title><tvdbid>{}</tvdbid></tvshow>",
+                900_000 + index
+            ),
+        )
+        .expect("write tvshow.nfo");
+    }
+
+    let update = gql(
+        &ctx,
+        r#"
+        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
+          updateLibraryPaths(input: $input) {
+            moviePath
+            seriesPath
+            animePath
+          }
+        }
+        "#,
+        json!({
+          "input": {
+            "moviePath": "/tmp/movies-unused",
+            "seriesPath": media_root.path().display().to_string(),
+            "animePath": "/tmp/anime-unused"
+          }
+        }),
+    )
+    .await;
+    assert_no_errors(&update);
+
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let summary = ctx
+        .app
+        .scan_library(&admin, MediaFacet::Series)
+        .await
+        .expect("scan library");
+
+    assert_eq!(summary.scanned, 300);
+    assert_eq!(summary.imported, 300);
+    assert_eq!(summary.skipped, 0);
+    assert_eq!(summary.unmatched, 0);
+
+    let titles = ctx
+        .db
+        .list(Some(MediaFacet::Series), None)
+        .await
+        .expect("list titles");
+    assert_eq!(titles.len(), 300);
+    assert!(titles.iter().all(|title| !title.monitored));
+}
+
+#[tokio::test]
+async fn library_movie_scan_handles_more_than_one_batch_of_titles() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    for index in 0..300 {
+        let display_name = format!("Movie.Title.{index:04}.2024");
+        let video_path = media_root.path().join(format!("{display_name}.mkv"));
+        std::fs::write(&video_path, b"video").expect("write movie");
+        std::fs::write(
+            video_path.with_extension("nfo"),
+            format!(
+                "<movie><title>Movie {index:04}</title><tvdbid>{}</tvdbid><year>2024</year></movie>",
+                800_000 + index
+            ),
+        )
+        .expect("write movie nfo");
+    }
+
+    let update = gql(
+        &ctx,
+        r#"
+        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
+          updateLibraryPaths(input: $input) {
+            moviePath
+            seriesPath
+            animePath
+          }
+        }
+        "#,
+        json!({
+          "input": {
+            "moviePath": media_root.path().display().to_string(),
+            "seriesPath": "/tmp/series-unused",
+            "animePath": "/tmp/anime-unused"
+          }
+        }),
+    )
+    .await;
+    assert_no_errors(&update);
+
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let summary = ctx
+        .app
+        .scan_library(&admin, MediaFacet::Movie)
+        .await
+        .expect("scan movie library");
+
+    assert_eq!(summary.scanned, 300);
+    assert_eq!(summary.matched, 300);
+    assert_eq!(summary.imported, 300);
+    assert_eq!(summary.skipped, 0);
+    assert_eq!(summary.unmatched, 0);
+
+    let titles = ctx
+        .db
+        .list(Some(MediaFacet::Movie), None)
+        .await
+        .expect("list titles");
+    assert_eq!(titles.len(), 300);
+    assert!(titles.iter().all(|title| !title.monitored));
+}
+
+#[tokio::test]
 async fn graphql_delete_title() {
     let ctx = TestContext::new().await;
     let id = add_test_title(&ctx, "To Delete", "movie").await;
@@ -3580,6 +3951,87 @@ async fn graphql_download_queue_empty() {
 }
 
 #[tokio::test]
+async fn graphql_invalid_nzb_xml_queue_failure_is_blocklisted() {
+    let ctx = TestContext::new().await;
+    let title_id = add_test_title(&ctx, "Broken NZB Movie", "movie").await;
+    let source_hint = format!("{}/invalid.nzb", ctx.nzbget_server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/invalid.nzb"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not xml"))
+        .mount(&ctx.nzbget_server)
+        .await;
+
+    let queue_body = gql(
+        &ctx,
+        r#"
+        mutation($input: QueueDownloadInput!) {
+          queueExistingTitleDownload(input: $input) {
+            jobId
+          }
+        }
+        "#,
+        json!({
+            "input": {
+                "titleId": title_id,
+                "release": {
+                    "sourceHint": source_hint,
+                    "sourceKind": "nzbFile",
+                    "sourceTitle": "Broken.NZB.Movie.2024"
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert!(
+        queue_body.get("errors").is_some(),
+        "expected queue mutation to fail for invalid nzb xml: {queue_body}"
+    );
+    let error_message = queue_body["errors"][0]["message"]
+        .as_str()
+        .expect("graphql error message");
+    assert!(
+        error_message.contains("did not look like xml")
+            || error_message.contains("root element must be <nzb>")
+            || error_message.contains("not valid xml"),
+        "expected invalid-xml error message, got: {error_message}"
+    );
+
+    let blocklist_body = gql(
+        &ctx,
+        r#"
+        query($titleId: String!) {
+          titleReleaseBlocklist(titleId: $titleId) {
+            sourceHint
+            sourceTitle
+            errorMessage
+          }
+        }
+        "#,
+        json!({ "titleId": title_id }),
+    )
+    .await;
+
+    assert_no_errors(&blocklist_body);
+    let entries = blocklist_body["data"]["titleReleaseBlocklist"]
+        .as_array()
+        .expect("blocklist entries array");
+    assert!(
+        entries.iter().any(|entry| {
+            entry["sourceHint"].as_str() == Some(source_hint.as_str())
+                && entry["sourceTitle"].as_str() == Some("Broken.NZB.Movie.2024")
+                && entry["errorMessage"].as_str().is_some_and(|message| {
+                    message.contains("did not look like xml")
+                        || message.contains("root element must be <nzb>")
+                        || message.contains("not valid xml")
+                })
+        }),
+        "expected invalid nzb release to appear in titleReleaseBlocklist: {blocklist_body}"
+    );
+}
+
+#[tokio::test]
 async fn graphql_download_history_empty() {
     let ctx = TestContext::new().await;
     let body = gql(
@@ -3781,6 +4233,399 @@ async fn graphql_metadata_series() {
     assert_eq!(series["name"], "Test Show Name");
     assert_eq!(series["seasons"].as_array().unwrap().len(), 2);
     assert_eq!(series["episodes"].as_array().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn graphql_fix_title_match_movie_updates_identity_and_history() {
+    let ctx = TestContext::new().await;
+    mount_smg_mocks(&ctx, "smg/get_movie.json").await;
+
+    let title = create_catalog_title(
+        &ctx,
+        "Broken Movie Match",
+        MediaFacet::Movie,
+        vec![
+            ExternalId {
+                source: "tvdb".to_string(),
+                value: "999".to_string(),
+            },
+            ExternalId {
+                source: "imdb".to_string(),
+                value: "tt0000999".to_string(),
+            },
+            ExternalId {
+                source: "tmdb".to_string(),
+                value: "4444".to_string(),
+            },
+        ],
+        vec!["scryer:quality-profile:4k".to_string()],
+        true,
+    )
+    .await;
+
+    let body = gql(
+        &ctx,
+        r#"
+        mutation FixTitleMatch($input: FixTitleMatchInput!) {
+          fixTitleMatch(input: $input) {
+            hydrated
+            warnings
+            libraryScan { scanned }
+            title {
+              id
+              name
+              slug
+              imdbId
+              metadataFetchedAt
+              tags
+              externalIds { source value }
+            }
+          }
+        }
+        "#,
+        json!({ "input": { "titleId": title.id, "tvdbId": "123456" } }),
+    )
+    .await;
+    assert_no_errors(&body);
+
+    let payload = &body["data"]["fixTitleMatch"];
+    assert_eq!(payload["hydrated"], true);
+    assert_eq!(payload["warnings"], json!([]));
+    assert!(payload["libraryScan"].is_null());
+    assert_eq!(payload["title"]["name"], "Broken Movie Match");
+    assert_eq!(payload["title"]["slug"], "test-movie-title");
+    assert_eq!(payload["title"]["imdbId"], "tt1234567");
+    assert!(payload["title"]["metadataFetchedAt"].is_string());
+
+    let tags = payload["title"]["tags"].as_array().expect("tags array");
+    assert!(tags.contains(&json!("scryer:quality-profile:4k")));
+
+    let external_ids = payload["title"]["externalIds"]
+        .as_array()
+        .expect("external ids array");
+    assert!(
+        external_ids
+            .iter()
+            .any(|value| { value["source"] == "tvdb" && value["value"] == "123456" })
+    );
+    assert!(
+        external_ids
+            .iter()
+            .any(|value| { value["source"] == "imdb" && value["value"] == "tt1234567" })
+    );
+    assert!(
+        !external_ids
+            .iter()
+            .any(|value| { value["source"] == "tvdb" && value["value"] == "999" })
+    );
+    assert!(!external_ids.iter().any(|value| value["source"] == "tmdb"));
+
+    let events = gql(
+        &ctx,
+        r#"
+        query TitleEvents($titleId: String!) {
+          titleEvents(titleId: $titleId, limit: 10) {
+            eventType
+            dataJson
+          }
+        }
+        "#,
+        json!({ "titleId": title.id }),
+    )
+    .await;
+    assert_no_errors(&events);
+    let rematch_events = events["data"]["titleEvents"]
+        .as_array()
+        .expect("title events array");
+    let rematch_event = rematch_events
+        .iter()
+        .find(|event| event["eventType"] == "rematched")
+        .expect("rematched history event");
+    let data_json = rematch_event["dataJson"]
+        .as_str()
+        .expect("rematch data json");
+    let data_value: Value = serde_json::from_str(data_json).expect("parse rematch data");
+    assert_eq!(data_value["old_tvdb_id"], "999");
+    assert_eq!(data_value["new_tvdb_id"], "123456");
+    assert_eq!(data_value["source"], "manual");
+}
+
+#[tokio::test]
+async fn graphql_fix_title_match_series_rebuilds_and_relinks_library() {
+    let ctx = TestContext::new().await;
+    mount_smg_mocks(&ctx, "smg/get_series.json").await;
+
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let title_name = "Broken Series Match";
+    let title = create_catalog_title(
+        &ctx,
+        title_name,
+        MediaFacet::Series,
+        vec![
+            ExternalId {
+                source: "tvdb".to_string(),
+                value: "999".to_string(),
+            },
+            ExternalId {
+                source: "mal".to_string(),
+                value: "5555".to_string(),
+            },
+        ],
+        vec![
+            format!("scryer:root-folder:{}", media_root.path().display()),
+            "scryer:season-folder:enabled".to_string(),
+            "scryer:anime-status:finished".to_string(),
+        ],
+        true,
+    )
+    .await;
+
+    let old_collection = ctx
+        .db
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Season,
+            collection_index: "99".to_string(),
+            label: Some("Legacy Season".to_string()),
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: Some("1".to_string()),
+            last_episode_number: Some("1".to_string()),
+            interstitial_movie: None,
+            specials_movies: vec![],
+            interstitial_season_episode: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create old collection");
+
+    let old_episode = ctx
+        .db
+        .create_episode(Episode {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_id: Some(old_collection.id.clone()),
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some("1".to_string()),
+            season_number: Some("99".to_string()),
+            episode_label: Some("S99E01".to_string()),
+            title: Some("Legacy Pilot".to_string()),
+            air_date: None,
+            duration_seconds: Some(1440),
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: None,
+            overview: Some("Legacy episode".to_string()),
+            tvdb_id: Some("9999001".to_string()),
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create old episode");
+
+    let season_dir = media_root.path().join(title_name).join("Season 01");
+    std::fs::create_dir_all(&season_dir).expect("create season dir");
+    let file_path = season_dir.join("Broken.Series.Match.S01E01.1080p.WEB-DL.mkv");
+    std::fs::write(&file_path, b"not-a-real-video").expect("write fake video");
+    let file_id = ctx
+        .db
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: file_path.to_string_lossy().to_string(),
+            size_bytes: 1024,
+            quality_label: Some("1080p".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("insert media file");
+    ctx.db
+        .link_file_to_episode(&file_id, &old_episode.id)
+        .await
+        .expect("link file to legacy episode");
+
+    let body = gql(
+        &ctx,
+        r#"
+        mutation FixTitleMatch($input: FixTitleMatchInput!) {
+          fixTitleMatch(input: $input) {
+            hydrated
+            warnings
+            libraryScan {
+              scanned
+              matched
+              imported
+              skipped
+              unmatched
+            }
+            title {
+              id
+              name
+              tags
+              externalIds { source value }
+              collections {
+                id
+                collectionIndex
+                episodes {
+                  id
+                  seasonNumber
+                  episodeNumber
+                  title
+                }
+              }
+              mediaFiles {
+                episodeId
+                filePath
+              }
+            }
+          }
+        }
+        "#,
+        json!({ "input": { "titleId": title.id, "tvdbId": "345678" } }),
+    )
+    .await;
+    assert_no_errors(&body);
+
+    let payload = &body["data"]["fixTitleMatch"];
+    assert_eq!(payload["hydrated"], true);
+    assert_eq!(payload["warnings"], json!([]));
+    assert_eq!(payload["title"]["name"], title_name);
+    assert_eq!(payload["libraryScan"]["scanned"], 1);
+    assert_eq!(payload["libraryScan"]["unmatched"], 0);
+
+    let tags = payload["title"]["tags"].as_array().expect("tags array");
+    assert!(tags.contains(&json!(format!(
+        "scryer:root-folder:{}",
+        media_root.path().display()
+    ))));
+    assert!(tags.contains(&json!("scryer:season-folder:enabled")));
+    assert!(!tags.contains(&json!("scryer:anime-status:finished")));
+
+    let external_ids = payload["title"]["externalIds"]
+        .as_array()
+        .expect("external ids array");
+    assert!(
+        external_ids
+            .iter()
+            .any(|value| { value["source"] == "tvdb" && value["value"] == "345678" })
+    );
+    assert!(!external_ids.iter().any(|value| value["source"] == "mal"));
+
+    let collections = payload["title"]["collections"]
+        .as_array()
+        .expect("collections array");
+    assert_eq!(collections.len(), 2);
+    assert!(
+        !collections
+            .iter()
+            .any(|collection| collection["id"] == old_collection.id)
+    );
+    let rebuilt_episode_count: usize = collections
+        .iter()
+        .map(|collection| {
+            collection["episodes"]
+                .as_array()
+                .expect("episodes array")
+                .len()
+        })
+        .sum();
+    assert_eq!(rebuilt_episode_count, 3);
+
+    let media_files = payload["title"]["mediaFiles"]
+        .as_array()
+        .expect("media files array");
+    assert_eq!(media_files.len(), 1);
+    assert_eq!(
+        media_files[0]["filePath"],
+        file_path.to_string_lossy().to_string()
+    );
+    let relinked_episode_id = media_files[0]["episodeId"]
+        .as_str()
+        .expect("media file should relink to rebuilt episode");
+    assert_ne!(relinked_episode_id, old_episode.id);
+
+    let events = gql(
+        &ctx,
+        r#"
+        query TitleEvents($titleId: String!) {
+          titleEvents(titleId: $titleId, limit: 10) {
+            eventType
+            dataJson
+          }
+        }
+        "#,
+        json!({ "titleId": title.id }),
+    )
+    .await;
+    assert_no_errors(&events);
+    let rematch_events = events["data"]["titleEvents"]
+        .as_array()
+        .expect("title events array");
+    let rematch_event = rematch_events
+        .iter()
+        .find(|event| event["eventType"] == "rematched")
+        .expect("rematched history event");
+    let data_json = rematch_event["dataJson"]
+        .as_str()
+        .expect("rematch data json");
+    let data_value: Value = serde_json::from_str(data_json).expect("parse rematch data");
+    assert_eq!(data_value["old_tvdb_id"], "999");
+    assert_eq!(data_value["new_tvdb_id"], "345678");
+}
+
+#[tokio::test]
+async fn graphql_fix_title_match_rejects_duplicate_target_tvdb_id() {
+    let ctx = TestContext::new().await;
+    let existing = create_catalog_title(
+        &ctx,
+        "Existing Correct Match",
+        MediaFacet::Movie,
+        vec![ExternalId {
+            source: "tvdb".to_string(),
+            value: "123456".to_string(),
+        }],
+        vec![],
+        true,
+    )
+    .await;
+    let broken = create_catalog_title(
+        &ctx,
+        "Broken Match",
+        MediaFacet::Movie,
+        vec![ExternalId {
+            source: "tvdb".to_string(),
+            value: "999".to_string(),
+        }],
+        vec![],
+        true,
+    )
+    .await;
+
+    let body = gql(
+        &ctx,
+        r#"
+        mutation FixTitleMatch($input: FixTitleMatchInput!) {
+          fixTitleMatch(input: $input) {
+            title { id }
+          }
+        }
+        "#,
+        json!({ "input": { "titleId": broken.id, "tvdbId": "123456" } }),
+    )
+    .await;
+
+    assert!(
+        body.get("errors").is_some(),
+        "expected graphql errors: {body}"
+    );
+    let message = body["errors"][0]["message"]
+        .as_str()
+        .expect("graphql error message");
+    assert!(message.contains("tvdb id 123456 is already assigned to title"));
+    assert!(message.contains(&existing.name));
 }
 
 // ---------------------------------------------------------------------------

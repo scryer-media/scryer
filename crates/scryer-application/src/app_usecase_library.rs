@@ -1,12 +1,18 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::sync::Arc;
+use std::time::{Instant, UNIX_EPOCH};
 
 use super::*;
-use crate::nfo::parse_nfo;
+use crate::nfo::{looks_like_movie_nfo, parse_nfo};
 use tracing::{info, warn};
 
 const METADATA_TYPE_MOVIE: &str = "movie";
+const LIBRARY_METADATA_LOOKUP_CONCURRENCY: usize = 4;
+const LIBRARY_SCAN_BATCH_SIZE: usize = 128;
+const TITLE_SCAN_FILE_BATCH_SIZE: usize = 128;
+const TITLE_SCAN_ANALYSIS_CONCURRENCY: usize = 2;
+const RADARR_MOVIE_NFO_MAX_BYTES: u64 = 10 * 1024 * 1024;
 const RENAME_TEMPLATE_KEY: &str = "rename.template";
 const RENAME_COLLISION_POLICY_KEY: &str = "rename.collision_policy";
 const RENAME_COLLISION_POLICY_GLOBAL_KEY: &str = "rename.collision_policy.global";
@@ -16,23 +22,29 @@ const DEFAULT_COLLISION_POLICY: RenameCollisionPolicy = RenameCollisionPolicy::S
 const DEFAULT_MISSING_METADATA_POLICY: RenameMissingMetadataPolicy =
     RenameMissingMetadataPolicy::FallbackTitle;
 
-/// Extracts the movie title and year hint from a library file.
-///
-/// Strategy (in priority order):
-/// 1. If the file lives in a sub-folder relative to the library root, use the
-///    immediate parent folder name as the title — it is the canonical movie name
-///    in any Plex/Kodi-style layout (e.g. `Movies/300/file.mkv` → `"300"`).
-///    The year is extracted from the folder name if present (e.g. `"A Quiet Place
-///    Day One (2024)"` → year 2024, query `"A Quiet Place Day One"`).
-/// 2. Fall back to parsing the file stem when the file is at the root level.
-fn extract_library_query(path: &str, library_root: &str) -> (String, Option<u32>) {
-    let (queries, year) = extract_library_queries(path, library_root);
-    (queries.into_iter().next().unwrap_or_default(), year)
-}
-
 fn extract_library_queries(path: &str, library_root: &str) -> (Vec<String>, Option<u32>) {
     // Normalise paths for comparison (strip trailing slash)
     let root = library_root.trim_end_matches('/');
+
+    let stem = Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    let parsed = parse_release_metadata(stem);
+    let parsed_queries = if parsed.normalized_title_variants.is_empty() {
+        vec![parsed.normalized_title.clone()]
+    } else {
+        parsed.normalized_title_variants.clone()
+    };
+
+    let mut queries = Vec::new();
+    let mut seen_normalized = HashSet::new();
+
+    // Preserve the folder name as the canonical movie title for nested-library
+    // layouts. We only fall back to parsed release variants when the file sits
+    // at the library root. The parsed release year still wins, because it is a
+    // better signal when the filename and parent folder disagree.
+    let mut folder_year = None;
 
     // Attempt to get the immediate parent directory of the file.
     if let Some(parent) = Path::new(path).parent() {
@@ -45,25 +57,19 @@ fn extract_library_queries(path: &str, library_root: &str) -> (Vec<String>, Opti
             let clean = normalize_folder_name(folder_name);
             let (title, year) = strip_year_suffix(&clean);
             if !title.trim().is_empty() {
-                return (vec![title.trim().to_string()], year);
+                push_unique_query(&mut queries, &mut seen_normalized, title);
+                folder_year = year;
             }
         }
     }
 
-    // Fallback: parse the file stem via the release parser.
-    let stem = Path::new(path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or_default();
-    let parsed = parse_release_metadata(stem);
-    let mut queries = if parsed.normalized_title_variants.is_empty() {
-        vec![parsed.normalized_title.clone()]
-    } else {
-        parsed.normalized_title_variants.clone()
-    };
-    queries.retain(|query| !query.trim().is_empty());
-    queries.dedup();
-    (queries, parsed.year)
+    if queries.is_empty() {
+        for query in parsed_queries {
+            push_unique_query(&mut queries, &mut seen_normalized, query);
+        }
+    }
+
+    (queries, parsed.year.or(folder_year))
 }
 
 /// Normalizes a folder name by replacing non-breaking spaces and other Unicode
@@ -104,6 +110,37 @@ fn strip_year_suffix(folder: &str) -> (String, Option<u32>) {
     (folder.to_string(), None)
 }
 
+fn push_unique_query(
+    queries: &mut Vec<String>,
+    seen_normalized: &mut HashSet<String>,
+    query: String,
+) {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    let normalized = crate::app_usecase_rss::normalize_for_matching(trimmed);
+    if normalized.is_empty() || !seen_normalized.insert(normalized) {
+        return;
+    }
+    queries.push(trimmed.to_string());
+}
+
+fn normalized_query_title_candidates(queries: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
+
+    for query in queries {
+        let value = crate::app_usecase_rss::normalize_for_matching(query);
+        if value.is_empty() || !seen.insert(value.clone()) {
+            continue;
+        }
+        normalized.push(value);
+    }
+
+    normalized
+}
+
 async fn list_child_directories(root: &Path) -> AppResult<Vec<PathBuf>> {
     let mut dirs = Vec::new();
     let mut entries = tokio::fs::read_dir(root).await.map_err(|err| {
@@ -115,12 +152,575 @@ async fn list_child_directories(root: &Path) -> AppResult<Vec<PathBuf>> {
     while let Some(entry) = entries.next_entry().await.map_err(|err| {
         AppError::Repository(format!("failed to read entry in {}: {err}", root.display()))
     })? {
-        if entry.metadata().await.map(|m| m.is_dir()).unwrap_or(false) {
+        if entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
             dirs.push(entry.path());
         }
     }
     dirs.sort();
     Ok(dirs)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FileSourceSignature {
+    scheme: String,
+    value: String,
+}
+
+#[derive(Clone, Debug)]
+struct FileSourceSnapshot {
+    size_bytes: i64,
+    signature: Option<FileSourceSignature>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct TitleEpisodeLookup {
+    by_air_date: HashMap<String, Vec<Episode>>,
+    by_collection_episode: HashMap<(String, String), Episode>,
+    by_absolute_number: HashMap<String, Episode>,
+    by_collection_index: HashMap<String, Vec<Episode>>,
+}
+
+#[derive(Clone, Debug)]
+struct PlannedTitleScanFile {
+    file: LibraryFile,
+    parsed: crate::ParsedReleaseMetadata,
+    target_episodes: Vec<Episode>,
+    snapshot: FileSourceSnapshot,
+    record: PlannedTitleScanRecord,
+}
+
+#[derive(Clone, Debug)]
+enum PlannedTitleScanRecord {
+    Existing {
+        file_id: String,
+        should_skip_analysis: bool,
+        should_refresh_source_signature: bool,
+    },
+    New,
+}
+
+#[derive(Clone, Debug)]
+struct MovieLibraryScanCandidate {
+    file: LibraryFile,
+    parsed_release: crate::ParsedReleaseMetadata,
+    nfo_meta: Option<crate::nfo::NfoMetadata>,
+    query: String,
+    year_hint: Option<u32>,
+    query_variants: Vec<String>,
+    selected_metadata: Option<MetadataSearchItem>,
+    metadata_lookup_attempted: bool,
+}
+
+#[derive(Clone, Debug)]
+struct SeriesLibraryScanCandidate {
+    folder_name: Option<String>,
+    nfo_meta: Option<crate::nfo::NfoMetadata>,
+    query: String,
+    selected_metadata: Option<MetadataSearchItem>,
+    metadata_lookup_error: Option<String>,
+    metadata_lookup_attempted: bool,
+}
+
+fn index_movie_title(
+    title: &Title,
+    index: usize,
+    existing_titles_by_name: &mut HashMap<String, usize>,
+    existing_titles_by_tvdb_id: &mut HashMap<String, usize>,
+    existing_titles_by_imdb_id: &mut HashMap<String, usize>,
+    existing_titles_by_tmdb_id: &mut HashMap<String, usize>,
+) {
+    existing_titles_by_name.insert(normalize_title_key(&title.name), index);
+    for alias in &title.aliases {
+        existing_titles_by_name.insert(normalize_title_key(alias), index);
+    }
+    for external_id in &title.external_ids {
+        if external_id.source.eq_ignore_ascii_case("tvdb") {
+            existing_titles_by_tvdb_id.insert(external_id.value.clone(), index);
+        } else if external_id.source.eq_ignore_ascii_case("imdb")
+            && let Some(imdb_id) = crate::normalize::normalize_imdb_id(&external_id.value)
+        {
+            existing_titles_by_imdb_id.insert(imdb_id, index);
+        } else if external_id.source.eq_ignore_ascii_case("tmdb") {
+            existing_titles_by_tmdb_id.insert(external_id.value.clone(), index);
+        }
+    }
+}
+
+fn index_series_title(
+    title: &Title,
+    index: usize,
+    existing_titles_by_name: &mut HashMap<String, usize>,
+    existing_titles_by_tvdb_id: &mut HashMap<String, usize>,
+) {
+    existing_titles_by_name.insert(normalize_title_key(&title.name), index);
+    for external_id in &title.external_ids {
+        if external_id.source.eq_ignore_ascii_case("tvdb") {
+            existing_titles_by_tvdb_id.insert(external_id.value.clone(), index);
+        }
+    }
+}
+
+async fn read_valid_movie_nfo_metadata(nfo_path: Option<&str>) -> Option<crate::nfo::NfoMetadata> {
+    let path = Path::new(nfo_path?).to_path_buf();
+    let metadata = tokio::fs::metadata(&path).await.ok()?;
+    if !metadata.is_file() || metadata.len() > RADARR_MOVIE_NFO_MAX_BYTES {
+        return None;
+    }
+
+    let content = tokio::fs::read_to_string(path).await.ok()?;
+    if !looks_like_movie_nfo(&content) {
+        return None;
+    }
+
+    Some(parse_nfo(&content))
+}
+
+async fn read_tvshow_nfo_metadata(folder: PathBuf) -> Option<crate::nfo::NfoMetadata> {
+    let path = folder.join("tvshow.nfo");
+    let metadata = tokio::fs::metadata(&path).await.ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let content = tokio::fs::read_to_string(path).await.ok()?;
+    Some(parse_nfo(&content))
+}
+
+async fn preload_movie_library_scan_candidates(
+    metadata_gateway: Arc<dyn MetadataGateway>,
+    files: &[LibraryFile],
+    library_path: &str,
+) -> AppResult<(Vec<MovieLibraryScanCandidate>, usize)> {
+    let lookup_limit = Arc::new(tokio::sync::Semaphore::new(
+        LIBRARY_METADATA_LOOKUP_CONCURRENCY,
+    ));
+    let mut lookup_set = tokio::task::JoinSet::new();
+
+    for (index, file) in files.iter().cloned().enumerate() {
+        let metadata_gateway = metadata_gateway.clone();
+        let lookup_limit = lookup_limit.clone();
+        let library_path = library_path.to_string();
+
+        lookup_set.spawn(async move {
+            let parsed_release = parse_release_metadata(
+                Path::new(&file.path)
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or(file.display_name.as_str()),
+            );
+
+            let nfo_meta = read_valid_movie_nfo_metadata(file.nfo_path.as_deref()).await;
+            let (query_variants, extracted_year_hint) =
+                extract_library_queries(&file.path, &library_path);
+            let fallback_query = query_variants.first().cloned().unwrap_or_default();
+
+            let (query, year_hint) = if let Some(ref meta) = nfo_meta {
+                let title = meta.title.clone().unwrap_or_else(|| fallback_query.clone());
+                let year = meta.year.map(|value| value as u32).or(extracted_year_hint);
+                (title, year)
+            } else {
+                (fallback_query, extracted_year_hint)
+            };
+            let mut selected_metadata = None;
+            let mut metadata_lookup_attempted = false;
+
+            if nfo_meta
+                .as_ref()
+                .and_then(|meta| meta.tvdb_id.as_deref())
+                .is_none()
+                && !query.trim().is_empty()
+            {
+                metadata_lookup_attempted = true;
+                let mut search_candidates = Vec::new();
+                let mut seen_search_candidates = HashSet::new();
+                for value in query_variants
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(query.clone()))
+                {
+                    if value.trim().is_empty() || !seen_search_candidates.insert(value.clone()) {
+                        continue;
+                    }
+                    search_candidates.push(value);
+                }
+                let normalized_title_candidates =
+                    normalized_query_title_candidates(&search_candidates);
+
+                let _permit = lookup_limit
+                    .acquire_owned()
+                    .await
+                    .map_err(|error| AppError::Repository(error.to_string()))?;
+
+                for candidate in search_candidates {
+                    let results = metadata_gateway
+                        .search_tvdb(&candidate, METADATA_TYPE_MOVIE)
+                        .await?;
+                    if let Some(best) =
+                        select_best_match(&results, year_hint, &normalized_title_candidates)
+                    {
+                        selected_metadata = Some(best);
+                        break;
+                    }
+                }
+            }
+
+            Ok::<_, AppError>((
+                index,
+                MovieLibraryScanCandidate {
+                    file,
+                    parsed_release,
+                    nfo_meta,
+                    query,
+                    year_hint,
+                    query_variants,
+                    selected_metadata,
+                    metadata_lookup_attempted,
+                },
+            ))
+        });
+    }
+
+    let mut results = vec![None; lookup_set.len()];
+    let mut metadata_lookups = 0usize;
+    while let Some(result) = lookup_set.join_next().await {
+        let (index, candidate) =
+            result.map_err(|error| AppError::Repository(error.to_string()))??;
+        if candidate.metadata_lookup_attempted {
+            metadata_lookups += 1;
+        }
+        results[index] = Some(candidate);
+    }
+
+    Ok((results.into_iter().flatten().collect(), metadata_lookups))
+}
+
+async fn preload_series_library_scan_candidates(
+    metadata_gateway: Arc<dyn MetadataGateway>,
+    folders: &[PathBuf],
+) -> AppResult<(Vec<SeriesLibraryScanCandidate>, usize)> {
+    let lookup_limit = Arc::new(tokio::sync::Semaphore::new(
+        LIBRARY_METADATA_LOOKUP_CONCURRENCY,
+    ));
+    let mut lookup_set = tokio::task::JoinSet::new();
+
+    for (index, folder) in folders.iter().cloned().enumerate() {
+        let metadata_gateway = metadata_gateway.clone();
+        let lookup_limit = lookup_limit.clone();
+
+        lookup_set.spawn(async move {
+            let folder_name = folder
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(std::string::ToString::to_string);
+
+            let Some(folder_name_value) = folder_name.clone() else {
+                return Ok::<_, AppError>((
+                    index,
+                    SeriesLibraryScanCandidate {
+                        folder_name: None,
+                        nfo_meta: None,
+                        query: String::new(),
+                        selected_metadata: None,
+                        metadata_lookup_error: None,
+                        metadata_lookup_attempted: false,
+                    },
+                ));
+            };
+
+            let nfo_meta = read_tvshow_nfo_metadata(folder.clone()).await;
+            let clean_name = normalize_folder_name(&folder_name_value);
+            let (query, year_hint) = strip_year_suffix(&clean_name);
+            let query = query.trim().to_string();
+
+            let mut selected_metadata = None;
+            let mut metadata_lookup_error = None;
+            let mut metadata_lookup_attempted = false;
+
+            if nfo_meta
+                .as_ref()
+                .and_then(|meta| meta.tvdb_id.as_deref())
+                .is_none()
+                && !query.is_empty()
+            {
+                metadata_lookup_attempted = true;
+                let normalized_title_candidates =
+                    normalized_query_title_candidates(std::slice::from_ref(&query));
+                let _permit = lookup_limit
+                    .acquire_owned()
+                    .await
+                    .map_err(|error| AppError::Repository(error.to_string()))?;
+
+                match metadata_gateway.search_tvdb(&query, "series").await {
+                    Ok(results) => {
+                        selected_metadata =
+                            select_best_match(&results, year_hint, &normalized_title_candidates);
+                    }
+                    Err(error) => {
+                        metadata_lookup_error = Some(error.to_string());
+                    }
+                }
+            }
+
+            Ok::<_, AppError>((
+                index,
+                SeriesLibraryScanCandidate {
+                    folder_name,
+                    nfo_meta,
+                    query,
+                    selected_metadata,
+                    metadata_lookup_error,
+                    metadata_lookup_attempted,
+                },
+            ))
+        });
+    }
+
+    let mut results = vec![None; lookup_set.len()];
+    let mut metadata_lookups = 0usize;
+    while let Some(result) = lookup_set.join_next().await {
+        let (index, candidate) =
+            result.map_err(|error| AppError::Repository(error.to_string()))??;
+        if candidate.metadata_lookup_attempted {
+            metadata_lookups += 1;
+        }
+        results[index] = Some(candidate);
+    }
+
+    Ok((results.into_iter().flatten().collect(), metadata_lookups))
+}
+
+fn file_source_signature_from_metadata(
+    metadata: &std::fs::Metadata,
+) -> Option<FileSourceSignature> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+
+        return Some(FileSourceSignature {
+            scheme: "windows_last_write_100ns_v1".to_string(),
+            value: metadata.last_write_time().to_string(),
+        });
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        return Some(FileSourceSignature {
+            scheme: "unix_mtime_nsec_v1".to_string(),
+            value: format!("{}:{}", metadata.mtime(), metadata.mtime_nsec()),
+        });
+    }
+
+    #[allow(unreachable_code)]
+    metadata
+        .modified()
+        .ok()
+        .and_then(|modified| match modified.duration_since(UNIX_EPOCH) {
+            Ok(duration) => Some(FileSourceSignature {
+                scheme: "system_time_nsec_v1".to_string(),
+                value: format!("{}:{}", duration.as_secs(), duration.subsec_nanos()),
+            }),
+            Err(error) => {
+                let duration = error.duration();
+                Some(FileSourceSignature {
+                    scheme: "system_time_nsec_v1".to_string(),
+                    value: format!("-{}:{}", duration.as_secs(), duration.subsec_nanos()),
+                })
+            }
+        })
+}
+
+fn title_media_file_matches_snapshot(
+    media_file: &TitleMediaFile,
+    snapshot: &FileSourceSnapshot,
+) -> bool {
+    if media_file.scan_status != "scanned" || media_file.size_bytes != snapshot.size_bytes {
+        return false;
+    }
+
+    match (
+        &media_file.source_signature_scheme,
+        &media_file.source_signature_value,
+    ) {
+        // Older rows created before source signatures existed can safely reuse
+        // the previous analysis on the first post-migration scan when size and
+        // scan status still match. The signature gets backfilled separately.
+        (None, None) => true,
+        (Some(scheme), Some(value)) => snapshot
+            .signature
+            .as_ref()
+            .is_some_and(|signature| signature.scheme == *scheme && signature.value == *value),
+        _ => false,
+    }
+}
+
+fn build_title_episode_lookup(
+    collections: &[Collection],
+    episodes: &[Episode],
+) -> TitleEpisodeLookup {
+    let collection_indexes = collections
+        .iter()
+        .map(|collection| (collection.id.clone(), collection.collection_index.clone()))
+        .collect::<HashMap<_, _>>();
+
+    let mut lookup = TitleEpisodeLookup::default();
+    for episode in episodes {
+        if let Some(air_date) = episode.air_date.as_ref() {
+            lookup
+                .by_air_date
+                .entry(air_date.clone())
+                .or_default()
+                .push(episode.clone());
+        }
+
+        if let (Some(season_number), Some(episode_number)) = (
+            episode.season_number.as_ref(),
+            episode.episode_number.as_ref(),
+        ) {
+            if let Some(collection_id) = episode.collection_id.as_ref()
+                && let Some(collection_index) = collection_indexes.get(collection_id)
+            {
+                lookup
+                    .by_collection_episode
+                    .entry((collection_index.clone(), episode_number.clone()))
+                    .or_insert_with(|| episode.clone());
+            } else {
+                lookup
+                    .by_collection_episode
+                    .entry((season_number.clone(), episode_number.clone()))
+                    .or_insert_with(|| episode.clone());
+            }
+        }
+
+        if let Some(absolute_number) = episode.absolute_number.as_ref() {
+            lookup
+                .by_absolute_number
+                .entry(absolute_number.clone())
+                .or_insert_with(|| episode.clone());
+        }
+
+        if let Some(collection_id) = episode.collection_id.as_ref()
+            && let Some(collection_index) = collection_indexes.get(collection_id)
+        {
+            lookup
+                .by_collection_index
+                .entry(collection_index.clone())
+                .or_default()
+                .push(episode.clone());
+        }
+    }
+
+    for episodes in lookup.by_air_date.values_mut() {
+        episodes.sort_by_key(|episode| {
+            episode
+                .episode_number
+                .as_deref()
+                .and_then(|value| value.parse::<u32>().ok())
+                .unwrap_or(u32::MAX)
+        });
+    }
+    for episodes in lookup.by_collection_index.values_mut() {
+        episodes.sort_by_key(|episode| {
+            episode
+                .episode_number
+                .as_deref()
+                .and_then(|value| value.parse::<u32>().ok())
+                .unwrap_or(u32::MAX)
+        });
+    }
+
+    lookup
+}
+
+fn resolve_target_episodes_from_lookup(
+    ep_meta: &crate::ParsedEpisodeMetadata,
+    season_str: &str,
+    lookup: &TitleEpisodeLookup,
+) -> Vec<Episode> {
+    let mut episodes = Vec::new();
+    let mut seen = HashSet::new();
+    let target_season = if ep_meta.special_kind.is_some() || ep_meta.season == Some(0) {
+        "0".to_string()
+    } else {
+        season_str.to_string()
+    };
+
+    if let Some(air_date) = ep_meta.air_date {
+        let air_date_str = air_date.format("%Y-%m-%d").to_string();
+        if let Some(matches) = lookup.by_air_date.get(&air_date_str) {
+            if let Some(part) = ep_meta.daily_part {
+                let part_index = part.saturating_sub(1) as usize;
+                if let Some(episode) = matches.get(part_index)
+                    && seen.insert(episode.id.clone())
+                {
+                    episodes.push(episode.clone());
+                }
+            } else {
+                for episode in matches {
+                    if seen.insert(episode.id.clone()) {
+                        episodes.push(episode.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    for episode_number in &ep_meta.episode_numbers {
+        let key = (target_season.clone(), episode_number.to_string());
+        if let Some(episode) = lookup.by_collection_episode.get(&key)
+            && seen.insert(episode.id.clone())
+        {
+            episodes.push(episode.clone());
+        }
+    }
+
+    if episodes.is_empty()
+        && ep_meta.season.is_some()
+        && ep_meta.episode_numbers.is_empty()
+        && ep_meta.release_type == crate::ParsedEpisodeReleaseType::SeasonPack
+        && let Some(collection_episodes) = lookup.by_collection_index.get(&target_season)
+    {
+        for episode in collection_episodes {
+            if episode.season_number.as_deref() == Some(target_season.as_str())
+                && seen.insert(episode.id.clone())
+            {
+                episodes.push(episode.clone());
+            }
+        }
+    }
+
+    if episodes.is_empty() && !ep_meta.special_absolute_episode_numbers.is_empty() {
+        for special_number in &ep_meta.special_absolute_episode_numbers {
+            let key = ("0".to_string(), special_number.to_string());
+            if let Some(episode) = lookup.by_collection_episode.get(&key)
+                && seen.insert(episode.id.clone())
+            {
+                episodes.push(episode.clone());
+            }
+        }
+    }
+
+    if episodes.is_empty()
+        && (ep_meta.absolute_episode.is_some() || !ep_meta.absolute_episode_numbers.is_empty())
+    {
+        let absolute_numbers: Vec<u32> = if !ep_meta.absolute_episode_numbers.is_empty() {
+            ep_meta.absolute_episode_numbers.clone()
+        } else if ep_meta.episode_numbers.is_empty() {
+            vec![ep_meta.absolute_episode.unwrap_or_default()]
+        } else {
+            ep_meta.episode_numbers.clone()
+        };
+
+        for absolute_number in absolute_numbers {
+            if let Some(episode) = lookup.by_absolute_number.get(&absolute_number.to_string())
+                && seen.insert(episode.id.clone())
+            {
+                episodes.push(episode.clone());
+            }
+        }
+    }
+
+    episodes
 }
 
 const SEASON_FOLDER_TAG_PREFIX: &str = "scryer:season-folder:";
@@ -576,232 +1176,211 @@ impl AppUseCase {
         facet: &MediaFacet,
         library_path: &str,
     ) -> AppResult<LibraryScanSummary> {
-        let files = self
+        let started_at = Instant::now();
+        let mut file_batches = self
             .services
             .library_scanner
-            .scan_library(library_path)
+            .scan_library_batched(library_path, LIBRARY_SCAN_BATCH_SIZE)
             .await?;
-        let existing_titles = self.services.titles.list(Some(facet.clone()), None).await?;
-        let mut existing_titles_by_name: HashMap<String, Title> = HashMap::new();
-        let mut existing_titles_by_tvdb_id: HashMap<String, Title> = HashMap::new();
-        let mut existing_titles_by_imdb_id: HashMap<String, Title> = HashMap::new();
-        let mut existing_titles_by_tmdb_id: HashMap<String, Title> = HashMap::new();
+        let mut existing_titles = self.services.titles.list(Some(facet.clone()), None).await?;
+        let mut existing_titles_by_name: HashMap<String, usize> = HashMap::new();
+        let mut existing_titles_by_tvdb_id: HashMap<String, usize> = HashMap::new();
+        let mut existing_titles_by_imdb_id: HashMap<String, usize> = HashMap::new();
+        let mut existing_titles_by_tmdb_id: HashMap<String, usize> = HashMap::new();
 
-        for title in &existing_titles {
-            existing_titles_by_name.insert(normalize_title_key(&title.name), title.clone());
-            for alias in &title.aliases {
-                existing_titles_by_name.insert(normalize_title_key(alias), title.clone());
-            }
-            for external_id in &title.external_ids {
-                if external_id.source.eq_ignore_ascii_case("tvdb") {
-                    existing_titles_by_tvdb_id.insert(external_id.value.clone(), title.clone());
-                } else if external_id.source.eq_ignore_ascii_case("imdb")
-                    && let Some(imdb_id) = crate::normalize::normalize_imdb_id(&external_id.value)
-                {
-                    existing_titles_by_imdb_id.insert(imdb_id, title.clone());
-                } else if external_id.source.eq_ignore_ascii_case("tmdb") {
-                    existing_titles_by_tmdb_id.insert(external_id.value.clone(), title.clone());
-                }
-            }
+        for (index, title) in existing_titles.iter().enumerate() {
+            index_movie_title(
+                title,
+                index,
+                &mut existing_titles_by_name,
+                &mut existing_titles_by_tvdb_id,
+                &mut existing_titles_by_imdb_id,
+                &mut existing_titles_by_tmdb_id,
+            );
         }
 
         let mut summary = LibraryScanSummary::default();
+        let mut metadata_lookups = 0usize;
 
-        for file in files {
-            summary.scanned += 1;
-            let parsed_release = parse_release_metadata(
-                Path::new(&file.path)
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .unwrap_or(file.display_name.as_str()),
-            );
+        while let Some(file_batch) = file_batches.recv().await {
+            let files = file_batch?;
+            let (candidates, batch_lookups) = preload_movie_library_scan_candidates(
+                self.services.metadata_gateway.clone(),
+                &files,
+                library_path,
+            )
+            .await?;
+            metadata_lookups += batch_lookups;
 
-            // Parse companion NFO sidecar if present (non-fatal).
-            let nfo_meta = file
-                .nfo_path
-                .as_deref()
-                .and_then(|p| std::fs::read_to_string(p).ok())
-                .map(|content| parse_nfo(&content));
+            for candidate in candidates {
+                summary.scanned += 1;
+                let file = &candidate.file;
+                let parsed_release = &candidate.parsed_release;
+                let nfo_meta = candidate.nfo_meta.as_ref();
 
-            // --- Fast path: NFO provides a TVDB ID, skip gateway search ---
-            if let Some(tvdb_id) = nfo_meta.as_ref().and_then(|m| m.tvdb_id.as_deref()) {
-                let title = if let Some(existing) = existing_titles_by_tvdb_id.get(tvdb_id).cloned()
+                if let Some(tvdb_id) = nfo_meta.and_then(|m| m.tvdb_id.as_deref()) {
+                    let title = if let Some(&index) = existing_titles_by_tvdb_id.get(tvdb_id) {
+                        existing_titles[index].clone()
+                    } else {
+                        let name = nfo_meta
+                            .and_then(|m| m.title.clone())
+                            .unwrap_or_else(|| candidate.query.clone());
+
+                        let mut external_ids = vec![ExternalId {
+                            source: "tvdb".into(),
+                            value: tvdb_id.to_string(),
+                        }];
+                        if let Some(ref imdb) = nfo_meta.and_then(|m| m.imdb_id.clone()) {
+                            external_ids.push(ExternalId {
+                                source: "imdb".into(),
+                                value: imdb.clone(),
+                            });
+                        }
+                        if let Some(ref tmdb) = nfo_meta.and_then(|m| m.tmdb_id.clone()) {
+                            external_ids.push(ExternalId {
+                                source: "tmdb".into(),
+                                value: tmdb.clone(),
+                            });
+                        }
+
+                        let new_title = NewTitle {
+                            name,
+                            facet: facet.clone(),
+                            monitored: false,
+                            tags: vec![],
+                            external_ids,
+                            min_availability: None,
+                            ..Default::default()
+                        };
+
+                        let created = self.add_title(actor, new_title).await?;
+                        let index = existing_titles.len();
+                        existing_titles.push(created.clone());
+                        index_movie_title(
+                            &created,
+                            index,
+                            &mut existing_titles_by_name,
+                            &mut existing_titles_by_tvdb_id,
+                            &mut existing_titles_by_imdb_id,
+                            &mut existing_titles_by_tmdb_id,
+                        );
+                        created
+                    };
+
+                    summary.matched += 1;
+                    self.track_movie_file_in_collection(&title, file, &mut summary)
+                        .await;
+                    continue;
+                }
+
+                let query = candidate.query.clone();
+                let year_hint = candidate.year_hint;
+
+                if let Some(parsed_imdb_id) = parsed_release
+                    .imdb_id
+                    .as_deref()
+                    .and_then(crate::normalize::normalize_imdb_id)
+                    && let Some(&index) = existing_titles_by_imdb_id.get(&parsed_imdb_id)
                 {
-                    existing
+                    summary.matched += 1;
+                    let title = existing_titles[index].clone();
+                    self.track_movie_file_in_collection(&title, file, &mut summary)
+                        .await;
+                    continue;
+                }
+
+                if let Some(parsed_tmdb_id) = parsed_release.tmdb_id.map(|id| id.to_string())
+                    && let Some(&index) = existing_titles_by_tmdb_id.get(&parsed_tmdb_id)
+                {
+                    summary.matched += 1;
+                    let title = existing_titles[index].clone();
+                    self.track_movie_file_in_collection(&title, file, &mut summary)
+                        .await;
+                    continue;
+                }
+
+                if let Some(index) = candidate.query_variants.iter().find_map(|query_variant| {
+                    let normalized = normalize_title_key(query_variant);
+                    existing_titles_by_name
+                        .get(&normalized)
+                        .copied()
+                        .filter(|index| {
+                            let title = &existing_titles[*index];
+                            year_hint.is_none()
+                                || title.year.map(|value| value as u32) == year_hint
+                                || title.year.is_none()
+                        })
+                }) {
+                    summary.matched += 1;
+                    let title = existing_titles[index].clone();
+                    self.track_movie_file_in_collection(&title, file, &mut summary)
+                        .await;
+                    continue;
+                }
+
+                if query.is_empty() {
+                    summary.skipped += 1;
+                    continue;
+                }
+
+                let Some(selected) = candidate.selected_metadata.clone() else {
+                    summary.unmatched += 1;
+                    continue;
+                };
+
+                summary.matched += 1;
+
+                let key = normalize_title_key(&selected.name);
+                let title = if let Some(index) = existing_titles_by_tvdb_id
+                    .get(&selected.tvdb_id)
+                    .copied()
+                    .or_else(|| existing_titles_by_name.get(&key).copied())
+                {
+                    existing_titles[index].clone()
                 } else {
-                    let (fallback_query, _) = extract_library_query(&file.path, library_path);
-                    let name = nfo_meta
-                        .as_ref()
-                        .and_then(|m| m.title.clone())
-                        .unwrap_or(fallback_query);
-
-                    let mut external_ids = vec![ExternalId {
-                        source: "tvdb".into(),
-                        value: tvdb_id.to_string(),
-                    }];
-                    if let Some(ref imdb) = nfo_meta.as_ref().and_then(|m| m.imdb_id.clone()) {
-                        external_ids.push(ExternalId {
-                            source: "imdb".into(),
-                            value: imdb.clone(),
-                        });
-                    }
-                    if let Some(ref tmdb) = nfo_meta.as_ref().and_then(|m| m.tmdb_id.clone()) {
-                        external_ids.push(ExternalId {
-                            source: "tmdb".into(),
-                            value: tmdb.clone(),
-                        });
-                    }
-
                     let new_title = NewTitle {
-                        name,
+                        name: selected.name.clone(),
                         facet: facet.clone(),
-                        monitored: true,
+                        monitored: false,
                         tags: vec![],
-                        external_ids,
+                        external_ids: vec![ExternalId {
+                            source: "tvdb".into(),
+                            value: selected.tvdb_id.clone(),
+                        }],
                         min_availability: None,
                         ..Default::default()
                     };
 
-                    let created = self.add_title(actor, new_title).await?;
-                    let key = normalize_title_key(&created.name);
-                    existing_titles_by_name.insert(key, created.clone());
-                    existing_titles_by_tvdb_id.insert(tvdb_id.to_string(), created.clone());
-                    created
+                    let title = self.add_title(actor, new_title).await?;
+                    let index = existing_titles.len();
+                    existing_titles.push(title.clone());
+                    index_movie_title(
+                        &title,
+                        index,
+                        &mut existing_titles_by_name,
+                        &mut existing_titles_by_tvdb_id,
+                        &mut existing_titles_by_imdb_id,
+                        &mut existing_titles_by_tmdb_id,
+                    );
+                    title
                 };
 
-                summary.matched += 1;
-                self.track_movie_file_in_collection(&title, &file, &mut summary)
+                self.track_movie_file_in_collection(&title, file, &mut summary)
                     .await;
-                continue;
             }
-
-            // --- Normal path: search metadata gateway ---
-            let (query, year_hint) = if let Some(ref meta) = nfo_meta {
-                let title_str = meta
-                    .title
-                    .clone()
-                    .unwrap_or_else(|| extract_library_query(&file.path, library_path).0);
-                let year = meta
-                    .year
-                    .map(|y| y as u32)
-                    .or_else(|| extract_library_query(&file.path, library_path).1);
-                (title_str, year)
-            } else {
-                extract_library_query(&file.path, library_path)
-            };
-
-            if let Some(parsed_imdb_id) = parsed_release
-                .imdb_id
-                .as_deref()
-                .and_then(crate::normalize::normalize_imdb_id)
-                && let Some(existing) = existing_titles_by_imdb_id.get(&parsed_imdb_id).cloned()
-            {
-                summary.matched += 1;
-                self.track_movie_file_in_collection(&existing, &file, &mut summary)
-                    .await;
-                continue;
-            }
-
-            if let Some(parsed_tmdb_id) = parsed_release.tmdb_id.map(|id| id.to_string())
-                && let Some(existing) = existing_titles_by_tmdb_id.get(&parsed_tmdb_id).cloned()
-            {
-                summary.matched += 1;
-                self.track_movie_file_in_collection(&existing, &file, &mut summary)
-                    .await;
-                continue;
-            }
-
-            let (query_variants, _) = extract_library_queries(&file.path, library_path);
-            if let Some(existing) = query_variants.iter().find_map(|candidate| {
-                let normalized = normalize_title_key(candidate);
-                existing_titles_by_name
-                    .get(&normalized)
-                    .filter(|title| {
-                        year_hint.is_none()
-                            || title.year.map(|value| value as u32) == year_hint
-                            || title.year.is_none()
-                    })
-                    .cloned()
-            }) {
-                summary.matched += 1;
-                self.track_movie_file_in_collection(&existing, &file, &mut summary)
-                    .await;
-                continue;
-            }
-
-            if query.is_empty() {
-                summary.skipped += 1;
-                continue;
-            }
-
-            let mut selected = None;
-            for candidate in query_variants
-                .into_iter()
-                .chain(std::iter::once(query.clone()))
-                .fold(Vec::<String>::new(), |mut acc, value| {
-                    if !value.trim().is_empty() && !acc.iter().any(|existing| existing == &value) {
-                        acc.push(value);
-                    }
-                    acc
-                })
-            {
-                let results = self
-                    .services
-                    .metadata_gateway
-                    .search_tvdb(&candidate, METADATA_TYPE_MOVIE)
-                    .await?;
-
-                if let Some(best) = select_best_match(&results, year_hint) {
-                    selected = Some(best.clone());
-                    break;
-                }
-            }
-
-            let Some(selected) = selected else {
-                summary.unmatched += 1;
-                continue;
-            };
-
-            summary.matched += 1;
-
-            let key = normalize_title_key(&selected.name);
-            let title = existing_titles_by_tvdb_id
-                .get(&selected.tvdb_id)
-                .cloned()
-                .or_else(|| existing_titles_by_name.get(&key).cloned());
-
-            let title = if let Some(existing_title) = title {
-                existing_title
-            } else {
-                let new_title = NewTitle {
-                    name: selected.name.clone(),
-                    facet: facet.clone(),
-                    monitored: true,
-                    tags: vec![],
-                    external_ids: vec![ExternalId {
-                        source: "tvdb".into(),
-                        value: selected.tvdb_id.clone(),
-                    }],
-                    min_availability: None,
-                    ..Default::default()
-                };
-
-                let title = self.add_title(actor, new_title).await?;
-                existing_titles_by_name.insert(key, title.clone());
-                existing_titles_by_tvdb_id.insert(selected.tvdb_id.clone(), title.clone());
-                title
-            };
-
-            self.track_movie_file_in_collection(&title, &file, &mut summary)
-                .await;
         }
 
         info!(
             path = %library_path,
             scanned = summary.scanned,
+            matched = summary.matched,
             imported = summary.imported,
             skipped = summary.skipped,
             unmatched = summary.unmatched,
+            metadata_lookups,
+            batch_size = LIBRARY_SCAN_BATCH_SIZE,
+            worker_concurrency = LIBRARY_METADATA_LOOKUP_CONCURRENCY,
+            elapsed_ms = started_at.elapsed().as_millis() as u64,
             "movie library scan completed"
         );
 
@@ -817,6 +1396,7 @@ impl AppUseCase {
         facet: &MediaFacet,
         library_path: &str,
     ) -> AppResult<LibraryScanSummary> {
+        let started_at = Instant::now();
         let root = Path::new(library_path);
         if !root.is_dir() {
             return Err(AppError::Validation(format!(
@@ -825,135 +1405,125 @@ impl AppUseCase {
         }
 
         let folders = list_child_directories(root).await?;
+        let folders_count = folders.len();
 
-        let existing_titles = self.services.titles.list(Some(facet.clone()), None).await?;
-        let mut existing_titles_by_name: HashMap<String, Title> = HashMap::new();
-        let mut existing_titles_by_tvdb_id: HashMap<String, Title> = HashMap::new();
+        let mut existing_titles = self.services.titles.list(Some(facet.clone()), None).await?;
+        let mut existing_titles_by_name: HashMap<String, usize> = HashMap::new();
+        let mut existing_titles_by_tvdb_id: HashMap<String, usize> = HashMap::new();
 
-        for title in &existing_titles {
-            existing_titles_by_name.insert(normalize_title_key(&title.name), title.clone());
-            for external_id in &title.external_ids {
-                if external_id.source.eq_ignore_ascii_case("tvdb") {
-                    existing_titles_by_tvdb_id.insert(external_id.value.clone(), title.clone());
-                }
-            }
+        for (index, title) in existing_titles.iter().enumerate() {
+            index_series_title(
+                title,
+                index,
+                &mut existing_titles_by_name,
+                &mut existing_titles_by_tvdb_id,
+            );
         }
 
         let mut summary = LibraryScanSummary::default();
+        let mut metadata_lookups = 0usize;
 
-        for folder in &folders {
-            summary.scanned += 1;
+        for folder_batch in folders.chunks(LIBRARY_SCAN_BATCH_SIZE) {
+            let (candidates, batch_lookups) = preload_series_library_scan_candidates(
+                self.services.metadata_gateway.clone(),
+                folder_batch,
+            )
+            .await?;
+            metadata_lookups += batch_lookups;
 
-            let folder_name = match folder.file_name().and_then(|n| n.to_str()) {
-                Some(name) => name.to_string(),
-                None => {
+            for candidate in candidates {
+                summary.scanned += 1;
+
+                let folder_name = match candidate.folder_name.as_deref() {
+                    Some(name) => name.to_string(),
+                    None => {
+                        summary.skipped += 1;
+                        continue;
+                    }
+                };
+                let nfo_meta = candidate.nfo_meta.as_ref();
+
+                if let Some(tvdb_id) = nfo_meta.and_then(|m| m.tvdb_id.as_deref()) {
+                    if existing_titles_by_tvdb_id.contains_key(tvdb_id) {
+                        summary.skipped += 1;
+                        continue;
+                    }
+
+                    let name = nfo_meta
+                        .and_then(|m| m.title.clone())
+                        .unwrap_or_else(|| folder_name.clone());
+                    let name_key = normalize_title_key(&name);
+                    if existing_titles_by_name.contains_key(&name_key) {
+                        summary.skipped += 1;
+                        continue;
+                    }
+
+                    let mut external_ids = vec![ExternalId {
+                        source: "tvdb".into(),
+                        value: tvdb_id.to_string(),
+                    }];
+                    if let Some(ref imdb) = nfo_meta.and_then(|m| m.imdb_id.clone()) {
+                        external_ids.push(ExternalId {
+                            source: "imdb".into(),
+                            value: imdb.clone(),
+                        });
+                    }
+                    if let Some(ref tmdb) = nfo_meta.and_then(|m| m.tmdb_id.clone()) {
+                        external_ids.push(ExternalId {
+                            source: "tmdb".into(),
+                            value: tmdb.clone(),
+                        });
+                    }
+
+                    let new_title = NewTitle {
+                        name,
+                        facet: facet.clone(),
+                        monitored: false,
+                        tags: vec![],
+                        external_ids,
+                        min_availability: None,
+                        ..Default::default()
+                    };
+
+                    match self.add_title(actor, new_title).await {
+                        Ok(created) => {
+                            let index = existing_titles.len();
+                            existing_titles.push(created.clone());
+                            index_series_title(
+                                &created,
+                                index,
+                                &mut existing_titles_by_name,
+                                &mut existing_titles_by_tvdb_id,
+                            );
+                            summary.imported += 1;
+                        }
+                        Err(error) => {
+                            warn!(
+                                folder = %folder_name,
+                                tvdb_id = %tvdb_id,
+                                error = %error,
+                                "series scan: failed to create title from NFO"
+                            );
+                            summary.unmatched += 1;
+                        }
+                    }
+                    continue;
+                }
+
+                let query = candidate.query.clone();
+
+                if query.is_empty() {
                     summary.skipped += 1;
                     continue;
                 }
-            };
 
-            // Try tvshow.nfo for series-level metadata.
-            let nfo_path = folder.join("tvshow.nfo");
-            let nfo_meta = if nfo_path.is_file() {
-                std::fs::read_to_string(&nfo_path)
-                    .ok()
-                    .map(|content| parse_nfo(&content))
-            } else {
-                None
-            };
-
-            // --- Fast path: tvshow.nfo provides a TVDB ID ---
-            if let Some(tvdb_id) = nfo_meta.as_ref().and_then(|m| m.tvdb_id.as_deref()) {
-                if existing_titles_by_tvdb_id.contains_key(tvdb_id) {
-                    summary.skipped += 1;
-                    continue;
-                }
-
-                // Also skip if we already know this title by name.
-                let name = nfo_meta
-                    .as_ref()
-                    .and_then(|m| m.title.clone())
-                    .unwrap_or_else(|| folder_name.clone());
-                let name_key = normalize_title_key(&name);
+                let name_key = normalize_title_key(&query);
                 if existing_titles_by_name.contains_key(&name_key) {
                     summary.skipped += 1;
                     continue;
                 }
 
-                let mut external_ids = vec![ExternalId {
-                    source: "tvdb".into(),
-                    value: tvdb_id.to_string(),
-                }];
-                if let Some(ref imdb) = nfo_meta.as_ref().and_then(|m| m.imdb_id.clone()) {
-                    external_ids.push(ExternalId {
-                        source: "imdb".into(),
-                        value: imdb.clone(),
-                    });
-                }
-                if let Some(ref tmdb) = nfo_meta.as_ref().and_then(|m| m.tmdb_id.clone()) {
-                    external_ids.push(ExternalId {
-                        source: "tmdb".into(),
-                        value: tmdb.clone(),
-                    });
-                }
-
-                let new_title = NewTitle {
-                    name,
-                    facet: facet.clone(),
-                    // Library import should discover existing titles without
-                    // immediately backfilling missing episodes before the local
-                    // files are linked into Scryer's DB.
-                    monitored: false,
-                    tags: vec![],
-                    external_ids,
-                    min_availability: None,
-                    ..Default::default()
-                };
-
-                match self.add_title(actor, new_title).await {
-                    Ok(created) => {
-                        let key = normalize_title_key(&created.name);
-                        existing_titles_by_name.insert(key, created.clone());
-                        existing_titles_by_tvdb_id.insert(tvdb_id.to_string(), created);
-                        summary.imported += 1;
-                    }
-                    Err(error) => {
-                        warn!(
-                            folder = %folder_name,
-                            tvdb_id = %tvdb_id,
-                            error = %error,
-                            "series scan: failed to create title from NFO"
-                        );
-                        summary.unmatched += 1;
-                    }
-                }
-                continue;
-            }
-
-            // --- Slow path: search metadata gateway by folder name ---
-            let clean_name = normalize_folder_name(&folder_name);
-            let (query, year_hint) = strip_year_suffix(&clean_name);
-            let query = query.trim().to_string();
-
-            if query.is_empty() {
-                summary.skipped += 1;
-                continue;
-            }
-
-            let name_key = normalize_title_key(&query);
-            if existing_titles_by_name.contains_key(&name_key) {
-                summary.skipped += 1;
-                continue;
-            }
-
-            let results = match self
-                .services
-                .metadata_gateway
-                .search_tvdb(&query, "series")
-                .await
-            {
-                Ok(r) => r,
-                Err(error) => {
+                if let Some(error) = candidate.metadata_lookup_error.as_deref() {
                     warn!(
                         folder = %folder_name,
                         query = %query,
@@ -963,54 +1533,56 @@ impl AppUseCase {
                     summary.unmatched += 1;
                     continue;
                 }
-            };
 
-            let Some(selected) = select_best_match(&results, year_hint) else {
-                info!(
-                    folder = %folder_name,
-                    query = %query,
-                    "series scan: no metadata match"
-                );
-                summary.unmatched += 1;
-                continue;
-            };
-
-            // Check if the matched TVDB ID is already tracked.
-            if existing_titles_by_tvdb_id.contains_key(&selected.tvdb_id) {
-                summary.skipped += 1;
-                continue;
-            }
-
-            let new_title = NewTitle {
-                name: selected.name.clone(),
-                facet: facet.clone(),
-                // Keep discovered episodic titles unmonitored until the user
-                // explicitly enables monitoring after review/import.
-                monitored: false,
-                tags: vec![],
-                external_ids: vec![ExternalId {
-                    source: "tvdb".into(),
-                    value: selected.tvdb_id.clone(),
-                }],
-                min_availability: None,
-                ..Default::default()
-            };
-
-            match self.add_title(actor, new_title).await {
-                Ok(created) => {
-                    let key = normalize_title_key(&created.name);
-                    existing_titles_by_name.insert(key, created.clone());
-                    existing_titles_by_tvdb_id.insert(selected.tvdb_id.clone(), created);
-                    summary.imported += 1;
-                }
-                Err(error) => {
-                    warn!(
+                let Some(selected) = candidate.selected_metadata.clone() else {
+                    info!(
                         folder = %folder_name,
-                        tvdb_id = %selected.tvdb_id,
-                        error = %error,
-                        "series scan: failed to create title from search"
+                        query = %query,
+                        "series scan: no metadata match"
                     );
                     summary.unmatched += 1;
+                    continue;
+                };
+
+                if existing_titles_by_tvdb_id.contains_key(&selected.tvdb_id) {
+                    summary.skipped += 1;
+                    continue;
+                }
+
+                let new_title = NewTitle {
+                    name: selected.name.clone(),
+                    facet: facet.clone(),
+                    monitored: false,
+                    tags: vec![],
+                    external_ids: vec![ExternalId {
+                        source: "tvdb".into(),
+                        value: selected.tvdb_id.clone(),
+                    }],
+                    min_availability: None,
+                    ..Default::default()
+                };
+
+                match self.add_title(actor, new_title).await {
+                    Ok(created) => {
+                        let index = existing_titles.len();
+                        existing_titles.push(created.clone());
+                        index_series_title(
+                            &created,
+                            index,
+                            &mut existing_titles_by_name,
+                            &mut existing_titles_by_tvdb_id,
+                        );
+                        summary.imported += 1;
+                    }
+                    Err(error) => {
+                        warn!(
+                            folder = %folder_name,
+                            tvdb_id = %selected.tvdb_id,
+                            error = %error,
+                            "series scan: failed to create title from search"
+                        );
+                        summary.unmatched += 1;
+                    }
                 }
             }
         }
@@ -1018,10 +1590,14 @@ impl AppUseCase {
         info!(
             path = %library_path,
             facet = facet.as_str(),
-            folders = folders.len(),
+            folders = folders_count,
             imported = summary.imported,
             skipped = summary.skipped,
             unmatched = summary.unmatched,
+            metadata_lookups,
+            batch_size = LIBRARY_SCAN_BATCH_SIZE,
+            worker_concurrency = LIBRARY_METADATA_LOOKUP_CONCURRENCY,
+            elapsed_ms = started_at.elapsed().as_millis() as u64,
             "series library scan completed"
         );
 
@@ -1034,6 +1610,7 @@ impl AppUseCase {
         title_id: &str,
     ) -> AppResult<LibraryScanSummary> {
         require(actor, &Entitlement::ManageTitle)?;
+        let started_at = Instant::now();
 
         let title = self
             .services
@@ -1065,10 +1642,10 @@ impl AppUseCase {
             })?;
         }
 
-        let files = self
+        let mut file_batches = self
             .services
             .library_scanner
-            .scan_directory(&title_dir_str)
+            .scan_directory_batched(&title_dir_str, TITLE_SCAN_FILE_BATCH_SIZE)
             .await?;
 
         let existing_files = self
@@ -1077,15 +1654,24 @@ impl AppUseCase {
             .list_media_files_for_title(&title.id)
             .await
             .unwrap_or_default();
+        let collections = self
+            .services
+            .shows
+            .list_collections_for_title(&title.id)
+            .await
+            .unwrap_or_default();
+        let title_episodes = self
+            .services
+            .shows
+            .list_episodes_for_title(&title.id)
+            .await
+            .unwrap_or_default();
+        let episode_lookup = build_title_episode_lookup(&collections, &title_episodes);
 
-        let mut file_ids_by_path: HashMap<String, String> = HashMap::new();
         let mut existing_records_by_path: HashMap<String, TitleMediaFile> = HashMap::new();
         let mut episode_links: HashSet<(String, String)> = HashSet::new();
 
         for file in &existing_files {
-            file_ids_by_path
-                .entry(file.file_path.clone())
-                .or_insert_with(|| file.id.clone());
             existing_records_by_path
                 .entry(file.file_path.clone())
                 .or_insert_with(|| file.clone());
@@ -1093,205 +1679,313 @@ impl AppUseCase {
                 episode_links.insert((file.id.clone(), episode_id.clone()));
             }
         }
-
-        let scanned_paths: HashSet<String> = files.iter().map(|file| file.path.clone()).collect();
-        let stale_paths: Vec<String> = existing_records_by_path
-            .iter()
-            .filter(|(path, record)| {
-                path.starts_with(title_dir_str.as_str())
-                    && !scanned_paths.contains(*path)
-                    && !Path::new(&record.file_path).exists()
-            })
-            .map(|(path, _)| path.clone())
-            .collect();
-
-        for stale_path in stale_paths {
-            if let Some(record) = existing_records_by_path.remove(&stale_path) {
-                file_ids_by_path.remove(&stale_path);
-                if let Err(error) = self
-                    .services
-                    .media_files
-                    .delete_media_file(&record.id)
-                    .await
-                {
-                    warn!(
-                        error = %error,
-                        title_id = %title.id,
-                        file_path = %record.file_path,
-                        "failed to delete stale media file during title scan"
-                    );
-                }
-            }
-        }
+        let mut remaining_existing_paths = existing_records_by_path
+            .keys()
+            .cloned()
+            .collect::<HashSet<_>>();
 
         let mut summary = LibraryScanSummary::default();
         let mut layout_summary = TitleScanLayoutSummary::default();
+        let analysis_limit = Arc::new(tokio::sync::Semaphore::new(TITLE_SCAN_ANALYSIS_CONCURRENCY));
+        let mut unchanged_file_skips = 0usize;
+        let mut analyzed_files = 0usize;
 
-        for file in files {
-            summary.scanned += 1;
+        while let Some(file_batch) = file_batches.recv().await {
+            let files = file_batch?;
+            let mut planned_files = Vec::new();
 
-            let source_path = Path::new(&file.path);
-            let parsed = parse_release_metadata(
-                source_path
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .unwrap_or(file.display_name.as_str()),
-            );
+            for file in files {
+                remaining_existing_paths.remove(&file.path);
+                summary.scanned += 1;
 
-            let ep_meta = match parsed.episode.as_ref() {
-                Some(ep) if !ep.episode_numbers.is_empty() => ep,
-                Some(ep)
-                    if ep.absolute_episode.is_some()
-                        && title.facet == scryer_domain::MediaFacet::Anime =>
-                {
-                    ep
-                }
-                _ => {
+                let source_path = Path::new(&file.path);
+                let parsed = parse_release_metadata(
+                    source_path
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .unwrap_or(file.display_name.as_str()),
+                );
+
+                let ep_meta = match parsed.episode.as_ref() {
+                    Some(ep) if !ep.episode_numbers.is_empty() => ep,
+                    Some(ep) if ep.air_date.is_some() => ep,
+                    Some(ep)
+                        if ep.absolute_episode.is_some()
+                            && title.facet == scryer_domain::MediaFacet::Anime =>
+                    {
+                        ep
+                    }
+                    _ => {
+                        summary.unmatched += 1;
+                        continue;
+                    }
+                };
+
+                let season_str = ep_meta.season.unwrap_or(1).to_string();
+                let target_episodes =
+                    resolve_target_episodes_from_lookup(ep_meta, &season_str, &episode_lookup);
+
+                if target_episodes.is_empty() {
                     summary.unmatched += 1;
                     continue;
                 }
-            };
 
-            let season_str = ep_meta.season.unwrap_or(1).to_string();
-            let target_episodes = crate::app_usecase_import::resolve_target_episodes(
-                self,
-                &title,
-                ep_meta,
-                &season_str,
-            )
-            .await;
-
-            if target_episodes.is_empty() {
-                summary.unmatched += 1;
-                continue;
-            }
-
-            summary.matched += 1;
-            layout_summary.observe(classify_title_scan_layout(
-                &title_dir,
-                source_path,
-                &target_episodes,
-            ));
-
-            let file_id = if let Some(existing_id) = file_ids_by_path.get(&file.path).cloned() {
-                summary.skipped += 1;
-                existing_id
-            } else {
-                let size_bytes = std::fs::metadata(source_path)
-                    .map(|meta| meta.len() as i64)
-                    .unwrap_or(0);
-                let media_file_input = crate::InsertMediaFileInput {
-                    title_id: title.id.clone(),
-                    file_path: file.path.clone(),
-                    size_bytes,
-                    quality_label: parsed.quality.clone(),
-                    scene_name: Some(parsed.raw_title.clone()),
-                    release_group: parsed.release_group.clone(),
-                    source_type: parsed.source.clone(),
-                    resolution: parsed.quality.clone(),
-                    video_codec_parsed: parsed.video_codec.clone(),
-                    audio_codec_parsed: parsed.audio.clone(),
-                    ..Default::default()
-                };
-
-                match self
-                    .services
-                    .media_files
-                    .insert_media_file(&media_file_input)
-                    .await
-                {
-                    Ok(file_id) => {
-                        file_ids_by_path.insert(file.path.clone(), file_id.clone());
-                        summary.imported += 1;
-                        file_id
-                    }
+                let metadata = match tokio::fs::metadata(source_path).await {
+                    Ok(metadata) => metadata,
                     Err(error) => {
                         warn!(
                             error = %error,
                             title_id = %title.id,
                             file_path = %file.path,
-                            "failed to insert media file during title scan"
+                            "failed to read file metadata during title scan"
                         );
                         summary.skipped += 1;
                         continue;
                     }
-                }
-            };
+                };
 
-            for episode in &target_episodes {
-                if episode_links.insert((file_id.clone(), episode.id.clone()))
-                    && let Err(error) = self
-                        .services
-                        .media_files
-                        .link_file_to_episode(&file_id, &episode.id)
-                        .await
-                {
-                    warn!(
-                        error = %error,
-                        title_id = %title.id,
-                        episode_id = %episode.id,
-                        file_id = %file_id,
-                        "failed to link scanned file to episode"
-                    );
-                }
-                crate::app_usecase_import::mark_wanted_completed(
-                    self,
-                    &title.id,
-                    Some(&episode.id),
-                    None,
-                )
-                .await;
+                let snapshot = FileSourceSnapshot {
+                    size_bytes: i64::try_from(metadata.len()).unwrap_or(i64::MAX),
+                    signature: file_source_signature_from_metadata(&metadata),
+                };
+
+                summary.matched += 1;
+                let layout_observation =
+                    classify_title_scan_layout(&title_dir, source_path, &target_episodes);
+                layout_summary.observe(layout_observation);
+
+                let record = if let Some(existing) = existing_records_by_path.get(&file.path) {
+                    let desired_scheme = snapshot
+                        .signature
+                        .as_ref()
+                        .map(|value| value.scheme.clone());
+                    let desired_value =
+                        snapshot.signature.as_ref().map(|value| value.value.clone());
+                    PlannedTitleScanRecord::Existing {
+                        file_id: existing.id.clone(),
+                        should_skip_analysis: title_media_file_matches_snapshot(
+                            existing, &snapshot,
+                        ),
+                        should_refresh_source_signature: existing.size_bytes != snapshot.size_bytes
+                            || existing.source_signature_scheme != desired_scheme
+                            || existing.source_signature_value != desired_value
+                            || existing.scan_status != "scanned",
+                    }
+                } else {
+                    PlannedTitleScanRecord::New
+                };
+
+                planned_files.push(PlannedTitleScanFile {
+                    file,
+                    parsed,
+                    target_episodes,
+                    snapshot,
+                    record,
+                });
             }
 
-            match scryer_mediainfo::analyze_file(source_path) {
-                Ok(analysis) if scryer_mediainfo::is_valid_video(&analysis) => {
-                    if let Err(error) = self
-                        .services
-                        .media_files
-                        .update_media_file_analysis(
-                            &file_id,
-                            crate::post_download_gate::build_media_file_analysis(&analysis),
-                        )
+            planned_files.sort_by(|left, right| left.file.path.cmp(&right.file.path));
+
+            let mut analysis_set = tokio::task::JoinSet::new();
+            for plan in &planned_files {
+                let should_analyze = match &plan.record {
+                    PlannedTitleScanRecord::Existing {
+                        should_skip_analysis,
+                        ..
+                    } => !should_skip_analysis,
+                    PlannedTitleScanRecord::New => true,
+                };
+
+                if !should_analyze {
+                    unchanged_file_skips += 1;
+                    continue;
+                }
+
+                analyzed_files += 1;
+                let analyzer = self.services.media_analyzer.clone();
+                let analysis_limit = analysis_limit.clone();
+                let file_path = plan.file.path.clone();
+                analysis_set.spawn(async move {
+                    let _permit = analysis_limit
+                        .acquire_owned()
                         .await
+                        .map_err(|error| AppError::Repository(error.to_string()))?;
+                    let outcome = analyzer.analyze_file(PathBuf::from(&file_path)).await?;
+                    Ok::<(String, MediaAnalysisOutcome), AppError>((file_path, outcome))
+                });
+            }
+
+            let mut analysis_results = HashMap::new();
+            while let Some(result) = analysis_set.join_next().await {
+                let (file_path, outcome) =
+                    result.map_err(|error| AppError::Repository(error.to_string()))??;
+                analysis_results.insert(file_path, outcome);
+            }
+
+            for plan in planned_files {
+                let source_signature_scheme = plan
+                    .snapshot
+                    .signature
+                    .as_ref()
+                    .map(|signature| signature.scheme.clone());
+                let source_signature_value = plan
+                    .snapshot
+                    .signature
+                    .as_ref()
+                    .map(|signature| signature.value.clone());
+
+                let file_id = match &plan.record {
+                    PlannedTitleScanRecord::Existing {
+                        file_id,
+                        should_refresh_source_signature,
+                        ..
+                    } => {
+                        summary.skipped += 1;
+                        if *should_refresh_source_signature
+                            && let Err(error) = self
+                                .services
+                                .media_files
+                                .update_media_file_source_signature(
+                                    file_id,
+                                    plan.snapshot.size_bytes,
+                                    source_signature_scheme.clone(),
+                                    source_signature_value.clone(),
+                                )
+                                .await
+                        {
+                            warn!(
+                                error = %error,
+                                title_id = %title.id,
+                                file_id = %file_id,
+                                "failed to refresh media file source signature during title scan"
+                            );
+                        }
+                        file_id.clone()
+                    }
+                    PlannedTitleScanRecord::New => {
+                        let media_file_input = crate::InsertMediaFileInput {
+                            title_id: title.id.clone(),
+                            file_path: plan.file.path.clone(),
+                            size_bytes: plan.snapshot.size_bytes,
+                            source_signature_scheme,
+                            source_signature_value,
+                            quality_label: plan.parsed.quality.clone(),
+                            scene_name: Some(plan.parsed.raw_title.clone()),
+                            release_group: plan.parsed.release_group.clone(),
+                            source_type: plan.parsed.source.clone(),
+                            resolution: plan.parsed.quality.clone(),
+                            video_codec_parsed: plan.parsed.video_codec.clone(),
+                            audio_codec_parsed: plan.parsed.audio.clone(),
+                            ..Default::default()
+                        };
+
+                        match self
+                            .services
+                            .media_files
+                            .insert_media_file(&media_file_input)
+                            .await
+                        {
+                            Ok(file_id) => {
+                                summary.imported += 1;
+                                file_id
+                            }
+                            Err(error) => {
+                                warn!(
+                                    error = %error,
+                                    title_id = %title.id,
+                                    file_path = %plan.file.path,
+                                    "failed to insert media file during title scan"
+                                );
+                                summary.skipped += 1;
+                                continue;
+                            }
+                        }
+                    }
+                };
+
+                for episode in &plan.target_episodes {
+                    if episode_links.insert((file_id.clone(), episode.id.clone()))
+                        && let Err(error) = self
+                            .services
+                            .media_files
+                            .link_file_to_episode(&file_id, &episode.id)
+                            .await
                     {
                         warn!(
                             error = %error,
                             title_id = %title.id,
+                            episode_id = %episode.id,
                             file_id = %file_id,
-                            "failed to persist scanned media analysis"
+                            "failed to link scanned file to episode"
                         );
                     }
+                    crate::app_usecase_import::mark_wanted_completed(
+                        self,
+                        &title.id,
+                        Some(&episode.id),
+                        None,
+                    )
+                    .await;
                 }
-                Ok(_) => {
-                    if let Err(error) = self
-                        .services
-                        .media_files
-                        .mark_scan_failed(&file_id, "file is not a valid video")
-                        .await
-                    {
-                        warn!(
-                            error = %error,
-                            title_id = %title.id,
-                            file_id = %file_id,
-                            "failed to mark invalid scanned media file"
-                        );
+
+                if let Some(outcome) = analysis_results.remove(&plan.file.path) {
+                    match outcome {
+                        MediaAnalysisOutcome::Valid(analysis) => {
+                            if let Err(error) = self
+                                .services
+                                .media_files
+                                .update_media_file_analysis(&file_id, analysis)
+                                .await
+                            {
+                                warn!(
+                                    error = %error,
+                                    title_id = %title.id,
+                                    file_id = %file_id,
+                                    "failed to persist scanned media analysis"
+                                );
+                            }
+                        }
+                        MediaAnalysisOutcome::Invalid(error_message) => {
+                            if let Err(error) = self
+                                .services
+                                .media_files
+                                .mark_scan_failed(&file_id, &error_message)
+                                .await
+                            {
+                                warn!(
+                                    error = %error,
+                                    title_id = %title.id,
+                                    file_id = %file_id,
+                                    "failed to mark scanned media analysis failure"
+                                );
+                            }
+                        }
                     }
                 }
-                Err(error) => {
-                    if let Err(mark_error) = self
-                        .services
-                        .media_files
-                        .mark_scan_failed(&file_id, &error.to_string())
-                        .await
-                    {
-                        warn!(
-                            error = %mark_error,
-                            title_id = %title.id,
-                            file_id = %file_id,
-                            "failed to mark scanned media analysis failure"
-                        );
-                    }
-                }
+            }
+        }
+
+        for stale_path in remaining_existing_paths {
+            let Some(record) = existing_records_by_path.get(&stale_path).cloned() else {
+                continue;
+            };
+            if !stale_path.starts_with(title_dir_str.as_str())
+                || Path::new(&record.file_path).exists()
+            {
+                continue;
+            }
+            if let Err(error) = self
+                .services
+                .media_files
+                .delete_media_file(&record.id)
+                .await
+            {
+                warn!(
+                    error = %error,
+                    title_id = %title.id,
+                    file_path = %record.file_path,
+                    "failed to delete stale media file during title scan"
+                );
             }
         }
 
@@ -1330,6 +2024,11 @@ impl AppUseCase {
             imported = summary.imported,
             skipped = summary.skipped,
             unmatched = summary.unmatched,
+            analyzed_files,
+            unchanged_file_skips,
+            batch_size = TITLE_SCAN_FILE_BATCH_SIZE,
+            worker_concurrency = TITLE_SCAN_ANALYSIS_CONCURRENCY,
+            elapsed_ms = started_at.elapsed().as_millis() as u64,
             "title library scan completed"
         );
 
@@ -1396,7 +2095,7 @@ impl AppUseCase {
             interstitial_movie: None,
             specials_movies: vec![],
             interstitial_season_episode: None,
-            monitored: true,
+            monitored: title.monitored,
             created_at: Utc::now(),
         };
 
@@ -1559,18 +2258,36 @@ mod scan_layout_tests {
 fn select_best_match(
     results: &[MetadataSearchItem],
     year: Option<u32>,
+    normalized_title_candidates: &[String],
 ) -> Option<MetadataSearchItem> {
     if results.is_empty() {
         return None;
     }
 
-    if let Some(year) = year.map(|value| value as i32)
-        && let Some(match_item) = results.iter().find(|item| item.year == Some(year))
-    {
-        return Some(match_item.clone());
+    let exact_title_matches = results
+        .iter()
+        .filter(|item| {
+            let normalized = crate::app_usecase_rss::normalize_for_matching(&item.name);
+            !normalized.is_empty()
+                && normalized_title_candidates
+                    .iter()
+                    .any(|candidate| candidate == &normalized)
+        })
+        .collect::<Vec<_>>();
+
+    if exact_title_matches.is_empty() {
+        return None;
     }
 
-    Some(results[0].clone())
+    if let Some(year) = year.map(|value| value as i32)
+        && let Some(match_item) = exact_title_matches
+            .iter()
+            .find(|item| item.year == Some(year))
+    {
+        return Some((*match_item).clone());
+    }
+
+    exact_title_matches.into_iter().next().cloned()
 }
 
 fn normalize_title_key(name: &str) -> String {
@@ -2181,6 +2898,186 @@ fn split_title_and_year_hint(raw_title: &str) -> (String, Option<String>) {
 mod tests {
     use super::*;
 
+    fn build_test_media_file(
+        size_bytes: i64,
+        source_signature_scheme: Option<&str>,
+        source_signature_value: Option<&str>,
+    ) -> TitleMediaFile {
+        TitleMediaFile {
+            id: "file-1".into(),
+            title_id: "title-1".into(),
+            episode_id: Some("episode-1".into()),
+            file_path: "/library/Show/Season 01/Show.S01E01.mkv".into(),
+            size_bytes,
+            source_signature_scheme: source_signature_scheme.map(str::to_string),
+            source_signature_value: source_signature_value.map(str::to_string),
+            quality_label: None,
+            scan_status: "scanned".into(),
+            created_at: String::new(),
+            video_codec: None,
+            video_width: None,
+            video_height: None,
+            video_bitrate_kbps: None,
+            video_bit_depth: None,
+            video_hdr_format: None,
+            video_frame_rate: None,
+            video_profile: None,
+            audio_codec: None,
+            audio_channels: None,
+            audio_bitrate_kbps: None,
+            audio_languages: vec![],
+            audio_streams: vec![],
+            subtitle_languages: vec![],
+            subtitle_codecs: vec![],
+            subtitle_streams: vec![],
+            has_multiaudio: false,
+            duration_seconds: None,
+            num_chapters: None,
+            container_format: None,
+            scene_name: None,
+            release_group: None,
+            source_type: None,
+            resolution: None,
+            video_codec_parsed: None,
+            audio_codec_parsed: None,
+            acquisition_score: None,
+            scoring_log: None,
+            indexer_source: None,
+            grabbed_release_title: None,
+            grabbed_at: None,
+            edition: None,
+            original_file_path: None,
+            release_hash: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn read_valid_movie_nfo_metadata_accepts_movie_roots() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("movie.nfo");
+        std::fs::write(
+            &path,
+            r#"<movie><title>Test Movie Title</title><tvdbid>123456</tvdbid></movie>"#,
+        )
+        .expect("write nfo");
+
+        let metadata = read_valid_movie_nfo_metadata(Some(path.to_string_lossy().as_ref()))
+            .await
+            .expect("movie nfo");
+        assert_eq!(metadata.title.as_deref(), Some("Test Movie Title"));
+        assert_eq!(metadata.tvdb_id.as_deref(), Some("123456"));
+    }
+
+    #[tokio::test]
+    async fn read_valid_movie_nfo_metadata_rejects_tvshow_roots() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("movie.nfo");
+        std::fs::write(
+            &path,
+            r#"<tvshow><title>Bluey</title><tvdbid>81189</tvdbid></tvshow>"#,
+        )
+        .expect("write nfo");
+
+        assert!(
+            read_valid_movie_nfo_metadata(Some(path.to_string_lossy().as_ref()))
+                .await
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn file_source_signature_uses_platform_scheme() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("movie.mkv");
+        std::fs::write(&path, b"video").expect("write test file");
+
+        let metadata = std::fs::metadata(&path).expect("metadata");
+        let signature = file_source_signature_from_metadata(&metadata).expect("signature");
+
+        #[cfg(unix)]
+        assert_eq!(signature.scheme, "unix_mtime_nsec_v1");
+        #[cfg(windows)]
+        assert_eq!(signature.scheme, "windows_last_write_100ns_v1");
+        #[cfg(all(not(unix), not(windows)))]
+        assert_eq!(signature.scheme, "system_time_nsec_v1");
+
+        assert!(!signature.value.trim().is_empty());
+    }
+
+    #[test]
+    fn title_media_file_matches_snapshot_backfills_missing_signatures_without_reanalysis() {
+        let media_file = build_test_media_file(1234, None, None);
+        let snapshot = FileSourceSnapshot {
+            size_bytes: 1234,
+            signature: Some(FileSourceSignature {
+                scheme: "unix_mtime_nsec_v1".into(),
+                value: "1:2".into(),
+            }),
+        };
+
+        assert!(title_media_file_matches_snapshot(&media_file, &snapshot));
+    }
+
+    #[test]
+    fn resolve_target_episodes_from_lookup_uses_collection_index_and_preserves_first_duplicate() {
+        let collection = Collection {
+            id: "collection-2".into(),
+            title_id: "title-1".into(),
+            collection_type: CollectionType::Season,
+            collection_index: "2".into(),
+            label: Some("Season 2".into()),
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: Some("1".into()),
+            last_episode_number: Some("10".into()),
+            interstitial_movie: None,
+            specials_movies: vec![],
+            interstitial_season_episode: None,
+            monitored: true,
+            created_at: Utc::now(),
+        };
+        let first = Episode {
+            id: "episode-a".into(),
+            title_id: "title-1".into(),
+            collection_id: Some(collection.id.clone()),
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some("1".into()),
+            season_number: Some("1".into()),
+            episode_label: Some("S01E01".into()),
+            title: Some("First".into()),
+            air_date: None,
+            duration_seconds: None,
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: Some("101".into()),
+            overview: None,
+            tvdb_id: None,
+            monitored: true,
+            created_at: Utc::now(),
+        };
+        let second = Episode {
+            id: "episode-b".into(),
+            absolute_number: Some("101".into()),
+            ..first.clone()
+        };
+
+        let lookup =
+            build_title_episode_lookup(std::slice::from_ref(&collection), &[first.clone(), second]);
+        let ep_meta = crate::ParsedEpisodeMetadata {
+            season: Some(2),
+            episode_numbers: vec![1],
+            release_type: crate::ParsedEpisodeReleaseType::SingleEpisode,
+            ..Default::default()
+        };
+
+        let episodes = resolve_target_episodes_from_lookup(&ep_meta, "2", &lookup);
+
+        assert_eq!(episodes.len(), 1);
+        assert_eq!(episodes[0].id, first.id);
+    }
+
     #[test]
     fn extract_library_queries_uses_movie_title_variants_for_root_files() {
         let (queries, year) = extract_library_queries(
@@ -2206,5 +3103,62 @@ mod tests {
 
         assert_eq!(queries, vec!["My Cousin".to_string()]);
         assert_eq!(year, Some(2020));
+    }
+
+    #[test]
+    fn extract_library_queries_prefers_release_year_over_stale_folder_year() {
+        let (queries, year) = extract_library_queries(
+            "/library/Dune (2020)/Dune.2021.2160p.BluRay.REMUX.HEVC.DTS-HD.MA.TrueHD.7.1.Atmos-FGT.mkv",
+            "/library",
+        );
+
+        assert_eq!(queries, vec!["Dune".to_string()]);
+        assert_eq!(year, Some(2021));
+    }
+
+    #[test]
+    fn extract_library_queries_keeps_nested_movie_search_grounded_in_folder_title() {
+        let (queries, year) = extract_library_queries(
+            "/library/Dune (2020)/Dune.Part.Two.2024.2160p.WEB-DL.H265-GRP.mkv",
+            "/library",
+        );
+
+        assert_eq!(queries, vec!["Dune".to_string()]);
+        assert_eq!(year, Some(2024));
+    }
+
+    #[test]
+    fn select_best_match_prefers_exact_title_and_matching_year() {
+        let results = vec![
+            MetadataSearchItem {
+                tvdb_id: "wrong".into(),
+                name: "Dune Drifter".into(),
+                year: Some(2020),
+            },
+            MetadataSearchItem {
+                tvdb_id: "right".into(),
+                name: "Dune".into(),
+                year: Some(2021),
+            },
+        ];
+        let candidates = normalized_query_title_candidates(&["Dune".to_string()]);
+
+        let selected =
+            select_best_match(&results, Some(2021), &candidates).expect("exact title match");
+
+        assert_eq!(selected.tvdb_id, "right");
+        assert_eq!(selected.name, "Dune");
+    }
+
+    #[test]
+    fn select_best_match_rejects_non_exact_title_even_with_year_match() {
+        let results = vec![MetadataSearchItem {
+            tvdb_id: "wrong".into(),
+            name: "Dune Drifter".into(),
+            year: Some(2020),
+        }];
+        let candidates = normalized_query_title_candidates(&["Dune".to_string()]);
+
+        assert!(select_best_match(&results, Some(2020), &candidates).is_none());
     }
 }

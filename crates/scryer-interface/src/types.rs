@@ -1127,6 +1127,14 @@ pub struct AddTitleResult {
 }
 
 #[derive(SimpleObject, Clone)]
+pub struct FixTitleMatchPayload {
+    pub title: TitlePayload,
+    pub hydrated: bool,
+    pub library_scan: Option<LibraryScanSummaryPayload>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(SimpleObject, Clone)]
 pub struct LibraryScanSummaryPayload {
     pub scanned: i32,
     pub matched: i32,
@@ -1842,6 +1850,12 @@ pub struct UpdateTitleInput {
     pub facet: Option<MediaFacetValue>,
     pub tags: Option<Vec<String>>,
     pub options: Option<TitleOptionsInput>,
+}
+
+#[derive(InputObject)]
+pub struct FixTitleMatchInput {
+    pub title_id: String,
+    pub tvdb_id: String,
 }
 
 #[derive(InputObject)]

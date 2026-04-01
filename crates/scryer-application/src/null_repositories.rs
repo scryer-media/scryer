@@ -109,6 +109,18 @@ impl MediaFileRepository for NullMediaFileRepository {
         ))
     }
 
+    async fn update_media_file_source_signature(
+        &self,
+        _file_id: &str,
+        _size_bytes: i64,
+        _source_signature_scheme: Option<String>,
+        _source_signature_value: Option<String>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "media file repository is not configured".to_string(),
+        ))
+    }
+
     async fn mark_scan_failed(&self, _file_id: &str, _error: &str) -> AppResult<()> {
         Err(AppError::Repository(
             "media file repository is not configured".to_string(),
@@ -909,6 +921,9 @@ pub mod test_nulls {
         async fn get_by_id(&self, _: &str) -> AppResult<Option<Title>> {
             Ok(None)
         }
+        async fn find_by_external_id(&self, _: &str, _: &str) -> AppResult<Option<Title>> {
+            Ok(None)
+        }
         async fn create(&self, _: Title) -> AppResult<Title> {
             Err(AppError::Repository("not configured".into()))
         }
@@ -928,6 +943,14 @@ pub mod test_nulls {
             &self,
             _: &str,
             _: TitleMetadataUpdate,
+        ) -> AppResult<Title> {
+            Err(AppError::Repository("not configured".into()))
+        }
+        async fn replace_match_state(
+            &self,
+            _: &str,
+            _: Vec<scryer_domain::ExternalId>,
+            _: Vec<String>,
         ) -> AppResult<Title> {
             Err(AppError::Repository("not configured".into()))
         }
@@ -985,7 +1008,13 @@ pub mod test_nulls {
         async fn delete_collection(&self, _: &str) -> AppResult<()> {
             Ok(())
         }
+        async fn delete_collections_for_title(&self, _: &str) -> AppResult<()> {
+            Ok(())
+        }
         async fn list_episodes_for_collection(&self, _: &str) -> AppResult<Vec<Episode>> {
+            Ok(vec![])
+        }
+        async fn list_episodes_for_title(&self, _: &str) -> AppResult<Vec<Episode>> {
             Ok(vec![])
         }
         async fn get_episode_by_id(&self, _: &str) -> AppResult<Option<Episode>> {
@@ -1014,6 +1043,9 @@ pub mod test_nulls {
             Err(AppError::Repository("not configured".into()))
         }
         async fn delete_episode(&self, _: &str) -> AppResult<()> {
+            Ok(())
+        }
+        async fn delete_episodes_for_title(&self, _: &str) -> AppResult<()> {
             Ok(())
         }
         async fn find_episode_by_title_and_numbers(

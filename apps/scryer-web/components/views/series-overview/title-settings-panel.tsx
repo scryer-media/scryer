@@ -1,5 +1,7 @@
 import * as React from "react";
 import { useClient } from "urql";
+import { Search } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -24,12 +26,14 @@ export function TitleSettingsPanel({
   defaultRootFolder,
   rootFolders,
   onUpdateTitleOptions,
+  onOpenFixMatch,
 }: {
   title: TitleDetail;
   qualityProfiles: { id: string; name: string }[];
   defaultRootFolder: string;
   rootFolders: { path: string; isDefault: boolean }[];
   onUpdateTitleOptions: (options: TitleOptionUpdates) => Promise<void>;
+  onOpenFixMatch?: () => void;
 }) {
   const t = useTranslate();
   const client = useClient();
@@ -314,6 +318,27 @@ export function TitleSettingsPanel({
                 : null}
             </p>
           )}
+        </div>
+      ) : null}
+
+      {onOpenFixMatch ? (
+        <div className="mt-5 flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-3">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-foreground">{t("title.fixMatchHeading")}</p>
+            <p className="text-xs text-muted-foreground">
+              {t("title.fixMatchDescriptionSeries")}
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="shrink-0"
+            onClick={onOpenFixMatch}
+          >
+            <Search className="mr-2 h-4 w-4" />
+            {t("title.fixMatchAction")}
+          </Button>
         </div>
       ) : null}
     </div>

@@ -603,6 +603,19 @@ mod tests {
             Ok(titles.iter().find(|title| title.id == id).cloned())
         }
 
+        async fn find_by_external_id(&self, source: &str, value: &str) -> AppResult<Option<Title>> {
+            let titles = self.titles.lock().await;
+            Ok(titles
+                .iter()
+                .find(|title| {
+                    title.external_ids.iter().any(|external_id| {
+                        external_id.source.eq_ignore_ascii_case(source)
+                            && external_id.value == value
+                    })
+                })
+                .cloned())
+        }
+
         async fn create(&self, title: Title) -> AppResult<Title> {
             self.titles.lock().await.push(title.clone());
             Ok(title)
@@ -626,6 +639,15 @@ mod tests {
             &self,
             _: &str,
             _: TitleMetadataUpdate,
+        ) -> AppResult<Title> {
+            Err(AppError::Repository("not needed in test".into()))
+        }
+
+        async fn replace_match_state(
+            &self,
+            _: &str,
+            _: Vec<scryer_domain::ExternalId>,
+            _: Vec<String>,
         ) -> AppResult<Title> {
             Err(AppError::Repository("not needed in test".into()))
         }
@@ -707,6 +729,10 @@ mod tests {
             Ok(())
         }
 
+        async fn delete_collections_for_title(&self, _: &str) -> AppResult<()> {
+            Ok(())
+        }
+
         async fn list_episodes_for_collection(
             &self,
             collection_id: &str,
@@ -715,6 +741,15 @@ mod tests {
             Ok(episodes
                 .iter()
                 .filter(|episode| episode.collection_id.as_deref() == Some(collection_id))
+                .cloned()
+                .collect())
+        }
+
+        async fn list_episodes_for_title(&self, title_id: &str) -> AppResult<Vec<Episode>> {
+            let episodes = self.episodes.lock().await;
+            Ok(episodes
+                .iter()
+                .filter(|episode| episode.title_id == title_id)
                 .cloned()
                 .collect())
         }
@@ -753,6 +788,10 @@ mod tests {
         }
 
         async fn delete_episode(&self, _: &str) -> AppResult<()> {
+            Ok(())
+        }
+
+        async fn delete_episodes_for_title(&self, _: &str) -> AppResult<()> {
             Ok(())
         }
 

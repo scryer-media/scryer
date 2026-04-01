@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use scryer_domain::ExternalId;
 use serde::{Deserialize, Serialize};
 
+use crate::library_scan::LibraryScanSummary;
 use crate::quality_profile::QualityProfileDecision;
 use crate::release_parser::ParsedReleaseMetadata;
 
@@ -135,6 +136,8 @@ pub struct TitleMediaFile {
     pub episode_id: Option<String>,
     pub file_path: String,
     pub size_bytes: i64,
+    pub source_signature_scheme: Option<String>,
+    pub source_signature_value: Option<String>,
     pub quality_label: Option<String>,
     pub scan_status: String,
     pub created_at: String,
@@ -180,6 +183,14 @@ pub struct TitleMediaFile {
 pub struct DownloadHistoryPage {
     pub items: Vec<scryer_domain::DownloadQueueItem>,
     pub has_more: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct FixTitleMatchResult {
+    pub title: scryer_domain::Title,
+    pub hydrated: bool,
+    pub library_scan: Option<LibraryScanSummary>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

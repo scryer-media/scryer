@@ -36,6 +36,7 @@ pub(crate) mod import_checks;
 mod library_rename;
 mod library_scan;
 pub mod managed_rules;
+mod media_analyzer;
 pub(crate) mod nfo;
 pub(crate) mod normalize;
 mod notification_dispatcher;
@@ -117,10 +118,11 @@ pub use library_rename::{
 };
 pub use library_scan::{
     AnibridgeSourceMapping, AnimeEpisodeMapping, AnimeMapping, AnimeMovie, BulkMetadataResult,
-    EpisodeMetadata, LibraryFile, LibraryScanSummary, LibraryScanner, MetadataGateway,
-    MetadataSearchItem, MovieMetadata, MultiMetadataSearchResult, RichMetadataSearchItem,
-    SeasonMetadata, SeriesMetadata,
+    EpisodeMetadata, LibraryFile, LibraryFileBatch, LibraryFileBatchReceiver, LibraryScanSummary,
+    LibraryScanner, MetadataGateway, MetadataSearchItem, MovieMetadata, MultiMetadataSearchResult,
+    RichMetadataSearchItem, SeasonMetadata, SeriesMetadata,
 };
+pub use media_analyzer::NativeMediaAnalyzer;
 pub use notification_dispatcher::start_notification_dispatcher;
 pub use null_repositories::{
     NullAcquisitionStateRepository, NullBlocklistRepository, NullDownloadSubmissionRepository,
@@ -148,8 +150,8 @@ pub use scoring_weights::{
 pub(crate) use types::JwtClaims;
 pub use types::{
     BackupInfo, DiskSpaceInfo, DownloadGrabResult, DownloadHistoryPage, DownloadSourceKind,
-    HealthCheckResult, HealthCheckStatus, HousekeepingReport, IndexerQueryStats,
-    IndexerSearchResponse, IndexerSearchResult, JwtAuthConfig, PendingRelease,
+    FixTitleMatchResult, HealthCheckResult, HealthCheckStatus, HousekeepingReport,
+    IndexerQueryStats, IndexerSearchResponse, IndexerSearchResult, JwtAuthConfig, PendingRelease,
     PendingReleaseStatus, PrimaryCollectionSummary, ReleaseDecision, ReleaseDownloadAttemptOutcome,
     ReleaseDownloadFailureSignature, SystemHealth, TitleImageBlob, TitleImageKind,
     TitleImageReplacement, TitleImageStorageMode, TitleImageSyncTask, TitleImageVariantRecord,
@@ -246,6 +248,7 @@ pub struct AppServices {
     pub imports: Arc<dyn ImportRepository>,
     pub file_importer: Arc<dyn FileImporter>,
     pub media_files: Arc<dyn MediaFileRepository>,
+    pub media_analyzer: Arc<dyn MediaAnalyzer>,
     pub download_client_configs: Arc<dyn DownloadClientConfigRepository>,
     pub release_attempts: Arc<dyn ReleaseAttemptRepository>,
     pub acquisition_state: Arc<dyn AcquisitionStateRepository>,
@@ -325,6 +328,7 @@ impl AppServices {
             imports: Arc::new(NullImportRepository),
             file_importer: Arc::new(NullFileImporter),
             media_files: Arc::new(NullMediaFileRepository),
+            media_analyzer: Arc::new(NativeMediaAnalyzer),
             download_client_configs,
             release_attempts,
             acquisition_state: Arc::new(NullAcquisitionStateRepository),
@@ -521,6 +525,7 @@ pub trait TitleRepository: Send + Sync {
     async fn list(&self, facet: Option<MediaFacet>, query: Option<String>)
     -> AppResult<Vec<Title>>;
     async fn get_by_id(&self, id: &str) -> AppResult<Option<Title>>;
+    async fn find_by_external_id(&self, source: &str, value: &str) -> AppResult<Option<Title>>;
     async fn create(&self, title: Title) -> AppResult<Title>;
     async fn update_monitored(&self, id: &str, monitored: bool) -> AppResult<Title>;
     async fn update_metadata(
@@ -534,6 +539,12 @@ pub trait TitleRepository: Send + Sync {
         &self,
         id: &str,
         metadata: TitleMetadataUpdate,
+    ) -> AppResult<Title>;
+    async fn replace_match_state(
+        &self,
+        id: &str,
+        external_ids: Vec<ExternalId>,
+        tags: Vec<String>,
     ) -> AppResult<Title>;
     async fn delete(&self, id: &str) -> AppResult<()>;
     async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()>;
@@ -605,7 +616,9 @@ pub trait ShowRepository: Send + Sync {
         monitored: bool,
     ) -> AppResult<()>;
     async fn delete_collection(&self, collection_id: &str) -> AppResult<()>;
+    async fn delete_collections_for_title(&self, title_id: &str) -> AppResult<()>;
     async fn list_episodes_for_collection(&self, collection_id: &str) -> AppResult<Vec<Episode>>;
+    async fn list_episodes_for_title(&self, title_id: &str) -> AppResult<Vec<Episode>>;
     async fn get_episode_by_id(&self, episode_id: &str) -> AppResult<Option<Episode>>;
     async fn create_episode(&self, episode: Episode) -> AppResult<Episode>;
     async fn update_episode(
@@ -626,6 +639,7 @@ pub trait ShowRepository: Send + Sync {
         tvdb_id: Option<String>,
     ) -> AppResult<Episode>;
     async fn delete_episode(&self, episode_id: &str) -> AppResult<()>;
+    async fn delete_episodes_for_title(&self, title_id: &str) -> AppResult<()>;
     async fn find_episode_by_title_and_numbers(
         &self,
         title_id: &str,
@@ -1016,7 +1030,7 @@ pub struct SubtitleStreamDetail {
 }
 
 /// Mirrors `scryer_mediainfo::MediaAnalysis` without depending on that crate.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MediaFileAnalysis {
     pub video_codec: Option<String>,
     pub video_width: Option<i32>,
@@ -1041,12 +1055,25 @@ pub struct MediaFileAnalysis {
     pub raw_json: String,
 }
 
+#[derive(Clone, Debug)]
+pub enum MediaAnalysisOutcome {
+    Valid(MediaFileAnalysis),
+    Invalid(String),
+}
+
+#[async_trait]
+pub trait MediaAnalyzer: Send + Sync {
+    async fn analyze_file(&self, path: PathBuf) -> AppResult<MediaAnalysisOutcome>;
+}
+
 /// Input for inserting a media file record with rich metadata.
 #[derive(Clone, Debug, Default)]
 pub struct InsertMediaFileInput {
     pub title_id: String,
     pub file_path: String,
     pub size_bytes: i64,
+    pub source_signature_scheme: Option<String>,
+    pub source_signature_value: Option<String>,
     pub quality_label: Option<String>,
     pub scene_name: Option<String>,
     pub release_group: Option<String>,
@@ -1081,6 +1108,14 @@ pub trait MediaFileRepository: Send + Sync {
         &self,
         file_id: &str,
         analysis: MediaFileAnalysis,
+    ) -> AppResult<()>;
+
+    async fn update_media_file_source_signature(
+        &self,
+        file_id: &str,
+        size_bytes: i64,
+        source_signature_scheme: Option<String>,
+        source_signature_value: Option<String>,
     ) -> AppResult<()>;
 
     async fn mark_scan_failed(&self, file_id: &str, error: &str) -> AppResult<()>;
@@ -2008,6 +2043,19 @@ mod tests {
             Ok(list.iter().find(|title| title.id == id).cloned())
         }
 
+        async fn find_by_external_id(&self, source: &str, value: &str) -> AppResult<Option<Title>> {
+            let list = self.store.lock().await;
+            Ok(list
+                .iter()
+                .find(|title| {
+                    title.external_ids.iter().any(|external_id| {
+                        external_id.source.eq_ignore_ascii_case(source)
+                            && external_id.value == value
+                    })
+                })
+                .cloned())
+        }
+
         async fn create(&self, title: Title) -> AppResult<Title> {
             self.store.lock().await.push(title.clone());
             Ok(title)
@@ -2081,6 +2129,22 @@ mod tests {
             title.country = metadata.country;
             title.aliases = metadata.aliases;
             title.metadata_language = metadata.metadata_language;
+            Ok(title.clone())
+        }
+
+        async fn replace_match_state(
+            &self,
+            id: &str,
+            external_ids: Vec<ExternalId>,
+            tags: Vec<String>,
+        ) -> AppResult<Title> {
+            let mut list = self.store.lock().await;
+            let title = list
+                .iter_mut()
+                .find(|entry| entry.id == id)
+                .ok_or_else(|| AppError::NotFound(format!("title {}", id)))?;
+            title.external_ids = external_ids;
+            title.tags = tags;
             Ok(title.clone())
         }
 
@@ -2321,6 +2385,19 @@ mod tests {
             Ok(())
         }
 
+        async fn delete_collections_for_title(&self, title_id: &str) -> AppResult<()> {
+            let mut collections = self.collections.lock().await;
+            collections.retain(|item| item.title_id != title_id);
+
+            let mut episodes = self.episodes.lock().await;
+            for episode in episodes.iter_mut() {
+                if episode.title_id == title_id {
+                    episode.collection_id = None;
+                }
+            }
+            Ok(())
+        }
+
         async fn list_episodes_for_collection(
             &self,
             collection_id: &str,
@@ -2329,6 +2406,15 @@ mod tests {
             Ok(episodes
                 .iter()
                 .filter(|item| item.collection_id.as_deref() == Some(collection_id))
+                .cloned()
+                .collect())
+        }
+
+        async fn list_episodes_for_title(&self, title_id: &str) -> AppResult<Vec<Episode>> {
+            let episodes = self.episodes.lock().await;
+            Ok(episodes
+                .iter()
+                .filter(|item| item.title_id == title_id)
                 .cloned()
                 .collect())
         }
@@ -2416,6 +2502,12 @@ mod tests {
                 .position(|item| item.id == episode_id)
                 .ok_or_else(|| AppError::NotFound(format!("episode {}", episode_id)))?;
             episodes.remove(index);
+            Ok(())
+        }
+
+        async fn delete_episodes_for_title(&self, title_id: &str) -> AppResult<()> {
+            let mut episodes = self.episodes.lock().await;
+            episodes.retain(|item| item.title_id != title_id);
             Ok(())
         }
 

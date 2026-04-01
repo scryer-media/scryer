@@ -1,11 +1,13 @@
 use super::*;
 use chrono::Utc;
 use scryer_application::{
-    TitleImageBlob, TitleImageKind, TitleImageReplacement, TitleImageRepository,
-    TitleImageStorageMode, TitleImageVariantRecord, TitleRepository, UserRepository,
+    InsertMediaFileInput, MediaFileRepository, TitleImageBlob, TitleImageKind,
+    TitleImageReplacement, TitleImageRepository, TitleImageStorageMode, TitleImageVariantRecord,
+    TitleRepository, UserRepository,
 };
 use scryer_domain::{
-    Collection, CollectionType, Entitlement, Episode, InterstitialMovieMetadata, MediaFacet, Title,
+    Collection, CollectionType, Entitlement, Episode, ExternalId, InterstitialMovieMetadata,
+    MediaFacet, Title,
 };
 use sqlx::{Row, sqlite::SqlitePoolOptions};
 
@@ -213,6 +215,94 @@ async fn title_queries_change_local_version_when_cached_poster_changes() {
         updated.poster_url.as_deref(),
         Some("/images/titles/title-2/poster/w500?v=2222222222222222")
     );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn title_queries_find_by_external_id() {
+    let db = std::env::temp_dir().join(format!(
+        "scryer_title_external_id_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let services = SqliteServices::new(db.to_string_lossy())
+        .await
+        .expect("db should initialize");
+
+    let mut title = make_test_title("title-external-id", None);
+    title.external_ids = vec![ExternalId {
+        source: "TVDB".to_string(),
+        value: "123456".to_string(),
+    }];
+    <SqliteServices as TitleRepository>::create(&services, title.clone())
+        .await
+        .expect("title should insert");
+
+    let found =
+        <SqliteServices as TitleRepository>::find_by_external_id(&services, "tvdb", "123456")
+            .await
+            .expect("lookup should succeed")
+            .expect("title should exist");
+
+    assert_eq!(found.id, title.id);
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn media_file_source_signature_refresh_preserves_scan_status() {
+    let db = std::env::temp_dir().join(format!(
+        "scryer_media_file_signature_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let services = SqliteServices::new(db.to_string_lossy())
+        .await
+        .expect("db should initialize");
+
+    let title = make_test_title("title-media-file", None);
+    <SqliteServices as TitleRepository>::create(&services, title.clone())
+        .await
+        .expect("title should insert");
+
+    let file_id = <SqliteServices as MediaFileRepository>::insert_media_file(
+        &services,
+        &InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: "/library/Movie.Title.2024.mkv".to_string(),
+            size_bytes: 4_096,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("media file should insert");
+
+    sqlx::query("UPDATE media_files SET scan_status = 'scanned' WHERE id = ?")
+        .bind(&file_id)
+        .execute(&services.pool)
+        .await
+        .expect("scan status should update");
+
+    <SqliteServices as MediaFileRepository>::update_media_file_source_signature(
+        &services,
+        &file_id,
+        4_096,
+        Some("unix_mtime_nsec_v1".to_string()),
+        Some("1:2".to_string()),
+    )
+    .await
+    .expect("source signature should refresh");
+
+    let media_file =
+        <SqliteServices as MediaFileRepository>::get_media_file_by_id(&services, &file_id)
+            .await
+            .expect("lookup should succeed")
+            .expect("media file should exist");
+
+    assert_eq!(media_file.scan_status, "scanned");
+    assert_eq!(
+        media_file.source_signature_scheme.as_deref(),
+        Some("unix_mtime_nsec_v1")
+    );
+    assert_eq!(media_file.source_signature_value.as_deref(), Some("1:2"));
 
     let _ = std::fs::remove_file(db);
 }

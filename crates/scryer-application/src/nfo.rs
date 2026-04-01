@@ -17,6 +17,14 @@ pub(crate) struct NfoMetadata {
     pub year: Option<i32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NfoRootKind {
+    Movie,
+    TvShow,
+    Episode,
+    Other,
+}
+
 // ---------------------------------------------------------------------------
 // Parser
 // ---------------------------------------------------------------------------
@@ -55,6 +63,35 @@ pub(crate) fn parse_nfo(content: &str) -> NfoMetadata {
     }
 
     meta
+}
+
+pub(crate) fn detect_nfo_root_kind(content: &str) -> NfoRootKind {
+    let trimmed = content.trim();
+    if trimmed.is_empty() || !trimmed.starts_with('<') {
+        return NfoRootKind::Other;
+    }
+
+    let mut reader = Reader::from_str(content);
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref event)) | Ok(Event::Empty(ref event)) => {
+                let name = String::from_utf8_lossy(event.name().as_ref()).to_lowercase();
+                return match name.as_str() {
+                    "movie" => NfoRootKind::Movie,
+                    "tvshow" => NfoRootKind::TvShow,
+                    "episodedetails" => NfoRootKind::Episode,
+                    _ => NfoRootKind::Other,
+                };
+            }
+            Ok(Event::Eof) => return NfoRootKind::Other,
+            Err(_) => return NfoRootKind::Other,
+            _ => {}
+        }
+    }
+}
+
+pub(crate) fn looks_like_movie_nfo(content: &str) -> bool {
+    detect_nfo_root_kind(content) == NfoRootKind::Movie
 }
 
 fn parse_xml_nfo(content: &str, meta: &mut NfoMetadata) {
@@ -726,6 +763,35 @@ mod tests {
         let meta = parse_nfo(nfo);
         assert_eq!(meta.tvdb_id, Some("349232".into()));
         assert_eq!(meta.title, Some("Pilot".into()));
+    }
+
+    #[test]
+    fn detect_movie_nfo_root_kind() {
+        assert_eq!(
+            detect_nfo_root_kind(r#"<movie><title>Dune</title></movie>"#),
+            NfoRootKind::Movie
+        );
+        assert!(looks_like_movie_nfo(
+            r#"<movie><title>Dune</title></movie>"#
+        ));
+    }
+
+    #[test]
+    fn reject_tvshow_and_episode_nfo_for_movie_detection() {
+        assert_eq!(
+            detect_nfo_root_kind(r#"<tvshow><title>Bluey</title></tvshow>"#),
+            NfoRootKind::TvShow
+        );
+        assert_eq!(
+            detect_nfo_root_kind(r#"<episodedetails><title>Pilot</title></episodedetails>"#),
+            NfoRootKind::Episode
+        );
+        assert!(!looks_like_movie_nfo(
+            r#"<tvshow><title>Bluey</title></tvshow>"#
+        ));
+        assert!(!looks_like_movie_nfo(
+            r#"<episodedetails><title>Pilot</title></episodedetails>"#
+        ));
     }
 
     #[test]

@@ -81,6 +81,7 @@ type Props = {
   onRequestDeleteTitle?: () => void;
   deleteLoading?: boolean;
   onDeleteFile?: (fileId: string) => void;
+  onOpenFixMatch?: () => void;
 };
 
 export function SeriesOverviewView({
@@ -119,6 +120,7 @@ export function SeriesOverviewView({
   onRequestDeleteTitle,
   deleteLoading = false,
   onDeleteFile,
+  onOpenFixMatch,
 }: Props) {
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
@@ -550,6 +552,7 @@ export function SeriesOverviewView({
               defaultRootFolder={defaultRootFolder}
               rootFolders={rootFolders ?? []}
               onUpdateTitleOptions={onUpdateTitleOptions}
+              onOpenFixMatch={onOpenFixMatch}
             />
           ) : undefined
         }

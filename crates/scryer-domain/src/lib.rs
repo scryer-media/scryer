@@ -809,6 +809,7 @@ pub enum TitleHistoryEventType {
     FileDeleted,
     FileRenamed,
     DownloadIgnored,
+    Rematched,
 }
 
 impl TitleHistoryEventType {
@@ -822,6 +823,7 @@ impl TitleHistoryEventType {
             Self::FileDeleted => "file_deleted",
             Self::FileRenamed => "file_renamed",
             Self::DownloadIgnored => "download_ignored",
+            Self::Rematched => "rematched",
         }
     }
 
@@ -835,6 +837,7 @@ impl TitleHistoryEventType {
             "file_deleted" => Some(Self::FileDeleted),
             "file_renamed" => Some(Self::FileRenamed),
             "download_ignored" => Some(Self::DownloadIgnored),
+            "rematched" => Some(Self::Rematched),
             _ => None,
         }
     }
@@ -848,6 +851,7 @@ impl TitleHistoryEventType {
         Self::FileDeleted,
         Self::FileRenamed,
         Self::DownloadIgnored,
+        Self::Rematched,
     ];
 }
 
@@ -890,7 +894,7 @@ pub struct TitleHistoryRecord {
     pub title_id: String,
     pub episode_id: Option<String>,
     pub collection_id: Option<String>,
-    pub event_type: HistoryEventType,
+    pub event_type: TitleHistoryEventType,
     pub source_title: Option<String>,
     pub quality: Option<String>,
     pub download_id: Option<String>,

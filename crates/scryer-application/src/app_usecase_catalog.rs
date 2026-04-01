@@ -12,6 +12,13 @@ pub const LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY: &str = "nzbget.client_routi
 const DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY: &str = "download_client.default_category";
 const LEGACY_NZBGET_CATEGORY_SETTING_KEY: &str = "nzbget.category";
 const RECENT_QUEUE_PRIORITY_WINDOW_DAYS: i64 = 14;
+const REMATCH_REPLACED_EXTERNAL_ID_SOURCES: &[&str] =
+    &["tvdb", "imdb", "tmdb", "mal", "anilist", "anidb", "kitsu"];
+const REMATCH_DERIVED_TAG_PREFIXES: &[&str] = &[
+    "scryer:mal-score:",
+    "scryer:anime-media-type:",
+    "scryer:anime-status:",
+];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct DownloadClientRoutingEntry {
@@ -95,6 +102,50 @@ fn parse_download_client_routing_map(
         .ok()?
         .as_object()
         .cloned()
+}
+
+fn build_rematched_external_ids(
+    title: &Title,
+    tvdb_id: &str,
+    imdb_id: Option<&str>,
+) -> Vec<ExternalId> {
+    let mut next: Vec<ExternalId> = title
+        .external_ids
+        .iter()
+        .filter(|eid| {
+            !REMATCH_REPLACED_EXTERNAL_ID_SOURCES
+                .iter()
+                .any(|source| eid.source.eq_ignore_ascii_case(source))
+        })
+        .cloned()
+        .collect();
+
+    next.push(ExternalId {
+        source: "tvdb".to_string(),
+        value: tvdb_id.to_string(),
+    });
+
+    if let Some(imdb_id) = imdb_id
+        && let Some(normalized) = crate::normalize::normalize_imdb_id(imdb_id)
+    {
+        next.push(ExternalId {
+            source: "imdb".to_string(),
+            value: normalized,
+        });
+    }
+
+    next
+}
+
+fn strip_derived_match_tags(tags: &[String]) -> Vec<String> {
+    tags.iter()
+        .filter(|tag| {
+            !REMATCH_DERIVED_TAG_PREFIXES
+                .iter()
+                .any(|prefix| tag.starts_with(prefix))
+        })
+        .cloned()
+        .collect()
 }
 
 fn release_is_recent_for_queue_priority(baseline_date: Option<&str>) -> bool {
@@ -2274,6 +2325,179 @@ impl AppUseCase {
             )
             .await?;
         Ok(title)
+    }
+
+    pub async fn fix_title_match(
+        &self,
+        actor: &User,
+        title_id: &str,
+        target_tvdb_id: &str,
+    ) -> AppResult<FixTitleMatchResult> {
+        require(actor, &Entitlement::ManageTitle)?;
+
+        let target_tvdb_id = target_tvdb_id.trim();
+        if target_tvdb_id.is_empty() {
+            return Err(AppError::Validation("tvdb id is required".into()));
+        }
+        let target_tvdb_numeric = target_tvdb_id
+            .parse::<i64>()
+            .map_err(|_| AppError::Validation("tvdb id must be numeric".into()))?;
+
+        let existing_title = self
+            .services
+            .titles
+            .get_by_id(title_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+
+        let duplicate = self
+            .services
+            .titles
+            .find_by_external_id("tvdb", target_tvdb_id)
+            .await?
+            .filter(|title| title.id != existing_title.id);
+        if let Some(duplicate) = duplicate {
+            return Err(AppError::Validation(format!(
+                "tvdb id {target_tvdb_id} is already assigned to title {}",
+                duplicate.name
+            )));
+        }
+
+        let handler = self
+            .facet_registry
+            .get(&existing_title.facet)
+            .ok_or_else(|| AppError::Validation("unsupported title facet".into()))?;
+        let language = self.metadata_language().await;
+        let hydration_result = handler
+            .hydrate_metadata(
+                self.services.metadata_gateway.as_ref(),
+                target_tvdb_numeric,
+                &language,
+            )
+            .await?;
+
+        if handler.has_episodes() {
+            self.services
+                .pending_releases
+                .delete_pending_releases_for_title(&existing_title.id)
+                .await?;
+            self.services
+                .wanted_items
+                .delete_wanted_items_for_title(&existing_title.id)
+                .await?;
+
+            self.services
+                .shows
+                .delete_episodes_for_title(&existing_title.id)
+                .await?;
+            self.services
+                .shows
+                .delete_collections_for_title(&existing_title.id)
+                .await?;
+        }
+
+        let replacement_external_ids = build_rematched_external_ids(
+            &existing_title,
+            target_tvdb_id,
+            hydration_result.metadata_update.imdb_id.as_deref(),
+        );
+        let replacement_tags = strip_derived_match_tags(&existing_title.tags);
+
+        let reset_title = self
+            .services
+            .titles
+            .replace_match_state(
+                &existing_title.id,
+                replacement_external_ids,
+                replacement_tags,
+            )
+            .await?;
+
+        let hydrated_title = self
+            .apply_hydration_result(reset_title, hydration_result)
+            .await;
+        let mut warnings = Vec::new();
+        if hydrated_title.metadata_fetched_at.is_none() {
+            warnings.push("Matched title metadata could not be fully refreshed.".to_string());
+        }
+
+        let mut library_scan = None;
+        if handler.has_episodes() {
+            match self.scan_title_library(actor, &existing_title.id).await {
+                Ok(summary) => library_scan = Some(summary),
+                Err(err) => warnings.push(format!("Library relink failed: {err}")),
+            }
+        }
+
+        if hydrated_title.monitored {
+            let now = Utc::now();
+            if handler.has_episodes() {
+                self.sync_wanted_series_inner(&hydrated_title, &now, true)
+                    .await;
+            } else {
+                self.sync_wanted_movie_inner(&hydrated_title, &now, true)
+                    .await;
+            }
+        }
+
+        let refreshed_title = self
+            .services
+            .titles
+            .get_by_id(&existing_title.id)
+            .await?
+            .unwrap_or(hydrated_title);
+
+        let old_tvdb_id = extract_tvdb_id(&existing_title).map(|id| id.to_string());
+
+        let mut data = HashMap::new();
+        if let Some(old_tvdb_id) = old_tvdb_id.clone() {
+            data.insert(
+                "old_tvdb_id".to_string(),
+                serde_json::Value::String(old_tvdb_id),
+            );
+        }
+        data.insert(
+            "new_tvdb_id".to_string(),
+            serde_json::Value::String(target_tvdb_id.to_string()),
+        );
+        data.insert(
+            "source".to_string(),
+            serde_json::Value::String("manual".to_string()),
+        );
+
+        self.services
+            .record_title_history(NewTitleHistoryEvent {
+                title_id: refreshed_title.id.clone(),
+                episode_id: None,
+                collection_id: None,
+                event_type: TitleHistoryEventType::Rematched,
+                source_title: Some(refreshed_title.name.clone()),
+                quality: None,
+                download_id: None,
+                data,
+            })
+            .await?;
+
+        self.services
+            .record_event(
+                Some(actor.id.clone()),
+                Some(refreshed_title.id.clone()),
+                EventType::TitleUpdated,
+                format!(
+                    "title match fixed: {} ({} -> {})",
+                    refreshed_title.name,
+                    old_tvdb_id.as_deref().unwrap_or("unknown"),
+                    target_tvdb_id
+                ),
+            )
+            .await?;
+
+        Ok(FixTitleMatchResult {
+            hydrated: refreshed_title.metadata_fetched_at.is_some(),
+            title: refreshed_title,
+            library_scan,
+            warnings,
+        })
     }
 
     pub async fn get_title(&self, actor: &User, id: &str) -> AppResult<Option<Title>> {

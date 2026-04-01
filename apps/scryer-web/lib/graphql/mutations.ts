@@ -527,6 +527,32 @@ export const updateTitleMutation = `mutation UpdateTitle($input: UpdateTitleInpu
   }
 }`;
 
+export const fixTitleMatchMutation = `mutation FixTitleMatch($input: FixTitleMatchInput!) {
+  fixTitleMatch(input: $input) {
+    hydrated
+    warnings
+    libraryScan {
+      scanned
+      matched
+      imported
+      skipped
+      unmatched
+    }
+    title {
+      id
+      name
+      facet
+      externalIds {
+        source
+        value
+      }
+      imdbId
+      slug
+      metadataFetchedAt
+    }
+  }
+}`;
+
 export const triggerImportMutation = `mutation TriggerImport($input: TriggerImportInput!) {
   triggerImport(input: $input) {
     importId

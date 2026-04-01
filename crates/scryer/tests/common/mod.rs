@@ -131,6 +131,7 @@ impl TestContext {
         services.rule_sets = Arc::new(db.clone());
         services.acquisition_state = Arc::new(db.clone());
         services.wanted_items = Arc::new(db.clone());
+        services.title_history = Arc::new(db.clone());
         services.download_submissions = Arc::new(db.clone());
         services.pending_releases = Arc::new(db.clone());
         services.pp_scripts = Arc::new(db.clone());

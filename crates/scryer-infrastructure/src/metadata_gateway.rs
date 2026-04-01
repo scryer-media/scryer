@@ -957,13 +957,34 @@ fn build_bulk_mixed_query(movie_ids: &[i64], series_ids: &[i64], language: &str)
 
 #[cfg(test)]
 mod tests {
-    use super::build_bulk_mixed_query;
+    use super::{build_bulk_mixed_query, normalize_artwork_url, normalize_optional_artwork_url};
 
     #[test]
     fn bulk_series_query_requests_tagged_aliases() {
         let query = build_bulk_mixed_query(&[], &[424536], "eng");
 
         assert!(query.contains("tagged_aliases { name language }"));
+    }
+
+    #[test]
+    fn normalize_artwork_url_collapses_duplicate_path_separators() {
+        let url = "https://artworks.thetvdb.com/banners/movies/147325/backgrounds//5vyMUvxy6W0xU9Unnh5M7WXkh4l.jpg";
+
+        assert_eq!(
+            normalize_artwork_url(url),
+            "https://artworks.thetvdb.com/banners/movies/147325/backgrounds/5vyMUvxy6W0xU9Unnh5M7WXkh4l.jpg"
+        );
+    }
+
+    #[test]
+    fn normalize_optional_artwork_url_preserves_missing_and_existing_urls() {
+        assert_eq!(normalize_optional_artwork_url(None), None);
+        assert_eq!(
+            normalize_optional_artwork_url(Some(
+                "https://artworks.thetvdb.com/banners/posters/example.jpg".to_string()
+            )),
+            Some("https://artworks.thetvdb.com/banners/posters/example.jpg".to_string())
+        );
     }
 }
 
@@ -1095,7 +1116,32 @@ fn pick_artwork_url(artworks: &[ArtworkItem], kind: &str) -> Option<String> {
     artworks
         .iter()
         .find(|a| a.kind == kind)
-        .map(|a| a.url.clone())
+        .map(|a| normalize_artwork_url(&a.url))
+}
+
+fn normalize_optional_artwork_url(url: Option<String>) -> Option<String> {
+    url.map(|value| normalize_artwork_url(&value))
+}
+
+fn normalize_artwork_url(url: &str) -> String {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let Ok(mut parsed) = reqwest::Url::parse(trimmed) else {
+        return trimmed.to_string();
+    };
+
+    let normalized_path = parsed
+        .path()
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("/");
+    parsed.set_path(&format!("/{normalized_path}"));
+
+    parsed.to_string()
 }
 
 // --- Series types ---
@@ -1277,7 +1323,7 @@ impl MetadataGateway for MetadataGatewayClient {
                 status: item.status,
                 overview: item.overview,
                 popularity: item.popularity,
-                poster_url: item.poster_url,
+                poster_url: normalize_optional_artwork_url(item.poster_url),
                 language: item.language,
                 runtime_minutes: item.runtime_minutes,
                 sort_title: item.sort_title,
@@ -1314,7 +1360,7 @@ impl MetadataGateway for MetadataGatewayClient {
                     status: item.status,
                     overview: item.overview,
                     popularity: item.popularity,
-                    poster_url: item.poster_url,
+                    poster_url: normalize_optional_artwork_url(item.poster_url),
                     language: item.language,
                     runtime_minutes: item.runtime_minutes,
                     sort_title: item.sort_title,
@@ -1347,7 +1393,7 @@ impl MetadataGateway for MetadataGatewayClient {
             year: m.year,
             content_status: m.status,
             overview: m.overview,
-            poster_url: m.poster_url,
+            poster_url: normalize_artwork_url(&m.poster_url),
             banner_url: pick_artwork_url(&m.artworks, "banner"),
             background_url: pick_artwork_url(&m.artworks, "background"),
             language: m.language,
@@ -1384,7 +1430,7 @@ impl MetadataGateway for MetadataGatewayClient {
             overview: s.overview,
             network: s.network,
             runtime_minutes: s.runtime_minutes,
-            poster_url: s.poster_url,
+            poster_url: normalize_artwork_url(&s.poster_url),
             banner_url: pick_artwork_url(&s.artworks, "banner"),
             background_url: pick_artwork_url(&s.artworks, "background"),
             country: s.country,
@@ -1537,7 +1583,7 @@ impl MetadataGateway for MetadataGatewayClient {
                                 year: m.year,
                                 content_status: m.status,
                                 overview: m.overview,
-                                poster_url: m.poster_url,
+                                poster_url: normalize_artwork_url(&m.poster_url),
                                 banner_url: pick_artwork_url(&m.artworks, "banner"),
                                 background_url: pick_artwork_url(&m.artworks, "background"),
                                 language: m.language,
@@ -1568,7 +1614,7 @@ impl MetadataGateway for MetadataGatewayClient {
                             overview: s.overview,
                             network: s.network,
                             runtime_minutes: s.runtime_minutes,
-                            poster_url: s.poster_url,
+                            poster_url: normalize_artwork_url(&s.poster_url),
                             banner_url: pick_artwork_url(&s.artworks, "banner"),
                             background_url: pick_artwork_url(&s.artworks, "background"),
                             country: s.country,

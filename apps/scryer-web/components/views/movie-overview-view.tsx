@@ -180,11 +180,13 @@ function TitleSettingsPanel({
   qualityProfiles,
   defaultRootFolder,
   onUpdateTitleOptions,
+  onOpenFixMatch,
 }: {
   title: TitleDetail;
   qualityProfiles: { id: string; name: string }[];
   defaultRootFolder: string;
   onUpdateTitleOptions: (options: TitleOptionUpdates) => Promise<void>;
+  onOpenFixMatch?: () => void;
 }) {
   const t = useTranslate();
   const currentProfileId = title.qualityProfileId?.trim() || INHERIT_VALUE;
@@ -283,6 +285,27 @@ function TitleSettingsPanel({
           </div>
         </div>
       </div>
+
+      {onOpenFixMatch ? (
+        <div className="mt-5 flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-3">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-foreground">{t("title.fixMatchHeading")}</p>
+            <p className="text-xs text-muted-foreground">
+              {t("title.fixMatchDescriptionMovie")}
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="shrink-0"
+            onClick={onOpenFixMatch}
+          >
+            <Search className="mr-2 h-4 w-4" />
+            {t("title.fixMatchAction")}
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -326,6 +349,7 @@ type Props = {
   subtitleDownloads: SubtitleDownloadRecord[];
   onDeleteFile?: (fileId: string) => void;
   onRefreshSubtitles?: () => void;
+  onOpenFixMatch?: () => void;
 };
 
 export function MovieOverviewView({
@@ -365,6 +389,7 @@ export function MovieOverviewView({
   subtitleDownloads,
   onDeleteFile,
   onRefreshSubtitles,
+  onOpenFixMatch,
 }: Props) {
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
@@ -699,6 +724,7 @@ export function MovieOverviewView({
               qualityProfiles={qualityProfiles}
               defaultRootFolder={defaultRootFolder}
               onUpdateTitleOptions={onUpdateTitleOptions}
+              onOpenFixMatch={onOpenFixMatch}
             />
         )}
         interactiveSearchPanel={interactiveSearchPanel}

@@ -31,11 +31,13 @@ import { useClient, useSubscription } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useImportHistorySubscription } from "@/lib/hooks/use-import-history-subscription";
+import { handleFixTitleMatchComplete as applyFixTitleMatchCompletion } from "@/lib/fix-title-match";
 import type { Release, WantedItem } from "@/lib/types";
 import { MovieOverviewView } from "@/components/views/movie-overview-view";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
+import { FixTitleMatchDialog } from "@/components/dialogs/fix-title-match-dialog";
 
 export type TitleDetail = {
   id: string;
@@ -232,6 +234,7 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
   const [deleteFilesOnDisk, setDeleteFilesOnDisk] = React.useState(false);
   const [deleteLoading, setDeleteLoading] = React.useState(false);
+  const [fixMatchOpen, setFixMatchOpen] = React.useState(false);
   const [wantedActionLoading, setWantedActionLoading] = React.useState<
     "pause" | "resume" | "reset" | null
   >(null);
@@ -601,6 +604,19 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
     setDeleteDialogOpen(true);
   }, []);
 
+  const handleFixMatchComplete = React.useCallback(
+    async (warnings: string[]) => {
+      await applyFixTitleMatchCompletion({
+        warnings,
+        refreshTitleDetail,
+        setGlobalStatus,
+        t,
+        titleName: title?.name,
+      });
+    },
+    [refreshTitleDetail, setGlobalStatus, t, title?.name],
+  );
+
   const handleCancelDeleteTitle = React.useCallback(() => {
     if (deleteLoading) return;
     setDeleteDialogOpen(false);
@@ -743,6 +759,13 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
         subtitleDownloads={subtitleDownloads}
         onDeleteFile={handleDeleteMediaFile}
         onRefreshSubtitles={refreshSubtitleDownloads}
+        onOpenFixMatch={() => setFixMatchOpen(true)}
+      />
+      <FixTitleMatchDialog
+        open={fixMatchOpen}
+        onOpenChange={setFixMatchOpen}
+        title={title}
+        onFixed={handleFixMatchComplete}
       />
       <ConfirmDialog
         open={deleteDialogOpen && title !== null}
