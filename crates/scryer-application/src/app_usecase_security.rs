@@ -14,6 +14,9 @@ impl AppUseCase {
             services,
             auth,
             facet_registry,
+            jwt_signing_keys: Arc::new(RwLock::new(HashMap::new())),
+            jwt_signing_keys_loaded: Arc::new(OnceCell::new()),
+            jwt_signing_keys_seed_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -62,15 +65,139 @@ impl AppUseCase {
         Ok(candidate == stored_hash)
     }
 
-    /// Derive a per-user JWT signing key: HMAC-SHA256(key=salt, msg=password_hash).
+    pub(crate) fn entitlement_claim_string(entitlement: &Entitlement) -> &'static str {
+        match entitlement {
+            Entitlement::ViewCatalog => "view_catalog",
+            Entitlement::MonitorTitle => "monitor_title",
+            Entitlement::ManageTitle => "manage_title",
+            Entitlement::TriggerActions => "trigger_actions",
+            Entitlement::ManageConfig => "manage_config",
+            Entitlement::ViewHistory => "view_history",
+        }
+    }
+
+    fn parse_entitlement_claim(raw: &str) -> Option<Entitlement> {
+        match raw.trim().to_lowercase().replace('-', "_").as_str() {
+            "viewcatalog" | "view_catalog" => Some(Entitlement::ViewCatalog),
+            "monitortitle" | "monitor_title" => Some(Entitlement::MonitorTitle),
+            "managetitle" | "manage_title" => Some(Entitlement::ManageTitle),
+            "triggeractions" | "trigger_actions" => Some(Entitlement::TriggerActions),
+            "manageconfig" | "manage_config" => Some(Entitlement::ManageConfig),
+            "viewhistory" | "view_history" => Some(Entitlement::ViewHistory),
+            _ => None,
+        }
+    }
+
+    fn canonical_entitlement_claims(entitlements: &[Entitlement]) -> Vec<String> {
+        let mut claims = entitlements
+            .iter()
+            .map(|entitlement| Self::entitlement_claim_string(entitlement).to_string())
+            .collect::<Vec<_>>();
+        claims.sort();
+        claims.dedup();
+        claims
+    }
+
+    fn parse_entitlement_claims(&self, raw_claims: &[String]) -> AppResult<Vec<Entitlement>> {
+        let mut entitlements = Vec::with_capacity(raw_claims.len());
+        let mut seen = std::collections::HashSet::new();
+
+        for raw in raw_claims {
+            let entitlement = Self::parse_entitlement_claim(raw)
+                .ok_or_else(|| AppError::Validation(format!("unknown entitlement: {raw}")))?;
+            if seen.insert(entitlement.clone()) {
+                entitlements.push(entitlement);
+            }
+        }
+
+        entitlements.sort_by_key(|entitlement| Self::entitlement_claim_string(entitlement));
+        Ok(entitlements)
+    }
+
+    /// Derive a per-user JWT signing key:
+    /// HMAC-SHA256(key=salt, msg="{password_hash}\n{entitlements_fingerprint}").
     ///
     /// The salt is the registration secret baked into the binary, so an offline
     /// DB dump alone cannot forge tokens.
-    fn derive_jwt_key(&self, password_hash: &str) -> Vec<u8> {
+    pub(crate) fn derive_jwt_key(
+        &self,
+        password_hash: &str,
+        entitlements: &[Entitlement],
+    ) -> Vec<u8> {
+        let entitlement_claims = Self::canonical_entitlement_claims(entitlements);
+        let entitlement_fingerprint = sha256_hex(entitlement_claims.join("\n"));
+        let signing_material = format!("{password_hash}\n{entitlement_fingerprint}");
         let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, self.auth.jwt_signing_salt.as_bytes());
-        hmac::sign(&hmac_key, password_hash.as_bytes())
+        hmac::sign(&hmac_key, signing_material.as_bytes())
             .as_ref()
             .to_vec()
+    }
+
+    fn derive_jwt_key_for_user(&self, user: &User) -> AppResult<Option<Vec<u8>>> {
+        let Some(password_hash) = user.password_hash.as_deref() else {
+            return Ok(None);
+        };
+
+        Ok(Some(self.derive_jwt_key(password_hash, &user.entitlements)))
+    }
+
+    async fn write_cached_jwt_signing_key(
+        &self,
+        user: &User,
+        evict_first: bool,
+    ) -> AppResult<()> {
+        let _seed_guard = self.jwt_signing_keys_seed_lock.lock().await;
+        let mut cache = self.jwt_signing_keys.write().await;
+
+        if evict_first {
+            cache.remove(&user.id);
+        }
+
+        match self.derive_jwt_key_for_user(user)? {
+            Some(signing_key) => {
+                cache.insert(user.id.clone(), signing_key);
+            }
+            None => {
+                cache.remove(&user.id);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(super) async fn cache_jwt_signing_key(&self, user: &User) -> AppResult<()> {
+        self.write_cached_jwt_signing_key(user, false).await
+    }
+
+    pub(super) async fn refresh_cached_jwt_signing_key(&self, user: &User) -> AppResult<()> {
+        self.write_cached_jwt_signing_key(user, true).await
+    }
+
+    pub(super) async fn evict_cached_jwt_signing_key(&self, user_id: &str) {
+        let _seed_guard = self.jwt_signing_keys_seed_lock.lock().await;
+        self.jwt_signing_keys.write().await.remove(user_id);
+    }
+
+    pub(crate) async fn ensure_jwt_signing_keys_loaded(&self) -> AppResult<()> {
+        if self.jwt_signing_keys_loaded.get().is_some() {
+            return Ok(());
+        }
+
+        let _seed_guard = self.jwt_signing_keys_seed_lock.lock().await;
+        if self.jwt_signing_keys_loaded.get().is_some() {
+            return Ok(());
+        }
+
+        let users = self.services.users.list_all().await?;
+        let mut cache = self.jwt_signing_keys.write().await;
+        cache.clear();
+        for user in users {
+            if let Some(signing_key) = self.derive_jwt_key_for_user(&user)? {
+                cache.insert(user.id, signing_key);
+            }
+        }
+        let _ = self.jwt_signing_keys_loaded.set(());
+        Ok(())
     }
 
     pub fn token_lifetime(&self) -> i64 {
@@ -87,12 +214,7 @@ impl AppUseCase {
         let iat = now.timestamp();
         let exp = (now + Duration::seconds(self.token_lifetime())).timestamp();
 
-        let entitlements: Vec<String> = actor
-            .entitlements
-            .iter()
-            .filter_map(|e| serde_json::to_value(e).ok())
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect();
+        let entitlements = Self::canonical_entitlement_claims(&actor.entitlements);
 
         let claims = JwtClaims {
             sub: actor.id.clone(),
@@ -104,7 +226,7 @@ impl AppUseCase {
         };
 
         let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-        let signing_key = self.derive_jwt_key(password_hash);
+        let signing_key = self.derive_jwt_key(password_hash, &actor.entitlements);
         let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
 
         let token = jsonwebtoken::encode(&header, &claims, &key)
@@ -127,33 +249,35 @@ impl AppUseCase {
         .map_err(|err| AppError::Unauthorized(format!("malformed token: {err}")))?;
 
         let user_id = &unverified.claims.sub;
-
-        // Fetch the user from DB to get the current password hash.
-        let user = self
-            .services
-            .users
-            .get_by_id(user_id)
-            .await?
-            .ok_or_else(|| AppError::Unauthorized("unknown token subject".into()))?;
-
-        let password_hash = user
-            .password_hash
-            .as_deref()
-            .ok_or_else(|| AppError::Unauthorized("user has no password hash".into()))?;
+        self.ensure_jwt_signing_keys_loaded().await?;
 
         // Now verify the signature with the per-user key.
         let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
         validation.validate_exp = true;
         validation.set_issuer(&[self.auth.issuer.as_str()]);
 
-        let signing_key = self.derive_jwt_key(password_hash);
+        let signing_key = self
+            .jwt_signing_keys
+            .read()
+            .await
+            .get(user_id)
+            .cloned()
+            .ok_or_else(|| AppError::Unauthorized("unknown token subject".into()))?;
         let key = jsonwebtoken::DecodingKey::from_secret(&signing_key);
 
-        jsonwebtoken::decode::<JwtClaims>(token, &key, &validation)
+        let verified = jsonwebtoken::decode::<JwtClaims>(token, &key, &validation)
             .map_err(|err| AppError::Unauthorized(format!("invalid token: {err}")))?;
+        let claims = verified.claims;
+        let entitlements = self
+            .parse_entitlement_claims(&claims.entitlements)
+            .map_err(|err| AppError::Unauthorized(format!("invalid token claims: {err}")))?;
 
-        // Return the DB user — always has fresh entitlements/username.
-        Ok(user)
+        Ok(User {
+            id: claims.sub,
+            username: claims.username,
+            password_hash: None,
+            entitlements,
+        })
     }
 
     pub async fn authenticate_credentials(
@@ -198,6 +322,7 @@ impl AppUseCase {
                 .await
             {
                 Ok(updated) => {
+                    self.cache_jwt_signing_key(&updated).await?;
                     tracing::info!(user_id = %user.id, "migrated password hash from v1 to v2");
                     return Ok(updated);
                 }
@@ -207,6 +332,7 @@ impl AppUseCase {
             }
         }
 
+        self.cache_jwt_signing_key(&user).await?;
         Ok(user)
     }
 }

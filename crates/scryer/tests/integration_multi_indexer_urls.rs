@@ -8,6 +8,7 @@ mod common;
 
 use std::sync::Arc;
 
+use common::load_fixture;
 use scryer_application::{
     AppServices, AppUseCase, FacetRegistry, IndexerPluginProvider, JwtAuthConfig,
     MovieFacetHandler, SearchMode, SeriesFacetHandler,
@@ -16,7 +17,7 @@ use scryer_domain::{Entitlement, User};
 use scryer_infrastructure::{
     FileSystemLibraryScanner, InMemoryIndexerStatsTracker, MultiIndexerSearchClient, SqliteServices,
 };
-use wiremock::matchers::method;
+use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const TOSHO_EMPTY: &str = "[]";
@@ -262,6 +263,30 @@ fn print_summary(tosho: &[String], nzbgeek: &[String], torznab: &[String]) {
     );
 }
 
+fn assert_id_only_then_fallback(urls: &[String], id_fragment: &str, fallback_query_fragment: &str) {
+    assert!(
+        !urls.is_empty(),
+        "expected at least one request containing {id_fragment}"
+    );
+    assert!(
+        urls[0].contains(id_fragment),
+        "first request should use ID search: {:?}",
+        urls
+    );
+    assert!(
+        !urls[0].contains("&q="),
+        "first request should not mix freetext into the ID tier: {:?}",
+        urls[0]
+    );
+    assert!(
+        urls.iter()
+            .skip(1)
+            .any(|url| url.contains(fallback_query_fragment)),
+        "expected a later freetext fallback request containing {fallback_query_fragment}: {:?}",
+        urls
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Demon Slayer S02E03 — anime episode, end-to-end through discovery layer
 // ---------------------------------------------------------------------------
@@ -316,12 +341,19 @@ async fn multi_indexer_url_trace_tv_episode() {
         .await
         .expect("search should succeed");
 
+    let tosho_urls = captured_urls(&tosho).await;
+    let nzbgeek_urls = captured_urls(&nzbgeek).await;
+    let torznab_urls = captured_urls(&torznab).await;
+
     println!("\n=== Breaking Bad S05E01 (series, tvdb=81189) ===");
-    print_summary(
-        &captured_urls(&tosho).await,
-        &captured_urls(&nzbgeek).await,
-        &captured_urls(&torznab).await,
+    print_summary(&tosho_urls, &nzbgeek_urls, &torznab_urls);
+
+    assert!(
+        tosho_urls.is_empty(),
+        "AnimeTosho should not handle series searches"
     );
+    assert_id_only_then_fallback(&nzbgeek_urls, "tvdbid=81189", "q=Breaking%20Bad");
+    assert_id_only_then_fallback(&torznab_urls, "tvdbid=81189", "q=Breaking%20Bad");
 }
 
 // ---------------------------------------------------------------------------
@@ -344,12 +376,19 @@ async fn multi_indexer_url_trace_movie() {
         .await
         .expect("search should succeed");
 
+    let tosho_urls = captured_urls(&tosho).await;
+    let nzbgeek_urls = captured_urls(&nzbgeek).await;
+    let torznab_urls = captured_urls(&torznab).await;
+
     println!("\n=== The Matrix (movie, imdb=tt0133093) ===");
-    print_summary(
-        &captured_urls(&tosho).await,
-        &captured_urls(&nzbgeek).await,
-        &captured_urls(&torznab).await,
+    print_summary(&tosho_urls, &nzbgeek_urls, &torznab_urls);
+
+    assert!(
+        tosho_urls.is_empty(),
+        "AnimeTosho should not handle non-anime movie searches"
     );
+    assert_id_only_then_fallback(&nzbgeek_urls, "imdbid=000133093", "q=The%20Matrix");
+    assert_id_only_then_fallback(&torznab_urls, "imdbid=000133093", "q=The%20Matrix");
 }
 
 // ---------------------------------------------------------------------------
@@ -360,7 +399,19 @@ async fn multi_indexer_url_trace_movie() {
 async fn multi_indexer_url_trace_movie_spirited_away() {
     let (app, user, tosho, nzbgeek, torznab) = setup().await;
 
-    let _results = app
+    let nzbgeek_fixture = load_fixture("nzbgeek/search_movie.json").replace(
+        "Movie.Title.2024.2160p.UHD.BluRay.REMUX.DV.HDR.DTS-HD.MA.7.1.HEVC-GROUP",
+        "Sen.to.Chihiro.no.Kamikakushi.2001.1080p.BluRay",
+    );
+    Mock::given(method("GET"))
+        .and(path("/api/api"))
+        .and(query_param("imdbid", "000245429"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(nzbgeek_fixture))
+        .with_priority(1)
+        .mount(&nzbgeek)
+        .await;
+
+    let results = app
         .search_indexers(
             &user,
             "Spirited Away".into(),
@@ -372,12 +423,23 @@ async fn multi_indexer_url_trace_movie_spirited_away() {
         .await
         .expect("search should succeed");
 
-    println!("\n=== Spirited Away (movie, imdb=tt0245429, anidb=112) ===");
-    print_summary(
-        &captured_urls(&tosho).await,
-        &captured_urls(&nzbgeek).await,
-        &captured_urls(&torznab).await,
+    let tosho_urls = captured_urls(&tosho).await;
+    let nzbgeek_urls = captured_urls(&nzbgeek).await;
+    let torznab_urls = captured_urls(&torznab).await;
+
+    assert!(
+        results
+            .iter()
+            .any(|result| result.title.contains("Sen.to.Chihiro.no.Kamikakushi")),
+        "ID-backed alternate title should survive the title guard, got {:?}, urls: tosho={:?}, nzbgeek={:?}, torznab={:?}",
+        results.iter().map(|result| result.title.clone()).collect::<Vec<_>>(),
+        tosho_urls,
+        nzbgeek_urls,
+        torznab_urls
     );
+
+    println!("\n=== Spirited Away (movie, imdb=tt0245429, anidb=112) ===");
+    print_summary(&tosho_urls, &nzbgeek_urls, &torznab_urls);
 }
 
 // ---------------------------------------------------------------------------

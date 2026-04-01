@@ -601,6 +601,113 @@ async fn mount_smg_mocks(ctx: &TestContext, fixture_path: &str) {
         .await;
 }
 
+async fn create_series_scan_title(
+    ctx: &TestContext,
+    media_root: &std::path::Path,
+    name: &str,
+    extra_tags: Vec<String>,
+) -> (Title, Collection) {
+    let mut tags = vec![format!("scryer:root-folder:{}", media_root.display())];
+    tags.extend(extra_tags);
+
+    let title = Title {
+        id: Id::new().0,
+        name: name.to_string(),
+        facet: MediaFacet::Series,
+        monitored: true,
+        tags,
+        external_ids: vec![],
+        created_by: None,
+        created_at: chrono::Utc::now(),
+        year: Some(2024),
+        overview: None,
+        poster_url: None,
+        poster_source_url: None,
+        banner_url: None,
+        banner_source_url: None,
+        background_url: None,
+        background_source_url: None,
+        sort_title: None,
+        slug: None,
+        imdb_id: None,
+        runtime_minutes: Some(24),
+        genres: vec![],
+        content_status: None,
+        language: None,
+        first_aired: None,
+        network: None,
+        studio: None,
+        country: None,
+        aliases: vec![],
+        tagged_aliases: vec![],
+        metadata_language: None,
+        metadata_fetched_at: None,
+        min_availability: None,
+        digital_release_date: None,
+        folder_path: None,
+    };
+    let title = ctx.db.create(title).await.expect("create series title");
+
+    let collection = Collection {
+        id: Id::new().0,
+        title_id: title.id.clone(),
+        collection_type: scryer_domain::CollectionType::Season,
+        collection_index: "1".to_string(),
+        label: Some("Season 1".to_string()),
+        ordered_path: None,
+        narrative_order: None,
+        first_episode_number: Some("1".to_string()),
+        last_episode_number: Some("10".to_string()),
+        interstitial_movie: None,
+        specials_movies: vec![],
+        interstitial_season_episode: None,
+        monitored: true,
+        created_at: chrono::Utc::now(),
+    };
+    let collection = ctx
+        .db
+        .create_collection(collection)
+        .await
+        .expect("create season collection");
+
+    (title, collection)
+}
+
+async fn create_series_scan_episode(
+    ctx: &TestContext,
+    title: &Title,
+    collection: &Collection,
+    season_number: &str,
+    episode_number: &str,
+    label: &str,
+) -> Episode {
+    let episode = Episode {
+        id: Id::new().0,
+        title_id: title.id.clone(),
+        collection_id: Some(collection.id.clone()),
+        episode_type: scryer_domain::EpisodeType::Standard,
+        episode_number: Some(episode_number.to_string()),
+        season_number: Some(season_number.to_string()),
+        episode_label: Some(label.to_string()),
+        title: Some(format!("Episode {episode_number}")),
+        air_date: None,
+        duration_seconds: Some(1440),
+        has_multi_audio: false,
+        has_subtitle: false,
+        is_filler: false,
+        is_recap: false,
+        absolute_number: None,
+        overview: None,
+        tvdb_id: None,
+        monitored: true,
+        created_at: chrono::Utc::now(),
+    };
+    ctx.db
+        .create_episode(episode)
+        .await
+        .expect("create episode")
+}
+
 // ---------------------------------------------------------------------------
 // Basic connectivity
 // ---------------------------------------------------------------------------
@@ -2880,96 +2987,9 @@ async fn graphql_trigger_title_wanted_search() {
 async fn graphql_scan_title_library() {
     let ctx = TestContext::new().await;
     let media_root = tempfile::tempdir().expect("media root tempdir");
-
-    let title = Title {
-        id: Id::new().0,
-        name: "Scan Show".to_string(),
-        facet: MediaFacet::Series,
-        monitored: true,
-        tags: vec![format!(
-            "scryer:root-folder:{}",
-            media_root.path().display()
-        )],
-        external_ids: vec![],
-        created_by: None,
-        created_at: chrono::Utc::now(),
-        year: Some(2024),
-        overview: None,
-        poster_url: None,
-        poster_source_url: None,
-        banner_url: None,
-        banner_source_url: None,
-        background_url: None,
-        background_source_url: None,
-        sort_title: None,
-        slug: None,
-        imdb_id: None,
-        runtime_minutes: Some(24),
-        genres: vec![],
-        content_status: None,
-        language: None,
-        first_aired: None,
-        network: None,
-        studio: None,
-        country: None,
-        aliases: vec![],
-        tagged_aliases: vec![],
-        metadata_language: None,
-        metadata_fetched_at: None,
-        min_availability: None,
-        digital_release_date: None,
-        folder_path: None,
-    };
-    let title = ctx.db.create(title).await.expect("create series title");
-
-    let collection = Collection {
-        id: Id::new().0,
-        title_id: title.id.clone(),
-        collection_type: scryer_domain::CollectionType::Season,
-        collection_index: "1".to_string(),
-        label: Some("Season 1".to_string()),
-        ordered_path: None,
-        narrative_order: None,
-        first_episode_number: Some("1".to_string()),
-        last_episode_number: Some("1".to_string()),
-        interstitial_movie: None,
-        specials_movies: vec![],
-        interstitial_season_episode: None,
-        monitored: true,
-        created_at: chrono::Utc::now(),
-    };
-    let collection = ctx
-        .db
-        .create_collection(collection)
-        .await
-        .expect("create season collection");
-
-    let episode = Episode {
-        id: Id::new().0,
-        title_id: title.id.clone(),
-        collection_id: Some(collection.id.clone()),
-        episode_type: scryer_domain::EpisodeType::Standard,
-        episode_number: Some("1".to_string()),
-        season_number: Some("1".to_string()),
-        episode_label: Some("S01E01".to_string()),
-        title: Some("Pilot".to_string()),
-        air_date: None,
-        duration_seconds: Some(1440),
-        has_multi_audio: false,
-        has_subtitle: false,
-        is_filler: false,
-        is_recap: false,
-        absolute_number: None,
-        overview: None,
-        tvdb_id: None,
-        monitored: true,
-        created_at: chrono::Utc::now(),
-    };
-    let episode = ctx
-        .db
-        .create_episode(episode)
-        .await
-        .expect("create episode");
+    let (title, collection) =
+        create_series_scan_title(&ctx, media_root.path(), "Scan Show", vec![]).await;
+    let episode = create_series_scan_episode(&ctx, &title, &collection, "1", "1", "S01E01").await;
 
     let season_dir = media_root.path().join(&title.name).join("Season 01");
     std::fs::create_dir_all(&season_dir).expect("create season dir");
@@ -2987,7 +3007,7 @@ async fn graphql_scan_title_library() {
                 unmatched
             }
         }"#,
-        json!({ "input": { "titleId": title.id } }),
+        json!({ "input": { "titleId": title.id.clone() } }),
     )
     .await;
     assert_no_errors(&body);
@@ -3008,7 +3028,7 @@ async fn graphql_scan_title_library() {
                 }
             }
         }"#,
-        json!({ "id": title.id }),
+        json!({ "id": title.id.clone() }),
     )
     .await;
     assert_no_errors(&body);
@@ -3022,6 +3042,318 @@ async fn graphql_scan_title_library() {
         file_path.to_string_lossy().to_string()
     );
     assert_eq!(files[0]["scanStatus"], "scan_failed");
+
+    let persisted_title = ctx
+        .db
+        .get_by_id(&title.id)
+        .await
+        .expect("load title")
+        .expect("title exists");
+    let expected_folder_path = media_root.path().join(&title.name);
+    assert_eq!(
+        persisted_title.folder_path.as_deref(),
+        Some(expected_folder_path.to_string_lossy().as_ref())
+    );
+    assert!(
+        persisted_title
+            .tags
+            .iter()
+            .all(|tag| tag != "scryer:season-folder:disabled")
+    );
+}
+
+#[tokio::test]
+async fn graphql_scan_title_library_disables_season_folders_for_flat_layout() {
+    let ctx = TestContext::new().await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let (title, collection) =
+        create_series_scan_title(&ctx, media_root.path(), "Flat Show", vec![]).await;
+    create_series_scan_episode(&ctx, &title, &collection, "1", "1", "S01E01").await;
+
+    let title_dir = media_root.path().join(&title.name);
+    std::fs::create_dir_all(&title_dir).expect("create title dir");
+    std::fs::write(
+        title_dir.join("Flat.Show.S01E01.1080p.WEB-DL.mkv"),
+        b"not-a-real-video",
+    )
+    .expect("write fake video");
+
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    ctx.app
+        .scan_title_library(&admin, &title.id)
+        .await
+        .expect("scan title library");
+
+    let persisted_title = ctx
+        .db
+        .get_by_id(&title.id)
+        .await
+        .expect("load title")
+        .expect("title exists");
+    let expected_folder_path = title_dir.to_string_lossy().to_string();
+    assert_eq!(
+        persisted_title.folder_path.as_deref(),
+        Some(expected_folder_path.as_str())
+    );
+    assert!(
+        persisted_title
+            .tags
+            .iter()
+            .any(|tag| tag == "scryer:season-folder:disabled")
+    );
+}
+
+#[tokio::test]
+async fn graphql_scan_title_library_preserves_existing_layout_when_ambiguous() {
+    let ctx = TestContext::new().await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let (title, collection) = create_series_scan_title(
+        &ctx,
+        media_root.path(),
+        "Mixed Show",
+        vec!["scryer:season-folder:disabled".to_string()],
+    )
+    .await;
+    create_series_scan_episode(&ctx, &title, &collection, "1", "1", "S01E01").await;
+    create_series_scan_episode(&ctx, &title, &collection, "1", "2", "S01E02").await;
+
+    let title_dir = media_root.path().join(&title.name);
+    let season_dir = title_dir.join("Season 01");
+    std::fs::create_dir_all(&season_dir).expect("create season dir");
+    std::fs::write(title_dir.join("Mixed.Show.S01E01.1080p.WEB-DL.mkv"), b"one")
+        .expect("write flat file");
+    std::fs::write(
+        season_dir.join("Mixed.Show.S01E02.1080p.WEB-DL.mkv"),
+        b"two",
+    )
+    .expect("write season file");
+
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    ctx.app
+        .scan_title_library(&admin, &title.id)
+        .await
+        .expect("scan title library");
+
+    let persisted_title = ctx
+        .db
+        .get_by_id(&title.id)
+        .await
+        .expect("load title")
+        .expect("title exists");
+    let expected_folder_path = title_dir.to_string_lossy().to_string();
+    assert_eq!(
+        persisted_title.folder_path.as_deref(),
+        Some(expected_folder_path.as_str())
+    );
+    assert!(
+        persisted_title
+            .tags
+            .iter()
+            .any(|tag| tag == "scryer:season-folder:disabled")
+    );
+    assert_eq!(
+        persisted_title
+            .tags
+            .iter()
+            .filter(|tag| tag.starts_with("scryer:season-folder:"))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn library_series_scan_hydrates_without_creating_wanted_for_unmonitored_titles() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+
+    let fixture = json!({
+        "data": {
+            "s0": {
+                "series": {
+                    "tvdb_id": 345678,
+                    "name": "Test Show Name",
+                    "sort_name": "Test Show Name",
+                    "slug": "test-show-name",
+                    "status": "Continuing",
+                    "year": 2023,
+                    "first_aired": "2023-09-15",
+                    "overview": "A compelling drama about software testing.",
+                    "network": "Test Network",
+                    "runtime_minutes": 45,
+                    "poster_url": "https://artworks.thetvdb.com/banners/series/345678/posters/test.jpg",
+                    "country": "usa",
+                    "genres": ["Drama", "Thriller"],
+                    "aliases": ["Testing Show", "QA Chronicles"],
+                    "tagged_aliases": [],
+                    "artworks": [],
+                    "seasons": [
+                        {
+                            "tvdb_id": 1000001,
+                            "number": 1,
+                            "label": "Season 1",
+                            "episode_type": "default"
+                        }
+                    ],
+                    "episodes": [
+                        {
+                            "tvdb_id": 2000001,
+                            "episode_number": 1,
+                            "season_number": 1,
+                            "name": "Pilot",
+                            "aired": "2023-09-15",
+                            "runtime_minutes": 60,
+                            "is_filler": false,
+                            "is_recap": false,
+                            "overview": "The team assembles.",
+                            "absolute_number": "1"
+                        }
+                    ],
+                    "anime_mappings": [],
+                    "anime_movies": []
+                }
+            }
+        }
+    })
+    .to_string();
+    Mock::given(method("GET"))
+        .and(path("/graphql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(fixture.clone()))
+        .mount(&ctx.smg_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(fixture))
+        .mount(&ctx.smg_server)
+        .await;
+
+    let token = tokio_util::sync::CancellationToken::new();
+    let hydration_token = token.clone();
+    let hydration_app = ctx.app.clone();
+    tokio::spawn(async move {
+        scryer_application::start_background_hydration_loop(hydration_app, hydration_token).await;
+    });
+
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let show_dir = media_root.path().join("Test Show Name");
+    std::fs::create_dir_all(&show_dir).expect("create show dir");
+    std::fs::write(
+        show_dir.join("tvshow.nfo"),
+        r#"<tvshow><title>Test Show Name</title><tvdbid>345678</tvdbid></tvshow>"#,
+    )
+    .expect("write tvshow.nfo");
+
+    let update = gql(
+        &ctx,
+        r#"
+        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
+          updateLibraryPaths(input: $input) {
+            moviePath
+            seriesPath
+            animePath
+          }
+        }
+        "#,
+        json!({
+          "input": {
+            "moviePath": "/tmp/movies-unused",
+            "seriesPath": media_root.path().display().to_string(),
+            "animePath": "/tmp/anime-unused"
+          }
+        }),
+    )
+    .await;
+    assert_no_errors(&update);
+
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    ctx.app
+        .scan_library(&admin, MediaFacet::Series)
+        .await
+        .expect("scan library");
+
+    let mut hydrated_title = None;
+    for _ in 0..20 {
+        let titles = ctx
+            .db
+            .list(Some(MediaFacet::Series), None)
+            .await
+            .expect("list titles");
+        assert_eq!(titles.len(), 1);
+        if titles[0].metadata_fetched_at.is_some() {
+            hydrated_title = Some(titles[0].clone());
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    token.cancel();
+
+    let hydrated_title = hydrated_title.expect("title should hydrate");
+    assert!(!hydrated_title.monitored);
+
+    let (wanted_items, total) = ctx
+        .app
+        .list_wanted_items(None, None, Some(&hydrated_title.id), 10, 0)
+        .await
+        .expect("list wanted items");
+    assert!(wanted_items.is_empty());
+    assert_eq!(total, 0);
+}
+
+#[tokio::test]
+async fn library_series_scan_creates_unmonitored_titles() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let show_dir = media_root.path().join("Bluey");
+    std::fs::create_dir_all(&show_dir).expect("create show dir");
+    std::fs::write(
+        show_dir.join("tvshow.nfo"),
+        r#"<tvshow><title>Bluey</title><tvdbid>81189</tvdbid></tvshow>"#,
+    )
+    .expect("write tvshow.nfo");
+
+    let update = gql(
+        &ctx,
+        r#"
+        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
+          updateLibraryPaths(input: $input) {
+            moviePath
+            seriesPath
+            animePath
+          }
+        }
+        "#,
+        json!({
+          "input": {
+            "moviePath": "/tmp/movies-unused",
+            "seriesPath": media_root.path().display().to_string(),
+            "animePath": "/tmp/anime-unused"
+          }
+        }),
+    )
+    .await;
+    assert_no_errors(&update);
+
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let summary = ctx
+        .app
+        .scan_library(&admin, MediaFacet::Series)
+        .await
+        .expect("scan library");
+
+    assert_eq!(summary.scanned, 1);
+    assert_eq!(summary.imported, 1);
+    assert_eq!(summary.skipped, 0);
+
+    let titles = ctx
+        .db
+        .list(Some(MediaFacet::Series), None)
+        .await
+        .expect("list titles");
+    assert_eq!(titles.len(), 1);
+    assert_eq!(titles[0].name, "Bluey");
+    assert!(!titles[0].monitored);
 }
 
 #[tokio::test]
@@ -3743,6 +4075,105 @@ async fn authenticated_request_with_valid_token_succeeds() {
         "authenticated query should not error: {body}"
     );
     assert!(body["data"]["titles"].is_array());
+}
+
+#[tokio::test]
+async fn token_is_revoked_after_set_user_entitlements_until_relogin() {
+    let ctx = TestContext::new().await;
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+
+    let create_body = schema_exec(
+        &ctx,
+        r#"mutation {
+            createUser(input: {
+                username: "entrevoketest",
+                password: "s3cr3t!",
+                entitlements: ["view_catalog"]
+            }) {
+                id
+                username
+            }
+        }"#,
+        Some(admin.clone()),
+    )
+    .await;
+    assert!(
+        create_body["errors"].is_null(),
+        "createUser should succeed: {create_body}"
+    );
+    let user_id = create_body["data"]["createUser"]["id"]
+        .as_str()
+        .expect("created user id")
+        .to_string();
+
+    let login_before = schema_exec(
+        &ctx,
+        r#"mutation { login(input: { username: "entrevoketest", password: "s3cr3t!" }) { token } }"#,
+        None,
+    )
+    .await;
+    assert!(
+        login_before["errors"].is_null(),
+        "initial login should succeed: {login_before}"
+    );
+    let old_token = login_before["data"]["login"]["token"]
+        .as_str()
+        .expect("token should be a string")
+        .to_string();
+
+    let update_body = schema_exec(
+        &ctx,
+        &format!(
+            r#"mutation {{
+                setUserEntitlements(input: {{
+                    userId: "{user_id}",
+                    entitlements: ["view_catalog", "manage_title"]
+                }}) {{
+                    id
+                    entitlements
+                }}
+            }}"#
+        ),
+        Some(admin),
+    )
+    .await;
+    assert!(
+        update_body["errors"].is_null(),
+        "setUserEntitlements should succeed: {update_body}"
+    );
+
+    let old_result = ctx.app.authenticate_token(&old_token).await;
+    assert!(
+        old_result.is_err(),
+        "token issued before entitlement change should be rejected"
+    );
+
+    let login_after = schema_exec(
+        &ctx,
+        r#"mutation { login(input: { username: "entrevoketest", password: "s3cr3t!" }) { token } }"#,
+        None,
+    )
+    .await;
+    assert!(
+        login_after["errors"].is_null(),
+        "re-login should succeed after entitlement change: {login_after}"
+    );
+    let new_token = login_after["data"]["login"]["token"]
+        .as_str()
+        .expect("refreshed token should be a string")
+        .to_string();
+
+    let decoded = ctx
+        .app
+        .authenticate_token(&new_token)
+        .await
+        .expect("refreshed token should authenticate");
+    assert!(
+        decoded
+            .entitlements
+            .contains(&scryer_domain::Entitlement::ManageTitle),
+        "re-issued token should carry updated entitlements"
+    );
 }
 
 /// A token issued for a different issuer (or an arbitrary tampered token)

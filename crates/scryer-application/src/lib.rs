@@ -66,10 +66,10 @@ use scryer_domain::{
     PluginInstallation, PolicyInput, PolicyOutput, RuleSet, TaggedAlias, Title,
     TitleHistoryEventType, TitleHistoryRecord, User,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::{Semaphore, broadcast};
+use tokio::sync::{Mutex, OnceCell, RwLock, Semaphore, broadcast};
 
 pub type AppResult<T> = Result<T, AppError>;
 
@@ -1833,6 +1833,9 @@ pub struct AppUseCase {
     pub services: AppServices,
     pub auth: JwtAuthConfig,
     pub facet_registry: Arc<FacetRegistry>,
+    pub(crate) jwt_signing_keys: Arc<RwLock<HashMap<String, Vec<u8>>>>,
+    pub(crate) jwt_signing_keys_loaded: Arc<OnceCell<()>>,
+    pub(crate) jwt_signing_keys_seed_lock: Arc<Mutex<()>>,
 }
 
 pub(crate) fn normalize_release_attempt_hint(raw: Option<&str>) -> Option<String> {
@@ -1969,6 +1972,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Mutex;
 
     #[derive(Default)]
@@ -2129,6 +2133,18 @@ mod tests {
     #[derive(Default)]
     struct MockUserRepo {
         store: Arc<Mutex<Vec<User>>>,
+        get_by_id_calls: Arc<AtomicUsize>,
+        list_all_calls: Arc<AtomicUsize>,
+    }
+
+    impl MockUserRepo {
+        fn get_by_id_call_count(&self) -> usize {
+            self.get_by_id_calls.load(Ordering::SeqCst)
+        }
+
+        fn list_all_call_count(&self) -> usize {
+            self.list_all_calls.load(Ordering::SeqCst)
+        }
     }
 
     #[async_trait]
@@ -2139,6 +2155,7 @@ mod tests {
         }
 
         async fn get_by_id(&self, id: &str) -> AppResult<Option<User>> {
+            self.get_by_id_calls.fetch_add(1, Ordering::SeqCst);
             let users = self.store.lock().await;
             Ok(users.iter().find(|user| user.id == id).cloned())
         }
@@ -2149,6 +2166,7 @@ mod tests {
         }
 
         async fn list_all(&self) -> AppResult<Vec<User>> {
+            self.list_all_calls.fetch_add(1, Ordering::SeqCst);
             Ok(self.store.lock().await.clone())
         }
 
@@ -3433,9 +3451,12 @@ mod tests {
     }
 
     fn bootstrap() -> (AppUseCase, User) {
+        bootstrap_with_user_repo(Arc::new(MockUserRepo::default()))
+    }
+
+    fn bootstrap_with_user_repo(users: Arc<MockUserRepo>) -> (AppUseCase, User) {
         let titles = Arc::new(MockTitleRepo::default());
         let shows = Arc::new(MockShowRepo::default());
-        let users = Arc::new(MockUserRepo::default());
         let events = Arc::new(MockEventRepo::default());
         let indexer_configs = Arc::new(MockIndexerConfigRepo::default());
         let download_client_configs = Arc::new(MockDownloadClientConfigRepo::default());
@@ -5456,10 +5477,23 @@ mod tests {
     // ── JWT round-trip ────────────────────────────────────────────────────────
 
     /// Derive a per-user JWT signing key (mirrors `AppUseCase::derive_jwt_key`).
-    fn test_derive_jwt_key(salt: &str, password_hash: &str) -> Vec<u8> {
+    fn test_derive_jwt_key(
+        salt: &str,
+        password_hash: &str,
+        entitlements: &[Entitlement],
+    ) -> Vec<u8> {
         use ring::hmac;
+        let mut entitlement_claims = entitlements
+            .iter()
+            .map(AppUseCase::entitlement_claim_string)
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        entitlement_claims.sort();
+        entitlement_claims.dedup();
+        let entitlement_fingerprint = sha256_hex(entitlement_claims.join("\n"));
+        let signing_material = format!("{password_hash}\n{entitlement_fingerprint}");
         let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, salt.as_bytes());
-        hmac::sign(&hmac_key, password_hash.as_bytes())
+        hmac::sign(&hmac_key, signing_material.as_bytes())
             .as_ref()
             .to_vec()
     }
@@ -5524,7 +5558,7 @@ mod tests {
             entitlements: vec![],
         };
         let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-        let signing_key = test_derive_jwt_key(&app.auth.jwt_signing_salt, TEST_PASSWORD_HASH);
+        let signing_key = test_derive_jwt_key(&app.auth.jwt_signing_salt, TEST_PASSWORD_HASH, &[]);
         let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
         let expired_token = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
         let result = app.authenticate_token(&expired_token).await;
@@ -5550,7 +5584,11 @@ mod tests {
             entitlements: vec!["view_catalog".to_string()],
         };
         let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-        let signing_key = test_derive_jwt_key(&app.auth.jwt_signing_salt, TEST_PASSWORD_HASH);
+        let signing_key = test_derive_jwt_key(
+            &app.auth.jwt_signing_salt,
+            TEST_PASSWORD_HASH,
+            &user.entitlements,
+        );
         let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
         let bad_token = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
         let result = app.authenticate_token(&bad_token).await;
@@ -5558,5 +5596,166 @@ mod tests {
             result.is_err(),
             "token with wrong issuer should be rejected"
         );
+    }
+
+    #[tokio::test]
+    async fn authenticate_token_warms_cache_without_get_by_id_round_trip() {
+        let users = Arc::new(MockUserRepo::default());
+        let (app, _) = bootstrap_with_user_repo(users.clone());
+        let user = User {
+            id: "user-jwt-cache-1".to_string(),
+            username: "cache_user".to_string(),
+            password_hash: Some(TEST_PASSWORD_HASH.to_string()),
+            entitlements: vec![Entitlement::ViewCatalog],
+        };
+        app.services.users.create(user.clone()).await.unwrap();
+
+        let token = app.issue_access_token(&user).expect("issue token");
+        app.authenticate_token(&token)
+            .await
+            .expect("authenticate token");
+        app.authenticate_token(&token)
+            .await
+            .expect("authenticate token from warm cache");
+
+        assert_eq!(users.get_by_id_call_count(), 0);
+        assert_eq!(users.list_all_call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn password_change_invalidates_existing_token_immediately() {
+        let (app, admin) = bootstrap();
+        let created = app
+            .create_user(
+                &admin,
+                "pw_rotate".to_string(),
+                "before-pass".to_string(),
+                vec![Entitlement::ViewCatalog],
+            )
+            .await
+            .expect("create user");
+        let token = app.issue_access_token(&created).expect("issue token");
+
+        app.set_user_password(&admin, &created.id, "after-pass".to_string(), None)
+            .await
+            .expect("rotate password");
+
+        let result = app.authenticate_token(&token).await;
+        assert!(result.is_err(), "old token should be rejected after password change");
+    }
+
+    #[tokio::test]
+    async fn entitlement_change_invalidates_existing_token_and_relogin_works() {
+        let (app, admin) = bootstrap();
+        let created = app
+            .create_user(
+                &admin,
+                "ent_rotate".to_string(),
+                "same-pass".to_string(),
+                vec![Entitlement::ViewCatalog],
+            )
+            .await
+            .expect("create user");
+        let old_token = app.issue_access_token(&created).expect("issue token");
+
+        let updated = app
+            .set_user_entitlements(
+                &admin,
+                &created.id,
+                vec![Entitlement::ViewCatalog, Entitlement::ManageTitle],
+            )
+            .await
+            .expect("update entitlements");
+
+        let old_result = app.authenticate_token(&old_token).await;
+        assert!(
+            old_result.is_err(),
+            "old token should be rejected after entitlement change"
+        );
+
+        let relogged = app
+            .authenticate_credentials("ent_rotate", "same-pass")
+            .await
+            .expect("re-login after entitlement change");
+        let new_token = app.issue_access_token(&relogged).expect("issue refreshed token");
+        let decoded = app
+            .authenticate_token(&new_token)
+            .await
+            .expect("authenticate refreshed token");
+
+        assert_eq!(decoded.id, updated.id);
+        assert!(decoded.entitlements.contains(&Entitlement::ManageTitle));
+    }
+
+    #[tokio::test]
+    async fn deleting_user_invalidates_existing_token_immediately() {
+        let (app, admin) = bootstrap();
+        let created = app
+            .create_user(
+                &admin,
+                "gone_user".to_string(),
+                "password123".to_string(),
+                vec![Entitlement::ViewCatalog],
+            )
+            .await
+            .expect("create user");
+        let token = app.issue_access_token(&created).expect("issue token");
+
+        app.delete_user(&admin, &created.id)
+            .await
+            .expect("delete user");
+
+        let result = app.authenticate_token(&token).await;
+        assert!(result.is_err(), "deleted user token should be rejected");
+    }
+
+    #[test]
+    fn jwt_key_derivation_is_stable_across_entitlement_order() {
+        let (app, _) = bootstrap();
+        let key_a = app.derive_jwt_key(
+            TEST_PASSWORD_HASH,
+            &[Entitlement::ManageTitle, Entitlement::ViewCatalog],
+        );
+        let key_b = app.derive_jwt_key(
+            TEST_PASSWORD_HASH,
+            &[Entitlement::ViewCatalog, Entitlement::ManageTitle],
+        );
+
+        assert_eq!(key_a, key_b);
+    }
+
+    #[tokio::test]
+    async fn malformed_entitlement_claims_are_rejected() {
+        let (app, _) = bootstrap();
+        let user = User {
+            id: "user-jwt-malformed".to_string(),
+            username: "jwt_claims".to_string(),
+            password_hash: Some(TEST_PASSWORD_HASH.to_string()),
+            entitlements: vec![Entitlement::ViewCatalog],
+        };
+        app.services.users.create(user.clone()).await.unwrap();
+        app.ensure_jwt_signing_keys_loaded()
+            .await
+            .expect("seed signing key cache");
+
+        let claims = JwtClaims {
+            sub: user.id.clone(),
+            exp: Utc::now().timestamp() + 3600,
+            iat: Utc::now().timestamp(),
+            iss: app.auth.issuer.clone(),
+            username: user.username.clone(),
+            entitlements: vec!["definitely_not_real".to_string()],
+        };
+        let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
+        let signing_key = test_derive_jwt_key(
+            &app.auth.jwt_signing_salt,
+            TEST_PASSWORD_HASH,
+            &user.entitlements,
+        );
+        let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
+        let token = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
+
+        let result = app.authenticate_token(&token).await;
+        assert!(result.is_err(), "malformed entitlement claims should be rejected");
     }
 }

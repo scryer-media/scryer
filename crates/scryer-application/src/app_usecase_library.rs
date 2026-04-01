@@ -123,6 +123,157 @@ async fn list_child_directories(root: &Path) -> AppResult<Vec<PathBuf>> {
     Ok(dirs)
 }
 
+const SEASON_FOLDER_TAG_PREFIX: &str = "scryer:season-folder:";
+
+fn set_structured_title_tag(tags: &mut Vec<String>, prefix: &str, value: Option<&str>) {
+    tags.retain(|tag| !tag.starts_with(prefix));
+    let Some(value) = value else {
+        return;
+    };
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return;
+    }
+    tags.push(format!("{prefix}{normalized}"));
+}
+
+fn merge_title_scan_option_tags(mut tags: Vec<String>, use_season_folders: bool) -> Vec<String> {
+    set_structured_title_tag(
+        &mut tags,
+        SEASON_FOLDER_TAG_PREFIX,
+        Some(if use_season_folders {
+            "enabled"
+        } else {
+            "disabled"
+        }),
+    );
+    tags
+}
+
+fn normalize_layout_component(name: &str) -> String {
+    let mut normalized = String::with_capacity(name.len());
+    let mut prev_sep = false;
+    for ch in name.chars() {
+        let lower = ch.to_ascii_lowercase();
+        if lower.is_whitespace() || matches!(lower, '.' | '_' | '-') {
+            if !prev_sep {
+                normalized.push(' ');
+                prev_sep = true;
+            }
+        } else {
+            normalized.push(lower);
+            prev_sep = false;
+        }
+    }
+    normalized.trim().to_string()
+}
+
+fn recognize_season_folder_name(name: &str) -> Option<u32> {
+    let normalized = normalize_layout_component(name);
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let compact = normalized.replace(' ', "");
+    if matches!(compact.as_str(), "specials" | "specialepisodes") {
+        return Some(0);
+    }
+
+    for prefix in ["season", "series", "s"] {
+        let Some(rest) = compact.strip_prefix(prefix) else {
+            continue;
+        };
+        if rest.is_empty() || !rest.chars().all(|ch| ch.is_ascii_digit()) {
+            continue;
+        }
+        return rest.parse::<u32>().ok();
+    }
+
+    None
+}
+
+fn infer_target_season_number(target_episodes: &[Episode]) -> Option<u32> {
+    let mut seasons = target_episodes
+        .iter()
+        .map(|episode| episode.season_number.as_deref()?.parse::<u32>().ok())
+        .collect::<Option<HashSet<_>>>()?;
+    if seasons.len() == 1 {
+        seasons.drain().next()
+    } else {
+        None
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TitleScanLayoutObservation {
+    Flat,
+    SeasonFolder,
+    Ambiguous,
+}
+
+fn classify_title_scan_layout(
+    title_dir: &Path,
+    file_path: &Path,
+    target_episodes: &[Episode],
+) -> TitleScanLayoutObservation {
+    let Ok(relative) = file_path.strip_prefix(title_dir) else {
+        return TitleScanLayoutObservation::Ambiguous;
+    };
+
+    let Some(parent) = relative.parent() else {
+        return TitleScanLayoutObservation::Flat;
+    };
+
+    let first_component = parent
+        .components()
+        .find_map(|component| component.as_os_str().to_str())
+        .filter(|component| !component.is_empty());
+
+    let Some(first_component) = first_component else {
+        return TitleScanLayoutObservation::Flat;
+    };
+
+    let Some(folder_season) = recognize_season_folder_name(first_component) else {
+        return TitleScanLayoutObservation::Ambiguous;
+    };
+
+    match infer_target_season_number(target_episodes) {
+        Some(target_season) if target_season == folder_season => {
+            TitleScanLayoutObservation::SeasonFolder
+        }
+        _ => TitleScanLayoutObservation::Ambiguous,
+    }
+}
+
+#[derive(Default)]
+struct TitleScanLayoutSummary {
+    saw_flat: bool,
+    saw_season_folder: bool,
+    ambiguous: bool,
+}
+
+impl TitleScanLayoutSummary {
+    fn observe(&mut self, observation: TitleScanLayoutObservation) {
+        match observation {
+            TitleScanLayoutObservation::Flat => self.saw_flat = true,
+            TitleScanLayoutObservation::SeasonFolder => self.saw_season_folder = true,
+            TitleScanLayoutObservation::Ambiguous => self.ambiguous = true,
+        }
+    }
+
+    fn inferred_use_season_folders(&self) -> Option<bool> {
+        if self.ambiguous || self.saw_flat == self.saw_season_folder {
+            None
+        } else if self.saw_season_folder {
+            Some(true)
+        } else if self.saw_flat {
+            Some(false)
+        } else {
+            None
+        }
+    }
+}
+
 impl AppUseCase {
     pub async fn preview_rename_for_title(
         &self,
@@ -749,7 +900,10 @@ impl AppUseCase {
                 let new_title = NewTitle {
                     name,
                     facet: facet.clone(),
-                    monitored: true,
+                    // Library import should discover existing titles without
+                    // immediately backfilling missing episodes before the local
+                    // files are linked into Scryer's DB.
+                    monitored: false,
                     tags: vec![],
                     external_ids,
                     min_availability: None,
@@ -830,7 +984,9 @@ impl AppUseCase {
             let new_title = NewTitle {
                 name: selected.name.clone(),
                 facet: facet.clone(),
-                monitored: true,
+                // Keep discovered episodic titles unmonitored until the user
+                // explicitly enables monitoring after review/import.
+                monitored: false,
                 tags: vec![],
                 external_ids: vec![ExternalId {
                     source: "tvdb".into(),
@@ -969,6 +1125,7 @@ impl AppUseCase {
         }
 
         let mut summary = LibraryScanSummary::default();
+        let mut layout_summary = TitleScanLayoutSummary::default();
 
         for file in files {
             summary.scanned += 1;
@@ -1010,6 +1167,11 @@ impl AppUseCase {
             }
 
             summary.matched += 1;
+            layout_summary.observe(classify_title_scan_layout(
+                &title_dir,
+                source_path,
+                &target_episodes,
+            ));
 
             let file_id = if let Some(existing_id) = file_ids_by_path.get(&file.path).cloned() {
                 summary.skipped += 1;
@@ -1131,6 +1293,21 @@ impl AppUseCase {
                     }
                 }
             }
+        }
+
+        if title.folder_path.as_deref() != Some(title_dir_str.as_str()) {
+            self.services
+                .titles
+                .set_folder_path(&title.id, &title_dir_str)
+                .await?;
+        }
+
+        if let Some(use_season_folders) = layout_summary.inferred_use_season_folders()
+            && crate::app_usecase_import::use_season_folders(&title) != use_season_folders
+        {
+            let tags = merge_title_scan_option_tags(title.tags.clone(), use_season_folders);
+            self.update_title_metadata(actor, &title.id, None, None, Some(tags))
+                .await?;
         }
 
         self.services
@@ -1324,6 +1501,58 @@ impl AppUseCase {
         }
 
         Ok(DEFAULT_MISSING_METADATA_POLICY)
+    }
+}
+
+#[cfg(test)]
+mod scan_layout_tests {
+    use super::*;
+
+    fn test_episode(season_number: &str) -> Episode {
+        Episode {
+            id: "episode-1".into(),
+            title_id: "title-1".into(),
+            collection_id: None,
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some("1".into()),
+            season_number: Some(season_number.into()),
+            episode_label: Some("S01E01".into()),
+            title: Some("Pilot".into()),
+            air_date: None,
+            duration_seconds: Some(1440),
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: None,
+            overview: None,
+            tvdb_id: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn recognize_season_folder_name_accepts_common_variants() {
+        assert_eq!(recognize_season_folder_name("Season 01"), Some(1));
+        assert_eq!(recognize_season_folder_name("Series_1"), Some(1));
+        assert_eq!(recognize_season_folder_name("S01"), Some(1));
+        assert_eq!(recognize_season_folder_name("Season-00"), Some(0));
+        assert_eq!(recognize_season_folder_name("Special Episodes"), Some(0));
+        assert_eq!(recognize_season_folder_name("specials"), Some(0));
+        assert_eq!(recognize_season_folder_name("Extras"), None);
+    }
+
+    #[test]
+    fn classify_title_scan_layout_marks_conflicting_season_folders_ambiguous() {
+        let title_dir = PathBuf::from("/library/Example Show");
+        let file_path = title_dir.join("Series 02/Example.Show.S01E01.mkv");
+        let target_episodes = vec![test_episode("1")];
+
+        assert_eq!(
+            classify_title_scan_layout(&title_dir, &file_path, &target_episodes),
+            TitleScanLayoutObservation::Ambiguous
+        );
     }
 }
 

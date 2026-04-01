@@ -23,6 +23,103 @@ struct SearchStrategy {
     label: String,
 }
 
+#[derive(Debug)]
+struct StrategyExecutionOutcome {
+    label: String,
+    title_guard_mode: TitleGuardMode,
+    response: AppResult<IndexerSearchResponse>,
+    elapsed: std::time::Duration,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TitleGuardMode {
+    SkipTitleMatch,
+    ExactTitleMatch,
+}
+
+#[derive(Default)]
+struct StrategyBatchHealth {
+    any_success: bool,
+    any_error: bool,
+}
+
+impl StrategyBatchHealth {
+    fn mark_success(&mut self) {
+        self.any_success = true;
+    }
+
+    fn mark_error(&mut self) {
+        self.any_error = true;
+    }
+
+    async fn apply(
+        self,
+        backoff_tracker: &IndexerBackoffTracker,
+        indexer_id: &str,
+        indexer_name: &str,
+    ) {
+        if self.any_success {
+            backoff_tracker.record_success(indexer_id).await;
+        } else if self.any_error {
+            let until = backoff_tracker.record_failure(indexer_id).await;
+            warn!(
+                indexer = indexer_name,
+                disabled_until = %until,
+                "indexer backoff escalated"
+            );
+        }
+    }
+}
+
+fn should_run_fallback_tier(
+    collected_results: &[IndexerSearchResult],
+    primary_had_success: bool,
+    primary_had_error: bool,
+    fallback_strategies: &[SearchStrategy],
+) -> bool {
+    collected_results.is_empty()
+        && primary_had_success
+        && !primary_had_error
+        && !fallback_strategies.is_empty()
+}
+
+/// Records transport metrics per outbound indexer request.
+///
+/// A single high-level search can emit multiple request attempts when we fan
+/// out across ID/episode strategies or run a freetext fallback tier. Keeping
+/// these counters at request granularity makes the tier labels actionable in
+/// dashboards and keeps latency tied to the specific outbound call.
+fn record_strategy_metrics(
+    indexer_name: &str,
+    mode_label: &str,
+    status: &str,
+    elapsed: std::time::Duration,
+    result_count: Option<usize>,
+) {
+    metrics::counter!(
+        "scryer_indexer_queries_total",
+        "indexer" => indexer_name.to_string(),
+        "status" => status.to_string(),
+        "mode" => mode_label.to_string()
+    )
+    .increment(1);
+    metrics::histogram!(
+        "scryer_indexer_query_duration_seconds",
+        "indexer" => indexer_name.to_string(),
+        "mode" => mode_label.to_string()
+    )
+    .record(elapsed.as_secs_f64());
+
+    if let Some(result_count) = result_count {
+        metrics::counter!(
+            "scryer_indexer_query_results_total",
+            "indexer" => indexer_name.to_string(),
+            "mode" => mode_label.to_string()
+        )
+        .increment(result_count as u64);
+    }
+}
+
 fn preferred_anime_alias_query(
     query: &str,
     tagged_aliases: &[scryer_domain::TaggedAlias],
@@ -51,6 +148,45 @@ fn preferred_anime_alias_query(
                 && !canonical.eq_ignore_ascii_case(name)
         })
         .map(|(name, _, _, _)| name.clone())
+}
+
+fn is_freetext_strategy_label(label: &str) -> bool {
+    matches!(label, "freetext" | "freetext_alias")
+}
+
+fn should_defer_freetext_to_fallback(_facet: &str, strategies: &[SearchStrategy]) -> bool {
+    strategies.iter().any(|strategy| !strategy.ids.is_empty())
+        && strategies
+            .iter()
+            .any(|strategy| is_freetext_strategy_label(&strategy.label))
+}
+
+fn split_strategy_tiers(
+    facet: &str,
+    strategies: Vec<SearchStrategy>,
+) -> (Vec<SearchStrategy>, Vec<SearchStrategy>) {
+    if !should_defer_freetext_to_fallback(facet, &strategies) {
+        return (strategies, Vec::new());
+    }
+
+    let mut primary = Vec::new();
+    let mut fallback = Vec::new();
+
+    for strategy in strategies {
+        if is_freetext_strategy_label(&strategy.label) {
+            fallback.push(strategy);
+        } else {
+            primary.push(strategy);
+        }
+    }
+
+    if primary.is_empty() || fallback.is_empty() {
+        let mut merged = primary;
+        merged.extend(fallback);
+        return (merged, Vec::new());
+    }
+
+    (primary, fallback)
 }
 
 fn strip_query_context(query: &str) -> &str {
@@ -294,6 +430,78 @@ impl MultiIndexerSearchClient {
             && season.is_none()
             && episode.is_none()
     }
+
+    async fn execute_strategy_tier(
+        client: Arc<dyn IndexerClient>,
+        category: Option<String>,
+        facet: String,
+        per_indexer_categories: Option<Vec<String>>,
+        mode: SearchMode,
+        tagged_aliases: Vec<scryer_domain::TaggedAlias>,
+        strategies: Vec<SearchStrategy>,
+    ) -> Vec<StrategyExecutionOutcome> {
+        let mut set = tokio::task::JoinSet::<StrategyExecutionOutcome>::new();
+
+        for strategy in strategies {
+            let client = client.clone();
+            let category = category.clone();
+            let per_indexer_categories = per_indexer_categories.clone();
+            let tagged_aliases = tagged_aliases.clone();
+            let facet = facet.clone();
+            let strategy_label = strategy.label.clone();
+            let title_guard_mode = if strategy.ids.is_empty() {
+                TitleGuardMode::ExactTitleMatch
+            } else {
+                TitleGuardMode::SkipTitleMatch
+            };
+
+            set.spawn(async move {
+                let start = std::time::Instant::now();
+                let response = tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    client.search(
+                        strategy.query,
+                        strategy.ids,
+                        category,
+                        Some(facet),
+                        per_indexer_categories,
+                        None,
+                        mode,
+                        strategy.season,
+                        strategy.episode,
+                        strategy.absolute_episode,
+                        tagged_aliases,
+                    ),
+                )
+                .await
+                .unwrap_or_else(|_| Err(AppError::Repository("indexer search timed out".into())));
+
+                StrategyExecutionOutcome {
+                    label: strategy_label,
+                    title_guard_mode,
+                    response,
+                    elapsed: start.elapsed(),
+                }
+            });
+        }
+
+        let mut outcomes = Vec::new();
+        while let Some(join_result) = set.join_next().await {
+            match join_result {
+                Ok(outcome) => outcomes.push(outcome),
+                Err(error) => outcomes.push(StrategyExecutionOutcome {
+                    label: "join".into(),
+                    title_guard_mode: TitleGuardMode::SkipTitleMatch,
+                    response: Err(AppError::Repository(format!(
+                        "indexer search task panicked: {error}"
+                    ))),
+                    elapsed: std::time::Duration::ZERO,
+                }),
+            }
+        }
+
+        outcomes
+    }
 }
 
 #[async_trait]
@@ -415,8 +623,12 @@ impl IndexerClient for MultiIndexerSearchClient {
         );
         let available_ids = ids;
 
-        // Spawn parallel searches across enabled indexers, applying per-indexer routing
-        let mut set = tokio::task::JoinSet::new();
+        // Spawn parallel searches across enabled indexers, applying per-indexer routing.
+        // Each indexer may still execute multiple strategies internally, but for
+        // TV/series searches we run ID searches first and only fall back to a
+        // broad freetext query if that indexer returned no releases.
+        let mut set =
+            tokio::task::JoinSet::<(String, String, AppResult<IndexerSearchResponse>)>::new();
         for config in enabled {
             // Apply per-indexer facet scoping: if routing is configured and this
             // indexer is disabled for the current scope, skip it entirely.
@@ -571,23 +783,15 @@ impl IndexerClient for MultiIndexerSearchClient {
 
                     let response = IndexerSearchResponse {
                         results: results.clone(),
-                        api_current: None, api_max: None, grab_current: None, grab_max: None,
+                        api_current: None,
+                        api_max: None,
+                        grab_current: None,
+                        grab_max: None,
                     };
-                    (indexer_id, indexer_name, Ok(response), std::time::Duration::ZERO, "rss_cached".to_string())
+                    (indexer_id, indexer_name, Ok(response))
                 });
                 continue;
             }
-
-            // For Interactive mode, fan out separate strategy tasks per ID type
-            // so all HTTP calls happen in parallel. For Auto mode, send everything
-            // in a single call (current behavior — no extra API pressure).
-            let has_api_limit = self
-                .stats_tracker
-                .all_stats()
-                .iter()
-                .find(|s| s.indexer_id == config.id)
-                .and_then(|s| s.api_max)
-                .is_some_and(|max| max > 0);
 
             let mut strategies: Vec<SearchStrategy> = build_strategies(&StrategyParams {
                 query: &query,
@@ -617,107 +821,219 @@ impl IndexerClient for MultiIndexerSearchClient {
                 strategies.extend(alias_strategies);
             }
 
-            // Skip freetext strategies when ID-based strategies are available and
-            // the indexer has API limits or deduplicates aliases (freetext without
-            // the constraining ID returns broad, unrelated results).
-            if (has_api_limit || caps.deduplicates_aliases)
-                && strategies.len() > 1
-                && facet != "anime"
-            {
-                let has_id_strategy = strategies.iter().any(|s| !s.ids.is_empty());
-                if has_id_strategy {
-                    strategies.retain(|s| s.label != "freetext");
-                }
-            }
+            let (primary_strategies, fallback_strategies) =
+                split_strategy_tiers(&facet, strategies);
 
             self.rate_limiter
                 .acquire(&config.id, config.rate_limit_seconds, mode)
                 .await;
 
-            for strategy in strategies {
-                let client = client.clone();
-                let category = category.clone();
-                let per_indexer_categories = per_indexer_categories.clone();
-                let tagged_aliases = tagged_aliases.clone();
-                let indexer_id = config.id.clone();
-                let indexer_name = config.name.clone();
-                let strategy_label = strategy.label.clone();
-                let facet = facet.clone();
+            let indexer_id = config.id.clone();
+            let indexer_name = config.name.clone();
+            let facet = facet.clone();
+            let search_query = query.clone();
+            let category_for_indexer = category.clone();
+            let tagged_aliases_for_indexer = tagged_aliases.clone();
+            let stats_tracker = self.stats_tracker.clone();
+            let backoff_tracker = self.backoff_tracker.clone();
 
-                set.spawn(async move {
-                    let start = std::time::Instant::now();
-                    let result = tokio::time::timeout(
-                        std::time::Duration::from_secs(30),
-                        client.search(
-                            strategy.query,
-                            strategy.ids,
-                            category,
-                            Some(facet),
-                            per_indexer_categories,
-                            None,
-                            mode,
-                            strategy.season,
-                            strategy.episode,
-                            strategy.absolute_episode,
-                            tagged_aliases,
-                        ),
+            set.spawn(async move {
+                let mut collected_results = Vec::new();
+                let mut primary_had_success = false;
+                let mut primary_had_error = false;
+                let mut batch_health = StrategyBatchHealth::default();
+
+                let primary_outcomes = Self::execute_strategy_tier(
+                    client.clone(),
+                    category_for_indexer.clone(),
+                    facet.clone(),
+                    per_indexer_categories.clone(),
+                    mode,
+                    tagged_aliases_for_indexer.clone(),
+                    primary_strategies,
+                )
+                .await;
+
+                for outcome in primary_outcomes {
+                    match outcome.response {
+                        Ok(mut response) => {
+                            primary_had_success = true;
+                            batch_health.mark_success();
+                            info!(
+                                indexer = indexer_name.as_str(),
+                                strategy = outcome.label.as_str(),
+                                count = response.results.len(),
+                                "indexer returned results"
+                            );
+                            stats_tracker.record_query(&indexer_id, &indexer_name, true);
+                            stats_tracker.record_api_limits(
+                                &indexer_id,
+                                response.api_current,
+                                response.api_max,
+                                response.grab_current,
+                                response.grab_max,
+                            );
+                            backoff_tracker.record_success(&indexer_id).await;
+
+                            record_strategy_metrics(
+                                &indexer_name,
+                                &outcome.label,
+                                "success",
+                                outcome.elapsed,
+                                Some(response.results.len()),
+                            );
+
+                            filter_strategy_results(
+                                &mut response.results,
+                                &search_query,
+                                season,
+                                episode,
+                                &tagged_aliases_for_indexer,
+                                outcome.title_guard_mode,
+                                &outcome.label,
+                            );
+                            collected_results.append(&mut response.results);
+                        }
+                        Err(err) => {
+                            primary_had_error = true;
+                            batch_health.mark_error();
+                            warn!(
+                                indexer = indexer_name.as_str(),
+                                strategy = outcome.label.as_str(),
+                                error = %err,
+                                "indexer search failed"
+                            );
+                            stats_tracker.record_query(&indexer_id, &indexer_name, false);
+
+                            record_strategy_metrics(
+                                &indexer_name,
+                                &outcome.label,
+                                "error",
+                                outcome.elapsed,
+                                None,
+                            );
+                        }
+                    }
+                }
+
+                if should_run_fallback_tier(
+                    &collected_results,
+                    primary_had_success,
+                    primary_had_error,
+                    &fallback_strategies,
+                ) {
+                    info!(
+                        indexer = indexer_name.as_str(),
+                        facet = facet.as_str(),
+                        query = search_query.as_str(),
+                        reason = "zero_id_results",
+                        "indexer search falling back to title tier"
+                    );
+
+                    let fallback_outcomes = Self::execute_strategy_tier(
+                        client,
+                        category_for_indexer,
+                        facet,
+                        per_indexer_categories,
+                        mode,
+                        tagged_aliases_for_indexer.clone(),
+                        fallback_strategies,
                     )
                     .await;
 
-                    let elapsed = start.elapsed();
-                    match result {
-                        Ok(inner) => (indexer_id, indexer_name, inner, elapsed, strategy_label),
-                        Err(_) => (
-                            indexer_id,
-                            indexer_name,
-                            Err(AppError::Repository("indexer search timed out".into())),
-                            elapsed,
-                            strategy_label,
-                        ),
+                    for outcome in fallback_outcomes {
+                        match outcome.response {
+                            Ok(mut response) => {
+                                batch_health.mark_success();
+                                info!(
+                                    indexer = indexer_name.as_str(),
+                                    strategy = outcome.label.as_str(),
+                                    count = response.results.len(),
+                                    "indexer returned fallback results"
+                                );
+                                stats_tracker.record_query(&indexer_id, &indexer_name, true);
+                                stats_tracker.record_api_limits(
+                                    &indexer_id,
+                                    response.api_current,
+                                    response.api_max,
+                                    response.grab_current,
+                                    response.grab_max,
+                                );
+                                backoff_tracker.record_success(&indexer_id).await;
+
+                                record_strategy_metrics(
+                                    &indexer_name,
+                                    &outcome.label,
+                                    "success",
+                                    outcome.elapsed,
+                                    Some(response.results.len()),
+                                );
+
+                                filter_strategy_results(
+                                    &mut response.results,
+                                    &search_query,
+                                    season,
+                                    episode,
+                                    &tagged_aliases_for_indexer,
+                                    outcome.title_guard_mode,
+                                    &outcome.label,
+                                );
+                                collected_results.append(&mut response.results);
+                            }
+                            Err(err) => {
+                                batch_health.mark_error();
+                                warn!(
+                                    indexer = indexer_name.as_str(),
+                                    strategy = outcome.label.as_str(),
+                                    error = %err,
+                                    "indexer fallback search failed"
+                                );
+                                stats_tracker.record_query(&indexer_id, &indexer_name, false);
+
+                                record_strategy_metrics(
+                                    &indexer_name,
+                                    &outcome.label,
+                                    "error",
+                                    outcome.elapsed,
+                                    None,
+                                );
+                            }
+                        }
                     }
-                });
-            }
+                }
+
+                batch_health
+                    .apply(&backoff_tracker, &indexer_id, &indexer_name)
+                    .await;
+
+                (
+                    indexer_id,
+                    indexer_name,
+                    Ok(IndexerSearchResponse {
+                        results: collected_results,
+                        api_current: None,
+                        api_max: None,
+                        grab_current: None,
+                        grab_max: None,
+                    }),
+                )
+            });
         }
 
         let mut all_results: Vec<IndexerSearchResult> = Vec::new();
         while let Some(join_result) = set.join_next().await {
             match join_result {
-                Ok((id, name, Ok(mut response), elapsed, mode_label)) => {
+                Ok((_id, name, Ok(mut response))) => {
                     info!(
                         indexer = name.as_str(),
                         count = response.results.len(),
-                        "indexer returned results"
+                        "indexer returned aggregated results"
                     );
-                    self.stats_tracker.record_query(&id, &name, true);
-                    self.stats_tracker.record_api_limits(
-                        &id,
-                        response.api_current,
-                        response.api_max,
-                        response.grab_current,
-                        response.grab_max,
-                    );
-                    // De-escalate on success
-                    self.backoff_tracker.record_success(&id).await;
-
-                    metrics::counter!("scryer_indexer_queries_total", "indexer" => name.clone(), "status" => "success", "mode" => mode_label.clone()).increment(1);
-                    metrics::histogram!("scryer_indexer_query_duration_seconds", "indexer" => name.clone(), "mode" => mode_label.clone()).record(elapsed.as_secs_f64());
-                    metrics::counter!("scryer_indexer_query_results_total", "indexer" => name.clone(), "mode" => mode_label).increment(response.results.len() as u64);
-
                     all_results.append(&mut response.results);
                 }
-                Ok((id, name, Err(err), elapsed, mode_label)) => {
+                Ok((id, name, Err(err))) => {
                     warn!(indexer = name.as_str(), error = %err, "indexer search failed");
-                    self.stats_tracker.record_query(&id, &name, false);
-                    // Escalate backoff on failure
-                    let until = self.backoff_tracker.record_failure(&id).await;
-                    warn!(
-                        indexer = name.as_str(),
-                        disabled_until = %until,
-                        "indexer backoff escalated"
-                    );
-
-                    metrics::counter!("scryer_indexer_queries_total", "indexer" => name.clone(), "status" => "error", "mode" => mode_label.clone()).increment(1);
-                    metrics::histogram!("scryer_indexer_query_duration_seconds", "indexer" => name.clone(), "mode" => mode_label).record(elapsed.as_secs_f64());
+                    let _ = id;
                 }
                 Err(err) => {
                     warn!(error = %err, "indexer search task panicked");
@@ -753,91 +1069,10 @@ impl IndexerClient for MultiIndexerSearchClient {
             }
         }
 
-        // Title relevance guard: parse the search query with the release parser
-        // to extract the expected title/season/episode, then drop results that
-        // don't match.  What we check depends on the search type:
-        //   Movie:       title only
-        //   Season pack: title + season
-        //   Episode:     title + season + episode
-        if !query.is_empty() {
-            let expected = scryer_release_parser::parse_release_metadata(&query);
-            if !expected.normalized_title.is_empty() {
-                let mut expected_titles =
-                    vec![normalize_for_comparison(&expected.normalized_title)];
-                expected_titles.extend(
-                    tagged_aliases
-                        .iter()
-                        .map(|alias| normalize_for_comparison(&alias.name))
-                        .filter(|alias| !alias.is_empty()),
-                );
-                let mut seen_titles = HashSet::new();
-                expected_titles.retain(|title| seen_titles.insert(title.clone()));
-                let before = all_results.len();
-                all_results.retain(|r| {
-                    let Some(ref parsed) = r.parsed_release_metadata else {
-                        return true;
-                    };
-                    if parsed.normalized_title.is_empty() {
-                        return true;
-                    }
-
-                    // Always check title
-                    let release_title = normalize_for_comparison(&parsed.normalized_title);
-                    let title_ok = expected_titles.iter().any(|expected_title| {
-                        expected_title.contains(&release_title)
-                            || release_title.contains(expected_title)
-                    });
-                    if !title_ok {
-                        tracing::debug!(
-                            query = %query,
-                            expected = ?expected_titles,
-                            got = %parsed.normalized_title,
-                            "title guard: title mismatch"
-                        );
-                        return false;
-                    }
-
-                    // Season check (season pack or episode search)
-                    if let Some(expected_s) = season
-                        && let Some(ref res_ep) = parsed.episode
-                        && let Some(rs) = res_ep.season
-                        && rs != expected_s
-                    {
-                        tracing::debug!(
-                            query = %query,
-                            expected_season = expected_s,
-                            got_season = rs,
-                            "title guard: season mismatch"
-                        );
-                        return false;
-                    }
-
-                    // Episode check (episode search only)
-                    if let Some(expected_e) = episode
-                        && let Some(ref res_ep) = parsed.episode
-                        && !res_ep.episode_numbers.is_empty()
-                        && !res_ep.episode_numbers.contains(&expected_e)
-                    {
-                        tracing::debug!(
-                            query = %query,
-                            expected_episode = expected_e,
-                            got_episodes = ?res_ep.episode_numbers,
-                            "title guard: episode mismatch"
-                        );
-                        return false;
-                    }
-
-                    true
-                });
-                let filtered = before - all_results.len();
-                if filtered > 0 {
-                    info!(
-                        before,
-                        after = all_results.len(),
-                        filtered,
-                        "title guard: removed irrelevant results"
-                    );
-                }
+        for result in &mut all_results {
+            if result.parsed_release_metadata.is_none() {
+                result.parsed_release_metadata =
+                    Some(scryer_release_parser::parse_release_metadata(&result.title));
             }
         }
 
@@ -891,7 +1126,7 @@ fn build_strategies(p: &StrategyParams<'_>) -> Vec<SearchStrategy> {
         if facet == "anime" {
             if let Some(absolute_episode) = absolute_episode {
                 strategies.push(SearchStrategy {
-                    query: query.to_string(),
+                    query: String::new(),
                     ids: filtered_ids.clone(),
                     season: None,
                     episode: None,
@@ -902,7 +1137,7 @@ fn build_strategies(p: &StrategyParams<'_>) -> Vec<SearchStrategy> {
 
             if episode.is_some() {
                 strategies.push(SearchStrategy {
-                    query: query.to_string(),
+                    query: String::new(),
                     ids: filtered_ids.clone(),
                     season,
                     episode,
@@ -914,7 +1149,7 @@ fn build_strategies(p: &StrategyParams<'_>) -> Vec<SearchStrategy> {
 
         if strategies.is_empty() {
             strategies.push(SearchStrategy {
-                query: query.to_string(),
+                query: String::new(),
                 ids: filtered_ids,
                 season,
                 episode,
@@ -985,9 +1220,142 @@ fn normalize_for_comparison(input: &str) -> String {
         .collect()
 }
 
+/// Returns the normalized titles that can legitimately identify this parsed
+/// release. The title guard uses exact matches against this set to reject
+/// nearby-but-wrong releases like "Firefly Lane" for a "Firefly" search.
+fn parsed_title_candidates(parsed: &scryer_application::ParsedReleaseMetadata) -> Vec<String> {
+    let mut titles = if parsed.normalized_title_variants.is_empty() {
+        vec![parsed.normalized_title.clone()]
+    } else {
+        parsed.normalized_title_variants.clone()
+    };
+
+    if titles.is_empty() {
+        titles.push(parsed.normalized_title.clone());
+    }
+
+    let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
+    for title in titles {
+        let candidate = normalize_for_comparison(&title);
+        if !candidate.is_empty() && seen.insert(candidate.clone()) {
+            normalized.push(candidate);
+        }
+    }
+
+    normalized
+}
+
+fn filter_strategy_results(
+    results: &mut Vec<IndexerSearchResult>,
+    query: &str,
+    season: Option<u32>,
+    episode: Option<u32>,
+    tagged_aliases: &[scryer_domain::TaggedAlias],
+    title_guard_mode: TitleGuardMode,
+    strategy_label: &str,
+) {
+    if results.is_empty() {
+        return;
+    }
+
+    for result in results.iter_mut() {
+        if result.parsed_release_metadata.is_none() {
+            result.parsed_release_metadata =
+                Some(scryer_release_parser::parse_release_metadata(&result.title));
+        }
+    }
+
+    if query.is_empty() && season.is_none() && episode.is_none() {
+        return;
+    }
+
+    let mut expected_titles = if query.is_empty() {
+        Vec::new()
+    } else {
+        parsed_title_candidates(&scryer_release_parser::parse_release_metadata(query))
+    };
+    expected_titles.extend(
+        tagged_aliases
+            .iter()
+            .map(|alias| normalize_for_comparison(&alias.name))
+            .filter(|alias| !alias.is_empty()),
+    );
+    let mut seen_titles = HashSet::new();
+    expected_titles.retain(|title| seen_titles.insert(title.clone()));
+
+    let before = results.len();
+    results.retain(|result| {
+        let Some(ref parsed) = result.parsed_release_metadata else {
+            return true;
+        };
+
+        if title_guard_mode == TitleGuardMode::ExactTitleMatch && !expected_titles.is_empty() {
+            let release_titles = parsed_title_candidates(parsed);
+            let title_ok = release_titles
+                .iter()
+                .any(|release_title| expected_titles.iter().any(|expected| expected == release_title));
+            if !title_ok {
+                tracing::debug!(
+                    strategy = strategy_label,
+                    query = %query,
+                    expected = ?expected_titles,
+                    got = ?release_titles,
+                    "title guard: title mismatch"
+                );
+                return false;
+            }
+        }
+
+        if let Some(expected_s) = season
+            && let Some(ref res_ep) = parsed.episode
+            && let Some(rs) = res_ep.season
+            && rs != expected_s
+        {
+            tracing::debug!(
+                strategy = strategy_label,
+                query = %query,
+                expected_season = expected_s,
+                got_season = rs,
+                "title guard: season mismatch"
+            );
+            return false;
+        }
+
+        if let Some(expected_e) = episode
+            && let Some(ref res_ep) = parsed.episode
+            && !res_ep.episode_numbers.is_empty()
+            && !res_ep.episode_numbers.contains(&expected_e)
+        {
+            tracing::debug!(
+                strategy = strategy_label,
+                query = %query,
+                expected_episode = expected_e,
+                got_episodes = ?res_ep.episode_numbers,
+                "title guard: episode mismatch"
+            );
+            return false;
+        }
+
+        true
+    });
+
+    let filtered = before - results.len();
+    if filtered > 0 {
+        info!(
+            strategy = strategy_label,
+            before,
+            after = results.len(),
+            filtered,
+            "title guard: removed irrelevant results"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc as StdArc, Mutex as StdMutex};
 
     use async_trait::async_trait;
     use chrono::Utc;
@@ -1044,6 +1412,34 @@ mod tests {
 
     impl IndexerStatsTracker for MockIndexerStatsTracker {
         fn record_query(&self, _indexer_id: &str, _indexer_name: &str, _success: bool) {}
+
+        fn record_api_limits(
+            &self,
+            _indexer_id: &str,
+            _api_current: Option<u32>,
+            _api_max: Option<u32>,
+            _grab_current: Option<u32>,
+            _grab_max: Option<u32>,
+        ) {
+        }
+
+        fn all_stats(&self) -> Vec<IndexerQueryStats> {
+            vec![]
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingIndexerStatsTracker {
+        queries: StdArc<StdMutex<Vec<bool>>>,
+    }
+
+    impl IndexerStatsTracker for RecordingIndexerStatsTracker {
+        fn record_query(&self, _indexer_id: &str, _indexer_name: &str, success: bool) {
+            self.queries
+                .lock()
+                .expect("stats log mutex")
+                .push(success);
+        }
 
         fn record_api_limits(
             &self,
@@ -1151,6 +1547,207 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct RecordedCall {
+        query: String,
+        ids: HashMap<String, String>,
+        facet: Option<String>,
+        season: Option<u32>,
+        episode: Option<u32>,
+        absolute_episode: Option<u32>,
+    }
+
+    type ResponseFn = dyn Fn(&RecordedCall) -> AppResult<IndexerSearchResponse> + Send + Sync;
+
+    struct ScriptedIndexerClient {
+        calls: StdArc<StdMutex<Vec<RecordedCall>>>,
+        responder: StdArc<ResponseFn>,
+    }
+
+    #[async_trait]
+    impl IndexerClient for ScriptedIndexerClient {
+        async fn search(
+            &self,
+            query: String,
+            ids: HashMap<String, String>,
+            _category: Option<String>,
+            facet: Option<String>,
+            _newznab_categories: Option<Vec<String>>,
+            _indexer_routing: Option<IndexerRoutingPlan>,
+            _mode: SearchMode,
+            season: Option<u32>,
+            episode: Option<u32>,
+            absolute_episode: Option<u32>,
+            _tagged_aliases: Vec<scryer_domain::TaggedAlias>,
+        ) -> AppResult<IndexerSearchResponse> {
+            let call = RecordedCall {
+                query,
+                ids,
+                facet,
+                season,
+                episode,
+                absolute_episode,
+            };
+            self.calls
+                .lock()
+                .expect("call log mutex")
+                .push(call.clone());
+            (self.responder)(&call)
+        }
+    }
+
+    struct ScriptedIndexerPluginProvider {
+        client: Arc<dyn IndexerClient>,
+        caps: IndexerProviderCapabilities,
+    }
+
+    impl IndexerPluginProvider for ScriptedIndexerPluginProvider {
+        fn client_for_provider(&self, _config: &IndexerConfig) -> Option<Arc<dyn IndexerClient>> {
+            Some(self.client.clone())
+        }
+
+        fn available_provider_types(&self) -> Vec<String> {
+            vec!["mock".into()]
+        }
+
+        fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
+            vec![]
+        }
+
+        fn capabilities_for_provider(&self, _provider_type: &str) -> IndexerProviderCapabilities {
+            self.caps.clone()
+        }
+    }
+
+    fn scripted_search_client(
+        caps: IndexerProviderCapabilities,
+        responder: impl Fn(&RecordedCall) -> AppResult<IndexerSearchResponse> + Send + Sync + 'static,
+    ) -> (
+        MultiIndexerSearchClient,
+        StdArc<StdMutex<Vec<RecordedCall>>>,
+    ) {
+        scripted_search_client_with_stats(caps, Arc::new(MockIndexerStatsTracker), responder)
+    }
+
+    fn scripted_search_client_with_stats(
+        caps: IndexerProviderCapabilities,
+        stats_tracker: Arc<dyn IndexerStatsTracker>,
+        responder: impl Fn(&RecordedCall) -> AppResult<IndexerSearchResponse> + Send + Sync + 'static,
+    ) -> (
+        MultiIndexerSearchClient,
+        StdArc<StdMutex<Vec<RecordedCall>>>,
+    ) {
+        let calls = StdArc::new(StdMutex::new(Vec::new()));
+        let client = Arc::new(ScriptedIndexerClient {
+            calls: calls.clone(),
+            responder: StdArc::new(responder),
+        });
+
+        let multi = MultiIndexerSearchClient::new(
+            Arc::new(MockIndexerConfigRepository {
+                configs: vec![mock_indexer_config()],
+            }),
+            stats_tracker,
+            Arc::new(ScriptedIndexerPluginProvider { client, caps }),
+        );
+
+        (multi, calls)
+    }
+
+    async fn backoff_state(
+        client: &MultiIndexerSearchClient,
+        indexer_id: &str,
+    ) -> Option<IndexerBackoffState> {
+        client
+            .backoff_tracker
+            .state
+            .lock()
+            .await
+            .get(indexer_id)
+            .cloned()
+    }
+
+    fn search_result(title: &str) -> IndexerSearchResult {
+        IndexerSearchResult {
+            source: "mock".into(),
+            title: title.into(),
+            link: None,
+            download_url: Some(format!(
+                "https://example.test/download/{}",
+                title.replace(' ', "_")
+            )),
+            source_kind: None,
+            size_bytes: None,
+            published_at: None,
+            thumbs_up: None,
+            thumbs_down: None,
+            indexer_languages: None,
+            indexer_subtitles: None,
+            indexer_grabs: None,
+            password_hint: None,
+            parsed_release_metadata: None,
+            quality_profile_decision: None,
+            extra: HashMap::new(),
+            guid: None,
+            info_url: None,
+        }
+    }
+
+    fn response_with_titles(titles: &[&str]) -> AppResult<IndexerSearchResponse> {
+        Ok(IndexerSearchResponse {
+            results: titles.iter().map(|title| search_result(title)).collect(),
+            api_current: None,
+            api_max: None,
+            grab_current: None,
+            grab_max: None,
+        })
+    }
+
+    fn movie_caps() -> IndexerProviderCapabilities {
+        IndexerProviderCapabilities {
+            rss: false,
+            supported_ids: HashMap::from([("movie".into(), vec!["imdb_id".into()])]),
+            deduplicates_aliases: false,
+            season_param: None,
+            episode_param: None,
+            query_param: Some("q".into()),
+            search: true,
+            imdb_search: true,
+            tvdb_search: false,
+            anidb_search: false,
+        }
+    }
+
+    fn series_caps() -> IndexerProviderCapabilities {
+        IndexerProviderCapabilities {
+            rss: false,
+            supported_ids: HashMap::from([("series".into(), vec!["tvdb_id".into()])]),
+            deduplicates_aliases: false,
+            season_param: Some("season".into()),
+            episode_param: Some("ep".into()),
+            query_param: Some("q".into()),
+            search: true,
+            imdb_search: false,
+            tvdb_search: true,
+            anidb_search: false,
+        }
+    }
+
+    fn anime_caps() -> IndexerProviderCapabilities {
+        IndexerProviderCapabilities {
+            rss: false,
+            supported_ids: HashMap::from([("anime".into(), vec!["anidb_id".into()])]),
+            deduplicates_aliases: false,
+            season_param: Some("season".into()),
+            episode_param: Some("ep".into()),
+            query_param: Some("q".into()),
+            search: true,
+            imdb_search: false,
+            tvdb_search: false,
+            anidb_search: true,
+        }
+    }
+
     #[tokio::test]
     async fn rss_sync_search_skips_providers_without_rss_capability() {
         let calls = Arc::new(AtomicUsize::new(0));
@@ -1184,6 +1781,446 @@ mod tests {
 
         assert!(response.results.is_empty());
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn series_search_with_tvdb_id_skips_freetext_when_id_tier_returns_results() {
+        let (client, calls) = scripted_search_client(series_caps(), |call| {
+            if call.ids.contains_key("tvdb_id") {
+                response_with_titles(&["Firefly.S01E12.720p.WEB-DL"])
+            } else {
+                response_with_titles(&["Firefly.Lane.S01E12.720p.WEB-DL"])
+            }
+        });
+
+        let response = client
+            .search(
+                "Firefly S01E12".into(),
+                HashMap::from([("tvdb_id".to_string(), "78874".to_string())]),
+                Some("series".into()),
+                Some("series".into()),
+                None,
+                None,
+                SearchMode::Interactive,
+                Some(1),
+                Some(12),
+                None,
+                vec![],
+            )
+            .await
+            .expect("search should succeed");
+
+        let calls = calls.lock().expect("call log mutex");
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].ids.contains_key("tvdb_id"));
+        assert!(calls[0].query.is_empty());
+        assert_eq!(response.results.len(), 1);
+        assert_eq!(response.results[0].title, "Firefly.S01E12.720p.WEB-DL");
+    }
+
+    #[tokio::test]
+    async fn series_search_with_tvdb_id_falls_back_only_after_empty_id_tier() {
+        let (client, calls) = scripted_search_client(series_caps(), |call| {
+            if call.ids.contains_key("tvdb_id") {
+                response_with_titles(&[])
+            } else {
+                response_with_titles(&["Firefly.S01E12.720p.WEB-DL"])
+            }
+        });
+
+        let response = client
+            .search(
+                "Firefly S01E12".into(),
+                HashMap::from([("tvdb_id".to_string(), "78874".to_string())]),
+                Some("series".into()),
+                Some("series".into()),
+                None,
+                None,
+                SearchMode::Interactive,
+                Some(1),
+                Some(12),
+                None,
+                vec![],
+            )
+            .await
+            .expect("search should succeed");
+
+        let calls = calls.lock().expect("call log mutex");
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0].ids.contains_key("tvdb_id"));
+        assert!(calls[0].query.is_empty());
+        assert!(calls[1].ids.is_empty());
+        assert_eq!(calls[1].query, "Firefly S01E12");
+        assert_eq!(response.results.len(), 1);
+        assert_eq!(response.results[0].title, "Firefly.S01E12.720p.WEB-DL");
+    }
+
+    #[tokio::test]
+    async fn id_empty_then_fallback_still_rejects_false_positive_titles() {
+        let (client, calls) = scripted_search_client(series_caps(), |call| {
+            if call.ids.contains_key("tvdb_id") {
+                response_with_titles(&[])
+            } else {
+                response_with_titles(&[
+                    "Firefly.S01E12.720p.WEB-DL",
+                    "Firefly.Lane.2021.S01E12.2160p.WEB-DL",
+                ])
+            }
+        });
+
+        let response = client
+            .search(
+                "Firefly S01E12".into(),
+                HashMap::from([("tvdb_id".to_string(), "78874".to_string())]),
+                Some("series".into()),
+                Some("series".into()),
+                None,
+                None,
+                SearchMode::Interactive,
+                Some(1),
+                Some(12),
+                None,
+                vec![],
+            )
+            .await
+            .expect("search should succeed");
+
+        let calls = calls.lock().expect("call log mutex");
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0].ids.contains_key("tvdb_id"));
+        assert!(calls[1].ids.is_empty());
+        assert_eq!(response.results.len(), 1);
+        assert_eq!(response.results[0].title, "Firefly.S01E12.720p.WEB-DL");
+    }
+
+    #[tokio::test]
+    async fn movie_search_with_imdb_id_uses_tiered_fallback() {
+        let (client, calls) = scripted_search_client(movie_caps(), |call| {
+            if call.ids.contains_key("imdb_id") {
+                response_with_titles(&[])
+            } else {
+                response_with_titles(&["The.Matrix.1999.1080p.BluRay"])
+            }
+        });
+
+        let response = client
+            .search(
+                "The Matrix".into(),
+                HashMap::from([("imdb_id".to_string(), "tt0133093".to_string())]),
+                Some("movie".into()),
+                Some("movie".into()),
+                None,
+                None,
+                SearchMode::Interactive,
+                None,
+                None,
+                None,
+                vec![],
+            )
+            .await
+            .expect("search should succeed");
+
+        let calls = calls.lock().expect("call log mutex");
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0].ids.contains_key("imdb_id"));
+        assert!(calls[0].query.is_empty());
+        assert!(calls[1].ids.is_empty());
+        assert_eq!(calls[1].query, "The Matrix");
+        assert_eq!(response.results[0].title, "The.Matrix.1999.1080p.BluRay");
+    }
+
+    #[tokio::test]
+    async fn anime_search_keeps_id_variants_in_primary_tier_and_falls_back_after_empty_results() {
+        let (client, calls) = scripted_search_client(anime_caps(), |call| {
+            if call.ids.contains_key("anidb_id") {
+                response_with_titles(&[])
+            } else {
+                response_with_titles(&["Demon.Slayer.S02E03.720p.WEB-DL"])
+            }
+        });
+
+        let response = client
+            .search(
+                "Demon Slayer S02E03".into(),
+                HashMap::from([("anidb_id".to_string(), "1535".to_string())]),
+                Some("anime".into()),
+                Some("anime".into()),
+                None,
+                None,
+                SearchMode::Interactive,
+                Some(2),
+                Some(3),
+                Some(21),
+                vec![],
+            )
+            .await
+            .expect("search should succeed");
+
+        let calls = calls.lock().expect("call log mutex");
+        assert_eq!(calls.len(), 3);
+        assert!(calls[0].ids.contains_key("anidb_id"));
+        assert!(calls[1].ids.contains_key("anidb_id"));
+        assert!(calls[0].query.is_empty());
+        assert!(calls[1].query.is_empty());
+        assert!(calls[0].absolute_episode == Some(21) || calls[1].absolute_episode == Some(21));
+        assert!(calls[0].ids.is_empty() || calls[1].ids.is_empty() || calls[2].ids.is_empty());
+        assert!(calls[2].ids.is_empty());
+        assert_eq!(calls[2].query, "Demon Slayer S02E03");
+        assert_eq!(response.results[0].title, "Demon.Slayer.S02E03.720p.WEB-DL");
+    }
+
+    #[tokio::test]
+    async fn id_tier_errors_do_not_trigger_title_fallback() {
+        let (client, calls) = scripted_search_client(series_caps(), |call| {
+            if call.ids.contains_key("tvdb_id") {
+                Err(AppError::Repository("boom".into()))
+            } else {
+                response_with_titles(&["Firefly.S01E12.720p.WEB-DL"])
+            }
+        });
+
+        let response = client
+            .search(
+                "Firefly S01E12".into(),
+                HashMap::from([("tvdb_id".to_string(), "78874".to_string())]),
+                Some("series".into()),
+                Some("series".into()),
+                None,
+                None,
+                SearchMode::Interactive,
+                Some(1),
+                Some(12),
+                None,
+                vec![],
+            )
+            .await
+            .expect("search should still return an aggregate response");
+
+        let calls = calls.lock().expect("call log mutex");
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].ids.contains_key("tvdb_id"));
+        assert!(calls[0].query.is_empty());
+        assert!(response.results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn mixed_primary_outcomes_do_not_trigger_fallback() {
+        let (client, calls) = scripted_search_client(anime_caps(), |call| {
+            if call.ids.contains_key("anidb_id") && call.absolute_episode.is_some() {
+                Err(AppError::Repository("abs lookup failed".into()))
+            } else if call.ids.contains_key("anidb_id") {
+                response_with_titles(&[])
+            } else {
+                response_with_titles(&["Demon.Slayer.S02E03.720p.WEB-DL"])
+            }
+        });
+
+        let response = client
+            .search(
+                "Demon Slayer S02E03".into(),
+                HashMap::from([("anidb_id".to_string(), "1535".to_string())]),
+                Some("anime".into()),
+                Some("anime".into()),
+                None,
+                None,
+                SearchMode::Interactive,
+                Some(2),
+                Some(3),
+                Some(21),
+                vec![],
+            )
+            .await
+            .expect("mixed primary outcomes should still aggregate cleanly");
+
+        let calls = calls.lock().expect("call log mutex");
+        assert_eq!(calls.len(), 2);
+        assert!(calls.iter().all(|call| call.ids.contains_key("anidb_id")));
+        assert!(calls.iter().all(|call| call.query.is_empty()));
+        assert!(response.results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn mixed_batch_does_not_back_off_when_any_request_succeeds() {
+        let stats = Arc::new(RecordingIndexerStatsTracker::default());
+        let (client, calls) =
+            scripted_search_client_with_stats(anime_caps(), stats.clone(), |call| {
+                if call.ids.contains_key("anidb_id") && call.absolute_episode.is_some() {
+                    Err(AppError::Repository("abs lookup failed".into()))
+                } else if call.ids.contains_key("anidb_id") {
+                    response_with_titles(&[])
+                } else {
+                    response_with_titles(&["Demon.Slayer.S02E03.720p.WEB-DL"])
+                }
+            });
+
+        client.backoff_tracker.state.lock().await.insert(
+            "idx-1".into(),
+            IndexerBackoffState {
+                escalation_level: 1,
+                disabled_until: None,
+            },
+        );
+
+        let response = client
+            .search(
+                "Demon Slayer S02E03".into(),
+                HashMap::from([("anidb_id".to_string(), "1535".to_string())]),
+                Some("anime".into()),
+                Some("anime".into()),
+                None,
+                None,
+                SearchMode::Interactive,
+                Some(2),
+                Some(3),
+                Some(21),
+                vec![],
+            )
+            .await
+            .expect("mixed primary outcomes should still aggregate cleanly");
+
+        let calls = calls.lock().expect("call log mutex");
+        assert_eq!(calls.len(), 2);
+        assert!(response.results.is_empty());
+        assert!(client.backoff_tracker.is_disabled("idx-1").await.is_none());
+        let state = backoff_state(&client, "idx-1")
+            .await
+            .expect("success should preserve a cleared backoff entry");
+        assert_eq!(state.escalation_level, 0);
+        assert!(state.disabled_until.is_none());
+
+        let stats = stats.queries.lock().expect("stats log mutex");
+        assert_eq!(stats.len(), 2);
+        assert_eq!(stats.iter().filter(|success| **success).count(), 1);
+        assert_eq!(stats.iter().filter(|success| !**success).count(), 1);
+    }
+
+    #[tokio::test]
+    async fn all_request_failures_back_off_once() {
+        let stats = Arc::new(RecordingIndexerStatsTracker::default());
+        let (client, calls) =
+            scripted_search_client_with_stats(anime_caps(), stats.clone(), |call| {
+                if call.ids.contains_key("anidb_id") {
+                    Err(AppError::Repository("lookup failed".into()))
+                } else {
+                    response_with_titles(&["Demon.Slayer.S02E03.720p.WEB-DL"])
+                }
+            });
+
+        let response = client
+            .search(
+                "Demon Slayer S02E03".into(),
+                HashMap::from([("anidb_id".to_string(), "1535".to_string())]),
+                Some("anime".into()),
+                Some("anime".into()),
+                None,
+                None,
+                SearchMode::Interactive,
+                Some(2),
+                Some(3),
+                Some(21),
+                vec![],
+            )
+            .await
+            .expect("all-failure primary outcomes should still aggregate cleanly");
+
+        let calls = calls.lock().expect("call log mutex");
+        assert_eq!(calls.len(), 2);
+        assert!(calls.iter().all(|call| call.ids.contains_key("anidb_id")));
+        assert!(response.results.is_empty());
+        assert!(client.backoff_tracker.is_disabled("idx-1").await.is_some());
+
+        let state = backoff_state(&client, "idx-1")
+            .await
+            .expect("indexer should have backoff state");
+        assert_eq!(state.escalation_level, 1);
+        assert!(state.disabled_until.is_some());
+
+        let stats = stats.queries.lock().expect("stats log mutex");
+        assert_eq!(stats.len(), 2);
+        assert!(stats.iter().all(|success| !*success));
+    }
+
+    #[tokio::test]
+    async fn exact_title_guard_rejects_false_positive_series_matches_for_freetext_searches() {
+        let (client, _calls) = scripted_search_client(series_caps(), |_call| {
+            response_with_titles(&[
+                "Firefly.S01E12.720p.WEB-DL",
+                "Firefly.Lane.2021.S01E12.2160p.WEB-DL",
+                "Friends.Like.These.S01E12.720p.WEB-DL",
+                "Smiling.Friends.S01E12.1080p.WEB-DL",
+            ])
+        });
+
+        let firefly = client
+            .search(
+                "Firefly S01E12".into(),
+                HashMap::new(),
+                Some("series".into()),
+                Some("series".into()),
+                None,
+                None,
+                SearchMode::Interactive,
+                Some(1),
+                Some(12),
+                None,
+                vec![],
+            )
+            .await
+            .expect("firefly search should succeed");
+        assert_eq!(firefly.results.len(), 1);
+        assert_eq!(firefly.results[0].title, "Firefly.S01E12.720p.WEB-DL");
+
+        let friends = client
+            .search(
+                "Friends S01E12".into(),
+                HashMap::new(),
+                Some("series".into()),
+                Some("series".into()),
+                None,
+                None,
+                SearchMode::Interactive,
+                Some(1),
+                Some(12),
+                None,
+                vec![],
+            )
+            .await
+            .expect("friends search should succeed");
+        assert!(friends.results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn id_backed_searches_skip_title_guard() {
+        let (client, _calls) = scripted_search_client(movie_caps(), |call| {
+            if call.ids.contains_key("imdb_id") {
+                response_with_titles(&["Sen.to.Chihiro.no.Kamikakushi.2001.1080p.BluRay"])
+            } else {
+                response_with_titles(&[])
+            }
+        });
+
+        let response = client
+            .search(
+                "Spirited Away".into(),
+                HashMap::from([("imdb_id".to_string(), "tt0245429".to_string())]),
+                Some("movie".into()),
+                Some("movie".into()),
+                None,
+                None,
+                SearchMode::Interactive,
+                None,
+                None,
+                None,
+                vec![],
+            )
+            .await
+            .expect("ID-backed search should succeed");
+
+        assert_eq!(response.results.len(), 1);
+        assert_eq!(
+            response.results[0].title,
+            "Sen.to.Chihiro.no.Kamikakushi.2001.1080p.BluRay"
+        );
     }
     #[test]
     fn anime_strategies_try_abs_and_sxex_in_parallel() {

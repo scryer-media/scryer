@@ -606,7 +606,70 @@ pub(crate) async fn resolve_staged_nzb_for_request(
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_NZB_BYTES, validate_nzb_xml};
+    use std::path::Path;
+
+    use scryer_application::StagedNzbStore;
+    use tempfile::TempDir;
+
+    use crate::FileSystemStagedNzbStore;
+
+    use super::{MAX_NZB_BYTES, stream_validate_and_compress_nzb, validate_nzb_xml};
+
+    fn load_real_nzb_fixture_bytes() -> Vec<u8> {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let fixture_path = Path::new(manifest_dir)
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("tests")
+            .join("fixtures")
+            .join("nzbgeek")
+            .join("nzb_content.xml");
+        std::fs::read(&fixture_path).unwrap_or_else(|error| {
+            panic!("failed to load fixture {}: {error}", fixture_path.display())
+        })
+    }
+
+    async fn materialize_real_staged_nzb_fixture(
+        output_root: &Path,
+    ) -> scryer_application::AppResult<scryer_application::StagedNzbRef> {
+        let store = FileSystemStagedNzbStore::new(output_root).await?;
+        let pending = store
+            .create_pending_staged_nzb(
+                "https://example.invalid/nzbgeek/nzb_content.xml",
+                Some("real-nzb-fixture"),
+            )
+            .await?;
+        let partial_path = pending.partial_path.clone();
+        let raw_nzb = load_real_nzb_fixture_bytes();
+        let raw_size_bytes = raw_nzb.len() as u64;
+        let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(2);
+        let validator = tokio::task::spawn_blocking(move || {
+            stream_validate_and_compress_nzb(rx, &partial_path)
+        });
+        let chunk_sizes = [1usize, 2, 5, 3, 8, 13, 21];
+        let mut offset = 0usize;
+        let mut chunk_index = 0usize;
+
+        while offset < raw_nzb.len() {
+            let chunk_size = chunk_sizes[chunk_index % chunk_sizes.len()];
+            let end = (offset + chunk_size).min(raw_nzb.len());
+            tx.send(raw_nzb[offset..end].to_vec())
+                .await
+                .expect("fixture stream receiver should stay alive");
+            offset = end;
+            chunk_index += 1;
+        }
+        drop(tx);
+
+        validator
+            .await
+            .expect("validator task should join successfully")?;
+        store
+            .finalize_pending_staged_nzb(pending, raw_size_bytes)
+            .await
+    }
 
     #[test]
     fn validate_nzb_xml_accepts_well_formed_nzb_root() {
@@ -670,5 +733,46 @@ mod tests {
         let error = validate_nzb_xml(&bytes).expect_err("oversized payload should fail");
 
         assert!(error.to_string().contains("payload exceeded"));
+    }
+
+    #[tokio::test]
+    async fn real_nzb_fixture_round_trips_through_streaming_staged_zstd_pipeline() {
+        let tempdir = TempDir::new().expect("tempdir");
+        let staged = materialize_real_staged_nzb_fixture(tempdir.path())
+            .await
+            .expect("real fixture should stage successfully");
+        let compressed = std::fs::read(&staged.compressed_path).expect("staged file should exist");
+        let decompressed = zstd::stream::decode_all(std::io::Cursor::new(compressed))
+            .expect("staged artifact should decode");
+
+        assert_eq!(decompressed, load_real_nzb_fixture_bytes());
+        assert!(
+            staged
+                .compressed_path
+                .extension()
+                .is_some_and(|ext| ext == "zst"),
+            "staged artifact should use .zst extension"
+        );
+        assert!(
+            staged
+                .compressed_path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with(".nzb.zst")),
+            "staged artifact should use the same .nzb.zst suffix as production"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "utility test for manual Weaver interoperability checks"]
+    async fn emit_real_nzb_fixture_for_manual_weaver_submit() {
+        let output_root = std::env::temp_dir().join(format!(
+            "scryer-manual-staged-nzb-{}",
+            scryer_domain::Id::new().0
+        ));
+        let staged = materialize_real_staged_nzb_fixture(&output_root)
+            .await
+            .expect("real fixture should stage successfully");
+
+        println!("{}", staged.compressed_path.display());
     }
 }

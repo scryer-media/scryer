@@ -150,8 +150,6 @@ impl AppUseCase {
             }
         }
 
-        let title_hint = extract_title_hint(&queries);
-
         // Auto mode: conserve API calls by using only the first (canonical) query variant
         let effective_queries: Vec<String> = match mode {
             SearchMode::Auto => queries.into_iter().take(1).collect(),
@@ -223,41 +221,6 @@ impl AppUseCase {
                         caller = caller_label,
                         error = %error,
                         "indexer search task panicked"
-                    );
-                }
-            }
-        }
-
-        // Filter out results whose title doesn't match any of the search queries
-        // or known aliases. This prevents RSS feeds (which return their entire
-        // recent feed) from polluting results with unrelated releases.
-        //
-        // Only apply for freetext searches — when searching by external ID
-        // (IMDB, TVDB, AniDB) we trust the indexer's categorization.
-        let is_freetext_search = imdb_id.is_none() && tvdb_id.is_none() && anidb_id.is_none();
-        if is_freetext_search && let Some(ref hint) = title_hint {
-            let hint_normalized = crate::app_usecase_rss::normalize_for_matching(hint);
-            let alias_hints: Vec<String> = tagged_aliases
-                .iter()
-                .map(|alias| crate::app_usecase_rss::normalize_for_matching(&alias.name))
-                .filter(|h| !h.is_empty())
-                .collect();
-            if !hint_normalized.is_empty() {
-                let before = raw_results.len();
-                raw_results.retain(|r| {
-                    let normalized = crate::app_usecase_rss::normalize_for_matching(&r.title);
-                    normalized.contains(&hint_normalized)
-                        || alias_hints.iter().any(|ah| normalized.contains(ah))
-                });
-                let filtered = before - raw_results.len();
-                if filtered > 0 {
-                    info!(
-                        before,
-                        after = raw_results.len(),
-                        filtered,
-                        title_hint = hint.as_str(),
-                        alias_count = alias_hints.len(),
-                        "filtered non-matching releases from search results"
                     );
                 }
             }
@@ -1317,37 +1280,6 @@ pub(crate) fn build_user_rule_input(
         title_tags,
         runtime_minutes,
     )
-}
-
-/// Extract a title name hint from search queries by stripping S##E## patterns.
-/// Returns None if no meaningful title text can be extracted.
-fn extract_title_hint(queries: &[String]) -> Option<String> {
-    for query in queries {
-        let trimmed = query.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        // Strip season/episode patterns: S01E05, S01, 1x05, etc.
-        let cleaned = trimmed
-            .split_whitespace()
-            .filter(|word| {
-                let w = word.to_ascii_lowercase();
-                // Skip pure season/episode tokens (S01E05, S01, 1x05, bare numbers)
-                if w.starts_with('s') && w[1..].chars().all(|c| c.is_ascii_digit() || c == 'e') {
-                    return false;
-                }
-                if w.contains('x') {
-                    return false;
-                }
-                !w.chars().all(|c| c.is_ascii_digit())
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
-        if !cleaned.is_empty() {
-            return Some(cleaned);
-        }
-    }
-    None
 }
 
 #[cfg(test)]

@@ -166,6 +166,7 @@ impl AppUseCase {
                     .update_password_hash(&found.id, self.hash_password(password)?)
                     .await?;
             }
+            self.refresh_cached_jwt_signing_key(&found).await?;
             return Ok(found);
         }
 
@@ -176,7 +177,8 @@ impl AppUseCase {
             entitlements: desired_entitlements,
         };
 
-        self.services.users.create(user.clone()).await?;
+        let user = self.services.users.create(user).await?;
+        self.cache_jwt_signing_key(&user).await?;
         Ok(user)
     }
 
@@ -230,6 +232,7 @@ impl AppUseCase {
         };
 
         let user = self.services.users.create(user).await?;
+        self.cache_jwt_signing_key(&user).await?;
         self.services
             .record_event(
                 Some(actor.id.clone()),
@@ -245,10 +248,13 @@ impl AppUseCase {
     /// Set a user's password without actor checks. Used only for first-run bootstrap.
     pub async fn bootstrap_user_password(&self, user_id: &str, password: &str) -> AppResult<User> {
         let password_hash = self.hash_password(password)?;
-        self.services
+        let user = self
+            .services
             .users
             .update_password_hash(user_id, password_hash)
-            .await
+            .await?;
+        self.refresh_cached_jwt_signing_key(&user).await?;
+        Ok(user)
     }
 
     pub async fn set_user_password(
@@ -292,6 +298,7 @@ impl AppUseCase {
             .users
             .update_password_hash(user_id, password_hash)
             .await?;
+        self.refresh_cached_jwt_signing_key(&user).await?;
 
         self.services
             .record_event(
@@ -337,6 +344,8 @@ impl AppUseCase {
             .users
             .update_entitlements(user_id, entitlements)
             .await?;
+        self.evict_cached_jwt_signing_key(user_id).await;
+        self.refresh_cached_jwt_signing_key(&user).await?;
 
         self.services
             .record_event(
@@ -365,6 +374,7 @@ impl AppUseCase {
         }
 
         self.services.users.delete(user_id).await?;
+        self.evict_cached_jwt_signing_key(user_id).await;
         self.services
             .record_event(
                 Some(actor.id.clone()),
