@@ -110,7 +110,7 @@ impl AppUseCase {
             }
         }
 
-        entitlements.sort_by_key(|entitlement| Self::entitlement_claim_string(entitlement));
+        entitlements.sort_by_key(Self::entitlement_claim_string);
         Ok(entitlements)
     }
 

@@ -2077,9 +2077,11 @@ mod tests {
             .await
             .expect("mixed primary outcomes should still aggregate cleanly");
 
-        let calls = calls.lock().expect("call log mutex");
-        assert_eq!(calls.len(), 2);
-        assert!(response.results.is_empty());
+        {
+            let calls = calls.lock().expect("call log mutex");
+            assert_eq!(calls.len(), 2);
+            assert!(response.results.is_empty());
+        }
         assert!(client.backoff_tracker.is_disabled("idx-1").await.is_none());
         let state = backoff_state(&client, "idx-1")
             .await
@@ -2122,10 +2124,12 @@ mod tests {
             .await
             .expect("all-failure primary outcomes should still aggregate cleanly");
 
-        let calls = calls.lock().expect("call log mutex");
-        assert_eq!(calls.len(), 2);
-        assert!(calls.iter().all(|call| call.ids.contains_key("anidb_id")));
-        assert!(response.results.is_empty());
+        {
+            let calls = calls.lock().expect("call log mutex");
+            assert_eq!(calls.len(), 2);
+            assert!(calls.iter().all(|call| call.ids.contains_key("anidb_id")));
+            assert!(response.results.is_empty());
+        }
         assert!(client.backoff_tracker.is_disabled("idx-1").await.is_some());
 
         let state = backoff_state(&client, "idx-1")
