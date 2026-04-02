@@ -709,6 +709,7 @@ impl AppUseCase {
             Ok(result) => {
                 let hydrated = self.apply_hydration_result(title, result).await;
                 if hydrated.metadata_fetched_at.is_some() {
+                    maybe_auto_scan_title_library_after_hydration(self, &hydrated).await;
                     self.emit_hydration_completed(&hydrated).await;
                 } else {
                     self.emit_hydration_failed(&hydrated, "metadata could not be persisted")
@@ -3085,6 +3086,52 @@ fn extract_tvdb_id(title: &scryer_domain::Title) -> Option<i64> {
         .and_then(|eid| eid.value.parse::<i64>().ok())
 }
 
+async fn maybe_auto_scan_title_library_after_hydration(
+    app: &AppUseCase,
+    title: &scryer_domain::Title,
+) {
+    let Some(handler) = app.facet_registry.get(&title.facet) else {
+        return;
+    };
+    if !handler.has_episodes() || title.metadata_fetched_at.is_none() {
+        return;
+    }
+
+    let Some(folder_path) = title
+        .folder_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    match tokio::fs::metadata(folder_path).await {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) | Err(_) => return,
+    }
+
+    let actor = match app.find_or_create_default_user().await {
+        Ok(actor) => actor,
+        Err(error) => {
+            warn!(
+                error = %error,
+                title_id = %title.id,
+                "failed to resolve default user for post-hydration title scan"
+            );
+            return;
+        }
+    };
+
+    if let Err(error) = app.scan_title_library(&actor, &title.id).await {
+        warn!(
+            error = %error,
+            title_id = %title.id,
+            folder_path = %folder_path,
+            "failed to auto-scan episodic title after hydration"
+        );
+    }
+}
+
 /// Spawns a background loop that hydrates titles whose `metadata_fetched_at`
 /// is NULL.
 ///
@@ -3193,6 +3240,8 @@ pub async fn start_background_hydration_loop(
                                 super::series_to_hydration_result(series.clone(), &language);
                             let hydrated = app.apply_hydration_result(title, result).await;
                             if hydrated.metadata_fetched_at.is_some() {
+                                maybe_auto_scan_title_library_after_hydration(&app, &hydrated)
+                                    .await;
                                 app.emit_hydration_completed(&hydrated).await;
                             }
                             sync_wanted_after_hydration(&app, &hydrated).await;

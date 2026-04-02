@@ -3431,6 +3431,410 @@ async fn library_series_scan_hydrates_without_creating_wanted_for_unmonitored_ti
 }
 
 #[tokio::test]
+async fn library_anime_scan_hydrates_and_relinks_files_from_discovered_folder_path() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+
+    let fixture = json!({
+        "data": {
+            "s0": {
+                "series": {
+                    "tvdb_id": 456789,
+                    "name": "Hydrated Anime Title",
+                    "sort_name": "Hydrated Anime Title",
+                    "slug": "hydrated-anime-title",
+                    "status": "Ended",
+                    "year": 2021,
+                    "first_aired": "2021-01-10",
+                    "overview": "An anime hydration fixture.",
+                    "network": "Tokyo MX",
+                    "runtime_minutes": 24,
+                    "poster_url": "https://artworks.thetvdb.com/banners/series/456789/posters/test.jpg",
+                    "country": "jpn",
+                    "genres": ["Animation"],
+                    "aliases": ["Hydrated Anime Alias"],
+                    "tagged_aliases": [],
+                    "artworks": [],
+                    "seasons": [
+                        {
+                            "tvdb_id": 1001001,
+                            "number": 1,
+                            "label": "Season 1",
+                            "episode_type": "default"
+                        }
+                    ],
+                    "episodes": [
+                        {
+                            "tvdb_id": 2001001,
+                            "episode_number": 1,
+                            "season_number": 1,
+                            "name": "Episode 1",
+                            "aired": "2021-01-10",
+                            "runtime_minutes": 24,
+                            "is_filler": false,
+                            "is_recap": false,
+                            "overview": "Episode 1 overview.",
+                            "absolute_number": "1"
+                        }
+                    ],
+                    "anime_mappings": [],
+                    "anime_movies": []
+                }
+            }
+        }
+    })
+    .to_string();
+    Mock::given(method("GET"))
+        .and(path("/graphql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(fixture.clone()))
+        .mount(&ctx.smg_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(fixture))
+        .mount(&ctx.smg_server)
+        .await;
+
+    let token = tokio_util::sync::CancellationToken::new();
+    let hydration_token = token.clone();
+    let hydration_app = ctx.app.clone();
+    tokio::spawn(async move {
+        scryer_application::start_background_hydration_loop(hydration_app, hydration_token).await;
+    });
+
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let show_dir = media_root.path().join("Anime Scan [SubsPlease]");
+    let season_dir = show_dir.join("Season 01");
+    std::fs::create_dir_all(&season_dir).expect("create season dir");
+    std::fs::write(
+        show_dir.join("tvshow.nfo"),
+        r#"<tvshow><title>Anime Scan</title><tvdbid>456789</tvdbid></tvshow>"#,
+    )
+    .expect("write tvshow.nfo");
+    let file_path = season_dir.join("Anime.Scan.S01E01.1080p.WEB-DL.mkv");
+    std::fs::write(&file_path, b"not-a-real-video").expect("write fake video");
+
+    let update = gql(
+        &ctx,
+        r#"
+        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
+          updateLibraryPaths(input: $input) {
+            moviePath
+            seriesPath
+            animePath
+          }
+        }
+        "#,
+        json!({
+          "input": {
+            "moviePath": "/tmp/movies-unused",
+            "seriesPath": "/tmp/series-unused",
+            "animePath": media_root.path().display().to_string()
+          }
+        }),
+    )
+    .await;
+    assert_no_errors(&update);
+
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let summary = ctx
+        .app
+        .scan_library(&admin, MediaFacet::Anime)
+        .await
+        .expect("scan anime library");
+    assert_eq!(summary.scanned, 1);
+    assert_eq!(summary.imported, 1);
+    assert_eq!(summary.skipped, 0);
+
+    let mut hydrated_title = None;
+    let mut linked_files = Vec::new();
+    for _ in 0..40 {
+        let titles = ctx
+            .db
+            .list(Some(MediaFacet::Anime), None)
+            .await
+            .expect("list anime titles");
+        assert_eq!(titles.len(), 1);
+        let files = ctx
+            .db
+            .list_media_files_for_title(&titles[0].id)
+            .await
+            .expect("list media files");
+        if titles[0].metadata_fetched_at.is_some() && !files.is_empty() {
+            hydrated_title = Some(titles[0].clone());
+            linked_files = files;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    token.cancel();
+
+    let hydrated_title = hydrated_title.expect("anime title should hydrate and relink files");
+    assert_eq!(hydrated_title.name, "Anime Scan");
+    assert!(hydrated_title.metadata_fetched_at.is_some());
+    assert_eq!(
+        hydrated_title.folder_path.as_deref(),
+        Some(show_dir.to_string_lossy().as_ref())
+    );
+
+    assert_eq!(linked_files.len(), 1);
+    assert_eq!(
+        linked_files[0].file_path,
+        file_path.to_string_lossy().to_string()
+    );
+    assert!(
+        linked_files[0].episode_id.is_some(),
+        "linked file should target a hydrated episode"
+    );
+    assert_eq!(linked_files[0].scan_status, "scan_failed");
+}
+
+#[tokio::test]
+async fn library_anime_scan_relinks_existing_hydrated_titles_from_discovered_folder_path() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+
+    let title = create_catalog_title(
+        &ctx,
+        "Existing Anime",
+        MediaFacet::Anime,
+        vec![ExternalId {
+            source: "tvdb".to_string(),
+            value: "567890".to_string(),
+        }],
+        vec![],
+        false,
+    )
+    .await;
+
+    let collection = Collection {
+        id: Id::new().0,
+        title_id: title.id.clone(),
+        collection_type: scryer_domain::CollectionType::Season,
+        collection_index: "1".to_string(),
+        label: Some("Season 1".to_string()),
+        ordered_path: None,
+        narrative_order: None,
+        first_episode_number: Some("1".to_string()),
+        last_episode_number: Some("1".to_string()),
+        interstitial_movie: None,
+        specials_movies: vec![],
+        interstitial_season_episode: None,
+        monitored: false,
+        created_at: chrono::Utc::now(),
+    };
+    let collection = ctx
+        .db
+        .create_collection(collection)
+        .await
+        .expect("create collection");
+    let episode = create_series_scan_episode(&ctx, &title, &collection, "1", "1", "S01E01").await;
+
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let show_dir = media_root.path().join("Existing Anime [BD]");
+    let season_dir = show_dir.join("Season 01");
+    std::fs::create_dir_all(&season_dir).expect("create season dir");
+    std::fs::write(
+        show_dir.join("tvshow.nfo"),
+        r#"<tvshow><title>Existing Anime</title><tvdbid>567890</tvdbid></tvshow>"#,
+    )
+    .expect("write tvshow.nfo");
+    let file_path = season_dir.join("Existing.Anime.S01E01.1080p.WEB-DL.mkv");
+    std::fs::write(&file_path, b"not-a-real-video").expect("write fake video");
+
+    let update = gql(
+        &ctx,
+        r#"
+        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
+          updateLibraryPaths(input: $input) {
+            moviePath
+            seriesPath
+            animePath
+          }
+        }
+        "#,
+        json!({
+          "input": {
+            "moviePath": "/tmp/movies-unused",
+            "seriesPath": "/tmp/series-unused",
+            "animePath": media_root.path().display().to_string()
+          }
+        }),
+    )
+    .await;
+    assert_no_errors(&update);
+
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let summary = ctx
+        .app
+        .scan_library(&admin, MediaFacet::Anime)
+        .await
+        .expect("scan anime library");
+    assert_eq!(summary.scanned, 1);
+    assert_eq!(summary.imported, 0);
+    assert_eq!(summary.skipped, 1);
+
+    let mut linked_files = Vec::new();
+    for _ in 0..10 {
+        linked_files = ctx
+            .db
+            .list_media_files_for_title(&title.id)
+            .await
+            .expect("list media files");
+        if !linked_files.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+
+    let refreshed_title = ctx
+        .db
+        .get_by_id(&title.id)
+        .await
+        .expect("load title")
+        .expect("title exists");
+    assert_eq!(refreshed_title.name, "Existing Anime");
+    assert_eq!(
+        refreshed_title.folder_path.as_deref(),
+        Some(show_dir.to_string_lossy().as_ref())
+    );
+
+    assert_eq!(linked_files.len(), 1);
+    assert_eq!(
+        linked_files[0].file_path,
+        file_path.to_string_lossy().to_string()
+    );
+    assert_eq!(
+        linked_files[0].episode_id.as_deref(),
+        Some(episode.id.as_str())
+    );
+    assert_eq!(linked_files[0].scan_status, "scan_failed");
+}
+
+#[tokio::test]
+async fn library_series_scan_relinks_existing_hydrated_titles_from_discovered_folder_path() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+
+    let title = create_catalog_title(
+        &ctx,
+        "Existing Series",
+        MediaFacet::Series,
+        vec![ExternalId {
+            source: "tvdb".to_string(),
+            value: "345678".to_string(),
+        }],
+        vec![],
+        false,
+    )
+    .await;
+
+    let collection = Collection {
+        id: Id::new().0,
+        title_id: title.id.clone(),
+        collection_type: scryer_domain::CollectionType::Season,
+        collection_index: "1".to_string(),
+        label: Some("Season 1".to_string()),
+        ordered_path: None,
+        narrative_order: None,
+        first_episode_number: Some("1".to_string()),
+        last_episode_number: Some("1".to_string()),
+        interstitial_movie: None,
+        specials_movies: vec![],
+        interstitial_season_episode: None,
+        monitored: false,
+        created_at: chrono::Utc::now(),
+    };
+    let collection = ctx
+        .db
+        .create_collection(collection)
+        .await
+        .expect("create collection");
+    let episode = create_series_scan_episode(&ctx, &title, &collection, "1", "1", "S01E01").await;
+
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let show_dir = media_root.path().join("Existing Series [WEB-DL]");
+    let season_dir = show_dir.join("Season 01");
+    std::fs::create_dir_all(&season_dir).expect("create season dir");
+    std::fs::write(
+        show_dir.join("tvshow.nfo"),
+        r#"<tvshow><title>Existing Series</title><tvdbid>345678</tvdbid></tvshow>"#,
+    )
+    .expect("write tvshow.nfo");
+    let file_path = season_dir.join("Existing.Series.S01E01.1080p.WEB-DL.mkv");
+    std::fs::write(&file_path, b"not-a-real-video").expect("write fake video");
+
+    let update = gql(
+        &ctx,
+        r#"
+        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
+          updateLibraryPaths(input: $input) {
+            moviePath
+            seriesPath
+            animePath
+          }
+        }
+        "#,
+        json!({
+          "input": {
+            "moviePath": "/tmp/movies-unused",
+            "seriesPath": media_root.path().display().to_string(),
+            "animePath": "/tmp/anime-unused"
+          }
+        }),
+    )
+    .await;
+    assert_no_errors(&update);
+
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let summary = ctx
+        .app
+        .scan_library(&admin, MediaFacet::Series)
+        .await
+        .expect("scan series library");
+    assert_eq!(summary.scanned, 1);
+    assert_eq!(summary.imported, 0);
+    assert_eq!(summary.skipped, 1);
+
+    let mut linked_files = Vec::new();
+    for _ in 0..10 {
+        linked_files = ctx
+            .db
+            .list_media_files_for_title(&title.id)
+            .await
+            .expect("list media files");
+        if !linked_files.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+
+    let refreshed_title = ctx
+        .db
+        .get_by_id(&title.id)
+        .await
+        .expect("load title")
+        .expect("title exists");
+    assert_eq!(refreshed_title.name, "Existing Series");
+    assert_eq!(
+        refreshed_title.folder_path.as_deref(),
+        Some(show_dir.to_string_lossy().as_ref())
+    );
+
+    assert_eq!(linked_files.len(), 1);
+    assert_eq!(
+        linked_files[0].file_path,
+        file_path.to_string_lossy().to_string()
+    );
+    assert_eq!(
+        linked_files[0].episode_id.as_deref(),
+        Some(episode.id.as_str())
+    );
+    assert_eq!(linked_files[0].scan_status, "scan_failed");
+}
+
+#[tokio::test]
 async fn library_series_scan_creates_unmonitored_titles() {
     let ctx = TestContext::new().await;
     seed_typed_settings_definitions(&ctx).await;
@@ -3485,6 +3889,93 @@ async fn library_series_scan_creates_unmonitored_titles() {
     assert_eq!(titles.len(), 1);
     assert_eq!(titles[0].name, "Bluey");
     assert!(!titles[0].monitored);
+}
+
+#[tokio::test]
+async fn library_movie_scan_refreshes_existing_title_from_disk_without_renaming() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+
+    let title = create_catalog_title(
+        &ctx,
+        "Existing Movie",
+        MediaFacet::Movie,
+        vec![ExternalId {
+            source: "tvdb".to_string(),
+            value: "123456".to_string(),
+        }],
+        vec![],
+        false,
+    )
+    .await;
+
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let movie_dir = media_root.path().join("Existing Movie [2160p]");
+    std::fs::create_dir_all(&movie_dir).expect("create movie dir");
+    let movie_path = movie_dir.join("Existing.Movie.2024.2160p.WEB-DL.mkv");
+    let movie_file = std::fs::File::create(&movie_path).expect("create movie file");
+    movie_file
+        .set_len(60 * 1024 * 1024)
+        .expect("set movie file size");
+    std::fs::write(
+        movie_dir.join("movie.nfo"),
+        r#"<movie><title>Existing Movie</title><tvdbid>123456</tvdbid><year>2024</year></movie>"#,
+    )
+    .expect("write movie.nfo");
+
+    let update = gql(
+        &ctx,
+        r#"
+        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
+          updateLibraryPaths(input: $input) {
+            moviePath
+            seriesPath
+            animePath
+          }
+        }
+        "#,
+        json!({
+          "input": {
+            "moviePath": media_root.path().display().to_string(),
+            "seriesPath": "/tmp/series-unused",
+            "animePath": "/tmp/anime-unused"
+          }
+        }),
+    )
+    .await;
+    assert_no_errors(&update);
+
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let summary = ctx
+        .app
+        .scan_library(&admin, MediaFacet::Movie)
+        .await
+        .expect("scan movie library");
+
+    assert_eq!(summary.scanned, 1);
+    assert_eq!(summary.matched, 1);
+    assert_eq!(summary.imported, 1);
+    assert_eq!(summary.skipped, 0);
+    assert_eq!(summary.unmatched, 0);
+
+    let refreshed_title = ctx
+        .db
+        .get_by_id(&title.id)
+        .await
+        .expect("load title")
+        .expect("title exists");
+    assert_eq!(refreshed_title.name, "Existing Movie");
+
+    let collections = ctx
+        .db
+        .list_collections_for_title(&title.id)
+        .await
+        .expect("list collections");
+    assert_eq!(collections.len(), 1);
+    assert_eq!(
+        collections[0].ordered_path.as_deref(),
+        Some(movie_path.to_string_lossy().as_ref())
+    );
 }
 
 #[tokio::test]

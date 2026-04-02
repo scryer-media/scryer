@@ -1248,12 +1248,12 @@ const METADATA_SEARCH_FIELDS = `
     runtimeMinutes
     sortTitle`;
 
-export const searchMetadataQuery = `query SearchMetadata($query: String!, $type: String!, $limit: Int, $language: String) {
+export const searchMetadataQuery = `query SearchMetadata($query: String!, $type: String!, $limit: Int, $language: String! = "eng") {
   searchMetadata(query: $query, type: $type, limit: $limit, language: $language) {${METADATA_SEARCH_FIELDS}
   }
 }`;
 
-export const searchMetadataMultiQuery = `query SearchMetadataMulti($query: String!, $limit: Int, $language: String) {
+export const searchMetadataMultiQuery = `query SearchMetadataMulti($query: String!, $limit: Int, $language: String! = "eng") {
   searchMetadataMulti(query: $query, limit: $limit, language: $language) {
     movies {${METADATA_SEARCH_FIELDS}
     }
@@ -1264,7 +1264,7 @@ export const searchMetadataMultiQuery = `query SearchMetadataMulti($query: Strin
   }
 }`;
 
-export const metadataMovieQuery = `query MetadataMovie($tvdbId: Int!, $language: String) {
+export const metadataMovieQuery = `query MetadataMovie($tvdbId: Int!, $language: String! = "eng") {
   metadataMovie(tvdbId: $tvdbId, language: $language) {
     tvdbId
     name
@@ -1283,7 +1283,7 @@ export const metadataMovieQuery = `query MetadataMovie($tvdbId: Int!, $language:
   }
 }`;
 
-export const metadataSeriesQuery = `query MetadataSeries($id: String!, $includeEpisodes: Boolean, $language: String) {
+export const metadataSeriesQuery = `query MetadataSeries($id: String!, $includeEpisodes: Boolean, $language: String! = "eng") {
   metadataSeries(id: $id, includeEpisodes: $includeEpisodes, language: $language) {
     tvdbId
     name

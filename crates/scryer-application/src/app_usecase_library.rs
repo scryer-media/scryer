@@ -213,6 +213,7 @@ struct MovieLibraryScanCandidate {
 
 #[derive(Clone, Debug)]
 struct SeriesLibraryScanCandidate {
+    folder_path: PathBuf,
     folder_name: Option<String>,
     nfo_meta: Option<crate::nfo::NfoMetadata>,
     query: String,
@@ -416,6 +417,7 @@ async fn preload_series_library_scan_candidates(
                 return Ok::<_, AppError>((
                     index,
                     SeriesLibraryScanCandidate {
+                        folder_path: folder,
                         folder_name: None,
                         nfo_meta: None,
                         query: String::new(),
@@ -463,6 +465,7 @@ async fn preload_series_library_scan_candidates(
             Ok::<_, AppError>((
                 index,
                 SeriesLibraryScanCandidate {
+                    folder_path: folder,
                     folder_name,
                     nfo_meta,
                     query,
@@ -486,6 +489,66 @@ async fn preload_series_library_scan_candidates(
     }
 
     Ok((results.into_iter().flatten().collect(), metadata_lookups))
+}
+
+async fn ensure_title_folder_path_if_missing(
+    app: &AppUseCase,
+    title: &mut Title,
+    folder_path: &Path,
+) {
+    let folder_path = folder_path.to_string_lossy().trim().to_string();
+    if folder_path.is_empty()
+        || title
+            .folder_path
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+    {
+        return;
+    }
+
+    match app
+        .services
+        .titles
+        .set_folder_path(&title.id, folder_path.as_str())
+        .await
+    {
+        Ok(()) => title.folder_path = Some(folder_path),
+        Err(error) => warn!(
+            error = %error,
+            title_id = %title.id,
+            folder_path = %folder_path,
+            "failed to persist discovered title folder path during library scan"
+        ),
+    }
+}
+
+async fn should_relink_existing_episodic_title(
+    app: &AppUseCase,
+    title: &Title,
+    episode_presence_cache: &mut HashMap<String, bool>,
+) -> bool {
+    if title.metadata_fetched_at.is_some() {
+        return true;
+    }
+
+    if let Some(has_episodes) = episode_presence_cache.get(&title.id) {
+        return *has_episodes;
+    }
+
+    let has_episodes = match app.services.shows.list_episodes_for_title(&title.id).await {
+        Ok(episodes) => !episodes.is_empty(),
+        Err(error) => {
+            warn!(
+                error = %error,
+                title_id = %title.id,
+                "failed to inspect episode records during library scan relink eligibility check"
+            );
+            false
+        }
+    };
+
+    episode_presence_cache.insert(title.id.clone(), has_episodes);
+    has_episodes
 }
 
 fn file_source_signature_from_metadata(
@@ -1424,6 +1487,8 @@ impl AppUseCase {
 
         let mut summary = LibraryScanSummary::default();
         let mut metadata_lookups = 0usize;
+        let mut titles_to_relink = HashMap::new();
+        let mut episode_presence_cache = HashMap::new();
 
         for folder_batch in folders.chunks(LIBRARY_SCAN_BATCH_SIZE) {
             let (candidates, batch_lookups) = preload_series_library_scan_candidates(
@@ -1446,7 +1511,19 @@ impl AppUseCase {
                 let nfo_meta = candidate.nfo_meta.as_ref();
 
                 if let Some(tvdb_id) = nfo_meta.and_then(|m| m.tvdb_id.as_deref()) {
-                    if existing_titles_by_tvdb_id.contains_key(tvdb_id) {
+                    if let Some(&index) = existing_titles_by_tvdb_id.get(tvdb_id) {
+                        let existing = &mut existing_titles[index];
+                        ensure_title_folder_path_if_missing(self, existing, &candidate.folder_path)
+                            .await;
+                        if should_relink_existing_episodic_title(
+                            self,
+                            existing,
+                            &mut episode_presence_cache,
+                        )
+                        .await
+                        {
+                            titles_to_relink.insert(existing.id.clone(), existing.clone());
+                        }
                         summary.skipped += 1;
                         continue;
                     }
@@ -1455,7 +1532,19 @@ impl AppUseCase {
                         .and_then(|m| m.title.clone())
                         .unwrap_or_else(|| folder_name.clone());
                     let name_key = normalize_title_key(&name);
-                    if existing_titles_by_name.contains_key(&name_key) {
+                    if let Some(&index) = existing_titles_by_name.get(&name_key) {
+                        let existing = &mut existing_titles[index];
+                        ensure_title_folder_path_if_missing(self, existing, &candidate.folder_path)
+                            .await;
+                        if should_relink_existing_episodic_title(
+                            self,
+                            existing,
+                            &mut episode_presence_cache,
+                        )
+                        .await
+                        {
+                            titles_to_relink.insert(existing.id.clone(), existing.clone());
+                        }
                         summary.skipped += 1;
                         continue;
                     }
@@ -1488,7 +1577,13 @@ impl AppUseCase {
                     };
 
                     match self.add_title(actor, new_title).await {
-                        Ok(created) => {
+                        Ok(mut created) => {
+                            ensure_title_folder_path_if_missing(
+                                self,
+                                &mut created,
+                                &candidate.folder_path,
+                            )
+                            .await;
                             let index = existing_titles.len();
                             existing_titles.push(created.clone());
                             index_series_title(
@@ -1520,7 +1615,19 @@ impl AppUseCase {
                 }
 
                 let name_key = normalize_title_key(&query);
-                if existing_titles_by_name.contains_key(&name_key) {
+                if let Some(&index) = existing_titles_by_name.get(&name_key) {
+                    let existing = &mut existing_titles[index];
+                    ensure_title_folder_path_if_missing(self, existing, &candidate.folder_path)
+                        .await;
+                    if should_relink_existing_episodic_title(
+                        self,
+                        existing,
+                        &mut episode_presence_cache,
+                    )
+                    .await
+                    {
+                        titles_to_relink.insert(existing.id.clone(), existing.clone());
+                    }
                     summary.skipped += 1;
                     continue;
                 }
@@ -1546,7 +1653,19 @@ impl AppUseCase {
                     continue;
                 };
 
-                if existing_titles_by_tvdb_id.contains_key(&selected.tvdb_id) {
+                if let Some(&index) = existing_titles_by_tvdb_id.get(&selected.tvdb_id) {
+                    let existing = &mut existing_titles[index];
+                    ensure_title_folder_path_if_missing(self, existing, &candidate.folder_path)
+                        .await;
+                    if should_relink_existing_episodic_title(
+                        self,
+                        existing,
+                        &mut episode_presence_cache,
+                    )
+                    .await
+                    {
+                        titles_to_relink.insert(existing.id.clone(), existing.clone());
+                    }
                     summary.skipped += 1;
                     continue;
                 }
@@ -1565,7 +1684,13 @@ impl AppUseCase {
                 };
 
                 match self.add_title(actor, new_title).await {
-                    Ok(created) => {
+                    Ok(mut created) => {
+                        ensure_title_folder_path_if_missing(
+                            self,
+                            &mut created,
+                            &candidate.folder_path,
+                        )
+                        .await;
                         let index = existing_titles.len();
                         existing_titles.push(created.clone());
                         index_series_title(
@@ -1586,6 +1711,22 @@ impl AppUseCase {
                         summary.unmatched += 1;
                     }
                 }
+            }
+        }
+
+        // Keep the updated in-memory Title snapshot so the relink pass sees the
+        // discovered folder_path without depending on an immediate re-fetch.
+        let mut titles_to_relink = titles_to_relink.into_values().collect::<Vec<_>>();
+        titles_to_relink.sort_by(|left, right| left.id.cmp(&right.id));
+        for title in titles_to_relink {
+            let title_id = title.id.clone();
+            if let Err(error) = self.scan_title_library_for_title(actor, title).await {
+                warn!(
+                    error = %error,
+                    title_id = %title_id,
+                    facet = facet.as_str(),
+                    "failed to relink existing episodic title during library scan"
+                );
             }
         }
 
@@ -1612,14 +1753,23 @@ impl AppUseCase {
         title_id: &str,
     ) -> AppResult<LibraryScanSummary> {
         require(actor, &Entitlement::ManageTitle)?;
-        let started_at = Instant::now();
-
         let title = self
             .services
             .titles
             .get_by_id(title_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("title {}", title_id)))?;
+
+        self.scan_title_library_for_title(actor, title).await
+    }
+
+    pub(crate) async fn scan_title_library_for_title(
+        &self,
+        actor: &User,
+        title: Title,
+    ) -> AppResult<LibraryScanSummary> {
+        require(actor, &Entitlement::ManageTitle)?;
+        let started_at = Instant::now();
 
         let handler = self.facet_registry.get(&title.facet).ok_or_else(|| {
             AppError::Validation("library scan is not supported for this facet".into())
@@ -1631,7 +1781,13 @@ impl AppUseCase {
         }
 
         let (media_root, _) = crate::app_usecase_import::resolve_import_paths(self, &title).await?;
-        let title_dir = PathBuf::from(&media_root).join(&title.name);
+        let title_dir = title
+            .folder_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(&media_root).join(&title.name));
         let title_dir_str = title_dir.to_string_lossy().to_string();
 
         // If the title directory was deleted, recreate it and treat as empty.
