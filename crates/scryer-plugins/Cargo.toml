@@ -1,6 +1,6 @@
 [package]
 name = "scryer-plugins"
-version = "0.10.3"
+version = "0.10.4"
 edition.workspace = true
 
 [dependencies]
