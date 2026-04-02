@@ -495,39 +495,41 @@ fn file_source_signature_from_metadata(
     {
         use std::os::windows::fs::MetadataExt;
 
-        return Some(FileSourceSignature {
+        Some(FileSourceSignature {
             scheme: "windows_last_write_100ns_v1".to_string(),
             value: metadata.last_write_time().to_string(),
-        });
+        })
     }
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
 
-        return Some(FileSourceSignature {
+        Some(FileSourceSignature {
             scheme: "unix_mtime_nsec_v1".to_string(),
             value: format!("{}:{}", metadata.mtime(), metadata.mtime_nsec()),
-        });
+        })
     }
 
-    #[allow(unreachable_code)]
-    metadata
-        .modified()
-        .ok()
-        .and_then(|modified| match modified.duration_since(UNIX_EPOCH) {
-            Ok(duration) => Some(FileSourceSignature {
-                scheme: "system_time_nsec_v1".to_string(),
-                value: format!("{}:{}", duration.as_secs(), duration.subsec_nanos()),
-            }),
-            Err(error) => {
-                let duration = error.duration();
-                Some(FileSourceSignature {
+    #[cfg(not(any(unix, windows)))]
+    {
+        metadata
+            .modified()
+            .ok()
+            .and_then(|modified| match modified.duration_since(UNIX_EPOCH) {
+                Ok(duration) => Some(FileSourceSignature {
                     scheme: "system_time_nsec_v1".to_string(),
-                    value: format!("-{}:{}", duration.as_secs(), duration.subsec_nanos()),
-                })
-            }
-        })
+                    value: format!("{}:{}", duration.as_secs(), duration.subsec_nanos()),
+                }),
+                Err(error) => {
+                    let duration = error.duration();
+                    Some(FileSourceSignature {
+                        scheme: "system_time_nsec_v1".to_string(),
+                        value: format!("-{}:{}", duration.as_secs(), duration.subsec_nanos()),
+                    })
+                }
+            })
+    }
 }
 
 fn title_media_file_matches_snapshot(
@@ -1934,7 +1936,7 @@ impl AppUseCase {
                             if let Err(error) = self
                                 .services
                                 .media_files
-                                .update_media_file_analysis(&file_id, analysis)
+                                .update_media_file_analysis(&file_id, *analysis)
                                 .await
                             {
                                 warn!(

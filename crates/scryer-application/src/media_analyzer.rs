@@ -13,9 +13,9 @@ impl MediaAnalyzer for NativeMediaAnalyzer {
             nice_thread();
             match scryer_mediainfo::analyze_file(&path) {
                 Ok(analysis) if scryer_mediainfo::is_valid_video(&analysis) => {
-                    Ok(MediaAnalysisOutcome::Valid(
+                    Ok(MediaAnalysisOutcome::Valid(Box::new(
                         crate::post_download_gate::build_media_file_analysis(&analysis),
-                    ))
+                    )))
                 }
                 Ok(_) => Ok(MediaAnalysisOutcome::Invalid(
                     "file is not a valid video".to_string(),

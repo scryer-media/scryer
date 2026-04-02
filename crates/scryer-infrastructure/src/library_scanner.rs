@@ -215,10 +215,10 @@ async fn walk_scan_batches(
                 nfo_path,
             });
 
-            if batch.len() >= batch_size {
-                if sender.send(Ok(std::mem::take(&mut batch))).await.is_err() {
-                    return Ok(());
-                }
+            if batch.len() >= batch_size
+                && sender.send(Ok(std::mem::take(&mut batch))).await.is_err()
+            {
+                return Ok(());
             }
         }
     }

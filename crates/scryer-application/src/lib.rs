@@ -1057,7 +1057,7 @@ pub struct MediaFileAnalysis {
 
 #[derive(Clone, Debug)]
 pub enum MediaAnalysisOutcome {
-    Valid(MediaFileAnalysis),
+    Valid(Box<MediaFileAnalysis>),
     Invalid(String),
 }
 
