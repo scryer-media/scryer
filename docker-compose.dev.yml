@@ -55,6 +55,7 @@ services:
       SCRYER_METRICS: "true"
       SCRYER_WEB_UI_URL: http://nodejs:3000
       SCRYER_AUTH_ENABLED: "false"
+      CARGO_TARGET_DIR: /cargo-target
       SCRYER_MOVIES_PATH: /media/movies
       SCRYER_SERIES_PATH: /media/series
       SCRYER_SMG_REGISTRATION_SECRET: ${SCRYER_SMG_REGISTRATION_SECRET}
@@ -67,7 +68,6 @@ services:
       '
     volumes:
       - .:/workspace
-      - scryer-rust-target:/workspace/target
       - scryer-cargo-registry:/usr/local/cargo/registry
       - scryer-cargo-git:/usr/local/cargo/git
       - ./tmp/scryer-config:/config
@@ -94,12 +94,24 @@ services:
         set -eu
 
         lockfile="package-lock.json"
-        deps_stamp="node_modules/.deps-lock-sha"
-        current_hash="$$(sha256sum "$$lockfile" | cut -d" " -f1)"
+        deps_stamp="node_modules/.deps-runtime-stamp"
+        lock_hash="$$(sha256sum "$$lockfile" | cut -d" " -f1)"
+        runtime_key="$$(node -e '"'"'const report = process.report?.getReport?.(); const libc = process.platform === "linux" ? (report?.header?.glibcVersionRuntime ? "gnu" : "musl") : "native"; process.stdout.write([process.version, process.platform, process.arch, libc].join(":"));'"'"')"
+        expected_stamp="$$lock_hash:$$runtime_key"
+        rolldown_check="import(\"rolldown\").then(() => process.exit(0)).catch(() => process.exit(1))"
+        needs_install=0
 
-        if [ ! -f "$$deps_stamp" ] || [ "$$current_hash" != "$$(cat "$$deps_stamp" 2>/dev/null || true)" ]; then
+        if [ ! -f "$$deps_stamp" ] || [ "$$expected_stamp" != "$$(cat "$$deps_stamp" 2>/dev/null || true)" ]; then
+          needs_install=1
+        elif ! node -e "$$rolldown_check"; then
+          echo "Detected broken native frontend dependency install; rebuilding node_modules..."
+          needs_install=1
+        fi
+
+        if [ "$$needs_install" = "1" ]; then
+          find node_modules -mindepth 1 -maxdepth 1 -exec rm -rf {} +
           npm ci --prefer-offline --no-audit --no-fund
-          echo "$$current_hash" > "$$deps_stamp"
+          echo "$$expected_stamp" > "$$deps_stamp"
         fi
 
         npm run dev
@@ -169,7 +181,6 @@ networks:
 
 volumes:
   scryer-node_modules:
-  scryer-rust-target:
   scryer-cargo-registry:
   scryer-cargo-git:
   scryer-prometheus-data:

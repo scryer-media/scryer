@@ -63,6 +63,9 @@ This brings up:
 - Vite dev server for the web UI
 - Nginx reverse proxy combining both on port 3000
 
+`./scripts/stack-up.sh` recreates the Rust service container each time, so local testing
+starts from a fresh Linux build tree by default.
+
 To stop:
 
 ```bash

@@ -12,19 +12,134 @@ fn admin() -> User {
     User::new_admin("admin")
 }
 
-fn load_plugin_dist(filename: &str) -> Vec<u8> {
-    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root = manifest_dir
+struct RealPluginFixture {
+    plugin_id: &'static str,
+    name: &'static str,
+    description: &'static str,
+    version: &'static str,
+    plugin_type: &'static str,
+    provider_type: &'static str,
+    request_path: &'static str,
+    wasm_path: std::path::PathBuf,
+}
+
+fn repo_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|path| path.parent())
-        .and_then(|path| path.parent())
-        .expect("workspace root");
-    let wasm_path = workspace_root
+        .expect("repo root")
+        .to_path_buf()
+}
+
+fn load_wasm_fixture(path: &std::path::Path) -> Vec<u8> {
+    std::fs::read(path).unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()))
+}
+
+fn bundled_test_indexer_fixture() -> RealPluginFixture {
+    RealPluginFixture {
+        plugin_id: "test-indexer",
+        name: "Test",
+        description: "A test plugin",
+        version: "0.1.0",
+        plugin_type: "indexer",
+        provider_type: "test",
+        request_path: "/fixtures/test-indexer/plugin.wasm",
+        wasm_path: repo_root()
+            .join("crates")
+            .join("scryer-plugins")
+            .join("fixtures")
+            .join("test-indexer")
+            .join("plugin.wasm"),
+    }
+}
+
+fn torrent_rss_dist_fixture() -> Option<RealPluginFixture> {
+    let wasm_path = repo_root()
+        .parent()
+        .expect("workspace root")
         .join("scryer-plugins")
         .join("dist")
-        .join(filename);
-    std::fs::read(&wasm_path)
-        .unwrap_or_else(|error| panic!("failed to read {}: {error}", wasm_path.display()))
+        .join("torrent_rss_indexer.wasm");
+    if !wasm_path.exists() {
+        return None;
+    }
+
+    Some(RealPluginFixture {
+        plugin_id: "torrent-rss",
+        name: "Torrent RSS Feed Indexer",
+        description: "Generic torrent RSS indexer",
+        version: "0.1.3",
+        plugin_type: "torrent_indexer",
+        provider_type: "torrent_rss",
+        request_path: "/dist/torrent_rss_indexer.wasm",
+        wasm_path,
+    })
+}
+
+async fn assert_real_registry_plugin_install_exposes_provider_type(fixture: &RealPluginFixture) {
+    let ctx = TestContext::new().await;
+    ctx.app.seed_builtin_plugins().await.unwrap();
+
+    let wasm_bytes = load_wasm_fixture(&fixture.wasm_path);
+    Mock::given(method("GET"))
+        .and(path(fixture.request_path))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/wasm")
+                .set_body_bytes(wasm_bytes),
+        )
+        .mount(&ctx.nzbgeek_server)
+        .await;
+
+    let registry_json = serde_json::json!({
+        "schema_version": 1,
+        "plugins": [
+            {
+                "id": fixture.plugin_id,
+                "name": fixture.name,
+                "description": fixture.description,
+                "plugin_type": fixture.plugin_type,
+                "provider_type": fixture.provider_type,
+                "version": fixture.version,
+                "official": true,
+                "builtin": false,
+                "wasm_url": format!("{}{}", ctx.nzbgeek_server.uri(), fixture.request_path),
+            }
+        ]
+    })
+    .to_string();
+    ctx.db.store_registry_cache(&registry_json).await.unwrap();
+
+    let installation = ctx
+        .app
+        .install_plugin(&admin(), fixture.plugin_id)
+        .await
+        .unwrap();
+    assert_eq!(installation.plugin_id, fixture.plugin_id);
+    assert_eq!(installation.provider_type, fixture.provider_type);
+    assert_eq!(installation.plugin_type, fixture.plugin_type);
+
+    let provider_types = ctx
+        .app
+        .services
+        .plugin_provider
+        .as_ref()
+        .unwrap()
+        .available_provider_types();
+    assert!(
+        provider_types.contains(&fixture.provider_type.to_string()),
+        "{} should be available after install, got {provider_types:?}",
+        fixture.provider_type
+    );
+
+    let plugins = ctx.app.list_available_plugins(&admin()).await.unwrap();
+    let installed_plugin = plugins
+        .iter()
+        .find(|plugin| plugin.id == fixture.plugin_id)
+        .expect("installed plugin should be listed");
+    assert!(installed_plugin.is_installed);
+    assert!(installed_plugin.is_enabled);
+    assert_eq!(installed_plugin.plugin_type, fixture.plugin_type);
 }
 
 // ── seed_builtin_plugins ─────────────────────────────────────────────────────
@@ -121,70 +236,21 @@ async fn list_available_with_builtins_and_registry() {
 }
 
 #[tokio::test]
-#[ignore = "requires scryer-plugins/dist WASM artifacts (local only)"]
-async fn install_real_torrent_rss_plugin_exposes_provider_type() {
-    let ctx = TestContext::new().await;
-    ctx.app.seed_builtin_plugins().await.unwrap();
-
-    let wasm_bytes = load_plugin_dist("torrent_rss_indexer.wasm");
-    Mock::given(method("GET"))
-        .and(path("/dist/torrent_rss_indexer.wasm"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "application/wasm")
-                .set_body_bytes(wasm_bytes),
-        )
-        .mount(&ctx.nzbgeek_server)
+async fn install_repo_local_plugin_fixture_exposes_provider_type() {
+    assert_real_registry_plugin_install_exposes_provider_type(&bundled_test_indexer_fixture())
         .await;
+}
 
-    let registry_json = serde_json::json!({
-        "schema_version": 1,
-        "plugins": [
-            {
-                "id": "torrent-rss",
-                "name": "Torrent RSS Feed Indexer",
-                "description": "Generic torrent RSS indexer",
-                "plugin_type": "torrent_indexer",
-                "provider_type": "torrent_rss",
-                "version": "0.1.3",
-                "official": true,
-                "builtin": false,
-                "wasm_url": format!("{}/dist/torrent_rss_indexer.wasm", ctx.nzbgeek_server.uri()),
-            }
-        ]
-    })
-    .to_string();
-    ctx.db.store_registry_cache(&registry_json).await.unwrap();
+#[tokio::test]
+async fn install_real_torrent_rss_plugin_exposes_provider_type() {
+    let Some(fixture) = torrent_rss_dist_fixture() else {
+        eprintln!(
+            "skipping torrent RSS install regression: sibling scryer-plugins dist artifact is unavailable"
+        );
+        return;
+    };
 
-    let installation = ctx
-        .app
-        .install_plugin(&admin(), "torrent-rss")
-        .await
-        .unwrap();
-    assert_eq!(installation.plugin_id, "torrent-rss");
-    assert_eq!(installation.provider_type, "torrent_rss");
-    assert_eq!(installation.plugin_type, "torrent_indexer");
-
-    let provider_types = ctx
-        .app
-        .services
-        .plugin_provider
-        .as_ref()
-        .unwrap()
-        .available_provider_types();
-    assert!(
-        provider_types.contains(&"torrent_rss".to_string()),
-        "torrent_rss should be available after install, got {provider_types:?}"
-    );
-
-    let plugins = ctx.app.list_available_plugins(&admin()).await.unwrap();
-    let torrent_rss = plugins
-        .iter()
-        .find(|plugin| plugin.id == "torrent-rss")
-        .expect("torrent-rss plugin should be listed");
-    assert!(torrent_rss.is_installed);
-    assert!(torrent_rss.is_enabled);
-    assert_eq!(torrent_rss.plugin_type, "torrent_indexer");
+    assert_real_registry_plugin_install_exposes_provider_type(&fixture).await;
 }
 
 // ── toggle_plugin ────────────────────────────────────────────────────────────

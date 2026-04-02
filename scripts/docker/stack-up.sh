@@ -41,6 +41,10 @@ compose_cmd=(
   -f "$COMPOSE_FILE"
 )
 
+# Recreate the Rust container on every bring-up so local testing always
+# starts from a fresh Linux build tree.
+"${compose_cmd[@]}" rm -sf scryer >/dev/null 2>&1 || true
+
 compose_up() {
   local no_deps="$1"
   shift
