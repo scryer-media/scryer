@@ -155,7 +155,11 @@ async fn install_real_torrent_rss_plugin_exposes_provider_type() {
     .to_string();
     ctx.db.store_registry_cache(&registry_json).await.unwrap();
 
-    let installation = ctx.app.install_plugin(&admin(), "torrent-rss").await.unwrap();
+    let installation = ctx
+        .app
+        .install_plugin(&admin(), "torrent-rss")
+        .await
+        .unwrap();
     assert_eq!(installation.plugin_id, "torrent-rss");
     assert_eq!(installation.provider_type, "torrent_rss");
     assert_eq!(installation.plugin_type, "torrent_indexer");
