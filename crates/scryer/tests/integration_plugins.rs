@@ -121,6 +121,7 @@ async fn list_available_with_builtins_and_registry() {
 }
 
 #[tokio::test]
+#[ignore = "requires scryer-plugins/dist WASM artifacts (local only)"]
 async fn install_real_torrent_rss_plugin_exposes_provider_type() {
     let ctx = TestContext::new().await;
     ctx.app.seed_builtin_plugins().await.unwrap();
