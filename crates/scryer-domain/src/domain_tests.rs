@@ -253,3 +253,11 @@ fn parse_query_trims_and_lowercases() {
     assert_eq!(parse_query("  Cowboy Bebop  "), "cowboy bebop");
     assert_eq!(parse_query("UPPERCASE"), "uppercase");
 }
+
+#[test]
+fn config_field_type_accepts_secret_alias() {
+    assert_eq!(
+        ConfigFieldType::parse("secret"),
+        Some(ConfigFieldType::Password)
+    );
+}

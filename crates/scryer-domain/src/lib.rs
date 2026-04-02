@@ -1250,6 +1250,7 @@ impl IndexerProviderCapabilities {
 pub enum ConfigFieldType {
     #[default]
     String,
+    #[serde(alias = "secret")]
     Password,
     Bool,
     Select,
@@ -1270,7 +1271,7 @@ impl ConfigFieldType {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "string" => Some(Self::String),
-            "password" => Some(Self::Password),
+            "password" | "secret" => Some(Self::Password),
             "bool" => Some(Self::Bool),
             "select" => Some(Self::Select),
             "number" => Some(Self::Number),
