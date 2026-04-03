@@ -939,11 +939,8 @@ async fn prepare_tracked_episodic_title_for_library_scan_session(
         TrackedTitleInput::SchedulePreScan => None,
         TrackedTitleInput::PreScannedFiles(files) => Some(files),
     };
-    let Some(attach_result) =
-        track_title_for_library_scan_session(app, session_id, title, pre_scanned_files).await
-    else {
-        return None;
-    };
+    let attach_result =
+        track_title_for_library_scan_session(app, session_id, title, pre_scanned_files).await?;
 
     if should_relink_existing_episodic_title(app, title, episode_presence_cache).await {
         return Some(if has_pre_scanned_files {
@@ -1783,24 +1780,23 @@ impl AppUseCase {
         for item in &mut item_results {
             match item.status {
                 RenameApplyStatus::Applied => {
-                    if let Some(final_path) = item.final_path.clone() {
-                        if let Err(failure) =
+                    if let Some(final_path) = item.final_path.clone()
+                        && let Err(failure) =
                             self.persist_rename_item_paths(item, &final_path).await
-                        {
-                            let rollback = self
-                                .rollback_rename_item_after_db_failure(item, &failure.state)
-                                .await;
+                    {
+                        let rollback = self
+                            .rollback_rename_item_after_db_failure(item, &failure.state)
+                            .await;
 
-                            item.status = RenameApplyStatus::Failed;
-                            item.reason_code = "db_update_failed".into();
-                            item.error_message =
-                                Some(format!("{}; {}", failure.error, rollback.detail));
-                            if rollback.fully_restored {
-                                item.final_path = Some(item.current_path.clone());
-                            }
-                            failed += 1;
-                            continue;
+                        item.status = RenameApplyStatus::Failed;
+                        item.reason_code = "db_update_failed".into();
+                        item.error_message =
+                            Some(format!("{}; {}", failure.error, rollback.detail));
+                        if rollback.fully_restored {
+                            item.final_path = Some(item.current_path.clone());
                         }
+                        failed += 1;
+                        continue;
                     }
                     applied += 1;
                 }
@@ -2014,7 +2010,7 @@ impl AppUseCase {
             RenameWriteAction::Move => match self
                 .services
                 .library_renamer
-                .rollback(&[item.clone()])
+                .rollback(std::slice::from_ref(item))
                 .await
             {
                 Ok(_) => {
@@ -2031,18 +2027,17 @@ impl AppUseCase {
             }
         }
 
-        if filesystem_restored {
-            if state.media_file_updated
-                && let Some(media_file_id) = item.media_file_id.as_deref()
-                && let Err(error) = self
-                    .services
-                    .media_files
-                    .update_media_file_path(media_file_id, &item.current_path)
-                    .await
-            {
-                fully_restored = false;
-                details.push(format!("media file rollback failed: {error}"));
-            }
+        if filesystem_restored
+            && state.media_file_updated
+            && let Some(media_file_id) = item.media_file_id.as_deref()
+            && let Err(error) = self
+                .services
+                .media_files
+                .update_media_file_path(media_file_id, &item.current_path)
+                .await
+        {
+            fully_restored = false;
+            details.push(format!("media file rollback failed: {error}"));
         }
 
         if details.is_empty() {
@@ -3145,29 +3140,27 @@ impl AppUseCase {
                     .nfo_meta
                     .as_ref()
                     .and_then(|meta| meta.tvdb_id.as_deref())
+                    && let Some(&index) = existing_titles_by_tvdb_id.get(tvdb_id)
                 {
-                    if let Some(&index) = existing_titles_by_tvdb_id.get(tvdb_id) {
-                        let title = &mut existing_titles[index];
-                        ensure_title_folder_path_if_missing(self, title, &candidate.folder_path)
-                            .await;
-                        if let Some(folder_path) = title
-                            .folder_path
-                            .as_deref()
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                        {
-                            existing_titles_by_folder_path.insert(folder_path.to_string(), index);
-                        }
-                        self.maybe_probe_existing_series_title_for_background_refresh(
-                            session_id,
-                            title,
-                            &candidate.folder_path,
-                            &mut summary,
-                            &mut episode_presence_cache,
-                        )
-                        .await?;
-                        continue;
+                    let title = &mut existing_titles[index];
+                    ensure_title_folder_path_if_missing(self, title, &candidate.folder_path).await;
+                    if let Some(folder_path) = title
+                        .folder_path
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                    {
+                        existing_titles_by_folder_path.insert(folder_path.to_string(), index);
                     }
+                    self.maybe_probe_existing_series_title_for_background_refresh(
+                        session_id,
+                        title,
+                        &candidate.folder_path,
+                        &mut summary,
+                        &mut episode_presence_cache,
+                    )
+                    .await?;
+                    continue;
                 }
 
                 let query = candidate.query.trim().to_string();

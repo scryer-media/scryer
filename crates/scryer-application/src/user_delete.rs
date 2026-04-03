@@ -402,10 +402,7 @@ fn build_title_delete_manifest(context: TitleDeleteContext) -> AppResult<UserDel
     let normalized_folder = normalize_absolute_path(Path::new(&raw_folder_path))?;
     let normalized_roots = normalize_root_folders(root_folders, facet)?;
 
-    if normalized_roots
-        .iter()
-        .any(|root| *root == normalized_folder)
-    {
+    if normalized_roots.contains(&normalized_folder) {
         return Err(AppError::Validation(format!(
             "refusing to delete title folder {} because it matches a configured root folder",
             normalized_folder.display()

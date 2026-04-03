@@ -697,9 +697,7 @@ impl LibraryScanTracker {
     pub async fn complete_if_finished(&self, session_id: &str) -> Option<LibraryScanSession> {
         let (snapshot, removed_pending) = {
             let mut state = self.state.lock().await;
-            let Some(session) = state.sessions.get(session_id) else {
-                return None;
-            };
+            let session = state.sessions.get(session_id)?;
             if session.summary.is_none()
                 || !session.metadata_progress.is_finished()
                 || !session.file_progress.is_finished()

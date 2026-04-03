@@ -116,7 +116,7 @@ pub fn analyze_file(file_path: &Path) -> Result<MediaAnalysis, MediaInfoError> {
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
 
-    let format = sniff_container_format(file_path).or_else(|| match ext.as_str() {
+    let format = sniff_container_format(file_path).or(match ext.as_str() {
         "mkv" | "webm" => Some(ContainerFormat::Matroska),
         "mp4" | "m4v" | "mov" => Some(ContainerFormat::Mp4),
         "avi" => Some(ContainerFormat::Avi),

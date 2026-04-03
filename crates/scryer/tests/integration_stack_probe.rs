@@ -565,7 +565,7 @@ async fn wait_for_haikyu_scan_to_settle(
         }
 
         if let Some(title) = title
-            && let Some(metadata_fetched_at) = title.metadata_fetched_at.clone()
+            && let Some(metadata_fetched_at) = title.metadata_fetched_at
         {
             let collections = ctx
                 .db

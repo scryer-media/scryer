@@ -1196,7 +1196,7 @@ async fn series_monitoring_summary(
 }
 
 async fn activity_kinds_for_title(ctx: &TestContext, title_id: &str) -> Vec<String> {
-    let body = gql(&ctx, "{ activityEvents { kind titleId } }", json!({})).await;
+    let body = gql(ctx, "{ activityEvents { kind titleId } }", json!({})).await;
     assert_no_errors(&body);
 
     body["data"]["activityEvents"]

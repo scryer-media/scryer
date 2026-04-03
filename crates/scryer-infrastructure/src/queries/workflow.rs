@@ -134,6 +134,7 @@ pub(crate) async fn create_workflow_operation_query(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn create_job_workflow_operation_query(
     pool: &SqlitePool,
     operation_type: String,
@@ -199,6 +200,7 @@ pub(crate) async fn create_job_workflow_operation_query(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn update_job_workflow_operation_query(
     pool: &SqlitePool,
     id: &str,

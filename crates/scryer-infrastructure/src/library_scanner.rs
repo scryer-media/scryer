@@ -30,10 +30,7 @@ impl Default for FileSystemLibraryScanner {
 
 impl FileSystemLibraryScanner {
     pub fn new() -> Self {
-        let allowed_extensions = VIDEO_EXTENSIONS
-            .into_iter()
-            .map(|ext| ext.to_string())
-            .collect();
+        let allowed_extensions = VIDEO_EXTENSIONS.iter().map(|ext| ext.to_string()).collect();
 
         Self { allowed_extensions }
     }
