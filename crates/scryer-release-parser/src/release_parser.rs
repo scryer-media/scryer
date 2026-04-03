@@ -2801,8 +2801,7 @@ fn apply_special_context(
 ) -> Option<ParsedEpisodeMetadata> {
     let special = tokens.iter().enumerate().find_map(|(index, token)| {
         let kind = parse_special_kind_token(token)?;
-        if kind == ParsedSpecialKind::Special
-            && special_token_has_title_continuation(index, tokens)
+        if kind == ParsedSpecialKind::Special && special_token_has_title_continuation(index, tokens)
         {
             return None;
         }
