@@ -2799,9 +2799,15 @@ fn apply_special_context(
     base: Option<ParsedEpisodeMetadata>,
     tokens: &[String],
 ) -> Option<ParsedEpisodeMetadata> {
-    let special = tokens
-        .iter()
-        .find_map(|token| parse_special_kind_token(token).map(|kind| (kind, token.clone())));
+    let special = tokens.iter().enumerate().find_map(|(index, token)| {
+        let kind = parse_special_kind_token(token)?;
+        if kind == ParsedSpecialKind::Special
+            && special_token_has_title_continuation(index, tokens)
+        {
+            return None;
+        }
+        Some((kind, token.clone()))
+    });
 
     match (base, special) {
         (Some(mut metadata), Some((kind, raw))) => {
@@ -2842,6 +2848,29 @@ fn apply_special_context(
         })),
         (None, None) => None,
     }
+}
+
+fn special_token_has_title_continuation(index: usize, tokens: &[String]) -> bool {
+    tokens
+        .iter()
+        .skip(index + 1)
+        .map(String::as_str)
+        .any(is_special_title_continuation_token)
+}
+
+fn is_special_title_continuation_token(token: &str) -> bool {
+    if token.chars().all(|character| character.is_ascii_digit()) {
+        return false;
+    }
+
+    if parse_named_episode_anchor_token(token)
+        || !parse_named_episode_token(token).is_empty()
+        || !parse_pending_episode_token(token).is_empty()
+    {
+        return false;
+    }
+
+    !is_noise_token(token)
 }
 
 fn parse_series_episode_core(tokens: &[String]) -> Option<ParsedEpisodeMetadata> {

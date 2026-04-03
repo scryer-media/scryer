@@ -20,9 +20,10 @@ use crate::{
     NotificationSubscriptionRepository, PendingRelease, PendingReleaseRepository, PendingStagedNzb,
     PluginInstallationRepository, PostProcessingScriptRepository, ReleaseDecision,
     RuleSetRepository, SettingsRepository, StagedNzbRef, StagedNzbStore, SystemInfoProvider,
-    TitleHistoryFilter, TitleHistoryPage, TitleHistoryRepository, TitleImageBlob, TitleImageKind,
-    TitleImageProcessor, TitleImageReplacement, TitleImageRepository, TitleImageSyncTask,
-    TitleMediaFile, TitleMediaSizeSummary, WantedItem, WantedItemRepository,
+    TitleEpisodeProgressSummary, TitleHistoryFilter, TitleHistoryPage, TitleHistoryRepository,
+    TitleImageBlob, TitleImageKind, TitleImageProcessor, TitleImageReplacement,
+    TitleImageRepository, TitleImageSyncTask, TitleMediaFile, TitleMediaSizeSummary, WantedItem,
+    WantedItemRepository,
 };
 
 #[derive(Default)]
@@ -99,6 +100,13 @@ impl MediaFileRepository for NullMediaFileRepository {
         Ok(Vec::new())
     }
 
+    async fn list_title_episode_progress_summaries(
+        &self,
+        _title_ids: &[String],
+    ) -> AppResult<Vec<TitleEpisodeProgressSummary>> {
+        Ok(Vec::new())
+    }
+
     async fn update_media_file_analysis(
         &self,
         _file_id: &str,
@@ -121,6 +129,12 @@ impl MediaFileRepository for NullMediaFileRepository {
         ))
     }
 
+    async fn update_media_file_path(&self, _file_id: &str, _file_path: &str) -> AppResult<()> {
+        Err(AppError::Repository(
+            "media file repository is not configured".to_string(),
+        ))
+    }
+
     async fn mark_scan_failed(&self, _file_id: &str, _error: &str) -> AppResult<()> {
         Err(AppError::Repository(
             "media file repository is not configured".to_string(),
@@ -134,6 +148,10 @@ impl MediaFileRepository for NullMediaFileRepository {
     }
 
     async fn get_media_file_by_id(&self, _file_id: &str) -> AppResult<Option<TitleMediaFile>> {
+        Ok(None)
+    }
+
+    async fn get_media_file_by_path(&self, _file_path: &str) -> AppResult<Option<TitleMediaFile>> {
         Ok(None)
     }
 }
@@ -238,6 +256,12 @@ impl WantedItemRepository for NullWantedItemRepository {
         Ok(None)
     }
     async fn delete_wanted_items_for_title(&self, _title_id: &str) -> AppResult<()> {
+        Ok(())
+    }
+    async fn delete_wanted_items_for_collection(&self, _collection_id: &str) -> AppResult<()> {
+        Ok(())
+    }
+    async fn delete_wanted_items_for_episode(&self, _episode_id: &str) -> AppResult<()> {
         Ok(())
     }
     async fn reset_fruitless_wanted_items(&self, _now: &str) -> AppResult<u64> {
@@ -977,6 +1001,9 @@ pub mod test_nulls {
             Ok(vec![])
         }
         async fn get_collection_by_id(&self, _: &str) -> AppResult<Option<Collection>> {
+            Ok(None)
+        }
+        async fn get_collection_by_ordered_path(&self, _: &str) -> AppResult<Option<Collection>> {
             Ok(None)
         }
         async fn create_collection(&self, _: Collection) -> AppResult<Collection> {

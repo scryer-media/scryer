@@ -141,7 +141,7 @@ const ko: LocaleDictionary = {
     "루트 폴더는 미디어가 저장되는 최상위 디렉토리입니다. 별표가 표시된 폴더가 새 타이틀의 기본 폴더입니다.",
   "settings.rootFolderAdd": "루트 폴더 추가",
   "settings.rootFolderEdit": "루트 폴더 편집",
-  "settings.rootFolderAddPlaceholder": "/media/movies",
+  "settings.rootFolderAddPlaceholder": "/data/movies",
   "settings.rootFolderSetDefault": "기본값으로 설정",
   "settings.libraryScanTitle": "라이브러리 스캔",
   "settings.libraryScanHelp":
@@ -158,12 +158,12 @@ const ko: LocaleDictionary = {
   "settings.moviesPathLabel": "영화 폴더 경로",
   "settings.moviesPathHelp":
     "선택한 영화 릴리스의 대상 폴더로 사용됩니다.",
-  "settings.moviesPathPlaceholder": "/media/movies",
+  "settings.moviesPathPlaceholder": "/data/movies",
   "settings.moviesPathRequired": "영화 폴더 경로는 필수입니다.",
   "settings.seriesPathLabel": "시리즈 폴더 경로",
   "settings.seriesPathHelp":
     "선택한 시리즈 및 애니메이션 릴리스의 대상 폴더로 사용됩니다.",
-  "settings.seriesPathPlaceholder": "/media/series",
+  "settings.seriesPathPlaceholder": "/data/series",
   "settings.seriesPathRequired": "시리즈 폴더 경로는 필수입니다.",
   "settings.movieSettingsSaved": "영화 설정이 저장되었습니다.",
   "settings.seriesSettingsSaved": "시리즈 설정이 저장되었습니다.",
@@ -410,6 +410,7 @@ const ko: LocaleDictionary = {
   "title.table.monitored": "모니터링",
   "title.table.poster": "포스터",
   "title.table.qualityTier": "품질",
+  "title.table.episodes": "에피소드",
   "title.table.size": "크기",
   "title.viewModeToggle": "보기 모드",
   "title.viewModeTable": "테이블 보기",

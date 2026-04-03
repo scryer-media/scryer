@@ -214,12 +214,12 @@ fn find_monitored_movie_title_from_release_prefers_imdb_id() {
 #[test]
 fn is_sample_file_detects_sample_in_stem() {
     assert!(is_sample_file(std::path::Path::new(
-        "/media/episode.sample.mkv"
+        "/data/episode.sample.mkv"
     )));
     assert!(is_sample_file(std::path::Path::new(
-        "/media/sample-show.mkv"
+        "/data/sample-show.mkv"
     )));
-    assert!(is_sample_file(std::path::Path::new("/media/SAMPLE.mkv")));
+    assert!(is_sample_file(std::path::Path::new("/data/SAMPLE.mkv")));
 }
 
 #[test]
@@ -388,6 +388,23 @@ fn find_video_files_recurses_into_subdirs() {
     std::fs::write(dir.path().join("ep2.mp4"), b"data").expect("write");
     let files = find_video_files(dir.path(), false).expect("find");
     assert_eq!(files.len(), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn find_video_files_follows_symlinked_directories() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("season1");
+    std::fs::create_dir(&target).expect("mkdir");
+    std::fs::write(target.join("ep1.mkv"), b"data").expect("write");
+    symlink(&target, dir.path().join("linked-season1")).expect("symlink");
+
+    let files = find_video_files(dir.path(), false).expect("find");
+
+    assert_eq!(files.len(), 1);
+    assert!(files[0].ends_with("linked-season1/ep1.mkv"));
 }
 
 // ── missing_audio_languages ───────────────────────────────────────────────────

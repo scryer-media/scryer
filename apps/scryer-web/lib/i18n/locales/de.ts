@@ -139,7 +139,7 @@ const de: LocaleDictionary = {
   "settings.rootFoldersHelp": "Stammordner sind die obersten Verzeichnisse, in denen Medien gespeichert werden. Der markierte Ordner ist der Standard für neue Titel.",
   "settings.rootFolderAdd": "Stammordner hinzufügen",
   "settings.rootFolderEdit": "Stammordner bearbeiten",
-  "settings.rootFolderAddPlaceholder": "/media/movies",
+  "settings.rootFolderAddPlaceholder": "/data/movies",
   "settings.rootFolderSetDefault": "Als Standard festlegen",
   "settings.libraryScanTitle": "Bibliothek scannen",
   "settings.libraryScanHelp":
@@ -156,12 +156,12 @@ const de: LocaleDictionary = {
   "settings.moviesPathLabel": "Film-Ordnerpfad",
   "settings.moviesPathHelp":
     "Wird als Ziel für ausgewählte Film-Releases verwendet.",
-  "settings.moviesPathPlaceholder": "/media/movies",
+  "settings.moviesPathPlaceholder": "/data/movies",
   "settings.moviesPathRequired": "Film-Ordnerpfad ist erforderlich.",
   "settings.seriesPathLabel": "Serien-Ordnerpfad",
   "settings.seriesPathHelp":
     "Wird als Ziel für ausgewählte Serien- und Anime-Releases verwendet.",
-  "settings.seriesPathPlaceholder": "/media/series",
+  "settings.seriesPathPlaceholder": "/data/series",
   "settings.seriesPathRequired": "Serien-Ordnerpfad ist erforderlich.",
   "settings.movieSettingsSaved": "Film-Einstellungen gespeichert.",
   "settings.seriesSettingsSaved": "Serien-Einstellungen gespeichert.",
@@ -410,6 +410,7 @@ const de: LocaleDictionary = {
   "title.table.monitored": "Überwacht",
   "title.table.poster": "Poster",
   "title.table.qualityTier": "Qualität",
+  "title.table.episodes": "Episoden",
   "title.table.size": "Größe",
   "title.viewModeToggle": "Ansichtsmodus",
   "title.viewModeTable": "Tabellenansicht",

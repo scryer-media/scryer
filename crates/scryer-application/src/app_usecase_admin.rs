@@ -91,9 +91,9 @@ impl AppUseCase {
 
         // Collect unique root folder paths from all facet handlers
         let path_keys = [
-            ("series.path", "/media/series", "Series"),
-            ("anime.path", "/media/anime", "Anime"),
-            ("movies.path", "/media/movies", "Movies"),
+            ("series.path", "/data/series", "Series"),
+            ("anime.path", "/data/anime", "Anime"),
+            ("movies.path", "/data/movies", "Movies"),
         ];
 
         let mut seen_paths = std::collections::HashSet::new();

@@ -1,7 +1,7 @@
 
 import * as React from "react";
 import { useClient } from "urql";
-import { Ban, FolderOpen, Loader2, Pause, Play, RotateCcw, Search, Subtitles, Trash2 } from "lucide-react";
+import { Ban, FolderOpen, HardDrive, Loader2, Pause, Play, RotateCcw, Search, Subtitles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -27,6 +27,7 @@ import type {
   SubtitleDownloadRecord,
 } from "@/components/containers/movie-overview-container";
 import { MediaInfoBadges } from "@/components/common/media-info-badges";
+import { MediaRenamePlanPanel } from "@/components/common/media-rename-plan-panel";
 import { OverviewControlPanel } from "@/components/views/overview-control-panel";
 import { OverviewBackLink } from "@/components/views/overview-back-link";
 import { SubtitleSearchModal } from "@/components/views/subtitle-search-modal";
@@ -65,6 +66,15 @@ function formatRuntime(minutes: number | null | undefined) {
   const m = minutes % 60;
   if (h === 0) return `${m}m`;
   return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+function formatFileSize(sizeBytes: string | number | null | undefined) {
+  const bytes = typeof sizeBytes === "number" ? sizeBytes : Number.parseFloat(sizeBytes ?? "");
+  if (!Number.isFinite(bytes) || bytes <= 0) return "—";
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(2)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(2)} KB`;
+  return `${bytes.toFixed(0)} B`;
 }
 
 function prettifyTagValue(raw: string) {
@@ -296,7 +306,7 @@ function TitleSettingsPanel({
           </div>
           <Button
             type="button"
-            variant="outline"
+            variant="primary"
             size="sm"
             className="shrink-0"
             onClick={onOpenFixMatch}
@@ -453,6 +463,14 @@ export function MovieOverviewView({
   const year = title.year;
   const studio = title.studio;
   const hasMediaFiles = mediaFiles.length > 0;
+  const collectionsByOrderedPath = new Map(
+    collections.flatMap((collection) => (
+      collection.orderedPath ? [[collection.orderedPath, collection] as const] : []
+    )),
+  );
+  const orphanCollections = collections.filter(
+    (collection) => !collection.orderedPath || !mediaFiles.some((file) => file.filePath === collection.orderedPath),
+  );
   const wantedStatusLabel = wantedItem?.status
     ? wantedItem.status.charAt(0).toUpperCase() + wantedItem.status.slice(1)
     : null;
@@ -741,7 +759,7 @@ export function MovieOverviewView({
             <Button
               className="w-full sm:w-auto"
               size="sm"
-              variant="secondary"
+              variant="primary"
               onClick={onPreviewRename}
               disabled={renamePreviewing || collections.length === 0}
             >
@@ -750,7 +768,7 @@ export function MovieOverviewView({
           </div>
         </CardHeader>
         <CardContent>
-          {collections.length === 0 ? (
+          {mediaFiles.length === 0 && orphanCollections.length === 0 ? (
             <div className="space-y-3">
               <p className="text-sm text-muted-foreground">No files tracked. Run a library scan to detect files on disk.</p>
               <Button size="sm" onClick={onRefreshAndScan} disabled={refreshAndScanLoading}>
@@ -759,33 +777,30 @@ export function MovieOverviewView({
             </div>
           ) : (
             <div className="space-y-2">
-              {collections.map((col) => {
-                const qualityHint = col.label ?? col.collectionIndex ?? null;
-                const mediaFile = mediaFiles.find((f) => f.filePath === col.orderedPath) ?? null;
+              {mediaFiles.map((mediaFile) => {
+                const collection = collectionsByOrderedPath.get(mediaFile.filePath) ?? null;
+                const qualityHint = mediaFile.qualityLabel ?? collection?.label ?? null;
                 return (
-                  <div key={col.id} className="rounded-lg border border-border p-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0 space-y-1.5">
-                        {col.orderedPath ? (
-                          <p className="truncate font-mono text-xs text-muted-foreground">{col.orderedPath}</p>
-                        ) : (
-                          <p className="text-sm text-muted-foreground">Path not recorded</p>
-                        )}
-                        <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                          <span className="capitalize">{col.collectionType}</span>
-                          {qualityHint ? (
-                            <span className="rounded bg-accent px-1 py-0.5 text-card-foreground">{qualityHint}</span>
-                          ) : null}
-                          <span className="text-muted-foreground/60">Added {formatDate(col.createdAt)}</span>
-                          {mediaFile?.acquisitionScore != null ? (
-                            <span className="text-muted-foreground/60" title={mediaFile.scoringLog ?? undefined}>
-                              {t("mediaFile.score", { score: mediaFile.acquisitionScore })}
-                            </span>
-                          ) : null}
-                        </div>
-                        {mediaFile ? <MediaInfoBadges file={mediaFile} /> : null}
-                      </div>
-                      {onDeleteFile && mediaFile ? (
+                  <div key={mediaFile.id} className="space-y-1.5 rounded bg-card/60 px-3 py-2 text-sm">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <HardDrive className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+                      <span className="min-w-0 break-all font-mono text-xs text-muted-foreground">{mediaFile.filePath}</span>
+                      {collection ? (
+                        <span className="text-xs capitalize text-muted-foreground/60">{collection.collectionType}</span>
+                      ) : null}
+                      {qualityHint ? (
+                        <span className="rounded border border-emerald-500/40 bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300">
+                          {qualityHint}
+                        </span>
+                      ) : null}
+                      <span className="text-xs text-muted-foreground/60">{formatFileSize(mediaFile.sizeBytes)}</span>
+                      <span className="text-xs text-muted-foreground/60">{formatDate(mediaFile.createdAt)}</span>
+                      {mediaFile.acquisitionScore != null ? (
+                        <span className="text-xs text-muted-foreground/60" title={mediaFile.scoringLog ?? undefined}>
+                          {t("mediaFile.score", { score: mediaFile.acquisitionScore })}
+                        </span>
+                      ) : null}
+                      {onDeleteFile ? (
                         <button
                           type="button"
                           onClick={() => onDeleteFile(mediaFile.id)}
@@ -796,6 +811,31 @@ export function MovieOverviewView({
                         </button>
                       ) : null}
                     </div>
+                    <MediaInfoBadges file={mediaFile} />
+                  </div>
+                );
+              })}
+
+              {orphanCollections.map((collection) => {
+                const qualityHint = collection.label ?? null;
+                return (
+                  <div key={collection.id} className="rounded-lg border border-border p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 space-y-1.5">
+                        {collection.orderedPath ? (
+                          <p className="truncate font-mono text-xs text-muted-foreground">{collection.orderedPath}</p>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">{t("mediaFile.pathNotRecorded")}</p>
+                        )}
+                        <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                          <span className="capitalize">{collection.collectionType}</span>
+                          {qualityHint ? (
+                            <span className="rounded bg-accent px-1 py-0.5 text-card-foreground">{qualityHint}</span>
+                          ) : null}
+                          <span className="text-muted-foreground/60">Added {formatDate(collection.createdAt)}</span>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 );
               })}
@@ -803,56 +843,13 @@ export function MovieOverviewView({
           )}
 
           {renamePlan ? (
-            <div className="mt-5 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
-                <div>
-                  {t("rename.planSummary", {
-                    total: renamePlan.total,
-                    renamable: renamePlan.renamable,
-                    noop: renamePlan.noop,
-                    conflicts: renamePlan.conflicts,
-                    errors: renamePlan.errors,
-                  })}
-                </div>
-                <code className="rounded bg-card px-2 py-1 text-xs text-muted-foreground">
-                  {renamePlan.fingerprint.slice(0, 16)}
-                </code>
-              </div>
-              <div className="max-h-72 overflow-auto rounded-lg border border-border">
-                <table className="min-w-full text-sm">
-                  <thead className="bg-card/70 text-muted-foreground">
-                    <tr>
-                      <th className="px-3 py-2 text-left font-medium">Current</th>
-                      <th className="px-3 py-2 text-left font-medium">Proposed</th>
-                      <th className="px-3 py-2 text-left font-medium">Action</th>
-                      <th className="px-3 py-2 text-left font-medium">Reason</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {renamePlan.items.map((item) => (
-                      <tr key={`${item.collectionId ?? "none"}-${item.currentPath ?? ""}`} className="border-t border-border">
-                        <td className="px-3 py-2 align-top font-mono text-xs text-muted-foreground">
-                          {item.currentPath || "—"}
-                        </td>
-                        <td className="px-3 py-2 align-top font-mono text-xs text-muted-foreground">
-                          {item.proposedPath ?? "—"}
-                        </td>
-                        <td className="px-3 py-2 align-top text-xs text-card-foreground">{item.writeAction}</td>
-                        <td className="px-3 py-2 align-top text-xs text-muted-foreground">{item.reasonCode}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="flex justify-end">
-                <Button
-                  size="sm"
-                  onClick={onApplyRename}
-                  disabled={renameApplying || renamePlan.renamable === 0}
-                >
-                  {renameApplying ? t("rename.applying") : t("rename.applyButton")}
-                </Button>
-              </div>
+            <div className="mt-5">
+              <MediaRenamePlanPanel
+                plan={renamePlan}
+                applying={renameApplying}
+                applyDisabled={renameApplying || renamePlan.renamable === 0}
+                onApply={onApplyRename}
+              />
             </div>
           ) : null}
         </CardContent>

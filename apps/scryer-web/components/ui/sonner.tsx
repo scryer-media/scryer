@@ -7,7 +7,7 @@ import {
   TriangleAlertIcon,
 } from "lucide-react"
 import { useTheme } from "next-themes"
-import { Toaster as Sonner, type ToasterProps } from "sonner"
+import { Toaster as Sonner, toast, type ToasterProps } from "sonner"
 import { isDarkTheme } from "@/lib/theme"
 
 const Toaster = ({ ...props }: ToasterProps) => {
@@ -22,7 +22,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
       toastOptions={{
         className: "bg-background shadow-sm shadow-black/35",
         classNames: {
-          toast: "border border-border/30",
+          toast: "rounded-lg border border-border/30",
           success: isDark ? "border-emerald-500 bg-emerald-950" : "border-emerald-500 bg-emerald-50",
           error: isDark ? "border-red-500 bg-red-950" : "border-red-500 bg-red-50",
           warning: "border-amber-400/55",
@@ -84,4 +84,4 @@ const Toaster = ({ ...props }: ToasterProps) => {
   )
 }
 
-export { Toaster }
+export { Toaster, toast }

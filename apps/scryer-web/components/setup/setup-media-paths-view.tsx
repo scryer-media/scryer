@@ -68,7 +68,7 @@ export function SetupMediaPathsView({
               id="movies-path"
               value={moviesPath}
               onChange={(e) => onMoviesPathChange(e.target.value)}
-              placeholder="/media/movies"
+              placeholder="/data/movies"
             />
             <Button
               type="button"
@@ -88,7 +88,7 @@ export function SetupMediaPathsView({
               id="series-path"
               value={seriesPath}
               onChange={(e) => onSeriesPathChange(e.target.value)}
-              placeholder="/media/series"
+              placeholder="/data/series"
             />
             <Button
               type="button"
@@ -113,7 +113,7 @@ export function SetupMediaPathsView({
               id="anime-path"
               value={animePath}
               onChange={(e) => onAnimePathChange(e.target.value)}
-              placeholder="/media/anime"
+              placeholder="/data/anime"
             />
             <Button
               type="button"

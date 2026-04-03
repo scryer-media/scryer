@@ -50,7 +50,7 @@ impl FacetHandler for MovieFacetHandler {
     }
 
     fn default_library_path(&self) -> &str {
-        "/media/movies"
+        "/data/movies"
     }
 
     fn has_episodes(&self) -> bool {

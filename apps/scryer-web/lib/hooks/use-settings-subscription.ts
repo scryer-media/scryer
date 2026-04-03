@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 
 import { settingsChangedSubscription } from "@/lib/graphql/queries";
-import { wsClient } from "@/lib/graphql/ws-client";
+
+import { useDeferredWsSubscription } from "@/lib/hooks/use-deferred-ws-subscription";
 
 /**
  * Subscribes to settings change notifications via WebSocket.
@@ -17,43 +18,17 @@ export function useSettingsSubscription(
     onChangedRef.current = onChanged;
   });
 
-  const unsubRef = useRef<(() => void) | null>(null);
-  const teardownTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    // StrictMode re-run: cancel the pending teardown, subscription is still alive
-    if (teardownTimer.current) {
-      clearTimeout(teardownTimer.current);
-      teardownTimer.current = null;
-      return;
-    }
-
-    const unsubscribe = wsClient.subscribe(
-      { query: settingsChangedSubscription },
-      {
-        next(result: { data?: { settingsChanged?: string[] } }) {
-          const keys = result.data?.settingsChanged;
-          if (keys?.length) {
-            onChangedRef.current(keys);
-          }
-        },
-        error(err: unknown) {
-          console.error("[settings-changed] subscription error:", err);
-        },
-        complete() {
-          unsubRef.current = null;
-        },
-      },
-    );
-
-    unsubRef.current = unsubscribe;
-
-    return () => {
-      teardownTimer.current = setTimeout(() => {
-        teardownTimer.current = null;
-        unsubscribe();
-        unsubRef.current = null;
-      }, 200);
-    };
-  }, []);
+  useDeferredWsSubscription<{ data?: { settingsChanged?: string[] } }>({
+    requestKey: "settingsChanged",
+    request: { query: settingsChangedSubscription },
+    onNext(result) {
+      const keys = result.data?.settingsChanged;
+      if (keys?.length) {
+        onChangedRef.current(keys);
+      }
+    },
+    onError(err) {
+      console.error("[settings-changed] subscription error:", err);
+    },
+  });
 }

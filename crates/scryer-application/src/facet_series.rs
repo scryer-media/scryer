@@ -75,8 +75,8 @@ impl FacetHandler for SeriesFacetHandler {
 
     fn default_library_path(&self) -> &str {
         match self.media_facet {
-            MediaFacet::Anime => "/media/anime",
-            _ => "/media/series",
+            MediaFacet::Anime => "/data/anime",
+            _ => "/data/series",
         }
     }
 

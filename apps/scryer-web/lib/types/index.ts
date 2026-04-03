@@ -9,6 +9,7 @@ export * from "./quality-profiles";
 export * from "./releases";
 export * from "./root";
 export * from "./settings";
+export * from "./library-scans";
 export * from "./titles";
 export * from "./users";
 export * from "./wanted";

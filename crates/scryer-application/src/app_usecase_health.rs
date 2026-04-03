@@ -116,9 +116,9 @@ impl AppUseCase {
 
     async fn check_root_folders(&self) -> Vec<HealthCheckResult> {
         let path_keys = [
-            ("series.path", "/media/series", "Series"),
-            ("anime.path", "/media/anime", "Anime"),
-            ("movies.path", "/media/movies", "Movies"),
+            ("series.path", "/data/series", "Series"),
+            ("anime.path", "/data/anime", "Anime"),
+            ("movies.path", "/data/movies", "Movies"),
         ];
 
         let mut results = Vec::new();
@@ -155,9 +155,9 @@ impl AppUseCase {
 
     async fn check_disk_space_health(&self) -> Vec<HealthCheckResult> {
         let path_keys = [
-            ("series.path", "/media/series", "Series"),
-            ("anime.path", "/media/anime", "Anime"),
-            ("movies.path", "/media/movies", "Movies"),
+            ("series.path", "/data/series", "Series"),
+            ("anime.path", "/data/anime", "Anime"),
+            ("movies.path", "/data/movies", "Movies"),
         ];
 
         let mut seen = HashSet::new();

@@ -49,8 +49,8 @@ docker run --rm -it -v .:/output -w /output ghcr.io/scryer-media/scryer init
 You'll be prompted for your host media directories:
 
 ```
-Movies directory on this host [/media/movies]: /mnt/nas/movies
-Series directory on this host [/media/series]: /mnt/nas/series
+Movies directory on this host [/data/movies]: /mnt/nas/movies
+Series directory on this host [/data/series]: /mnt/nas/series
 wrote docker-compose.yml
 wrote scryer_encryption_key.txt (0600)
 
@@ -97,13 +97,11 @@ services:
       - "8080:8080"
     volumes:
       - scryer-config:/config
-      - /path/to/your/movies:/media/movies
-      - /path/to/your/series:/media/series
+      - /path/to/your/movies:/data/movies
+      - /path/to/your/series:/data/series
     secrets:
       - scryer_encryption_key
     environment:
-      SCRYER_MOVIES_PATH: /media/movies
-      SCRYER_SERIES_PATH: /media/series
       SCRYER_METADATA_GATEWAY_GRAPHQL_URL: https://smg.scryer.media/graphql
 
 secrets:
@@ -139,15 +137,12 @@ environment:
 
 ### Media Paths
 
-The `SCRYER_MOVIES_PATH` and `SCRYER_SERIES_PATH` environment variables tell scryer where to find media **inside the container**. These must match the right side of your volume mounts:
+Scryer defaults to `/data/movies`, `/data/series`, and `/data/anime` inside the container. Keep your volume mounts aligned to those container-side paths:
 
 ```yaml
 volumes:
-  - /mnt/nas/movies:/media/movies    # host path : container path
-  - /mnt/nas/series:/media/series
-environment:
-  SCRYER_MOVIES_PATH: /media/movies   # matches container path
-  SCRYER_SERIES_PATH: /media/series
+  - /mnt/nas/movies:/data/movies    # host path : container path
+  - /mnt/nas/series:/data/series
 ```
 
 ### Download Clients and Indexers
@@ -158,8 +153,6 @@ Download clients (NZBGet, SABnzbd) and indexers are configured in **Settings** t
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `SCRYER_MOVIES_PATH` | Yes | — | Movies directory inside the container |
-| `SCRYER_SERIES_PATH` | Yes | — | Series directory inside the container |
 | `SCRYER_METADATA_GATEWAY_GRAPHQL_URL` | Yes | — | Metadata API endpoint URL |
 | `SCRYER_ENCRYPTION_KEY` | No | Auto-managed | Override encryption key (see below) |
 | `SCRYER_BIND` | No | `0.0.0.0:8080` | Listen address and port |
@@ -282,7 +275,7 @@ docker compose start
 
 **Media not appearing after import**
 - Confirm the host directories are mounted correctly and contain media files
-- Check that `SCRYER_MOVIES_PATH` / `SCRYER_SERIES_PATH` match the container-side mount paths
+- Check that your volume mounts point to `/data/movies` and `/data/series` inside the container
 
 **Encryption key warning on startup**
 - On Docker, check that `scryer_encryption_key.txt` exists and is mounted via the `secrets:` section in your compose file

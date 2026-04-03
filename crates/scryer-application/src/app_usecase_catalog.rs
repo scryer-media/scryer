@@ -19,6 +19,8 @@ const REMATCH_DERIVED_TAG_PREFIXES: &[&str] = &[
     "scryer:anime-media-type:",
     "scryer:anime-status:",
 ];
+const POST_HYDRATION_TITLE_SCAN_CONCURRENCY: usize = 4;
+const TRACKED_TITLE_PRE_SCAN_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct DownloadClientRoutingEntry {
@@ -28,6 +30,36 @@ struct DownloadClientRoutingEntry {
     older_queue_priority: Option<String>,
     remove_completed: bool,
     remove_failed: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PostHydrationTitleScanMode {
+    None,
+    Inline,
+    Queued,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HydrationCompletionOptions {
+    post_hydration_title_scan_mode: PostHydrationTitleScanMode,
+    sync_wanted_after_completion: bool,
+}
+
+impl HydrationCompletionOptions {
+    const STANDARD: Self = Self {
+        post_hydration_title_scan_mode: PostHydrationTitleScanMode::Inline,
+        sync_wanted_after_completion: false,
+    };
+
+    const BACKGROUND: Self = Self {
+        post_hydration_title_scan_mode: PostHydrationTitleScanMode::Queued,
+        sync_wanted_after_completion: true,
+    };
+
+    const REMATCH: Self = Self {
+        post_hydration_title_scan_mode: PostHydrationTitleScanMode::None,
+        sync_wanted_after_completion: false,
+    };
 }
 
 fn routing_entry_enabled(config: &serde_json::Value) -> bool {
@@ -521,9 +553,7 @@ impl AppUseCase {
         let handler = self.facet_registry.get(facet);
         let root_folders_key = handler.map(|h| h.root_folders_key());
         let library_path_key = handler.map(|h| h.library_path_key());
-        let default_path = handler
-            .map(|h| h.default_library_path())
-            .unwrap_or("/media");
+        let default_path = handler.map(|h| h.default_library_path()).unwrap_or("/data");
 
         // Try the root_folders JSON array first.
         if let Some(key) = root_folders_key
@@ -677,6 +707,60 @@ impl AppUseCase {
         Ok(title)
     }
 
+    async fn fetch_hydration_result(
+        &self,
+        title: &Title,
+        tvdb_id: i64,
+    ) -> AppResult<super::HydrationResult> {
+        let handler = self
+            .facet_registry
+            .get(&title.facet)
+            .ok_or_else(|| AppError::Validation("unsupported title facet".into()))?;
+        let language = self.metadata_language().await;
+
+        self.emit_hydration_started(title).await;
+
+        match handler
+            .hydrate_metadata(self.services.metadata_gateway.as_ref(), tvdb_id, &language)
+            .await
+        {
+            Ok(result) => Ok(result),
+            Err(err) => {
+                warn!(
+                    title_id = %title.id,
+                    tvdb_id = tvdb_id,
+                    error = %err,
+                    "failed to fetch metadata from gateway"
+                );
+                self.emit_hydration_failed(title, &err.to_string()).await;
+                Err(err)
+            }
+        }
+    }
+
+    async fn complete_title_hydration(&self, title: &Title, options: HydrationCompletionOptions) {
+        if title.metadata_fetched_at.is_some() {
+            mark_library_scan_title_hydration_completed(self, &title.id).await;
+            self.emit_hydration_completed(title).await;
+            if options.sync_wanted_after_completion {
+                sync_wanted_after_hydration(self, title).await;
+            }
+            match options.post_hydration_title_scan_mode {
+                PostHydrationTitleScanMode::None => {}
+                PostHydrationTitleScanMode::Inline => {
+                    maybe_auto_scan_title_library_after_hydration(self, &title.id).await;
+                }
+                PostHydrationTitleScanMode::Queued => {
+                    enqueue_post_hydration_title_scan(self, &title.id).await;
+                }
+            }
+        } else {
+            mark_library_scan_title_hydration_failed(self, title).await;
+            self.emit_hydration_failed(title, "metadata could not be persisted")
+                .await;
+        }
+    }
+
     /// Hydrate a single title by fetching metadata from SMG.
     /// Used for the interactive single-title path (e.g. user adds one title via UI).
     async fn hydrate_title_metadata(&self, title: Title) -> Title {
@@ -694,40 +778,15 @@ impl AppUseCase {
             }
         };
 
-        let language = self.metadata_language().await;
-
-        let Some(handler) = self.facet_registry.get(&title.facet) else {
-            return title;
+        let result = match self.fetch_hydration_result(&title, tvdb_id).await {
+            Ok(result) => result,
+            Err(_) => return title,
         };
 
-        self.emit_hydration_started(&title).await;
-
-        match handler
-            .hydrate_metadata(self.services.metadata_gateway.as_ref(), tvdb_id, &language)
-            .await
-        {
-            Ok(result) => {
-                let hydrated = self.apply_hydration_result(title, result).await;
-                if hydrated.metadata_fetched_at.is_some() {
-                    maybe_auto_scan_title_library_after_hydration(self, &hydrated).await;
-                    self.emit_hydration_completed(&hydrated).await;
-                } else {
-                    self.emit_hydration_failed(&hydrated, "metadata could not be persisted")
-                        .await;
-                }
-                hydrated
-            }
-            Err(err) => {
-                warn!(
-                    title_id = %title.id,
-                    tvdb_id = tvdb_id,
-                    error = %err,
-                    "failed to fetch metadata from gateway"
-                );
-                self.emit_hydration_failed(&title, &err.to_string()).await;
-                title
-            }
-        }
+        let hydrated = self.apply_hydration_result(title, result).await;
+        self.complete_title_hydration(&hydrated, HydrationCompletionOptions::STANDARD)
+            .await;
+        hydrated
     }
 
     /// Apply a [`HydrationResult`] to a title: persist metadata, create
@@ -890,6 +949,11 @@ impl AppUseCase {
             .list_collections_for_title(&title.id)
             .await
             .unwrap_or_default();
+        let mut existing_collections_by_id: std::collections::HashMap<String, Collection> =
+            existing_collections
+                .iter()
+                .map(|collection| (collection.id.clone(), collection.clone()))
+                .collect();
         let existing_collection_map: std::collections::HashMap<(CollectionType, String), String> =
             existing_collections
                 .iter()
@@ -898,6 +962,19 @@ impl AppUseCase {
                         (c.collection_type, c.collection_index.clone()),
                         c.id.clone(),
                     )
+                })
+                .collect();
+        let mut existing_episode_lookup: std::collections::HashMap<(String, String), Episode> =
+            self.services
+                .shows
+                .list_episodes_for_title(&title.id)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|episode| {
+                    let season_number = episode.season_number.clone()?;
+                    let episode_number = episode.episode_number.clone()?;
+                    Some(((season_number, episode_number), episode))
                 })
                 .collect();
 
@@ -988,8 +1065,7 @@ impl AppUseCase {
             {
                 // Update language-sensitive label if it changed
                 if !season.label.is_empty()
-                    && let Ok(Some(existing)) =
-                        self.services.shows.get_collection_by_id(existing_id).await
+                    && let Some(existing) = existing_collections_by_id.get(existing_id)
                     && existing.label.as_deref() != Some(&season.label)
                 {
                     let _ = self
@@ -1006,6 +1082,9 @@ impl AppUseCase {
                             None,
                         )
                         .await;
+                    if let Some(existing) = existing_collections_by_id.get_mut(existing_id) {
+                        existing.label = Some(season.label.clone());
+                    }
                 }
                 season_number_to_collection.insert(season.number, existing_id.clone());
                 continue;
@@ -1039,6 +1118,7 @@ impl AppUseCase {
                 .await
             {
                 Ok(created) => {
+                    existing_collections_by_id.insert(created.id.clone(), created.clone());
                     season_number_to_collection.insert(season.number, created.id);
                 }
                 Err(err) => {
@@ -1128,8 +1208,7 @@ impl AppUseCase {
                     {
                         // Update language-sensitive label if it changed
                         if !label.is_empty()
-                            && let Ok(Some(existing_coll)) =
-                                self.services.shows.get_collection_by_id(existing_id).await
+                            && let Some(existing_coll) = existing_collections_by_id.get(existing_id)
                             && existing_coll.label.as_deref() != Some(&label)
                         {
                             let _ = self
@@ -1146,6 +1225,11 @@ impl AppUseCase {
                                     None,
                                 )
                                 .await;
+                            if let Some(existing_coll) =
+                                existing_collections_by_id.get_mut(existing_id)
+                            {
+                                existing_coll.label = Some(label.clone());
+                            }
                         }
 
                         // Update interstitial_season_episode if it changed or was missing
@@ -1156,8 +1240,7 @@ impl AppUseCase {
                             .find(|(s, _)| *s == 0)
                             .map(|(_, ep)| format!("S00E{:0>2}", ep));
                         if let Some(ref se) = new_season_episode
-                            && let Ok(Some(existing_coll)) =
-                                self.services.shows.get_collection_by_id(existing_id).await
+                            && let Some(existing_coll) = existing_collections_by_id.get(existing_id)
                             && existing_coll.interstitial_season_episode.as_deref()
                                 != Some(se.as_str())
                         {
@@ -1166,6 +1249,11 @@ impl AppUseCase {
                                 .shows
                                 .update_interstitial_season_episode(existing_id, Some(se.clone()))
                                 .await;
+                            if let Some(existing_coll) =
+                                existing_collections_by_id.get_mut(existing_id)
+                            {
+                                existing_coll.interstitial_season_episode = Some(se.clone());
+                            }
                         }
 
                         for key in anime_movie_identity_keys(movie) {
@@ -1206,6 +1294,7 @@ impl AppUseCase {
 
                     match self.services.shows.create_collection(collection).await {
                         Ok(created) => {
+                            existing_collections_by_id.insert(created.id.clone(), created.clone());
                             info!(
                                 title_id = %title.id,
                                 label = %label,
@@ -1280,6 +1369,9 @@ impl AppUseCase {
             std::collections::HashSet::new();
 
         for ep in episodes {
+            let season_number_key = ep.season_number.to_string();
+            let episode_number_key = ep.episode_number.to_string();
+
             // Check interstitial episode lookup first (routes movie episodes to their
             // interstitial collections), then fall back to the season-based lookup.
             let collection_id = interstitial_episode_lookup
@@ -1349,15 +1441,9 @@ impl AppUseCase {
             );
 
             // If episode already exists, update language-sensitive fields instead of skipping.
-            if let Ok(Some(existing)) = self
-                .services
-                .shows
-                .find_episode_by_title_and_numbers(
-                    &title.id,
-                    &ep.season_number.to_string(),
-                    &ep.episode_number.to_string(),
-                )
-                .await
+            if let Some(existing) = existing_episode_lookup
+                .get(&(season_number_key.clone(), episode_number_key.clone()))
+                .cloned()
             {
                 let new_title = if ep.name.is_empty() {
                     None
@@ -1412,8 +1498,8 @@ impl AppUseCase {
                 title_id: title.id.clone(),
                 collection_id,
                 episode_type,
-                episode_number: Some(ep.episode_number.to_string()),
-                season_number: Some(ep.season_number.to_string()),
+                episode_number: Some(episode_number_key.clone()),
+                season_number: Some(season_number_key.clone()),
                 episode_label: Some(ep.name.clone()),
                 title: Some(ep.name.clone()),
                 air_date,
@@ -1445,13 +1531,19 @@ impl AppUseCase {
                 created_at: Utc::now(),
             };
 
-            if let Err(err) = self.services.shows.create_episode(episode).await {
-                warn!(
-                    title_id = %title.id,
-                    episode_number = ep.episode_number,
-                    error = %err,
-                    "failed to create episode"
-                );
+            match self.services.shows.create_episode(episode).await {
+                Ok(created) => {
+                    existing_episode_lookup
+                        .insert((season_number_key, episode_number_key), created);
+                }
+                Err(err) => {
+                    warn!(
+                        title_id = %title.id,
+                        episode_number = ep.episode_number,
+                        error = %err,
+                        "failed to create episode"
+                    );
+                }
             }
         }
     }
@@ -1801,25 +1893,36 @@ impl AppUseCase {
             .unwrap_or_else(|| "other".to_string())
     }
 
-    pub async fn set_title_monitored(
-        &self,
-        actor: &User,
-        id: &str,
-        monitored: bool,
-    ) -> AppResult<Title> {
-        require(actor, &Entitlement::MonitorTitle)?;
+    /// Canonical owner for the "this title should be actionable right now"
+    /// orchestration. Callers must route immediate acquisition seeding through
+    /// this helper instead of open-coding facet splits or wake-ups.
+    async fn sync_title_for_immediate_acquisition(&self, title: &Title) {
+        if !title.monitored {
+            return;
+        }
 
-        let title = self.services.titles.update_monitored(id, monitored).await?;
+        let now = Utc::now();
+        if let Some(handler) = self.facet_registry.get(&title.facet) {
+            if handler.has_episodes() {
+                self.sync_wanted_series_inner(title, &now, true).await;
+            } else {
+                self.sync_wanted_movie_inner(title, &now, true).await;
+            }
+            self.services.acquisition_wake.notify_one();
+        }
+    }
+
+    /// Canonical owner for persisted title monitoring changes and title-level
+    /// side effects. All title monitoring writes must flow through this helper.
+    async fn persist_title_monitoring(&self, title_id: &str, monitored: bool) -> AppResult<Title> {
+        let title = self
+            .services
+            .titles
+            .update_monitored(title_id, monitored)
+            .await?;
 
         if title.monitored {
-            let now = Utc::now();
-            if let Some(handler) = self.facet_registry.get(&title.facet) {
-                if handler.has_episodes() {
-                    self.sync_wanted_series_inner(&title, &now, true).await;
-                } else {
-                    self.sync_wanted_movie_inner(&title, &now, true).await;
-                }
-            }
+            self.sync_title_for_immediate_acquisition(&title).await;
         } else if let Err(err) = self
             .services
             .wanted_items
@@ -1832,6 +1935,202 @@ impl AppUseCase {
                 "failed to delete wanted items after disabling monitoring"
             );
         }
+
+        Ok(title)
+    }
+
+    /// Canonical owner for persisted collection monitoring changes. All
+    /// collection monitoring writes, including `update_collection(... monitored
+    /// ...)`, must flow through this helper.
+    async fn persist_collection_monitoring(
+        &self,
+        collection_id: &str,
+        monitored: bool,
+        propagate_to_episodes: bool,
+    ) -> AppResult<Collection> {
+        let collection = self
+            .services
+            .shows
+            .update_collection(
+                collection_id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(monitored),
+            )
+            .await?;
+
+        if propagate_to_episodes {
+            self.services
+                .shows
+                .set_collection_episodes_monitored(collection_id, monitored)
+                .await?;
+        }
+
+        if !monitored
+            && let Err(err) = self
+                .services
+                .wanted_items
+                .delete_wanted_items_for_collection(collection_id)
+                .await
+        {
+            warn!(
+                collection_id,
+                error = %err,
+                "failed to delete wanted items after disabling collection monitoring"
+            );
+        }
+
+        Ok(collection)
+    }
+
+    /// Canonical owner for persisted episode monitoring changes. All episode
+    /// monitoring writes, including `update_episode(... monitored ...)`, must
+    /// flow through this helper.
+    async fn persist_episode_monitoring(
+        &self,
+        episode_id: &str,
+        monitored: bool,
+    ) -> AppResult<Episode> {
+        let episode = self
+            .services
+            .shows
+            .update_episode(
+                episode_id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(monitored),
+                None,
+                None,
+                None,
+            )
+            .await?;
+
+        if !monitored
+            && let Err(err) = self
+                .services
+                .wanted_items
+                .delete_wanted_items_for_episode(episode_id)
+                .await
+        {
+            warn!(
+                episode_id,
+                error = %err,
+                "failed to delete wanted items after disabling episode monitoring"
+            );
+        }
+
+        Ok(episode)
+    }
+
+    /// Canonical owner for collection monitoring orchestration. Dedicated
+    /// monitor mutations and generic collection updates must both delegate here
+    /// so propagation and immediate acquisition behavior cannot drift.
+    async fn apply_collection_monitoring_change(
+        &self,
+        collection_id: &str,
+        monitored: bool,
+        propagate_to_episodes: bool,
+    ) -> AppResult<Collection> {
+        let collection = self
+            .persist_collection_monitoring(collection_id, monitored, propagate_to_episodes)
+            .await?;
+
+        if monitored {
+            let title = self
+                .services
+                .titles
+                .get_by_id(&collection.title_id)
+                .await?
+                .ok_or_else(|| AppError::NotFound(format!("title {}", collection.title_id)))?;
+
+            if !title.monitored {
+                self.persist_title_monitoring(&title.id, true).await?;
+                tracing::info!(
+                    title_id = %title.id,
+                    title_name = %title.name,
+                    "auto-monitored title because a collection was monitored"
+                );
+            } else {
+                self.sync_title_for_immediate_acquisition(&title).await;
+            }
+        }
+
+        Ok(collection)
+    }
+
+    /// Canonical owner for episode monitoring orchestration. Dedicated monitor
+    /// mutations and generic episode updates must both delegate here so parent
+    /// propagation and immediate acquisition behavior stay single-sourced.
+    async fn apply_episode_monitoring_change(
+        &self,
+        episode_id: &str,
+        monitored: bool,
+    ) -> AppResult<Episode> {
+        let episode = self
+            .persist_episode_monitoring(episode_id, monitored)
+            .await?;
+
+        if monitored {
+            if let Some(collection_id) = episode.collection_id.as_deref() {
+                let collection = self
+                    .services
+                    .shows
+                    .get_collection_by_id(collection_id)
+                    .await?
+                    .ok_or_else(|| AppError::NotFound(format!("collection {}", collection_id)))?;
+
+                if !collection.monitored {
+                    self.persist_collection_monitoring(collection_id, true, false)
+                        .await?;
+                    tracing::info!(
+                        collection_id = %collection_id,
+                        "auto-monitored collection because an episode was monitored"
+                    );
+                }
+            }
+
+            let title = self
+                .services
+                .titles
+                .get_by_id(&episode.title_id)
+                .await?
+                .ok_or_else(|| AppError::NotFound(format!("title {}", episode.title_id)))?;
+
+            if !title.monitored {
+                self.persist_title_monitoring(&title.id, true).await?;
+                tracing::info!(
+                    title_id = %title.id,
+                    title_name = %title.name,
+                    "auto-monitored title because an episode was monitored"
+                );
+            } else {
+                self.sync_title_for_immediate_acquisition(&title).await;
+            }
+        }
+
+        Ok(episode)
+    }
+
+    pub async fn set_title_monitored(
+        &self,
+        actor: &User,
+        id: &str,
+        monitored: bool,
+    ) -> AppResult<Title> {
+        require(actor, &Entitlement::MonitorTitle)?;
+
+        let title = self.persist_title_monitoring(id, monitored).await?;
 
         self.services
             .record_event(
@@ -1853,47 +2152,8 @@ impl AppUseCase {
         require(actor, &Entitlement::MonitorTitle)?;
 
         let collection = self
-            .services
-            .shows
-            .update_collection(
-                collection_id,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                Some(monitored),
-            )
+            .apply_collection_monitoring_change(collection_id, monitored, true)
             .await?;
-        self.services
-            .shows
-            .set_collection_episodes_monitored(collection_id, monitored)
-            .await?;
-
-        // Auto-monitor the parent title + immediate wanted sync
-        if monitored
-            && let Ok(Some(title)) = self.services.titles.get_by_id(&collection.title_id).await
-        {
-            if !title.monitored {
-                let _ = self.services.titles.update_monitored(&title.id, true).await;
-                tracing::info!(
-                    title_id = %title.id,
-                    title_name = %title.name,
-                    "auto-monitored title because a collection was monitored"
-                );
-            }
-
-            let now = Utc::now();
-            if let Some(handler) = self.facet_registry.get(&title.facet)
-                && handler.has_episodes()
-            {
-                // Re-fetch title in case monitoring was just updated
-                if let Ok(Some(title)) = self.services.titles.get_by_id(&title.id).await {
-                    self.sync_wanted_series_inner(&title, &now, true).await;
-                }
-            }
-        }
 
         self.services
             .record_event(
@@ -1918,80 +2178,8 @@ impl AppUseCase {
         require(actor, &Entitlement::MonitorTitle)?;
 
         let episode = self
-            .services
-            .shows
-            .update_episode(
-                episode_id,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                Some(monitored),
-                None,
-                None,
-                None,
-            )
+            .apply_episode_monitoring_change(episode_id, monitored)
             .await?;
-
-        // When monitoring an episode, ensure the parent title and collection are
-        // also monitored — matching Sonarr behavior where monitoring any item
-        // implies the title should be monitored.
-        if monitored {
-            if let Ok(Some(title)) = self.services.titles.get_by_id(&episode.title_id).await
-                && !title.monitored
-            {
-                let _ = self.services.titles.update_monitored(&title.id, true).await;
-                tracing::info!(
-                    title_id = %title.id,
-                    title_name = %title.name,
-                    "auto-monitored title because an episode was monitored"
-                );
-            }
-
-            if let Some(ref collection_id) = episode.collection_id
-                && let Ok(Some(collection)) = self
-                    .services
-                    .shows
-                    .get_collection_by_id(collection_id)
-                    .await
-                && !collection.monitored
-            {
-                let _ = self
-                    .services
-                    .shows
-                    .update_collection(
-                        collection_id,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        Some(true),
-                    )
-                    .await;
-                tracing::info!(
-                    collection_id = %collection_id,
-                    "auto-monitored collection because an episode was monitored"
-                );
-            }
-
-            // Immediately sync wanted items for this title so the episode
-            // appears on the wanted page without waiting for the hourly sync.
-            if let Ok(Some(title)) = self.services.titles.get_by_id(&episode.title_id).await {
-                let now = Utc::now();
-                if let Some(handler) = self.facet_registry.get(&title.facet)
-                    && handler.has_episodes()
-                {
-                    self.sync_wanted_series_inner(&title, &now, true).await;
-                }
-            }
-        }
 
         self.services
             .record_event(
@@ -2368,16 +2556,12 @@ impl AppUseCase {
             .facet_registry
             .get(&existing_title.facet)
             .ok_or_else(|| AppError::Validation("unsupported title facet".into()))?;
-        let language = self.metadata_language().await;
-        let hydration_result = handler
-            .hydrate_metadata(
-                self.services.metadata_gateway.as_ref(),
-                target_tvdb_numeric,
-                &language,
-            )
+        let has_episodes = handler.has_episodes();
+        let hydration_result = self
+            .fetch_hydration_result(&existing_title, target_tvdb_numeric)
             .await?;
 
-        if handler.has_episodes() {
+        if has_episodes {
             self.services
                 .pending_releases
                 .delete_pending_releases_for_title(&existing_title.id)
@@ -2423,7 +2607,7 @@ impl AppUseCase {
         }
 
         let mut library_scan = None;
-        if handler.has_episodes() {
+        if has_episodes {
             match self.scan_title_library(actor, &existing_title.id).await {
                 Ok(summary) => library_scan = Some(summary),
                 Err(err) => warnings.push(format!("Library relink failed: {err}")),
@@ -2431,14 +2615,8 @@ impl AppUseCase {
         }
 
         if hydrated_title.monitored {
-            let now = Utc::now();
-            if handler.has_episodes() {
-                self.sync_wanted_series_inner(&hydrated_title, &now, true)
-                    .await;
-            } else {
-                self.sync_wanted_movie_inner(&hydrated_title, &now, true)
-                    .await;
-            }
+            self.sync_title_for_immediate_acquisition(&hydrated_title)
+                .await;
         }
 
         let refreshed_title = self
@@ -2447,6 +2625,8 @@ impl AppUseCase {
             .get_by_id(&existing_title.id)
             .await?
             .unwrap_or(hydrated_title);
+        self.complete_title_hydration(&refreshed_title, HydrationCompletionOptions::REMATCH)
+            .await;
 
         let old_tvdb_id = extract_tvdb_id(&existing_title).map(|id| id.to_string());
 
@@ -2536,6 +2716,18 @@ impl AppUseCase {
         self.services
             .media_files
             .list_title_media_size_summaries(title_ids)
+            .await
+    }
+
+    pub async fn list_title_episode_progress_summaries(
+        &self,
+        actor: &User,
+        title_ids: &[String],
+    ) -> AppResult<Vec<TitleEpisodeProgressSummary>> {
+        require(actor, &Entitlement::ViewCatalog)?;
+        self.services
+            .media_files
+            .list_title_episode_progress_summaries(title_ids)
             .await
     }
 
@@ -2664,6 +2856,12 @@ impl AppUseCase {
                 })
             })
             .transpose()?;
+        let has_non_monitor_updates = parsed_type.is_some()
+            || collection_index.is_some()
+            || label.is_some()
+            || ordered_path.is_some()
+            || first_episode_number.is_some()
+            || last_episode_number.is_some();
 
         if let Some(raw) = &collection_index
             && raw.trim().is_empty()
@@ -2673,20 +2871,36 @@ impl AppUseCase {
             ));
         }
 
-        let collection = self
-            .services
-            .shows
-            .update_collection(
-                &collection_id,
-                parsed_type,
-                collection_index.map(|value| value.trim().to_string()),
-                normalize_show_text_opt(label),
-                normalize_show_text_opt(ordered_path),
-                normalize_show_text_opt(first_episode_number),
-                normalize_show_text_opt(last_episode_number),
-                monitored,
+        let mut collection = if has_non_monitor_updates {
+            Some(
+                self.services
+                    .shows
+                    .update_collection(
+                        &collection_id,
+                        parsed_type,
+                        collection_index.map(|value| value.trim().to_string()),
+                        normalize_show_text_opt(label),
+                        normalize_show_text_opt(ordered_path),
+                        normalize_show_text_opt(first_episode_number),
+                        normalize_show_text_opt(last_episode_number),
+                        None,
+                    )
+                    .await?,
             )
-            .await?;
+        } else {
+            None
+        };
+
+        if let Some(monitored) = monitored {
+            collection = Some(
+                self.apply_collection_monitoring_change(&collection_id, monitored, true)
+                    .await?,
+            );
+        }
+
+        let collection = collection.ok_or_else(|| {
+            AppError::Validation("at least one collection field must be provided".into())
+        })?;
 
         self.services
             .record_event(
@@ -2816,27 +3030,54 @@ impl AppUseCase {
                     .ok_or_else(|| AppError::Validation(format!("unknown episode type: {}", value)))
             })
             .transpose()?;
+        let has_non_monitor_updates = parsed_episode_type.is_some()
+            || episode_number.is_some()
+            || season_number.is_some()
+            || episode_label.is_some()
+            || title.is_some()
+            || air_date.is_some()
+            || duration_seconds.is_some()
+            || has_multi_audio.is_some()
+            || has_subtitle.is_some()
+            || collection_id.is_some()
+            || overview.is_some();
 
-        let episode = self
-            .services
-            .shows
-            .update_episode(
-                &episode_id,
-                parsed_episode_type,
-                normalize_show_text_opt(episode_number),
-                normalize_show_text_opt(season_number),
-                normalize_show_text_opt(episode_label),
-                normalize_show_text_opt(title),
-                normalize_show_text_opt(air_date),
-                duration_seconds,
-                has_multi_audio,
-                has_subtitle,
-                monitored,
-                collection_id,
-                overview,
-                None,
+        let mut episode = if has_non_monitor_updates {
+            Some(
+                self.services
+                    .shows
+                    .update_episode(
+                        &episode_id,
+                        parsed_episode_type,
+                        normalize_show_text_opt(episode_number),
+                        normalize_show_text_opt(season_number),
+                        normalize_show_text_opt(episode_label),
+                        normalize_show_text_opt(title),
+                        normalize_show_text_opt(air_date),
+                        duration_seconds,
+                        has_multi_audio,
+                        has_subtitle,
+                        None,
+                        collection_id,
+                        overview,
+                        None,
+                    )
+                    .await?,
             )
-            .await?;
+        } else {
+            None
+        };
+
+        if let Some(monitored) = monitored {
+            episode = Some(
+                self.apply_episode_monitoring_change(&episode_id, monitored)
+                    .await?,
+            );
+        }
+
+        let episode = episode.ok_or_else(|| {
+            AppError::Validation("at least one episode field must be provided".into())
+        })?;
 
         self.services
             .record_event(
@@ -3086,14 +3327,172 @@ fn extract_tvdb_id(title: &scryer_domain::Title) -> Option<i64> {
         .and_then(|eid| eid.value.parse::<i64>().ok())
 }
 
-async fn maybe_auto_scan_title_library_after_hydration(
-    app: &AppUseCase,
-    title: &scryer_domain::Title,
-) {
-    let Some(handler) = app.facet_registry.get(&title.facet) else {
+async fn mark_library_scan_title_hydration_completed(app: &AppUseCase, title_id: &str) {
+    let Some(session_id) = app
+        .services
+        .library_scan_tracker
+        .mark_title_metadata_completed(title_id)
+        .await
+    else {
         return;
     };
-    if !handler.has_episodes() || title.metadata_fetched_at.is_none() {
+    let _ = app
+        .services
+        .library_scan_tracker
+        .complete_if_finished(&session_id)
+        .await;
+}
+
+async fn mark_library_scan_title_hydration_failed(app: &AppUseCase, title: &scryer_domain::Title) {
+    let Some(session_id) = app
+        .services
+        .library_scan_tracker
+        .mark_title_metadata_failed(&title.id)
+        .await
+    else {
+        return;
+    };
+    let _ = app
+        .services
+        .library_scan_tracker
+        .complete_if_finished(&session_id)
+        .await;
+}
+
+async fn enqueue_post_hydration_title_scan(app: &AppUseCase, title_id: &str) {
+    if app
+        .services
+        .post_hydration_title_scan_queue
+        .enqueue(title_id.to_string())
+        .await
+    {
+        info!(title_id = %title_id, "queued post-hydration title scan");
+    }
+}
+
+async fn wait_for_tracked_title_files(
+    app: &AppUseCase,
+    title_id: &str,
+) -> Option<Vec<LibraryFile>> {
+    loop {
+        if let Some(files) = app
+            .services
+            .library_scan_tracker
+            .take_title_files(title_id)
+            .await
+        {
+            return Some(files);
+        }
+
+        if app
+            .services
+            .library_scan_tracker
+            .session_for_title(title_id)
+            .await
+            .is_none()
+        {
+            return None;
+        }
+
+        if !app
+            .services
+            .library_scan_tracker
+            .is_title_pre_scan_pending(title_id)
+            .await
+        {
+            return None;
+        }
+
+        if tokio::time::timeout(
+            TRACKED_TITLE_PRE_SCAN_WAIT_TIMEOUT,
+            app.services
+                .library_scan_tracker
+                .wait_for_title_pre_scan_update(),
+        )
+        .await
+        .is_err()
+        {
+            warn!(
+                title_id = %title_id,
+                timeout_secs = TRACKED_TITLE_PRE_SCAN_WAIT_TIMEOUT.as_secs(),
+                "timed out waiting for tracked title pre-scan update"
+            );
+            return app
+                .services
+                .library_scan_tracker
+                .take_title_files(title_id)
+                .await;
+        }
+    }
+}
+
+async fn finalize_failed_post_hydration_title_scan(
+    app: &AppUseCase,
+    title_id: &str,
+    pre_scanned_files: Option<Vec<LibraryFile>>,
+) {
+    let Some(session_id) = app
+        .services
+        .library_scan_tracker
+        .session_for_title(title_id)
+        .await
+    else {
+        return;
+    };
+
+    let cached_files = match pre_scanned_files {
+        Some(files) => Some(files),
+        None => wait_for_tracked_title_files(app, title_id).await,
+    };
+    let remaining = cached_files.as_ref().map(Vec::len).unwrap_or_default();
+
+    if remaining > 0 {
+        let _ = app
+            .services
+            .library_scan_tracker
+            .increment_file_failed(&session_id, remaining)
+            .await;
+    }
+
+    app.services
+        .library_scan_tracker
+        .release_title(title_id)
+        .await;
+    let _ = app
+        .services
+        .library_scan_tracker
+        .complete_if_finished(&session_id)
+        .await;
+}
+
+async fn run_post_hydration_title_scan(app: &AppUseCase, title_id: &str) {
+    let Some(title) = app.services.titles.get_by_id(title_id).await.ok().flatten() else {
+        finalize_failed_post_hydration_title_scan(app, title_id, None).await;
+        warn!(title_id = %title_id, "skipping post-hydration title scan for missing title");
+        return;
+    };
+
+    let Some(handler) = app.facet_registry.get(&title.facet) else {
+        finalize_failed_post_hydration_title_scan(app, title_id, None).await;
+        return;
+    };
+    let has_episode_records = if title.metadata_fetched_at.is_some() {
+        true
+    } else {
+        match app.services.shows.list_episodes_for_title(title_id).await {
+            Ok(episodes) => !episodes.is_empty(),
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    title_id = %title_id,
+                    "failed to inspect episode records before tracked title scan"
+                );
+                false
+            }
+        }
+    };
+    if !handler.has_episodes() || !has_episode_records {
+        finalize_failed_post_hydration_title_scan(app, title_id, None).await;
         return;
     }
 
@@ -3103,32 +3502,104 @@ async fn maybe_auto_scan_title_library_after_hydration(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
+        finalize_failed_post_hydration_title_scan(app, title_id, None).await;
+        warn!(title_id = %title_id, "skipping post-hydration title scan without folder path");
         return;
     };
     match tokio::fs::metadata(folder_path).await {
         Ok(metadata) if metadata.is_dir() => {}
-        Ok(_) | Err(_) => return,
+        Ok(_) | Err(_) => {
+            finalize_failed_post_hydration_title_scan(app, title_id, None).await;
+            warn!(
+                title_id = %title_id,
+                folder_path = %folder_path,
+                "skipping post-hydration title scan for missing folder"
+            );
+            return;
+        }
     }
 
     let actor = match app.find_or_create_default_user().await {
         Ok(actor) => actor,
         Err(error) => {
+            finalize_failed_post_hydration_title_scan(app, title_id, None).await;
             warn!(
                 error = %error,
-                title_id = %title.id,
+                title_id = %title_id,
                 "failed to resolve default user for post-hydration title scan"
             );
             return;
         }
     };
 
-    if let Err(error) = app.scan_title_library(&actor, &title.id).await {
+    let tracked_session_id = app
+        .services
+        .library_scan_tracker
+        .session_for_title(title_id)
+        .await;
+    let pre_scanned_files = wait_for_tracked_title_files(app, title_id).await;
+
+    if let Err(error) = app
+        .scan_title_library_for_title(
+            &actor,
+            title.clone(),
+            tracked_session_id.as_deref(),
+            pre_scanned_files.clone(),
+        )
+        .await
+    {
+        finalize_failed_post_hydration_title_scan(app, title_id, pre_scanned_files).await;
         warn!(
             error = %error,
-            title_id = %title.id,
+            title_id = %title_id,
             folder_path = %folder_path,
             "failed to auto-scan episodic title after hydration"
         );
+    }
+}
+
+async fn maybe_auto_scan_title_library_after_hydration(app: &AppUseCase, title_id: &str) {
+    run_post_hydration_title_scan(app, title_id).await;
+}
+
+pub async fn start_background_post_hydration_title_scan_workers(
+    app: AppUseCase,
+    token: tokio_util::sync::CancellationToken,
+) {
+    info!(
+        workers = POST_HYDRATION_TITLE_SCAN_CONCURRENCY,
+        "background post-hydration title scan workers started"
+    );
+
+    let mut workers = Vec::with_capacity(POST_HYDRATION_TITLE_SCAN_CONCURRENCY);
+    for worker_index in 0..POST_HYDRATION_TITLE_SCAN_CONCURRENCY {
+        let app = app.clone();
+        let token = token.child_token();
+        workers.push(tokio::spawn(async move {
+            loop {
+                let Some(title_id) = app
+                    .services
+                    .post_hydration_title_scan_queue
+                    .dequeue(&token)
+                    .await
+                else {
+                    return;
+                };
+
+                info!(worker_index, title_id = %title_id, "running queued post-hydration title scan");
+                run_post_hydration_title_scan(&app, &title_id).await;
+                app.services
+                    .post_hydration_title_scan_queue
+                    .finish(&title_id)
+                    .await;
+            }
+        }));
+    }
+
+    token.cancelled().await;
+    info!("background post-hydration title scan workers shutting down");
+    for worker in workers {
+        let _ = worker.await;
     }
 }
 
@@ -3225,11 +3696,18 @@ pub async fn start_background_hydration_loop(
                         if let Some(movie) = tvdb_id.and_then(|id| bulk.movies.get(&id)) {
                             let result = super::movie_to_hydration_result(movie.clone(), &language);
                             let hydrated = app.apply_hydration_result(title, result).await;
-                            if hydrated.metadata_fetched_at.is_some() {
-                                app.emit_hydration_completed(&hydrated).await;
-                            }
-                            sync_wanted_after_hydration(&app, &hydrated).await;
+                            app.complete_title_hydration(
+                                &hydrated,
+                                HydrationCompletionOptions::BACKGROUND,
+                            )
+                            .await;
                         } else {
+                            mark_library_scan_title_hydration_failed(&app, &title).await;
+                            app.emit_hydration_failed(
+                                &title,
+                                "bulk metadata response missing title",
+                            )
+                            .await;
                             had_failures = true;
                         }
                     }
@@ -3239,18 +3717,26 @@ pub async fn start_background_hydration_loop(
                             let result =
                                 super::series_to_hydration_result(series.clone(), &language);
                             let hydrated = app.apply_hydration_result(title, result).await;
-                            if hydrated.metadata_fetched_at.is_some() {
-                                maybe_auto_scan_title_library_after_hydration(&app, &hydrated)
-                                    .await;
-                                app.emit_hydration_completed(&hydrated).await;
-                            }
-                            sync_wanted_after_hydration(&app, &hydrated).await;
+                            app.complete_title_hydration(
+                                &hydrated,
+                                HydrationCompletionOptions::BACKGROUND,
+                            )
+                            .await;
                         } else {
+                            mark_library_scan_title_hydration_failed(&app, &title).await;
+                            app.emit_hydration_failed(
+                                &title,
+                                "bulk metadata response missing title",
+                            )
+                            .await;
                             had_failures = true;
                         }
                     }
                 }
                 Err(err) => {
+                    for title in movie_titles.iter().chain(series_titles.iter()) {
+                        mark_library_scan_title_hydration_failed(&app, title).await;
+                    }
                     warn!(error = %err, "hydration loop: bulk metadata fetch failed");
                     had_failures = true;
                 }
@@ -3284,14 +3770,6 @@ pub async fn start_background_hydration_loop(
 /// After successful hydration, sync wanted items for monitored titles.
 async fn sync_wanted_after_hydration(app: &AppUseCase, title: &scryer_domain::Title) {
     if title.monitored && title.metadata_fetched_at.is_some() {
-        let now = Utc::now();
-        if let Some(handler) = app.facet_registry.get(&title.facet) {
-            if handler.has_episodes() {
-                app.sync_wanted_series_inner(title, &now, true).await;
-            } else {
-                app.sync_wanted_movie_inner(title, &now, true).await;
-            }
-        }
-        app.services.acquisition_wake.notify_one();
+        app.sync_title_for_immediate_acquisition(title).await;
     }
 }

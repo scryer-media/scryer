@@ -65,16 +65,8 @@ fn run_init_docker(args: Vec<String>) {
     let stdin = io::stdin();
     let mut reader = stdin.lock();
 
-    let movies_path = prompt(
-        &mut reader,
-        "Movies directory on this host",
-        "/media/movies",
-    );
-    let series_path = prompt(
-        &mut reader,
-        "Series directory on this host",
-        "/media/series",
-    );
+    let movies_path = prompt(&mut reader, "Movies directory on this host", "/data/movies");
+    let series_path = prompt(&mut reader, "Series directory on this host", "/data/series");
     let encryption_key = EncryptionKey::generate().to_base64();
     let compose = generate_compose(&movies_path, &series_path);
 
@@ -255,8 +247,8 @@ fn generate_compose(movies_path: &str, series_path: &str) -> String {
       - "8080:8080"
     volumes:
       - scryer-config:/config
-      - {movies_path}:/media/movies
-      - {series_path}:/media/series
+      - {movies_path}:/data/movies
+      - {series_path}:/data/series
     secrets:
       - scryer_encryption_key
     environment:
@@ -269,10 +261,6 @@ fn generate_compose(movies_path: &str, series_path: &str) -> String {
       # Beta default: authentication is disabled and all requests act
       # as the built-in admin user. Set this to "true" to require login.
       SCRYER_AUTH_ENABLED: "false"
-
-      # ── Media paths (must match your volume mounts above) ─────────
-      SCRYER_MOVIES_PATH: /media/movies
-      SCRYER_SERIES_PATH: /media/series
 
       # ── Metadata gateway ──────────────────────────────────────────
       SCRYER_METADATA_GATEWAY_GRAPHQL_URL: https://smg.scryer.media/graphql

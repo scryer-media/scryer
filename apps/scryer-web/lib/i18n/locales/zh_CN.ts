@@ -141,7 +141,7 @@ const zh_CN: LocaleDictionary = {
     "根文件夹是存储媒体的顶级目录。标星的文件夹是新标题的默认文件夹。",
   "settings.rootFolderAdd": "添加根文件夹",
   "settings.rootFolderEdit": "编辑根文件夹",
-  "settings.rootFolderAddPlaceholder": "/media/movies",
+  "settings.rootFolderAddPlaceholder": "/data/movies",
   "settings.rootFolderSetDefault": "设为默认",
   "settings.libraryScanTitle": "媒体库扫描",
   "settings.libraryScanHelp":
@@ -158,12 +158,12 @@ const zh_CN: LocaleDictionary = {
   "settings.moviesPathLabel": "电影文件夹路径",
   "settings.moviesPathHelp":
     "用作所选电影版本的目标文件夹。",
-  "settings.moviesPathPlaceholder": "/media/movies",
+  "settings.moviesPathPlaceholder": "/data/movies",
   "settings.moviesPathRequired": "电影文件夹路径为必填项。",
   "settings.seriesPathLabel": "剧集文件夹路径",
   "settings.seriesPathHelp":
     "用作所选剧集和动漫版本的目标文件夹。",
-  "settings.seriesPathPlaceholder": "/media/series",
+  "settings.seriesPathPlaceholder": "/data/series",
   "settings.seriesPathRequired": "剧集文件夹路径为必填项。",
   "settings.movieSettingsSaved": "电影设置已保存。",
   "settings.seriesSettingsSaved": "剧集设置已保存。",
@@ -410,6 +410,7 @@ const zh_CN: LocaleDictionary = {
   "title.table.monitored": "监控",
   "title.table.poster": "海报",
   "title.table.qualityTier": "质量",
+  "title.table.episodes": "剧集",
   "title.table.size": "大小",
   "title.viewModeToggle": "视图模式",
   "title.viewModeTable": "表格视图",

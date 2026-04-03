@@ -547,6 +547,8 @@ export const titlesQuery = `query Titles($facet: MediaFacetValue, $query: String
     posterSourceUrl
     qualityTier
     sizeBytes
+    episodesOwned
+    episodesTotal
     contentStatus
     externalIds {
       source
@@ -606,6 +608,66 @@ export const activitySubscriptionQuery = `subscription ActivityStream {
     facet
     message
     occurredAt
+  }
+}`;
+
+export const activeLibraryScansQuery = `query ActiveLibraryScans {
+  activeLibraryScans {
+    sessionId
+    facet
+    status
+    startedAt
+    updatedAt
+    foundTitles
+    metadataTotalKnown
+    fileTotalKnown
+    metadataProgress {
+      total
+      completed
+      failed
+    }
+    fileProgress {
+      total
+      completed
+      failed
+    }
+    summary {
+      scanned
+      matched
+      imported
+      skipped
+      unmatched
+    }
+  }
+}`;
+
+export const libraryScanProgressSubscriptionQuery = `subscription LibraryScanProgress {
+  libraryScanProgress {
+    sessionId
+    facet
+    status
+    startedAt
+    updatedAt
+    foundTitles
+    metadataTotalKnown
+    fileTotalKnown
+    metadataProgress {
+      total
+      completed
+      failed
+    }
+    fileProgress {
+      total
+      completed
+      failed
+    }
+    summary {
+      scanned
+      matched
+      imported
+      skipped
+      unmatched
+    }
   }
 }`;
 

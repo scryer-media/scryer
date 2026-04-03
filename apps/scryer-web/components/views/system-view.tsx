@@ -14,7 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { serviceLogsQuery, serviceLogLinesSubscription } from "@/lib/graphql/queries";
-import { wsClient } from "@/lib/graphql/ws-client";
+import { useDeferredWsSubscription } from "@/lib/hooks/use-deferred-ws-subscription";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
 
 type SystemViewState = {
@@ -187,8 +187,6 @@ function LogViewer() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const autoScrollRef = useRef(true);
   const pausedRef = useRef(paused);
-  const unsubRef = useRef<(() => void) | null>(null);
-  const teardownTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => { pausedRef.current = paused; });
 
@@ -200,51 +198,31 @@ function LogViewer() {
     });
   }, [client]);
 
-  // Subscribe to live log lines via WebSocket
-  useEffect(() => {
-    // StrictMode re-run: cancel the pending teardown
-    if (teardownTimer.current) {
-      clearTimeout(teardownTimer.current);
-      teardownTimer.current = null;
-      return;
-    }
-
-    const unsubscribe = wsClient.subscribe(
-      { query: serviceLogLinesSubscription },
-      {
-        next(result) {
-          const line = result.data?.serviceLogLines as string | undefined;
-          if (line && !pausedRef.current) {
-            setLines((prev) => {
-              const next = [...prev, line];
-              return next.length > MAX_BUFFER ? next.slice(next.length - MAX_BUFFER) : next;
-            });
-          }
-          setConnected(true);
-        },
-        error(err) {
-          console.error("[service-logs] subscription error:", err);
-          setConnected(false);
-        },
-        complete() {
-          unsubRef.current = null;
-          setConnected(false);
-        },
-      },
-    );
-
-    unsubRef.current = unsubscribe;
-    setConnected(true);
-
-    return () => {
-      teardownTimer.current = setTimeout(() => {
-        teardownTimer.current = null;
-        unsubscribe();
-        unsubRef.current = null;
-        setConnected(false);
-      }, 200);
-    };
-  }, []);
+  useDeferredWsSubscription<{ data?: { serviceLogLines?: string } }>({
+    requestKey: "serviceLogLines",
+    request: { query: serviceLogLinesSubscription },
+    onStart() {
+      setConnected(true);
+    },
+    onNext(result) {
+      const line = result.data?.serviceLogLines;
+      if (line && !pausedRef.current) {
+        setLines((prev) => {
+          const next = [...prev, line];
+          return next.length > MAX_BUFFER
+            ? next.slice(next.length - MAX_BUFFER)
+            : next;
+        });
+      }
+    },
+    onError(err) {
+      console.error("[service-logs] subscription error:", err);
+      setConnected(false);
+    },
+    onComplete() {
+      setConnected(false);
+    },
+  });
 
   // Auto-scroll when new lines arrive
   useEffect(() => {

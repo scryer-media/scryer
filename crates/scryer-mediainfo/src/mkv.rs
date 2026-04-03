@@ -5,14 +5,25 @@ use matroska_demuxer::{Frame, MatroskaFile, TrackType, TransferCharacteristics};
 
 use crate::MediaInfoError;
 use crate::codec::normalize_codec_name;
+use crate::probe::ProbeBudget;
 use crate::types::{RawContainer, RawTrack, TrackKind};
 
-/// Maximum number of seconds of frame data to sample when estimating per-track
-/// bitrates. For files shorter than this, all frames are counted.
-const BITRATE_SAMPLE_SECONDS: f64 = 30.0;
+const HDR10PLUS_SCAN_MAX_BYTES: u64 = 4 * 1024 * 1024;
+const HDR10PLUS_SCAN_MAX_FRAMES: usize = 2048;
+
+fn normalize_mkv_track_language(
+    language_bcp47: Option<&str>,
+    language: Option<&str>,
+) -> Option<String> {
+    language_bcp47
+        .or(language)
+        .filter(|value| !value.is_empty() && *value != "und")
+        .map(str::to_owned)
+}
 
 /// Parse an MKV/WebM file into a [`RawContainer`].
 pub(crate) fn parse_mkv(path: &Path) -> Result<RawContainer, MediaInfoError> {
+    let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     let file = std::fs::File::open(path).map_err(|e| MediaInfoError::Io(e.to_string()))?;
     let mut mkv = MatroskaFile::open(file)
         .map_err(|e| MediaInfoError::Parse(format!("matroska open: {e}")))?;
@@ -34,7 +45,6 @@ pub(crate) fn parse_mkv(path: &Path) -> Result<RawContainer, MediaInfoError> {
 
     // -- tracks ----------------------------------------------------------
     let mut tracks: Vec<RawTrack> = Vec::new();
-    // Map track_number -> index in `tracks` for bitrate accumulation.
     let mut track_index: HashMap<u64, usize> = HashMap::new();
 
     for entry in mkv.tracks() {
@@ -55,11 +65,7 @@ pub(crate) fn parse_mkv(path: &Path) -> Result<RawContainer, MediaInfoError> {
             height: None,
             channels: None,
             bit_rate_bps: None,
-            language: entry
-                .language_bcp47()
-                .or_else(|| entry.language())
-                .filter(|l| !l.is_empty() && *l != "und")
-                .map(str::to_owned),
+            language: normalize_mkv_track_language(entry.language_bcp47(), entry.language()),
             name: entry.name().map(str::to_owned),
             forced: entry.flag_forced(),
             default_track: entry.flag_default(),
@@ -113,8 +119,19 @@ pub(crate) fn parse_mkv(path: &Path) -> Result<RawContainer, MediaInfoError> {
         vt.dovi_config = Some(dovi_config);
     }
 
-    // -- per-track bitrate estimation ------------------------------------
-    estimate_bitrates(&mut mkv, &track_index, &mut tracks, duration_seconds)?;
+    // Use a fast overall bitrate estimate for the primary video stream instead
+    // of walking large frame ranges over networked filesystems.
+    if file_size > 0
+        && let Some(duration_seconds) = duration_seconds
+        && duration_seconds > 0.0
+        && let Some(video_track) = tracks
+            .iter_mut()
+            .find(|track| track.kind == TrackKind::Video)
+    {
+        video_track.bit_rate_bps = Some((file_size as f64 * 8.0 / duration_seconds) as i64);
+    }
+
+    scan_first_hevc_frame_for_hdr10plus(&mut mkv, &track_index, &mut tracks)?;
 
     Ok(RawContainer {
         format_name,
@@ -135,27 +152,13 @@ fn count_mkv_chapters<R: std::io::Read + std::io::Seek>(mkv: &MatroskaFile<R>) -
         .unwrap_or(0)
 }
 
-/// Walk frames and accumulate byte sizes per track to estimate bitrate.
-///
-/// For files longer than [`BITRATE_SAMPLE_SECONDS`] we stop early and
-/// extrapolate from the sampled duration.
-///
-/// As a side-effect, scans the first HEVC video frame for HDR10+ (SMPTE ST
-/// 2094-40) dynamic metadata and sets `has_hdr10plus` on the video track.
-fn estimate_bitrates<R: std::io::Read + std::io::Seek>(
+/// Scan only until the first HEVC video frame is seen, with explicit budgets,
+/// so MKV/WebM analysis stays header-driven instead of frame-walking.
+fn scan_first_hevc_frame_for_hdr10plus<R: std::io::Read + std::io::Seek>(
     mkv: &mut MatroskaFile<R>,
     track_index: &HashMap<u64, usize>,
     tracks: &mut [RawTrack],
-    duration_seconds: Option<f64>,
 ) -> Result<(), MediaInfoError> {
-    let timestamp_scale_ns = mkv.info().timestamp_scale().get() as f64;
-
-    // Determine the sampling cutoff in TimestampScale units.
-    let sample_limit_ts: Option<u64> = duration_seconds
-        .filter(|&d| d > BITRATE_SAMPLE_SECONDS)
-        .map(|_| (BITRATE_SAMPLE_SECONDS * 1e9 / timestamp_scale_ns) as u64);
-
-    // Identify the HEVC video track (if any) for HDR10+ scanning.
     let hevc_video_track_num: Option<u64> = track_index.iter().find_map(|(&num, &idx)| {
         let t = &tracks[idx];
         if t.kind == TrackKind::Video && t.codec_name.as_deref() == Some("hevc") {
@@ -171,14 +174,13 @@ fn estimate_bitrates<R: std::io::Read + std::io::Seek>(
             .as_deref()
             .map(crate::codec::hevc_nal_length_size)
     });
-    let mut checked_hdr10plus = false;
+    let Some((hevc_track_num, nal_length_size)) = hevc_video_track_num.zip(hevc_nal_len) else {
+        return Ok(());
+    };
 
-    // Accumulate total bytes per track and track the last timestamp seen.
-    let mut bytes_per_track: HashMap<u64, u64> = HashMap::new();
-    let mut last_timestamp: u64 = 0;
-
+    let mut payload_budget = ProbeBudget::new(HDR10PLUS_SCAN_MAX_BYTES);
     let mut frame = Frame::default();
-    loop {
+    for _ in 0..HDR10PLUS_SCAN_MAX_FRAMES {
         let has_frame = mkv
             .next_frame(&mut frame)
             .map_err(|e| MediaInfoError::Parse(format!("matroska frame read: {e}")))?;
@@ -186,45 +188,18 @@ fn estimate_bitrates<R: std::io::Read + std::io::Seek>(
             break;
         }
 
-        // If we're past the sample window, stop.
-        if let Some(limit) = sample_limit_ts
-            && frame.timestamp > limit
-        {
+        if payload_budget.exhausted() {
             break;
         }
+        payload_budget.consume(frame.data.len());
 
-        if track_index.contains_key(&frame.track) {
-            *bytes_per_track.entry(frame.track).or_insert(0) += frame.data.len() as u64;
-        }
-        if frame.timestamp > last_timestamp {
-            last_timestamp = frame.timestamp;
-        }
-
-        // Check first HEVC video frame for HDR10+ SEI.
-        if !checked_hdr10plus
-            && let (Some(hevc_num), Some(nal_len)) = (hevc_video_track_num, hevc_nal_len)
-            && frame.track == hevc_num
-        {
-            checked_hdr10plus = true;
-            if crate::codec::scan_hevc_frame_for_hdr10plus(&frame.data, nal_len)
-                && let Some(&idx) = track_index.get(&hevc_num)
+        if frame.track == hevc_track_num {
+            if crate::codec::scan_hevc_frame_for_hdr10plus(&frame.data, nal_length_size)
+                && let Some(&idx) = track_index.get(&hevc_track_num)
             {
                 tracks[idx].has_hdr10plus = true;
             }
-        }
-    }
-
-    // Convert last_timestamp (TimestampScale units) to seconds.
-    let sampled_seconds = (last_timestamp as f64) * timestamp_scale_ns / 1e9;
-    if sampled_seconds <= 0.0 {
-        return Ok(());
-    }
-
-    for (&track_num, &total_bytes) in &bytes_per_track {
-        if let Some(&idx) = track_index.get(&track_num) {
-            // bits per second = bytes * 8 / seconds
-            let bps = ((total_bytes as f64) * 8.0 / sampled_seconds) as i64;
-            tracks[idx].bit_rate_bps = Some(bps);
+            break;
         }
     }
 
@@ -356,5 +331,20 @@ mod tests {
         assert_eq!(parse_ebml_vint(&[0x85]), Some((5, 1)));
         // 0x40 0x18 = 2 byte VINT, value 24
         assert_eq!(parse_ebml_vint(&[0x40, 0x18]), Some((24, 2)));
+    }
+
+    #[test]
+    fn normalize_track_language_preserves_unknown() {
+        assert_eq!(normalize_mkv_track_language(None, None), None);
+        assert_eq!(normalize_mkv_track_language(Some(""), None), None);
+        assert_eq!(normalize_mkv_track_language(None, Some("und")), None);
+        assert_eq!(
+            normalize_mkv_track_language(Some("jpn"), Some("eng")),
+            Some("jpn".to_string())
+        );
+        assert_eq!(
+            normalize_mkv_track_language(None, Some("eng")),
+            Some("eng".to_string())
+        );
     }
 }

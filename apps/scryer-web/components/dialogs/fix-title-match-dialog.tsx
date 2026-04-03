@@ -232,7 +232,7 @@ export function FixTitleMatchDialog({
                   <div className="flex items-start">
                     <Button
                       type="button"
-                      variant={selected ? "secondary" : "outline"}
+                      variant="primary"
                       size="sm"
                       className="gap-2"
                       disabled={applying}

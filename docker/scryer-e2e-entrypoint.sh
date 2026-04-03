@@ -10,10 +10,9 @@ ensure_dir() {
 
 if [ "$(id -u)" = "0" ]; then
   ensure_dir /data
-  ensure_dir /media
-  ensure_dir /media/movies
-  ensure_dir /media/series
-  ensure_dir /media/anime
+  ensure_dir /data/movies
+  ensure_dir /data/series
+  ensure_dir /data/anime
   ensure_dir /weaver-downloads
   ensure_dir /nzbget-downloads
   ensure_dir /sabnzbd-downloads
@@ -21,7 +20,6 @@ if [ "$(id -u)" = "0" ]; then
 
   chown -R "${SCRYER_UID}:${SCRYER_GID}" \
     /data \
-    /media \
     /weaver-downloads \
     /nzbget-downloads \
     /sabnzbd-downloads \

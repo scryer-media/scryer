@@ -959,6 +959,24 @@ impl SqliteServices {
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
+    pub async fn list_title_episode_progress_summaries(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<scryer_application::TitleEpisodeProgressSummary>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::ListTitleEpisodeProgressSummaries {
+                title_ids: title_ids.to_vec(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
     pub async fn update_media_file_analysis(
         &self,
         file_id: &str,
@@ -1003,6 +1021,22 @@ impl SqliteServices {
             .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
+    pub async fn update_media_file_path(&self, file_id: &str, file_path: &str) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::UpdateMediaFilePath {
+                file_id: file_id.to_string(),
+                file_path: file_path.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
     pub async fn mark_scan_failed(&self, file_id: &str, error: &str) -> AppResult<()> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender
@@ -1027,6 +1061,24 @@ impl SqliteServices {
         self.sender
             .send(DbCommand::GetMediaFileById {
                 file_id: file_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn get_media_file_by_path(
+        &self,
+        file_path: &str,
+    ) -> AppResult<Option<scryer_application::TitleMediaFile>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::GetMediaFileByPath {
+                file_path: file_path.to_string(),
                 reply: reply_tx,
             })
             .await
@@ -1236,6 +1288,36 @@ impl SqliteServices {
         self.sender
             .send(DbCommand::DeleteWantedItemsForTitle {
                 title_id: title_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn delete_wanted_items_for_collection(&self, collection_id: &str) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::DeleteWantedItemsForCollection {
+                collection_id: collection_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+    }
+
+    pub async fn delete_wanted_items_for_episode(&self, episode_id: &str) -> AppResult<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(DbCommand::DeleteWantedItemsForEpisode {
+                episode_id: episode_id.to_string(),
                 reply: reply_tx,
             })
             .await

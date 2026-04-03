@@ -60,6 +60,18 @@ function bytesToReadable(raw: number | null | undefined) {
   return `${raw} B`;
 }
 
+function formatEpisodeProgress(
+  ownedEpisodes: number | null | undefined,
+  totalEpisodes: number | null | undefined,
+) {
+  if (typeof totalEpisodes !== "number" || totalEpisodes <= 0) {
+    return "—";
+  }
+
+  const owned = typeof ownedEpisodes === "number" && ownedEpisodes >= 0 ? ownedEpisodes : 0;
+  return `${owned}/${totalEpisodes}`;
+}
+
 type TitleTableProps = {
   view: string;
   titles: TitleRecord[];
@@ -162,12 +174,13 @@ export function TitleTable({
   const t = useTranslate();
   const isMovieView = view === "movies";
   const overviewTargetView: ViewId = isMovieView ? "movies" : view === "anime" ? "anime" : "series";
-  const columnCount = isMovieView ? 6 : 5;
+  const columnCount = isMovieView ? 6 : 7;
   const titleTableColGroup = (
     <colgroup>
       <col style={{ width: "5.5rem" }} />
       <col />
       <col style={{ width: "10rem" }} />
+      {!isMovieView ? <col style={{ width: "8rem" }} /> : null}
       {isMovieView ? <col style={{ width: "8rem" }} /> : null}
       <col style={{ width: "7rem" }} />
       <col style={{ width: "12.5rem" }} />
@@ -319,6 +332,11 @@ export function TitleTable({
             )}
           </TableCell>
           {!isMovieView ? (
+            <TableCell className="align-middle whitespace-nowrap tabular-nums">
+              {formatEpisodeProgress(item.episodesOwned, item.episodesTotal)}
+            </TableCell>
+          ) : null}
+          {!isMovieView ? (
             <TableCell className="align-middle whitespace-nowrap">
               <StatusBadge status={item.contentStatus} t={t} />
             </TableCell>
@@ -444,6 +462,7 @@ export function TitleTable({
         <TableHead>{t("label.name")}</TableHead>
         <TableHead className="text-center whitespace-nowrap">{t("title.table.monitored")}</TableHead>
         <TableHead className="w-48 whitespace-nowrap">{t("title.table.qualityTier")}</TableHead>
+        {!isMovieView ? <TableHead className="whitespace-nowrap">{t("title.table.episodes")}</TableHead> : null}
         {!isMovieView ? <TableHead className="whitespace-nowrap">{t("title.table.status")}</TableHead> : null}
         {isMovieView ? <TableHead className="whitespace-nowrap">{t("title.table.size")}</TableHead> : null}
         <TableHead className="text-center whitespace-nowrap">{t("label.actions")}</TableHead>

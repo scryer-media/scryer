@@ -20,7 +20,6 @@ const NO_TOAST_PATTERNS: RegExp[] = [
   /\btitle is required\b/i,
   /\busername and password are required\b/i,
   /\bpassword is required\b/i,
-  /\blibrary scan running\b/i,
   /\btesting nzbget connection/i,
 ];
 
@@ -32,7 +31,6 @@ const ERROR_PATTERNS: RegExp[] = [
   /\bfailed to (?:load|save|update|create|delete|queue|connect|connect\s+to)\b/i,
   /\bqueue operation failed\b/i,
   /\bdownload client connection test failed\b/i,
-  /\blibrary scan failed\b/i,
   /\binvalid\b/i,
 ];
 

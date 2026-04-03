@@ -6,6 +6,9 @@ REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 COMPOSE_FILE="${SCRYER_DOCKER_COMPOSE_FILE:-$REPO_DIR/docker-compose.dev.yml}"
 COMPOSE_ORCHESTRATION_SERVICE="${SCRYER_DOCKER_STACK_NAME:-scryer-dev}"
 SCRYER_DOCKER_RESTART_SERVICES="${SCRYER_DOCKER_RESTART_SERVICES:-nzbget sabnzbd weaver scryer nodejs proxy prometheus grafana}"
+SCRYER_DOCKER_SCRYER_READY_TIMEOUT_SECONDS="${SCRYER_DOCKER_SCRYER_READY_TIMEOUT_SECONDS:-300}"
+SCRYER_DOCKER_NODEJS_READY_TIMEOUT_SECONDS="${SCRYER_DOCKER_NODEJS_READY_TIMEOUT_SECONDS:-120}"
+SCRYER_DOCKER_READY_POLL_SECONDS="${SCRYER_DOCKER_READY_POLL_SECONDS:-2}"
 NO_SEED=false
 
 while [ "$#" -gt 0 ]; do
@@ -36,6 +39,94 @@ compose_cmd=(
   -f "$COMPOSE_FILE"
 )
 
+contains_service() {
+  local target="$1"
+  shift
+  local service
+  for service in "$@"; do
+    if [ "$service" = "$target" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+log_container_failure() {
+  local container_name="$1"
+  echo "Recent logs for ${container_name}:" >&2
+  docker logs --tail 200 "$container_name" >&2 || true
+}
+
+wait_for_scryer() {
+  echo "Waiting for scryer to be ready..."
+  local attempts=$((SCRYER_DOCKER_SCRYER_READY_TIMEOUT_SECONDS / SCRYER_DOCKER_READY_POLL_SECONDS))
+  if [ "$attempts" -lt 1 ]; then
+    attempts=1
+  fi
+  for _ in $(seq 1 "$attempts"); do
+    if curl -sf http://localhost:8080/health >/dev/null 2>&1; then
+      return 0
+    fi
+
+    case "$(docker inspect --format '{{.State.Status}}' scryer 2>/dev/null || true)" in
+      exited|dead)
+        echo "scryer exited before it became ready." >&2
+        log_container_failure scryer
+        return 1
+        ;;
+    esac
+    sleep "$SCRYER_DOCKER_READY_POLL_SECONDS"
+  done
+
+  echo "Timed out waiting for scryer to become ready." >&2
+  log_container_failure scryer
+  return 1
+}
+
+wait_for_nodejs() {
+  echo "Waiting for nodejs to be ready..."
+  local attempts=$((SCRYER_DOCKER_NODEJS_READY_TIMEOUT_SECONDS / SCRYER_DOCKER_READY_POLL_SECONDS))
+  if [ "$attempts" -lt 1 ]; then
+    attempts=1
+  fi
+  for _ in $(seq 1 "$attempts"); do
+    case "$(docker inspect --format '{{.State.Status}}' scryer-nodejs 2>/dev/null || true)" in
+      running)
+        if docker exec scryer-nodejs sh -lc \
+          'wget -q -O /dev/null http://127.0.0.1:3000' >/dev/null 2>&1; then
+          return 0
+        fi
+        ;;
+      exited|dead)
+        echo "nodejs exited before it became ready." >&2
+        log_container_failure scryer-nodejs
+        return 1
+        ;;
+    esac
+    sleep "$SCRYER_DOCKER_READY_POLL_SECONDS"
+  done
+
+  echo "Timed out waiting for nodejs to become ready." >&2
+  log_container_failure scryer-nodejs
+  return 1
+}
+
+start_services() {
+  local no_deps="$1"
+  shift
+  local -a selected_services=("$@")
+  if [ "${#selected_services[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  local -a up_args=("${compose_cmd[@]}" up -d --build)
+  if [ "$no_deps" = "1" ]; then
+    up_args+=(--no-deps)
+  fi
+  up_args+=("${selected_services[@]}")
+  "${up_args[@]}"
+}
+
 if [ "$#" -gt 0 ]; then
   services=("$@")
 else
@@ -60,20 +151,38 @@ rm -rf "$REPO_DIR/tmp/weaver/data/intermediate/"*
 rm -rf "$REPO_DIR/tmp/weaver/data/complete/"*
 rm -rf "$REPO_DIR/tmp/scryer-media/"*
 
-up_args=("${compose_cmd[@]}" up -d --build --no-deps)
-up_args+=("${services[@]}")
+mkdir -p "$REPO_DIR/tmp/scryer-config"
+mkdir -p "$REPO_DIR/tmp/scryer-data"
+mkdir -p "$REPO_DIR/tmp/scryer-media/movies"
+mkdir -p "$REPO_DIR/tmp/scryer-media/series"
 
-"${up_args[@]}"
+proxy_requested=false
+non_proxy_services=()
+for service in "${services[@]}"; do
+  if [ "$service" = "proxy" ]; then
+    proxy_requested=true
+  else
+    non_proxy_services+=("$service")
+  fi
+done
+
+start_services 1 "${non_proxy_services[@]}"
+
+if contains_service scryer "${services[@]}" || [ "$proxy_requested" = true ]; then
+  wait_for_scryer
+fi
+
+if contains_service nodejs "${services[@]}" || [ "$proxy_requested" = true ]; then
+  wait_for_nodejs
+fi
+
+if [ "$proxy_requested" = true ]; then
+  start_services 1 proxy
+fi
 
 # Run the seed sidecar after scryer is healthy (unless --no-seed)
 if [ "$NO_SEED" = false ] && [ -f "$REPO_DIR/dev-seed.json" ]; then
-  echo "Waiting for scryer to be ready..."
-  for i in $(seq 1 60); do
-    if curl -sf http://localhost:8080/health >/dev/null 2>&1; then
-      break
-    fi
-    sleep 2
-  done
+  wait_for_scryer
   "${compose_cmd[@]}" --profile seed rm -f seed 2>/dev/null || true
   "${compose_cmd[@]}" --profile seed up -d seed
 fi

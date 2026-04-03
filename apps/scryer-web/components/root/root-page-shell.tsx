@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/hooks/use-auth";
 import { TranslateContext } from "@/lib/context/translate-context";
 import { GlobalStatusContext } from "@/lib/context/global-status-context";
 import { RootHeader } from "@/components/root/root-header";
+import { LibraryScanProgressProvider } from "@/components/root/library-scan-progress-provider";
 import { RootSidebar } from "@/components/root/root-sidebar";
 import { ViewLoadingFallback } from "@/components/common/view-loading-fallback";
 import { buildRouteCommands } from "@/components/root/route-commands";
@@ -423,79 +424,81 @@ function AuthenticatedHomePage({
         <BackendRestartOverlay />
       )}
       <Suspense fallback={<ViewLoadingFallback />}>
-        <GlobalSearchProvider
-          activeFacet={activeFacet}
-          queueFacet={queueFacet}
-          uiLanguage={uiLanguage}
-          onCatalogChanged={onCatalogChanged}
-        >
-          <RootHeader
-            onOpenOverview={handleOpenOverview}
-            routeCommandPalette={routeCommandPaletteConfig}
-          />
+        <LibraryScanProgressProvider>
+          <GlobalSearchProvider
+            activeFacet={activeFacet}
+            queueFacet={queueFacet}
+            uiLanguage={uiLanguage}
+            onCatalogChanged={onCatalogChanged}
+          >
+            <RootHeader
+              onOpenOverview={handleOpenOverview}
+              routeCommandPalette={routeCommandPaletteConfig}
+            />
 
-          {!isOnline ? (
-            <div className="flex items-center justify-center gap-2 bg-amber-900/80 px-4 py-2 text-sm text-amber-100">
-              <WifiOff className="h-4 w-4 flex-none" />
-              <span>{t("pwa.offline")}</span>
-            </div>
-          ) : null}
+            {!isOnline ? (
+              <div className="flex items-center justify-center gap-2 bg-amber-900/80 px-4 py-2 text-sm text-amber-100">
+                <WifiOff className="h-4 w-4 flex-none" />
+                <span>{t("pwa.offline")}</span>
+              </div>
+            ) : null}
 
-          {showInstallBanner ? (
-            <div className="flex items-center justify-center gap-3 bg-emerald-100 dark:bg-emerald-900/60 px-4 py-2 text-sm text-emerald-800 dark:text-emerald-100">
-              <Download className="h-4 w-4 flex-none" />
-              <span>{isIosSafari ? t("pwa.iosInstallHint") : t("pwa.installApp")}</span>
-              {canPrompt ? (
+            {showInstallBanner ? (
+              <div className="flex items-center justify-center gap-3 bg-emerald-100 dark:bg-emerald-900/60 px-4 py-2 text-sm text-emerald-800 dark:text-emerald-100">
+                <Download className="h-4 w-4 flex-none" />
+                <span>{isIosSafari ? t("pwa.iosInstallHint") : t("pwa.installApp")}</span>
+                {canPrompt ? (
+                  <button
+                    type="button"
+                    onClick={() => void promptInstall()}
+                    className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-medium text-foreground hover:bg-emerald-500"
+                  >
+                    {t("pwa.installApp")}
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  onClick={() => void promptInstall()}
-                  className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-medium text-foreground hover:bg-emerald-500"
+                  onClick={dismissInstallBanner}
+                  className="ml-auto text-emerald-700 dark:text-emerald-300 hover:text-foreground"
+                  aria-label={t("label.dismiss")}
                 >
-                  {t("pwa.installApp")}
+                  <X className="h-4 w-4" />
                 </button>
-              ) : null}
-              <button
-                type="button"
-                onClick={dismissInstallBanner}
-                className="ml-auto text-emerald-700 dark:text-emerald-300 hover:text-foreground"
-                aria-label={t("label.dismiss")}
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          ) : null}
+              </div>
+            ) : null}
 
-          <div className="mx-auto w-full max-w-[1480px] px-3 pb-10 pt-4">
-            <RootSidebar
-              topNav={topNav}
-              view={view}
-              settingsSection={settingsSection}
-              contentSettingsSection={contentSettingsSection}
-              entitlements={entitlements}
-              onNavigate={navigateTo}
-            >
-              <main className="min-h-[70vh]">
-                <Suspense fallback={<ViewLoadingFallback />}>
-                  <MainContent
-                    view={view}
-                    overviewTitleId={overviewTitleId}
-                    overviewEpisodeId={overviewEpisodeId}
-                    handleBackToList={handleBackToList}
-                    handleTitleNotFound={handleTitleNotFound}
-                    settingsSection={settingsSection}
-                    userId={user?.id}
-                    username={user?.username}
-                    selectedLanguage={selectedLanguage}
-                    uiLanguage={uiLanguage}
-                    setLanguagePreferenceFromShell={setLanguagePreferenceFromShell}
-                    contentSettingsSection={contentSettingsSection}
-                    handleOpenOverview={handleOpenOverview}
-                  />
-                </Suspense>
-              </main>
-            </RootSidebar>
-          </div>
-        </GlobalSearchProvider>
+            <div className="mx-auto w-full max-w-[1480px] px-3 pb-10 pt-4">
+              <RootSidebar
+                topNav={topNav}
+                view={view}
+                settingsSection={settingsSection}
+                contentSettingsSection={contentSettingsSection}
+                entitlements={entitlements}
+                onNavigate={navigateTo}
+              >
+                <main className="min-h-[70vh]">
+                  <Suspense fallback={<ViewLoadingFallback />}>
+                    <MainContent
+                      view={view}
+                      overviewTitleId={overviewTitleId}
+                      overviewEpisodeId={overviewEpisodeId}
+                      handleBackToList={handleBackToList}
+                      handleTitleNotFound={handleTitleNotFound}
+                      settingsSection={settingsSection}
+                      userId={user?.id}
+                      username={user?.username}
+                      selectedLanguage={selectedLanguage}
+                      uiLanguage={uiLanguage}
+                      setLanguagePreferenceFromShell={setLanguagePreferenceFromShell}
+                      contentSettingsSection={contentSettingsSection}
+                      handleOpenOverview={handleOpenOverview}
+                    />
+                  </Suspense>
+                </main>
+              </RootSidebar>
+            </div>
+          </GlobalSearchProvider>
+        </LibraryScanProgressProvider>
       </Suspense>
     </div>
     </GlobalStatusContext.Provider>

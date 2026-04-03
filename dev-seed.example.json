@@ -53,17 +53,17 @@
     {
       "scope": "media",
       "key": "movies.path",
-      "value": "/media/movies"
+      "value": "/data/movies"
     },
     {
       "scope": "media",
       "key": "series.path",
-      "value": "/media/series"
+      "value": "/data/series"
     },
     {
       "scope": "media",
       "key": "anime.path",
-      "value": "/media/anime"
+      "value": "/data/anime"
     },
     {
       "scope": "system",

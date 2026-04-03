@@ -45,7 +45,9 @@ pub(crate) fn normalize_codec_name(codec_id: &str) -> Option<String> {
 
         // --- MP4 FourCC ---
         "avc1" | "avc3" => "h264",
+        "dva1" | "dvav" => "h264",
         "hvc1" | "hev1" => "hevc",
+        "dvh1" | "dvhe" => "hevc",
         "av01" => "av1",
         "vp09" => "vp9",
         "mp4a" => "aac",
@@ -77,34 +79,64 @@ pub(crate) fn normalize_codec_name(codec_id: &str) -> Option<String> {
 /// (e.g. MKV CodecPrivate or MP4 avcC box contents).
 pub(crate) fn extract_h264_info(codec_private: &[u8]) -> CodecInfo {
     use bytes::Bytes;
-    use scuffle_h264::AVCDecoderConfigurationRecord;
+    use scuffle_h264::{AVCDecoderConfigurationRecord, Sps};
     use std::io;
 
     let data = Bytes::from(codec_private.to_vec());
-    let config = match AVCDecoderConfigurationRecord::parse(&mut io::Cursor::new(data)) {
-        Ok(c) => c,
+    if let Ok(config) = AVCDecoderConfigurationRecord::parse(&mut io::Cursor::new(data)) {
+        let profile = map_h264_profile(config.profile_indication);
+
+        // Bit depth: prefer the extended_config field (from the AVCC record itself),
+        // fall back to parsing the first SPS NAL unit.
+        let bit_depth = if let Some(ref ext) = config.extended_config {
+            Some(ext.bit_depth_luma_minus8 as i32 + 8)
+        } else {
+            config.sps.first().and_then(|sps_bytes| {
+                Sps::parse_with_emulation_prevention(io::Cursor::new(sps_bytes))
+                    .ok()
+                    .and_then(|sps| sps.ext.map(|ext| ext.bit_depth_luma_minus8 as i32 + 8))
+            })
+        };
+
+        let color_transfer = config.sps.first().and_then(|sps_bytes| {
+            let sps = Sps::parse_with_emulation_prevention(io::Cursor::new(sps_bytes)).ok()?;
+            let transfer = sps.color_config?.transfer_characteristics as u32;
+            if transfer > 0 && transfer != 2 {
+                Some(transfer)
+            } else {
+                None
+            }
+        });
+
+        return CodecInfo {
+            profile,
+            bit_depth: bit_depth.or(Some(8)),
+            color_transfer,
+        };
+    }
+
+    let sps = match Sps::parse(io::Cursor::new(codec_private)) {
+        Ok(sps) => sps,
         Err(_) => return CodecInfo::default(),
     };
-
-    let profile = map_h264_profile(config.profile_indication);
-
-    // Bit depth: prefer the extended_config field (from the AVCC record itself),
-    // fall back to parsing the first SPS NAL unit.
-    let bit_depth = if let Some(ref ext) = config.extended_config {
-        Some(ext.bit_depth_luma_minus8 as i32 + 8)
-    } else {
-        // Try parsing the first SPS to extract bit depth from the SPS extension
-        config.sps.first().and_then(|sps_bytes| {
-            scuffle_h264::Sps::parse_with_emulation_prevention(io::Cursor::new(sps_bytes))
-                .ok()
-                .and_then(|sps| sps.ext.map(|ext| ext.bit_depth_luma_minus8 as i32 + 8))
-        })
-    };
+    let bit_depth = sps
+        .ext
+        .as_ref()
+        .map(|ext| ext.bit_depth_luma_minus8 as i32 + 8)
+        .or(Some(8));
+    let color_transfer = sps.color_config.as_ref().and_then(|color| {
+        let transfer = color.transfer_characteristics as u32;
+        if transfer > 0 && transfer != 2 {
+            Some(transfer)
+        } else {
+            None
+        }
+    });
 
     CodecInfo {
-        profile,
-        bit_depth: bit_depth.or(Some(8)),
-        color_transfer: None,
+        profile: map_h264_profile(sps.profile_idc),
+        bit_depth,
+        color_transfer,
     }
 }
 
@@ -114,36 +146,50 @@ pub(crate) fn extract_h265_info(codec_private: &[u8]) -> CodecInfo {
     use scuffle_h265::{HEVCDecoderConfigurationRecord, NALUnitType, SpsNALUnit};
     use std::io;
 
-    let config = match HEVCDecoderConfigurationRecord::demux(&mut io::Cursor::new(codec_private)) {
-        Ok(c) => c,
+    if let Ok(config) = HEVCDecoderConfigurationRecord::demux(&mut io::Cursor::new(codec_private)) {
+        let profile = map_h265_profile(config.general_profile_idc);
+        let bit_depth = Some(config.bit_depth_luma_minus8 as i32 + 8);
+
+        // Extract transfer_characteristics from the first SPS VUI.
+        let color_transfer = config
+            .arrays
+            .iter()
+            .filter(|arr| arr.nal_unit_type == NALUnitType::SpsNut)
+            .flat_map(|arr| arr.nalus.iter())
+            .find_map(|nalu_bytes| {
+                let sps = SpsNALUnit::parse(io::Cursor::new(nalu_bytes.clone())).ok()?;
+                let vui = sps.rbsp.vui_parameters?;
+                let tc = vui.video_signal_type.transfer_characteristics;
+                if tc > 0 && tc != 2 {
+                    Some(tc as u32)
+                } else {
+                    None
+                }
+            });
+
+        return CodecInfo {
+            profile,
+            bit_depth,
+            color_transfer,
+        };
+    }
+
+    let sps = match SpsNALUnit::parse(io::Cursor::new(codec_private)) {
+        Ok(sps) => sps,
         Err(_) => return CodecInfo::default(),
     };
-
-    let profile = map_h265_profile(config.general_profile_idc);
-    let bit_depth = Some(config.bit_depth_luma_minus8 as i32 + 8);
-
-    // Extract transfer_characteristics from the first SPS VUI.
-    let color_transfer = config
-        .arrays
-        .iter()
-        .filter(|arr| arr.nal_unit_type == NALUnitType::SpsNut)
-        .flat_map(|arr| arr.nalus.iter())
-        .find_map(|nalu_bytes| {
-            let sps = SpsNALUnit::parse(io::Cursor::new(nalu_bytes.clone())).ok()?;
-            let vui = sps.rbsp.vui_parameters;
-            let vui = vui?;
-            let vst = vui.video_signal_type;
-            let tc = vst.transfer_characteristics;
-            if tc > 0 && tc != 2 {
-                Some(tc as u32)
-            } else {
-                None
-            }
-        });
+    let color_transfer = sps.rbsp.vui_parameters.as_ref().and_then(|vui| {
+        let tc = vui.video_signal_type.transfer_characteristics;
+        if tc > 0 && tc != 2 {
+            Some(tc as u32)
+        } else {
+            None
+        }
+    });
 
     CodecInfo {
-        profile,
-        bit_depth,
+        profile: map_h265_profile(sps.rbsp.profile_tier_level.general_profile.profile_idc),
+        bit_depth: Some(sps.rbsp.bit_depth_luma_minus8 as i32 + 8),
         color_transfer,
     }
 }

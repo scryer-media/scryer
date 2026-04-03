@@ -32,9 +32,11 @@ mod facet_movie;
 mod facet_registry;
 mod facet_series;
 pub mod failed_download_handler;
+pub mod filesystem_walk;
 pub(crate) mod import_checks;
 mod library_rename;
 mod library_scan;
+mod library_scan_progress;
 pub mod managed_rules;
 mod media_analyzer;
 pub(crate) mod nfo;
@@ -42,6 +44,7 @@ pub(crate) mod normalize;
 mod notification_dispatcher;
 mod null_repositories;
 mod post_download_gate;
+mod post_hydration_title_scan_queue;
 mod quality_profile;
 pub mod recycle_bin;
 pub mod release_dedup;
@@ -83,7 +86,7 @@ pub use app_usecase_acquisition::start_background_acquisition_poller;
 pub use app_usecase_backup::BackupService;
 pub use app_usecase_catalog::{
     DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY, LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY,
-    start_background_hydration_loop,
+    start_background_hydration_loop, start_background_post_hydration_title_scan_workers,
 };
 pub use app_usecase_import::{
     ManualImportFileMapping, ManualImportFilePreview, ManualImportFileResult, ManualImportPreview,
@@ -116,11 +119,19 @@ pub use library_rename::{
     RenameApplyStatus, RenameCollisionPolicy, RenameMissingMetadataPolicy, RenamePlan,
     RenamePlanItem, RenameWriteAction, build_rename_plan_fingerprint, render_rename_template,
 };
+use post_hydration_title_scan_queue::PostHydrationTitleScanQueue;
+
+pub(crate) const GLOBAL_LIBRARY_SCAN_ANALYSIS_CONCURRENCY: usize = 4;
 pub use library_scan::{
     AnibridgeSourceMapping, AnimeEpisodeMapping, AnimeMapping, AnimeMovie, BulkMetadataResult,
-    EpisodeMetadata, LibraryFile, LibraryFileBatch, LibraryFileBatchReceiver, LibraryScanSummary,
-    LibraryScanner, MetadataGateway, MetadataSearchItem, MovieMetadata, MultiMetadataSearchResult,
-    RichMetadataSearchItem, SeasonMetadata, SeriesMetadata,
+    EpisodeMetadata, LibraryDirectoryScanResult, LibraryFile, LibraryFileBatch,
+    LibraryFileBatchReceiver, LibraryScanSummary, LibraryScanner, MetadataGateway,
+    MetadataSearchItem, MovieMetadata, MultiMetadataSearchResult, RichMetadataSearchItem,
+    SeasonMetadata, SeriesMetadata, source_signature_from_std_metadata,
+};
+pub use library_scan_progress::{
+    LibraryScanPhaseProgress, LibraryScanSession, LibraryScanStatus, LibraryScanTitleAttachResult,
+    LibraryScanTracker,
 };
 pub use media_analyzer::NativeMediaAnalyzer;
 pub use notification_dispatcher::start_notification_dispatcher;
@@ -153,11 +164,11 @@ pub use types::{
     FixTitleMatchResult, HealthCheckResult, HealthCheckStatus, HousekeepingReport,
     IndexerQueryStats, IndexerSearchResponse, IndexerSearchResult, JwtAuthConfig, PendingRelease,
     PendingReleaseStatus, PrimaryCollectionSummary, ReleaseDecision, ReleaseDownloadAttemptOutcome,
-    ReleaseDownloadFailureSignature, SystemHealth, TitleImageBlob, TitleImageKind,
-    TitleImageReplacement, TitleImageStorageMode, TitleImageSyncTask, TitleImageVariantRecord,
-    TitleMediaFile, TitleMediaSizeSummary, TitleMetadataUpdate, TitleReleaseBlocklistEntry,
-    WantedCompleteTransition, WantedGrabTransition, WantedItem, WantedPauseTransition,
-    WantedSearchTransition, WantedStatus,
+    ReleaseDownloadFailureSignature, SystemHealth, TitleEpisodeProgressSummary, TitleImageBlob,
+    TitleImageKind, TitleImageReplacement, TitleImageStorageMode, TitleImageSyncTask,
+    TitleImageVariantRecord, TitleMediaFile, TitleMediaSizeSummary, TitleMetadataUpdate,
+    TitleReleaseBlocklistEntry, WantedCompleteTransition, WantedGrabTransition, WantedItem,
+    WantedPauseTransition, WantedSearchTransition, WantedStatus,
 };
 
 const SETTINGS_SCOPE_SYSTEM: &str = "system";
@@ -276,6 +287,8 @@ pub struct AppServices {
     pub download_queue_broadcast: broadcast::Sender<Vec<DownloadQueueItem>>,
     pub import_history_broadcast: broadcast::Sender<()>,
     pub settings_changed_broadcast: broadcast::Sender<Vec<String>>,
+    pub library_scan_tracker: LibraryScanTracker,
+    pub post_hydration_title_scan_queue: PostHydrationTitleScanQueue,
     pub acquisition_wake: Arc<tokio::sync::Notify>,
     pub hydration_wake: Arc<tokio::sync::Notify>,
     pub poster_wake: Arc<tokio::sync::Notify>,
@@ -291,6 +304,7 @@ pub struct AppServices {
     pub import_artifacts: Arc<dyn ImportArtifactRepository>,
     pub staged_nzb_store: Arc<dyn StagedNzbStore>,
     pub staged_nzb_pipeline_limit: Arc<Semaphore>,
+    pub library_scan_analysis_limit: Arc<Semaphore>,
     pub tracked_download_handle: Option<tracked_downloads::TrackedDownloadHandle>,
 }
 
@@ -358,6 +372,8 @@ impl AppServices {
             download_queue_broadcast: queue_tx,
             import_history_broadcast: import_history_tx,
             settings_changed_broadcast: settings_changed_tx,
+            library_scan_tracker: LibraryScanTracker::new(),
+            post_hydration_title_scan_queue: PostHydrationTitleScanQueue::new(),
             acquisition_wake: Arc::new(tokio::sync::Notify::new()),
             hydration_wake: Arc::new(tokio::sync::Notify::new()),
             poster_wake: Arc::new(tokio::sync::Notify::new()),
@@ -373,6 +389,9 @@ impl AppServices {
             import_artifacts: Arc::new(null_repositories::NullImportArtifactRepository),
             staged_nzb_store: Arc::new(null_repositories::NullStagedNzbStore),
             staged_nzb_pipeline_limit: Arc::new(Semaphore::new(4)),
+            library_scan_analysis_limit: Arc::new(Semaphore::new(
+                GLOBAL_LIBRARY_SCAN_ANALYSIS_CONCURRENCY,
+            )),
             tracked_download_handle: None,
         }
     }
@@ -593,6 +612,10 @@ pub trait TitleImageProcessor: Send + Sync {
 pub trait ShowRepository: Send + Sync {
     async fn list_collections_for_title(&self, title_id: &str) -> AppResult<Vec<Collection>>;
     async fn get_collection_by_id(&self, collection_id: &str) -> AppResult<Option<Collection>>;
+    async fn get_collection_by_ordered_path(
+        &self,
+        ordered_path: &str,
+    ) -> AppResult<Option<Collection>>;
     async fn create_collection(&self, collection: Collection) -> AppResult<Collection>;
     async fn update_collection(
         &self,
@@ -1104,6 +1127,11 @@ pub trait MediaFileRepository: Send + Sync {
         title_ids: &[String],
     ) -> AppResult<Vec<TitleMediaSizeSummary>>;
 
+    async fn list_title_episode_progress_summaries(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<TitleEpisodeProgressSummary>>;
+
     async fn update_media_file_analysis(
         &self,
         file_id: &str,
@@ -1118,9 +1146,13 @@ pub trait MediaFileRepository: Send + Sync {
         source_signature_value: Option<String>,
     ) -> AppResult<()>;
 
+    async fn update_media_file_path(&self, file_id: &str, file_path: &str) -> AppResult<()>;
+
     async fn mark_scan_failed(&self, file_id: &str, error: &str) -> AppResult<()>;
 
     async fn get_media_file_by_id(&self, file_id: &str) -> AppResult<Option<TitleMediaFile>>;
+
+    async fn get_media_file_by_path(&self, file_path: &str) -> AppResult<Option<TitleMediaFile>>;
 
     async fn delete_media_file(&self, file_id: &str) -> AppResult<()>;
 }
@@ -1226,6 +1258,8 @@ pub trait WantedItemRepository: Send + Sync {
         episode_id: Option<&str>,
     ) -> AppResult<Option<WantedItem>>;
     async fn delete_wanted_items_for_title(&self, title_id: &str) -> AppResult<()>;
+    async fn delete_wanted_items_for_collection(&self, collection_id: &str) -> AppResult<()>;
+    async fn delete_wanted_items_for_episode(&self, episode_id: &str) -> AppResult<()>;
     /// Reset `next_search_at` to now for wanted items that have been searched
     /// but never found a viable candidate (`current_score IS NULL`).
     async fn reset_fruitless_wanted_items(&self, now: &str) -> AppResult<u64>;
@@ -2299,6 +2333,17 @@ mod tests {
                 .cloned())
         }
 
+        async fn get_collection_by_ordered_path(
+            &self,
+            ordered_path: &str,
+        ) -> AppResult<Option<Collection>> {
+            let collections = self.collections.lock().await;
+            Ok(collections
+                .iter()
+                .find(|item| item.ordered_path.as_deref() == Some(ordered_path))
+                .cloned())
+        }
+
         async fn create_collection(&self, collection: Collection) -> AppResult<Collection> {
             self.collections.lock().await.push(collection.clone());
             Ok(collection)
@@ -3106,6 +3151,22 @@ mod tests {
                 .lock()
                 .await
                 .retain(|item| item.title_id != title_id);
+            Ok(())
+        }
+
+        async fn delete_wanted_items_for_collection(&self, collection_id: &str) -> AppResult<()> {
+            self.store
+                .lock()
+                .await
+                .retain(|item| item.collection_id.as_deref() != Some(collection_id));
+            Ok(())
+        }
+
+        async fn delete_wanted_items_for_episode(&self, episode_id: &str) -> AppResult<()> {
+            self.store
+                .lock()
+                .await
+                .retain(|item| item.episode_id.as_deref() != Some(episode_id));
             Ok(())
         }
 

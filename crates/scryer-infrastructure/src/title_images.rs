@@ -14,6 +14,7 @@ use scryer_application::{
 };
 use scryer_domain::Title;
 use sqlx::{Row, SqlitePool};
+use tokio::sync::oneshot;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -24,6 +25,7 @@ const TITLE_IMAGE_REQUEST_TIMEOUT_SECS: u64 = 20;
 const AVIF_SPEED: u8 = if cfg!(debug_assertions) { 10 } else { 6 };
 const AVIF_VARIANT_SPEED: u8 = 9;
 const AVIF_QUALITY: u8 = if cfg!(debug_assertions) { 60 } else { 85 };
+const AVIF_ENCODER_THREADS: usize = 1;
 
 #[derive(Clone)]
 pub struct SqliteTitleImageProcessor {
@@ -255,7 +257,19 @@ impl TitleImageRepository for crate::sqlite_services::SqliteServices {
         title_id: &str,
         replacement: TitleImageReplacement,
     ) -> AppResult<()> {
-        replace_title_image_query(&self.pool, title_id, replacement).await
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender
+            .send(crate::commands::DbCommand::ReplaceTitleImage {
+                title_id: title_id.to_string(),
+                replacement: Box::new(replacement),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?;
+
+        reply_rx
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
     }
 
     async fn get_title_image_blob(
@@ -689,6 +703,7 @@ fn resize_rgba(image: &RgbaImage, width: u32, height: u32) -> AppResult<RgbaImag
 fn encode_avif(image: &RgbaImage, speed: u8, quality: u8) -> AppResult<Vec<u8>> {
     let mut bytes = Vec::new();
     AvifEncoder::new_with_speed_quality(&mut bytes, speed, quality)
+        .with_num_threads(Some(AVIF_ENCODER_THREADS))
         .write_image(
             image.as_raw(),
             image.width(),

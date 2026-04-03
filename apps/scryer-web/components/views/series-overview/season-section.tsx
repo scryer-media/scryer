@@ -50,6 +50,7 @@ import {
   formatDate,
   formatRuntimeFromSeconds,
   blocklistEntryMatchesEpisode,
+  deriveMediaFileQualityLabel,
 } from "./helpers";
 import { EpisodeDetailsPanel } from "./episode-details-panel";
 import { InterstitialMoviePanel } from "./interstitial-movie-panel";
@@ -195,10 +196,37 @@ export function SeasonSection({
 
   const renderEpisodeQualityBadge = React.useCallback(
     (episode: CollectionEpisode, episodeFiles: EpisodeMediaFile[]) => {
-      if (episodeFiles.length > 0 && episodeFiles[0].qualityLabel) {
+      const primaryFile = episodeFiles[0];
+
+      if (primaryFile) {
+        const qualityLabel = deriveMediaFileQualityLabel(primaryFile);
+        if (qualityLabel) {
+          return (
+            <span className="rounded border border-emerald-500/40 bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300">
+              {qualityLabel}
+            </span>
+          );
+        }
+
+        if (primaryFile.scanStatus === "imported") {
+          return (
+            <span className="rounded border border-amber-500/30 bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
+              {t("mediaFile.pendingScan")}
+            </span>
+          );
+        }
+
+        if (primaryFile.scanStatus === "scan_failed") {
+          return (
+            <span className="rounded border border-red-500/30 bg-red-500/15 px-1.5 py-0.5 text-[10px] font-medium text-red-300">
+              {t("mediaFile.scanFailed")}
+            </span>
+          );
+        }
+
         return (
           <span className="rounded border border-emerald-500/40 bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300">
-            {episodeFiles[0].qualityLabel}
+            {t("episode.fileOnDisk")}
           </span>
         );
       }

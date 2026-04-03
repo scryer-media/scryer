@@ -8,10 +8,10 @@ use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_
 use crate::mappers::{
     from_activity_event, from_backup_info, from_calendar_episode, from_collection, from_disk_space,
     from_download_client_config, from_download_queue_item, from_episode, from_health_check_result,
-    from_indexer_config, from_media_rename_plan, from_pending_release, from_provider_type,
-    from_release_decision, from_system_health, from_title, from_title_history_page,
-    from_title_history_record, from_title_media_file, from_title_release_blocklist_entry,
-    from_user, from_wanted_item,
+    from_indexer_config, from_library_scan_session, from_media_rename_plan, from_pending_release,
+    from_provider_type, from_release_decision, from_system_health, from_title,
+    from_title_history_page, from_title_history_record, from_title_media_file,
+    from_title_release_blocklist_entry, from_user, from_wanted_item,
 };
 use crate::settings_graph::{
     load_download_client_routing, load_indexer_routing, load_library_paths_payload,
@@ -128,11 +128,19 @@ impl QueryRoot {
             .list_title_media_size_summaries(&actor, &title_ids)
             .await
             .map_err(to_gql_error)?;
+        let episode_progress_summaries = app
+            .list_title_episode_progress_summaries(&actor, &title_ids)
+            .await
+            .map_err(to_gql_error)?;
         let summary_map: std::collections::HashMap<&str, _> =
             summaries.iter().map(|s| (s.title_id.as_str(), s)).collect();
         let media_size_map: std::collections::HashMap<&str, i64> = media_size_summaries
             .iter()
             .map(|summary| (summary.title_id.as_str(), summary.total_size_bytes))
+            .collect();
+        let episode_progress_map: std::collections::HashMap<&str, _> = episode_progress_summaries
+            .iter()
+            .map(|summary| (summary.title_id.as_str(), summary))
             .collect();
 
         Ok(titles
@@ -144,6 +152,10 @@ impl QueryRoot {
                     payload.quality_tier = s.label.clone();
                 }
                 payload.size_bytes = media_size_map.get(id.as_str()).copied();
+                if let Some(summary) = episode_progress_map.get(id.as_str()) {
+                    payload.episodes_owned = Some(summary.owned_episodes);
+                    payload.episodes_total = Some(summary.total_episodes);
+                }
                 payload
             })
             .collect())
@@ -465,6 +477,22 @@ impl QueryRoot {
             .await
             .map_err(to_gql_error)?;
         Ok(events.into_iter().map(from_activity_event).collect())
+    }
+
+    async fn active_library_scans(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<LibraryScanProgressPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let sessions = app
+            .active_library_scans(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(sessions
+            .into_iter()
+            .map(from_library_scan_session)
+            .collect())
     }
 
     async fn download_queue(

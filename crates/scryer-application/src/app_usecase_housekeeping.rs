@@ -2,9 +2,9 @@ use super::*;
 use tracing::info;
 
 const MEDIA_ROOT_KEYS: [(&str, &str); 3] = [
-    ("series.path", "/media/series"),
-    ("anime.path", "/media/anime"),
-    ("movies.path", "/media/movies"),
+    ("series.path", "/data/series"),
+    ("anime.path", "/data/anime"),
+    ("movies.path", "/data/movies"),
 ];
 
 impl AppUseCase {

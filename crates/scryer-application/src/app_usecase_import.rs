@@ -2486,7 +2486,7 @@ pub(crate) async fn resolve_import_paths(
         .unwrap_or(RENAME_TEMPLATE_SERIES_GLOBAL_KEY);
     let media_root_default = handler
         .map(|h| h.default_library_path())
-        .unwrap_or("/media/series");
+        .unwrap_or("/data/series");
     let rename_template_default = handler
         .map(|h| h.default_rename_template())
         .unwrap_or("{title} - S{season:2}E{episode:2} - {quality}.{ext}");
@@ -3234,61 +3234,27 @@ fn normalize_imdb_id(raw_imdb_id: &str) -> Option<String> {
 /// extension and cannot be opened as a directory, we treat it as a single-file
 /// result.
 pub(crate) fn find_video_files(dir: &Path, filter_samples: bool) -> AppResult<Vec<PathBuf>> {
-    let mut video_files = Vec::new();
-    let mut dirs_to_visit = vec![dir.to_path_buf()];
-
-    while let Some(current_dir) = dirs_to_visit.pop() {
-        let entries = match std::fs::read_dir(&current_dir) {
-            Ok(entries) => entries,
-            Err(_) if current_dir == dir && is_video_file(dir) => {
-                // The top-level path has a video extension but can't be read as
-                // a directory — it's a file path, not a directory path.
-                tracing::info!(
-                    path = %dir.display(),
-                    "download path is a video file, not a directory"
-                );
-                if !filter_samples || !is_sample_file(dir) {
-                    video_files.push(dir.to_path_buf());
-                }
-                return Ok(video_files);
-            }
-            Err(e) if current_dir == dir => {
-                // Top-level directory must be readable.
-                return Err(AppError::Repository(format!(
-                    "failed to read directory {}: {}",
-                    current_dir.display(),
-                    e
-                )));
-            }
-            Err(e) => {
-                // Subdirectory failures (encoding issues, stale mounts, not-actually-a-dir)
-                // should not abort the entire scan.
-                tracing::warn!(
-                    path = %current_dir.display(),
-                    error = %e,
-                    "skipping unreadable path during video file scan"
-                );
-                continue;
-            }
-        };
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-            // Check video extension first — some filesystem mounts (NFS, CIFS,
-            // Docker volumes) incorrectly report files with non-ASCII names as
-            // directories, so we must not rely on is_dir() alone.
-            if is_video_file(&path) {
-                if filter_samples && is_sample_file(&path) {
-                    continue;
-                }
-                video_files.push(path);
-            } else if path.is_dir() {
-                dirs_to_visit.push(path);
-            }
-        }
+    if std::fs::read_dir(dir).is_err() && is_video_file(dir) {
+        tracing::info!(
+            path = %dir.display(),
+            "download path is a video file, not a directory"
+        );
+        return Ok((!filter_samples || !is_sample_file(dir))
+            .then_some(dir.to_path_buf())
+            .into_iter()
+            .collect());
     }
 
-    Ok(video_files)
+    let walked = crate::filesystem_walk::FilesystemWalker::new()
+        .skip_unreadable_subdirectories()
+        .walk(dir)?;
+
+    Ok(walked
+        .into_iter()
+        .flat_map(|entry| entry.files.into_iter())
+        .filter(|path| is_video_file(path))
+        .filter(|path| !filter_samples || !is_sample_file(path))
+        .collect())
 }
 
 const SAMPLE_SIZE_THRESHOLD: u64 = 50 * 1024 * 1024; // 50 MB

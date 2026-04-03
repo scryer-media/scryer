@@ -552,6 +552,7 @@ export function SeriesOverviewView({
               defaultRootFolder={defaultRootFolder}
               rootFolders={rootFolders ?? []}
               onUpdateTitleOptions={onUpdateTitleOptions}
+              onTitleChanged={onTitleChanged}
               onOpenFixMatch={onOpenFixMatch}
             />
           ) : undefined

@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use super::*;
+use crate::library_scan::source_signature_from_std_metadata;
 use crate::nfo::{looks_like_movie_nfo, parse_nfo};
 use tracing::{info, warn};
 
@@ -11,7 +12,8 @@ const METADATA_TYPE_MOVIE: &str = "movie";
 const LIBRARY_METADATA_LOOKUP_CONCURRENCY: usize = 4;
 const LIBRARY_SCAN_BATCH_SIZE: usize = 128;
 const TITLE_SCAN_FILE_BATCH_SIZE: usize = 128;
-const TITLE_SCAN_ANALYSIS_CONCURRENCY: usize = 2;
+const TITLE_SCAN_PROGRESS_UPDATE_BATCH_SIZE: usize = 16;
+const TITLE_PRE_SCAN_CONCURRENCY: usize = 16;
 const RADARR_MOVIE_NFO_MAX_BYTES: u64 = 10 * 1024 * 1024;
 const RENAME_TEMPLATE_KEY: &str = "rename.template";
 const RENAME_COLLISION_POLICY_KEY: &str = "rename.collision_policy";
@@ -21,6 +23,21 @@ const RENAME_MISSING_METADATA_POLICY_GLOBAL_KEY: &str = "rename.missing_metadata
 const DEFAULT_COLLISION_POLICY: RenameCollisionPolicy = RenameCollisionPolicy::Skip;
 const DEFAULT_MISSING_METADATA_POLICY: RenameMissingMetadataPolicy =
     RenameMissingMetadataPolicy::FallbackTitle;
+
+#[derive(Default)]
+struct RenamePersistenceState {
+    media_file_updated: bool,
+}
+
+struct RenamePersistenceFailure {
+    error: AppError,
+    state: RenamePersistenceState,
+}
+
+struct RenameRollbackOutcome {
+    fully_restored: bool,
+    detail: String,
+}
 
 fn extract_library_queries(path: &str, library_root: &str) -> (Vec<String>, Option<u32>) {
     // Normalise paths for comparison (strip trailing slash)
@@ -141,23 +158,12 @@ fn normalized_query_title_candidates(queries: &[String]) -> Vec<String> {
     normalized
 }
 
+fn elapsed_ms_u64(started_at: Instant) -> u64 {
+    u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
 async fn list_child_directories(root: &Path) -> AppResult<Vec<PathBuf>> {
-    let mut dirs = Vec::new();
-    let mut entries = tokio::fs::read_dir(root).await.map_err(|err| {
-        AppError::Repository(format!(
-            "failed to read directory {}: {err}",
-            root.display()
-        ))
-    })?;
-    while let Some(entry) = entries.next_entry().await.map_err(|err| {
-        AppError::Repository(format!("failed to read entry in {}: {err}", root.display()))
-    })? {
-        if entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
-            dirs.push(entry.path());
-        }
-    }
-    dirs.sort();
-    Ok(dirs)
+    crate::filesystem_walk::FilesystemWalker::new().list_child_directories(root)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -197,6 +203,37 @@ enum PlannedTitleScanRecord {
         should_refresh_source_signature: bool,
     },
     New,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct TitleScanProgressDelta {
+    completed: usize,
+    failed: usize,
+}
+
+impl TitleScanProgressDelta {
+    fn completed(count: usize) -> Self {
+        Self {
+            completed: count,
+            failed: 0,
+        }
+    }
+
+    fn failed(count: usize) -> Self {
+        Self {
+            completed: 0,
+            failed: count,
+        }
+    }
+
+    fn total(self) -> usize {
+        self.completed.saturating_add(self.failed)
+    }
+
+    fn absorb(&mut self, other: Self) {
+        self.completed = self.completed.saturating_add(other.completed);
+        self.failed = self.failed.saturating_add(other.failed);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -551,55 +588,297 @@ async fn should_relink_existing_episodic_title(
     has_episodes
 }
 
+async fn track_title_for_library_scan_session(
+    app: &AppUseCase,
+    session_id: &str,
+    title: &Title,
+    pre_scanned_files: Option<Vec<LibraryFile>>,
+) {
+    let Some(result) = app
+        .services
+        .library_scan_tracker
+        .attach_title(session_id, &title.id, pre_scanned_files)
+        .await
+    else {
+        return;
+    };
+
+    if result.new_title && title.metadata_fetched_at.is_none() {
+        let _ = app
+            .services
+            .library_scan_tracker
+            .add_metadata_total(session_id, 1)
+            .await;
+    }
+}
+
+async fn attach_title_for_library_scan_session(app: &AppUseCase, session_id: &str, title: &Title) {
+    track_title_for_library_scan_session(app, session_id, title, None).await;
+}
+
+async fn maybe_complete_library_scan_session(app: &AppUseCase, session_id: &str) {
+    let _ = app
+        .services
+        .library_scan_tracker
+        .complete_if_finished(session_id)
+        .await;
+}
+
+async fn pre_scan_title_for_library_scan_session(
+    library_scanner: Arc<dyn LibraryScanner>,
+    library_scan_tracker: LibraryScanTracker,
+    session_id: String,
+    title_id: String,
+    folder_path: PathBuf,
+) {
+    if library_scan_tracker
+        .session_for_title(&title_id)
+        .await
+        .as_deref()
+        != Some(session_id.as_str())
+    {
+        return;
+    }
+
+    let started_at = Instant::now();
+    let folder_path_display = folder_path.display().to_string();
+    let folder_path_string = folder_path.to_string_lossy().to_string();
+    let pre_scan = match library_scanner
+        .scan_directory_for_progress_with_metrics(&folder_path_string)
+        .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            library_scan_tracker
+                .mark_title_pre_scan_finished(&title_id)
+                .await;
+            warn!(
+                error = %error,
+                title_id = %title_id,
+                folder_path = %folder_path_display,
+                "failed to pre-scan episodic title folder for library scan progress"
+            );
+            return;
+        }
+    };
+
+    if library_scan_tracker
+        .session_for_title(&title_id)
+        .await
+        .as_deref()
+        != Some(session_id.as_str())
+    {
+        return;
+    }
+
+    let pre_scanned_files = pre_scan.files;
+    let files_count = pre_scanned_files.len();
+    let _ = library_scan_tracker
+        .attach_title(&session_id, &title_id, Some(pre_scanned_files))
+        .await;
+
+    info!(
+        title_id = %title_id,
+        path = %folder_path_display,
+        files = files_count,
+        walk_ms = pre_scan.walk_ms,
+        stat_ms = pre_scan.stat_ms,
+        analyze_ms = 0u64,
+        db_ms = 0u64,
+        elapsed_ms = elapsed_ms_u64(started_at),
+        "episodic title pre-scan completed"
+    );
+}
+
+async fn schedule_title_pre_scan_for_library_scan_session(
+    pre_scan_set: &mut tokio::task::JoinSet<()>,
+    library_scanner: Arc<dyn LibraryScanner>,
+    library_scan_tracker: LibraryScanTracker,
+    pre_scan_limit: Arc<tokio::sync::Semaphore>,
+    session_id: &str,
+    title_id: &str,
+    folder_path: PathBuf,
+) {
+    library_scan_tracker
+        .mark_title_pre_scan_started(title_id)
+        .await;
+
+    let session_id = session_id.to_string();
+    let title_id = title_id.to_string();
+    pre_scan_set.spawn(async move {
+        let Ok(_permit) = pre_scan_limit.acquire_owned().await else {
+            library_scan_tracker
+                .mark_title_pre_scan_finished(&title_id)
+                .await;
+            return;
+        };
+        pre_scan_title_for_library_scan_session(
+            library_scanner,
+            library_scan_tracker,
+            session_id,
+            title_id,
+            folder_path,
+        )
+        .await;
+    });
+}
+
+async fn attach_and_schedule_series_title_for_library_scan_session(
+    app: &AppUseCase,
+    pre_scan_set: &mut tokio::task::JoinSet<()>,
+    queued_titles: &mut HashMap<String, Title>,
+    library_scanner: &Arc<dyn LibraryScanner>,
+    library_scan_tracker: &LibraryScanTracker,
+    pre_scan_limit: &Arc<tokio::sync::Semaphore>,
+    session_id: &str,
+    title: &mut Title,
+    folder_path: &Path,
+) {
+    ensure_title_folder_path_if_missing(app, title, folder_path).await;
+    schedule_series_title_for_library_scan_session(
+        app,
+        pre_scan_set,
+        queued_titles,
+        library_scanner,
+        library_scan_tracker,
+        pre_scan_limit,
+        session_id,
+        title,
+        folder_path,
+    )
+    .await;
+}
+
+async fn maybe_attach_existing_series_title_for_library_scan_session(
+    app: &AppUseCase,
+    pre_scan_set: &mut tokio::task::JoinSet<()>,
+    queued_titles: &mut HashMap<String, Title>,
+    library_scanner: &Arc<dyn LibraryScanner>,
+    library_scan_tracker: &LibraryScanTracker,
+    pre_scan_limit: &Arc<tokio::sync::Semaphore>,
+    session_id: &str,
+    title: &mut Title,
+    folder_path: &Path,
+    episode_presence_cache: &mut HashMap<String, bool>,
+) {
+    ensure_title_folder_path_if_missing(app, title, folder_path).await;
+
+    if !should_relink_existing_episodic_title(app, title, episode_presence_cache).await {
+        return;
+    }
+
+    schedule_series_title_for_library_scan_session(
+        app,
+        pre_scan_set,
+        queued_titles,
+        library_scanner,
+        library_scan_tracker,
+        pre_scan_limit,
+        session_id,
+        title,
+        folder_path,
+    )
+    .await;
+}
+
+async fn schedule_series_title_for_library_scan_session(
+    app: &AppUseCase,
+    pre_scan_set: &mut tokio::task::JoinSet<()>,
+    queued_titles: &mut HashMap<String, Title>,
+    library_scanner: &Arc<dyn LibraryScanner>,
+    library_scan_tracker: &LibraryScanTracker,
+    pre_scan_limit: &Arc<tokio::sync::Semaphore>,
+    session_id: &str,
+    title: &Title,
+    folder_path: &Path,
+) {
+    attach_title_for_library_scan_session(app, session_id, title).await;
+
+    if queued_titles.contains_key(&title.id) {
+        return;
+    }
+
+    queued_titles.insert(title.id.clone(), title.clone());
+    schedule_title_pre_scan_for_library_scan_session(
+        pre_scan_set,
+        library_scanner.clone(),
+        library_scan_tracker.clone(),
+        pre_scan_limit.clone(),
+        session_id,
+        &title.id,
+        folder_path.to_path_buf(),
+    )
+    .await;
+}
+
+async fn flush_title_scan_progress_batch(
+    tracker: &LibraryScanTracker,
+    session_id: Option<&str>,
+    pending_progress: &mut TitleScanProgressDelta,
+) {
+    let Some(session_id) = session_id else {
+        *pending_progress = TitleScanProgressDelta::default();
+        return;
+    };
+    if pending_progress.total() == 0 {
+        return;
+    }
+
+    let delta = std::mem::take(pending_progress);
+    if delta.completed > 0 {
+        let _ = tracker
+            .increment_file_completed(session_id, delta.completed)
+            .await;
+    }
+    if delta.failed > 0 {
+        let _ = tracker
+            .increment_file_failed(session_id, delta.failed)
+            .await;
+    }
+}
+
+async fn maybe_flush_title_scan_progress_batch(
+    tracker: &LibraryScanTracker,
+    session_id: Option<&str>,
+    pending_progress: &mut TitleScanProgressDelta,
+) {
+    if pending_progress.total() < TITLE_SCAN_PROGRESS_UPDATE_BATCH_SIZE {
+        return;
+    }
+    flush_title_scan_progress_batch(tracker, session_id, pending_progress).await;
+}
+
 fn file_source_signature_from_metadata(
     metadata: &std::fs::Metadata,
 ) -> Option<FileSourceSignature> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
+    source_signature_from_std_metadata(metadata)
+        .map(|(scheme, value)| FileSourceSignature { scheme, value })
+}
 
-        Some(FileSourceSignature {
-            scheme: "windows_last_write_100ns_v1".to_string(),
-            value: metadata.last_write_time().to_string(),
-        })
-    }
+fn file_source_snapshot_from_library_file(file: &LibraryFile) -> Option<FileSourceSnapshot> {
+    let size_bytes = file.size_bytes?;
+    let signature = match (
+        file.source_signature_scheme.clone(),
+        file.source_signature_value.clone(),
+    ) {
+        (Some(scheme), Some(value)) => Some(FileSourceSignature { scheme, value }),
+        _ => None,
+    };
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-
-        Some(FileSourceSignature {
-            scheme: "unix_mtime_nsec_v1".to_string(),
-            value: format!("{}:{}", metadata.mtime(), metadata.mtime_nsec()),
-        })
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    {
-        metadata
-            .modified()
-            .ok()
-            .and_then(|modified| match modified.duration_since(UNIX_EPOCH) {
-                Ok(duration) => Some(FileSourceSignature {
-                    scheme: "system_time_nsec_v1".to_string(),
-                    value: format!("{}:{}", duration.as_secs(), duration.subsec_nanos()),
-                }),
-                Err(error) => {
-                    let duration = error.duration();
-                    Some(FileSourceSignature {
-                        scheme: "system_time_nsec_v1".to_string(),
-                        value: format!("-{}:{}", duration.as_secs(), duration.subsec_nanos()),
-                    })
-                }
-            })
-    }
+    Some(FileSourceSnapshot {
+        size_bytes,
+        signature,
+    })
 }
 
 fn title_media_file_matches_snapshot(
     media_file: &TitleMediaFile,
     snapshot: &FileSourceSnapshot,
 ) -> bool {
-    if media_file.scan_status != "scanned" || media_file.size_bytes != snapshot.size_bytes {
+    if media_file.scan_status != "scanned"
+        || media_file.size_bytes != snapshot.size_bytes
+        || !title_media_file_has_persisted_analysis(media_file)
+    {
         return false;
     }
 
@@ -617,6 +896,29 @@ fn title_media_file_matches_snapshot(
             .is_some_and(|signature| signature.scheme == *scheme && signature.value == *value),
         _ => false,
     }
+}
+
+fn title_media_file_has_persisted_analysis(media_file: &TitleMediaFile) -> bool {
+    media_file.video_codec.is_some()
+        || media_file.video_width.is_some()
+        || media_file.video_height.is_some()
+        || media_file.video_bitrate_kbps.is_some()
+        || media_file.video_bit_depth.is_some()
+        || media_file.video_hdr_format.is_some()
+        || media_file.video_frame_rate.is_some()
+        || media_file.video_profile.is_some()
+        || media_file.audio_codec.is_some()
+        || media_file.audio_channels.is_some()
+        || media_file.audio_bitrate_kbps.is_some()
+        || !media_file.audio_languages.is_empty()
+        || !media_file.audio_streams.is_empty()
+        || !media_file.subtitle_languages.is_empty()
+        || !media_file.subtitle_codecs.is_empty()
+        || !media_file.subtitle_streams.is_empty()
+        || media_file.duration_seconds.is_some()
+        || media_file.num_chapters.is_some()
+        || media_file.container_format.is_some()
+        || media_file.has_multiaudio
 }
 
 fn build_title_episode_lookup(
@@ -967,19 +1269,15 @@ impl AppUseCase {
         let template = self.read_rename_template(handler.as_ref()).await?;
         let collision_policy = self.read_collision_policy(handler.as_ref()).await?;
         let missing_metadata_policy = self.read_missing_metadata_policy(handler.as_ref()).await?;
-        let collections = self
-            .services
-            .shows
-            .list_collections_for_title(&title.id)
+        let plan = self
+            .build_rename_plan_for_title(
+                handler.as_ref(),
+                &title,
+                template,
+                collision_policy,
+                missing_metadata_policy,
+            )
             .await?;
-        let plan = build_rename_plan_for_facet(
-            handler.as_ref(),
-            &title,
-            collections,
-            template,
-            collision_policy,
-            missing_metadata_policy,
-        );
 
         self.services
             .record_event(
@@ -1017,23 +1315,17 @@ impl AppUseCase {
         let mut planned_targets = HashSet::new();
         let mut items = Vec::new();
         for title in titles {
-            let mut collections = self
-                .services
-                .shows
-                .list_collections_for_title(&title.id)
-                .await?;
-            collections.sort_by(|left, right| left.id.cmp(&right.id));
-
-            for collection in collections {
-                items.push(handler.build_rename_plan_item(
+            let mut title_items = self
+                .build_rename_plan_items_for_title(
                     &title,
-                    &collection,
+                    handler.as_ref(),
                     &template,
                     &collision_policy,
                     &missing_metadata_policy,
                     &mut planned_targets,
-                ));
-            }
+                )
+                .await?;
+            items.append(&mut title_items);
         }
 
         let plan = build_rename_plan_from_items(
@@ -1126,28 +1418,24 @@ impl AppUseCase {
         for item in &mut item_results {
             match item.status {
                 RenameApplyStatus::Applied => {
-                    if let (Some(collection_id), Some(final_path)) =
-                        (item.collection_id.as_deref(), item.final_path.clone())
-                        && let Err(err) = self
-                            .services
-                            .shows
-                            .update_collection(
-                                collection_id,
-                                None,
-                                None,
-                                None,
-                                Some(final_path),
-                                None,
-                                None,
-                                None,
-                            )
-                            .await
-                    {
-                        item.status = RenameApplyStatus::Failed;
-                        item.reason_code = "db_update_failed".into();
-                        item.error_message = Some(err.to_string());
-                        failed += 1;
-                        continue;
+                    if let Some(final_path) = item.final_path.clone() {
+                        if let Err(failure) =
+                            self.persist_rename_item_paths(item, &final_path).await
+                        {
+                            let rollback = self
+                                .rollback_rename_item_after_db_failure(item, &failure.state)
+                                .await;
+
+                            item.status = RenameApplyStatus::Failed;
+                            item.reason_code = "db_update_failed".into();
+                            item.error_message =
+                                Some(format!("{}; {}", failure.error, rollback.detail));
+                            if rollback.fully_restored {
+                                item.final_path = Some(item.current_path.clone());
+                            }
+                            failed += 1;
+                            continue;
+                        }
                     }
                     applied += 1;
                 }
@@ -1204,6 +1492,290 @@ impl AppUseCase {
         Ok(result)
     }
 
+    async fn persist_rename_item_paths(
+        &self,
+        item: &RenameApplyItemResult,
+        final_path: &str,
+    ) -> Result<(), RenamePersistenceFailure> {
+        let mut state = RenamePersistenceState::default();
+
+        if let Some(media_file_id) = item.media_file_id.as_deref()
+            && let Err(error) = self
+                .services
+                .media_files
+                .update_media_file_path(media_file_id, final_path)
+                .await
+        {
+            return Err(RenamePersistenceFailure { error, state });
+        } else if item.media_file_id.is_some() {
+            state.media_file_updated = true;
+        }
+
+        if let Some(collection_id) = item.collection_id.as_deref()
+            && let Err(error) = self
+                .services
+                .shows
+                .update_collection(
+                    collection_id,
+                    None,
+                    None,
+                    None,
+                    Some(final_path.to_string()),
+                    None,
+                    None,
+                    None,
+                )
+                .await
+        {
+            return Err(RenamePersistenceFailure { error, state });
+        }
+
+        Ok(())
+    }
+
+    async fn rollback_rename_item_after_db_failure(
+        &self,
+        item: &RenameApplyItemResult,
+        state: &RenamePersistenceState,
+    ) -> RenameRollbackOutcome {
+        let mut details = Vec::new();
+        let mut fully_restored = true;
+        let mut filesystem_restored = false;
+
+        match item.write_action {
+            RenameWriteAction::Move => match self
+                .services
+                .library_renamer
+                .rollback(&[item.clone()])
+                .await
+            {
+                Ok(_) => {
+                    filesystem_restored = true;
+                }
+                Err(error) => {
+                    fully_restored = false;
+                    details.push(format!("filesystem rollback failed: {error}"));
+                }
+            },
+            _ => {
+                fully_restored = false;
+                details.push("filesystem rollback unavailable for this write action".to_string());
+            }
+        }
+
+        if filesystem_restored {
+            if state.media_file_updated
+                && let Some(media_file_id) = item.media_file_id.as_deref()
+                && let Err(error) = self
+                    .services
+                    .media_files
+                    .update_media_file_path(media_file_id, &item.current_path)
+                    .await
+            {
+                fully_restored = false;
+                details.push(format!("media file rollback failed: {error}"));
+            }
+        }
+
+        if details.is_empty() {
+            RenameRollbackOutcome {
+                fully_restored,
+                detail: "rollback succeeded".to_string(),
+            }
+        } else {
+            RenameRollbackOutcome {
+                fully_restored,
+                detail: format!("rollback failed: {}", details.join("; ")),
+            }
+        }
+    }
+
+    async fn build_rename_plan_for_title(
+        &self,
+        handler: &dyn crate::FacetHandler,
+        title: &Title,
+        template: String,
+        collision_policy: RenameCollisionPolicy,
+        missing_metadata_policy: RenameMissingMetadataPolicy,
+    ) -> AppResult<RenamePlan> {
+        let mut planned_targets = HashSet::new();
+        let items = self
+            .build_rename_plan_items_for_title(
+                title,
+                handler,
+                &template,
+                &collision_policy,
+                &missing_metadata_policy,
+                &mut planned_targets,
+            )
+            .await?;
+
+        Ok(build_rename_plan_from_items(
+            handler.facet(),
+            Some(title.id.clone()),
+            template,
+            collision_policy,
+            missing_metadata_policy,
+            items,
+        ))
+    }
+
+    async fn build_rename_plan_items_for_title(
+        &self,
+        title: &Title,
+        handler: &dyn crate::FacetHandler,
+        template: &str,
+        collision_policy: &RenameCollisionPolicy,
+        missing_metadata_policy: &RenameMissingMetadataPolicy,
+        planned_targets: &mut HashSet<String>,
+    ) -> AppResult<Vec<RenamePlanItem>> {
+        match title.facet.clone() {
+            MediaFacet::Movie => {
+                let mut collections = self
+                    .services
+                    .shows
+                    .list_collections_for_title(&title.id)
+                    .await?;
+                let media_files = self
+                    .services
+                    .media_files
+                    .list_media_files_for_title(&title.id)
+                    .await?;
+                collections.sort_by(|left, right| left.id.cmp(&right.id));
+                let media_file_ids_by_path = media_files.into_iter().fold(
+                    HashMap::<String, String>::new(),
+                    |mut acc, media_file| {
+                        acc.entry(media_file.file_path).or_insert(media_file.id);
+                        acc
+                    },
+                );
+
+                let items = collections
+                    .into_iter()
+                    .map(|collection| {
+                        let mut item = handler.build_rename_plan_item(
+                            title,
+                            &collection,
+                            template,
+                            collision_policy,
+                            missing_metadata_policy,
+                            planned_targets,
+                        );
+                        if let Some(media_file_id) =
+                            media_file_ids_by_path.get(item.current_path.as_str())
+                        {
+                            item.media_file_id = Some(media_file_id.clone());
+                        }
+                        item
+                    })
+                    .collect::<Vec<_>>();
+                self.normalize_existing_rename_collisions(items).await
+            }
+            MediaFacet::Series | MediaFacet::Anime => {
+                let collections = self
+                    .services
+                    .shows
+                    .list_collections_for_title(&title.id)
+                    .await?;
+                let episodes = self
+                    .services
+                    .shows
+                    .list_episodes_for_title(&title.id)
+                    .await?;
+                let media_files = self
+                    .services
+                    .media_files
+                    .list_media_files_for_title(&title.id)
+                    .await?;
+
+                self.normalize_existing_rename_collisions(
+                    build_series_rename_plan_items_from_media_files(
+                        title,
+                        collections,
+                        episodes,
+                        media_files,
+                        template,
+                        collision_policy,
+                        missing_metadata_policy,
+                        planned_targets,
+                    ),
+                )
+                .await
+            }
+        }
+    }
+
+    async fn normalize_existing_rename_collisions(
+        &self,
+        items: Vec<RenamePlanItem>,
+    ) -> AppResult<Vec<RenamePlanItem>> {
+        let mut collection_cache = HashMap::<String, Option<Collection>>::new();
+        let mut media_file_cache = HashMap::<String, Option<TitleMediaFile>>::new();
+        let mut out = Vec::with_capacity(items.len());
+
+        for mut item in items {
+            let Some(proposed_path) = item.proposed_path.clone() else {
+                out.push(item);
+                continue;
+            };
+
+            if proposed_path == item.current_path {
+                out.push(item);
+                continue;
+            }
+
+            let destination_exists_on_disk = Path::new(&proposed_path).exists();
+
+            let tracked_media_file = if let Some(existing) = media_file_cache.get(&proposed_path) {
+                existing.clone()
+            } else {
+                let loaded = self
+                    .services
+                    .media_files
+                    .get_media_file_by_path(&proposed_path)
+                    .await?;
+                media_file_cache.insert(proposed_path.clone(), loaded.clone());
+                loaded
+            };
+            let tracked_collection = if let Some(existing) = collection_cache.get(&proposed_path) {
+                existing.clone()
+            } else {
+                let loaded = self
+                    .services
+                    .shows
+                    .get_collection_by_ordered_path(&proposed_path)
+                    .await?;
+                collection_cache.insert(proposed_path.clone(), loaded.clone());
+                loaded
+            };
+
+            let tracked_media_conflict = tracked_media_file.as_ref().is_some_and(|media_file| {
+                item.media_file_id.as_deref() != Some(media_file.id.as_str())
+            });
+            let tracked_collection_conflict =
+                tracked_collection.as_ref().is_some_and(|collection| {
+                    item.collection_id.as_deref() != Some(collection.id.as_str())
+                });
+
+            if tracked_media_conflict || tracked_collection_conflict {
+                item.collision = true;
+                item.reason_code = "collision_existing_tracked".into();
+                item.write_action = RenameWriteAction::Error;
+            } else if !destination_exists_on_disk {
+                out.push(item);
+                continue;
+            } else if matches!(item.write_action, RenameWriteAction::Replace) {
+                item.collision = true;
+                item.reason_code = "collision_existing".into();
+                item.write_action = RenameWriteAction::Error;
+            }
+
+            out.push(item);
+        }
+
+        Ok(out)
+    }
+
     pub async fn scan_library(
         &self,
         actor: &User,
@@ -1211,27 +1783,58 @@ impl AppUseCase {
     ) -> AppResult<LibraryScanSummary> {
         require(actor, &Entitlement::ManageTitle)?;
 
-        let path_key = match facet {
-            MediaFacet::Movie => "movies.path",
-            MediaFacet::Series => "series.path",
-            MediaFacet::Anime => "anime.path",
-        };
+        let session = self
+            .services
+            .library_scan_tracker
+            .start_session(facet.clone())
+            .await?;
 
-        let Some(library_path) = self
-            .read_setting_string_value_for_scope(super::SETTINGS_SCOPE_MEDIA, path_key, None)
-            .await?
-        else {
-            return Err(AppError::Validation(format!(
-                "{path_key} is not configured"
-            )));
-        };
+        let result = async {
+            let path_key = match facet {
+                MediaFacet::Movie => "movies.path",
+                MediaFacet::Series => "series.path",
+                MediaFacet::Anime => "anime.path",
+            };
 
-        match facet {
-            MediaFacet::Movie => self.scan_library_movies(actor, &facet, &library_path).await,
-            MediaFacet::Series | MediaFacet::Anime => {
-                self.scan_library_series(actor, &facet, &library_path).await
-            }
+            let Some(library_path) = self
+                .read_setting_string_value_for_scope(super::SETTINGS_SCOPE_MEDIA, path_key, None)
+                .await?
+            else {
+                return Err(AppError::Validation(format!(
+                    "{path_key} is not configured"
+                )));
+            };
+
+            let summary = match facet {
+                MediaFacet::Movie => {
+                    self.scan_library_movies(actor, &facet, &library_path, &session.session_id)
+                        .await?
+                }
+                MediaFacet::Series | MediaFacet::Anime => {
+                    self.scan_library_series(actor, &facet, &library_path, &session.session_id)
+                        .await?
+                }
+            };
+
+            let _ = self
+                .services
+                .library_scan_tracker
+                .set_summary(&session.session_id, summary.clone())
+                .await;
+            maybe_complete_library_scan_session(self, &session.session_id).await;
+            Ok(summary)
         }
+        .await;
+
+        if result.is_err() {
+            let _ = self
+                .services
+                .library_scan_tracker
+                .fail_session(&session.session_id)
+                .await;
+        }
+
+        result
     }
 
     /// Movie library scan: each video file is a potential title.
@@ -1240,13 +1843,15 @@ impl AppUseCase {
         actor: &User,
         facet: &MediaFacet,
         library_path: &str,
+        session_id: &str,
     ) -> AppResult<LibraryScanSummary> {
         let started_at = Instant::now();
-        let mut file_batches = self
+        let mut discovered_files = self
             .services
             .library_scanner
             .scan_library_batched(library_path, LIBRARY_SCAN_BATCH_SIZE)
             .await?;
+
         let mut existing_titles = self.services.titles.list(Some(facet.clone()), None).await?;
         let mut existing_titles_by_name: HashMap<String, usize> = HashMap::new();
         let mut existing_titles_by_tvdb_id: HashMap<String, usize> = HashMap::new();
@@ -1267,11 +1872,25 @@ impl AppUseCase {
         let mut summary = LibraryScanSummary::default();
         let mut metadata_lookups = 0usize;
 
-        while let Some(file_batch) = file_batches.recv().await {
-            let files = file_batch?;
+        while let Some(file_chunk) = discovered_files.recv().await {
+            let file_chunk = file_chunk?;
+            if file_chunk.is_empty() {
+                continue;
+            }
+            let _ = self
+                .services
+                .library_scan_tracker
+                .add_found_titles(session_id, file_chunk.len())
+                .await;
+            let _ = self
+                .services
+                .library_scan_tracker
+                .add_file_total(session_id, file_chunk.len())
+                .await;
+
             let (candidates, batch_lookups) = preload_movie_library_scan_candidates(
                 self.services.metadata_gateway.clone(),
-                &files,
+                &file_chunk,
                 library_path,
             )
             .await?;
@@ -1319,6 +1938,8 @@ impl AppUseCase {
                         };
 
                         let created = self.add_title(actor, new_title).await?;
+                        track_title_for_library_scan_session(self, session_id, &created, None)
+                            .await;
                         let index = existing_titles.len();
                         existing_titles.push(created.clone());
                         index_movie_title(
@@ -1332,8 +1953,16 @@ impl AppUseCase {
                         created
                     };
 
+                    if title.metadata_fetched_at.is_none() {
+                        track_title_for_library_scan_session(self, session_id, &title, None).await;
+                    }
                     summary.matched += 1;
                     self.track_movie_file_in_collection(&title, file, &mut summary)
+                        .await;
+                    let _ = self
+                        .services
+                        .library_scan_tracker
+                        .increment_file_completed(session_id, 1)
                         .await;
                     continue;
                 }
@@ -1349,7 +1978,15 @@ impl AppUseCase {
                 {
                     summary.matched += 1;
                     let title = existing_titles[index].clone();
+                    if title.metadata_fetched_at.is_none() {
+                        track_title_for_library_scan_session(self, session_id, &title, None).await;
+                    }
                     self.track_movie_file_in_collection(&title, file, &mut summary)
+                        .await;
+                    let _ = self
+                        .services
+                        .library_scan_tracker
+                        .increment_file_completed(session_id, 1)
                         .await;
                     continue;
                 }
@@ -1359,7 +1996,15 @@ impl AppUseCase {
                 {
                     summary.matched += 1;
                     let title = existing_titles[index].clone();
+                    if title.metadata_fetched_at.is_none() {
+                        track_title_for_library_scan_session(self, session_id, &title, None).await;
+                    }
                     self.track_movie_file_in_collection(&title, file, &mut summary)
+                        .await;
+                    let _ = self
+                        .services
+                        .library_scan_tracker
+                        .increment_file_completed(session_id, 1)
                         .await;
                     continue;
                 }
@@ -1378,18 +2023,36 @@ impl AppUseCase {
                 }) {
                     summary.matched += 1;
                     let title = existing_titles[index].clone();
+                    if title.metadata_fetched_at.is_none() {
+                        track_title_for_library_scan_session(self, session_id, &title, None).await;
+                    }
                     self.track_movie_file_in_collection(&title, file, &mut summary)
+                        .await;
+                    let _ = self
+                        .services
+                        .library_scan_tracker
+                        .increment_file_completed(session_id, 1)
                         .await;
                     continue;
                 }
 
                 if query.is_empty() {
                     summary.skipped += 1;
+                    let _ = self
+                        .services
+                        .library_scan_tracker
+                        .increment_file_completed(session_id, 1)
+                        .await;
                     continue;
                 }
 
                 let Some(selected) = candidate.selected_metadata.clone() else {
                     summary.unmatched += 1;
+                    let _ = self
+                        .services
+                        .library_scan_tracker
+                        .increment_file_completed(session_id, 1)
+                        .await;
                     continue;
                 };
 
@@ -1417,6 +2080,7 @@ impl AppUseCase {
                     };
 
                     let title = self.add_title(actor, new_title).await?;
+                    track_title_for_library_scan_session(self, session_id, &title, None).await;
                     let index = existing_titles.len();
                     existing_titles.push(title.clone());
                     index_movie_title(
@@ -1430,10 +2094,29 @@ impl AppUseCase {
                     title
                 };
 
+                if title.metadata_fetched_at.is_none() {
+                    track_title_for_library_scan_session(self, session_id, &title, None).await;
+                }
                 self.track_movie_file_in_collection(&title, file, &mut summary)
+                    .await;
+                let _ = self
+                    .services
+                    .library_scan_tracker
+                    .increment_file_completed(session_id, 1)
                     .await;
             }
         }
+
+        let _ = self
+            .services
+            .library_scan_tracker
+            .mark_metadata_total_known(session_id)
+            .await;
+        let _ = self
+            .services
+            .library_scan_tracker
+            .mark_file_total_known(session_id)
+            .await;
 
         info!(
             path = %library_path,
@@ -1445,7 +2128,7 @@ impl AppUseCase {
             metadata_lookups,
             batch_size = LIBRARY_SCAN_BATCH_SIZE,
             worker_concurrency = LIBRARY_METADATA_LOOKUP_CONCURRENCY,
-            elapsed_ms = started_at.elapsed().as_millis() as u64,
+            elapsed_ms = elapsed_ms_u64(started_at),
             "movie library scan completed"
         );
 
@@ -1460,6 +2143,7 @@ impl AppUseCase {
         actor: &User,
         facet: &MediaFacet,
         library_path: &str,
+        session_id: &str,
     ) -> AppResult<LibraryScanSummary> {
         let started_at = Instant::now();
         let root = Path::new(library_path);
@@ -1471,6 +2155,11 @@ impl AppUseCase {
 
         let folders = list_child_directories(root).await?;
         let folders_count = folders.len();
+        let _ = self
+            .services
+            .library_scan_tracker
+            .set_found_titles(session_id, folders_count)
+            .await;
 
         let mut existing_titles = self.services.titles.list(Some(facet.clone()), None).await?;
         let mut existing_titles_by_name: HashMap<String, usize> = HashMap::new();
@@ -1487,8 +2176,12 @@ impl AppUseCase {
 
         let mut summary = LibraryScanSummary::default();
         let mut metadata_lookups = 0usize;
-        let mut titles_to_relink = HashMap::new();
+        let mut queued_titles = HashMap::new();
         let mut episode_presence_cache = HashMap::new();
+        let library_scan_tracker = self.services.library_scan_tracker.clone();
+        let library_scanner = self.services.library_scanner.clone();
+        let mut pre_scan_set = tokio::task::JoinSet::new();
+        let pre_scan_limit = Arc::new(tokio::sync::Semaphore::new(TITLE_PRE_SCAN_CONCURRENCY));
 
         for folder_batch in folders.chunks(LIBRARY_SCAN_BATCH_SIZE) {
             let (candidates, batch_lookups) = preload_series_library_scan_candidates(
@@ -1513,17 +2206,19 @@ impl AppUseCase {
                 if let Some(tvdb_id) = nfo_meta.and_then(|m| m.tvdb_id.as_deref()) {
                     if let Some(&index) = existing_titles_by_tvdb_id.get(tvdb_id) {
                         let existing = &mut existing_titles[index];
-                        ensure_title_folder_path_if_missing(self, existing, &candidate.folder_path)
-                            .await;
-                        if should_relink_existing_episodic_title(
+                        maybe_attach_existing_series_title_for_library_scan_session(
                             self,
+                            &mut pre_scan_set,
+                            &mut queued_titles,
+                            &library_scanner,
+                            &library_scan_tracker,
+                            &pre_scan_limit,
+                            session_id,
                             existing,
+                            &candidate.folder_path,
                             &mut episode_presence_cache,
                         )
-                        .await
-                        {
-                            titles_to_relink.insert(existing.id.clone(), existing.clone());
-                        }
+                        .await;
                         summary.skipped += 1;
                         continue;
                     }
@@ -1534,17 +2229,19 @@ impl AppUseCase {
                     let name_key = normalize_title_key(&name);
                     if let Some(&index) = existing_titles_by_name.get(&name_key) {
                         let existing = &mut existing_titles[index];
-                        ensure_title_folder_path_if_missing(self, existing, &candidate.folder_path)
-                            .await;
-                        if should_relink_existing_episodic_title(
+                        maybe_attach_existing_series_title_for_library_scan_session(
                             self,
+                            &mut pre_scan_set,
+                            &mut queued_titles,
+                            &library_scanner,
+                            &library_scan_tracker,
+                            &pre_scan_limit,
+                            session_id,
                             existing,
+                            &candidate.folder_path,
                             &mut episode_presence_cache,
                         )
-                        .await
-                        {
-                            titles_to_relink.insert(existing.id.clone(), existing.clone());
-                        }
+                        .await;
                         summary.skipped += 1;
                         continue;
                     }
@@ -1578,8 +2275,14 @@ impl AppUseCase {
 
                     match self.add_title(actor, new_title).await {
                         Ok(mut created) => {
-                            ensure_title_folder_path_if_missing(
+                            attach_and_schedule_series_title_for_library_scan_session(
                                 self,
+                                &mut pre_scan_set,
+                                &mut queued_titles,
+                                &library_scanner,
+                                &library_scan_tracker,
+                                &pre_scan_limit,
+                                session_id,
                                 &mut created,
                                 &candidate.folder_path,
                             )
@@ -1617,17 +2320,19 @@ impl AppUseCase {
                 let name_key = normalize_title_key(&query);
                 if let Some(&index) = existing_titles_by_name.get(&name_key) {
                     let existing = &mut existing_titles[index];
-                    ensure_title_folder_path_if_missing(self, existing, &candidate.folder_path)
-                        .await;
-                    if should_relink_existing_episodic_title(
+                    maybe_attach_existing_series_title_for_library_scan_session(
                         self,
+                        &mut pre_scan_set,
+                        &mut queued_titles,
+                        &library_scanner,
+                        &library_scan_tracker,
+                        &pre_scan_limit,
+                        session_id,
                         existing,
+                        &candidate.folder_path,
                         &mut episode_presence_cache,
                     )
-                    .await
-                    {
-                        titles_to_relink.insert(existing.id.clone(), existing.clone());
-                    }
+                    .await;
                     summary.skipped += 1;
                     continue;
                 }
@@ -1655,17 +2360,19 @@ impl AppUseCase {
 
                 if let Some(&index) = existing_titles_by_tvdb_id.get(&selected.tvdb_id) {
                     let existing = &mut existing_titles[index];
-                    ensure_title_folder_path_if_missing(self, existing, &candidate.folder_path)
-                        .await;
-                    if should_relink_existing_episodic_title(
+                    maybe_attach_existing_series_title_for_library_scan_session(
                         self,
+                        &mut pre_scan_set,
+                        &mut queued_titles,
+                        &library_scanner,
+                        &library_scan_tracker,
+                        &pre_scan_limit,
+                        session_id,
                         existing,
+                        &candidate.folder_path,
                         &mut episode_presence_cache,
                     )
-                    .await
-                    {
-                        titles_to_relink.insert(existing.id.clone(), existing.clone());
-                    }
+                    .await;
                     summary.skipped += 1;
                     continue;
                 }
@@ -1685,8 +2392,14 @@ impl AppUseCase {
 
                 match self.add_title(actor, new_title).await {
                     Ok(mut created) => {
-                        ensure_title_folder_path_if_missing(
+                        attach_and_schedule_series_title_for_library_scan_session(
                             self,
+                            &mut pre_scan_set,
+                            &mut queued_titles,
+                            &library_scanner,
+                            &library_scan_tracker,
+                            &pre_scan_limit,
+                            session_id,
                             &mut created,
                             &candidate.folder_path,
                         )
@@ -1714,21 +2427,44 @@ impl AppUseCase {
             }
         }
 
-        // Keep the updated in-memory Title snapshot so the relink pass sees the
-        // discovered folder_path without depending on an immediate re-fetch.
-        let mut titles_to_relink = titles_to_relink.into_values().collect::<Vec<_>>();
-        titles_to_relink.sort_by(|left, right| left.id.cmp(&right.id));
-        for title in titles_to_relink {
-            let title_id = title.id.clone();
-            if let Err(error) = self.scan_title_library_for_title(actor, title).await {
+        let _ = self
+            .services
+            .library_scan_tracker
+            .mark_metadata_total_known(session_id)
+            .await;
+
+        let mut title_ids_to_scan = queued_titles.keys().cloned().collect::<Vec<_>>();
+        title_ids_to_scan.sort();
+        for title_id in title_ids_to_scan {
+            let Some(title) = queued_titles.get(&title_id) else {
+                continue;
+            };
+            if should_relink_existing_episodic_title(self, title, &mut episode_presence_cache).await
+                && self
+                    .services
+                    .post_hydration_title_scan_queue
+                    .enqueue(title_id.clone())
+                    .await
+            {
+                info!(title_id = %title_id, "queued tracked episodic title scan");
+            }
+        }
+
+        while let Some(result) = pre_scan_set.join_next().await {
+            if let Err(error) = result {
                 warn!(
                     error = %error,
-                    title_id = %title_id,
                     facet = facet.as_str(),
-                    "failed to relink existing episodic title during library scan"
+                    "episodic title pre-scan task failed during library scan"
                 );
             }
         }
+
+        let _ = self
+            .services
+            .library_scan_tracker
+            .mark_file_total_known(session_id)
+            .await;
 
         info!(
             path = %library_path,
@@ -1740,7 +2476,7 @@ impl AppUseCase {
             metadata_lookups,
             batch_size = LIBRARY_SCAN_BATCH_SIZE,
             worker_concurrency = LIBRARY_METADATA_LOOKUP_CONCURRENCY,
-            elapsed_ms = started_at.elapsed().as_millis() as u64,
+            elapsed_ms = elapsed_ms_u64(started_at),
             "series library scan completed"
         );
 
@@ -1760,13 +2496,16 @@ impl AppUseCase {
             .await?
             .ok_or_else(|| AppError::NotFound(format!("title {}", title_id)))?;
 
-        self.scan_title_library_for_title(actor, title).await
+        self.scan_title_library_for_title(actor, title, None, None)
+            .await
     }
 
     pub(crate) async fn scan_title_library_for_title(
         &self,
         actor: &User,
         title: Title,
+        session_id: Option<&str>,
+        pre_scanned_files: Option<Vec<LibraryFile>>,
     ) -> AppResult<LibraryScanSummary> {
         require(actor, &Entitlement::ManageTitle)?;
         let started_at = Instant::now();
@@ -1789,9 +2528,13 @@ impl AppUseCase {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(&media_root).join(&title.name));
         let title_dir_str = title_dir.to_string_lossy().to_string();
+        let mut walk_elapsed = Duration::ZERO;
+        let mut stat_elapsed = Duration::ZERO;
+        let mut analyze_elapsed = Duration::ZERO;
+        let mut db_elapsed = Duration::ZERO;
 
         // If the title directory was deleted, recreate it and treat as empty.
-        if !title_dir.exists() {
+        if tokio::fs::metadata(&title_dir).await.is_err() {
             tokio::fs::create_dir_all(&title_dir).await.map_err(|err| {
                 AppError::Repository(format!(
                     "failed to recreate title directory {}: {err}",
@@ -1800,12 +2543,30 @@ impl AppUseCase {
             })?;
         }
 
-        let mut file_batches = self
-            .services
-            .library_scanner
-            .scan_directory_batched(&title_dir_str, TITLE_SCAN_FILE_BATCH_SIZE)
-            .await?;
+        let discovered_files = match pre_scanned_files {
+            Some(files) => files,
+            None => {
+                let scan_result = self
+                    .services
+                    .library_scanner
+                    .scan_directory_with_metrics(&title_dir_str)
+                    .await?;
+                walk_elapsed =
+                    walk_elapsed.saturating_add(Duration::from_millis(scan_result.walk_ms));
+                stat_elapsed =
+                    stat_elapsed.saturating_add(Duration::from_millis(scan_result.stat_ms));
+                if let Some(session_id) = session_id {
+                    let _ = self
+                        .services
+                        .library_scan_tracker
+                        .add_file_total(session_id, scan_result.files.len())
+                        .await;
+                }
+                scan_result.files
+            }
+        };
 
+        let db_started = Instant::now();
         let existing_files = self
             .services
             .media_files
@@ -1824,6 +2585,7 @@ impl AppUseCase {
             .list_episodes_for_title(&title.id)
             .await
             .unwrap_or_default();
+        db_elapsed = db_elapsed.saturating_add(db_started.elapsed());
         let episode_lookup = build_title_episode_lookup(&collections, &title_episodes);
 
         let mut existing_records_by_path: HashMap<String, TitleMediaFile> = HashMap::new();
@@ -1844,12 +2606,14 @@ impl AppUseCase {
 
         let mut summary = LibraryScanSummary::default();
         let mut layout_summary = TitleScanLayoutSummary::default();
-        let analysis_limit = Arc::new(tokio::sync::Semaphore::new(TITLE_SCAN_ANALYSIS_CONCURRENCY));
+        let analysis_limit = self.services.library_scan_analysis_limit.clone();
+        let library_scan_tracker = self.services.library_scan_tracker.clone();
+        let mut pending_progress = TitleScanProgressDelta::default();
         let mut unchanged_file_skips = 0usize;
         let mut analyzed_files = 0usize;
 
-        while let Some(file_batch) = file_batches.recv().await {
-            let files = file_batch?;
+        for file_chunk in discovered_files.chunks(TITLE_SCAN_FILE_BATCH_SIZE) {
+            let files = file_chunk.to_vec();
             let mut planned_files = Vec::new();
 
             for file in files {
@@ -1875,6 +2639,13 @@ impl AppUseCase {
                     }
                     _ => {
                         summary.unmatched += 1;
+                        pending_progress.absorb(TitleScanProgressDelta::completed(1));
+                        maybe_flush_title_scan_progress_batch(
+                            &library_scan_tracker,
+                            session_id,
+                            &mut pending_progress,
+                        )
+                        .await;
                         continue;
                     }
                 };
@@ -1885,26 +2656,48 @@ impl AppUseCase {
 
                 if target_episodes.is_empty() {
                     summary.unmatched += 1;
+                    pending_progress.absorb(TitleScanProgressDelta::completed(1));
+                    maybe_flush_title_scan_progress_batch(
+                        &library_scan_tracker,
+                        session_id,
+                        &mut pending_progress,
+                    )
+                    .await;
                     continue;
                 }
 
-                let metadata = match tokio::fs::metadata(source_path).await {
-                    Ok(metadata) => metadata,
-                    Err(error) => {
-                        warn!(
-                            error = %error,
-                            title_id = %title.id,
-                            file_path = %file.path,
-                            "failed to read file metadata during title scan"
-                        );
-                        summary.skipped += 1;
-                        continue;
-                    }
-                };
+                let snapshot = if let Some(snapshot) = file_source_snapshot_from_library_file(&file)
+                {
+                    snapshot
+                } else {
+                    let stat_started = Instant::now();
+                    let metadata = match tokio::fs::metadata(source_path).await {
+                        Ok(metadata) => metadata,
+                        Err(error) => {
+                            stat_elapsed = stat_elapsed.saturating_add(stat_started.elapsed());
+                            warn!(
+                                error = %error,
+                                title_id = %title.id,
+                                file_path = %file.path,
+                                "failed to read file metadata during title scan"
+                            );
+                            summary.skipped += 1;
+                            pending_progress.absorb(TitleScanProgressDelta::completed(1));
+                            maybe_flush_title_scan_progress_batch(
+                                &library_scan_tracker,
+                                session_id,
+                                &mut pending_progress,
+                            )
+                            .await;
+                            continue;
+                        }
+                    };
+                    stat_elapsed = stat_elapsed.saturating_add(stat_started.elapsed());
 
-                let snapshot = FileSourceSnapshot {
-                    size_bytes: i64::try_from(metadata.len()).unwrap_or(i64::MAX),
-                    signature: file_source_signature_from_metadata(&metadata),
+                    FileSourceSnapshot {
+                        size_bytes: i64::try_from(metadata.len()).unwrap_or(i64::MAX),
+                        signature: file_source_signature_from_metadata(&metadata),
+                    }
                 };
 
                 summary.matched += 1;
@@ -1945,7 +2738,8 @@ impl AppUseCase {
             planned_files.sort_by(|left, right| left.file.path.cmp(&right.file.path));
 
             let mut analysis_set = tokio::task::JoinSet::new();
-            for plan in &planned_files {
+            let mut pending_analysis_plans = HashMap::new();
+            for plan in planned_files {
                 let should_analyze = match &plan.record {
                     PlannedTitleScanRecord::Existing {
                         should_skip_analysis,
@@ -1956,6 +2750,23 @@ impl AppUseCase {
 
                 if !should_analyze {
                     unchanged_file_skips += 1;
+                    let progress = self
+                        .finalize_title_scan_file(
+                            &title,
+                            plan,
+                            None,
+                            &mut episode_links,
+                            &mut summary,
+                            &mut db_elapsed,
+                        )
+                        .await;
+                    pending_progress.absorb(progress);
+                    maybe_flush_title_scan_progress_batch(
+                        &library_scan_tracker,
+                        session_id,
+                        &mut pending_progress,
+                    )
+                    .await;
                     continue;
                 }
 
@@ -1963,181 +2774,75 @@ impl AppUseCase {
                 let analyzer = self.services.media_analyzer.clone();
                 let analysis_limit = analysis_limit.clone();
                 let file_path = plan.file.path.clone();
+                pending_analysis_plans.insert(file_path.clone(), plan);
                 analysis_set.spawn(async move {
                     let _permit = analysis_limit
                         .acquire_owned()
                         .await
                         .map_err(|error| AppError::Repository(error.to_string()))?;
+                    let analysis_started = Instant::now();
                     let outcome = analyzer.analyze_file(PathBuf::from(&file_path)).await?;
-                    Ok::<(String, MediaAnalysisOutcome), AppError>((file_path, outcome))
+                    Ok::<(String, MediaAnalysisOutcome, Duration), AppError>((
+                        file_path,
+                        outcome,
+                        analysis_started.elapsed(),
+                    ))
                 });
             }
 
-            let mut analysis_results = HashMap::new();
             while let Some(result) = analysis_set.join_next().await {
-                let (file_path, outcome) =
+                let (file_path, outcome, analysis_duration) =
                     result.map_err(|error| AppError::Repository(error.to_string()))??;
-                analysis_results.insert(file_path, outcome);
-            }
-
-            for plan in planned_files {
-                let source_signature_scheme = plan
-                    .snapshot
-                    .signature
-                    .as_ref()
-                    .map(|signature| signature.scheme.clone());
-                let source_signature_value = plan
-                    .snapshot
-                    .signature
-                    .as_ref()
-                    .map(|signature| signature.value.clone());
-
-                let file_id = match &plan.record {
-                    PlannedTitleScanRecord::Existing {
-                        file_id,
-                        should_refresh_source_signature,
-                        ..
-                    } => {
-                        summary.skipped += 1;
-                        if *should_refresh_source_signature
-                            && let Err(error) = self
-                                .services
-                                .media_files
-                                .update_media_file_source_signature(
-                                    file_id,
-                                    plan.snapshot.size_bytes,
-                                    source_signature_scheme.clone(),
-                                    source_signature_value.clone(),
-                                )
-                                .await
-                        {
-                            warn!(
-                                error = %error,
-                                title_id = %title.id,
-                                file_id = %file_id,
-                                "failed to refresh media file source signature during title scan"
-                            );
-                        }
-                        file_id.clone()
-                    }
-                    PlannedTitleScanRecord::New => {
-                        let media_file_input = crate::InsertMediaFileInput {
-                            title_id: title.id.clone(),
-                            file_path: plan.file.path.clone(),
-                            size_bytes: plan.snapshot.size_bytes,
-                            source_signature_scheme,
-                            source_signature_value,
-                            quality_label: plan.parsed.quality.clone(),
-                            scene_name: Some(plan.parsed.raw_title.clone()),
-                            release_group: plan.parsed.release_group.clone(),
-                            source_type: plan.parsed.source.clone(),
-                            resolution: plan.parsed.quality.clone(),
-                            video_codec_parsed: plan.parsed.video_codec.clone(),
-                            audio_codec_parsed: plan.parsed.audio.clone(),
-                            ..Default::default()
-                        };
-
-                        match self
-                            .services
-                            .media_files
-                            .insert_media_file(&media_file_input)
-                            .await
-                        {
-                            Ok(file_id) => {
-                                summary.imported += 1;
-                                file_id
-                            }
-                            Err(error) => {
-                                warn!(
-                                    error = %error,
-                                    title_id = %title.id,
-                                    file_path = %plan.file.path,
-                                    "failed to insert media file during title scan"
-                                );
-                                summary.skipped += 1;
-                                continue;
-                            }
-                        }
-                    }
+                analyze_elapsed = analyze_elapsed.saturating_add(analysis_duration);
+                let Some(plan) = pending_analysis_plans.remove(&file_path) else {
+                    warn!(
+                        title_id = %title.id,
+                        file_path = %file_path,
+                        "missing planned title scan file for completed analysis result"
+                    );
+                    continue;
                 };
-
-                for episode in &plan.target_episodes {
-                    if episode_links.insert((file_id.clone(), episode.id.clone()))
-                        && let Err(error) = self
-                            .services
-                            .media_files
-                            .link_file_to_episode(&file_id, &episode.id)
-                            .await
-                    {
-                        warn!(
-                            error = %error,
-                            title_id = %title.id,
-                            episode_id = %episode.id,
-                            file_id = %file_id,
-                            "failed to link scanned file to episode"
-                        );
-                    }
-                    crate::app_usecase_import::mark_wanted_completed(
-                        self,
-                        &title.id,
-                        Some(&episode.id),
-                        None,
+                let progress = self
+                    .finalize_title_scan_file(
+                        &title,
+                        plan,
+                        Some(outcome),
+                        &mut episode_links,
+                        &mut summary,
+                        &mut db_elapsed,
                     )
                     .await;
-                }
-
-                if let Some(outcome) = analysis_results.remove(&plan.file.path) {
-                    match outcome {
-                        MediaAnalysisOutcome::Valid(analysis) => {
-                            if let Err(error) = self
-                                .services
-                                .media_files
-                                .update_media_file_analysis(&file_id, *analysis)
-                                .await
-                            {
-                                warn!(
-                                    error = %error,
-                                    title_id = %title.id,
-                                    file_id = %file_id,
-                                    "failed to persist scanned media analysis"
-                                );
-                            }
-                        }
-                        MediaAnalysisOutcome::Invalid(error_message) => {
-                            if let Err(error) = self
-                                .services
-                                .media_files
-                                .mark_scan_failed(&file_id, &error_message)
-                                .await
-                            {
-                                warn!(
-                                    error = %error,
-                                    title_id = %title.id,
-                                    file_id = %file_id,
-                                    "failed to mark scanned media analysis failure"
-                                );
-                            }
-                        }
-                    }
-                }
+                pending_progress.absorb(progress);
+                maybe_flush_title_scan_progress_batch(
+                    &library_scan_tracker,
+                    session_id,
+                    &mut pending_progress,
+                )
+                .await;
             }
         }
+
+        flush_title_scan_progress_batch(&library_scan_tracker, session_id, &mut pending_progress)
+            .await;
 
         for stale_path in remaining_existing_paths {
             let Some(record) = existing_records_by_path.get(&stale_path).cloned() else {
                 continue;
             };
-            if !stale_path.starts_with(title_dir_str.as_str())
-                || Path::new(&record.file_path).exists()
-            {
+            if !stale_path.starts_with(title_dir_str.as_str()) {
                 continue;
             }
-            if let Err(error) = self
+            if Path::new(&record.file_path).exists() {
+                continue;
+            }
+            let db_started = Instant::now();
+            let delete_result = self
                 .services
                 .media_files
                 .delete_media_file(&record.id)
-                .await
-            {
+                .await;
+            db_elapsed = db_elapsed.saturating_add(db_started.elapsed());
+            if let Err(error) = delete_result {
                 warn!(
                     error = %error,
                     title_id = %title.id,
@@ -2148,20 +2853,25 @@ impl AppUseCase {
         }
 
         if title.folder_path.as_deref() != Some(title_dir_str.as_str()) {
+            let db_started = Instant::now();
             self.services
                 .titles
                 .set_folder_path(&title.id, &title_dir_str)
                 .await?;
+            db_elapsed = db_elapsed.saturating_add(db_started.elapsed());
         }
 
         if let Some(use_season_folders) = layout_summary.inferred_use_season_folders()
             && crate::app_usecase_import::use_season_folders(&title) != use_season_folders
         {
             let tags = merge_title_scan_option_tags(title.tags.clone(), use_season_folders);
+            let db_started = Instant::now();
             self.update_title_metadata(actor, &title.id, None, None, Some(tags))
                 .await?;
+            db_elapsed = db_elapsed.saturating_add(db_started.elapsed());
         }
 
+        let db_started = Instant::now();
         self.services
             .record_event(
                 Some(actor.id.clone()),
@@ -2173,6 +2883,15 @@ impl AppUseCase {
                 ),
             )
             .await?;
+        db_elapsed = db_elapsed.saturating_add(db_started.elapsed());
+
+        if let Some(session_id) = session_id {
+            self.services
+                .library_scan_tracker
+                .release_title(&title.id)
+                .await;
+            maybe_complete_library_scan_session(self, session_id).await;
+        }
 
         info!(
             title_id = %title.id,
@@ -2182,15 +2901,184 @@ impl AppUseCase {
             imported = summary.imported,
             skipped = summary.skipped,
             unmatched = summary.unmatched,
+            walk_ms = u64::try_from(walk_elapsed.as_millis()).unwrap_or(u64::MAX),
+            stat_ms = u64::try_from(stat_elapsed.as_millis()).unwrap_or(u64::MAX),
+            analyze_ms = u64::try_from(analyze_elapsed.as_millis()).unwrap_or(u64::MAX),
+            db_ms = u64::try_from(db_elapsed.as_millis()).unwrap_or(u64::MAX),
             analyzed_files,
             unchanged_file_skips,
             batch_size = TITLE_SCAN_FILE_BATCH_SIZE,
-            worker_concurrency = TITLE_SCAN_ANALYSIS_CONCURRENCY,
-            elapsed_ms = started_at.elapsed().as_millis() as u64,
+            worker_concurrency = GLOBAL_LIBRARY_SCAN_ANALYSIS_CONCURRENCY,
+            elapsed_ms = elapsed_ms_u64(started_at),
             "title library scan completed"
         );
 
         Ok(summary)
+    }
+
+    async fn finalize_title_scan_file(
+        &self,
+        title: &Title,
+        plan: PlannedTitleScanFile,
+        analysis_outcome: Option<MediaAnalysisOutcome>,
+        episode_links: &mut HashSet<(String, String)>,
+        summary: &mut LibraryScanSummary,
+        db_elapsed: &mut Duration,
+    ) -> TitleScanProgressDelta {
+        let source_signature_scheme = plan
+            .snapshot
+            .signature
+            .as_ref()
+            .map(|signature| signature.scheme.clone());
+        let source_signature_value = plan
+            .snapshot
+            .signature
+            .as_ref()
+            .map(|signature| signature.value.clone());
+
+        let file_id = match &plan.record {
+            PlannedTitleScanRecord::Existing {
+                file_id,
+                should_refresh_source_signature,
+                ..
+            } => {
+                summary.skipped += 1;
+                if *should_refresh_source_signature {
+                    let db_started = Instant::now();
+                    let update_result = self
+                        .services
+                        .media_files
+                        .update_media_file_source_signature(
+                            file_id,
+                            plan.snapshot.size_bytes,
+                            source_signature_scheme.clone(),
+                            source_signature_value.clone(),
+                        )
+                        .await;
+                    *db_elapsed = db_elapsed.saturating_add(db_started.elapsed());
+                    if let Err(error) = update_result {
+                        warn!(
+                            error = %error,
+                            title_id = %title.id,
+                            file_id = %file_id,
+                            "failed to refresh media file source signature during title scan"
+                        );
+                    }
+                }
+                file_id.clone()
+            }
+            PlannedTitleScanRecord::New => {
+                let media_file_input = crate::InsertMediaFileInput {
+                    title_id: title.id.clone(),
+                    file_path: plan.file.path.clone(),
+                    size_bytes: plan.snapshot.size_bytes,
+                    source_signature_scheme,
+                    source_signature_value,
+                    quality_label: plan.parsed.quality.clone(),
+                    scene_name: Some(plan.parsed.raw_title.clone()),
+                    release_group: plan.parsed.release_group.clone(),
+                    source_type: plan.parsed.source.clone(),
+                    resolution: plan.parsed.quality.clone(),
+                    video_codec_parsed: plan.parsed.video_codec.clone(),
+                    audio_codec_parsed: plan.parsed.audio.clone(),
+                    ..Default::default()
+                };
+
+                let db_started = Instant::now();
+                let insert_result = self
+                    .services
+                    .media_files
+                    .insert_media_file(&media_file_input)
+                    .await;
+                *db_elapsed = db_elapsed.saturating_add(db_started.elapsed());
+
+                match insert_result {
+                    Ok(file_id) => {
+                        summary.imported += 1;
+                        file_id
+                    }
+                    Err(error) => {
+                        warn!(
+                            error = %error,
+                            title_id = %title.id,
+                            file_path = %plan.file.path,
+                            "failed to insert media file during title scan"
+                        );
+                        summary.skipped += 1;
+                        return TitleScanProgressDelta::failed(1);
+                    }
+                }
+            }
+        };
+
+        for episode in &plan.target_episodes {
+            if episode_links.insert((file_id.clone(), episode.id.clone())) {
+                let db_started = Instant::now();
+                let link_result = self
+                    .services
+                    .media_files
+                    .link_file_to_episode(&file_id, &episode.id)
+                    .await;
+                *db_elapsed = db_elapsed.saturating_add(db_started.elapsed());
+                if let Err(error) = link_result {
+                    warn!(
+                        error = %error,
+                        title_id = %title.id,
+                        episode_id = %episode.id,
+                        file_id = %file_id,
+                        "failed to link scanned file to episode"
+                    );
+                }
+            }
+            crate::app_usecase_import::mark_wanted_completed(
+                self,
+                &title.id,
+                Some(&episode.id),
+                None,
+            )
+            .await;
+        }
+
+        if let Some(outcome) = analysis_outcome {
+            match outcome {
+                MediaAnalysisOutcome::Valid(analysis) => {
+                    let db_started = Instant::now();
+                    let update_result = self
+                        .services
+                        .media_files
+                        .update_media_file_analysis(&file_id, *analysis)
+                        .await;
+                    *db_elapsed = db_elapsed.saturating_add(db_started.elapsed());
+                    if let Err(error) = update_result {
+                        warn!(
+                            error = %error,
+                            title_id = %title.id,
+                            file_id = %file_id,
+                            "failed to persist scanned media analysis"
+                        );
+                    }
+                }
+                MediaAnalysisOutcome::Invalid(error_message) => {
+                    let db_started = Instant::now();
+                    let mark_result = self
+                        .services
+                        .media_files
+                        .mark_scan_failed(&file_id, &error_message)
+                        .await;
+                    *db_elapsed = db_elapsed.saturating_add(db_started.elapsed());
+                    if let Err(error) = mark_result {
+                        warn!(
+                            error = %error,
+                            title_id = %title.id,
+                            file_id = %file_id,
+                            "failed to mark scanned media analysis failure"
+                        );
+                    }
+                }
+            }
+        }
+
+        TitleScanProgressDelta::completed(1)
     }
 
     /// Track a discovered movie file as a collection entry for the given title.
@@ -2400,6 +3288,24 @@ mod scan_layout_tests {
         assert_eq!(recognize_season_folder_name("Extras"), None);
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn list_child_directories_deduplicates_symlinked_show_folders() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join("Real Show");
+        let link = dir.path().join("Linked Show");
+        std::fs::create_dir_all(&target).expect("target dir");
+        symlink(&target, &link).expect("symlink");
+
+        let child_dirs = list_child_directories(dir.path())
+            .await
+            .expect("child dirs");
+
+        assert_eq!(child_dirs, vec![link]);
+    }
+
     #[test]
     fn classify_title_scan_layout_marks_conflicting_season_folders_ambiguous() {
         let title_dir = PathBuf::from("/library/Example Show");
@@ -2469,39 +3375,641 @@ fn parse_missing_metadata_policy(raw: &str) -> Option<RenameMissingMetadataPolic
     }
 }
 
-fn build_rename_plan_for_facet(
-    handler: &dyn crate::FacetHandler,
+struct GroupedTitleMediaFile {
+    file: TitleMediaFile,
+    episode_ids: Vec<String>,
+}
+
+struct ResolvedSeriesRenameMetadata {
+    collection_id: Option<String>,
+    season: String,
+    season_order: String,
+    episode: String,
+    absolute_episode: String,
+    episode_title: String,
+}
+
+fn build_series_rename_plan_items_from_media_files(
     title: &Title,
     mut collections: Vec<Collection>,
-    template: String,
-    collision_policy: RenameCollisionPolicy,
-    missing_metadata_policy: RenameMissingMetadataPolicy,
-) -> RenamePlan {
+    episodes: Vec<Episode>,
+    media_files: Vec<TitleMediaFile>,
+    template: &str,
+    collision_policy: &RenameCollisionPolicy,
+    missing_metadata_policy: &RenameMissingMetadataPolicy,
+    planned_targets: &mut HashSet<String>,
+) -> Vec<RenamePlanItem> {
     collections.sort_by(|left, right| left.id.cmp(&right.id));
 
-    let mut planned_targets = HashSet::new();
-    let mut items = Vec::with_capacity(collections.len());
+    let collections_by_id = collections
+        .iter()
+        .cloned()
+        .map(|collection| (collection.id.clone(), collection))
+        .collect::<HashMap<_, _>>();
+    let episodes_by_id = episodes
+        .into_iter()
+        .map(|episode| (episode.id.clone(), episode))
+        .collect::<HashMap<_, _>>();
 
-    for collection in collections {
-        let item = handler.build_rename_plan_item(
-            title,
-            &collection,
-            &template,
-            &collision_policy,
-            &missing_metadata_policy,
-            &mut planned_targets,
-        );
-        items.push(item);
+    let mut grouped_files = group_title_media_files(media_files);
+    grouped_files.sort_by(|left, right| {
+        left.file
+            .file_path
+            .cmp(&right.file.file_path)
+            .then_with(|| left.file.id.cmp(&right.file.id))
+    });
+
+    grouped_files
+        .into_iter()
+        .map(|source| {
+            build_series_media_file_rename_plan_item(
+                title,
+                &collections,
+                &collections_by_id,
+                &episodes_by_id,
+                source,
+                template,
+                collision_policy,
+                missing_metadata_policy,
+                planned_targets,
+            )
+        })
+        .collect()
+}
+
+fn group_title_media_files(media_files: Vec<TitleMediaFile>) -> Vec<GroupedTitleMediaFile> {
+    let mut grouped: Vec<GroupedTitleMediaFile> = Vec::new();
+    let mut indexes: HashMap<String, usize> = HashMap::new();
+
+    for media_file in media_files {
+        if let Some(index) = indexes.get(&media_file.id).copied() {
+            if let Some(episode_id) = media_file.episode_id.as_ref()
+                && !grouped[index]
+                    .episode_ids
+                    .iter()
+                    .any(|value| value == episode_id)
+            {
+                grouped[index].episode_ids.push(episode_id.clone());
+            }
+            continue;
+        }
+
+        let episode_ids = media_file
+            .episode_id
+            .clone()
+            .into_iter()
+            .collect::<Vec<_>>();
+        indexes.insert(media_file.id.clone(), grouped.len());
+        grouped.push(GroupedTitleMediaFile {
+            file: media_file,
+            episode_ids,
+        });
     }
 
-    build_rename_plan_from_items(
-        handler.facet(),
-        Some(title.id.clone()),
-        template,
-        collision_policy,
-        missing_metadata_policy,
-        items,
+    grouped
+}
+
+fn build_series_media_file_rename_plan_item(
+    title: &Title,
+    collections: &[Collection],
+    collections_by_id: &HashMap<String, Collection>,
+    episodes_by_id: &HashMap<String, Episode>,
+    source: GroupedTitleMediaFile,
+    template: &str,
+    collision_policy: &RenameCollisionPolicy,
+    missing_metadata_policy: &RenameMissingMetadataPolicy,
+    planned_targets: &mut HashSet<String>,
+) -> RenamePlanItem {
+    let media_file_id = Some(source.file.id.clone());
+    let current_path = source.file.file_path.clone();
+    if current_path.trim().is_empty() {
+        return RenamePlanItem {
+            collection_id: None,
+            media_file_id,
+            current_path,
+            proposed_path: None,
+            normalized_filename: None,
+            collision: false,
+            reason_code: "no_source_path".into(),
+            write_action: RenameWriteAction::Skip,
+            source_size_bytes: None,
+            source_mtime_unix_ms: None,
+        };
+    }
+
+    let current_file = Path::new(&current_path);
+    let source_metadata = std::fs::metadata(current_file).ok();
+    let source_size_bytes = source_metadata.as_ref().map(|meta| meta.len());
+    let source_mtime_unix_ms = source_metadata
+        .as_ref()
+        .and_then(|meta| meta.modified().ok())
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok());
+
+    if source_metadata.as_ref().is_none_or(|meta| !meta.is_file()) {
+        return RenamePlanItem {
+            collection_id: None,
+            media_file_id,
+            current_path,
+            proposed_path: None,
+            normalized_filename: None,
+            collision: false,
+            reason_code: "source_not_file".into(),
+            write_action: RenameWriteAction::Error,
+            source_size_bytes,
+            source_mtime_unix_ms,
+        };
+    }
+
+    let current_stem = current_file
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default();
+    let parsed = parse_release_metadata(current_stem);
+    let rename_metadata = resolve_series_rename_metadata(
+        collections,
+        collections_by_id,
+        episodes_by_id,
+        &source,
+        &parsed,
+    );
+    let (title_token, year_token) = split_title_and_year_hint(&title.name);
+    let extension = current_file
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default();
+
+    let quality = source
+        .file
+        .quality_label
+        .clone()
+        .or(parsed.quality.clone())
+        .unwrap_or_default();
+
+    let mut tokens = BTreeMap::new();
+    tokens.insert("title".to_string(), title_token.clone());
+    tokens.insert("year".to_string(), year_token.unwrap_or_default());
+    tokens.insert("season".to_string(), rename_metadata.season.clone());
+    tokens.insert(
+        "season_order".to_string(),
+        rename_metadata.season_order.clone(),
+    );
+    tokens.insert("episode".to_string(), rename_metadata.episode.clone());
+    tokens.insert(
+        "absolute_episode".to_string(),
+        rename_metadata.absolute_episode.clone(),
+    );
+    tokens.insert(
+        "episode_title".to_string(),
+        rename_metadata.episode_title.clone(),
+    );
+    tokens.insert("quality".to_string(), quality);
+    tokens.insert(
+        "source".to_string(),
+        source
+            .file
+            .source_type
+            .clone()
+            .or(parsed.source.clone())
+            .unwrap_or_default(),
+    );
+    tokens.insert(
+        "video_codec".to_string(),
+        source
+            .file
+            .video_codec_parsed
+            .clone()
+            .or(parsed.video_codec.clone())
+            .unwrap_or_default(),
+    );
+    tokens.insert(
+        "audio_codec".to_string(),
+        source
+            .file
+            .audio_codec_parsed
+            .clone()
+            .or(parsed.audio.clone())
+            .unwrap_or_default(),
+    );
+    tokens.insert(
+        "audio_channels".to_string(),
+        parsed.audio_channels.clone().unwrap_or_default(),
+    );
+    tokens.insert(
+        "group".to_string(),
+        source
+            .file
+            .release_group
+            .clone()
+            .or(parsed.release_group.clone())
+            .unwrap_or_default(),
+    );
+    tokens.insert("ext".to_string(), extension.clone());
+
+    let mut rendered = render_rename_template(template, &tokens);
+    if rendered.is_empty() {
+        if matches!(missing_metadata_policy, RenameMissingMetadataPolicy::Skip) {
+            return RenamePlanItem {
+                collection_id: rename_metadata.collection_id,
+                media_file_id,
+                current_path,
+                proposed_path: None,
+                normalized_filename: None,
+                collision: false,
+                reason_code: "missing_metadata".into(),
+                write_action: RenameWriteAction::Skip,
+                source_size_bytes,
+                source_mtime_unix_ms,
+            };
+        }
+        rendered = split_title_and_year_hint(&title.name).0;
+    }
+
+    if !extension.is_empty()
+        && !rendered
+            .to_ascii_lowercase()
+            .ends_with(&format!(".{extension}"))
+    {
+        rendered = format!("{rendered}.{extension}");
+    }
+
+    let parent = current_file
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let proposed_path = parent.join(&rendered);
+    let proposed_path_str = proposed_path.to_string_lossy().to_string();
+    let collection_id = rename_metadata.collection_id;
+
+    if proposed_path_str == current_path {
+        return RenamePlanItem {
+            collection_id,
+            media_file_id,
+            current_path,
+            proposed_path: Some(proposed_path_str),
+            normalized_filename: Some(rendered),
+            collision: false,
+            reason_code: "same_path".into(),
+            write_action: RenameWriteAction::Noop,
+            source_size_bytes,
+            source_mtime_unix_ms,
+        };
+    }
+
+    if !planned_targets.insert(proposed_path_str.clone()) {
+        return RenamePlanItem {
+            collection_id,
+            media_file_id,
+            current_path,
+            proposed_path: Some(proposed_path_str),
+            normalized_filename: Some(rendered),
+            collision: true,
+            reason_code: "collision_within_plan".into(),
+            write_action: RenameWriteAction::Skip,
+            source_size_bytes,
+            source_mtime_unix_ms,
+        };
+    }
+
+    if Path::new(&proposed_path_str).exists() {
+        return match collision_policy {
+            RenameCollisionPolicy::Skip => RenamePlanItem {
+                collection_id,
+                media_file_id,
+                current_path,
+                proposed_path: Some(proposed_path_str),
+                normalized_filename: Some(rendered),
+                collision: true,
+                reason_code: "collision_existing".into(),
+                write_action: RenameWriteAction::Skip,
+                source_size_bytes,
+                source_mtime_unix_ms,
+            },
+            RenameCollisionPolicy::Error => RenamePlanItem {
+                collection_id,
+                media_file_id,
+                current_path,
+                proposed_path: Some(proposed_path_str),
+                normalized_filename: Some(rendered),
+                collision: true,
+                reason_code: "collision_existing".into(),
+                write_action: RenameWriteAction::Error,
+                source_size_bytes,
+                source_mtime_unix_ms,
+            },
+            RenameCollisionPolicy::ReplaceIfBetter => RenamePlanItem {
+                collection_id,
+                media_file_id,
+                current_path,
+                proposed_path: Some(proposed_path_str),
+                normalized_filename: Some(rendered),
+                collision: true,
+                reason_code: "collision_existing".into(),
+                write_action: RenameWriteAction::Error,
+                source_size_bytes,
+                source_mtime_unix_ms,
+            },
+        };
+    }
+
+    RenamePlanItem {
+        collection_id,
+        media_file_id,
+        current_path,
+        proposed_path: Some(proposed_path_str),
+        normalized_filename: Some(rendered),
+        collision: false,
+        reason_code: "rename_move".into(),
+        write_action: RenameWriteAction::Move,
+        source_size_bytes,
+        source_mtime_unix_ms,
+    }
+}
+
+fn resolve_series_rename_metadata(
+    collections: &[Collection],
+    collections_by_id: &HashMap<String, Collection>,
+    episodes_by_id: &HashMap<String, Episode>,
+    source: &GroupedTitleMediaFile,
+    parsed: &ParsedReleaseMetadata,
+) -> ResolvedSeriesRenameMetadata {
+    if source.episode_ids.is_empty()
+        && let Some(collection) = collections.iter().find(|collection| {
+            collection.collection_type == CollectionType::Interstitial
+                && collection.ordered_path.as_deref() == Some(source.file.file_path.as_str())
+        })
+    {
+        let (season, episode) =
+            parse_interstitial_season_episode(collection.interstitial_season_episode.as_deref())
+                .unwrap_or_else(|| ("0".to_string(), "1".to_string()));
+
+        return ResolvedSeriesRenameMetadata {
+            collection_id: Some(collection.id.clone()),
+            season_order: non_empty_owned(collection.narrative_order.clone())
+                .or_else(|| non_empty_string(&collection.collection_index))
+                .unwrap_or_else(|| season.clone()),
+            absolute_episode: parsed
+                .episode
+                .as_ref()
+                .and_then(|episode_meta| episode_meta.absolute_episode)
+                .map(|value| format!("{value:03}"))
+                .unwrap_or_else(|| episode.clone()),
+            episode_title: collection
+                .interstitial_movie
+                .as_ref()
+                .map(|movie| movie.name.clone())
+                .unwrap_or_default(),
+            season,
+            episode,
+        };
+    }
+
+    let linked_episodes =
+        select_sorted_episodes(&source.episode_ids, episodes_by_id, collections_by_id);
+    if let Some(primary_episode) = linked_episodes.first().copied() {
+        let collection = primary_episode
+            .collection_id
+            .as_deref()
+            .and_then(|collection_id| collections_by_id.get(collection_id));
+        let parsed_episode = parsed.episode.as_ref();
+        let season = non_empty_owned(primary_episode.season_number.clone())
+            .or_else(|| collection.and_then(|value| non_empty_string(&value.collection_index)))
+            .or_else(|| {
+                parsed_episode
+                    .and_then(|value| value.season)
+                    .map(|value| value.to_string())
+            })
+            .unwrap_or_default();
+        let episode = format_number_token(collect_episode_numbers(&linked_episodes), 2, false)
+            .or_else(|| non_empty_owned(primary_episode.episode_number.clone()))
+            .or_else(|| parsed_episode.and_then(parsed_episode_token))
+            .unwrap_or_default();
+
+        return ResolvedSeriesRenameMetadata {
+            collection_id: None,
+            season_order: collection
+                .and_then(|value| non_empty_owned(value.narrative_order.clone()))
+                .or_else(|| collection.and_then(|value| non_empty_string(&value.collection_index)))
+                .or_else(|| non_empty_owned(primary_episode.season_number.clone()))
+                .unwrap_or_else(|| season.clone()),
+            absolute_episode: format_number_token(
+                collect_absolute_episode_numbers(&linked_episodes),
+                3,
+                true,
+            )
+            .or_else(|| normalize_absolute_episode_token(primary_episode.absolute_number.clone()))
+            .or_else(|| parsed_episode.and_then(parsed_absolute_episode_token))
+            .unwrap_or_else(|| episode.clone()),
+            episode_title: join_episode_titles(&linked_episodes).unwrap_or_default(),
+            season,
+            episode,
+        };
+    }
+
+    let parsed_episode = parsed.episode.as_ref();
+    let season = parsed_episode
+        .and_then(|value| value.season)
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    let episode = parsed_episode
+        .and_then(parsed_episode_token)
+        .unwrap_or_default();
+
+    ResolvedSeriesRenameMetadata {
+        collection_id: None,
+        season_order: if season.is_empty() {
+            String::new()
+        } else {
+            season.clone()
+        },
+        absolute_episode: parsed_episode
+            .and_then(parsed_absolute_episode_token)
+            .unwrap_or_else(|| episode.clone()),
+        episode_title: String::new(),
+        season,
+        episode,
+    }
+}
+
+fn select_sorted_episodes<'a>(
+    episode_ids: &[String],
+    episodes_by_id: &'a HashMap<String, Episode>,
+    collections_by_id: &HashMap<String, Collection>,
+) -> Vec<&'a Episode> {
+    let mut episodes = episode_ids
+        .iter()
+        .filter_map(|episode_id| episodes_by_id.get(episode_id))
+        .collect::<Vec<_>>();
+    episodes.sort_by_key(|episode| episode_sort_key(episode, collections_by_id));
+    episodes
+}
+
+fn collect_episode_numbers(episodes: &[&Episode]) -> Vec<u32> {
+    episodes
+        .iter()
+        .filter_map(|episode| parse_sort_number(episode.episode_number.as_deref()))
+        .collect()
+}
+
+fn collect_absolute_episode_numbers(episodes: &[&Episode]) -> Vec<u32> {
+    episodes
+        .iter()
+        .filter_map(|episode| parse_sort_number(episode.absolute_number.as_deref()))
+        .collect()
+}
+
+fn join_episode_titles(episodes: &[&Episode]) -> Option<String> {
+    let mut seen = HashSet::new();
+    let mut titles = Vec::new();
+
+    for episode in episodes {
+        let Some(title) = episode
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+
+        let normalized = title.to_ascii_lowercase();
+        if seen.insert(normalized) {
+            titles.push(title.to_string());
+        }
+    }
+
+    if titles.is_empty() {
+        None
+    } else {
+        Some(titles.join(" + "))
+    }
+}
+
+fn format_number_token(mut numbers: Vec<u32>, width: usize, pad_single: bool) -> Option<String> {
+    if numbers.is_empty() {
+        return None;
+    }
+
+    numbers.sort_unstable();
+    numbers.dedup();
+
+    if numbers.len() == 1 {
+        let value = numbers[0];
+        return Some(if pad_single {
+            format!("{value:0width$}")
+        } else {
+            value.to_string()
+        });
+    }
+
+    Some(
+        numbers
+            .into_iter()
+            .map(|value| format!("{value:0width$}"))
+            .collect::<Vec<_>>()
+            .join("-"),
     )
+}
+
+fn parsed_episode_token(parsed_episode: &ParsedEpisodeMetadata) -> Option<String> {
+    if !parsed_episode.episode_numbers.is_empty() {
+        format_number_token(parsed_episode.episode_numbers.clone(), 2, false)
+    } else {
+        parsed_episode
+            .first_episode()
+            .map(|value| value.to_string())
+    }
+}
+
+fn parsed_absolute_episode_token(parsed_episode: &ParsedEpisodeMetadata) -> Option<String> {
+    if !parsed_episode.absolute_episode_numbers.is_empty() {
+        format_number_token(parsed_episode.absolute_episode_numbers.clone(), 3, true)
+    } else {
+        parsed_episode
+            .absolute_episode
+            .map(|value| format!("{value:03}"))
+    }
+}
+
+fn episode_sort_key(
+    episode: &Episode,
+    collections_by_id: &HashMap<String, Collection>,
+) -> (u32, u32, u32, u32, String) {
+    let collection = episode
+        .collection_id
+        .as_deref()
+        .and_then(|collection_id| collections_by_id.get(collection_id));
+
+    (
+        collection
+            .and_then(|value| {
+                parse_sort_number(
+                    value
+                        .narrative_order
+                        .as_deref()
+                        .or(Some(value.collection_index.as_str())),
+                )
+            })
+            .unwrap_or(u32::MAX),
+        parse_sort_number(episode.season_number.as_deref()).unwrap_or(u32::MAX),
+        parse_sort_number(episode.episode_number.as_deref()).unwrap_or(u32::MAX),
+        parse_sort_number(episode.absolute_number.as_deref()).unwrap_or(u32::MAX),
+        episode.id.clone(),
+    )
+}
+
+fn parse_sort_number(value: Option<&str>) -> Option<u32> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<u32>().ok())
+}
+
+fn parse_interstitial_season_episode(value: Option<&str>) -> Option<(String, String)> {
+    let raw = value?.trim();
+    let stripped = raw.strip_prefix('S')?;
+    let (season, episode) = stripped.split_once('E')?;
+    let season = season.trim_start_matches('0');
+    let episode = episode.trim_start_matches('0');
+    Some((
+        if season.is_empty() {
+            "0".to_string()
+        } else {
+            season.to_string()
+        },
+        if episode.is_empty() {
+            "0".to_string()
+        } else {
+            episode.to_string()
+        },
+    ))
+}
+
+fn non_empty_owned(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        if value.trim().is_empty() {
+            None
+        } else {
+            Some(value)
+        }
+    })
+}
+
+fn normalize_absolute_episode_token(value: Option<String>) -> Option<String> {
+    non_empty_owned(value).map(|value| match value.parse::<u32>() {
+        Ok(number) => format!("{number:03}"),
+        Err(_) => value,
+    })
+}
+
+fn non_empty_string(value: &str) -> Option<String> {
+    if value.trim().is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
 }
 
 fn build_rename_plan_from_items(
@@ -2515,12 +4023,7 @@ fn build_rename_plan_from_items(
     let total = items.len();
     let renamable = items
         .iter()
-        .filter(|item| {
-            matches!(
-                item.write_action,
-                RenameWriteAction::Move | RenameWriteAction::Replace
-            )
-        })
+        .filter(|item| matches!(item.write_action, RenameWriteAction::Move))
         .count();
     let noop = items
         .iter()
@@ -2566,6 +4069,7 @@ pub(crate) fn build_movie_rename_plan_item(
     let Some(current_path) = collection.ordered_path.clone() else {
         return RenamePlanItem {
             collection_id: Some(collection.id.clone()),
+            media_file_id: None,
             current_path: String::new(),
             proposed_path: None,
             normalized_filename: None,
@@ -2589,6 +4093,7 @@ pub(crate) fn build_movie_rename_plan_item(
     if source_metadata.as_ref().is_none_or(|meta| !meta.is_file()) {
         return RenamePlanItem {
             collection_id: Some(collection.id.clone()),
+            media_file_id: None,
             current_path,
             proposed_path: None,
             normalized_filename: None,
@@ -2659,6 +4164,7 @@ pub(crate) fn build_movie_rename_plan_item(
         if matches!(missing_metadata_policy, RenameMissingMetadataPolicy::Skip) {
             return RenamePlanItem {
                 collection_id: Some(collection.id.clone()),
+                media_file_id: None,
                 current_path,
                 proposed_path: None,
                 normalized_filename: None,
@@ -2690,6 +4196,7 @@ pub(crate) fn build_movie_rename_plan_item(
     if proposed_path_str == current_path {
         return RenamePlanItem {
             collection_id: Some(collection.id.clone()),
+            media_file_id: None,
             current_path,
             proposed_path: Some(proposed_path_str),
             normalized_filename: Some(rendered),
@@ -2704,6 +4211,7 @@ pub(crate) fn build_movie_rename_plan_item(
     if !planned_targets.insert(proposed_path_str.clone()) {
         return RenamePlanItem {
             collection_id: Some(collection.id.clone()),
+            media_file_id: None,
             current_path,
             proposed_path: Some(proposed_path_str),
             normalized_filename: Some(rendered),
@@ -2719,6 +4227,7 @@ pub(crate) fn build_movie_rename_plan_item(
         return match collision_policy {
             RenameCollisionPolicy::Skip => RenamePlanItem {
                 collection_id: Some(collection.id.clone()),
+                media_file_id: None,
                 current_path,
                 proposed_path: Some(proposed_path_str),
                 normalized_filename: Some(rendered),
@@ -2730,6 +4239,7 @@ pub(crate) fn build_movie_rename_plan_item(
             },
             RenameCollisionPolicy::Error => RenamePlanItem {
                 collection_id: Some(collection.id.clone()),
+                media_file_id: None,
                 current_path,
                 proposed_path: Some(proposed_path_str),
                 normalized_filename: Some(rendered),
@@ -2741,12 +4251,13 @@ pub(crate) fn build_movie_rename_plan_item(
             },
             RenameCollisionPolicy::ReplaceIfBetter => RenamePlanItem {
                 collection_id: Some(collection.id.clone()),
+                media_file_id: None,
                 current_path,
                 proposed_path: Some(proposed_path_str),
                 normalized_filename: Some(rendered),
                 collision: true,
-                reason_code: "collision_replace".into(),
-                write_action: RenameWriteAction::Replace,
+                reason_code: "collision_existing".into(),
+                write_action: RenameWriteAction::Error,
                 source_size_bytes,
                 source_mtime_unix_ms,
             },
@@ -2755,6 +4266,7 @@ pub(crate) fn build_movie_rename_plan_item(
 
     RenamePlanItem {
         collection_id: Some(collection.id.clone()),
+        media_file_id: None,
         current_path,
         proposed_path: Some(proposed_path_str),
         normalized_filename: Some(rendered),
@@ -2777,6 +4289,7 @@ pub(crate) fn build_series_rename_plan_item(
     let Some(current_path) = collection.ordered_path.clone() else {
         return RenamePlanItem {
             collection_id: Some(collection.id.clone()),
+            media_file_id: None,
             current_path: String::new(),
             proposed_path: None,
             normalized_filename: None,
@@ -2800,6 +4313,7 @@ pub(crate) fn build_series_rename_plan_item(
     if source_metadata.as_ref().is_none_or(|meta| !meta.is_file()) {
         return RenamePlanItem {
             collection_id: Some(collection.id.clone()),
+            media_file_id: None,
             current_path,
             proposed_path: None,
             normalized_filename: None,
@@ -2926,6 +4440,7 @@ pub(crate) fn build_series_rename_plan_item(
         if matches!(missing_metadata_policy, RenameMissingMetadataPolicy::Skip) {
             return RenamePlanItem {
                 collection_id: Some(collection.id.clone()),
+                media_file_id: None,
                 current_path,
                 proposed_path: None,
                 normalized_filename: None,
@@ -2957,6 +4472,7 @@ pub(crate) fn build_series_rename_plan_item(
     if proposed_path_str == current_path {
         return RenamePlanItem {
             collection_id: Some(collection.id.clone()),
+            media_file_id: None,
             current_path,
             proposed_path: Some(proposed_path_str),
             normalized_filename: Some(rendered),
@@ -2971,6 +4487,7 @@ pub(crate) fn build_series_rename_plan_item(
     if !planned_targets.insert(proposed_path_str.clone()) {
         return RenamePlanItem {
             collection_id: Some(collection.id.clone()),
+            media_file_id: None,
             current_path,
             proposed_path: Some(proposed_path_str),
             normalized_filename: Some(rendered),
@@ -2986,6 +4503,7 @@ pub(crate) fn build_series_rename_plan_item(
         return match collision_policy {
             RenameCollisionPolicy::Skip => RenamePlanItem {
                 collection_id: Some(collection.id.clone()),
+                media_file_id: None,
                 current_path,
                 proposed_path: Some(proposed_path_str),
                 normalized_filename: Some(rendered),
@@ -2997,6 +4515,7 @@ pub(crate) fn build_series_rename_plan_item(
             },
             RenameCollisionPolicy::Error => RenamePlanItem {
                 collection_id: Some(collection.id.clone()),
+                media_file_id: None,
                 current_path,
                 proposed_path: Some(proposed_path_str),
                 normalized_filename: Some(rendered),
@@ -3008,12 +4527,13 @@ pub(crate) fn build_series_rename_plan_item(
             },
             RenameCollisionPolicy::ReplaceIfBetter => RenamePlanItem {
                 collection_id: Some(collection.id.clone()),
+                media_file_id: None,
                 current_path,
                 proposed_path: Some(proposed_path_str),
                 normalized_filename: Some(rendered),
                 collision: true,
-                reason_code: "collision_replace".into(),
-                write_action: RenameWriteAction::Replace,
+                reason_code: "collision_existing".into(),
+                write_action: RenameWriteAction::Error,
                 source_size_bytes,
                 source_mtime_unix_ms,
             },
@@ -3022,6 +4542,7 @@ pub(crate) fn build_series_rename_plan_item(
 
     RenamePlanItem {
         collection_id: Some(collection.id.clone()),
+        media_file_id: None,
         current_path,
         proposed_path: Some(proposed_path_str),
         normalized_filename: Some(rendered),
@@ -3060,6 +4581,7 @@ mod tests {
         size_bytes: i64,
         source_signature_scheme: Option<&str>,
         source_signature_value: Option<&str>,
+        analyzed: bool,
     ) -> TitleMediaFile {
         TitleMediaFile {
             id: "file-1".into(),
@@ -3072,16 +4594,16 @@ mod tests {
             quality_label: None,
             scan_status: "scanned".into(),
             created_at: String::new(),
-            video_codec: None,
-            video_width: None,
-            video_height: None,
+            video_codec: analyzed.then(|| "h264".into()),
+            video_width: analyzed.then_some(1920),
+            video_height: analyzed.then_some(1080),
             video_bitrate_kbps: None,
             video_bit_depth: None,
             video_hdr_format: None,
             video_frame_rate: None,
             video_profile: None,
-            audio_codec: None,
-            audio_channels: None,
+            audio_codec: analyzed.then(|| "aac".into()),
+            audio_channels: analyzed.then_some(2),
             audio_bitrate_kbps: None,
             audio_languages: vec![],
             audio_streams: vec![],
@@ -3089,9 +4611,9 @@ mod tests {
             subtitle_codecs: vec![],
             subtitle_streams: vec![],
             has_multiaudio: false,
-            duration_seconds: None,
+            duration_seconds: analyzed.then_some(1440),
             num_chapters: None,
-            container_format: None,
+            container_format: analyzed.then(|| "matroska".into()),
             scene_name: None,
             release_group: None,
             source_type: None,
@@ -3164,7 +4686,7 @@ mod tests {
 
     #[test]
     fn title_media_file_matches_snapshot_backfills_missing_signatures_without_reanalysis() {
-        let media_file = build_test_media_file(1234, None, None);
+        let media_file = build_test_media_file(1234, None, None, true);
         let snapshot = FileSourceSnapshot {
             size_bytes: 1234,
             signature: Some(FileSourceSignature {
@@ -3174,6 +4696,21 @@ mod tests {
         };
 
         assert!(title_media_file_matches_snapshot(&media_file, &snapshot));
+    }
+
+    #[test]
+    fn title_media_file_matches_snapshot_requires_persisted_analysis() {
+        let media_file =
+            build_test_media_file(1234, Some("unix_mtime_nsec_v1"), Some("1:2"), false);
+        let snapshot = FileSourceSnapshot {
+            size_bytes: 1234,
+            signature: Some(FileSourceSignature {
+                scheme: "unix_mtime_nsec_v1".into(),
+                value: "1:2".into(),
+            }),
+        };
+
+        assert!(!title_media_file_matches_snapshot(&media_file, &snapshot));
     }
 
     #[test]

@@ -73,6 +73,19 @@ impl AppUseCase {
         Ok(self.services.import_history_broadcast.subscribe())
     }
 
+    pub async fn active_library_scans(&self, actor: &User) -> AppResult<Vec<LibraryScanSession>> {
+        require(actor, &Entitlement::ViewCatalog)?;
+        Ok(self.services.library_scan_tracker.list_active().await)
+    }
+
+    pub fn subscribe_library_scan_progress(
+        &self,
+        actor: &User,
+    ) -> AppResult<broadcast::Receiver<LibraryScanSession>> {
+        require(actor, &Entitlement::ViewCatalog)?;
+        Ok(self.services.library_scan_tracker.subscribe())
+    }
+
     pub fn subscribe_settings_changed(
         &self,
         actor: &User,

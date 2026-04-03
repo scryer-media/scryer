@@ -5,9 +5,9 @@ import {
   downloadQueueQuery,
   downloadQueueSubscription,
 } from "@/lib/graphql/queries";
-import { wsClient } from "@/lib/graphql/ws-client";
 import type { DownloadQueueItem } from "@/lib/types";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { useDeferredWsSubscription } from "@/lib/hooks/use-deferred-ws-subscription";
 
 type UseDownloadQueueArgs = {
   enabled: boolean;
@@ -52,94 +52,53 @@ export function useDownloadQueue({
   // The subscription is gated on `initialFetchDone` so the first broadcast
   // (which may carry stale/un-enriched data) cannot overwrite the HTTP query
   // result that the user is already looking at.
-  const unsubRef = useRef<(() => void) | null>(null);
-  const teardownTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (!enabled || includeHistoryOnly || !initialFetchDone) {
-      if (teardownTimer.current) {
-        clearTimeout(teardownTimer.current);
-        teardownTimer.current = null;
+  useDeferredWsSubscription<{ data?: { downloadQueue?: DownloadQueueItem[] } }>({
+    enabled: enabled && !includeHistoryOnly && initialFetchDone,
+    requestKey: `downloadQueue:${includeAllActivity ? 1 : 0}:${includeHistoryOnly ? 1 : 0}`,
+    request: {
+      query: downloadQueueSubscription,
+      variables: { includeAllActivity, includeHistoryOnly },
+    },
+    onNext(result) {
+      const items = result.data?.downloadQueue;
+      if (!items) {
+        return;
       }
-      if (unsubRef.current) {
-        unsubRef.current();
-        unsubRef.current = null;
+
+      // Merge: the subscription only carries live jobs from the
+      // download client — it does NOT include terminal/historical
+      // items (completed, failed, import_pending). Preserve those
+      // from the existing state so the table doesn't flash empty.
+      setQueueItems((prev) => {
+        if (!includeAllActivity) {
+          return items;
+        }
+
+        const TERMINAL_STATES = new Set([
+          "completed",
+          "failed",
+          "import_pending",
+          "importpending",
+        ]);
+        const liveIds = new Set(items.map((item) => item.downloadClientItemId));
+        const kept = prev.filter(
+          (item) =>
+            TERMINAL_STATES.has(item.state.toLowerCase()) &&
+            !liveIds.has(item.downloadClientItemId),
+        );
+        return [...items, ...kept];
+      });
+      setQueueError(null);
+      setLastRefreshedAt(new Date());
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
       }
-      return;
-    }
-
-    // StrictMode re-run: cancel the pending teardown, subscription is still alive
-    if (teardownTimer.current) {
-      clearTimeout(teardownTimer.current);
-      teardownTimer.current = null;
-      return;
-    }
-
-    // Fresh subscription
-    const unsubscribe = wsClient.subscribe(
-      {
-        query: downloadQueueSubscription,
-        variables: { includeAllActivity, includeHistoryOnly },
-      },
-      {
-        next(result) {
-          const items = result.data?.downloadQueue as
-            | DownloadQueueItem[]
-            | undefined;
-          if (items) {
-            // Merge: the subscription only carries live jobs from the
-            // download client — it does NOT include terminal/historical
-            // items (completed, failed, import_pending). Preserve those
-            // from the existing state so the table doesn't flash empty.
-            setQueueItems((prev) => {
-              if (!includeAllActivity) {
-                return items;
-              }
-
-              const TERMINAL_STATES = new Set([
-                "completed",
-                "failed",
-                "import_pending",
-                "importpending",
-              ]);
-              const liveIds = new Set(
-                items.map((i) => i.downloadClientItemId),
-              );
-              const kept = prev.filter(
-                (p) =>
-                  TERMINAL_STATES.has(p.state.toLowerCase()) &&
-                  !liveIds.has(p.downloadClientItemId),
-              );
-              return [...items, ...kept];
-            });
-            setQueueError(null);
-            setLastRefreshedAt(new Date());
-            if (pollingRef.current) {
-              clearInterval(pollingRef.current);
-              pollingRef.current = null;
-            }
-          }
-        },
-        error(err) {
-          console.error("[download-queue] subscription error:", err);
-        },
-        complete() {
-          unsubRef.current = null;
-        },
-      },
-    );
-
-    unsubRef.current = unsubscribe;
-
-    return () => {
-      // Defer unsubscribe — if StrictMode re-runs within 200ms we cancel this
-      teardownTimer.current = setTimeout(() => {
-        teardownTimer.current = null;
-        unsubscribe();
-        unsubRef.current = null;
-      }, 200);
-    };
-  }, [enabled, includeAllActivity, includeHistoryOnly, initialFetchDone]);
+    },
+    onError(err) {
+      console.error("[download-queue] subscription error:", err);
+    },
+  });
 
   // --- Query fetch (initial load + manual refresh) ---
   // The query is authoritative — it returns enriched data with import status,

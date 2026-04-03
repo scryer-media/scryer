@@ -433,8 +433,8 @@ seed_settings() {
   done < "$ENTRIES_FILE"
 
   if [ -n "$movie_path" ] || [ -n "$series_path" ] || [ -n "$anime_path" ]; then
-    [ -n "$movie_path" ] || movie_path="/media/movies"
-    [ -n "$series_path" ] || series_path="/media/series"
+    [ -n "$movie_path" ] || movie_path="/data/movies"
+    [ -n "$series_path" ] || series_path="/data/series"
 
     variables=$(jq -nc \
       --arg moviePath "$movie_path" \

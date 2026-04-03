@@ -694,6 +694,17 @@ mod tests {
                 .cloned())
         }
 
+        async fn get_collection_by_ordered_path(
+            &self,
+            ordered_path: &str,
+        ) -> AppResult<Option<Collection>> {
+            let collections = self.collections.lock().await;
+            Ok(collections
+                .iter()
+                .find(|collection| collection.ordered_path.as_deref() == Some(ordered_path))
+                .cloned())
+        }
+
         async fn create_collection(&self, collection: Collection) -> AppResult<Collection> {
             self.collections.lock().await.push(collection.clone());
             Ok(collection)

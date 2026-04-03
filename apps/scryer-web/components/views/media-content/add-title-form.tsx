@@ -311,8 +311,8 @@ export function AddTitleForm({
               value={titleFilter}
               onChange={onTitleFilterChange}
             />
-            <Button className="w-full sm:w-auto" variant="secondary" onClick={onRefreshTitles} disabled={titleLoading}>
-              {titleLoading ? t("label.refreshing") : t("label.refresh")}
+            <Button className="w-full sm:w-auto" variant="primary" onClick={onRefreshTitles} disabled={titleLoading}>
+              {t("label.refresh")}
             </Button>
           </div>
           <p className="mb-2 text-sm text-muted-foreground">{titleStatus}</p>

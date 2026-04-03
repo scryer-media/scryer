@@ -191,6 +191,8 @@ export function MediaContentView({
     rulesSaving: boolean;
     onToggleRuleFacet: (ruleSetId: string, enabled: boolean) => void;
     libraryScanLoading: boolean;
+    libraryScanDisabled: boolean;
+    libraryScanNotice: string | null;
     libraryScanSummary: LibraryScanSummary | null;
     scanLibrary: () => Promise<void> | void;
     onOpenOverview: (targetView: ViewId, titleId: string) => void;
@@ -286,6 +288,8 @@ export function MediaContentView({
     updateIndexerRoutingForScope,
     moveIndexerInScope,
     libraryScanLoading,
+    libraryScanDisabled,
+    libraryScanNotice,
     libraryScanSummary,
     scanLibrary,
     onOpenOverview,
@@ -540,6 +544,8 @@ export function MediaContentView({
               onSaveRootFolders={saveRootFolders}
               loading={mediaSettingsLoading}
               scanLoading={libraryScanLoading}
+              scanDisabled={libraryScanDisabled}
+              scanNotice={libraryScanNotice}
               scanSummary={libraryScanSummary}
               onScan={handleLibraryScan}
             />
@@ -598,8 +604,8 @@ export function MediaContentView({
                     </ToggleGroupItem>
                   </ToggleGroup>
                 ) : null}
-                <Button className="w-full sm:w-auto" variant="secondary" onClick={handleRefreshTitles} disabled={titleLoading}>
-                  {titleLoading ? t("label.refreshing") : t("label.refresh")}
+                <Button className="w-full sm:w-auto" variant="primary" onClick={handleRefreshTitles} disabled={titleLoading}>
+                  {t("label.refresh")}
                 </Button>
               </div>
               <p className="mb-2 text-sm text-muted-foreground">{titleStatus}</p>

@@ -179,8 +179,9 @@ fn resolve_token_missing_returns_empty() {
 fn fingerprint_deterministic() {
     let items = vec![RenamePlanItem {
         collection_id: None,
-        current_path: "/media/movie.mkv".to_string(),
-        proposed_path: Some("/media/Movie (2024).mkv".to_string()),
+        media_file_id: None,
+        current_path: "/data/movie.mkv".to_string(),
+        proposed_path: Some("/data/Movie (2024).mkv".to_string()),
         normalized_filename: Some("Movie (2024).mkv".to_string()),
         collision: false,
         reason_code: "rename".to_string(),

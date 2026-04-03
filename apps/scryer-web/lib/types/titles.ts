@@ -15,6 +15,8 @@ export type TitleRecord = {
   externalIds: ExternalId[];
   qualityTier?: string | null;
   sizeBytes?: number | null;
+  episodesOwned?: number | null;
+  episodesTotal?: number | null;
   contentStatus?: string | null;
   posterUrl?: string | null;
   posterSourceUrl?: string | null;

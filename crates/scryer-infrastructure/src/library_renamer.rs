@@ -26,10 +26,13 @@ impl FileSystemLibraryRenamer {
 impl LibraryRenamer for FileSystemLibraryRenamer {
     async fn validate_targets(&self, plan: &RenamePlan) -> AppResult<()> {
         for item in &plan.items {
-            if !matches!(
-                item.write_action,
-                RenameWriteAction::Move | RenameWriteAction::Replace
-            ) {
+            if matches!(item.write_action, RenameWriteAction::Replace) {
+                return Err(AppError::Validation(
+                    "rename replace action is not supported".into(),
+                ));
+            }
+
+            if !matches!(item.write_action, RenameWriteAction::Move) {
                 continue;
             }
 
@@ -56,10 +59,7 @@ impl LibraryRenamer for FileSystemLibraryRenamer {
                     .map_err(|err| AppError::Repository(err.to_string()))?;
             }
 
-            if matches!(item.write_action, RenameWriteAction::Move)
-                && target_path != item.current_path
-                && fs::metadata(target_path).await.is_ok()
-            {
+            if target_path != item.current_path && fs::metadata(target_path).await.is_ok() {
                 return Err(AppError::Validation(format!(
                     "rename target already exists: {target_path}"
                 )));
@@ -75,6 +75,7 @@ impl LibraryRenamer for FileSystemLibraryRenamer {
         for item in &plan.items {
             let mut result = RenameApplyItemResult {
                 collection_id: item.collection_id.clone(),
+                media_file_id: item.media_file_id.clone(),
                 current_path: item.current_path.clone(),
                 proposed_path: item.proposed_path.clone(),
                 final_path: None,
@@ -95,18 +96,22 @@ impl LibraryRenamer for FileSystemLibraryRenamer {
                 RenameWriteAction::Error => {
                     result.status = RenameApplyStatus::Failed;
                 }
-                RenameWriteAction::Move | RenameWriteAction::Replace => {
+                RenameWriteAction::Replace => {
+                    result.status = RenameApplyStatus::Failed;
+                    result.reason_code = "replace_not_supported".into();
+                    result.error_message = Some("rename replace action is not supported".into());
+                }
+                RenameWriteAction::Move => {
                     let Some(target) = item.proposed_path.as_deref() else {
                         result.status = RenameApplyStatus::Failed;
                         result.reason_code = "missing_target".into();
                         result.error_message =
-                            Some("rename target path missing for move/replace action".into());
+                            Some("rename target path missing for move action".into());
                         out.push(result);
                         continue;
                     };
 
-                    let replace = matches!(item.write_action, RenameWriteAction::Replace);
-                    match move_file(&item.current_path, target, replace).await {
+                    match move_file(&item.current_path, target, false).await {
                         Ok(()) => {
                             result.status = RenameApplyStatus::Applied;
                             result.final_path = Some(target.to_string());
@@ -128,9 +133,27 @@ impl LibraryRenamer for FileSystemLibraryRenamer {
 
     async fn rollback(
         &self,
-        _applied_items: &[RenameApplyItemResult],
+        applied_items: &[RenameApplyItemResult],
     ) -> AppResult<Vec<RenameApplyItemResult>> {
-        Ok(Vec::new())
+        for item in applied_items.iter().rev() {
+            if !matches!(item.write_action, RenameWriteAction::Move) {
+                continue;
+            }
+
+            let Some(final_path) = item.final_path.as_deref() else {
+                continue;
+            };
+
+            if final_path == item.current_path {
+                continue;
+            }
+
+            move_file(final_path, &item.current_path, false)
+                .await
+                .map_err(|err| AppError::Repository(err.to_string()))?;
+        }
+
+        Ok(applied_items.to_vec())
     }
 }
 

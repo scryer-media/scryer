@@ -89,8 +89,8 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
   const [personaSaving, setPersonaSaving] = useState(false);
 
   // ── Step 2 (fresh): Media Paths ─────────────────────────────────────
-  const [moviesPath, setMoviesPath] = useState("/media/movies");
-  const [seriesPath, setSeriesPath] = useState("/media/series");
+  const [moviesPath, setMoviesPath] = useState("/data/movies");
+  const [seriesPath, setSeriesPath] = useState("/data/series");
   const [animePath, setAnimePath] = useState("");
   const [mediaPathsSaving, setMediaPathsSaving] = useState(false);
   const [mediaPathsError, setMediaPathsError] = useState<string | null>(null);

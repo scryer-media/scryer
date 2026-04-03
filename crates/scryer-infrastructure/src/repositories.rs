@@ -156,6 +156,14 @@ impl ShowRepository for SqliteServices {
         db_call!(self, GetCollectionById { collection_id })
     }
 
+    async fn get_collection_by_ordered_path(
+        &self,
+        ordered_path: &str,
+    ) -> AppResult<Option<Collection>> {
+        let ordered_path = ordered_path.to_string();
+        db_call!(self, GetCollectionByOrderedPath { ordered_path })
+    }
+
     async fn create_collection(&self, collection: Collection) -> AppResult<Collection> {
         db_call!(self, CreateCollection { collection })
     }
@@ -816,6 +824,13 @@ impl MediaFileRepository for SqliteServices {
         self.list_title_media_size_summaries(title_ids).await
     }
 
+    async fn list_title_episode_progress_summaries(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<scryer_application::TitleEpisodeProgressSummary>> {
+        self.list_title_episode_progress_summaries(title_ids).await
+    }
+
     async fn update_media_file_analysis(
         &self,
         file_id: &str,
@@ -840,12 +855,20 @@ impl MediaFileRepository for SqliteServices {
         .await
     }
 
+    async fn update_media_file_path(&self, file_id: &str, file_path: &str) -> AppResult<()> {
+        self.update_media_file_path(file_id, file_path).await
+    }
+
     async fn mark_scan_failed(&self, file_id: &str, error: &str) -> AppResult<()> {
         self.mark_scan_failed(file_id, error).await
     }
 
     async fn get_media_file_by_id(&self, file_id: &str) -> AppResult<Option<TitleMediaFile>> {
         self.get_media_file_by_id(file_id).await
+    }
+
+    async fn get_media_file_by_path(&self, file_path: &str) -> AppResult<Option<TitleMediaFile>> {
+        self.get_media_file_by_path(file_path).await
     }
 
     async fn delete_media_file(&self, file_id: &str) -> AppResult<()> {
@@ -903,6 +926,14 @@ impl WantedItemRepository for SqliteServices {
 
     async fn delete_wanted_items_for_title(&self, title_id: &str) -> AppResult<()> {
         self.delete_wanted_items_for_title(title_id).await
+    }
+
+    async fn delete_wanted_items_for_collection(&self, collection_id: &str) -> AppResult<()> {
+        self.delete_wanted_items_for_collection(collection_id).await
+    }
+
+    async fn delete_wanted_items_for_episode(&self, episode_id: &str) -> AppResult<()> {
+        self.delete_wanted_items_for_episode(episode_id).await
     }
 
     async fn reset_fruitless_wanted_items(&self, now: &str) -> AppResult<u64> {

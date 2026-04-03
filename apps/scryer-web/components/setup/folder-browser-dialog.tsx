@@ -39,18 +39,26 @@ export function FolderBrowserDialog({
   const [error, setError] = useState<string | null>(null);
 
   const browse = useCallback(
-    async (path: string) => {
+    async (
+      path: string,
+      options?: { fallbackToRootOnError?: boolean },
+    ) => {
+      const nextPath = path.trim() || "/";
+      setCurrentPath(nextPath);
       setLoading(true);
       setError(null);
       const { data, error: gqlError } = await client
-        .query(browsePathQuery, { path })
+        .query(browsePathQuery, { path: nextPath })
         .toPromise();
       setLoading(false);
       if (gqlError) {
+        if (options?.fallbackToRootOnError && nextPath !== "/") {
+          await browse("/", { fallbackToRootOnError: false });
+          return;
+        }
         setError(gqlError.message);
         return;
       }
-      setCurrentPath(path);
       setEntries(data?.browsePath ?? []);
     },
     [client],
@@ -58,7 +66,7 @@ export function FolderBrowserDialog({
 
   useEffect(() => {
     if (open) {
-      browse(initialPath || "/");
+      browse(initialPath || "/", { fallbackToRootOnError: true });
     }
   }, [open, initialPath, browse]);
 

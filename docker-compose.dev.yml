@@ -56,24 +56,20 @@ services:
       SCRYER_WEB_UI_URL: http://nodejs:3000
       SCRYER_AUTH_ENABLED: "false"
       CARGO_TARGET_DIR: /cargo-target
-      SCRYER_MOVIES_PATH: /media/movies
-      SCRYER_SERIES_PATH: /media/series
       SCRYER_SMG_REGISTRATION_SECRET: ${SCRYER_SMG_REGISTRATION_SECRET}
-      #RUST_LOG: "info,scryer_infrastructure::metadata_gateway=debug,extism=debug"
-      #RUST_LOG: "info"
     command: >
       sh -c '
         set -eu
-        cargo run --locked -p scryer
+        cargo run --locked -p scryer 
       '
     volumes:
       - .:/workspace
       - scryer-cargo-registry:/usr/local/cargo/registry
       - scryer-cargo-git:/usr/local/cargo/git
       - ./tmp/scryer-config:/config
-      - ./tmp/scryer-data:/data
-      - ./tmp/scryer-media:/media
-      - /Volumes/Media/Anime:/media/anime:ro
+      - ./tmp/scryer-media/movies:/data/movies
+      - ./tmp/scryer-media/series:/data/series
+      - /Volumes/Media/Anime:/data/anime:ro
       - ./tmp/nzbget-downloads:/nzbget-downloads
       - ./tmp/sabnzbd-downloads:/sabnzbd-downloads
       - ./tmp/weaver-downloads:/weaver-downloads
@@ -83,6 +79,7 @@ services:
   nodejs:
     image: node:25-alpine
     container_name: scryer-nodejs
+    restart: unless-stopped
     working_dir: /app
     volumes:
       - ./apps/scryer-web:/app
@@ -109,7 +106,7 @@ services:
         fi
 
         if [ "$$needs_install" = "1" ]; then
-          find node_modules -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          rm -f "$$deps_stamp"
           npm ci --prefer-offline --no-audit --no-fund
           echo "$$expected_stamp" > "$$deps_stamp"
         fi
@@ -123,6 +120,7 @@ services:
   proxy:
     image: nginx:alpine
     container_name: scryer-proxy
+    restart: unless-stopped
     depends_on:
       - nodejs
       - scryer

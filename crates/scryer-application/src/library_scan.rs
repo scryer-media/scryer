@@ -3,19 +3,30 @@ use tokio::sync::mpsc;
 
 use crate::{AppError, AppResult};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LibraryFile {
     pub path: String,
     pub display_name: String,
     /// Absolute path to the companion `.nfo` sidecar file, if one was found
     /// alongside this video file during scanning.
     pub nfo_path: Option<String>,
+    pub size_bytes: Option<i64>,
+    pub source_signature_scheme: Option<String>,
+    pub source_signature_value: Option<String>,
 }
 
 pub type LibraryFileBatch = Vec<LibraryFile>;
 pub type LibraryFileBatchReceiver = mpsc::Receiver<AppResult<LibraryFileBatch>>;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LibraryDirectoryScanResult {
+    pub files: Vec<LibraryFile>,
+    pub walk_ms: u64,
+    pub stat_ms: u64,
+    pub elapsed_ms: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LibraryScanSummary {
     pub scanned: usize,
     pub matched: usize,
@@ -251,6 +262,75 @@ pub trait LibraryScanner: Send + Sync {
         root: &str,
         batch_size: usize,
     ) -> AppResult<LibraryFileBatchReceiver>;
+
+    async fn scan_directory_with_metrics(
+        &self,
+        root: &str,
+    ) -> AppResult<LibraryDirectoryScanResult> {
+        Ok(LibraryDirectoryScanResult {
+            files: self.scan_directory(root).await?,
+            ..Default::default()
+        })
+    }
+
+    async fn scan_directory_for_progress_with_metrics(
+        &self,
+        root: &str,
+    ) -> AppResult<LibraryDirectoryScanResult> {
+        let mut result = self.scan_directory_with_metrics(root).await?;
+        for file in &mut result.files {
+            file.size_bytes = None;
+            file.source_signature_scheme = None;
+            file.source_signature_value = None;
+        }
+        Ok(result)
+    }
+}
+
+pub fn source_signature_from_std_metadata(
+    metadata: &std::fs::Metadata,
+) -> Option<(String, String)> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+
+        Some((
+            "windows_last_write_100ns_v1".to_string(),
+            metadata.last_write_time().to_string(),
+        ))
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        Some((
+            "unix_mtime_nsec_v1".to_string(),
+            format!("{}:{}", metadata.mtime(), metadata.mtime_nsec()),
+        ))
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        use std::time::UNIX_EPOCH;
+
+        metadata
+            .modified()
+            .ok()
+            .and_then(|modified| match modified.duration_since(UNIX_EPOCH) {
+                Ok(duration) => Some((
+                    "system_time_nsec_v1".to_string(),
+                    format!("{}:{}", duration.as_secs(), duration.subsec_nanos()),
+                )),
+                Err(error) => {
+                    let duration = error.duration();
+                    Some((
+                        "system_time_nsec_v1".to_string(),
+                        format!("-{}:{}", duration.as_secs(), duration.subsec_nanos()),
+                    ))
+                }
+            })
+    }
 }
 
 #[derive(Default)]

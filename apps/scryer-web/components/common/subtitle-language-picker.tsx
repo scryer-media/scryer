@@ -8,10 +8,15 @@ import {
   getSubtitleLanguage,
   type SubtitleLanguage,
 } from "@/lib/constants/subtitle-languages";
+import { useTranslate } from "@/lib/context/translate-context";
+import { cn } from "@/lib/utils";
 
 type SubtitleLanguagePickerProps = {
   value: string[];
   onChange: (codes: string[]) => void;
+  className?: string;
+  buttonClassName?: string;
+  compact?: boolean;
 };
 
 function matchesFilter(lang: SubtitleLanguage, filter: string): boolean {
@@ -26,7 +31,11 @@ function matchesFilter(lang: SubtitleLanguage, filter: string): boolean {
 export const SubtitleLanguagePicker = React.memo(function SubtitleLanguagePicker({
   value,
   onChange,
+  className,
+  buttonClassName,
+  compact = false,
 }: SubtitleLanguagePickerProps) {
+  const t = useTranslate();
   const pickerRef = React.useRef<HTMLDivElement>(null);
   const floatingPanelRef = React.useRef<HTMLDivElement>(null);
   const searchInputRef = React.useRef<HTMLInputElement>(null);
@@ -78,6 +87,14 @@ export const SubtitleLanguagePicker = React.memo(function SubtitleLanguagePicker
   }, [isOpen]);
 
   const selectedSet = React.useMemo(() => new Set<string>(value), [value]);
+  const selectedLabel = React.useMemo(() => {
+    if (value.length === 0) {
+      return t("settings.sub.languagePickerSelect");
+    }
+    return value
+      .map((code) => getSubtitleLanguage(code)?.name ?? code)
+      .join(", ");
+  }, [t, value]);
 
   const filteredLanguages = React.useMemo(
     () =>
@@ -123,7 +140,7 @@ export const SubtitleLanguagePicker = React.memo(function SubtitleLanguagePicker
                   ref={searchInputRef}
                   type="text"
                   className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
-                  placeholder="Search languages..."
+                  placeholder={t("settings.sub.languagePickerSearch")}
                   value={filter}
                   onChange={(event) => setFilter(event.target.value)}
                 />
@@ -134,7 +151,7 @@ export const SubtitleLanguagePicker = React.memo(function SubtitleLanguagePicker
             <div className="max-h-64 overflow-y-auto p-2">
               {filteredLanguages.length === 0 ? (
                 <p className="px-2 py-3 text-center text-sm text-muted-foreground">
-                  No languages found
+                  {t("settings.sub.languagePickerEmpty")}
                 </p>
               ) : (
                 <div className="space-y-0.5">
@@ -172,39 +189,53 @@ export const SubtitleLanguagePicker = React.memo(function SubtitleLanguagePicker
       : null;
 
   return (
-    <div ref={pickerRef} className="relative inline-block w-full">
+    <div ref={pickerRef} className={cn("relative inline-block w-full", className)}>
       <Button
         type="button"
         variant="secondary"
-        className="h-auto min-h-10 w-full justify-between gap-2 border border-input bg-field px-3 py-2 text-sm"
+        className={cn(
+          "h-auto min-h-10 w-full justify-between gap-2 border border-input bg-field px-3 py-2 text-sm",
+          compact && "h-9 min-h-9 py-0",
+          buttonClassName,
+        )}
         onClick={() => setIsOpen((previous) => !previous)}
-        aria-label="Select subtitle languages"
+        aria-label={t("settings.sub.languagePickerAriaLabel")}
       >
-        <span className="flex min-w-0 flex-1 flex-wrap gap-1">
-          {value.length === 0 ? (
-            <span className="text-muted-foreground">Select languages...</span>
-          ) : (
-            value.map((code) => {
-              const lang = getSubtitleLanguage(code);
-              return (
-                <span
-                  key={code}
-                  className="inline-flex items-center gap-1 rounded-md bg-primary/15 px-2 py-0.5 text-xs font-medium text-primary"
-                >
-                  {lang?.name ?? code}
-                  <button
-                    type="button"
-                    className="ml-0.5 rounded-sm hover:bg-primary/20"
-                    onClick={(event) => removeLanguage(code, event)}
-                    aria-label={`Remove ${lang?.name ?? code}`}
+        {compact ? (
+          <span className={cn("min-w-0 flex-1 truncate text-left", value.length === 0 && "text-muted-foreground")}>
+            {selectedLabel}
+          </span>
+        ) : (
+          <span className="flex min-w-0 flex-1 flex-wrap gap-1">
+            {value.length === 0 ? (
+              <span className="text-muted-foreground">
+                {t("settings.sub.languagePickerSelect")}
+              </span>
+            ) : (
+              value.map((code) => {
+                const lang = getSubtitleLanguage(code);
+                return (
+                  <span
+                    key={code}
+                    className="inline-flex items-center gap-1 rounded-md bg-primary/15 px-2 py-0.5 text-xs font-medium text-primary"
                   >
-                    <X className="h-3 w-3" />
-                  </button>
-                </span>
-              );
-            })
-          )}
-        </span>
+                    {lang?.name ?? code}
+                    <button
+                      type="button"
+                      className="ml-0.5 rounded-sm hover:bg-primary/20"
+                      onClick={(event) => removeLanguage(code, event)}
+                      aria-label={t("settings.sub.languagePickerRemove", {
+                        language: lang?.name ?? code,
+                      })}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                );
+              })
+            )}
+          </span>
+        )}
         <ChevronDown
           className={`h-4 w-4 shrink-0 transition-transform ${isOpen ? "rotate-180" : ""}`}
         />

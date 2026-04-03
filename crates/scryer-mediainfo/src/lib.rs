@@ -5,6 +5,7 @@ mod avi;
 mod codec;
 mod mkv;
 mod mp4;
+mod probe;
 mod ts;
 mod types;
 
@@ -182,7 +183,7 @@ fn build_analysis(raw: RawContainer) -> MediaAnalysis {
     });
 
     // --- Audio ---
-    let primary_audio = audio_tracks.first().copied();
+    let primary_audio = select_primary_audio_track(&audio_tracks);
     let audio_codec = primary_audio.and_then(|t| t.codec_name.clone());
     let audio_channels = primary_audio.and_then(|t| t.channels);
     let audio_bitrate_kbps = primary_audio
@@ -275,6 +276,14 @@ fn build_analysis(raw: RawContainer) -> MediaAnalysis {
     }
 }
 
+fn select_primary_audio_track<'a>(audio_tracks: &[&'a RawTrack]) -> Option<&'a RawTrack> {
+    audio_tracks
+        .iter()
+        .find(|track| track.default_track)
+        .copied()
+        .or_else(|| audio_tracks.first().copied())
+}
+
 /// Dispatch to the right codec extractor based on normalized codec name.
 fn extract_codec_info(track: &RawTrack) -> codec::CodecInfo {
     let codec_name = track.codec_name.as_deref().unwrap_or("");
@@ -347,4 +356,78 @@ fn build_raw_json(raw: &RawContainer) -> String {
     };
 
     serde_json::to_string(&analysis).unwrap_or_else(|_| "{}".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn analysis_prefers_default_audio_track_for_primary_fields() {
+        let analysis = build_analysis(RawContainer {
+            format_name: "matroska".into(),
+            duration_seconds: Some(60.0),
+            num_chapters: Some(0),
+            tracks: vec![
+                RawTrack {
+                    kind: TrackKind::Video,
+                    codec_id: "V_MPEG4/ISO/AVC".into(),
+                    codec_name: Some("h264".into()),
+                    codec_private: None,
+                    width: Some(1920),
+                    height: Some(1080),
+                    channels: None,
+                    bit_rate_bps: Some(8_000_000),
+                    language: None,
+                    name: None,
+                    forced: false,
+                    default_track: false,
+                    frame_rate_fps: Some(24.0),
+                    color_transfer: None,
+                    dovi_config: None,
+                    has_hdr10plus: false,
+                },
+                RawTrack {
+                    kind: TrackKind::Audio,
+                    codec_id: "A_AAC".into(),
+                    codec_name: Some("aac".into()),
+                    codec_private: None,
+                    width: None,
+                    height: None,
+                    channels: Some(2),
+                    bit_rate_bps: Some(128_000),
+                    language: Some("eng".into()),
+                    name: None,
+                    forced: false,
+                    default_track: false,
+                    frame_rate_fps: None,
+                    color_transfer: None,
+                    dovi_config: None,
+                    has_hdr10plus: false,
+                },
+                RawTrack {
+                    kind: TrackKind::Audio,
+                    codec_id: "A_FLAC".into(),
+                    codec_name: Some("flac".into()),
+                    codec_private: None,
+                    width: None,
+                    height: None,
+                    channels: Some(6),
+                    bit_rate_bps: Some(640_000),
+                    language: Some("jpn".into()),
+                    name: None,
+                    forced: false,
+                    default_track: true,
+                    frame_rate_fps: None,
+                    color_transfer: None,
+                    dovi_config: None,
+                    has_hdr10plus: false,
+                },
+            ],
+        });
+
+        assert_eq!(analysis.audio_codec.as_deref(), Some("flac"));
+        assert_eq!(analysis.audio_channels, Some(6));
+        assert_eq!(analysis.audio_bitrate_kbps, Some(640));
+    }
 }

@@ -329,6 +329,41 @@ pub(crate) async fn delete_wanted_items_for_title_query(
     Ok(())
 }
 
+pub(crate) async fn delete_wanted_items_for_collection_query(
+    pool: &SqlitePool,
+    collection_id: &str,
+) -> AppResult<()> {
+    sqlx::query(
+        "DELETE FROM wanted_items
+         WHERE collection_id = ?
+            OR episode_id IN (
+                SELECT id
+                FROM episodes
+                WHERE collection_id = ?
+            )",
+    )
+    .bind(collection_id)
+    .bind(collection_id)
+    .execute(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(())
+}
+
+pub(crate) async fn delete_wanted_items_for_episode_query(
+    pool: &SqlitePool,
+    episode_id: &str,
+) -> AppResult<()> {
+    sqlx::query("DELETE FROM wanted_items WHERE episode_id = ?")
+        .bind(episode_id)
+        .execute(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(())
+}
+
 pub(crate) async fn insert_release_decision_query(
     pool: &SqlitePool,
     decision: &ReleaseDecision,

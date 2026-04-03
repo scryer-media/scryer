@@ -40,7 +40,9 @@ import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { useLibraryScanProgress } from "@/lib/context/library-scan-progress-context";
 import { useSearchContext } from "@/lib/context/search-context";
+import { toast } from "sonner";
 
 type MediaContentContainerProps = {
   view: ViewId;
@@ -71,6 +73,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const t = useTranslate();
   const client = useClient();
   const activeFacet = viewToFacet[view as keyof typeof viewToFacet] ?? "movie";
+  const { getActiveSession } = useLibraryScanProgress();
+  const activeLibraryScanSession = getActiveSession(activeFacet);
   const activeQualityScopeId =
     CATEGORY_SCOPE_MAP[view as keyof typeof CATEGORY_SCOPE_MAP] ?? "movie";
   const isMediaView =
@@ -161,6 +165,12 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       : view === "series"
         ? t("settings.seriesSettings")
         : t("settings.animeSettings");
+  const activeFacetLabel =
+    activeFacet === "movie"
+      ? t("nav.movies")
+      : activeFacet === "tv"
+        ? t("nav.series")
+        : t("nav.anime");
   const {
     downloadClients,
     activeScopeRouting,
@@ -191,9 +201,21 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const [ruleSets, setRuleSets] = React.useState<RuleSetRecord[]>([]);
   const [rulesLoading, setRulesLoading] = React.useState(true);
   const [rulesSaving, setRulesSaving] = React.useState(false);
-  const [titleMonitoringLoadingById, setTitleMonitoringLoadingById] = React.useState<
-    Record<string, boolean>
-  >({});
+  const [libraryScanNotice, setLibraryScanNotice] = React.useState<
+    string | null
+  >(null);
+  const [titleMonitoringLoadingById, setTitleMonitoringLoadingById] =
+    React.useState<Record<string, boolean>>({});
+
+  React.useEffect(() => {
+    if (!activeLibraryScanSession) {
+      setLibraryScanNotice(null);
+    }
+  }, [activeLibraryScanSession]);
+
+  React.useEffect(() => {
+    setLibraryScanNotice(null);
+  }, [activeFacet]);
 
   const refreshRuleSets = React.useCallback(async () => {
     setRulesLoading(true);
@@ -483,7 +505,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         title.imdbId?.trim() ||
         title.externalIds
           ?.find((externalId) => externalId.source.toLowerCase() === "imdb")
-          ?.value?.trim() || null;
+          ?.value?.trim() ||
+        null;
       const tvdbId =
         title.externalIds
           ?.find((externalId) => externalId.source.toLowerCase() === "tvdb")
@@ -537,7 +560,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         title.imdbId?.trim() ||
         title.externalIds
           ?.find((externalId) => externalId.source.toLowerCase() === "imdb")
-          ?.value?.trim() || null;
+          ?.value?.trim() ||
+        null;
       const tvdbId =
         title.externalIds
           ?.find((externalId) => externalId.source.toLowerCase() === "tvdb")
@@ -700,23 +724,54 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   ]);
 
   const handleLibraryScan = React.useCallback(async () => {
+    if (activeLibraryScanSession) {
+      setLibraryScanNotice(
+        t("settings.libraryScanAlreadyRunning", {
+          facet: activeFacetLabel,
+        }),
+      );
+      return;
+    }
+
+    setLibraryScanNotice(null);
     setLibraryScanLoading(true);
-    setGlobalStatus(t("settings.libraryScanRunning"));
     try {
       const { data, error } = await client
         .mutation(scanLibraryMutation, { facet: activeFacet })
         .toPromise();
       if (error) throw error;
       setLibraryScanSummary(data.scanLibrary);
-      setGlobalStatus(
-        t("settings.libraryScanSuccess", {
-          imported: data.scanLibrary.imported,
-          skipped: data.scanLibrary.skipped,
-          unmatched: data.scanLibrary.unmatched,
-        }),
-      );
       await refreshTitles();
     } catch (error) {
+      console.error("[library-scan] mutation failed:", error);
+      const message =
+        error instanceof Error ? error.message : String(error ?? "");
+      if (/library scan already running/i.test(message)) {
+        setLibraryScanNotice(
+          t("settings.libraryScanAlreadyRunning", {
+            facet: activeFacetLabel,
+          }),
+        );
+        return;
+      }
+      if (
+        error != null &&
+        typeof error === "object" &&
+        "networkError" in error &&
+        (error as { networkError?: unknown }).networkError != null
+      ) {
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : t("settings.libraryScanFailed"),
+        );
+        setGlobalStatus(
+          error instanceof Error
+            ? error.message
+            : t("settings.libraryScanFailed"),
+        );
+        return;
+      }
       setGlobalStatus(
         error instanceof Error
           ? error.message
@@ -726,13 +781,16 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       setLibraryScanLoading(false);
     }
   }, [
+    activeFacetLabel,
+    activeLibraryScanSession,
     activeFacet,
     refreshTitles,
     client,
+    setLibraryScanLoading,
+    setLibraryScanNotice,
+    setLibraryScanSummary,
     setGlobalStatus,
     t,
-    setLibraryScanLoading,
-    setLibraryScanSummary,
   ]);
 
   React.useEffect(() => {
@@ -794,7 +852,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     const timer = setTimeout(() => {
       if (!cancelled) void refreshMediaSettings();
     }, 0);
-    return () => { cancelled = true; clearTimeout(timer); };
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [shouldLoadMediaSettings, refreshMediaSettings]);
 
   React.useEffect(() => {
@@ -827,7 +888,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
             data?.downloadClientConfigs || [],
             data.downloadClientRouting || [],
           );
-          hydrateIndexerRouting(data?.indexers || [], data.indexerRouting || []);
+          hydrateIndexerRouting(
+            data?.indexers || [],
+            data.indexerRouting || [],
+          );
         })
         .catch((error) => {
           if (cancelled) {
@@ -968,7 +1032,11 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           rulesLoading,
           rulesSaving,
           onToggleRuleFacet,
-          libraryScanLoading,
+          libraryScanLoading:
+            libraryScanLoading || Boolean(activeLibraryScanSession),
+          libraryScanDisabled:
+            libraryScanLoading || Boolean(activeLibraryScanSession),
+          libraryScanNotice,
           libraryScanSummary,
           onOpenOverview,
           scanLibrary: handleLibraryScan,

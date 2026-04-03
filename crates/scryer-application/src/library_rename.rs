@@ -88,6 +88,7 @@ impl RenameMissingMetadataPolicy {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenamePlanItem {
     pub collection_id: Option<String>,
+    pub media_file_id: Option<String>,
     pub current_path: String,
     pub proposed_path: Option<String>,
     pub normalized_filename: Option<String>,
@@ -117,6 +118,7 @@ pub struct RenamePlan {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenameApplyItemResult {
     pub collection_id: Option<String>,
+    pub media_file_id: Option<String>,
     pub current_path: String,
     pub proposed_path: Option<String>,
     pub final_path: Option<String>,

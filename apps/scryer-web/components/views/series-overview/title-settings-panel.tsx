@@ -9,16 +9,33 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { MediaRenamePlanPanel } from "@/components/common/media-rename-plan-panel";
 import { SubtitleLanguagePicker } from "@/components/common/subtitle-language-picker";
-import { convenienceSettingsQuery } from "@/lib/graphql/queries";
-import { setTitleRequiredAudioMutation } from "@/lib/graphql/mutations";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { convenienceSettingsQuery, mediaRenamePreviewQuery } from "@/lib/graphql/queries";
+import { applyMediaRenameMutation, setTitleRequiredAudioMutation } from "@/lib/graphql/mutations";
 import { useTranslate } from "@/lib/context/translate-context";
-import { getSubtitleLanguage } from "@/lib/constants/subtitle-languages";
 import type { TitleDetail } from "@/components/containers/series-overview-container";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
 
 const INHERIT_VALUE = "__inherit__";
 const DEFAULT_MARKER = "__default__";
+
+type MediaRenamePlanItem = {
+  collectionId: string | null;
+  currentPath: string;
+  proposedPath: string | null;
+};
+
+type MediaRenamePlan = {
+  fingerprint: string;
+  total: number;
+  renamable: number;
+  noop: number;
+  conflicts: number;
+  errors: number;
+  items: MediaRenamePlanItem[];
+};
 
 export function TitleSettingsPanel({
   title,
@@ -27,6 +44,7 @@ export function TitleSettingsPanel({
   rootFolders,
   onUpdateTitleOptions,
   onOpenFixMatch,
+  onTitleChanged,
 }: {
   title: TitleDetail;
   qualityProfiles: { id: string; name: string }[];
@@ -34,14 +52,19 @@ export function TitleSettingsPanel({
   rootFolders: { path: string; isDefault: boolean }[];
   onUpdateTitleOptions: (options: TitleOptionUpdates) => Promise<void>;
   onOpenFixMatch?: () => void;
+  onTitleChanged?: () => Promise<void> | void;
 }) {
   const t = useTranslate();
   const client = useClient();
+  const setGlobalStatus = useGlobalStatus();
 
   const [requiredAudioLanguages, setRequiredAudioLanguages] = React.useState<string[]>([]);
   const [inheritedAudioLanguages, setInheritedAudioLanguages] = React.useState<string[]>([]);
   const [hasAudioOverride, setHasAudioOverride] = React.useState(false);
   const [audioLoaded, setAudioLoaded] = React.useState(false);
+  const [renamePlan, setRenamePlan] = React.useState<MediaRenamePlan | null>(null);
+  const [renamePreviewing, setRenamePreviewing] = React.useState(false);
+  const [renameApplying, setRenameApplying] = React.useState(false);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -102,11 +125,6 @@ export function TitleSettingsPanel({
     }
   };
 
-  const formatLanguageList = (codes: string[]) =>
-    codes.length === 0
-      ? "None"
-      : codes.map((c) => getSubtitleLanguage(c)?.name ?? c).join(", ");
-
   const currentProfileId = title.qualityProfileId?.trim() || INHERIT_VALUE;
   const currentRootFolder = title.rootFolderPath?.trim() || "";
   const currentSeasonFolder = title.useSeasonFolders === false ? "disabled" : "enabled";
@@ -115,6 +133,10 @@ export function TitleSettingsPanel({
   const [saving, setSaving] = React.useState(false);
 
   const rootFolderSelectValue = currentRootFolder || DEFAULT_MARKER;
+
+  React.useEffect(() => {
+    setRenamePlan(null);
+  }, [title.id, title.facet]);
 
   const handleProfileChange = async (value: string) => {
     setSaving(true);
@@ -173,6 +195,66 @@ export function TitleSettingsPanel({
 
   const folderLabel = (path: string) =>
     path.split("/").filter(Boolean).pop() ?? path;
+
+  const handlePreviewRename = async () => {
+    setRenamePreviewing(true);
+    try {
+      const { data, error } = await client.query(mediaRenamePreviewQuery, {
+        input: {
+          facet: title.facet,
+          titleId: title.id,
+          dryRun: true,
+        },
+      }).toPromise();
+      if (error) throw error;
+      const plan = data.mediaRenamePreview as MediaRenamePlan;
+      setRenamePlan(plan);
+      setGlobalStatus(
+        t("status.renamePreviewGenerated", {
+          total: plan.total,
+          renamable: plan.renamable,
+        }),
+      );
+    } catch (error: unknown) {
+      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+      setRenamePlan(null);
+    } finally {
+      setRenamePreviewing(false);
+    }
+  };
+
+  const handleApplyRename = async () => {
+    if (!renamePlan) return;
+    setRenameApplying(true);
+    try {
+      const { data, error } = await client.mutation(applyMediaRenameMutation, {
+        input: {
+          facet: title.facet,
+          titleId: title.id,
+          fingerprint: renamePlan.fingerprint,
+        },
+      }).toPromise();
+      if (error) throw error;
+      const result = data.applyMediaRename as {
+        applied: number;
+        skipped: number;
+        failed: number;
+      };
+      setGlobalStatus(
+        t("status.renameApplied", {
+          applied: result.applied,
+          skipped: result.skipped,
+          failed: result.failed,
+        }),
+      );
+      setRenamePlan(null);
+      await onTitleChanged?.();
+    } catch (error: unknown) {
+      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+    } finally {
+      setRenameApplying(false);
+    }
+  };
 
   return (
     <div className="p-4">
@@ -248,6 +330,28 @@ export function TitleSettingsPanel({
           </Select>
         </div>
 
+        {audioLoaded ? (
+          <div className="min-w-0 xl:max-w-72">
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">
+              {t("title.requiredAudioLanguages")}
+            </label>
+            <SubtitleLanguagePicker
+              value={requiredAudioLanguages}
+              onChange={(codes) => void handleRequiredAudioChange(codes)}
+              compact
+            />
+            {hasAudioOverride ? (
+              <button
+                type="button"
+                className="mt-1 text-xs text-primary hover:underline"
+                onClick={() => void handleResetAudioOverride()}
+              >
+                {t("title.requiredAudioResetInherit")}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
         {title.facet === "anime" ? (
           <>
             <div className="min-w-0">
@@ -293,34 +397,6 @@ export function TitleSettingsPanel({
         ) : null}
       </div>
 
-      {audioLoaded ? (
-        <div className="mt-4 space-y-2">
-          <label className="block text-xs font-medium text-muted-foreground">
-            {t("title.requiredAudioLanguages")}
-          </label>
-          <SubtitleLanguagePicker
-            value={requiredAudioLanguages}
-            onChange={(codes) => void handleRequiredAudioChange(codes)}
-          />
-          {hasAudioOverride ? (
-            <button
-              type="button"
-              className="text-xs text-primary hover:underline"
-              onClick={() => void handleResetAudioOverride()}
-            >
-              {t("title.requiredAudioResetInherit")}
-            </button>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              {t("title.requiredAudioInherited", { facet: title.facet })}
-              {inheritedAudioLanguages.length > 0
-                ? `: ${formatLanguageList(inheritedAudioLanguages)}`
-                : null}
-            </p>
-          )}
-        </div>
-      ) : null}
-
       {onOpenFixMatch ? (
         <div className="mt-5 flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-3">
           <div className="min-w-0">
@@ -331,7 +407,7 @@ export function TitleSettingsPanel({
           </div>
           <Button
             type="button"
-            variant="outline"
+            variant="primary"
             size="sm"
             className="shrink-0"
             onClick={onOpenFixMatch}
@@ -341,6 +417,30 @@ export function TitleSettingsPanel({
           </Button>
         </div>
       ) : null}
+
+      <div className={`${onOpenFixMatch ? "mt-3" : "mt-5"} rounded-lg border border-border/70 bg-muted/20 px-3 py-3`}>
+        <div className="flex justify-end">
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            className="shrink-0"
+            onClick={() => void handlePreviewRename()}
+            disabled={saving || renamePreviewing || renameApplying}
+          >
+            {renamePreviewing ? t("rename.previewing") : t("rename.previewButton")}
+          </Button>
+        </div>
+
+        {renamePlan ? (
+          <MediaRenamePlanPanel
+            plan={renamePlan}
+            applying={renameApplying}
+            applyDisabled={renameApplying || renamePreviewing || renamePlan.renamable === 0}
+            onApply={() => void handleApplyRename()}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }

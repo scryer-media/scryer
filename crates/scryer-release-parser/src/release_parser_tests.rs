@@ -835,6 +835,27 @@ fn parse_ncop_without_number_as_special() {
 }
 
 #[test]
+fn parse_special_word_inside_episode_title_stays_standard_episode() {
+    let parsed = parse_release_metadata(
+        "Black Clover - 01x80 - Special Little Brother vs. Failed Big Brother WEBDL-1080p",
+    );
+    let episode = parsed.episode.expect("episode metadata");
+    assert_eq!(episode.season, Some(1));
+    assert_eq!(episode.episode_numbers, vec![80]);
+    assert_eq!(episode.special_kind, None);
+}
+
+#[test]
+fn parse_numbered_special_marker_without_title_words_as_special() {
+    let parsed = parse_release_metadata("Another Anime Show - 01 - Special [BD][720p][AAC]");
+    let episode = parsed.episode.expect("special episode metadata");
+    assert_eq!(episode.season, Some(0));
+    assert_eq!(episode.episode_numbers, vec![1]);
+    assert_eq!(episode.special_kind, Some(ParsedSpecialKind::Special));
+    assert_eq!(episode.special_absolute_episode_numbers, vec![1]);
+}
+
+#[test]
 fn release_group_repost_suffix_is_ignored() {
     let parsed = parse_release_metadata(
         "Series.S01E08.Haunted.Hayride.720p.AMZN.WEBRip.DDP5.1.x264-NTb-postbot",

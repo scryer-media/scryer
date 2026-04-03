@@ -1,5 +1,6 @@
 import type {
   CollectionEpisode,
+  EpisodeMediaFile,
   InterstitialMovieMetadata,
   TitleCollection,
   TitleReleaseBlocklistEntry,
@@ -87,6 +88,21 @@ export function formatFileSize(bytes: number) {
   const i = Math.floor(Math.log(bytes) / Math.log(1024));
   const val = bytes / Math.pow(1024, i);
   return `${val.toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
+}
+
+export function deriveMediaFileQualityLabel(
+  file: Pick<EpisodeMediaFile, "qualityLabel" | "resolution" | "videoWidth" | "videoHeight">,
+) {
+  if (file.videoWidth != null && file.videoWidth > 0) {
+    if (file.videoWidth >= 3840) return "4K";
+    if (file.videoWidth >= 1920) return "1080p";
+    if (file.videoWidth >= 1280) return "720p";
+  }
+  if (file.videoHeight != null && file.videoHeight > 0) {
+    return `${file.videoHeight}p`;
+  }
+  const parsedLabel = file.qualityLabel?.trim() || file.resolution?.trim();
+  return parsedLabel || null;
 }
 
 export function parseSeasonSortValue(collection: TitleCollection) {

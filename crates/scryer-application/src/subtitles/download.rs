@@ -119,7 +119,7 @@ mod tests {
     #[test]
     fn subtitle_path_basic() {
         let path = build_subtitle_path(
-            Path::new("/media/movies/Movie.2024.1080p.BluRay.mkv"),
+            Path::new("/data/movies/Movie.2024.1080p.BluRay.mkv"),
             "eng",
             "srt",
             false,
@@ -127,32 +127,32 @@ mod tests {
         );
         assert_eq!(
             path,
-            PathBuf::from("/media/movies/Movie.2024.1080p.BluRay.eng.srt")
+            PathBuf::from("/data/movies/Movie.2024.1080p.BluRay.eng.srt")
         );
     }
 
     #[test]
     fn subtitle_path_forced() {
         let path = build_subtitle_path(
-            Path::new("/media/movies/Movie.mkv"),
+            Path::new("/data/movies/Movie.mkv"),
             "spa",
             "srt",
             true,
             false,
         );
-        assert_eq!(path, PathBuf::from("/media/movies/Movie.spa.forced.srt"));
+        assert_eq!(path, PathBuf::from("/data/movies/Movie.spa.forced.srt"));
     }
 
     #[test]
     fn subtitle_path_hi() {
         let path = build_subtitle_path(
-            Path::new("/media/movies/Movie.mkv"),
+            Path::new("/data/movies/Movie.mkv"),
             "eng",
             "ass",
             false,
             true,
         );
-        assert_eq!(path, PathBuf::from("/media/movies/Movie.eng.hi.ass"));
+        assert_eq!(path, PathBuf::from("/data/movies/Movie.eng.hi.ass"));
     }
 
     // ── Spaces in filename ──────────────────────────────────────────
@@ -160,7 +160,7 @@ mod tests {
     #[test]
     fn subtitle_path_with_spaces() {
         let path = build_subtitle_path(
-            Path::new("/media/movies/My Great Movie 2024.mkv"),
+            Path::new("/data/movies/My Great Movie 2024.mkv"),
             "eng",
             "srt",
             false,
@@ -168,14 +168,14 @@ mod tests {
         );
         assert_eq!(
             path,
-            PathBuf::from("/media/movies/My Great Movie 2024.eng.srt")
+            PathBuf::from("/data/movies/My Great Movie 2024.eng.srt")
         );
     }
 
     #[test]
     fn subtitle_path_with_spaces_forced() {
         let path = build_subtitle_path(
-            Path::new("/media/tv/My Show S01E02.mkv"),
+            Path::new("/data/tv/My Show S01E02.mkv"),
             "spa",
             "srt",
             true,
@@ -183,7 +183,7 @@ mod tests {
         );
         assert_eq!(
             path,
-            PathBuf::from("/media/tv/My Show S01E02.spa.forced.srt")
+            PathBuf::from("/data/tv/My Show S01E02.spa.forced.srt")
         );
     }
 
@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn subtitle_path_with_periods_in_filename() {
         let path = build_subtitle_path(
-            Path::new("/media/movies/Movie.2024.1080p.BluRay.x264-GROUP.mkv"),
+            Path::new("/data/movies/Movie.2024.1080p.BluRay.x264-GROUP.mkv"),
             "eng",
             "srt",
             false,
@@ -201,14 +201,14 @@ mod tests {
         // file_stem takes everything before the last dot
         assert_eq!(
             path,
-            PathBuf::from("/media/movies/Movie.2024.1080p.BluRay.x264-GROUP.eng.srt")
+            PathBuf::from("/data/movies/Movie.2024.1080p.BluRay.x264-GROUP.eng.srt")
         );
     }
 
     #[test]
     fn subtitle_path_with_periods_hi() {
         let path = build_subtitle_path(
-            Path::new("/media/movies/Some.Movie.2024.2160p.WEB-DL.DDP5.1.DV.HDR.H.265-NTb.mkv"),
+            Path::new("/data/movies/Some.Movie.2024.2160p.WEB-DL.DDP5.1.DV.HDR.H.265-NTb.mkv"),
             "eng",
             "srt",
             false,
@@ -217,7 +217,7 @@ mod tests {
         assert_eq!(
             path,
             PathBuf::from(
-                "/media/movies/Some.Movie.2024.2160p.WEB-DL.DDP5.1.DV.HDR.H.265-NTb.eng.hi.srt"
+                "/data/movies/Some.Movie.2024.2160p.WEB-DL.DDP5.1.DV.HDR.H.265-NTb.eng.hi.srt"
             )
         );
     }
@@ -243,14 +243,14 @@ mod tests {
     #[test]
     fn subtitle_path_forced_takes_precedence_over_hi() {
         let path = build_subtitle_path(
-            Path::new("/media/movies/Movie.mkv"),
+            Path::new("/data/movies/Movie.mkv"),
             "spa",
             "srt",
             true,
             true,
         );
         // When both forced and HI are true, forced wins (checked first in the if-else)
-        assert_eq!(path, PathBuf::from("/media/movies/Movie.spa.forced.srt"));
+        assert_eq!(path, PathBuf::from("/data/movies/Movie.spa.forced.srt"));
         // Verify it does NOT contain ".hi."
         let path_str = path.to_string_lossy();
         assert!(
@@ -262,13 +262,13 @@ mod tests {
     #[test]
     fn subtitle_path_forced_precedence_different_language() {
         let path = build_subtitle_path(
-            Path::new("/media/tv/Show.S01E01.mkv"),
+            Path::new("/data/tv/Show.S01E01.mkv"),
             "fre",
             "srt",
             true,
             true,
         );
-        assert_eq!(path, PathBuf::from("/media/tv/Show.S01E01.fre.forced.srt"));
+        assert_eq!(path, PathBuf::from("/data/tv/Show.S01E01.fre.forced.srt"));
     }
 
     // ── Various formats ─────────────────────────────────────────────
@@ -276,24 +276,24 @@ mod tests {
     #[test]
     fn subtitle_path_sub_format() {
         let path = build_subtitle_path(
-            Path::new("/media/movies/Movie.mkv"),
+            Path::new("/data/movies/Movie.mkv"),
             "eng",
             "sub",
             false,
             false,
         );
-        assert_eq!(path, PathBuf::from("/media/movies/Movie.eng.sub"));
+        assert_eq!(path, PathBuf::from("/data/movies/Movie.eng.sub"));
     }
 
     #[test]
     fn subtitle_path_ssa_format() {
         let path = build_subtitle_path(
-            Path::new("/media/movies/Movie.mkv"),
+            Path::new("/data/movies/Movie.mkv"),
             "jpn",
             "ssa",
             false,
             false,
         );
-        assert_eq!(path, PathBuf::from("/media/movies/Movie.jpn.ssa"));
+        assert_eq!(path, PathBuf::from("/data/movies/Movie.jpn.ssa"));
     }
 }

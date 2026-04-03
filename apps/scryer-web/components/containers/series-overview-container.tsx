@@ -1,11 +1,9 @@
 
 import * as React from "react";
 import {
-  activitySubscriptionQuery,
   searchQuery,
   searchForEpisodeQuery,
   seriesOverviewSettingsInitQuery,
-  titleOverviewInitQuery,
 } from "@/lib/graphql/queries";
 import {
   deleteMediaFileMutation,
@@ -23,15 +21,12 @@ import type { DownloadQueueItem } from "@/lib/types/download-queue";
 import type { Release } from "@/lib/types";
 import { DEFAULT_SERIES_LIBRARY_PATH } from "@/lib/constants/settings";
 import { qualityProfileSettingsToEntries } from "@/lib/utils/quality-profiles";
-import {
-  collectActivityEventsFromPayload,
-  normalizeActivityEvent,
-} from "@/lib/utils/activity";
-import { useClient, useSubscription } from "urql";
+import { useClient } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { handleFixTitleMatchComplete as applyFixTitleMatchCompletion } from "@/lib/fix-title-match";
-import { useImportHistorySubscription } from "@/lib/hooks/use-import-history-subscription";
+import { useTitleOverviewReactiveRefresh } from "@/lib/hooks/use-title-overview-reactive-refresh";
+import { fetchTitleOverviewSnapshot } from "@/lib/title-overview-loader";
 import { SeriesOverviewView } from "@/components/views/series-overview-view";
 import { ManualImportDialog } from "@/components/dialogs/manual-import-dialog";
 import { FixTitleMatchDialog } from "@/components/dialogs/fix-title-match-dialog";
@@ -198,6 +193,11 @@ export type EpisodeMediaFile = {
   releaseHash: string | null;
 };
 
+type SeriesOverviewSnapshotTitle = TitleDetail & {
+  collections?: TitleCollection[];
+  mediaFiles?: EpisodeMediaFile[];
+};
+
 type SeriesOverviewContainerProps = {
   titleId: string;
   onTitleNotFound?: () => void;
@@ -254,11 +254,17 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   const [deleteFilesOnDisk, setDeleteFilesOnDisk] = React.useState(false);
   const [deleteLoading, setDeleteLoading] = React.useState(false);
   const [fixMatchOpen, setFixMatchOpen] = React.useState(false);
+  const [titleLookupAttempted, setTitleLookupAttempted] = React.useState(false);
+  const [titleLookupFailed, setTitleLookupFailed] = React.useState(false);
 
-  const refreshTitleDetail = React.useCallback(async (_options?: { quiet?: boolean }) => {
-    const { data, error } = await client.query(titleOverviewInitQuery, { id: titleId, blocklistLimit: 300 }, { requestPolicy: "network-only" }).toPromise();
-    if (error) throw error;
-    const nextTitle = data.title ?? null;
+  const refreshTitleDetail = React.useCallback(async () => {
+    const snapshot = await fetchTitleOverviewSnapshot<
+      SeriesOverviewSnapshotTitle,
+      TitleHistoryEvent,
+      TitleReleaseBlocklistEntry,
+      import("@/components/containers/movie-overview-container").SubtitleDownloadRecord
+    >(client, titleId, 300);
+    const nextTitle = snapshot.title;
     const nextCollections = nextTitle?.collections ?? [];
     const nextMediaFiles = nextTitle?.mediaFiles ?? [];
     const nextDownloadQueueItems = nextTitle?.downloadQueueItems ?? [];
@@ -273,9 +279,9 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       ),
     );
     setMediaFilesByEpisode(groupMediaFilesByEpisode(nextMediaFiles));
-    setEvents(data.titleEvents ?? []);
-    setReleaseBlocklistEntries(data.titleReleaseBlocklist ?? []);
-    setSubtitleDownloads(data.subtitleDownloads ?? []);
+    setEvents(snapshot.titleEvents);
+    setReleaseBlocklistEntries(snapshot.titleReleaseBlocklist);
+    setSubtitleDownloads(snapshot.subtitleDownloads);
     setCompletedDownloads(
       nextDownloadQueueItems.filter(
         (item: DownloadQueueItem) => item.state === "completed" || item.state === "import_pending",
@@ -285,10 +291,33 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
 
   React.useEffect(() => {
     let cancelled = false;
+
+    if (!titleId) {
+      setTitle(null);
+      setCollections([]);
+      setEvents([]);
+      setReleaseBlocklistEntries([]);
+      setEpisodesByCollection({});
+      setMediaFilesByEpisode({});
+      setSubtitleDownloads([]);
+      setCompletedDownloads([]);
+      setManualImportItem(null);
+      setHydratingFromActivity(false);
+      setTitleLookupAttempted(false);
+      setTitleLookupFailed(false);
+      setLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setTitleLookupAttempted(false);
+    setTitleLookupFailed(false);
     setLoading(true);
     refreshTitleDetail()
       .catch((error: unknown) => {
         if (!cancelled) {
+          setTitleLookupFailed(true);
           setGlobalStatus(
             error instanceof Error ? error.message : t("status.apiError"),
           );
@@ -296,19 +325,20 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       })
       .finally(() => {
         if (!cancelled) {
+          setTitleLookupAttempted(true);
           setLoading(false);
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [refreshTitleDetail, setGlobalStatus, t]);
+  }, [refreshTitleDetail, setGlobalStatus, t, titleId]);
 
   React.useEffect(() => {
-    if (!loading && !title) {
+    if (titleId && titleLookupAttempted && !loading && !titleLookupFailed && !title) {
       onTitleNotFound?.();
     }
-  }, [loading, title, onTitleNotFound]);
+  }, [loading, onTitleNotFound, title, titleId, titleLookupAttempted, titleLookupFailed]);
 
   React.useEffect(() => {
     setHydratingFromActivity(false);
@@ -377,30 +407,14 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
 
   const handleSetCollectionMonitored = React.useCallback(
     async (collectionId: string, monitored: boolean) => {
-      const { error, data } = await client.mutation(
+      const { error } = await client.mutation(
         setCollectionMonitoredMutation,
         { input: { collectionId, monitored } },
       ).toPromise();
       if (error) throw error;
-      const payload = data?.setCollectionMonitored;
-      if (!payload) return;
-      // Update collection monitored flag from the mutation response.
-      setCollections((prev) =>
-        prev.map((c) => (
-          c.id === payload.id
-            ? { ...c, monitored: payload.monitored, episodes: payload.episodes ?? c.episodes }
-            : c
-        )),
-      );
-      // Update episode monitored flags from the projected episodes.
-      if (payload.episodes) {
-        setEpisodesByCollection((prev) => ({
-          ...prev,
-          [collectionId]: payload.episodes,
-        }));
-      }
+      await refreshTitleDetail();
     },
-    [client],
+    [client, refreshTitleDetail],
   );
 
   const handleSetEpisodeMonitored = React.useCallback(
@@ -410,23 +424,9 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         { input: { episodeId, monitored } },
       ).toPromise();
       if (error) throw error;
-      // Update just this episode from the mutation response.
-      setEpisodesByCollection((prev) => {
-        for (const [cid, episodes] of Object.entries(prev)) {
-          const idx = episodes.findIndex((ep) => ep.id === episodeId);
-          if (idx !== -1) {
-            return {
-              ...prev,
-              [cid]: episodes.map((ep) =>
-                ep.id === episodeId ? { ...ep, monitored } : ep,
-              ),
-            };
-          }
-        }
-        return prev;
-      });
+      await refreshTitleDetail();
     },
-    [client],
+    [client, refreshTitleDetail],
   );
 
   const handleSetTitleMonitored = React.useCallback(
@@ -744,88 +744,32 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     await refreshTitleDetail();
   }, [refreshTitleDetail]);
 
-  // Fallback: also listen to importHistoryChanged — fires from a different
-  // broadcast channel so the page still refreshes even if the activity
-  // subscription misses an event (e.g. transient WebSocket gap).
-  useImportHistorySubscription(refreshTitleDetail);
-
-  // Subscribe to activity events via WebSocket — refetch media files when an
-  // import completes for this title (movie_downloaded / series_episode_imported / file_upgraded).
   const IMPORT_KINDS = React.useMemo(
-    () => new Set(["movie_downloaded", "series_episode_imported", "file_upgraded"]),
+    () =>
+      new Set([
+        "movie_downloaded",
+        "series_episode_imported",
+        "file_upgraded",
+        "subtitle_downloaded",
+      ]),
     [],
   );
-  const HYDRATION_STARTED_KIND = "metadata_hydration_started";
-  const HYDRATION_COMPLETED_KIND = "metadata_hydration_completed";
-  const HYDRATION_FAILED_KIND = "metadata_hydration_failed";
 
-  // Use a ref for title so the effect only fires on new subscription data,
-  // not when refreshTitleDetail() updates state (which would loop).
-  const titleRef = React.useRef(title);
-  titleRef.current = title;
-  const processedActivityEventIdsRef = React.useRef<Set<string>>(new Set());
-
-  React.useEffect(() => {
-    processedActivityEventIdsRef.current.clear();
-  }, [titleId]);
-
-  const [activitySub] = useSubscription({
-    query: activitySubscriptionQuery,
-    pause: !title,
+  useTitleOverviewReactiveRefresh({
+    titleId,
+    refresh: refreshTitleDetail,
+    importKinds: IMPORT_KINDS,
+    pause: !titleId,
+    onHydrationStarted() {
+      setHydratingFromActivity(true);
+    },
+    onHydrationCompleted() {
+      setHydratingFromActivity(false);
+    },
+    onHydrationFailed() {
+      setHydratingFromActivity(false);
+    },
   });
-
-  React.useEffect(() => {
-    const currentTitle = titleRef.current;
-    if (!currentTitle || !activitySub.data?.activityEvents) return;
-    const rawEvents = collectActivityEventsFromPayload(activitySub.data.activityEvents);
-    for (const raw of rawEvents) {
-      const activity = normalizeActivityEvent(
-        raw as Partial<ReturnType<typeof normalizeActivityEvent>>,
-      );
-      const processedEventIds = processedActivityEventIdsRef.current;
-      if (processedEventIds.has(activity.id)) {
-        continue;
-      }
-      processedEventIds.add(activity.id);
-      if (processedEventIds.size > 200) {
-        const oldestProcessedEventId = processedEventIds.values().next().value;
-        if (oldestProcessedEventId) {
-          processedEventIds.delete(oldestProcessedEventId);
-        }
-      }
-      if (activity.titleId !== currentTitle.id) {
-        continue;
-      }
-
-      if (activity.kind === HYDRATION_STARTED_KIND) {
-        setHydratingFromActivity(true);
-        continue;
-      }
-
-      if (activity.kind === HYDRATION_COMPLETED_KIND) {
-        setHydratingFromActivity(false);
-        void refreshTitleDetail();
-        return;
-      }
-
-      if (activity.kind === HYDRATION_FAILED_KIND) {
-        setHydratingFromActivity(false);
-        continue;
-      }
-
-      if (IMPORT_KINDS.has(activity.kind)) {
-        void refreshTitleDetail();
-        return;
-      }
-    }
-  }, [
-    HYDRATION_COMPLETED_KIND,
-    HYDRATION_FAILED_KIND,
-    HYDRATION_STARTED_KIND,
-    IMPORT_KINDS,
-    refreshTitleDetail,
-    activitySub.data,
-  ]);
 
   return (
     <>

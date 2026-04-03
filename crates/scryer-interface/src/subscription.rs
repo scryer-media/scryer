@@ -10,7 +10,8 @@ use crate::context::LogBuffer;
 use crate::context::{actor_from_ctx, app_from_ctx};
 use crate::mappers::from_activity_event;
 use crate::mappers::from_download_queue_item;
-use crate::types::{ActivityEventPayload, DownloadQueueItemPayload};
+use crate::mappers::from_library_scan_session;
+use crate::types::{ActivityEventPayload, DownloadQueueItemPayload, LibraryScanProgressPayload};
 
 pub struct SubscriptionRoot;
 
@@ -140,6 +141,63 @@ impl SubscriptionRoot {
                     }
                     Err(RecvError::Closed) => {
                         tracing::debug!("download_queue sub: broadcast channel closed");
+                        return None;
+                    }
+                }
+            }
+        });
+
+        Box::pin(stream)
+    }
+
+    async fn library_scan_progress(
+        &self,
+        ctx: &Context<'_>,
+    ) -> BoxStream<'static, LibraryScanProgressPayload> {
+        let empty_stream =
+            || -> BoxStream<'static, LibraryScanProgressPayload> { Box::pin(stream::empty()) };
+
+        let app = match app_from_ctx(ctx) {
+            Ok(app) => app,
+            Err(e) => {
+                tracing::warn!("library_scan_progress: app_from_ctx failed: {e:?}");
+                return empty_stream();
+            }
+        };
+
+        let actor = match actor_from_ctx(ctx) {
+            Ok(actor) => actor,
+            Err(e) => {
+                tracing::warn!("library_scan_progress: actor_from_ctx failed: {e:?}");
+                return empty_stream();
+            }
+        };
+
+        let receiver = match app.subscribe_library_scan_progress(&actor) {
+            Ok(receiver) => receiver,
+            Err(e) => {
+                tracing::warn!("library_scan_progress: subscribe failed: {e}");
+                return empty_stream();
+            }
+        };
+
+        tracing::debug!(
+            "library_scan_progress: subscription started for user {}",
+            actor.id
+        );
+
+        let stream = unfold(receiver, move |mut receiver| async move {
+            loop {
+                match receiver.recv().await {
+                    Ok(session) => return Some((from_library_scan_session(session), receiver)),
+                    Err(RecvError::Lagged(n)) => {
+                        tracing::debug!(
+                            "library_scan_progress: receiver lagged, skipped {n} messages"
+                        );
+                        continue;
+                    }
+                    Err(RecvError::Closed) => {
+                        tracing::debug!("library_scan_progress: broadcast channel closed");
                         return None;
                     }
                 }

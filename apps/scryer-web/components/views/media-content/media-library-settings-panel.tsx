@@ -13,6 +13,8 @@ type MediaLibrarySettingsPanelProps = {
   onSaveRootFolders: (folders: RootFolderOption[]) => void;
   loading: boolean;
   scanLoading: boolean;
+  scanDisabled?: boolean;
+  scanNotice?: string | null;
   scanSummary: LibraryScanSummary | null;
   onScan: () => void;
 };
@@ -23,6 +25,8 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
   onSaveRootFolders,
   loading,
   scanLoading,
+  scanDisabled = scanLoading,
+  scanNotice,
   scanSummary,
   onScan,
 }: MediaLibrarySettingsPanelProps) {
@@ -173,7 +177,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
             <Button
               type="button"
               onClick={onScan}
-              disabled={scanLoading}
+              disabled={scanDisabled}
             >
               {scanLoading
                 ? t("settings.libraryScanRunning")
@@ -189,6 +193,9 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
               </span>
             ) : null}
           </div>
+          {scanNotice ? (
+            <p className="text-xs text-destructive">{scanNotice}</p>
+          ) : null}
         </CardContent>
       </Card>
       <FolderBrowserDialog

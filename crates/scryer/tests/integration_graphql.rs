@@ -2,13 +2,15 @@
 
 mod common;
 
+use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use scryer_application::{
-    InsertMediaFileInput, PendingRelease, ReleaseDecision, ShowRepository, TitleRepository,
-    WantedItem,
+    AppError, AppResult, InsertMediaFileInput, MediaFileAnalysis, MediaFileRepository,
+    PendingRelease, ReleaseDecision, ShowRepository, TitleEpisodeProgressSummary, TitleMediaFile,
+    TitleMediaSizeSummary, TitleRepository, WantedItem,
 };
-use scryer_domain::{Collection, Episode, ExternalId, Id, MediaFacet, Title};
-use scryer_infrastructure::SettingDefinitionSeed;
+use scryer_domain::{Collection, CollectionType, Episode, ExternalId, Id, MediaFacet, Title};
+use scryer_infrastructure::{FileSystemLibraryRenamer, SettingDefinitionSeed, SqliteServices};
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
@@ -46,6 +48,356 @@ fn assert_no_errors(body: &Value) {
         body.get("errors").is_none(),
         "unexpected GraphQL errors: {body}"
     );
+}
+
+async fn set_rename_collision_policy(ctx: &TestContext, scope: &str, policy: &str) {
+    let body = gql(
+        ctx,
+        r#"
+        mutation UpdateMediaSettings($input: UpdateMediaSettingsInput!) {
+          updateMediaSettings(input: $input) {
+            scope
+            renameCollisionPolicy
+          }
+        }
+        "#,
+        json!({
+            "input": {
+                "scope": scope,
+                "renameCollisionPolicy": policy
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&body);
+    assert_eq!(
+        body["data"]["updateMediaSettings"]["renameCollisionPolicy"],
+        policy
+    );
+}
+
+struct FailingMediaFileRepo {
+    inner: SqliteServices,
+    fail_file_id: String,
+}
+
+#[async_trait]
+impl MediaFileRepository for FailingMediaFileRepo {
+    async fn insert_media_file(&self, input: &InsertMediaFileInput) -> AppResult<String> {
+        <SqliteServices as MediaFileRepository>::insert_media_file(&self.inner, input).await
+    }
+
+    async fn link_file_to_episode(&self, file_id: &str, episode_id: &str) -> AppResult<()> {
+        <SqliteServices as MediaFileRepository>::link_file_to_episode(
+            &self.inner,
+            file_id,
+            episode_id,
+        )
+        .await
+    }
+
+    async fn list_media_files_for_title(&self, title_id: &str) -> AppResult<Vec<TitleMediaFile>> {
+        <SqliteServices as MediaFileRepository>::list_media_files_for_title(&self.inner, title_id)
+            .await
+    }
+
+    async fn list_title_media_size_summaries(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<TitleMediaSizeSummary>> {
+        <SqliteServices as MediaFileRepository>::list_title_media_size_summaries(
+            &self.inner,
+            title_ids,
+        )
+        .await
+    }
+
+    async fn list_title_episode_progress_summaries(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<TitleEpisodeProgressSummary>> {
+        <SqliteServices as MediaFileRepository>::list_title_episode_progress_summaries(
+            &self.inner,
+            title_ids,
+        )
+        .await
+    }
+
+    async fn update_media_file_analysis(
+        &self,
+        file_id: &str,
+        analysis: MediaFileAnalysis,
+    ) -> AppResult<()> {
+        <SqliteServices as MediaFileRepository>::update_media_file_analysis(
+            &self.inner,
+            file_id,
+            analysis,
+        )
+        .await
+    }
+
+    async fn update_media_file_source_signature(
+        &self,
+        file_id: &str,
+        size_bytes: i64,
+        source_signature_scheme: Option<String>,
+        source_signature_value: Option<String>,
+    ) -> AppResult<()> {
+        <SqliteServices as MediaFileRepository>::update_media_file_source_signature(
+            &self.inner,
+            file_id,
+            size_bytes,
+            source_signature_scheme,
+            source_signature_value,
+        )
+        .await
+    }
+
+    async fn update_media_file_path(&self, file_id: &str, file_path: &str) -> AppResult<()> {
+        if file_id == self.fail_file_id {
+            return Err(AppError::Repository(format!(
+                "injected media file path failure for {file_id} -> {file_path}"
+            )));
+        }
+
+        <SqliteServices as MediaFileRepository>::update_media_file_path(
+            &self.inner,
+            file_id,
+            file_path,
+        )
+        .await
+    }
+
+    async fn mark_scan_failed(&self, file_id: &str, error: &str) -> AppResult<()> {
+        <SqliteServices as MediaFileRepository>::mark_scan_failed(&self.inner, file_id, error).await
+    }
+
+    async fn get_media_file_by_id(&self, file_id: &str) -> AppResult<Option<TitleMediaFile>> {
+        <SqliteServices as MediaFileRepository>::get_media_file_by_id(&self.inner, file_id).await
+    }
+
+    async fn get_media_file_by_path(&self, file_path: &str) -> AppResult<Option<TitleMediaFile>> {
+        <SqliteServices as MediaFileRepository>::get_media_file_by_path(&self.inner, file_path)
+            .await
+    }
+
+    async fn delete_media_file(&self, file_id: &str) -> AppResult<()> {
+        <SqliteServices as MediaFileRepository>::delete_media_file(&self.inner, file_id).await
+    }
+}
+
+struct FailingShowRepo {
+    inner: SqliteServices,
+    fail_collection_id: String,
+    fail_path: String,
+}
+
+#[async_trait]
+impl ShowRepository for FailingShowRepo {
+    async fn list_collections_for_title(&self, title_id: &str) -> AppResult<Vec<Collection>> {
+        <SqliteServices as ShowRepository>::list_collections_for_title(&self.inner, title_id).await
+    }
+
+    async fn get_collection_by_id(&self, collection_id: &str) -> AppResult<Option<Collection>> {
+        <SqliteServices as ShowRepository>::get_collection_by_id(&self.inner, collection_id).await
+    }
+
+    async fn get_collection_by_ordered_path(
+        &self,
+        ordered_path: &str,
+    ) -> AppResult<Option<Collection>> {
+        <SqliteServices as ShowRepository>::get_collection_by_ordered_path(
+            &self.inner,
+            ordered_path,
+        )
+        .await
+    }
+
+    async fn create_collection(&self, collection: Collection) -> AppResult<Collection> {
+        <SqliteServices as ShowRepository>::create_collection(&self.inner, collection).await
+    }
+
+    async fn update_collection(
+        &self,
+        collection_id: &str,
+        collection_type: Option<CollectionType>,
+        collection_index: Option<String>,
+        label: Option<String>,
+        ordered_path: Option<String>,
+        first_episode_number: Option<String>,
+        last_episode_number: Option<String>,
+        monitored: Option<bool>,
+    ) -> AppResult<Collection> {
+        if collection_id == self.fail_collection_id
+            && ordered_path.as_deref() == Some(self.fail_path.as_str())
+        {
+            return Err(AppError::Repository(format!(
+                "injected collection path failure for {collection_id}"
+            )));
+        }
+
+        <SqliteServices as ShowRepository>::update_collection(
+            &self.inner,
+            collection_id,
+            collection_type,
+            collection_index,
+            label,
+            ordered_path,
+            first_episode_number,
+            last_episode_number,
+            monitored,
+        )
+        .await
+    }
+
+    async fn update_interstitial_season_episode(
+        &self,
+        collection_id: &str,
+        season_episode: Option<String>,
+    ) -> AppResult<()> {
+        <SqliteServices as ShowRepository>::update_interstitial_season_episode(
+            &self.inner,
+            collection_id,
+            season_episode,
+        )
+        .await
+    }
+
+    async fn set_collection_episodes_monitored(
+        &self,
+        collection_id: &str,
+        monitored: bool,
+    ) -> AppResult<()> {
+        <SqliteServices as ShowRepository>::set_collection_episodes_monitored(
+            &self.inner,
+            collection_id,
+            monitored,
+        )
+        .await
+    }
+
+    async fn delete_collection(&self, collection_id: &str) -> AppResult<()> {
+        <SqliteServices as ShowRepository>::delete_collection(&self.inner, collection_id).await
+    }
+
+    async fn delete_collections_for_title(&self, title_id: &str) -> AppResult<()> {
+        <SqliteServices as ShowRepository>::delete_collections_for_title(&self.inner, title_id)
+            .await
+    }
+
+    async fn list_episodes_for_collection(&self, collection_id: &str) -> AppResult<Vec<Episode>> {
+        <SqliteServices as ShowRepository>::list_episodes_for_collection(&self.inner, collection_id)
+            .await
+    }
+
+    async fn list_episodes_for_title(&self, title_id: &str) -> AppResult<Vec<Episode>> {
+        <SqliteServices as ShowRepository>::list_episodes_for_title(&self.inner, title_id).await
+    }
+
+    async fn get_episode_by_id(&self, episode_id: &str) -> AppResult<Option<Episode>> {
+        <SqliteServices as ShowRepository>::get_episode_by_id(&self.inner, episode_id).await
+    }
+
+    async fn create_episode(&self, episode: Episode) -> AppResult<Episode> {
+        <SqliteServices as ShowRepository>::create_episode(&self.inner, episode).await
+    }
+
+    async fn update_episode(
+        &self,
+        episode_id: &str,
+        episode_type: Option<scryer_domain::EpisodeType>,
+        episode_number: Option<String>,
+        season_number: Option<String>,
+        episode_label: Option<String>,
+        title: Option<String>,
+        air_date: Option<String>,
+        duration_seconds: Option<i64>,
+        has_multi_audio: Option<bool>,
+        has_subtitle: Option<bool>,
+        monitored: Option<bool>,
+        collection_id: Option<String>,
+        overview: Option<String>,
+        tvdb_id: Option<String>,
+    ) -> AppResult<Episode> {
+        <SqliteServices as ShowRepository>::update_episode(
+            &self.inner,
+            episode_id,
+            episode_type,
+            episode_number,
+            season_number,
+            episode_label,
+            title,
+            air_date,
+            duration_seconds,
+            has_multi_audio,
+            has_subtitle,
+            monitored,
+            collection_id,
+            overview,
+            tvdb_id,
+        )
+        .await
+    }
+
+    async fn delete_episode(&self, episode_id: &str) -> AppResult<()> {
+        <SqliteServices as ShowRepository>::delete_episode(&self.inner, episode_id).await
+    }
+
+    async fn delete_episodes_for_title(&self, title_id: &str) -> AppResult<()> {
+        <SqliteServices as ShowRepository>::delete_episodes_for_title(&self.inner, title_id).await
+    }
+
+    async fn find_episode_by_title_and_numbers(
+        &self,
+        title_id: &str,
+        season_number: &str,
+        episode_number: &str,
+    ) -> AppResult<Option<Episode>> {
+        <SqliteServices as ShowRepository>::find_episode_by_title_and_numbers(
+            &self.inner,
+            title_id,
+            season_number,
+            episode_number,
+        )
+        .await
+    }
+
+    async fn find_episode_by_title_and_absolute_number(
+        &self,
+        title_id: &str,
+        absolute_number: &str,
+    ) -> AppResult<Option<Episode>> {
+        <SqliteServices as ShowRepository>::find_episode_by_title_and_absolute_number(
+            &self.inner,
+            title_id,
+            absolute_number,
+        )
+        .await
+    }
+
+    async fn list_episodes_in_date_range(
+        &self,
+        start_inclusive: &str,
+        end_inclusive: &str,
+    ) -> AppResult<Vec<scryer_domain::CalendarEpisode>> {
+        <SqliteServices as ShowRepository>::list_episodes_in_date_range(
+            &self.inner,
+            start_inclusive,
+            end_inclusive,
+        )
+        .await
+    }
+
+    async fn list_primary_collection_summaries(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<scryer_application::PrimaryCollectionSummary>> {
+        <SqliteServices as ShowRepository>::list_primary_collection_summaries(
+            &self.inner,
+            title_ids,
+        )
+        .await
+    }
 }
 
 /// Helper to add a title and return the title ID.
@@ -331,7 +683,7 @@ async fn seed_typed_settings_definitions(ctx: &TestContext) {
                 scope: "media".into(),
                 key_name: "movies.path".into(),
                 data_type: "string".into(),
-                default_value_json: "\"/media/movies\"".into(),
+                default_value_json: "\"/data/movies\"".into(),
                 is_sensitive: false,
                 validation_json: None,
             },
@@ -340,7 +692,7 @@ async fn seed_typed_settings_definitions(ctx: &TestContext) {
                 scope: "media".into(),
                 key_name: "series.path".into(),
                 data_type: "string".into(),
-                default_value_json: "\"/media/series\"".into(),
+                default_value_json: "\"/data/series\"".into(),
                 is_sensitive: false,
                 validation_json: None,
             },
@@ -349,7 +701,7 @@ async fn seed_typed_settings_definitions(ctx: &TestContext) {
                 scope: "media".into(),
                 key_name: "anime.path".into(),
                 data_type: "string".into(),
-                default_value_json: "\"/media/anime\"".into(),
+                default_value_json: "\"/data/anime\"".into(),
                 is_sensitive: false,
                 validation_json: None,
             },
@@ -720,6 +1072,134 @@ async fn create_catalog_title(
     ctx.db.create(title).await.expect("create title")
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct SeriesMonitoringSummary {
+    title_monitored: bool,
+    collection_monitored: bool,
+    episode_monitored: bool,
+    wanted_count: i64,
+}
+
+async fn create_series_monitoring_fixture(
+    ctx: &TestContext,
+    name: &str,
+    tvdb_id: &str,
+) -> (Title, Collection, Episode) {
+    let title = create_catalog_title(
+        ctx,
+        name,
+        MediaFacet::Series,
+        vec![ExternalId {
+            source: "tvdb".to_string(),
+            value: tvdb_id.to_string(),
+        }],
+        vec![],
+        false,
+    )
+    .await;
+
+    let collection = ctx
+        .db
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Season,
+            collection_index: "1".to_string(),
+            label: Some("Season 1".to_string()),
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: Some("1".to_string()),
+            last_episode_number: Some("1".to_string()),
+            interstitial_movie: None,
+            specials_movies: vec![],
+            interstitial_season_episode: None,
+            monitored: false,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create season collection");
+
+    let episode = ctx
+        .db
+        .create_episode(Episode {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_id: Some(collection.id.clone()),
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some("1".to_string()),
+            season_number: Some("1".to_string()),
+            episode_label: Some("S01E01".to_string()),
+            title: Some("Pilot".to_string()),
+            air_date: Some("2024-01-01".to_string()),
+            duration_seconds: Some(1440),
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: Some("1".to_string()),
+            overview: Some("Pilot episode".to_string()),
+            tvdb_id: Some(format!("{tvdb_id}01")),
+            monitored: false,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create episode");
+
+    (title, collection, episode)
+}
+
+async fn series_monitoring_summary(
+    ctx: &TestContext,
+    title_id: &str,
+    collection_id: &str,
+    episode_id: &str,
+) -> SeriesMonitoringSummary {
+    let title = ctx
+        .db
+        .get_by_id(title_id)
+        .await
+        .expect("load title")
+        .expect("title");
+    let collection = ctx
+        .db
+        .get_collection_by_id(collection_id)
+        .await
+        .expect("load collection")
+        .expect("collection");
+    let episode = ctx
+        .db
+        .get_episode_by_id(episode_id)
+        .await
+        .expect("load episode")
+        .expect("episode");
+    let wanted_count = ctx
+        .db
+        .count_wanted_items(None, None, Some(title_id))
+        .await
+        .expect("count wanted items");
+
+    SeriesMonitoringSummary {
+        title_monitored: title.monitored,
+        collection_monitored: collection.monitored,
+        episode_monitored: episode.monitored,
+        wanted_count,
+    }
+}
+
+async fn activity_kinds_for_title(ctx: &TestContext, title_id: &str) -> Vec<String> {
+    let body = gql(&ctx, "{ activityEvents { kind titleId } }", json!({})).await;
+    assert_no_errors(&body);
+
+    body["data"]["activityEvents"]
+        .as_array()
+        .expect("activity events array")
+        .iter()
+        .filter(|event| event["titleId"] == title_id)
+        .filter_map(|event| event["kind"].as_str())
+        .map(str::to_string)
+        .collect()
+}
+
 async fn create_series_scan_episode(
     ctx: &TestContext,
     title: &Title,
@@ -753,6 +1233,1518 @@ async fn create_series_scan_episode(
         .create_episode(episode)
         .await
         .expect("create episode")
+}
+
+#[tokio::test]
+async fn graphql_media_rename_preview_for_anime_uses_media_file_rows() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+
+    let title = create_catalog_title(
+        &ctx,
+        "Rename Preview Show",
+        MediaFacet::Anime,
+        vec![ExternalId {
+            source: "tvdb".to_string(),
+            value: "91001".to_string(),
+        }],
+        vec![],
+        true,
+    )
+    .await;
+
+    let collection = ctx
+        .db
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Season,
+            collection_index: "1".to_string(),
+            label: Some("Season 1".to_string()),
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: Some("3".to_string()),
+            last_episode_number: Some("3".to_string()),
+            interstitial_movie: None,
+            specials_movies: vec![],
+            interstitial_season_episode: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create season collection");
+
+    let episode = ctx
+        .db
+        .create_episode(Episode {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_id: Some(collection.id.clone()),
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some("3".to_string()),
+            season_number: Some("1".to_string()),
+            episode_label: Some("S01E03".to_string()),
+            title: Some("Arrival".to_string()),
+            air_date: None,
+            duration_seconds: Some(1440),
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: Some("12".to_string()),
+            overview: None,
+            tvdb_id: Some("9100103".to_string()),
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create episode");
+
+    let season_dir = media_root
+        .path()
+        .join("Rename Preview Show")
+        .join("Season 01");
+    std::fs::create_dir_all(&season_dir).expect("create season dir");
+    let file_path = season_dir.join("[SubsPlease] Rename Preview Show - 03 (1080p).mkv");
+    std::fs::write(&file_path, b"anime-preview").expect("write preview file");
+
+    let file_id = ctx
+        .db
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: file_path.to_string_lossy().to_string(),
+            size_bytes: 2048,
+            quality_label: Some("1080p".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("insert media file");
+    ctx.db
+        .link_file_to_episode(&file_id, &episode.id)
+        .await
+        .expect("link file to episode");
+
+    let body = gql(
+        &ctx,
+        r#"
+        query($input: MediaRenamePreviewInput!) {
+          mediaRenamePreview(input: $input) {
+            total
+            renamable
+            noop
+            conflicts
+            errors
+            items {
+              collectionId
+              mediaFileId
+              currentPath
+              proposedPath
+              writeAction
+              reasonCode
+            }
+          }
+        }
+        "#,
+        json!({
+            "input": {
+                "facet": "anime",
+                "titleId": title.id,
+                "dryRun": true
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&body);
+
+    let plan = &body["data"]["mediaRenamePreview"];
+    assert_eq!(plan["total"].as_i64(), Some(1));
+    assert_eq!(plan["renamable"].as_i64(), Some(1));
+    assert_eq!(plan["noop"].as_i64(), Some(0));
+    assert_eq!(plan["conflicts"].as_i64(), Some(0));
+    assert_eq!(plan["errors"].as_i64(), Some(0));
+
+    let item = &plan["items"][0];
+    assert_eq!(item["collectionId"], Value::Null);
+    assert_eq!(item["mediaFileId"], json!(file_id));
+    assert_eq!(
+        item["currentPath"],
+        json!(file_path.to_string_lossy().to_string())
+    );
+    assert_eq!(
+        item["proposedPath"],
+        json!(
+            season_dir
+                .join("Rename Preview Show - S01E03 (012) - 1080p.mkv")
+                .to_string_lossy()
+                .to_string()
+        )
+    );
+    assert_eq!(item["writeAction"], "move");
+    assert_eq!(item["reasonCode"], "rename_move");
+}
+
+#[tokio::test]
+async fn graphql_media_rename_preview_for_anime_interstitial_uses_season_zero_numbering() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+
+    let title = create_catalog_title(
+        &ctx,
+        "Festival Saga",
+        MediaFacet::Anime,
+        vec![ExternalId {
+            source: "tvdb".to_string(),
+            value: "92001".to_string(),
+        }],
+        vec![],
+        true,
+    )
+    .await;
+
+    let season_zero_dir = media_root.path().join("Festival Saga").join("Season 00");
+    std::fs::create_dir_all(&season_zero_dir).expect("create season zero dir");
+    let file_path = season_zero_dir.join("Festival.Saga.Movie.Special.1080p.mkv");
+    std::fs::write(&file_path, b"anime-interstitial").expect("write interstitial file");
+
+    let interstitial = ctx
+        .db
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Interstitial,
+            collection_index: "0".to_string(),
+            label: Some("Movie".to_string()),
+            ordered_path: Some(file_path.to_string_lossy().to_string()),
+            narrative_order: None,
+            first_episode_number: None,
+            last_episode_number: None,
+            interstitial_movie: Some(scryer_domain::InterstitialMovieMetadata {
+                tvdb_id: "9200103".to_string(),
+                name: "Festival Film".to_string(),
+                slug: "festival-film".to_string(),
+                year: Some(2024),
+                content_status: "released".to_string(),
+                overview: "Festival special".to_string(),
+                poster_url: "https://example.com/festival-film.jpg".to_string(),
+                language: "eng".to_string(),
+                runtime_minutes: 95,
+                sort_title: "Festival Film".to_string(),
+                imdb_id: "tt9200103".to_string(),
+                genres: vec!["Fantasy".to_string()],
+                studio: "Scryer Films".to_string(),
+                digital_release_date: Some("2024-01-01".to_string()),
+                association_confidence: None,
+                continuity_status: None,
+                movie_form: None,
+                confidence: None,
+                signal_summary: None,
+                placement: None,
+                movie_tmdb_id: None,
+                movie_mal_id: None,
+                movie_anidb_id: None,
+            }),
+            specials_movies: vec![],
+            interstitial_season_episode: Some("S00E03".to_string()),
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create interstitial collection");
+
+    let file_id = ctx
+        .db
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: file_path.to_string_lossy().to_string(),
+            size_bytes: 4096,
+            quality_label: Some("1080p".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("insert interstitial file");
+
+    let body = gql(
+        &ctx,
+        r#"
+        query($input: MediaRenamePreviewInput!) {
+          mediaRenamePreview(input: $input) {
+            total
+            renamable
+            items {
+              collectionId
+              mediaFileId
+              currentPath
+              proposedPath
+              writeAction
+            }
+          }
+        }
+        "#,
+        json!({
+            "input": {
+                "facet": "anime",
+                "titleId": title.id,
+                "dryRun": true
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&body);
+
+    let plan = &body["data"]["mediaRenamePreview"];
+    assert_eq!(plan["total"].as_i64(), Some(1));
+    assert_eq!(plan["renamable"].as_i64(), Some(1));
+
+    let item = &plan["items"][0];
+    assert_eq!(item["collectionId"], json!(interstitial.id));
+    assert_eq!(item["mediaFileId"], json!(file_id));
+    assert_eq!(
+        item["currentPath"],
+        json!(file_path.to_string_lossy().to_string())
+    );
+    assert_eq!(
+        item["proposedPath"],
+        json!(
+            season_zero_dir
+                .join("Festival Saga - S00E03 (3) - 1080p.mkv")
+                .to_string_lossy()
+                .to_string()
+        )
+    );
+    assert_eq!(item["writeAction"], "move");
+}
+
+#[tokio::test]
+async fn apply_media_rename_for_anime_updates_media_files_and_only_interstitial_collections() {
+    let mut ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    ctx.app.services.library_renamer = std::sync::Arc::new(FileSystemLibraryRenamer::new());
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+
+    let title = create_catalog_title(
+        &ctx,
+        "Anime Apply Show",
+        MediaFacet::Anime,
+        vec![ExternalId {
+            source: "tvdb".to_string(),
+            value: "93001".to_string(),
+        }],
+        vec![],
+        true,
+    )
+    .await;
+
+    let season_collection = ctx
+        .db
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Season,
+            collection_index: "1".to_string(),
+            label: Some("Season 1".to_string()),
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: Some("1".to_string()),
+            last_episode_number: Some("1".to_string()),
+            interstitial_movie: None,
+            specials_movies: vec![],
+            interstitial_season_episode: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create season collection");
+
+    let episode = ctx
+        .db
+        .create_episode(Episode {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_id: Some(season_collection.id.clone()),
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some("1".to_string()),
+            season_number: Some("1".to_string()),
+            episode_label: Some("S01E01".to_string()),
+            title: Some("Pilot".to_string()),
+            air_date: None,
+            duration_seconds: Some(1440),
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: Some("1".to_string()),
+            overview: None,
+            tvdb_id: Some("9300101".to_string()),
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create episode");
+
+    let season_dir = media_root.path().join("Anime Apply Show").join("Season 01");
+    std::fs::create_dir_all(&season_dir).expect("create season dir");
+    let regular_file_path = season_dir.join("Anime.Apply.Show.Episode.One.1080p.mkv");
+    std::fs::write(&regular_file_path, b"anime-apply-episode").expect("write regular file");
+
+    let regular_file_id = ctx
+        .db
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: regular_file_path.to_string_lossy().to_string(),
+            size_bytes: 1024,
+            quality_label: Some("1080p".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("insert regular file");
+    ctx.db
+        .link_file_to_episode(&regular_file_id, &episode.id)
+        .await
+        .expect("link regular file");
+
+    let season_zero_dir = media_root.path().join("Anime Apply Show").join("Season 00");
+    std::fs::create_dir_all(&season_zero_dir).expect("create season zero dir");
+    let interstitial_file_path = season_zero_dir.join("Anime.Apply.Show.Movie.Special.1080p.mkv");
+    std::fs::write(&interstitial_file_path, b"anime-apply-interstitial")
+        .expect("write interstitial file");
+
+    let interstitial_collection = ctx
+        .db
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Interstitial,
+            collection_index: "0".to_string(),
+            label: Some("Movie".to_string()),
+            ordered_path: Some(interstitial_file_path.to_string_lossy().to_string()),
+            narrative_order: None,
+            first_episode_number: None,
+            last_episode_number: None,
+            interstitial_movie: Some(scryer_domain::InterstitialMovieMetadata {
+                tvdb_id: "9300103".to_string(),
+                name: "Pilot Movie".to_string(),
+                slug: "pilot-movie".to_string(),
+                year: Some(2024),
+                content_status: "released".to_string(),
+                overview: "Pilot side story".to_string(),
+                poster_url: "https://example.com/pilot-movie.jpg".to_string(),
+                language: "eng".to_string(),
+                runtime_minutes: 90,
+                sort_title: "Pilot Movie".to_string(),
+                imdb_id: "tt9300103".to_string(),
+                genres: vec!["Adventure".to_string()],
+                studio: "Scryer Films".to_string(),
+                digital_release_date: Some("2024-01-01".to_string()),
+                association_confidence: None,
+                continuity_status: None,
+                movie_form: None,
+                confidence: None,
+                signal_summary: None,
+                placement: None,
+                movie_tmdb_id: None,
+                movie_mal_id: None,
+                movie_anidb_id: None,
+            }),
+            specials_movies: vec![],
+            interstitial_season_episode: Some("S00E03".to_string()),
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create interstitial collection");
+
+    let interstitial_file_id = ctx
+        .db
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: interstitial_file_path.to_string_lossy().to_string(),
+            size_bytes: 2048,
+            quality_label: Some("1080p".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("insert interstitial media file");
+
+    let actor = ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("default user");
+    let preview = ctx
+        .app
+        .preview_rename_for_title(&actor, &title.id, MediaFacet::Anime)
+        .await
+        .expect("preview rename plan");
+    assert_eq!(preview.renamable, 2);
+
+    let result = ctx
+        .app
+        .apply_rename_for_title(&actor, &title.id, MediaFacet::Anime, &preview.fingerprint)
+        .await
+        .expect("apply rename");
+    assert_eq!(result.applied, 2);
+    assert_eq!(result.failed, 0);
+
+    let expected_regular_path = season_dir
+        .join("Anime Apply Show - S01E01 (001) - 1080p.mkv")
+        .to_string_lossy()
+        .to_string();
+    let expected_interstitial_path = season_zero_dir
+        .join("Anime Apply Show - S00E03 (3) - 1080p.mkv")
+        .to_string_lossy()
+        .to_string();
+
+    let updated_regular_file = ctx
+        .db
+        .get_media_file_by_id(&regular_file_id)
+        .await
+        .expect("load updated regular media file")
+        .expect("regular media file");
+    let updated_interstitial_file = ctx
+        .db
+        .get_media_file_by_id(&interstitial_file_id)
+        .await
+        .expect("load updated interstitial media file")
+        .expect("interstitial media file");
+    let refreshed_season_collection = ctx
+        .db
+        .get_collection_by_id(&season_collection.id)
+        .await
+        .expect("load season collection")
+        .expect("season collection");
+    let refreshed_interstitial_collection = ctx
+        .db
+        .get_collection_by_id(&interstitial_collection.id)
+        .await
+        .expect("load interstitial collection")
+        .expect("interstitial collection");
+
+    assert_eq!(updated_regular_file.file_path, expected_regular_path);
+    assert_eq!(
+        updated_interstitial_file.file_path,
+        expected_interstitial_path
+    );
+    assert_eq!(refreshed_season_collection.ordered_path, None);
+    assert_eq!(
+        refreshed_interstitial_collection.ordered_path,
+        Some(expected_interstitial_path.clone())
+    );
+    assert!(std::path::Path::new(&expected_regular_path).exists());
+    assert!(std::path::Path::new(&expected_interstitial_path).exists());
+    assert!(!regular_file_path.exists());
+    assert!(!interstitial_file_path.exists());
+}
+
+#[tokio::test]
+async fn graphql_media_rename_preview_for_movies_stays_collection_based() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+
+    let title = create_catalog_title(
+        &ctx,
+        "Regression Movie (2024)",
+        MediaFacet::Movie,
+        vec![ExternalId {
+            source: "tvdb".to_string(),
+            value: "94001".to_string(),
+        }],
+        vec![],
+        true,
+    )
+    .await;
+
+    let movie_dir = media_root.path().join("Regression Movie (2024)");
+    std::fs::create_dir_all(&movie_dir).expect("create movie dir");
+    let file_path = movie_dir.join("Regression.Movie.2024.1080p.WEB-DL.mkv");
+    std::fs::write(&file_path, b"movie-rename-preview").expect("write movie file");
+
+    let collection = ctx
+        .db
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Movie,
+            collection_index: "1".to_string(),
+            label: Some("1080p".to_string()),
+            ordered_path: Some(file_path.to_string_lossy().to_string()),
+            narrative_order: None,
+            first_episode_number: None,
+            last_episode_number: None,
+            interstitial_movie: None,
+            specials_movies: vec![],
+            interstitial_season_episode: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create movie collection");
+    let file_id = ctx
+        .db
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: file_path.to_string_lossy().to_string(),
+            size_bytes: 4096,
+            quality_label: Some("1080p".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("insert movie media file");
+
+    let body = gql(
+        &ctx,
+        r#"
+        query($input: MediaRenamePreviewInput!) {
+          mediaRenamePreview(input: $input) {
+            total
+            renamable
+            items {
+              collectionId
+              mediaFileId
+              currentPath
+              proposedPath
+              writeAction
+            }
+          }
+        }
+        "#,
+        json!({
+            "input": {
+                "facet": "movie",
+                "titleId": title.id,
+                "dryRun": true
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&body);
+
+    let plan = &body["data"]["mediaRenamePreview"];
+    assert_eq!(plan["total"].as_i64(), Some(1));
+    assert_eq!(plan["renamable"].as_i64(), Some(1));
+
+    let item = &plan["items"][0];
+    assert_eq!(item["collectionId"], json!(collection.id));
+    assert_eq!(item["mediaFileId"], json!(file_id));
+    assert_eq!(
+        item["currentPath"],
+        json!(file_path.to_string_lossy().to_string())
+    );
+    assert_eq!(
+        item["proposedPath"],
+        json!(
+            movie_dir
+                .join("Regression Movie (2024) - 1080p.mkv")
+                .to_string_lossy()
+                .to_string()
+        )
+    );
+    assert_eq!(item["writeAction"], "move");
+}
+
+#[tokio::test]
+async fn apply_media_rename_for_movies_updates_collection_and_media_file_paths() {
+    let mut ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    ctx.app.services.library_renamer = std::sync::Arc::new(FileSystemLibraryRenamer::new());
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+
+    let title = create_catalog_title(
+        &ctx,
+        "Movie Apply Sync (2024)",
+        MediaFacet::Movie,
+        vec![ExternalId {
+            source: "tvdb".to_string(),
+            value: "94002".to_string(),
+        }],
+        vec![],
+        true,
+    )
+    .await;
+
+    let movie_dir = media_root.path().join("Movie Apply Sync (2024)");
+    std::fs::create_dir_all(&movie_dir).expect("create movie dir");
+    let source_path = movie_dir.join("Movie.Apply.Sync.2024.1080p.WEB-DL.mkv");
+    std::fs::write(&source_path, b"movie-apply-sync").expect("write movie file");
+
+    let collection = ctx
+        .db
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Movie,
+            collection_index: "1".to_string(),
+            label: Some("1080p".to_string()),
+            ordered_path: Some(source_path.to_string_lossy().to_string()),
+            narrative_order: None,
+            first_episode_number: None,
+            last_episode_number: None,
+            interstitial_movie: None,
+            specials_movies: vec![],
+            interstitial_season_episode: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create movie collection");
+    let file_id = ctx
+        .db
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: source_path.to_string_lossy().to_string(),
+            size_bytes: 8192,
+            quality_label: Some("1080p".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("insert movie media file");
+
+    let actor = ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("default user");
+    let preview = ctx
+        .app
+        .preview_rename_for_title(&actor, &title.id, MediaFacet::Movie)
+        .await
+        .expect("preview rename plan");
+    assert_eq!(preview.renamable, 1);
+    assert_eq!(
+        preview.items[0].media_file_id.as_deref(),
+        Some(file_id.as_str())
+    );
+
+    let result = ctx
+        .app
+        .apply_rename_for_title(&actor, &title.id, MediaFacet::Movie, &preview.fingerprint)
+        .await
+        .expect("apply rename");
+    assert_eq!(result.applied, 1);
+    assert_eq!(result.failed, 0);
+
+    let expected_path = movie_dir
+        .join("Movie Apply Sync (2024) - 1080p.mkv")
+        .to_string_lossy()
+        .to_string();
+    let updated_collection = ctx
+        .db
+        .get_collection_by_id(&collection.id)
+        .await
+        .expect("load movie collection")
+        .expect("movie collection");
+    let updated_file = ctx
+        .db
+        .get_media_file_by_id(&file_id)
+        .await
+        .expect("load movie media file")
+        .expect("movie media file");
+
+    assert_eq!(
+        updated_collection.ordered_path.as_deref(),
+        Some(expected_path.as_str())
+    );
+    assert_eq!(updated_file.file_path, expected_path);
+}
+
+#[tokio::test]
+async fn graphql_media_rename_preview_for_anime_tracked_destination_returns_error_not_replace() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    set_rename_collision_policy(&ctx, "anime", "replace_if_better").await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+
+    let title = create_catalog_title(
+        &ctx,
+        "Tracked Collision Anime",
+        MediaFacet::Anime,
+        vec![ExternalId {
+            source: "tvdb".to_string(),
+            value: "95001".to_string(),
+        }],
+        vec![],
+        true,
+    )
+    .await;
+
+    let collection = ctx
+        .db
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Season,
+            collection_index: "1".to_string(),
+            label: Some("Season 1".to_string()),
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: Some("3".to_string()),
+            last_episode_number: Some("3".to_string()),
+            interstitial_movie: None,
+            specials_movies: vec![],
+            interstitial_season_episode: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create season collection");
+
+    let episode = ctx
+        .db
+        .create_episode(Episode {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_id: Some(collection.id.clone()),
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some("3".to_string()),
+            season_number: Some("1".to_string()),
+            episode_label: Some("S01E03".to_string()),
+            title: Some("Arrival".to_string()),
+            air_date: None,
+            duration_seconds: Some(1440),
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: Some("12".to_string()),
+            overview: None,
+            tvdb_id: Some("9500103".to_string()),
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create episode");
+
+    let season_dir = media_root
+        .path()
+        .join("Tracked Collision Anime")
+        .join("Season 01");
+    std::fs::create_dir_all(&season_dir).expect("create season dir");
+    let source_path = season_dir.join("[SubsPlease] Tracked Collision Anime - 03 (1080p).mkv");
+    std::fs::write(&source_path, b"tracked-collision-source").expect("write source file");
+    let destination_path = season_dir.join("Tracked Collision Anime - S01E03 (012) - 1080p.mkv");
+
+    let file_id = ctx
+        .db
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: source_path.to_string_lossy().to_string(),
+            size_bytes: 2048,
+            quality_label: Some("1080p".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("insert source media file");
+    ctx.db
+        .link_file_to_episode(&file_id, &episode.id)
+        .await
+        .expect("link file to episode");
+
+    let owning_title = create_catalog_title(
+        &ctx,
+        "Tracked Collision Owner",
+        MediaFacet::Anime,
+        vec![ExternalId {
+            source: "tvdb".to_string(),
+            value: "95002".to_string(),
+        }],
+        vec![],
+        true,
+    )
+    .await;
+    ctx.db
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: owning_title.id,
+            file_path: destination_path.to_string_lossy().to_string(),
+            size_bytes: 4096,
+            quality_label: Some("1080p".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("insert tracked destination");
+
+    let body = gql(
+        &ctx,
+        r#"
+        query($input: MediaRenamePreviewInput!) {
+          mediaRenamePreview(input: $input) {
+            total
+            renamable
+            conflicts
+            errors
+            items {
+              writeAction
+              reasonCode
+            }
+          }
+        }
+        "#,
+        json!({
+            "input": {
+                "facet": "anime",
+                "titleId": title.id,
+                "dryRun": true
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&body);
+
+    let plan = &body["data"]["mediaRenamePreview"];
+    assert_eq!(plan["total"].as_i64(), Some(1));
+    assert_eq!(plan["renamable"].as_i64(), Some(0));
+    assert_eq!(plan["conflicts"].as_i64(), Some(1));
+    assert_eq!(plan["errors"].as_i64(), Some(1));
+    assert_eq!(plan["items"][0]["writeAction"], "error");
+    assert_eq!(plan["items"][0]["reasonCode"], "collision_existing_tracked");
+    assert!(
+        plan["items"]
+            .as_array()
+            .expect("items array")
+            .iter()
+            .all(|item| item["writeAction"] != "replace")
+    );
+}
+
+#[tokio::test]
+async fn graphql_media_rename_preview_for_movies_tracked_destination_returns_error_not_replace() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    set_rename_collision_policy(&ctx, "movie", "replace_if_better").await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+
+    let title = create_catalog_title(
+        &ctx,
+        "Tracked Collision Movie (2024)",
+        MediaFacet::Movie,
+        vec![ExternalId {
+            source: "tvdb".to_string(),
+            value: "96001".to_string(),
+        }],
+        vec![],
+        true,
+    )
+    .await;
+
+    let movie_dir = media_root.path().join("Tracked Collision Movie (2024)");
+    std::fs::create_dir_all(&movie_dir).expect("create movie dir");
+    let source_path = movie_dir.join("Tracked.Collision.Movie.2024.1080p.WEB-DL.mkv");
+    std::fs::write(&source_path, b"tracked-movie-source").expect("write movie source");
+    let destination_path = movie_dir.join("Tracked Collision Movie (2024) - 1080p.mkv");
+
+    ctx.db
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Movie,
+            collection_index: "1".to_string(),
+            label: Some("1080p".to_string()),
+            ordered_path: Some(source_path.to_string_lossy().to_string()),
+            narrative_order: None,
+            first_episode_number: None,
+            last_episode_number: None,
+            interstitial_movie: None,
+            specials_movies: vec![],
+            interstitial_season_episode: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create movie collection");
+
+    let owning_title = create_catalog_title(
+        &ctx,
+        "Tracked Collision Owner Movie (2024)",
+        MediaFacet::Movie,
+        vec![ExternalId {
+            source: "tvdb".to_string(),
+            value: "96002".to_string(),
+        }],
+        vec![],
+        true,
+    )
+    .await;
+    ctx.db
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: owning_title.id,
+            collection_type: scryer_domain::CollectionType::Movie,
+            collection_index: "1".to_string(),
+            label: Some("1080p".to_string()),
+            ordered_path: Some(destination_path.to_string_lossy().to_string()),
+            narrative_order: None,
+            first_episode_number: None,
+            last_episode_number: None,
+            interstitial_movie: None,
+            specials_movies: vec![],
+            interstitial_season_episode: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create tracked destination collection");
+
+    let body = gql(
+        &ctx,
+        r#"
+        query($input: MediaRenamePreviewInput!) {
+          mediaRenamePreview(input: $input) {
+            total
+            renamable
+            conflicts
+            errors
+            items {
+              writeAction
+              reasonCode
+            }
+          }
+        }
+        "#,
+        json!({
+            "input": {
+                "facet": "movie",
+                "titleId": title.id,
+                "dryRun": true
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&body);
+
+    let plan = &body["data"]["mediaRenamePreview"];
+    assert_eq!(plan["total"].as_i64(), Some(1));
+    assert_eq!(plan["renamable"].as_i64(), Some(0));
+    assert_eq!(plan["conflicts"].as_i64(), Some(1));
+    assert_eq!(plan["errors"].as_i64(), Some(1));
+    assert_eq!(plan["items"][0]["writeAction"], "error");
+    assert_eq!(plan["items"][0]["reasonCode"], "collision_existing_tracked");
+    assert!(
+        plan["items"]
+            .as_array()
+            .expect("items array")
+            .iter()
+            .all(|item| item["writeAction"] != "replace")
+    );
+}
+
+#[tokio::test]
+async fn graphql_media_rename_preview_for_anime_multi_episode_file_uses_episode_range() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+
+    let title = create_catalog_title(
+        &ctx,
+        "Range Preview Show",
+        MediaFacet::Anime,
+        vec![ExternalId {
+            source: "tvdb".to_string(),
+            value: "97002".to_string(),
+        }],
+        vec![],
+        true,
+    )
+    .await;
+
+    let collection = ctx
+        .db
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Season,
+            collection_index: "1".to_string(),
+            label: Some("Season 1".to_string()),
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: Some("1".to_string()),
+            last_episode_number: Some("2".to_string()),
+            interstitial_movie: None,
+            specials_movies: vec![],
+            interstitial_season_episode: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create season collection");
+    let episode_one =
+        create_series_scan_episode(&ctx, &title, &collection, "1", "1", "S01E01").await;
+    let episode_two =
+        create_series_scan_episode(&ctx, &title, &collection, "1", "2", "S01E02").await;
+
+    let season_dir = media_root
+        .path()
+        .join("Range Preview Show")
+        .join("Season 01");
+    std::fs::create_dir_all(&season_dir).expect("create season dir");
+    let file_path = season_dir.join("Range.Preview.Show.S01E01-E02.1080p.mkv");
+    std::fs::write(&file_path, b"anime-range-preview").expect("write preview file");
+
+    let file_id = ctx
+        .db
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: file_path.to_string_lossy().to_string(),
+            size_bytes: 4096,
+            quality_label: Some("1080p".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("insert media file");
+    ctx.db
+        .link_file_to_episode(&file_id, &episode_one.id)
+        .await
+        .expect("link first episode");
+    ctx.db
+        .link_file_to_episode(&file_id, &episode_two.id)
+        .await
+        .expect("link second episode");
+
+    let body = gql(
+        &ctx,
+        r#"
+        query($input: MediaRenamePreviewInput!) {
+          mediaRenamePreview(input: $input) {
+            total
+            renamable
+            items {
+              mediaFileId
+              proposedPath
+              writeAction
+            }
+          }
+        }
+        "#,
+        json!({
+            "input": {
+                "facet": "anime",
+                "titleId": title.id,
+                "dryRun": true
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&body);
+
+    let plan = &body["data"]["mediaRenamePreview"];
+    assert_eq!(plan["total"].as_i64(), Some(1));
+    assert_eq!(plan["renamable"].as_i64(), Some(1));
+    assert_eq!(plan["items"][0]["mediaFileId"], json!(file_id));
+    assert_eq!(plan["items"][0]["writeAction"], "move");
+    assert_eq!(
+        plan["items"][0]["proposedPath"],
+        json!(
+            season_dir
+                .join("Range Preview Show - S01E01-02 (01-02) - 1080p.mkv")
+                .to_string_lossy()
+                .to_string()
+        )
+    );
+}
+
+#[tokio::test]
+async fn graphql_media_rename_preview_for_untracked_existing_target_does_not_emit_replace() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    set_rename_collision_policy(&ctx, "movie", "replace_if_better").await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+
+    let title = create_catalog_title(
+        &ctx,
+        "Untracked Collision Movie (2024)",
+        MediaFacet::Movie,
+        vec![ExternalId {
+            source: "tvdb".to_string(),
+            value: "97001".to_string(),
+        }],
+        vec![],
+        true,
+    )
+    .await;
+
+    let movie_dir = media_root.path().join("Untracked Collision Movie (2024)");
+    std::fs::create_dir_all(&movie_dir).expect("create movie dir");
+    let source_path = movie_dir.join("Untracked.Collision.Movie.2024.1080p.WEB-DL.mkv");
+    std::fs::write(&source_path, b"untracked-movie-source").expect("write movie source");
+    let destination_path = movie_dir.join("Untracked Collision Movie (2024) - 1080p.mkv");
+    std::fs::write(&destination_path, b"untracked-movie-destination")
+        .expect("write untracked destination");
+
+    ctx.db
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Movie,
+            collection_index: "1".to_string(),
+            label: Some("1080p".to_string()),
+            ordered_path: Some(source_path.to_string_lossy().to_string()),
+            narrative_order: None,
+            first_episode_number: None,
+            last_episode_number: None,
+            interstitial_movie: None,
+            specials_movies: vec![],
+            interstitial_season_episode: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create movie collection");
+
+    let body = gql(
+        &ctx,
+        r#"
+        query($input: MediaRenamePreviewInput!) {
+          mediaRenamePreview(input: $input) {
+            total
+            renamable
+            conflicts
+            errors
+            items {
+              writeAction
+              reasonCode
+            }
+          }
+        }
+        "#,
+        json!({
+            "input": {
+                "facet": "movie",
+                "titleId": title.id,
+                "dryRun": true
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&body);
+
+    let plan = &body["data"]["mediaRenamePreview"];
+    assert_eq!(plan["total"].as_i64(), Some(1));
+    assert_eq!(plan["renamable"].as_i64(), Some(0));
+    assert_eq!(plan["conflicts"].as_i64(), Some(1));
+    assert_eq!(plan["errors"].as_i64(), Some(1));
+    assert_eq!(plan["items"][0]["writeAction"], "error");
+    assert_eq!(plan["items"][0]["reasonCode"], "collision_existing");
+    assert!(
+        plan["items"]
+            .as_array()
+            .expect("items array")
+            .iter()
+            .all(|item| item["writeAction"] != "replace")
+    );
+}
+
+#[tokio::test]
+async fn apply_media_rename_for_anime_rolls_back_when_media_file_update_fails() {
+    let mut ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    ctx.app.services.library_renamer = std::sync::Arc::new(FileSystemLibraryRenamer::new());
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+
+    let title = create_catalog_title(
+        &ctx,
+        "Anime Media Rollback",
+        MediaFacet::Anime,
+        vec![ExternalId {
+            source: "tvdb".to_string(),
+            value: "98001".to_string(),
+        }],
+        vec![],
+        true,
+    )
+    .await;
+
+    let collection = ctx
+        .db
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Season,
+            collection_index: "1".to_string(),
+            label: Some("Season 1".to_string()),
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: Some("1".to_string()),
+            last_episode_number: Some("1".to_string()),
+            interstitial_movie: None,
+            specials_movies: vec![],
+            interstitial_season_episode: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create season collection");
+
+    let episode = ctx
+        .db
+        .create_episode(Episode {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_id: Some(collection.id.clone()),
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some("1".to_string()),
+            season_number: Some("1".to_string()),
+            episode_label: Some("S01E01".to_string()),
+            title: Some("Pilot".to_string()),
+            air_date: None,
+            duration_seconds: Some(1440),
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: Some("1".to_string()),
+            overview: None,
+            tvdb_id: Some("9800101".to_string()),
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create episode");
+
+    let season_dir = media_root
+        .path()
+        .join("Anime Media Rollback")
+        .join("Season 01");
+    std::fs::create_dir_all(&season_dir).expect("create season dir");
+    let source_path = season_dir.join("Anime.Media.Rollback.Episode.One.1080p.mkv");
+    std::fs::write(&source_path, b"anime-media-rollback").expect("write source file");
+
+    let file_id = ctx
+        .db
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: source_path.to_string_lossy().to_string(),
+            size_bytes: 1024,
+            quality_label: Some("1080p".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("insert media file");
+    ctx.db
+        .link_file_to_episode(&file_id, &episode.id)
+        .await
+        .expect("link file to episode");
+
+    ctx.app.services.media_files = std::sync::Arc::new(FailingMediaFileRepo {
+        inner: ctx.db.clone(),
+        fail_file_id: file_id.clone(),
+    });
+
+    let actor = ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("default user");
+    let preview = ctx
+        .app
+        .preview_rename_for_title(&actor, &title.id, MediaFacet::Anime)
+        .await
+        .expect("preview rename plan");
+    assert_eq!(preview.renamable, 1);
+    assert!(
+        preview
+            .items
+            .iter()
+            .all(|item| item.write_action != scryer_application::RenameWriteAction::Replace)
+    );
+
+    let result = ctx
+        .app
+        .apply_rename_for_title(&actor, &title.id, MediaFacet::Anime, &preview.fingerprint)
+        .await
+        .expect("apply rename");
+    assert_eq!(result.applied, 0);
+    assert_eq!(result.failed, 1);
+    assert!(
+        result
+            .items
+            .iter()
+            .all(|item| item.write_action != scryer_application::RenameWriteAction::Replace)
+    );
+
+    let expected_path = season_dir
+        .join("Anime Media Rollback - S01E01 (001) - 1080p.mkv")
+        .to_string_lossy()
+        .to_string();
+    let item = &result.items[0];
+    assert_eq!(item.status.as_str(), "failed");
+    assert_eq!(item.reason_code, "db_update_failed");
+    assert_eq!(
+        item.final_path.as_deref(),
+        Some(source_path.to_string_lossy().as_ref())
+    );
+    assert!(
+        item.error_message
+            .as_deref()
+            .is_some_and(|message| message.contains("rollback succeeded"))
+    );
+
+    let stored = ctx
+        .db
+        .get_media_file_by_id(&file_id)
+        .await
+        .expect("load media file")
+        .expect("media file present");
+    assert_eq!(stored.file_path, source_path.to_string_lossy().to_string());
+    assert!(source_path.exists());
+    assert!(!std::path::Path::new(&expected_path).exists());
+}
+
+#[tokio::test]
+async fn apply_media_rename_for_anime_interstitial_rolls_back_when_collection_update_fails() {
+    let mut ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    ctx.app.services.library_renamer = std::sync::Arc::new(FileSystemLibraryRenamer::new());
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+
+    let title = create_catalog_title(
+        &ctx,
+        "Anime Interstitial Rollback",
+        MediaFacet::Anime,
+        vec![ExternalId {
+            source: "tvdb".to_string(),
+            value: "99001".to_string(),
+        }],
+        vec![],
+        true,
+    )
+    .await;
+
+    let season_zero_dir = media_root
+        .path()
+        .join("Anime Interstitial Rollback")
+        .join("Season 00");
+    std::fs::create_dir_all(&season_zero_dir).expect("create season zero dir");
+    let source_path = season_zero_dir.join("Anime.Interstitial.Rollback.Movie.Special.1080p.mkv");
+    std::fs::write(&source_path, b"anime-interstitial-rollback").expect("write source file");
+    let expected_path = season_zero_dir
+        .join("Anime Interstitial Rollback - S00E03 (3) - 1080p.mkv")
+        .to_string_lossy()
+        .to_string();
+
+    let interstitial = ctx
+        .db
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Interstitial,
+            collection_index: "0".to_string(),
+            label: Some("Movie".to_string()),
+            ordered_path: Some(source_path.to_string_lossy().to_string()),
+            narrative_order: None,
+            first_episode_number: None,
+            last_episode_number: None,
+            interstitial_movie: Some(scryer_domain::InterstitialMovieMetadata {
+                tvdb_id: "9900103".to_string(),
+                name: "Rollback Movie".to_string(),
+                slug: "rollback-movie".to_string(),
+                year: Some(2024),
+                content_status: "released".to_string(),
+                overview: "Rollback special".to_string(),
+                poster_url: "https://example.com/rollback-movie.jpg".to_string(),
+                language: "eng".to_string(),
+                runtime_minutes: 88,
+                sort_title: "Rollback Movie".to_string(),
+                imdb_id: "tt9900103".to_string(),
+                genres: vec!["Adventure".to_string()],
+                studio: "Scryer Films".to_string(),
+                digital_release_date: Some("2024-01-01".to_string()),
+                association_confidence: None,
+                continuity_status: None,
+                movie_form: None,
+                confidence: None,
+                signal_summary: None,
+                placement: None,
+                movie_tmdb_id: None,
+                movie_mal_id: None,
+                movie_anidb_id: None,
+            }),
+            specials_movies: vec![],
+            interstitial_season_episode: Some("S00E03".to_string()),
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create interstitial collection");
+
+    let file_id = ctx
+        .db
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: source_path.to_string_lossy().to_string(),
+            size_bytes: 2048,
+            quality_label: Some("1080p".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("insert interstitial media file");
+
+    ctx.app.services.shows = std::sync::Arc::new(FailingShowRepo {
+        inner: ctx.db.clone(),
+        fail_collection_id: interstitial.id.clone(),
+        fail_path: expected_path.clone(),
+    });
+
+    let actor = ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("default user");
+    let preview = ctx
+        .app
+        .preview_rename_for_title(&actor, &title.id, MediaFacet::Anime)
+        .await
+        .expect("preview rename plan");
+    assert_eq!(preview.renamable, 1);
+    assert!(
+        preview
+            .items
+            .iter()
+            .all(|item| item.write_action != scryer_application::RenameWriteAction::Replace)
+    );
+
+    let result = ctx
+        .app
+        .apply_rename_for_title(&actor, &title.id, MediaFacet::Anime, &preview.fingerprint)
+        .await
+        .expect("apply rename");
+    assert_eq!(result.applied, 0);
+    assert_eq!(result.failed, 1);
+
+    let item = &result.items[0];
+    assert_eq!(item.status.as_str(), "failed");
+    assert_eq!(item.reason_code, "db_update_failed");
+    assert_eq!(
+        item.final_path.as_deref(),
+        Some(source_path.to_string_lossy().as_ref())
+    );
+    assert!(
+        item.error_message
+            .as_deref()
+            .is_some_and(|message| message.contains("rollback succeeded"))
+    );
+
+    let stored_file = ctx
+        .db
+        .get_media_file_by_id(&file_id)
+        .await
+        .expect("load interstitial media file")
+        .expect("interstitial media file");
+    let stored_collection = ctx
+        .db
+        .get_collection_by_id(&interstitial.id)
+        .await
+        .expect("load interstitial collection")
+        .expect("interstitial collection");
+    assert_eq!(
+        stored_file.file_path,
+        source_path.to_string_lossy().to_string()
+    );
+    assert_eq!(
+        stored_collection.ordered_path,
+        Some(source_path.to_string_lossy().to_string())
+    );
+    assert!(source_path.exists());
+    assert!(!std::path::Path::new(&expected_path).exists());
 }
 
 // ---------------------------------------------------------------------------
@@ -2860,6 +4852,117 @@ async fn graphql_titles_are_sorted_by_display_name() {
 }
 
 #[tokio::test]
+async fn graphql_titles_expose_episode_progress_excluding_specials() {
+    let ctx = TestContext::new().await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+
+    let title = create_catalog_title(
+        &ctx,
+        "Episode Progress Show",
+        MediaFacet::Series,
+        vec![],
+        vec![],
+        false,
+    )
+    .await;
+
+    let season_collection = ctx
+        .db
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Season,
+            collection_index: "1".to_string(),
+            label: Some("Season 1".to_string()),
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: Some("1".to_string()),
+            last_episode_number: Some("3".to_string()),
+            interstitial_movie: None,
+            specials_movies: vec![],
+            interstitial_season_episode: None,
+            monitored: false,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create season collection");
+
+    let specials_collection = ctx
+        .db
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Specials,
+            collection_index: "0".to_string(),
+            label: Some("Specials".to_string()),
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: None,
+            last_episode_number: None,
+            interstitial_movie: None,
+            specials_movies: vec![],
+            interstitial_season_episode: None,
+            monitored: false,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create specials collection");
+
+    let regular_episode_1 =
+        create_series_scan_episode(&ctx, &title, &season_collection, "1", "1", "S01E01").await;
+    let regular_episode_2 =
+        create_series_scan_episode(&ctx, &title, &season_collection, "1", "2", "S01E02").await;
+    let _regular_episode_3 =
+        create_series_scan_episode(&ctx, &title, &season_collection, "1", "3", "S01E03").await;
+    let special_episode_1 =
+        create_series_scan_episode(&ctx, &title, &specials_collection, "0", "1", "S00E01").await;
+    let _special_episode_2 =
+        create_series_scan_episode(&ctx, &title, &specials_collection, "0", "2", "S00E02").await;
+
+    for (index, episode) in [regular_episode_1, regular_episode_2, special_episode_1]
+        .into_iter()
+        .enumerate()
+    {
+        let file_path = media_root
+            .path()
+            .join(format!("Episode.Progress.Show.file-{index}.mkv"));
+        let file_id = ctx
+            .db
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: file_path.to_string_lossy().to_string(),
+                size_bytes: 4_096 + index as i64,
+                quality_label: Some("1080p".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("insert media file");
+        ctx.db
+            .link_file_to_episode(&file_id, &episode.id)
+            .await
+            .expect("link file to episode");
+    }
+
+    let body = gql(
+        &ctx,
+        r#"query($facet: MediaFacetValue) { titles(facet: $facet) { id name episodesOwned episodesTotal } }"#,
+        json!({ "facet": "tv" }),
+    )
+    .await;
+    assert_no_errors(&body);
+
+    let titles = body["data"]["titles"].as_array().expect("titles array");
+    let listed_title = titles
+        .iter()
+        .find(|item| item["id"] == title.id)
+        .expect("series title should be listed");
+
+    assert_eq!(listed_title["name"], "Episode Progress Show");
+    assert_eq!(listed_title["episodesOwned"], 2);
+    assert_eq!(listed_title["episodesTotal"], 3);
+}
+
+#[tokio::test]
 async fn graphql_get_title_by_id() {
     let ctx = TestContext::new().await;
     let id = add_test_title(&ctx, "Specific Movie", "movie").await;
@@ -2915,6 +5018,224 @@ async fn graphql_set_title_monitored() {
     )
     .await;
     assert_eq!(body["data"]["title"]["monitored"], false);
+}
+
+#[tokio::test]
+async fn graphql_update_collection_monitored_matches_set_collection_monitored_side_effects() {
+    let ctx = TestContext::new().await;
+    let (set_title, set_collection, set_episode) =
+        create_series_monitoring_fixture(&ctx, "Set Collection Flow", "61001").await;
+    let (update_title, update_collection, update_episode) =
+        create_series_monitoring_fixture(&ctx, "Update Collection Flow", "61002").await;
+
+    let set_enable = gql(
+        &ctx,
+        r#"mutation($input: SetCollectionMonitoredInput!) {
+            setCollectionMonitored(input: $input) { id monitored }
+        }"#,
+        json!({
+            "input": {
+                "collectionId": set_collection.id,
+                "monitored": true
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&set_enable);
+
+    let update_enable = gql(
+        &ctx,
+        r#"mutation($input: UpdateCollectionInput!) {
+            updateCollection(input: $input) { id monitored }
+        }"#,
+        json!({
+            "input": {
+                "collectionId": update_collection.id,
+                "monitored": true
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&update_enable);
+
+    let set_enabled_summary =
+        series_monitoring_summary(&ctx, &set_title.id, &set_collection.id, &set_episode.id).await;
+    let update_enabled_summary = series_monitoring_summary(
+        &ctx,
+        &update_title.id,
+        &update_collection.id,
+        &update_episode.id,
+    )
+    .await;
+    assert_eq!(set_enabled_summary, update_enabled_summary);
+    assert_eq!(
+        set_enabled_summary,
+        SeriesMonitoringSummary {
+            title_monitored: true,
+            collection_monitored: true,
+            episode_monitored: true,
+            wanted_count: 1,
+        }
+    );
+
+    let set_disable = gql(
+        &ctx,
+        r#"mutation($input: SetCollectionMonitoredInput!) {
+            setCollectionMonitored(input: $input) { id monitored }
+        }"#,
+        json!({
+            "input": {
+                "collectionId": set_collection.id,
+                "monitored": false
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&set_disable);
+
+    let update_disable = gql(
+        &ctx,
+        r#"mutation($input: UpdateCollectionInput!) {
+            updateCollection(input: $input) { id monitored }
+        }"#,
+        json!({
+            "input": {
+                "collectionId": update_collection.id,
+                "monitored": false
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&update_disable);
+
+    let set_disabled_summary =
+        series_monitoring_summary(&ctx, &set_title.id, &set_collection.id, &set_episode.id).await;
+    let update_disabled_summary = series_monitoring_summary(
+        &ctx,
+        &update_title.id,
+        &update_collection.id,
+        &update_episode.id,
+    )
+    .await;
+    assert_eq!(set_disabled_summary, update_disabled_summary);
+    assert_eq!(
+        set_disabled_summary,
+        SeriesMonitoringSummary {
+            title_monitored: true,
+            collection_monitored: false,
+            episode_monitored: false,
+            wanted_count: 0,
+        }
+    );
+}
+
+#[tokio::test]
+async fn graphql_update_episode_monitored_matches_set_episode_monitored_side_effects() {
+    let ctx = TestContext::new().await;
+    let (set_title, set_collection, set_episode) =
+        create_series_monitoring_fixture(&ctx, "Set Episode Flow", "62001").await;
+    let (update_title, update_collection, update_episode) =
+        create_series_monitoring_fixture(&ctx, "Update Episode Flow", "62002").await;
+
+    let set_enable = gql(
+        &ctx,
+        r#"mutation($input: SetEpisodeMonitoredInput!) {
+            setEpisodeMonitored(input: $input) { id monitored }
+        }"#,
+        json!({
+            "input": {
+                "episodeId": set_episode.id,
+                "monitored": true
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&set_enable);
+
+    let update_enable = gql(
+        &ctx,
+        r#"mutation($input: UpdateEpisodeInput!) {
+            updateEpisode(input: $input) { id monitored }
+        }"#,
+        json!({
+            "input": {
+                "episodeId": update_episode.id,
+                "monitored": true
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&update_enable);
+
+    let set_enabled_summary =
+        series_monitoring_summary(&ctx, &set_title.id, &set_collection.id, &set_episode.id).await;
+    let update_enabled_summary = series_monitoring_summary(
+        &ctx,
+        &update_title.id,
+        &update_collection.id,
+        &update_episode.id,
+    )
+    .await;
+    assert_eq!(set_enabled_summary, update_enabled_summary);
+    assert_eq!(
+        set_enabled_summary,
+        SeriesMonitoringSummary {
+            title_monitored: true,
+            collection_monitored: true,
+            episode_monitored: true,
+            wanted_count: 1,
+        }
+    );
+
+    let set_disable = gql(
+        &ctx,
+        r#"mutation($input: SetEpisodeMonitoredInput!) {
+            setEpisodeMonitored(input: $input) { id monitored }
+        }"#,
+        json!({
+            "input": {
+                "episodeId": set_episode.id,
+                "monitored": false
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&set_disable);
+
+    let update_disable = gql(
+        &ctx,
+        r#"mutation($input: UpdateEpisodeInput!) {
+            updateEpisode(input: $input) { id monitored }
+        }"#,
+        json!({
+            "input": {
+                "episodeId": update_episode.id,
+                "monitored": false
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&update_disable);
+
+    let set_disabled_summary =
+        series_monitoring_summary(&ctx, &set_title.id, &set_collection.id, &set_episode.id).await;
+    let update_disabled_summary = series_monitoring_summary(
+        &ctx,
+        &update_title.id,
+        &update_collection.id,
+        &update_episode.id,
+    )
+    .await;
+    assert_eq!(set_disabled_summary, update_disabled_summary);
+    assert_eq!(
+        set_disabled_summary,
+        SeriesMonitoringSummary {
+            title_monitored: true,
+            collection_monitored: true,
+            episode_monitored: false,
+            wanted_count: 0,
+        }
+    );
 }
 
 #[tokio::test]
@@ -3363,6 +5684,15 @@ async fn library_series_scan_hydrates_without_creating_wanted_for_unmonitored_ti
     tokio::spawn(async move {
         scryer_application::start_background_hydration_loop(hydration_app, hydration_token).await;
     });
+    let post_hydration_scan_token = token.clone();
+    let post_hydration_scan_app = ctx.app.clone();
+    tokio::spawn(async move {
+        scryer_application::start_background_post_hydration_title_scan_workers(
+            post_hydration_scan_app,
+            post_hydration_scan_token,
+        )
+        .await;
+    });
 
     let media_root = tempfile::tempdir().expect("media root tempdir");
     let show_dir = media_root.path().join("Test Show Name");
@@ -3501,6 +5831,15 @@ async fn library_anime_scan_hydrates_and_relinks_files_from_discovered_folder_pa
     tokio::spawn(async move {
         scryer_application::start_background_hydration_loop(hydration_app, hydration_token).await;
     });
+    let post_hydration_scan_token = token.clone();
+    let post_hydration_scan_app = ctx.app.clone();
+    tokio::spawn(async move {
+        scryer_application::start_background_post_hydration_title_scan_workers(
+            post_hydration_scan_app,
+            post_hydration_scan_token,
+        )
+        .await;
+    });
 
     let media_root = tempfile::tempdir().expect("media root tempdir");
     let show_dir = media_root.path().join("Anime Scan [SubsPlease]");
@@ -3535,6 +5874,17 @@ async fn library_anime_scan_hydrates_and_relinks_files_from_discovered_folder_pa
     )
     .await;
     assert_no_errors(&update);
+
+    let token = tokio_util::sync::CancellationToken::new();
+    let post_hydration_scan_token = token.clone();
+    let post_hydration_scan_app = ctx.app.clone();
+    tokio::spawn(async move {
+        scryer_application::start_background_post_hydration_title_scan_workers(
+            post_hydration_scan_app,
+            post_hydration_scan_token,
+        )
+        .await;
+    });
 
     let admin = ctx.app.find_or_create_default_user().await.unwrap();
     let summary = ctx
@@ -3787,6 +6137,17 @@ async fn library_series_scan_relinks_existing_hydrated_titles_from_discovered_fo
     .await;
     assert_no_errors(&update);
 
+    let token = tokio_util::sync::CancellationToken::new();
+    let post_hydration_scan_token = token.clone();
+    let post_hydration_scan_app = ctx.app.clone();
+    tokio::spawn(async move {
+        scryer_application::start_background_post_hydration_title_scan_workers(
+            post_hydration_scan_app,
+            post_hydration_scan_token,
+        )
+        .await;
+    });
+
     let admin = ctx.app.find_or_create_default_user().await.unwrap();
     let summary = ctx
         .app
@@ -3798,7 +6159,7 @@ async fn library_series_scan_relinks_existing_hydrated_titles_from_discovered_fo
     assert_eq!(summary.skipped, 1);
 
     let mut linked_files = Vec::new();
-    for _ in 0..10 {
+    for _ in 0..100 {
         linked_files = ctx
             .db
             .list_media_files_for_title(&title.id)
@@ -3832,6 +6193,127 @@ async fn library_series_scan_relinks_existing_hydrated_titles_from_discovered_fo
         Some(episode.id.as_str())
     );
     assert_eq!(linked_files[0].scan_status, "scan_failed");
+}
+
+#[tokio::test]
+async fn library_series_scan_existing_unhydrated_title_without_episodes_completes_session() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+
+    let title = ctx
+        .db
+        .create(Title {
+            id: Id::new().0,
+            name: "Pending Series".to_string(),
+            facet: MediaFacet::Series,
+            monitored: false,
+            tags: vec![],
+            external_ids: vec![ExternalId {
+                source: "tvdb".to_string(),
+                value: "345679".to_string(),
+            }],
+            created_by: None,
+            created_at: Utc::now(),
+            year: Some(2024),
+            overview: Some("Pending hydration title".to_string()),
+            poster_url: None,
+            poster_source_url: None,
+            banner_url: None,
+            banner_source_url: None,
+            background_url: None,
+            background_source_url: None,
+            sort_title: Some("Pending Series".to_string()),
+            slug: Some("pending-series".to_string()),
+            imdb_id: None,
+            runtime_minutes: None,
+            genres: vec![],
+            content_status: None,
+            language: None,
+            first_aired: None,
+            network: None,
+            studio: None,
+            country: None,
+            aliases: vec![],
+            tagged_aliases: vec![],
+            metadata_language: Some("eng".to_string()),
+            metadata_fetched_at: None,
+            min_availability: None,
+            digital_release_date: None,
+            folder_path: None,
+        })
+        .await
+        .expect("create pending title");
+
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let show_dir = media_root.path().join("Pending Series [WEB-DL]");
+    let season_dir = show_dir.join("Season 01");
+    std::fs::create_dir_all(&season_dir).expect("create season dir");
+    std::fs::write(
+        show_dir.join("tvshow.nfo"),
+        r#"<tvshow><title>Pending Series</title><tvdbid>345679</tvdbid></tvshow>"#,
+    )
+    .expect("write tvshow.nfo");
+    let file_path = season_dir.join("Pending.Series.S01E01.1080p.WEB-DL.mkv");
+    std::fs::write(&file_path, b"not-a-real-video").expect("write fake video");
+
+    let update = gql(
+        &ctx,
+        r#"
+        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
+          updateLibraryPaths(input: $input) {
+            moviePath
+            seriesPath
+            animePath
+          }
+        }
+        "#,
+        json!({
+          "input": {
+            "moviePath": "/tmp/movies-unused",
+            "seriesPath": media_root.path().display().to_string(),
+            "animePath": "/tmp/anime-unused"
+          }
+        }),
+    )
+    .await;
+    assert_no_errors(&update);
+
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let summary = ctx
+        .app
+        .scan_library(&admin, MediaFacet::Series)
+        .await
+        .expect("scan series library");
+    assert_eq!(summary.scanned, 1);
+    assert_eq!(summary.imported, 0);
+    assert_eq!(summary.skipped, 1);
+
+    let refreshed_title = ctx
+        .db
+        .get_by_id(&title.id)
+        .await
+        .expect("load title")
+        .expect("title exists");
+    assert_eq!(
+        refreshed_title.folder_path.as_deref(),
+        Some(show_dir.to_string_lossy().as_ref())
+    );
+    assert!(
+        ctx.app
+            .services
+            .library_scan_tracker
+            .list_active()
+            .await
+            .is_empty(),
+        "scan session should complete when an existing unhydrated title is skipped",
+    );
+    assert!(
+        ctx.db
+            .list_media_files_for_title(&title.id)
+            .await
+            .expect("list media files")
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -4000,6 +6482,15 @@ async fn library_movie_scan_creates_unmonitored_title_and_collection() {
     let hydration_app = ctx.app.clone();
     tokio::spawn(async move {
         scryer_application::start_background_hydration_loop(hydration_app, hydration_token).await;
+    });
+    let post_hydration_scan_token = token.clone();
+    let post_hydration_scan_app = ctx.app.clone();
+    tokio::spawn(async move {
+        scryer_application::start_background_post_hydration_title_scan_workers(
+            post_hydration_scan_app,
+            post_hydration_scan_token,
+        )
+        .await;
     });
 
     let media_root = tempfile::tempdir().expect("media root tempdir");
@@ -4839,6 +7330,18 @@ async fn graphql_fix_title_match_movie_updates_identity_and_history() {
     assert_eq!(data_value["old_tvdb_id"], "999");
     assert_eq!(data_value["new_tvdb_id"], "123456");
     assert_eq!(data_value["source"], "manual");
+
+    let activity_kinds = activity_kinds_for_title(&ctx, &title.id).await;
+    assert!(
+        activity_kinds
+            .iter()
+            .any(|kind| kind == "metadata_hydration_started")
+    );
+    assert!(
+        activity_kinds
+            .iter()
+            .any(|kind| kind == "metadata_hydration_completed")
+    );
 }
 
 #[tokio::test]
@@ -5065,6 +7568,18 @@ async fn graphql_fix_title_match_series_rebuilds_and_relinks_library() {
     let data_value: Value = serde_json::from_str(data_json).expect("parse rematch data");
     assert_eq!(data_value["old_tvdb_id"], "999");
     assert_eq!(data_value["new_tvdb_id"], "345678");
+
+    let activity_kinds = activity_kinds_for_title(&ctx, &title.id).await;
+    assert!(
+        activity_kinds
+            .iter()
+            .any(|kind| kind == "metadata_hydration_started")
+    );
+    assert!(
+        activity_kinds
+            .iter()
+            .any(|kind| kind == "metadata_hydration_completed")
+    );
 }
 
 #[tokio::test]

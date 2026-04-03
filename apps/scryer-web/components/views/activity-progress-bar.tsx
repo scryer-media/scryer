@@ -6,20 +6,25 @@ export function ActivityProgressBar({
   remainingLabel,
   colorClass,
   compact = false,
+  indeterminate = false,
 }: {
   percent: number;
   remainingLabel: string | null;
   colorClass: string;
   compact?: boolean;
+  indeterminate?: boolean;
 }) {
   return (
     <div>
       <div className="mb-1 flex items-center justify-between text-xs">
-        <p className="font-semibold tabular-nums text-foreground">{percent}%</p>
+        <p className="font-semibold tabular-nums text-foreground">
+          {indeterminate ? "\u2014" : `${percent}%`}
+        </p>
         <p className="text-muted-foreground">{remainingLabel ?? "\u2014"}</p>
       </div>
       <Progress
         value={percent}
+        indeterminate={indeterminate}
         className={cn("h-2.5 bg-muted/90", compact && "h-1.5")}
         indicatorClassName={colorClass}
       />

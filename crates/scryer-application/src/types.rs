@@ -600,6 +600,14 @@ pub struct TitleMediaSizeSummary {
     pub total_size_bytes: i64,
 }
 
+/// Aggregated owned-vs-total episode counts per title, excluding specials.
+#[derive(Clone, Debug)]
+pub struct TitleEpisodeProgressSummary {
+    pub title_id: String,
+    pub owned_episodes: i64,
+    pub total_episodes: i64,
+}
+
 #[derive(Clone, Debug)]
 pub struct DiskSpaceInfo {
     pub path: String,

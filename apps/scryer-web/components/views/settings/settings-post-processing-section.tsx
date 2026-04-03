@@ -673,7 +673,7 @@ function EnvVarsReference() {
 {`{
   "event": "post_import",
   "facet": "tv",
-  "file_path": "/media/series/...",
+  "file_path": "/data/series/...",
   "title": {
     "id": "...",
     "name": "...",

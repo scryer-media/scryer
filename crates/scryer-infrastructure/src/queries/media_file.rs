@@ -1,7 +1,7 @@
 use chrono::Utc;
 use scryer_application::{
-    AppError, AppResult, InsertMediaFileInput, MediaFileAnalysis, TitleMediaFile,
-    TitleMediaSizeSummary,
+    AppError, AppResult, InsertMediaFileInput, MediaFileAnalysis, TitleEpisodeProgressSummary,
+    TitleMediaFile, TitleMediaSizeSummary,
 };
 use scryer_domain::Id;
 use sqlx::sqlite::SqliteRow;
@@ -173,6 +173,55 @@ pub(crate) async fn list_title_media_size_summaries_query(
                 .map_err(|err| AppError::Repository(err.to_string()))?,
             total_size_bytes: row
                 .try_get("total_size_bytes")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+        });
+    }
+
+    Ok(out)
+}
+
+pub(crate) async fn list_title_episode_progress_summaries_query(
+    pool: &SqlitePool,
+    title_ids: &[String],
+) -> AppResult<Vec<TitleEpisodeProgressSummary>> {
+    if title_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let placeholders = title_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT e.title_id,
+                COUNT(DISTINCT e.id) AS total_episodes,
+                COUNT(DISTINCT CASE WHEN fem.file_id IS NOT NULL THEN e.id END) AS owned_episodes
+         FROM episodes e
+         INNER JOIN collections c ON c.id = e.collection_id
+         LEFT JOIN file_episode_map fem ON fem.episode_id = e.id
+         WHERE e.title_id IN ({placeholders})
+           AND c.collection_type <> 'specials'
+         GROUP BY e.title_id"
+    );
+
+    let mut query = sqlx::query(&sql);
+    for title_id in title_ids {
+        query = query.bind(title_id);
+    }
+
+    let rows = query
+        .fetch_all(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        out.push(TitleEpisodeProgressSummary {
+            title_id: row
+                .try_get("title_id")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+            owned_episodes: row
+                .try_get("owned_episodes")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+            total_episodes: row
+                .try_get("total_episodes")
                 .map_err(|err| AppError::Repository(err.to_string()))?,
         });
     }
@@ -409,6 +458,21 @@ pub(crate) async fn update_media_file_source_signature_query(
     Ok(())
 }
 
+pub(crate) async fn update_media_file_path_query(
+    pool: &SqlitePool,
+    file_id: &str,
+    file_path: &str,
+) -> AppResult<()> {
+    sqlx::query("UPDATE media_files SET file_path = ? WHERE id = ?")
+        .bind(file_path)
+        .bind(file_id)
+        .execute(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(())
+}
+
 pub(crate) async fn mark_scan_failed_query(
     pool: &SqlitePool,
     file_id: &str,
@@ -450,6 +514,43 @@ pub(crate) async fn get_media_file_by_id_query(
          WHERE mf.id = ?",
     )
     .bind(file_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    match row {
+        Some(ref r) => Ok(Some(row_to_title_media_file(r)?)),
+        None => Ok(None),
+    }
+}
+
+pub(crate) async fn get_media_file_by_path_query(
+    pool: &SqlitePool,
+    file_path: &str,
+) -> AppResult<Option<TitleMediaFile>> {
+    let row: Option<SqliteRow> = sqlx::query(
+        "SELECT mf.id, mf.title_id, NULL AS episode_id, mf.file_path,
+                mf.size_bytes, mf.source_signature_scheme, mf.source_signature_value,
+                mf.quality_id, mf.scan_status, mf.created_at,
+                mf.video_codec, mf.video_width, mf.video_height,
+                mf.video_bitrate_kbps, mf.video_bit_depth,
+                mf.video_hdr_format, mf.video_frame_rate, mf.video_profile,
+                mf.audio_codec, mf.audio_channels, mf.audio_bitrate_kbps,
+                mf.duration_seconds, mf.num_chapters, mf.container_format,
+                mf.audio_languages_json, mf.audio_streams_json,
+                mf.subtitle_languages_json,
+                mf.subtitle_codecs_json, mf.subtitle_streams_json,
+                mf.has_multiaudio,
+                mf.scene_name, mf.release_group, mf.source_type, mf.resolution,
+                mf.video_codec_parsed, mf.audio_codec_parsed,
+                mf.acquisition_score, mf.scoring_log,
+                mf.indexer_source, mf.grabbed_release_title, mf.grabbed_at,
+                mf.edition, mf.original_file_path, mf.release_hash
+         FROM media_files mf
+         WHERE mf.file_path = ?
+         LIMIT 1",
+    )
+    .bind(file_path)
     .fetch_optional(pool)
     .await
     .map_err(|err| AppError::Repository(err.to_string()))?;

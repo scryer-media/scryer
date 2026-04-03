@@ -414,6 +414,38 @@ pub(crate) async fn get_collection_by_id_query(
     }
 }
 
+pub(crate) async fn get_collection_by_ordered_path_query(
+    pool: &SqlitePool,
+    ordered_path: &str,
+) -> AppResult<Option<Collection>> {
+    let row = sqlx::query(
+        "SELECT id, title_id, collection_type, collection_index, label, ordered_path,
+                narrative_order, first_episode_number, last_episode_number,
+                interstitial_tvdb_id, interstitial_name, interstitial_slug, interstitial_year,
+                interstitial_content_status, interstitial_overview, interstitial_poster_url,
+                interstitial_language, interstitial_runtime_minutes, interstitial_sort_title,
+                interstitial_imdb_id, interstitial_genres_json, interstitial_studio,
+                interstitial_digital_release_date, interstitial_association_confidence,
+                interstitial_continuity_status, interstitial_movie_form, interstitial_confidence,
+                interstitial_signal_summary, interstitial_placement, interstitial_movie_tmdb_id,
+                interstitial_movie_mal_id, interstitial_movie_anidb_id, interstitial_season_episode,
+                special_movies_json, monitored, created_at
+         FROM collections
+         WHERE ordered_path = ?
+         ORDER BY id ASC
+         LIMIT 1",
+    )
+    .bind(ordered_path)
+    .fetch_optional(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    match row {
+        Some(row) => Ok(Some(row_to_collection(&row)?)),
+        None => Ok(None),
+    }
+}
+
 pub(crate) async fn create_collection_query(
     pool: &SqlitePool,
     collection: &Collection,
@@ -1652,7 +1684,7 @@ mod tests {
                 collection_type: CollectionType::Movie,
                 collection_index: "1".to_string(),
                 label: Some("1080P".to_string()),
-                ordered_path: Some("/media/movies/Movie/Movie.1080P.mkv".to_string()),
+                ordered_path: Some("/data/movies/Movie/Movie.1080P.mkv".to_string()),
             },
         ];
         candidates.sort_by_key(summary_candidate_sort_key);
@@ -1676,7 +1708,7 @@ mod tests {
                 collection_type: CollectionType::Movie,
                 collection_index: "1".to_string(),
                 label: Some("1080P".to_string()),
-                ordered_path: Some("/media/movies/Movie/Movie.1080P.mkv".to_string()),
+                ordered_path: Some("/data/movies/Movie/Movie.1080P.mkv".to_string()),
             },
         ];
         candidates.sort_by_key(summary_candidate_sort_key);

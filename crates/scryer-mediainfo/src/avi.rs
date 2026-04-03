@@ -46,6 +46,8 @@ pub(crate) fn parse_avi(path: &Path) -> Result<RawContainer, MediaInfoError> {
         }
     }
 
+    backfill_audio_bitrates(&mut file, &mut tracks)?;
+
     Ok(RawContainer {
         format_name: "avi".into(),
         duration_seconds,
@@ -287,6 +289,42 @@ fn parse_audio_stream(_strh: &[u8], strf: &[u8]) -> RawTrack {
     }
 }
 
+fn backfill_audio_bitrates<T: Read + Seek>(
+    stream: &mut T,
+    tracks: &mut [RawTrack],
+) -> Result<(), MediaInfoError> {
+    let needs_mp3_bitrate = tracks.iter().any(|track| {
+        track.kind == TrackKind::Audio
+            && track.codec_name.as_deref() == Some("mp3")
+            && track.bit_rate_bps.unwrap_or_default() <= 0
+    });
+    if !needs_mp3_bitrate {
+        return Ok(());
+    }
+
+    stream
+        .rewind()
+        .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+
+    let mut buf = vec![0_u8; 1024 * 1024];
+    let bytes_read = stream
+        .read(&mut buf)
+        .map_err(|e| MediaInfoError::Io(e.to_string()))?;
+    buf.truncate(bytes_read);
+
+    let fallback_bitrate = find_mp3_bitrate(&buf);
+    for track in tracks.iter_mut() {
+        if track.kind == TrackKind::Audio
+            && track.codec_name.as_deref() == Some("mp3")
+            && track.bit_rate_bps.unwrap_or_default() <= 0
+        {
+            track.bit_rate_bps = fallback_bitrate;
+        }
+    }
+
+    Ok(())
+}
+
 /// Map a video FourCC to a canonical codec name.
 fn map_video_fourcc(fcc: &str) -> &'static str {
     match fcc {
@@ -321,6 +359,61 @@ fn map_audio_format_tag(tag: u16) -> &'static str {
         0xFFFE => "extensible",
         _ => "unknown",
     }
+}
+
+fn find_mp3_bitrate(data: &[u8]) -> Option<i64> {
+    if data.len() < 4 {
+        return None;
+    }
+
+    const MPEG_AUDIO_SAMPLE_RATES: [[u32; 4]; 4] = [
+        [11_025, 12_000, 8_000, 0],
+        [0, 0, 0, 0],
+        [22_050, 24_000, 16_000, 0],
+        [44_100, 48_000, 32_000, 0],
+    ];
+    const MPEG_AUDIO_BITRATES_MPEG1_LAYER3: [u32; 16] = [
+        0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0,
+    ];
+    const MPEG_AUDIO_BITRATES_MPEG2_LAYER3: [u32; 16] = [
+        0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0,
+    ];
+
+    for i in 0..=data.len() - 4 {
+        let header = u32::from_be_bytes(data[i..i + 4].try_into().ok()?);
+        if (header & 0xFFE0_0000) != 0xFFE0_0000 {
+            continue;
+        }
+
+        let version_id = ((header >> 19) & 0x3) as usize;
+        let layer_index = ((header >> 17) & 0x3) as usize;
+        let bitrate_index = ((header >> 12) & 0xF) as usize;
+        let sample_rate_index = ((header >> 10) & 0x3) as usize;
+
+        if version_id == 1 || layer_index != 1 || bitrate_index == 0 || bitrate_index == 0xF {
+            continue;
+        }
+
+        let sample_rate = *MPEG_AUDIO_SAMPLE_RATES
+            .get(version_id)?
+            .get(sample_rate_index)?;
+        if sample_rate == 0 {
+            continue;
+        }
+
+        let bitrate_kbps = if version_id == 3 {
+            MPEG_AUDIO_BITRATES_MPEG1_LAYER3[bitrate_index]
+        } else {
+            MPEG_AUDIO_BITRATES_MPEG2_LAYER3[bitrate_index]
+        };
+        if bitrate_kbps == 0 {
+            continue;
+        }
+
+        return Some(i64::from(bitrate_kbps) * 1000);
+    }
+
+    None
 }
 
 /// Read a little-endian u32 from a byte slice at the given offset.

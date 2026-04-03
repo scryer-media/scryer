@@ -423,6 +423,8 @@ pub(crate) fn from_title(title: Title) -> TitlePayload {
         recap_policy,
         quality_tier: None,
         size_bytes: None,
+        episodes_owned: None,
+        episodes_total: None,
     }
 }
 
@@ -433,6 +435,34 @@ pub(crate) fn from_library_scan_summary(summary: LibraryScanSummary) -> LibraryS
         imported: summary.imported as i32,
         skipped: summary.skipped as i32,
         unmatched: summary.unmatched as i32,
+    }
+}
+
+pub(crate) fn from_library_scan_phase_progress(
+    progress: scryer_application::LibraryScanPhaseProgress,
+) -> LibraryScanPhaseProgressPayload {
+    LibraryScanPhaseProgressPayload {
+        total: progress.total as i32,
+        completed: progress.completed as i32,
+        failed: progress.failed as i32,
+    }
+}
+
+pub(crate) fn from_library_scan_session(
+    session: scryer_application::LibraryScanSession,
+) -> LibraryScanProgressPayload {
+    LibraryScanProgressPayload {
+        session_id: session.session_id,
+        facet: MediaFacetValue::from_domain(session.facet),
+        status: LibraryScanStatusValue::from_application(session.status),
+        started_at: session.started_at.to_rfc3339(),
+        updated_at: session.updated_at.to_rfc3339(),
+        found_titles: session.found_titles as i32,
+        metadata_total_known: session.metadata_total_known,
+        file_total_known: session.file_total_known,
+        metadata_progress: from_library_scan_phase_progress(session.metadata_progress),
+        file_progress: from_library_scan_phase_progress(session.file_progress),
+        summary: session.summary.map(from_library_scan_summary),
     }
 }
 
@@ -460,6 +490,7 @@ pub(crate) fn from_media_rename_plan(plan: RenamePlan) -> MediaRenamePlanPayload
 fn from_media_rename_plan_item(item: RenamePlanItem) -> MediaRenamePlanItemPayload {
     MediaRenamePlanItemPayload {
         collection_id: item.collection_id,
+        media_file_id: item.media_file_id,
         current_path: item.current_path,
         proposed_path: item.proposed_path,
         normalized_filename: item.normalized_filename,
@@ -489,6 +520,7 @@ pub(crate) fn from_media_rename_apply(result: RenameApplyResult) -> MediaRenameA
 fn from_media_rename_apply_item(item: RenameApplyItemResult) -> MediaRenameApplyItemPayload {
     MediaRenameApplyItemPayload {
         collection_id: item.collection_id,
+        media_file_id: item.media_file_id,
         current_path: item.current_path,
         proposed_path: item.proposed_path,
         final_path: item.final_path,

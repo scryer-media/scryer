@@ -15,8 +15,9 @@ use crate::{
 use scryer_application::QualityProfile;
 use scryer_application::{
     AppError, AppResult, PendingRelease, PendingReleaseStatus, PrimaryCollectionSummary,
-    ReleaseDecision, ReleaseDownloadAttemptOutcome, SuccessfulGrabCommit, TitleMediaSizeSummary,
-    TitleMetadataUpdate, WantedItem,
+    ReleaseDecision, ReleaseDownloadAttemptOutcome, SuccessfulGrabCommit,
+    TitleEpisodeProgressSummary, TitleImageReplacement, TitleMediaSizeSummary, TitleMetadataUpdate,
+    WantedItem,
 };
 use scryer_domain::{
     BlocklistEntry, CalendarEpisode, Collection, CollectionType, DownloadClientConfig, Episode,
@@ -77,6 +78,10 @@ pub(crate) enum DbCommand {
     },
     GetCollectionById {
         collection_id: String,
+        reply: Sender<AppResult<Option<Collection>>>,
+    },
+    GetCollectionByOrderedPath {
+        ordered_path: String,
         reply: Sender<AppResult<Option<Collection>>>,
     },
     CreateCollection {
@@ -469,6 +474,10 @@ pub(crate) enum DbCommand {
         title_ids: Vec<String>,
         reply: Sender<AppResult<Vec<TitleMediaSizeSummary>>>,
     },
+    ListTitleEpisodeProgressSummaries {
+        title_ids: Vec<String>,
+        reply: Sender<AppResult<Vec<TitleEpisodeProgressSummary>>>,
+    },
     UpdateMediaFileAnalysis {
         file_id: String,
         analysis: Box<scryer_application::MediaFileAnalysis>,
@@ -481,6 +490,16 @@ pub(crate) enum DbCommand {
         source_signature_value: Option<String>,
         reply: Sender<AppResult<()>>,
     },
+    UpdateMediaFilePath {
+        file_id: String,
+        file_path: String,
+        reply: Sender<AppResult<()>>,
+    },
+    ReplaceTitleImage {
+        title_id: String,
+        replacement: Box<TitleImageReplacement>,
+        reply: Sender<AppResult<()>>,
+    },
     MarkMediaFileScanFailed {
         file_id: String,
         error: String,
@@ -488,6 +507,10 @@ pub(crate) enum DbCommand {
     },
     GetMediaFileById {
         file_id: String,
+        reply: Sender<AppResult<Option<scryer_application::TitleMediaFile>>>,
+    },
+    GetMediaFileByPath {
+        file_path: String,
         reply: Sender<AppResult<Option<scryer_application::TitleMediaFile>>>,
     },
     DeleteMediaFile {
@@ -544,6 +567,14 @@ pub(crate) enum DbCommand {
     },
     DeleteWantedItemsForTitle {
         title_id: String,
+        reply: Sender<AppResult<()>>,
+    },
+    DeleteWantedItemsForCollection {
+        collection_id: String,
+        reply: Sender<AppResult<()>>,
+    },
+    DeleteWantedItemsForEpisode {
+        episode_id: String,
         reply: Sender<AppResult<()>>,
     },
     ResetFruitlessWantedItems {
@@ -961,6 +992,13 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     reply,
                 } => {
                     let _ = reply.send(get_collection_by_id_query(&pool, &collection_id).await);
+                }
+                DbCommand::GetCollectionByOrderedPath {
+                    ordered_path,
+                    reply,
+                } => {
+                    let _ = reply
+                        .send(get_collection_by_ordered_path_query(&pool, &ordered_path).await);
                 }
                 DbCommand::CreateCollection { collection, reply } => {
                     let _ = reply.send(create_collection_query(&pool, &collection).await);
@@ -1680,6 +1718,14 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                         .await,
                     );
                 }
+                DbCommand::ListTitleEpisodeProgressSummaries { title_ids, reply } => {
+                    let _ = reply.send(
+                        crate::queries::media_file::list_title_episode_progress_summaries_query(
+                            &pool, &title_ids,
+                        )
+                        .await,
+                    );
+                }
                 DbCommand::UpdateMediaFileAnalysis {
                     file_id,
                     analysis,
@@ -1710,6 +1756,32 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                         .await,
                     );
                 }
+                DbCommand::UpdateMediaFilePath {
+                    file_id,
+                    file_path,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        crate::queries::media_file::update_media_file_path_query(
+                            &pool, &file_id, &file_path,
+                        )
+                        .await,
+                    );
+                }
+                DbCommand::ReplaceTitleImage {
+                    title_id,
+                    replacement,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        crate::title_images::replace_title_image_query(
+                            &pool,
+                            &title_id,
+                            *replacement,
+                        )
+                        .await,
+                    );
+                }
                 DbCommand::MarkMediaFileScanFailed {
                     file_id,
                     error,
@@ -1723,6 +1795,12 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 DbCommand::GetMediaFileById { file_id, reply } => {
                     let _ = reply.send(
                         crate::queries::media_file::get_media_file_by_id_query(&pool, &file_id)
+                            .await,
+                    );
+                }
+                DbCommand::GetMediaFileByPath { file_path, reply } => {
+                    let _ = reply.send(
+                        crate::queries::media_file::get_media_file_by_path_query(&pool, &file_path)
                             .await,
                     );
                 }
@@ -1838,6 +1916,27 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                     let _ = reply.send(
                         crate::queries::wanted::delete_wanted_items_for_title_query(
                             &pool, &title_id,
+                        )
+                        .await,
+                    );
+                }
+                DbCommand::DeleteWantedItemsForCollection {
+                    collection_id,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        crate::queries::wanted::delete_wanted_items_for_collection_query(
+                            &pool,
+                            &collection_id,
+                        )
+                        .await,
+                    );
+                }
+                DbCommand::DeleteWantedItemsForEpisode { episode_id, reply } => {
+                    let _ = reply.send(
+                        crate::queries::wanted::delete_wanted_items_for_episode_query(
+                            &pool,
+                            &episode_id,
                         )
                         .await,
                     );

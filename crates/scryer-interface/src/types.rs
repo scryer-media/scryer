@@ -2,8 +2,9 @@ use async_graphql::{Enum, InputObject, SimpleObject};
 use scryer_application::{
     ActivityChannel as AppActivityChannel, ActivityKind as AppActivityKind,
     ActivitySeverity as AppActivitySeverity, DownloadSourceKind as AppDownloadSourceKind,
-    PendingReleaseStatus as AppPendingReleaseStatus, ScoringOverrides as AppScoringOverrides,
-    ScoringPersona as AppScoringPersona, WantedStatus as AppWantedStatus,
+    LibraryScanStatus as AppLibraryScanStatus, PendingReleaseStatus as AppPendingReleaseStatus,
+    ScoringOverrides as AppScoringOverrides, ScoringPersona as AppScoringPersona,
+    WantedStatus as AppWantedStatus,
 };
 use scryer_domain::{
     DownloadQueueState, ImportDecision, ImportSkipReason, ImportStatus, ImportType, MediaFacet,
@@ -662,6 +663,9 @@ pub struct TitlePayload {
     pub quality_tier: Option<String>,
     /// Aggregated media-file size in bytes for the title, populated in list queries.
     pub size_bytes: Option<i64>,
+    /// Owned-vs-total episode progress, excluding specials, populated in list queries.
+    pub episodes_owned: Option<i64>,
+    pub episodes_total: Option<i64>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -887,6 +891,50 @@ pub struct ActivityEventPayload {
     pub facet: Option<MediaFacetValue>,
     pub message: String,
     pub occurred_at: String,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "snake_case")]
+pub enum LibraryScanStatusValue {
+    Discovering,
+    Running,
+    Completed,
+    Warning,
+    Failed,
+}
+
+impl LibraryScanStatusValue {
+    pub fn from_application(value: AppLibraryScanStatus) -> Self {
+        match value {
+            AppLibraryScanStatus::Discovering => Self::Discovering,
+            AppLibraryScanStatus::Running => Self::Running,
+            AppLibraryScanStatus::Completed => Self::Completed,
+            AppLibraryScanStatus::Warning => Self::Warning,
+            AppLibraryScanStatus::Failed => Self::Failed,
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct LibraryScanPhaseProgressPayload {
+    pub total: i32,
+    pub completed: i32,
+    pub failed: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct LibraryScanProgressPayload {
+    pub session_id: String,
+    pub facet: MediaFacetValue,
+    pub status: LibraryScanStatusValue,
+    pub started_at: String,
+    pub updated_at: String,
+    pub found_titles: i32,
+    pub metadata_total_known: bool,
+    pub file_total_known: bool,
+    pub metadata_progress: LibraryScanPhaseProgressPayload,
+    pub file_progress: LibraryScanPhaseProgressPayload,
+    pub summary: Option<LibraryScanSummaryPayload>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -1146,6 +1194,7 @@ pub struct LibraryScanSummaryPayload {
 #[derive(SimpleObject, Clone)]
 pub struct MediaRenamePlanItemPayload {
     pub collection_id: Option<String>,
+    pub media_file_id: Option<String>,
     pub current_path: String,
     pub proposed_path: Option<String>,
     pub normalized_filename: Option<String>,
@@ -1175,6 +1224,7 @@ pub struct MediaRenamePlanPayload {
 #[derive(SimpleObject, Clone)]
 pub struct MediaRenameApplyItemPayload {
     pub collection_id: Option<String>,
+    pub media_file_id: Option<String>,
     pub current_path: String,
     pub proposed_path: Option<String>,
     pub final_path: Option<String>,

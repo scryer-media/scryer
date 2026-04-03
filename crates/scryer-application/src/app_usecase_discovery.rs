@@ -1141,6 +1141,7 @@ impl AppUseCase {
             return Ok(Some(trimmed.to_string()));
         };
         match parsed {
+            Value::Null => Ok(None),
             Value::String(value) => {
                 let normalized = value.trim();
                 if normalized.is_empty() || normalized == INHERIT_QUALITY_PROFILE_VALUE {

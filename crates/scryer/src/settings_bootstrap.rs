@@ -100,7 +100,7 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             scope: SETTINGS_SCOPE_MEDIA,
             key_name: MOVIES_PATH_KEY,
             data_type: "string",
-            default_value_json: "\"/media/movies\"",
+            default_value_json: "\"/data/movies\"",
             is_sensitive: false,
         },
         ServiceSettingSeed {
@@ -108,7 +108,7 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             scope: SETTINGS_SCOPE_MEDIA,
             key_name: SERIES_PATH_KEY,
             data_type: "string",
-            default_value_json: "\"/media/series\"",
+            default_value_json: "\"/data/series\"",
             is_sensitive: false,
         },
         ServiceSettingSeed {
@@ -116,7 +116,7 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             scope: SETTINGS_SCOPE_MEDIA,
             key_name: ANIME_PATH_KEY,
             data_type: "string",
-            default_value_json: "\"/media/anime\"",
+            default_value_json: "\"/data/anime\"",
             is_sensitive: false,
         },
         ServiceSettingSeed {

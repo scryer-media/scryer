@@ -94,8 +94,6 @@ Legacy bootstrap settings (still supported as fallback):
 - `SCRYER_NZBGEEK_MIN_REQUEST_INTERVAL_MS` (optional, default `1100`)
 - `SCRYER_NZBGEEK_BASE_BACKOFF_SECONDS` (optional, default `10`)
 - `SCRYER_NZBGEEK_MAX_BACKOFF_SECONDS` (optional, default `900`)
-- `SCRYER_MOVIES_PATH`
-- `SCRYER_SERIES_PATH`
 - `SCRYER_BASE_PATH` (optional; serves the UI, GraphQL, GraphiQL, health, and WebSocket endpoints under that prefix)
 - `SCRYER_WEB_UI_URL` (optional, default `http://127.0.0.1:3000`)
 - `SCRYER_WEB_DIST_DIR` (optional, default `./crates/scryer/ui`)
@@ -109,7 +107,7 @@ When queueing titles, Scryer now submits an NZBGet category derived from the tit
 
 For a standard completed-directory workflow:
 - Configure NZBGet with matching category definitions for `movie`, `tv`, `anime`, and `other`.
-- Set category-specific `DestDir` under a common completed root (for example, `/media/completed/movie`, `/media/completed/tv`, etc.).
+- Set category-specific `DestDir` under a common completed root (for example, `/data/completed/movie`, `/data/completed/tv`, etc.).
 - Configure your Servarr clients to monitor the completed directories and move final assets into your library destinations.
 - Keep this scryer category on queued items as the routing key; NZBGet category should remain your integration point for mover semantics.
 

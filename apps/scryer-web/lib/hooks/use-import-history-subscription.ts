@@ -1,53 +1,32 @@
 import { useEffect, useRef } from "react";
 
 import { importHistoryChangedSubscription } from "@/lib/graphql/queries";
-import { wsClient } from "@/lib/graphql/ws-client";
+
+import { useDeferredWsSubscription } from "@/lib/hooks/use-deferred-ws-subscription";
 
 /**
  * Subscribes to import history change notifications via WebSocket.
  * Calls `onChanged` whenever an import status update occurs so the
  * consumer can refetch the import history table.
  */
-export function useImportHistorySubscription(onChanged: () => void) {
+export function useImportHistorySubscription(
+  onChanged: () => void,
+  options?: { pause?: boolean },
+) {
   const onChangedRef = useRef(onChanged);
   useEffect(() => {
     onChangedRef.current = onChanged;
   });
 
-  const unsubRef = useRef<(() => void) | null>(null);
-  const teardownTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    // StrictMode re-run: cancel the pending teardown, subscription is still alive
-    if (teardownTimer.current) {
-      clearTimeout(teardownTimer.current);
-      teardownTimer.current = null;
-      return;
-    }
-
-    const unsubscribe = wsClient.subscribe(
-      { query: importHistoryChangedSubscription },
-      {
-        next() {
-          onChangedRef.current();
-        },
-        error(err) {
-          console.error("[import-history] subscription error:", err);
-        },
-        complete() {
-          unsubRef.current = null;
-        },
-      },
-    );
-
-    unsubRef.current = unsubscribe;
-
-    return () => {
-      teardownTimer.current = setTimeout(() => {
-        teardownTimer.current = null;
-        unsubscribe();
-        unsubRef.current = null;
-      }, 200);
-    };
-  }, []);
+  useDeferredWsSubscription({
+    enabled: !(options?.pause ?? false),
+    requestKey: "importHistoryChanged",
+    request: { query: importHistoryChangedSubscription },
+    onNext() {
+      onChangedRef.current();
+    },
+    onError(err) {
+      console.error("[import-history] subscription error:", err);
+    },
+  });
 }

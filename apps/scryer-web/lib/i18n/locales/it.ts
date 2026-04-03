@@ -139,7 +139,7 @@ const it: LocaleDictionary = {
   "settings.rootFoldersHelp": "Le cartelle radice sono le directory principali in cui vengono archiviati i media. La cartella con la stella è quella predefinita per i nuovi titoli.",
   "settings.rootFolderAdd": "Aggiungi cartella radice",
   "settings.rootFolderEdit": "Modifica cartella radice",
-  "settings.rootFolderAddPlaceholder": "/media/movies",
+  "settings.rootFolderAddPlaceholder": "/data/movies",
   "settings.rootFolderSetDefault": "Imposta come predefinita",
   "settings.libraryScanTitle": "Scansione libreria",
   "settings.libraryScanHelp":
@@ -156,12 +156,12 @@ const it: LocaleDictionary = {
   "settings.moviesPathLabel": "Percorso cartella film",
   "settings.moviesPathHelp":
     "Usato come destinazione per le release di film selezionate.",
-  "settings.moviesPathPlaceholder": "/media/movies",
+  "settings.moviesPathPlaceholder": "/data/movies",
   "settings.moviesPathRequired": "Il percorso della cartella film è obbligatorio.",
   "settings.seriesPathLabel": "Percorso cartella serie",
   "settings.seriesPathHelp":
     "Usato come destinazione per le release di serie e anime selezionate.",
-  "settings.seriesPathPlaceholder": "/media/series",
+  "settings.seriesPathPlaceholder": "/data/series",
   "settings.seriesPathRequired": "Il percorso della cartella serie è obbligatorio.",
   "settings.movieSettingsSaved": "Impostazioni film salvate.",
   "settings.seriesSettingsSaved": "Impostazioni serie salvate.",
@@ -410,6 +410,7 @@ const it: LocaleDictionary = {
   "title.table.monitored": "Monitorato",
   "title.table.poster": "Locandina",
   "title.table.qualityTier": "Qualità",
+  "title.table.episodes": "Episodi",
   "title.table.size": "Dimensione",
   "title.viewModeToggle": "Modalità di visualizzazione",
   "title.viewModeTable": "Vista tabella",

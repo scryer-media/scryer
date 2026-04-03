@@ -5,7 +5,7 @@ use std::path::Path;
 
 #[test]
 fn video_file_mkv() {
-    assert!(is_video_file(Path::new("/media/movie.mkv")));
+    assert!(is_video_file(Path::new("/data/movie.mkv")));
 }
 
 #[test]
@@ -56,7 +56,7 @@ fn not_video_file_no_extension() {
 
 #[test]
 fn not_video_file_directory() {
-    assert!(!is_video_file(Path::new("/media/movies/")));
+    assert!(!is_video_file(Path::new("/data/movies/")));
 }
 
 #[test]

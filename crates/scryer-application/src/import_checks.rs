@@ -241,7 +241,7 @@ mod tests {
     fn valid_extension_accepts_mkv() {
         let parsed = parse_release_metadata("Movie.2024.1080p.BluRay.x264");
         let src = PathBuf::from("/tmp/Movie.2024.1080p.BluRay.x264.mkv");
-        let dst = PathBuf::from("/media/Movie (2024)/Movie.2024.1080p.BluRay.x264.mkv");
+        let dst = PathBuf::from("/data/Movie (2024)/Movie.2024.1080p.BluRay.x264.mkv");
         let ctx = dummy_ctx(&src, &dst, 1_000_000, &parsed, &[]);
         assert!(check_valid_extension(&ctx).is_accept());
     }
@@ -250,7 +250,7 @@ mod tests {
     fn valid_extension_rejects_txt() {
         let parsed = parse_release_metadata("readme");
         let src = PathBuf::from("/tmp/readme.txt");
-        let dst = PathBuf::from("/media/readme.txt");
+        let dst = PathBuf::from("/data/readme.txt");
         let ctx = dummy_ctx(&src, &dst, 100, &parsed, &[]);
         assert!(!check_valid_extension(&ctx).is_accept());
     }
@@ -259,7 +259,7 @@ mod tests {
     fn sample_detected_in_filename() {
         let parsed = parse_release_metadata("sample-movie");
         let src = PathBuf::from("/tmp/sample-movie.mkv");
-        let dst = PathBuf::from("/media/movie.mkv");
+        let dst = PathBuf::from("/data/movie.mkv");
         let ctx = dummy_ctx(&src, &dst, 1_000_000, &parsed, &[]);
         assert!(!check_not_sample(&ctx).is_accept());
     }
@@ -268,7 +268,7 @@ mod tests {
     fn sample_detected_in_parent_dir() {
         let parsed = parse_release_metadata("movie");
         let src = PathBuf::from("/tmp/Sample/movie.mkv");
-        let dst = PathBuf::from("/media/movie.mkv");
+        let dst = PathBuf::from("/data/movie.mkv");
         let ctx = dummy_ctx(&src, &dst, 1_000_000, &parsed, &[]);
         assert!(!check_not_sample(&ctx).is_accept());
     }
@@ -277,7 +277,7 @@ mod tests {
     fn unpacking_marker_rejects() {
         let parsed = parse_release_metadata("movie");
         let src = PathBuf::from("/tmp/movie.mkv.!qB");
-        let dst = PathBuf::from("/media/movie.mkv");
+        let dst = PathBuf::from("/data/movie.mkv");
         let ctx = dummy_ctx(&src, &dst, 1_000_000, &parsed, &[]);
         assert!(!check_not_unpacking(&ctx).is_accept());
     }
@@ -286,7 +286,7 @@ mod tests {
     fn clean_file_passes_unpacking() {
         let parsed = parse_release_metadata("movie");
         let src = PathBuf::from("/tmp/movie.mkv");
-        let dst = PathBuf::from("/media/movie.mkv");
+        let dst = PathBuf::from("/data/movie.mkv");
         let ctx = dummy_ctx(&src, &dst, 1_000_000, &parsed, &[]);
         assert!(check_not_unpacking(&ctx).is_accept());
     }

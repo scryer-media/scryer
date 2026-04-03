@@ -141,7 +141,7 @@ const ja: LocaleDictionary = {
     "ルートフォルダはメディアが保存される最上位ディレクトリです。スター付きのフォルダが新しいタイトルのデフォルトです。",
   "settings.rootFolderAdd": "ルートフォルダを追加",
   "settings.rootFolderEdit": "ルートフォルダを編集",
-  "settings.rootFolderAddPlaceholder": "/media/movies",
+  "settings.rootFolderAddPlaceholder": "/data/movies",
   "settings.rootFolderSetDefault": "デフォルトに設定",
   "settings.libraryScanTitle": "ライブラリスキャン",
   "settings.libraryScanHelp":
@@ -158,12 +158,12 @@ const ja: LocaleDictionary = {
   "settings.moviesPathLabel": "映画フォルダパス",
   "settings.moviesPathHelp":
     "選択した映画リリースの保存先として使用されます。",
-  "settings.moviesPathPlaceholder": "/media/movies",
+  "settings.moviesPathPlaceholder": "/data/movies",
   "settings.moviesPathRequired": "映画フォルダパスは必須です。",
   "settings.seriesPathLabel": "シリーズフォルダパス",
   "settings.seriesPathHelp":
     "選択したシリーズおよびアニメリリースの保存先として使用されます。",
-  "settings.seriesPathPlaceholder": "/media/series",
+  "settings.seriesPathPlaceholder": "/data/series",
   "settings.seriesPathRequired": "シリーズフォルダパスは必須です。",
   "settings.movieSettingsSaved": "映画設定を保存しました。",
   "settings.seriesSettingsSaved": "シリーズ設定を保存しました。",
@@ -410,6 +410,7 @@ const ja: LocaleDictionary = {
   "title.table.monitored": "モニタリング",
   "title.table.poster": "ポスター",
   "title.table.qualityTier": "品質",
+  "title.table.episodes": "エピソード",
   "title.table.size": "サイズ",
   "title.viewModeToggle": "表示モード",
   "title.viewModeTable": "テーブル表示",

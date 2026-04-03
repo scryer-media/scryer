@@ -500,7 +500,7 @@ pub async fn media_root_for_title(
         .unwrap_or("series.path");
     let default_path = handler
         .map(|h| h.default_library_path())
-        .unwrap_or("/media/series");
+        .unwrap_or("/data/series");
 
     app.read_setting_string_value_for_scope(crate::SETTINGS_SCOPE_MEDIA, path_key, None)
         .await
@@ -571,10 +571,10 @@ pub async fn resolve_recycle_config(
 /// Defaults: enabled=true, retention_days=7, base_path derived from file's grandparent.
 pub fn config_from_file_path(file_path: &Path) -> RecycleBinConfig {
     // Walk up to the grandparent as a rough media root estimate.
-    // e.g. /media/movies/Movie (2024)/Movie.mkv → /media/movies/
+    // e.g. /data/movies/Movie (2024)/Movie.mkv → /data/movies/
     let base = file_path
         .parent() // Movie (2024)/
-        .and_then(|p| p.parent()) // /media/movies/
+        .and_then(|p| p.parent()) // /data/movies/
         .unwrap_or_else(|| Path::new("/tmp"));
 
     RecycleBinConfig {
@@ -600,7 +600,7 @@ mod tests {
     fn test_manifest() -> RecycleManifest {
         RecycleManifest {
             recycled_at: Utc::now().to_rfc3339(),
-            original_path: "/media/movies/test.mkv".to_string(),
+            original_path: "/data/movies/test.mkv".to_string(),
             size_bytes: 1024,
             title_id: Some("title-123".to_string()),
             reason: "title_deleted".to_string(),
@@ -752,7 +752,7 @@ mod tests {
         tokio::fs::create_dir_all(&match_dir).await.unwrap();
         let match_manifest = RecycleManifest {
             recycled_at: Utc::now().to_rfc3339(),
-            original_path: "/media/movies/Movie/Movie.mkv".to_string(),
+            original_path: "/data/movies/Movie/Movie.mkv".to_string(),
             size_bytes: 1024,
             title_id: Some("title-123".to_string()),
             reason: "upgrade_replaced".to_string(),
@@ -771,7 +771,7 @@ mod tests {
         tokio::fs::create_dir_all(&other_dir).await.unwrap();
         let other_manifest = RecycleManifest {
             recycled_at: Utc::now().to_rfc3339(),
-            original_path: "/media/movies/Other/Other.mkv".to_string(),
+            original_path: "/data/movies/Other/Other.mkv".to_string(),
             size_bytes: 2048,
             title_id: Some("title-456".to_string()),
             reason: "file_deleted".to_string(),
