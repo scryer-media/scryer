@@ -1,3 +1,5 @@
+import { JOB_RUN_FIELDS } from "./queries";
+
 export const loginMutation = `mutation Login($input: LoginInput!) {
   login(input: $input) {
     token
@@ -185,6 +187,12 @@ export const scanTitleLibraryMutation = `mutation ScanTitleLibrary($input: Title
     imported
     skipped
     unmatched
+  }
+}`;
+
+export const triggerJobMutation = `mutation TriggerJob($jobKey: JobKeyValue!) {
+  triggerJob(jobKey: $jobKey) {
+${JOB_RUN_FIELDS}
   }
 }`;
 

@@ -137,6 +137,8 @@ impl TestContext {
         services.pp_scripts = Arc::new(db.clone());
         services.staged_nzb_store = staged_nzb_store.clone();
         services.staged_nzb_pipeline_limit = staged_nzb_pipeline_limit;
+        services.job_runs = Arc::new(db.clone());
+        services.library_probe_signatures = Arc::new(db.clone());
 
         // Facet registry with all built-in facets
         let mut registry = FacetRegistry::new();

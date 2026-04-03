@@ -64,6 +64,30 @@ fn not_video_file_nzb() {
     assert!(!is_video_file(Path::new("download.nzb")));
 }
 
+// ── subtitle/image classification ──────────────────────────────────────────
+
+#[test]
+fn subtitle_file_srt() {
+    assert!(is_subtitle_file(Path::new("movie.eng.srt")));
+    assert!(is_subtitle_file(Path::new("movie.FORCED.ASS")));
+}
+
+#[test]
+fn not_subtitle_file_video() {
+    assert!(!is_subtitle_file(Path::new("movie.mkv")));
+}
+
+#[test]
+fn image_file_jpeg() {
+    assert!(is_image_file(Path::new("poster.jpg")));
+    assert!(is_image_file(Path::new("fanart.WEBP")));
+}
+
+#[test]
+fn not_image_file_subtitle() {
+    assert!(!is_image_file(Path::new("movie.eng.srt")));
+}
+
 // ── match_fuzzy ───────────────────────────────────────────────────────────
 
 #[test]
@@ -156,6 +180,23 @@ fn tags_scryer_prefix_preserves_case() {
 fn tags_empty_input() {
     let result = normalize_tags(&[]);
     assert!(result.is_empty());
+}
+
+// ── config / notification helpers ────────────────────────────────────────
+
+#[test]
+fn config_field_type_supports_multiline() {
+    assert_eq!(
+        ConfigFieldType::parse("multiline"),
+        Some(ConfigFieldType::Multiline)
+    );
+    assert_eq!(ConfigFieldType::Multiline.as_str(), "multiline");
+}
+
+#[test]
+fn notification_channel_type_normalizes_provider_string() {
+    let provider = ChannelType::parse("  Jellyfin  ").expect("provider");
+    assert_eq!(provider.as_str(), "jellyfin");
 }
 
 // ── User entitlements ─────────────────────────────────────────────────────

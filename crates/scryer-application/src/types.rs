@@ -658,7 +658,7 @@ pub struct BackupInfo {
     pub created_at: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HealthCheckStatus {
     Ok,
     Warning,

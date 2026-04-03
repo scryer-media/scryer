@@ -6,6 +6,8 @@ use scryer_domain::NotificationEventType;
 use std::collections::HashMap;
 use tracing::{info, trace, warn};
 
+use crate::{JobKey, JobTriggerSource};
+
 const FAILED_GRAB_OLD_TITLE_DAYS: i64 = 14;
 const FAILED_GRAB_RESEARCH_COOLDOWN_MINUTES: i64 = 20;
 const MAX_STANDBY_CANDIDATES_PER_WANTED_ITEM: usize = 5;
@@ -3174,7 +3176,10 @@ pub async fn start_background_acquisition_poller(
     info!("background acquisition poller started");
 
     // Initial wanted state sync
-    if let Err(err) = app.sync_wanted_state().await {
+    if let Err(err) = app
+        .run_scheduled_job_now(JobKey::WantedSync, JobTriggerSource::SystemInternal)
+        .await
+    {
         warn!(error = %err, "initial wanted state sync failed");
     }
 
@@ -3202,11 +3207,52 @@ pub async fn start_background_acquisition_poller(
         let app = app.clone();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-            let results = app.run_health_checks().await;
-            *app.services.health_check_results.write().await = results;
-            info!("initial health checks completed");
+            if let Err(error) = app
+                .run_scheduled_job_now(JobKey::HealthChecks, JobTriggerSource::ScheduledStartup)
+                .await
+            {
+                warn!(error = %error, "initial health checks failed");
+            }
         });
     }
+
+    app.set_job_next_run_at(
+        JobKey::WantedSync,
+        Utc::now() + chrono::Duration::seconds(settings.sync_interval_seconds.max(1) as i64),
+    )
+    .await;
+    app.set_job_next_run_at(
+        JobKey::MetadataRefresh,
+        Utc::now() + chrono::Duration::hours(12),
+    )
+    .await;
+    app.set_job_next_run_at(
+        JobKey::PluginRegistryRefresh,
+        Utc::now() + chrono::Duration::hours(24),
+    )
+    .await;
+    app.set_job_next_run_at(
+        JobKey::HealthChecks,
+        Utc::now() + chrono::Duration::seconds(30),
+    )
+    .await;
+    app.set_job_next_run_at(
+        JobKey::StagedNzbPrune,
+        Utc::now() + chrono::Duration::hours(1),
+    )
+    .await;
+    app.set_job_next_run_at(
+        JobKey::Housekeeping,
+        Utc::now() + chrono::Duration::hours(24),
+    )
+    .await;
+    app.set_job_next_run_at(JobKey::RssSync, Utc::now() + chrono::Duration::minutes(15))
+        .await;
+    app.set_job_next_run_at(
+        JobKey::PendingReleaseProcessing,
+        Utc::now() + chrono::Duration::minutes(1),
+    )
+    .await;
 
     let mut poll_interval = tokio::time::interval(std::time::Duration::from_secs(
         settings.poll_interval_seconds.max(1) as u64,
@@ -3279,7 +3325,16 @@ pub async fn start_background_acquisition_poller(
             _ = sync_interval.tick() => {
                 let app = app.clone();
                 run_task("sync_state", async move {
-                    if let Err(err) = app.sync_wanted_state().await {
+                    let sync_interval_seconds = app
+                        .acquisition_settings()
+                        .await
+                        .map(|settings| settings.sync_interval_seconds.max(1) as i64)
+                        .unwrap_or(60);
+                    app.set_job_next_run_at(
+                        JobKey::WantedSync,
+                        Utc::now() + chrono::Duration::seconds(sync_interval_seconds),
+                    ).await;
+                    if let Err(err) = app.run_scheduled_job_now(JobKey::WantedSync, JobTriggerSource::ScheduledInterval).await {
                         warn!(error = %err, "periodic wanted state sync failed");
                         metrics::counter!("scryer_task_errors_total", "task" => "sync_state").increment(1);
                     }
@@ -3288,15 +3343,23 @@ pub async fn start_background_acquisition_poller(
             _ = metadata_refresh_interval.tick() => {
                 let app = app.clone();
                 run_task("metadata_refresh", async move {
-                    info!("starting periodic metadata refresh for monitored series");
-                    app.refresh_monitored_series_metadata().await;
+                    app.set_job_next_run_at(
+                        JobKey::MetadataRefresh,
+                        Utc::now() + chrono::Duration::hours(12),
+                    ).await;
+                    if let Err(err) = app.run_scheduled_job_now(JobKey::MetadataRefresh, JobTriggerSource::ScheduledInterval).await {
+                        warn!(error = %err, "periodic metadata refresh failed");
+                    }
                 }).await;
             }
             _ = registry_refresh_interval.tick() => {
                 let app = app.clone();
                 run_task("registry_refresh", async move {
-                    info!("refreshing plugin registry");
-                    if let Err(e) = app.refresh_plugin_registry_internal().await {
+                    app.set_job_next_run_at(
+                        JobKey::PluginRegistryRefresh,
+                        Utc::now() + chrono::Duration::hours(24),
+                    ).await;
+                    if let Err(e) = app.run_scheduled_job_now(JobKey::PluginRegistryRefresh, JobTriggerSource::ScheduledInterval).await {
                         warn!(error = %e, "periodic plugin registry refresh failed");
                         metrics::counter!("scryer_task_errors_total", "task" => "registry_refresh").increment(1);
                     }
@@ -3305,43 +3368,38 @@ pub async fn start_background_acquisition_poller(
             _ = health_check_interval.tick() => {
                 let app = app.clone();
                 run_task("health_check", async move {
-                    let results = app.run_health_checks().await;
-                    *app.services.health_check_results.write().await = results;
-                    info!("periodic health checks completed");
+                    app.set_job_next_run_at(
+                        JobKey::HealthChecks,
+                        Utc::now() + chrono::Duration::hours(6),
+                    ).await;
+                    if let Err(err) = app.run_scheduled_job_now(JobKey::HealthChecks, JobTriggerSource::ScheduledInterval).await {
+                        warn!(error = %err, "periodic health checks failed");
+                    }
                 }).await;
             }
             _ = staged_nzb_prune_interval.tick() => {
                 let app = app.clone();
                 run_task("staged_nzb_prune", async move {
-                    match app.services.staged_nzb_store.prune_staged_nzbs_older_than(chrono::Utc::now() - chrono::Duration::hours(1)).await {
-                        Ok(pruned) => {
-                            if pruned > 0 {
-                                info!(staged_nzb_artifacts_pruned = pruned, "periodic staged nzb prune completed");
-                            }
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "periodic staged nzb prune failed");
-                            metrics::counter!("scryer_task_errors_total", "task" => "staged_nzb_prune").increment(1);
-                        }
+                    app.set_job_next_run_at(
+                        JobKey::StagedNzbPrune,
+                        Utc::now() + chrono::Duration::hours(1),
+                    ).await;
+                    if let Err(e) = app.run_scheduled_job_now(JobKey::StagedNzbPrune, JobTriggerSource::ScheduledInterval).await {
+                        warn!(error = %e, "periodic staged nzb prune failed");
+                        metrics::counter!("scryer_task_errors_total", "task" => "staged_nzb_prune").increment(1);
                     }
                 }).await;
             }
             _ = housekeeping_interval.tick() => {
                 let app = app.clone();
                 run_task("housekeeping", async move {
-                    match app.run_housekeeping().await {
-                        Ok(report) => info!(
-                            orphaned_media_files = report.orphaned_media_files,
-                            stale_release_decisions = report.stale_release_decisions,
-                            stale_release_attempts = report.stale_release_attempts,
-                            expired_event_outboxes = report.expired_event_outboxes,
-                            stale_history_events = report.stale_history_events,
-                            "periodic housekeeping completed"
-                        ),
-                        Err(e) => {
-                            warn!(error = %e, "periodic housekeeping failed");
-                            metrics::counter!("scryer_task_errors_total", "task" => "housekeeping").increment(1);
-                        }
+                    app.set_job_next_run_at(
+                        JobKey::Housekeeping,
+                        Utc::now() + chrono::Duration::hours(24),
+                    ).await;
+                    if let Err(e) = app.run_scheduled_job_now(JobKey::Housekeeping, JobTriggerSource::ScheduledInterval).await {
+                        warn!(error = %e, "periodic housekeeping failed");
+                        metrics::counter!("scryer_task_errors_total", "task" => "housekeeping").increment(1);
                     }
                     if let Err(e) = app.auto_backup_if_due().await {
                         warn!(error = %e, "auto-backup failed");
@@ -3351,38 +3409,26 @@ pub async fn start_background_acquisition_poller(
             _ = pending_release_interval.tick() => {
                 let app = app.clone();
                 run_task("pending_releases", async move {
-                    match app.process_expired_pending_releases().await {
-                        Ok(grabbed) => {
-                            if grabbed > 0 {
-                                info!(grabbed, "pending release processor: grabbed expired releases");
-                            }
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "pending release processor failed");
-                            metrics::counter!("scryer_task_errors_total", "task" => "pending_releases").increment(1);
-                        }
+                    app.set_job_next_run_at(
+                        JobKey::PendingReleaseProcessing,
+                        Utc::now() + chrono::Duration::minutes(1),
+                    ).await;
+                    if let Err(e) = app.run_scheduled_job_now(JobKey::PendingReleaseProcessing, JobTriggerSource::ScheduledInterval).await {
+                        warn!(error = %e, "pending release processor failed");
+                        metrics::counter!("scryer_task_errors_total", "task" => "pending_releases").increment(1);
                     }
                 }).await;
             }
             _ = rss_sync_interval.tick() => {
                 let app = app.clone();
                 run_task("rss_sync", async move {
-                    match app.run_rss_sync().await {
-                        Ok(report) => {
-                            if report.releases_fetched > 0 || report.releases_grabbed > 0 || report.releases_held > 0 {
-                                info!(
-                                    fetched = report.releases_fetched,
-                                    matched = report.releases_matched,
-                                    grabbed = report.releases_grabbed,
-                                    held = report.releases_held,
-                                    "periodic RSS sync completed"
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "periodic RSS sync failed");
-                            metrics::counter!("scryer_task_errors_total", "task" => "rss_sync").increment(1);
-                        }
+                    app.set_job_next_run_at(
+                        JobKey::RssSync,
+                        Utc::now() + chrono::Duration::minutes(15),
+                    ).await;
+                    if let Err(e) = app.run_scheduled_job_now(JobKey::RssSync, JobTriggerSource::ScheduledInterval).await {
+                        warn!(error = %e, "periodic RSS sync failed");
+                        metrics::counter!("scryer_task_errors_total", "task" => "rss_sync").increment(1);
                     }
                 }).await;
             }

@@ -3,6 +3,9 @@ import react from "@vitejs/plugin-react";
 import { compression } from "vite-plugin-compression2";
 import path from "path";
 
+const DEV_PROXY_TARGET =
+  process.env.SCRYER_DEV_PROXY_TARGET?.trim() || "http://127.0.0.1:8080";
+
 const FOUNDATION_CHUNK_MODULES = [
   "/components/common/backend-restart-overlay.tsx",
   "/components/root/global-search-provider.tsx",
@@ -120,5 +123,24 @@ export default defineConfig(({ mode }) => ({
   server: {
     port: 3000,
     host: "0.0.0.0",
+    proxy: {
+      "/graphql": {
+        target: DEV_PROXY_TARGET,
+        changeOrigin: true,
+        ws: true,
+      },
+      "/health": {
+        target: DEV_PROXY_TARGET,
+        changeOrigin: true,
+      },
+      "/admin": {
+        target: DEV_PROXY_TARGET,
+        changeOrigin: true,
+      },
+      "/images": {
+        target: DEV_PROXY_TARGET,
+        changeOrigin: true,
+      },
+    },
   },
 }));

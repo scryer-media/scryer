@@ -18,7 +18,12 @@ import { ScryerGraphqlProvider } from "@/lib/graphql/urql-provider";
 import { useOnlineStatus } from "@/lib/hooks/use-online-status";
 import { useInstallPrompt } from "@/lib/hooks/use-install-prompt";
 import { useBackendRestarting } from "@/lib/hooks/use-backend-restarting";
-import type { ViewId, SettingsSection, ContentSettingsSection } from "@/components/root/types";
+import type {
+  ViewId,
+  SettingsSection,
+  ContentSettingsSection,
+  SystemSection,
+} from "@/components/root/types";
 import type { Facet } from "@/lib/types";
 import {
   URL_PARAM_CONTENT_SECTION_DEPRECATED,
@@ -33,6 +38,7 @@ import {
   buildViewPath,
   parseContentSectionFromPath,
   parseSettingsSectionFromPath,
+  parseSystemSectionFromPath,
   parseViewFromPath,
 } from "@/lib/utils/routing";
 import { FACET_REGISTRY, isMediaView, facetForView } from "@/lib/facets/registry";
@@ -98,6 +104,7 @@ function MainContent({
   uiLanguage,
   setLanguagePreferenceFromShell,
   contentSettingsSection,
+  systemSection,
   handleOpenOverview,
 }: {
   view: ViewId;
@@ -112,6 +119,7 @@ function MainContent({
   uiLanguage: LocaleCode;
   setLanguagePreferenceFromShell: (code: string) => void;
   contentSettingsSection: ContentSettingsSection;
+  systemSection: SystemSection;
   handleOpenOverview: (targetView: ViewId, titleId: string, episodeId?: string) => void;
 }) {
   if (view === "activity") {
@@ -124,7 +132,7 @@ function MainContent({
     return <ImportHistoryContainer key="history" />;
   }
   if (view === "system") {
-    return <SystemContainer key="system" />;
+    return <SystemContainer key={`system-${systemSection}`} systemSection={systemSection} />;
   }
   if (isMediaView(view) && overviewTitleId) {
     return (
@@ -235,7 +243,12 @@ function AuthenticatedHomePage({
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
-  const { parsedView: view, parsedSettingsSection: settingsSection, parsedContentSection: contentSettingsSection } =
+  const {
+    parsedView: view,
+    parsedSettingsSection: settingsSection,
+    parsedContentSection: contentSettingsSection,
+    parsedSystemSection: systemSection,
+  } =
     useMemo(() => {
       const trimmed = pathname.replace(/^\/+|\/+$/g, "").toLowerCase();
       const segments = trimmed ? trimmed.split("/") : [];
@@ -246,7 +259,10 @@ function AuthenticatedHomePage({
       const parsedContentSection: ContentSettingsSection = isMediaView(parsedView)
         ? parseContentSectionFromPath(segments[1] ?? null, segments[2] ?? null)
         : "overview";
-      return { parsedView, parsedSettingsSection, parsedContentSection };
+      const parsedSystemSection: SystemSection = parsedView === "system"
+        ? parseSystemSectionFromPath(segments[1] ?? null)
+        : "overview";
+      return { parsedView, parsedSettingsSection, parsedContentSection, parsedSystemSection };
     }, [pathname]);
 
   const overviewTitleId = useMemo(() => {
@@ -313,6 +329,7 @@ function AuthenticatedHomePage({
       nextView: ViewId,
       nextSettingsSection?: SettingsSection,
       nextContentSection?: ContentSettingsSection,
+      nextSystemSection?: SystemSection,
       nextOverviewTitleId?: string | null,
       nextEpisodeId?: string | null,
     ) => {
@@ -321,6 +338,7 @@ function AuthenticatedHomePage({
         nextView,
         nextView === "settings" ? nextSettingsSection : undefined,
         isMedia ? nextContentSection : undefined,
+        nextView === "system" ? nextSystemSection : undefined,
       );
       const normalizedContentSection = isMedia
         ? (nextContentSection ?? "overview")
@@ -366,7 +384,7 @@ function AuthenticatedHomePage({
         return;
       }
 
-      navigateTo(targetView, undefined, "overview", titleId, episodeId);
+      navigateTo(targetView, undefined, "overview", undefined, titleId, episodeId);
     },
     [navigateTo],
   );
@@ -473,6 +491,7 @@ function AuthenticatedHomePage({
                 view={view}
                 settingsSection={settingsSection}
                 contentSettingsSection={contentSettingsSection}
+                systemSection={systemSection}
                 entitlements={entitlements}
                 onNavigate={navigateTo}
               >
@@ -491,6 +510,7 @@ function AuthenticatedHomePage({
                       uiLanguage={uiLanguage}
                       setLanguagePreferenceFromShell={setLanguagePreferenceFromShell}
                       contentSettingsSection={contentSettingsSection}
+                      systemSection={systemSection}
                       handleOpenOverview={handleOpenOverview}
                     />
                   </Suspense>

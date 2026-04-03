@@ -6,12 +6,13 @@ use scryer_domain::{PolicyInput, TitleHistoryEventType};
 
 use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_error};
 use crate::mappers::{
-    from_activity_event, from_backup_info, from_calendar_episode, from_collection, from_disk_space,
-    from_download_client_config, from_download_queue_item, from_episode, from_health_check_result,
-    from_indexer_config, from_library_scan_session, from_media_rename_plan, from_pending_release,
-    from_provider_type, from_release_decision, from_system_health, from_title,
-    from_title_history_page, from_title_history_record, from_title_media_file,
-    from_title_release_blocklist_entry, from_user, from_wanted_item,
+    from_activity_event, from_backup_info, from_calendar_episode, from_collection,
+    from_delete_preview, from_disk_space, from_download_client_config, from_download_queue_item,
+    from_episode, from_health_check_result, from_indexer_config, from_job_definition, from_job_run,
+    from_library_scan_session, from_media_rename_plan, from_pending_release, from_provider_type,
+    from_release_decision, from_system_health, from_title, from_title_history_page,
+    from_title_history_record, from_title_media_file, from_title_release_blocklist_entry,
+    from_user, from_wanted_item,
 };
 use crate::settings_graph::{
     load_download_client_routing, load_indexer_routing, load_library_paths_payload,
@@ -192,6 +193,48 @@ impl QueryRoot {
         };
 
         Ok(from_media_rename_plan(plan))
+    }
+
+    async fn delete_title_preview(
+        &self,
+        ctx: &Context<'_>,
+        input: DeleteTitlePreviewInput,
+    ) -> GqlResult<DeletePreviewPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let preview = app
+            .preview_delete_title_files(&actor, &input.title_id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_delete_preview(preview))
+    }
+
+    async fn delete_media_file_preview(
+        &self,
+        ctx: &Context<'_>,
+        input: DeleteMediaFilePreviewInput,
+    ) -> GqlResult<DeletePreviewPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let preview = app
+            .preview_delete_media_file(&actor, &input.file_id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_delete_preview(preview))
+    }
+
+    async fn delete_subtitle_preview(
+        &self,
+        ctx: &Context<'_>,
+        input: DeleteSubtitlePreviewInput,
+    ) -> GqlResult<DeletePreviewPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let preview = app
+            .preview_delete_subtitle_file(&actor, &input.subtitle_download_id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_delete_preview(preview))
     }
 
     async fn collection(
@@ -493,6 +536,53 @@ impl QueryRoot {
             .into_iter()
             .map(from_library_scan_session)
             .collect())
+    }
+
+    async fn jobs(&self, ctx: &Context<'_>) -> GqlResult<Vec<JobDefinitionPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let jobs = app.list_jobs(&actor).await.map_err(to_gql_error)?;
+        Ok(jobs.into_iter().map(from_job_definition).collect())
+    }
+
+    async fn active_job_runs(&self, ctx: &Context<'_>) -> GqlResult<Vec<JobRunPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let runs = app.active_job_runs(&actor).await.map_err(to_gql_error)?;
+        Ok(runs.into_iter().map(from_job_run).collect())
+    }
+
+    async fn job_runs(
+        &self,
+        ctx: &Context<'_>,
+        job_key: JobKeyValue,
+        limit: Option<i32>,
+    ) -> GqlResult<Vec<JobRunPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let runs = app
+            .list_job_runs(
+                &actor,
+                job_key.into_application(),
+                limit.unwrap_or(10).max(1) as usize,
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(runs.into_iter().map(from_job_run).collect())
+    }
+
+    async fn recent_job_runs(
+        &self,
+        ctx: &Context<'_>,
+        limit: Option<i32>,
+    ) -> GqlResult<Vec<JobRunPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let runs = app
+            .list_recent_job_runs(&actor, limit.unwrap_or(50).max(1) as usize)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(runs.into_iter().map(from_job_run).collect())
     }
 
     async fn download_queue(

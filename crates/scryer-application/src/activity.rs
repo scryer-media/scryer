@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use scryer_domain::NotificationEventType;
+use scryer_domain::{NotificationEventType, Title};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -13,6 +13,7 @@ pub enum ActivityKind {
     SettingSaved,
     MovieFetched,
     MovieAdded,
+    TitleUpdated,
     MetadataHydrationStarted,
     MetadataHydrationCompleted,
     MetadataHydrationFailed,
@@ -72,6 +73,7 @@ impl ActivityKind {
             Self::SettingSaved => "setting_saved",
             Self::MovieFetched => "movie_fetched",
             Self::MovieAdded => "movie_added",
+            Self::TitleUpdated => "title_updated",
             Self::MetadataHydrationStarted => "metadata_hydration_started",
             Self::MetadataHydrationCompleted => "metadata_hydration_completed",
             Self::MetadataHydrationFailed => "metadata_hydration_failed",
@@ -103,6 +105,105 @@ pub struct NotificationEnvelope {
     pub body: String,
     pub facet: Option<String>,
     pub metadata: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NotificationMediaUpdate {
+    pub path: String,
+    pub update_type: &'static str,
+}
+
+impl NotificationMediaUpdate {
+    pub fn created(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            update_type: "created",
+        }
+    }
+
+    pub fn modified(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            update_type: "modified",
+        }
+    }
+
+    pub fn deleted(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            update_type: "deleted",
+        }
+    }
+}
+
+pub(crate) fn build_lifecycle_notification_metadata(
+    title: &Title,
+    media_updates: impl IntoIterator<Item = NotificationMediaUpdate>,
+) -> HashMap<String, serde_json::Value> {
+    let mut metadata = HashMap::new();
+    metadata.insert("title_name".to_string(), serde_json::json!(title.name));
+    metadata.insert(
+        "title_facet".to_string(),
+        serde_json::json!(title.facet.as_str()),
+    );
+    if let Some(year) = title.year {
+        metadata.insert("title_year".to_string(), serde_json::json!(year));
+    }
+    if let Some(ref poster) = title.poster_url {
+        metadata.insert("poster_url".to_string(), serde_json::json!(poster));
+    }
+
+    let mut external_ids = serde_json::Map::new();
+    for external_id in &title.external_ids {
+        match external_id.source.as_str() {
+            "imdb" => {
+                external_ids.insert("imdb_id".to_string(), serde_json::json!(external_id.value));
+            }
+            "tmdb" => {
+                external_ids.insert("tmdb_id".to_string(), serde_json::json!(external_id.value));
+            }
+            "tvdb" => {
+                external_ids.insert("tvdb_id".to_string(), serde_json::json!(external_id.value));
+            }
+            _ => {}
+        }
+    }
+    if !external_ids.contains_key("imdb_id")
+        && let Some(ref imdb_id) = title.imdb_id
+    {
+        external_ids.insert("imdb_id".to_string(), serde_json::json!(imdb_id));
+    }
+    if !external_ids.is_empty() {
+        metadata.insert(
+            "external_ids".to_string(),
+            serde_json::Value::Object(external_ids),
+        );
+    }
+
+    let updates: Vec<serde_json::Value> = media_updates
+        .into_iter()
+        .map(|update| {
+            serde_json::json!({
+                "path": update.path,
+                "update_type": update.update_type,
+            })
+        })
+        .collect();
+    if !updates.is_empty() {
+        if let Some(first_path) = updates
+            .first()
+            .and_then(|value| value.get("path"))
+            .and_then(serde_json::Value::as_str)
+        {
+            metadata.insert("file_path".to_string(), serde_json::json!(first_path));
+        }
+        metadata.insert(
+            "media_updates".to_string(),
+            serde_json::Value::Array(updates),
+        );
+    }
+
+    metadata
 }
 
 #[derive(Clone, Debug, PartialEq)]

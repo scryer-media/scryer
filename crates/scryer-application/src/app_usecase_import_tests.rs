@@ -425,6 +425,13 @@ fn missing_audio_languages_case_normalization() {
 }
 
 #[test]
+fn missing_audio_languages_accepts_full_iso_language_names() {
+    let required = vec!["Filipino".to_string()];
+    let actual = vec!["fil-PH".to_string()];
+    assert!(missing_audio_languages(&required, &actual).is_empty());
+}
+
+#[test]
 fn missing_audio_languages_one_missing() {
     let required = vec!["JPN".to_string(), "ENG".to_string()];
     let actual = vec!["eng".to_string()];

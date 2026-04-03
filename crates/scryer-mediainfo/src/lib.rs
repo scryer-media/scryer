@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::io::Read;
 use std::path::Path;
 
 mod avi;
@@ -107,7 +108,7 @@ pub fn is_valid_video(analysis: &MediaAnalysis) -> bool {
 }
 
 /// Analyzes a media file using pure Rust container parsers. Dispatches to the
-/// appropriate parser based on file extension.
+/// appropriate parser based on container sniffing with an extension fallback.
 pub fn analyze_file(file_path: &Path) -> Result<MediaAnalysis, MediaInfoError> {
     let ext = file_path
         .extension()
@@ -115,15 +116,86 @@ pub fn analyze_file(file_path: &Path) -> Result<MediaAnalysis, MediaInfoError> {
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
 
-    let raw = match ext.as_str() {
-        "mkv" | "webm" => mkv::parse_mkv(file_path)?,
-        "mp4" | "m4v" | "mov" => mp4::parse_mp4(file_path)?,
-        "avi" => avi::parse_avi(file_path)?,
-        "ts" | "m2ts" => ts::parse_ts(file_path)?,
-        _ => return Err(MediaInfoError::UnsupportedFormat(ext)),
+    let format = sniff_container_format(file_path).or_else(|| match ext.as_str() {
+        "mkv" | "webm" => Some(ContainerFormat::Matroska),
+        "mp4" | "m4v" | "mov" => Some(ContainerFormat::Mp4),
+        "avi" => Some(ContainerFormat::Avi),
+        "ts" | "m2ts" => Some(ContainerFormat::Ts),
+        _ => None,
+    });
+
+    let raw = match format {
+        Some(ContainerFormat::Matroska) => mkv::parse_mkv(file_path)?,
+        Some(ContainerFormat::Mp4) => mp4::parse_mp4(file_path)?,
+        Some(ContainerFormat::Avi) => avi::parse_avi(file_path)?,
+        Some(ContainerFormat::Ts) => ts::parse_ts(file_path)?,
+        None => return Err(MediaInfoError::UnsupportedFormat(ext)),
     };
 
     Ok(build_analysis(raw))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ContainerFormat {
+    Matroska,
+    Mp4,
+    Avi,
+    Ts,
+}
+
+fn sniff_container_format(file_path: &Path) -> Option<ContainerFormat> {
+    let mut file = std::fs::File::open(file_path).ok()?;
+    let mut header = [0_u8; 564];
+    let bytes_read = file.read(&mut header).ok()?;
+    sniff_container_format_from_bytes(&header[..bytes_read])
+}
+
+fn sniff_container_format_from_bytes(data: &[u8]) -> Option<ContainerFormat> {
+    if data.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+        return Some(ContainerFormat::Matroska);
+    }
+
+    if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"AVI " {
+        return Some(ContainerFormat::Avi);
+    }
+
+    if looks_like_transport_stream(data) {
+        return Some(ContainerFormat::Ts);
+    }
+
+    if looks_like_mp4(data) {
+        return Some(ContainerFormat::Mp4);
+    }
+
+    None
+}
+
+fn looks_like_transport_stream(data: &[u8]) -> bool {
+    const TS_PACKET_SIZE: usize = 188;
+
+    [0_usize, 4].into_iter().any(|offset| {
+        data.len() > offset + TS_PACKET_SIZE * 2 && {
+            data[offset] == 0x47
+                && data[offset + TS_PACKET_SIZE] == 0x47
+                && data[offset + TS_PACKET_SIZE * 2] == 0x47
+        }
+    })
+}
+
+fn looks_like_mp4(data: &[u8]) -> bool {
+    if data.len() < 8 {
+        return false;
+    }
+
+    let name = &data[4..8];
+    let printable_name = name.iter().all(u8::is_ascii_alphanumeric)
+        || matches!(name, b"ac-3" | b"ec-3" | b"mp4a" | b".mp3");
+
+    printable_name
+        && matches!(
+            name,
+            b"ftyp" | b"moov" | b"moof" | b"mdat" | b"free" | b"skip" | b"wide" | b"styp"
+        )
 }
 
 // ---------------------------------------------------------------------------
@@ -429,5 +501,41 @@ mod tests {
         assert_eq!(analysis.audio_codec.as_deref(), Some("flac"));
         assert_eq!(analysis.audio_channels, Some(6));
         assert_eq!(analysis.audio_bitrate_kbps, Some(640));
+    }
+
+    #[test]
+    fn sniff_container_format_prefers_matroska_magic_over_extension_hint() {
+        assert_eq!(
+            sniff_container_format_from_bytes(&[0x1A, 0x45, 0xDF, 0xA3, 0, 0, 0, 0]),
+            Some(ContainerFormat::Matroska)
+        );
+    }
+
+    #[test]
+    fn sniff_container_format_detects_avi_and_transport_stream() {
+        assert_eq!(
+            sniff_container_format_from_bytes(b"RIFF\0\0\0\0AVI LIST"),
+            Some(ContainerFormat::Avi)
+        );
+
+        let mut ts = vec![0_u8; 564];
+        ts[0] = 0x47;
+        ts[188] = 0x47;
+        ts[376] = 0x47;
+        assert_eq!(
+            sniff_container_format_from_bytes(&ts),
+            Some(ContainerFormat::Ts)
+        );
+    }
+
+    #[test]
+    fn sniff_container_format_detects_mp4_box_headers() {
+        let mut bytes = vec![0_u8; 16];
+        bytes[..4].copy_from_slice(&16_u32.to_be_bytes());
+        bytes[4..8].copy_from_slice(b"ftyp");
+        assert_eq!(
+            sniff_container_format_from_bytes(&bytes),
+            Some(ContainerFormat::Mp4)
+        );
     }
 }

@@ -4,10 +4,12 @@
 //! the old file is recycled and the new one takes its place. If the new import
 //! fails, the old file is restored from the recycle bin to avoid data loss.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::activity::{ActivityChannel, ActivityKind, ActivitySeverity};
+use crate::activity::{
+    ActivityChannel, ActivityKind, ActivitySeverity, NotificationMediaUpdate,
+    build_lifecycle_notification_metadata,
+};
 use crate::recycle_bin::{self, RecycleBinConfig, RecycleManifest};
 use crate::release_parser::ParsedReleaseMetadata;
 use crate::types::TitleMediaFile;
@@ -256,13 +258,24 @@ pub async fn execute_upgrade(
         final_score - old_score
     );
     {
-        let mut meta = HashMap::new();
-        meta.insert("title_name".to_string(), serde_json::json!(title.name));
+        let mut meta = if existing_file.file_path == dest_path.to_string_lossy() {
+            build_lifecycle_notification_metadata(
+                title,
+                [NotificationMediaUpdate::modified(
+                    dest_path.to_string_lossy().to_string(),
+                )],
+            )
+        } else {
+            build_lifecycle_notification_metadata(
+                title,
+                [
+                    NotificationMediaUpdate::deleted(existing_file.file_path.clone()),
+                    NotificationMediaUpdate::created(dest_path.to_string_lossy().to_string()),
+                ],
+            )
+        };
         meta.insert("old_score".to_string(), serde_json::json!(old_score));
         meta.insert("new_score".to_string(), serde_json::json!(final_score));
-        if let Some(ref poster) = title.poster_url {
-            meta.insert("poster_url".to_string(), serde_json::json!(poster));
-        }
         let envelope = crate::activity::NotificationEnvelope {
             event_type: NotificationEventType::Upgrade,
             title: format!("Upgraded: {}", title.name),

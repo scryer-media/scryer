@@ -6,6 +6,7 @@ import type { LucideIcon } from "lucide-react";
 import type {
   ContentSettingsSection,
   SettingsSection,
+  SystemSection,
   Translate,
   ViewId,
 } from "@/components/root/types";
@@ -45,12 +46,14 @@ type RootSidebarProps = {
   view: ViewId;
   settingsSection: SettingsSection;
   contentSettingsSection: ContentSettingsSection;
+  systemSection: SystemSection;
   entitlements: string[];
   children?: React.ReactNode;
   onNavigate: (
     nextView: ViewId,
     nextSettingsSection?: SettingsSection,
     nextContentSection?: ContentSettingsSection,
+    nextSystemSection?: SystemSection,
   ) => void;
 };
 
@@ -132,6 +135,11 @@ const MEDIA_SETTINGS_SUB_PAGES: Array<{ id: ContentSettingsSection; labelKey: st
   { id: "routing", labelKey: "facetSettings.routing" },
 ];
 
+const SYSTEM_SUB_PAGES: Array<{ id: SystemSection; labelKey: string }> = [
+  { id: "overview", labelKey: "system.title" },
+  { id: "jobs", labelKey: "system.jobsTitle" },
+];
+
 function isSettingsSubPage(section: ContentSettingsSection): boolean {
   return section === "settings" || section === "general" || section === "quality" || section === "renaming" || section === "routing";
 }
@@ -149,6 +157,7 @@ function RootSidebarContent({
   view,
   settingsSection,
   contentSettingsSection,
+  systemSection,
   entitlements,
   children,
   onNavigate,
@@ -193,9 +202,10 @@ function RootSidebarContent({
       nextView: ViewId,
       nextSettingsSection?: SettingsSection,
       nextContentSection?: ContentSettingsSection,
+      nextSystemSection?: SystemSection,
     ) => {
       event.preventDefault();
-      onNavigate(nextView, nextSettingsSection, nextContentSection);
+      onNavigate(nextView, nextSettingsSection, nextContentSection, nextSystemSection);
       if (isMobile) {
         setOpenMobile(false);
       }
@@ -226,8 +236,14 @@ function RootSidebarContent({
       }
     }
 
+    if (view === "system") {
+      return SYSTEM_SUB_PAGES.find((entry) => entry.id === systemSection)?.labelKey
+        ? t(SYSTEM_SUB_PAGES.find((entry) => entry.id === systemSection)!.labelKey)
+        : null;
+    }
+
     return null;
-  }, [contentSettingsSection, settingsSection, t, view, visibleSettingsEntries]);
+  }, [contentSettingsSection, settingsSection, systemSection, t, view, visibleSettingsEntries]);
 
   return (
     <>
@@ -243,11 +259,14 @@ function RootSidebarContent({
                 const Icon = item.icon;
                 const isMediaSection = ["movies", "series", "anime"].includes(item.id);
                 const isSettingsTop = item.id === "settings";
+                const isSystemTop = item.id === "system";
                 const isActiveMediaSection = isMediaSection && view === item.id;
                 const isActiveSettingsSection = isSettingsTop && view === "settings";
-                const shouldShowChildren = isActiveMediaSection || isActiveSettingsSection;
+                const isActiveSystemSection = isSystemTop && view === "system";
+                const shouldShowChildren =
+                  isActiveMediaSection || isActiveSettingsSection || isActiveSystemSection;
                 const showSeparator = index < topNav.length - 1;
-                if (!isMediaSection && !isSettingsTop) {
+                if (!isMediaSection && !isSettingsTop && !isSystemTop) {
                   return (
                     <React.Fragment key={item.id}>
                       <SidebarMenuItem>
@@ -275,6 +294,10 @@ function RootSidebarContent({
                           onClick={(event) => {
                             if (isSettingsTop) {
                               handleNavigate(event, "settings", settingsSection);
+                              return;
+                            }
+                            if (isSystemTop) {
+                              handleNavigate(event, "system", undefined, undefined, systemSection);
                               return;
                             }
                             handleNavigate(event, item.id, undefined, contentSettingsSection);
@@ -306,7 +329,20 @@ function RootSidebarContent({
                                   </SidebarMenuSubButton>
                                 </SidebarMenuSubItem>
                               ))
-                            : (
+                            : isSystemTop ? (
+                              SYSTEM_SUB_PAGES.map((entry) => (
+                                <SidebarMenuSubItem key={entry.id}>
+                                  <SidebarMenuSubButton
+                                    isActive={systemSection === entry.id}
+                                    onClick={(event) => {
+                                      handleNavigate(event, "system", undefined, undefined, entry.id);
+                                    }}
+                                  >
+                                    {t(entry.labelKey)}
+                                  </SidebarMenuSubButton>
+                                </SidebarMenuSubItem>
+                              ))
+                            ) : (
                               <>
                                 <SidebarMenuSubItem>
                                   <SidebarMenuSubButton

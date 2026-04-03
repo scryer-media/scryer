@@ -2810,6 +2810,13 @@ fn apply_special_context(
 
     match (base, special) {
         (Some(mut metadata), Some((kind, raw))) => {
+            if has_explicit_standard_episode_identity(&metadata) {
+                if metadata.raw.is_none() {
+                    metadata.raw = Some(raw);
+                }
+                return Some(finalize_episode_metadata(metadata));
+            }
+
             metadata.season = Some(0);
             metadata.special_kind = Some(kind);
             if metadata.special_absolute_episode_numbers.is_empty() {
@@ -2847,6 +2854,10 @@ fn apply_special_context(
         })),
         (None, None) => None,
     }
+}
+
+fn has_explicit_standard_episode_identity(metadata: &ParsedEpisodeMetadata) -> bool {
+    metadata.season.is_some_and(|season| season > 0) && !metadata.episode_numbers.is_empty()
 }
 
 fn special_token_has_title_continuation(index: usize, tokens: &[String]) -> bool {

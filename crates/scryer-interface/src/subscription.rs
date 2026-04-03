@@ -8,10 +8,12 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::context::LogBuffer;
 use crate::context::{actor_from_ctx, app_from_ctx};
-use crate::mappers::from_activity_event;
-use crate::mappers::from_download_queue_item;
-use crate::mappers::from_library_scan_session;
-use crate::types::{ActivityEventPayload, DownloadQueueItemPayload, LibraryScanProgressPayload};
+use crate::mappers::{
+    from_activity_event, from_download_queue_item, from_job_run, from_library_scan_session,
+};
+use crate::types::{
+    ActivityEventPayload, DownloadQueueItemPayload, JobRunPayload, LibraryScanProgressPayload,
+};
 
 pub struct SubscriptionRoot;
 
@@ -200,6 +202,49 @@ impl SubscriptionRoot {
                         tracing::debug!("library_scan_progress: broadcast channel closed");
                         return None;
                     }
+                }
+            }
+        });
+
+        Box::pin(stream)
+    }
+
+    async fn job_run_events(&self, ctx: &Context<'_>) -> BoxStream<'static, JobRunPayload> {
+        let empty_stream = || -> BoxStream<'static, JobRunPayload> { Box::pin(stream::empty()) };
+
+        let app = match app_from_ctx(ctx) {
+            Ok(app) => app,
+            Err(error) => {
+                tracing::warn!("job_run_events: app_from_ctx failed: {error:?}");
+                return empty_stream();
+            }
+        };
+
+        let actor = match actor_from_ctx(ctx) {
+            Ok(actor) => actor,
+            Err(error) => {
+                tracing::warn!("job_run_events: actor_from_ctx failed: {error:?}");
+                return empty_stream();
+            }
+        };
+
+        let receiver = match app.subscribe_job_run_events(&actor) {
+            Ok(receiver) => receiver,
+            Err(error) => {
+                tracing::warn!("job_run_events: subscribe failed: {error}");
+                return empty_stream();
+            }
+        };
+
+        let stream = unfold(receiver, move |mut receiver| async move {
+            loop {
+                match receiver.recv().await {
+                    Ok(event) => return Some((from_job_run(event), receiver)),
+                    Err(RecvError::Lagged(n)) => {
+                        tracing::debug!("job_run_events: receiver lagged, skipped {n} messages");
+                        continue;
+                    }
+                    Err(RecvError::Closed) => return None,
                 }
             }
         });

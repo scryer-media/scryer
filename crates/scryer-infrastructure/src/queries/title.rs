@@ -294,6 +294,48 @@ pub(crate) async fn list_collections_for_title_query(
     Ok(out)
 }
 
+pub(crate) async fn list_collections_for_titles_query(
+    pool: &SqlitePool,
+    title_ids: &[String],
+) -> AppResult<Vec<Collection>> {
+    if title_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let placeholders: String = title_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT id, title_id, collection_type, collection_index, label, ordered_path,
+                narrative_order, first_episode_number, last_episode_number,
+                interstitial_tvdb_id, interstitial_name, interstitial_slug, interstitial_year,
+                interstitial_content_status, interstitial_overview, interstitial_poster_url,
+                interstitial_language, interstitial_runtime_minutes, interstitial_sort_title,
+                interstitial_imdb_id, interstitial_genres_json, interstitial_studio,
+                interstitial_digital_release_date, interstitial_association_confidence,
+                interstitial_continuity_status, interstitial_movie_form, interstitial_confidence,
+                interstitial_signal_summary, interstitial_placement, interstitial_movie_tmdb_id,
+                interstitial_movie_mal_id, interstitial_movie_anidb_id, interstitial_season_episode,
+                special_movies_json, monitored, created_at
+         FROM collections WHERE title_id IN ({placeholders})
+         ORDER BY title_id ASC, collection_index ASC, id ASC"
+    );
+
+    let mut query = sqlx::query(&sql);
+    for title_id in title_ids {
+        query = query.bind(title_id);
+    }
+
+    let rows = query
+        .fetch_all(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        out.push(row_to_collection(&row)?);
+    }
+    Ok(out)
+}
+
 pub(crate) async fn list_primary_collection_summaries_query(
     pool: &SqlitePool,
     title_ids: &[String],

@@ -43,6 +43,10 @@ services:
       context: .
       dockerfile: docker/scryer-dev-runtime.Dockerfile
     container_name: scryer
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
     working_dir: /workspace
     depends_on:
       - nzbget

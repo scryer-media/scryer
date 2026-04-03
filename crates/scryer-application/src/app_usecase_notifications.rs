@@ -43,7 +43,7 @@ impl AppUseCase {
             ));
         }
         let channel_type = scryer_domain::ChannelType::parse(channel_type.trim())
-            .ok_or_else(|| AppError::Validation(format!("unknown channel type: {channel_type}")))?;
+            .ok_or_else(|| AppError::Validation(format!("invalid channel type: {channel_type}")))?;
 
         let now = Utc::now();
         let config = NotificationChannelConfig {

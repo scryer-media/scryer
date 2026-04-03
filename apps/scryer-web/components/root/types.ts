@@ -1,4 +1,5 @@
 export type ViewId = "movies" | "series" | "anime" | "activity" | "wanted" | "history" | "settings" | "system";
+export type SystemSection = "overview" | "jobs";
 export type SettingsSection =
   | "profile"
   | "general"

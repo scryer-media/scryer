@@ -11,7 +11,12 @@ import { useGlobalStatusToast } from "@/lib/hooks/use-global-status-toast";
 import { ScryerGraphqlProvider } from "@/lib/graphql/urql-provider";
 import { TranslateContext } from "@/lib/context/translate-context";
 import { GlobalStatusContext } from "@/lib/context/global-status-context";
-import type { ViewId, SettingsSection, ContentSettingsSection } from "@/components/root/types";
+import type {
+  ViewId,
+  SettingsSection,
+  ContentSettingsSection,
+  SystemSection,
+} from "@/components/root/types";
 import { buildViewPath } from "@/lib/utils/routing";
 
 const MovieOverviewContainer = lazy(() =>
@@ -46,11 +51,17 @@ export function MovieOverviewShell() {
   }, [navigate]);
 
   const navigateTo = useCallback(
-    (nextView: ViewId, nextSettingsSection?: SettingsSection, nextContentSection?: ContentSettingsSection) => {
+    (
+      nextView: ViewId,
+      nextSettingsSection?: SettingsSection,
+      nextContentSection?: ContentSettingsSection,
+      nextSystemSection?: SystemSection,
+    ) => {
       const targetPath = buildViewPath(
         nextView,
         nextView === "settings" ? nextSettingsSection : undefined,
         nextView === "movies" || nextView === "series" || nextView === "anime" ? nextContentSection : undefined,
+        nextView === "system" ? nextSystemSection : undefined,
       );
       navigate(targetPath);
     },
@@ -90,6 +101,7 @@ export function MovieOverviewShell() {
                   view="movies"
                   settingsSection="profile"
                   contentSettingsSection="overview"
+                  systemSection="overview"
                   entitlements={[]}
                   onNavigate={navigateTo}
                 >

@@ -1,10 +1,10 @@
 use super::*;
+use crate::activity::{NotificationMediaUpdate, build_lifecycle_notification_metadata};
+use crate::library_scan_progress::TrackedTitleFilesConsumption;
 use scryer_domain::{InterstitialMovieMetadata, NotificationEventType};
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::Path;
 use std::time::Duration;
-use tokio::fs;
 use tracing::{info, warn};
 
 pub const DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY: &str = "download_client.routing";
@@ -20,7 +20,7 @@ const REMATCH_DERIVED_TAG_PREFIXES: &[&str] = &[
     "scryer:anime-status:",
 ];
 const POST_HYDRATION_TITLE_SCAN_CONCURRENCY: usize = 4;
-const TRACKED_TITLE_PRE_SCAN_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+const TRACKED_TITLE_PRE_SCAN_WAIT_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct DownloadClientRoutingEntry {
@@ -742,6 +742,7 @@ impl AppUseCase {
         if title.metadata_fetched_at.is_some() {
             mark_library_scan_title_hydration_completed(self, &title.id).await;
             self.emit_hydration_completed(title).await;
+            self.emit_title_updated_activity(None, title).await;
             if options.sync_wanted_after_completion {
                 sync_wanted_after_hydration(self, title).await;
             }
@@ -2197,6 +2198,8 @@ impl AppUseCase {
         actor: &User,
         id: &str,
         delete_files_on_disk: bool,
+        preview_fingerprint: Option<&str>,
+        typed_confirmation: Option<&str>,
     ) -> AppResult<()> {
         require(actor, &Entitlement::ManageTitle)?;
 
@@ -2208,28 +2211,13 @@ impl AppUseCase {
             .ok_or_else(|| AppError::NotFound(format!("title {}", id)))?;
 
         if delete_files_on_disk {
-            if let Some(ref folder_path) = title.folder_path {
-                let folder = Path::new(folder_path);
-                if folder.exists() {
-                    if let Err(err) = fs::remove_dir_all(folder).await {
-                        return Err(AppError::Repository(format!(
-                            "failed to delete title folder {}: {err}",
-                            folder.display()
-                        )));
-                    }
-                    info!(
-                        path = %folder.display(),
-                        title = %title.name,
-                        "deleted title folder"
-                    );
-                }
-            } else {
-                info!(
-                    title_id = %id,
-                    title_name = %title.name,
-                    "no folder_path set, skipping file deletion"
-                );
-            }
+            let preview_fingerprint = preview_fingerprint.ok_or_else(|| {
+                AppError::Validation(
+                    "delete preview confirmation is required before deleting files on disk".into(),
+                )
+            })?;
+            self.execute_delete_title_files(id, preview_fingerprint, typed_confirmation)
+                .await?;
         }
 
         // Purge recycle bin entries that belonged to this title.
@@ -2398,6 +2386,8 @@ impl AppUseCase {
         actor: &User,
         file_id: &str,
         delete_from_disk: bool,
+        preview_fingerprint: Option<&str>,
+        typed_confirmation: Option<&str>,
     ) -> AppResult<()> {
         require(actor, &Entitlement::ManageTitle)?;
 
@@ -2409,35 +2399,13 @@ impl AppUseCase {
             .ok_or_else(|| AppError::NotFound(format!("media file {}", file_id)))?;
 
         if delete_from_disk {
-            let file_path = media_file.file_path.trim().to_string();
-            if !file_path.is_empty() {
-                let recycle_config =
-                    crate::recycle_bin::config_from_file_path(Path::new(&file_path));
-
-                let manifest = crate::recycle_bin::RecycleManifest {
-                    recycled_at: chrono::Utc::now().to_rfc3339(),
-                    original_path: file_path.clone(),
-                    size_bytes: fs::metadata(&file_path).await.map(|m| m.len()).unwrap_or(0),
-                    title_id: Some(media_file.title_id.clone()),
-                    reason: "file_deleted".to_string(),
-                };
-
-                if let Err(error) = crate::recycle_bin::recycle_file(
-                    &recycle_config,
-                    Path::new(&file_path),
-                    manifest,
+            let preview_fingerprint = preview_fingerprint.ok_or_else(|| {
+                AppError::Validation(
+                    "delete preview confirmation is required before deleting files on disk".into(),
                 )
-                .await
-                {
-                    warn!(
-                        file_id = %file_id,
-                        file_path = %file_path,
-                        error = %error,
-                        "failed to recycle media file"
-                    );
-                    return Err(error);
-                }
-            }
+            })?;
+            self.execute_delete_media_file(file_id, preview_fingerprint, typed_confirmation)
+                .await?;
         }
 
         self.services.media_files.delete_media_file(file_id).await?;
@@ -2477,6 +2445,37 @@ impl AppUseCase {
                     download_id: None,
                     data,
                 })
+                .await;
+        }
+
+        if delete_from_disk
+            && let Ok(Some(title)) = self.services.titles.get_by_id(&media_file.title_id).await
+        {
+            let metadata = build_lifecycle_notification_metadata(
+                &title,
+                [NotificationMediaUpdate::deleted(
+                    media_file.file_path.clone(),
+                )],
+            );
+            let envelope = crate::activity::NotificationEnvelope {
+                event_type: NotificationEventType::FileDeleted,
+                title: format!("File deleted: {}", title.name),
+                body: format!("Deleted media file from disk: {}", media_file.file_path),
+                facet: Some(title.facet.as_str().to_string()),
+                metadata,
+            };
+            let _ = self
+                .services
+                .record_activity_event_with_notification(
+                    Some(actor.id.clone()),
+                    Some(title.id.clone()),
+                    None,
+                    ActivityKind::SystemNotice,
+                    format!("file deleted from disk: {}", media_file.file_path),
+                    ActivitySeverity::Info,
+                    vec![ActivityChannel::WebUi],
+                    envelope,
+                )
                 .await;
         }
 
@@ -3156,12 +3155,12 @@ impl AppUseCase {
     /// Re-fetch metadata from SMG for all monitored series/anime titles.
     /// This updates episode air dates (TBA → actual), adds newly announced
     /// episodes, and refreshes other metadata fields.
-    pub(crate) async fn refresh_monitored_series_metadata(&self) {
+    pub(crate) async fn run_metadata_refresh_job(&self) -> AppResult<u32> {
         let titles = match self.services.titles.list(None, None).await {
             Ok(t) => t,
             Err(err) => {
                 warn!(error = %err, "metadata refresh: failed to list titles");
-                return;
+                return Err(err);
             }
         };
 
@@ -3187,6 +3186,8 @@ impl AppUseCase {
         if refreshed > 0 {
             info!(count = refreshed, "periodic metadata refresh completed");
         }
+
+        Ok(refreshed)
     }
 }
 
@@ -3375,32 +3376,16 @@ async fn wait_for_tracked_title_files(
     title_id: &str,
 ) -> Option<Vec<LibraryFile>> {
     loop {
-        if let Some(files) = app
+        match app
             .services
             .library_scan_tracker
-            .take_title_files(title_id)
+            .consume_tracked_title_files(title_id)
             .await
         {
-            return Some(files);
-        }
-
-        if app
-            .services
-            .library_scan_tracker
-            .session_for_title(title_id)
-            .await
-            .is_none()
-        {
-            return None;
-        }
-
-        if !app
-            .services
-            .library_scan_tracker
-            .is_title_pre_scan_pending(title_id)
-            .await
-        {
-            return None;
+            TrackedTitleFilesConsumption::Ready(files) => return Some(files),
+            TrackedTitleFilesConsumption::FallbackRequired
+            | TrackedTitleFilesConsumption::NotTracked => return None,
+            TrackedTitleFilesConsumption::Pending => {}
         }
 
         if tokio::time::timeout(
@@ -3417,11 +3402,11 @@ async fn wait_for_tracked_title_files(
                 timeout_secs = TRACKED_TITLE_PRE_SCAN_WAIT_TIMEOUT.as_secs(),
                 "timed out waiting for tracked title pre-scan update"
             );
-            return app
-                .services
+            app.services
                 .library_scan_tracker
-                .take_title_files(title_id)
+                .abandon_title_pre_scan(title_id)
                 .await;
+            return None;
         }
     }
 }
@@ -3457,6 +3442,11 @@ async fn finalize_failed_post_hydration_title_scan(
     app.services
         .library_scan_tracker
         .release_title(title_id)
+        .await;
+    let _ = app
+        .services
+        .library_scan_tracker
+        .mark_file_total_known_if_resolved(&session_id)
         .await;
     let _ = app
         .services

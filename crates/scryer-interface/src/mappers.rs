@@ -1,9 +1,10 @@
 use scryer_application::{
-    ActivityEvent, BackupInfo, DiskSpaceInfo, HealthCheckResult, HousekeepingReport,
-    IndexerSearchResult, LibraryScanSummary, ParsedEpisodeMetadata, ParsedReleaseMetadata,
-    PendingRelease, QualityProfile, QualityProfileCriteria, QualityProfileDecision, RegistryPlugin,
-    RenameApplyItemResult, RenameApplyResult, RenamePlan, RenamePlanItem, RssSyncReport,
-    ScoringEntry, ScoringSource, SystemHealth, TitleHistoryPage, TitleReleaseBlocklistEntry,
+    ActivityEvent, BackupInfo, DeletePreview, DiskSpaceInfo, HealthCheckResult, HousekeepingReport,
+    IndexerSearchResult, JobDefinition, JobRun, LibraryScanSummary, ParsedEpisodeMetadata,
+    ParsedReleaseMetadata, PendingRelease, QualityProfile, QualityProfileCriteria,
+    QualityProfileDecision, RegistryPlugin, RenameApplyItemResult, RenameApplyResult, RenamePlan,
+    RenamePlanItem, RssSyncReport, ScoringEntry, ScoringSource, SystemHealth, TitleHistoryPage,
+    TitleReleaseBlocklistEntry,
 };
 use scryer_domain::{
     CalendarEpisode, Collection, DownloadClientConfig, DownloadQueueItem, Episode, IndexerConfig,
@@ -77,6 +78,22 @@ pub(crate) fn from_quality_profile(profile: QualityProfile) -> QualityProfilePay
         id: profile.id,
         name: profile.name,
         criteria: from_quality_profile_criteria(profile.criteria),
+    }
+}
+
+pub(crate) fn from_delete_preview(preview: DeletePreview) -> DeletePreviewPayload {
+    DeletePreviewPayload {
+        fingerprint: preview.fingerprint,
+        total_file_count: preview.total_file_count,
+        media_count: preview.media_count,
+        subtitle_count: preview.subtitle_count,
+        image_count: preview.image_count,
+        other_count: preview.other_count,
+        directory_count: preview.directory_count,
+        requires_typed_confirmation: preview.requires_typed_confirmation,
+        typed_confirmation_prompt: preview.typed_confirmation_prompt,
+        target_label: preview.target_label,
+        sample_paths: preview.sample_paths,
     }
 }
 
@@ -454,6 +471,7 @@ pub(crate) fn from_library_scan_session(
     LibraryScanProgressPayload {
         session_id: session.session_id,
         facet: MediaFacetValue::from_domain(session.facet),
+        mode: LibraryScanModeValue::from_application(session.mode),
         status: LibraryScanStatusValue::from_application(session.status),
         started_at: session.started_at.to_rfc3339(),
         updated_at: session.updated_at.to_rfc3339(),
@@ -463,6 +481,52 @@ pub(crate) fn from_library_scan_session(
         metadata_progress: from_library_scan_phase_progress(session.metadata_progress),
         file_progress: from_library_scan_phase_progress(session.file_progress),
         summary: session.summary.map(from_library_scan_summary),
+    }
+}
+
+pub(crate) fn from_job_definition(definition: JobDefinition) -> JobDefinitionPayload {
+    JobDefinitionPayload {
+        key: JobKeyValue::from_application(definition.key),
+        display_name: definition.display_name,
+        description: definition.description,
+        category: JobCategoryValue::from_application(definition.category),
+        section: JobSectionValue::from_application(definition.section),
+        manual_trigger_allowed: definition.manual_trigger_allowed,
+        uses_library_scan_progress: definition.uses_library_scan_progress,
+        schedule: JobScheduleInfoPayload {
+            kind: JobScheduleKindValue::from_application(definition.schedule.kind),
+            description: definition.schedule.description,
+            interval_seconds: definition
+                .schedule
+                .interval_seconds
+                .map(|value| value as i32),
+            initial_delay_seconds: definition
+                .schedule
+                .initial_delay_seconds
+                .map(|value| value as i32),
+            next_run_at: definition
+                .schedule
+                .next_run_at
+                .map(|value| value.to_rfc3339()),
+        },
+    }
+}
+
+pub(crate) fn from_job_run(run: JobRun) -> JobRunPayload {
+    JobRunPayload {
+        id: run.id,
+        job_key: JobKeyValue::from_application(run.job_key),
+        display_name: run.display_name,
+        category: JobCategoryValue::from_application(run.category),
+        section: JobSectionValue::from_application(run.section),
+        status: JobRunStatusValue::from_application(run.status),
+        trigger_source: JobTriggerSourceValue::from_application(run.trigger_source),
+        started_at: run.started_at.to_rfc3339(),
+        completed_at: run.completed_at.map(|value| value.to_rfc3339()),
+        summary_text: run.summary_text,
+        error_text: run.error_text,
+        progress_json: run.progress_json,
+        library_scan_progress: run.library_scan_progress.map(from_library_scan_session),
     }
 }
 

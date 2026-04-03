@@ -1,5 +1,4 @@
 import * as React from "react";
-import { useActivitySubscription } from "@/lib/hooks/use-activity-subscription";
 import { MediaContentView } from "@/components/views/media-content-view";
 import {
   addTitleMutation,
@@ -13,6 +12,8 @@ import {
 } from "@/lib/graphql/mutations";
 import {
   titlesQuery,
+  titleListEntryQuery,
+  deleteTitlePreviewQuery,
   ruleSetsQuery,
   routingPageInitQuery,
 } from "@/lib/graphql/queries";
@@ -37,11 +38,14 @@ import type { Release, TitleRecord, RuleSetRecord } from "@/lib/types";
 import type { ScoringPersonaId } from "@/lib/types/quality-profiles";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
+import { DeletePreviewSummary } from "@/components/common/delete-preview-summary";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useLibraryScanProgress } from "@/lib/context/library-scan-progress-context";
 import { useSearchContext } from "@/lib/context/search-context";
+import { useDeletePreview } from "@/lib/hooks/use-delete-preview";
+import { useTitleListReactiveRefresh } from "@/lib/hooks/use-title-list-reactive-refresh";
 import { toast } from "sonner";
 
 type MediaContentContainerProps = {
@@ -72,6 +76,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
   const client = useClient();
+  const [titleDeleteTypedConfirmation, setTitleDeleteTypedConfirmation] =
+    React.useState("");
   const activeFacet = viewToFacet[view as keyof typeof viewToFacet] ?? "movie";
   const { getActiveSession } = useLibraryScanProgress();
   const activeLibraryScanSession = getActiveSession(activeFacet);
@@ -114,6 +120,23 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     libraryScanSummary,
     setLibraryScanSummary,
   } = useTitleManagementState();
+  const titleDeletePreviewVariables = React.useMemo(
+    () =>
+      titleToDelete && deleteFilesOnDisk
+        ? { input: { titleId: titleToDelete.id } }
+        : null,
+    [deleteFilesOnDisk, titleToDelete],
+  );
+  const {
+    preview: titleDeletePreview,
+    loading: titleDeletePreviewLoading,
+    error: titleDeletePreviewError,
+  } = useDeletePreview(
+    deleteTitlePreviewQuery,
+    "deleteTitlePreview",
+    titleDeletePreviewVariables,
+    titleToDelete !== null && deleteFilesOnDisk,
+  );
 
   const {
     moviesPath,
@@ -301,6 +324,40 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     setTitleStatus,
   ]);
 
+  const refreshTitleRecord = React.useCallback(
+    async (titleId: string) => {
+      const { data, error } = await client
+        .query(
+          titleListEntryQuery,
+          { id: titleId },
+          { requestPolicy: "network-only" },
+        )
+        .toPromise();
+      if (error) {
+        throw error;
+      }
+
+      const refreshedTitle = (data?.title ?? null) as TitleRecord | null;
+      setMonitoredTitles((current) => {
+        const existingIndex = current.findIndex((item) => item.id === titleId);
+        if (!refreshedTitle) {
+          if (existingIndex === -1) {
+            return current;
+          }
+          return current.filter((item) => item.id !== titleId);
+        }
+        if (existingIndex === -1) {
+          return [...current, refreshedTitle];
+        }
+
+        return current.map((item) =>
+          item.id === titleId ? refreshedTitle : item,
+        );
+      });
+    },
+    [client, setMonitoredTitles],
+  );
+
   React.useEffect(() => {
     if (!catalogChangeSignal || !shouldLoadCatalogTitles) {
       return;
@@ -308,14 +365,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     void refreshTitles();
   }, [catalogChangeSignal, refreshTitles, shouldLoadCatalogTitles]);
 
-  // Refresh the title list when hydration completes for a title in this facet.
-  const HYDRATION_KINDS = React.useMemo(
-    () => new Set(["metadata_hydration_completed"]),
-    [],
-  );
-  useActivitySubscription(HYDRATION_KINDS, refreshTitles, {
+  useTitleListReactiveRefresh({
     facet: activeFacet,
     pause: !shouldLoadCatalogTitles,
+    onTitleUpdated: refreshTitleRecord,
   });
 
   const onAddSubmit = React.useCallback(
@@ -663,14 +716,22 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     (title: TitleRecord) => {
       setTitleToDelete(title);
       setDeleteFilesOnDisk(false);
+      setTitleDeleteTypedConfirmation("");
     },
-    [setTitleToDelete, setDeleteFilesOnDisk],
+    [setTitleDeleteTypedConfirmation, setTitleToDelete, setDeleteFilesOnDisk],
   );
 
   const closeDeleteTitleDialog = React.useCallback(() => {
     setTitleToDelete(null);
     setDeleteFilesOnDisk(false);
-  }, [setTitleToDelete, setDeleteFilesOnDisk]);
+    setTitleDeleteTypedConfirmation("");
+  }, [setDeleteFilesOnDisk, setTitleDeleteTypedConfirmation, setTitleToDelete]);
+
+  React.useEffect(() => {
+    if (!deleteFilesOnDisk) {
+      setTitleDeleteTypedConfirmation("");
+    }
+  }, [deleteFilesOnDisk]);
 
   const confirmDeleteTitle = React.useCallback(async () => {
     if (!titleToDelete) {
@@ -684,12 +745,24 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     }));
 
     try {
-      const payload: { titleId: string; deleteFilesOnDisk?: boolean } = {
+      const payload: {
+        titleId: string;
+        deleteFilesOnDisk?: boolean;
+        previewFingerprint?: string;
+        typedConfirmation?: string;
+      } = {
         titleId,
       };
 
       if (deleteFilesOnDisk) {
+        if (!titleDeletePreview) {
+          throw new Error("Delete preview is not ready yet.");
+        }
         payload.deleteFilesOnDisk = true;
+        payload.previewFingerprint = titleDeletePreview.fingerprint;
+        if (titleDeleteTypedConfirmation.trim()) {
+          payload.typedConfirmation = titleDeleteTypedConfirmation.trim();
+        }
       }
 
       const { error } = await client
@@ -717,11 +790,21 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     deleteFilesOnDisk,
     refreshTitles,
     client,
+    titleDeletePreview,
+    titleDeleteTypedConfirmation,
     t,
     titleToDelete,
     setGlobalStatus,
     setDeleteTitleLoadingById,
   ]);
+
+  const deleteTitleConfirmDisabled =
+    deleteFilesOnDisk &&
+    (titleDeletePreviewLoading ||
+      !!titleDeletePreviewError ||
+      !titleDeletePreview ||
+      (titleDeletePreview.requiresTypedConfirmation &&
+        titleDeleteTypedConfirmation.trim() !== "DELETE"));
 
   const handleLibraryScan = React.useCallback(async () => {
     if (activeLibraryScanSession) {
@@ -1059,25 +1142,37 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
             ? !!deleteTitleLoadingById[titleToDelete.id]
             : false
         }
+        confirmDisabled={deleteTitleConfirmDisabled}
         onConfirm={confirmDeleteTitle}
         onCancel={closeDeleteTitleDialog}
       >
-        <label className="flex items-center gap-2">
-          <Checkbox
-            checked={deleteFilesOnDisk}
-            onCheckedChange={(checked) =>
-              setDeleteFilesOnDisk(checked === true)
-            }
-            disabled={
-              titleToDelete !== null
-                ? !!deleteTitleLoadingById[titleToDelete.id]
-                : false
-            }
-          />
-          <span className="text-xs text-card-foreground">
-            {t("title.deleteFilesOnDisk")}
-          </span>
-        </label>
+        <div className="space-y-3">
+          <label className="flex items-center gap-2">
+            <Checkbox
+              checked={deleteFilesOnDisk}
+              onCheckedChange={(checked) =>
+                setDeleteFilesOnDisk(checked === true)
+              }
+              disabled={
+                titleToDelete !== null
+                  ? !!deleteTitleLoadingById[titleToDelete.id]
+                  : false
+              }
+            />
+            <span className="text-xs text-card-foreground">
+              {t("title.deleteFilesOnDisk")}
+            </span>
+          </label>
+          {deleteFilesOnDisk ? (
+            <DeletePreviewSummary
+              preview={titleDeletePreview}
+              loading={titleDeletePreviewLoading}
+              error={titleDeletePreviewError}
+              typedConfirmation={titleDeleteTypedConfirmation}
+              onTypedConfirmationChange={setTitleDeleteTypedConfirmation}
+            />
+          ) : null}
+        </div>
       </ConfirmDialog>
     </>
   );

@@ -67,6 +67,13 @@ pub(crate) fn build_import_profile_decision(
 pub(crate) fn build_media_file_analysis(
     analysis: &scryer_mediainfo::MediaAnalysis,
 ) -> crate::MediaFileAnalysis {
+    let audio_languages = crate::normalize_detected_audio_languages(
+        analysis.audio_languages.iter().map(String::as_str),
+    );
+    let subtitle_languages = crate::normalize_detected_subtitle_languages(
+        analysis.subtitle_languages.iter().map(String::as_str),
+    );
+
     crate::MediaFileAnalysis {
         video_codec: analysis.video_codec.clone(),
         video_width: analysis.video_width,
@@ -79,25 +86,31 @@ pub(crate) fn build_media_file_analysis(
         audio_codec: analysis.audio_codec.clone(),
         audio_channels: analysis.audio_channels,
         audio_bitrate_kbps: analysis.audio_bitrate_kbps,
-        audio_languages: analysis.audio_languages.clone(),
+        audio_languages,
         audio_streams: analysis
             .audio_streams
             .iter()
             .map(|stream| crate::AudioStreamDetail {
                 codec: stream.codec.clone(),
                 channels: stream.channels,
-                language: stream.language.clone(),
+                language: stream
+                    .language
+                    .as_deref()
+                    .and_then(crate::normalize_detected_audio_language_code),
                 bitrate_kbps: stream.bitrate_kbps,
             })
             .collect(),
-        subtitle_languages: analysis.subtitle_languages.clone(),
+        subtitle_languages,
         subtitle_codecs: analysis.subtitle_codecs.clone(),
         subtitle_streams: analysis
             .subtitle_streams
             .iter()
             .map(|stream| crate::SubtitleStreamDetail {
                 codec: stream.codec.clone(),
-                language: stream.language.clone(),
+                language: stream
+                    .language
+                    .as_deref()
+                    .and_then(crate::normalize_detected_subtitle_language_code),
                 name: stream.name.clone(),
                 forced: stream.forced,
                 default: stream.default,
@@ -115,13 +128,19 @@ pub(crate) fn missing_audio_languages<'a>(
     required: &'a [String],
     actual: &[String],
 ) -> Vec<&'a str> {
-    let actual_upper: std::collections::HashSet<String> = actual
-        .iter()
-        .map(|language| language.to_ascii_uppercase())
-        .collect();
+    let actual_upper: std::collections::HashSet<String> =
+        crate::normalize_detected_audio_languages(actual.iter().map(String::as_str))
+            .into_iter()
+            .map(|language| language.to_ascii_uppercase())
+            .collect();
     required
         .iter()
-        .filter(|required_language| !actual_upper.contains(required_language.as_str()))
+        .filter(|required_language| {
+            let normalized = crate::normalize_detected_audio_language_code(required_language)
+                .unwrap_or_else(|| required_language.trim().to_ascii_lowercase())
+                .to_ascii_uppercase();
+            !normalized.is_empty() && !actual_upper.contains(&normalized)
+        })
         .map(String::as_str)
         .collect()
 }

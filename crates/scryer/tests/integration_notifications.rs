@@ -38,7 +38,7 @@ async fn create_and_list_channels() {
         .await
         .expect("create channel");
     assert_eq!(ch.name, "Discord");
-    assert_eq!(ch.channel_type, scryer_domain::ChannelType::Webhook);
+    assert_eq!(ch.channel_type.as_str(), "webhook");
     assert!(ch.is_enabled);
 
     let channels = app.list_notification_channels(&user).await.expect("list");
@@ -146,6 +146,26 @@ async fn create_channel_rejects_empty_type() {
         .await
         .unwrap_err();
     assert!(matches!(err, AppError::Validation(_)));
+}
+
+#[tokio::test]
+async fn create_channel_accepts_arbitrary_provider_type() {
+    let ctx = TestContext::new().await;
+    let app = app_with_notifications(&ctx);
+    let user = default_user(&app).await;
+
+    let ch = app
+        .create_notification_channel(
+            &user,
+            "Jellyfin".into(),
+            "  Jellyfin  ".into(),
+            "{}".into(),
+            true,
+        )
+        .await
+        .expect("create channel");
+
+    assert_eq!(ch.channel_type.as_str(), "jellyfin");
 }
 
 #[tokio::test]

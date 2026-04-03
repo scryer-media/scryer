@@ -48,15 +48,15 @@ pub(crate) fn build_rule_input(
 
     // Merge indexer-reported languages (e.g. NZBGeek "English") into the
     // title-parsed set so that convenience rules like required_audio_languages
-    // see them.  Normalize full names → ISO 639-2 codes to match the parser.
+    // see them. Normalize via the app-layer ISO table so indexer input gets
+    // the same broad language coverage as detected media metadata.
     let mut languages_audio = parsed.languages_audio.clone();
     if let Some(indexer_langs) = release_runtime.indexer_languages {
         for raw in indexer_langs {
-            let upper = raw.trim().to_ascii_uppercase();
-            if let Some(code) = scryer_release_parser::normalize_language_token(&upper)
-                && !languages_audio.contains(&code.to_string())
+            if let Some(code) = crate::normalize_detected_audio_language_code(raw)
+                && !languages_audio.contains(&code)
             {
-                languages_audio.push(code.to_string());
+                languages_audio.push(code);
             }
         }
     }
@@ -249,6 +249,13 @@ pub(crate) fn build_search_rule_input(
 }
 
 pub(crate) fn build_file_doc(analysis: &scryer_mediainfo::MediaAnalysis) -> scryer_rules::FileDoc {
+    let audio_languages = crate::normalize_detected_audio_languages(
+        analysis.audio_languages.iter().map(String::as_str),
+    );
+    let subtitle_languages = crate::normalize_detected_subtitle_languages(
+        analysis.subtitle_languages.iter().map(String::as_str),
+    );
+
     scryer_rules::FileDoc {
         video_codec: analysis.video_codec.clone(),
         video_width: analysis.video_width,
@@ -263,25 +270,31 @@ pub(crate) fn build_file_doc(analysis: &scryer_mediainfo::MediaAnalysis) -> scry
         audio_codec: analysis.audio_codec.clone(),
         audio_channels: analysis.audio_channels,
         audio_bitrate_kbps: analysis.audio_bitrate_kbps,
-        audio_languages: analysis.audio_languages.clone(),
+        audio_languages,
         audio_streams: analysis
             .audio_streams
             .iter()
             .map(|stream| scryer_rules::AudioStreamDoc {
                 codec: stream.codec.clone(),
                 channels: stream.channels,
-                language: stream.language.clone(),
+                language: stream
+                    .language
+                    .as_deref()
+                    .and_then(crate::normalize_detected_audio_language_code),
                 bitrate_kbps: stream.bitrate_kbps,
             })
             .collect(),
-        subtitle_languages: analysis.subtitle_languages.clone(),
+        subtitle_languages,
         subtitle_codecs: analysis.subtitle_codecs.clone(),
         subtitle_streams: analysis
             .subtitle_streams
             .iter()
             .map(|stream| scryer_rules::SubtitleStreamDoc {
                 codec: stream.codec.clone(),
-                language: stream.language.clone(),
+                language: stream
+                    .language
+                    .as_deref()
+                    .and_then(crate::normalize_detected_subtitle_language_code),
                 name: stream.name.clone(),
                 forced: stream.forced,
                 default: stream.default,
@@ -503,6 +516,40 @@ mod tests {
             .filter(|l| *l == "fra")
             .count();
         assert_eq!(fra_count, 1, "French should not be duplicated");
+    }
+
+    #[test]
+    fn indexer_languages_support_full_iso_language_names() {
+        let input = build_rule_input(
+            &test_parsed(),
+            &test_profile(),
+            &test_decision(),
+            ReleaseRuntimeInfo {
+                size_bytes: None,
+                published_at: None,
+                thumbs_up: None,
+                thumbs_down: None,
+                extra: None,
+                indexer_languages: Some(&[
+                    "Filipino".to_string(),
+                    "English, Middle (1100-1500)".to_string(),
+                ]),
+            },
+            RuleContextInfo {
+                title_id: None,
+                category: Some("movie"),
+                title_tags: &[],
+                has_existing_file: false,
+                existing_score: None,
+                search_mode: "auto",
+                runtime_minutes: None,
+                is_filler: false,
+            },
+            None,
+        );
+
+        assert!(input.release.languages_audio.contains(&"fil".to_string()));
+        assert!(input.release.languages_audio.contains(&"enm".to_string()));
     }
 
     #[test]

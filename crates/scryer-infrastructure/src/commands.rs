@@ -72,6 +72,10 @@ pub(crate) enum DbCommand {
         title_id: String,
         reply: Sender<AppResult<Vec<Collection>>>,
     },
+    ListCollectionsForTitles {
+        title_ids: Vec<String>,
+        reply: Sender<AppResult<Vec<Collection>>>,
+    },
     ListPrimaryCollectionSummaries {
         title_ids: Vec<String>,
         reply: Sender<AppResult<Vec<PrimaryCollectionSummary>>>,
@@ -982,6 +986,9 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 }
                 DbCommand::ListCollectionsForTitle { title_id, reply } => {
                     let _ = reply.send(list_collections_for_title_query(&pool, &title_id).await);
+                }
+                DbCommand::ListCollectionsForTitles { title_ids, reply } => {
+                    let _ = reply.send(list_collections_for_titles_query(&pool, &title_ids).await);
                 }
                 DbCommand::ListPrimaryCollectionSummaries { title_ids, reply } => {
                     let _ = reply

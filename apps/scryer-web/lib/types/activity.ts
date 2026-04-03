@@ -4,6 +4,7 @@ export const activityKindValues = [
   "setting_saved",
   "movie_fetched",
   "movie_added",
+  "title_updated",
   "metadata_hydration_started",
   "metadata_hydration_completed",
   "metadata_hydration_failed",

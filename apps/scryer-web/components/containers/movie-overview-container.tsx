@@ -1,6 +1,9 @@
 
 import * as React from "react";
 import {
+  deleteMediaFilePreviewQuery,
+  deleteSubtitlePreviewQuery,
+  deleteTitlePreviewQuery,
   mediaRenamePreviewQuery,
   movieOverviewSettingsInitQuery,
   searchForTitleQuery,
@@ -8,6 +11,7 @@ import {
 } from "@/lib/graphql/queries";
 import {
   applyMediaRenameMutation,
+  blacklistSubtitleMutation,
   deleteMediaFileMutation,
   deleteTitleMutation,
   queueExistingMutation,
@@ -30,9 +34,11 @@ import type { Release, WantedItem } from "@/lib/types";
 import { fetchTitleOverviewSnapshot } from "@/lib/title-overview-loader";
 import { MovieOverviewView } from "@/components/views/movie-overview-view";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
+import { DeletePreviewSummary } from "@/components/common/delete-preview-summary";
 import { Checkbox } from "@/components/ui/checkbox";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
 import { FixTitleMatchDialog } from "@/components/dialogs/fix-title-match-dialog";
+import { useDeletePreview } from "@/lib/hooks/use-delete-preview";
 
 export type TitleDetail = {
   id: string;
@@ -235,10 +241,71 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
   const [deleteFilesOnDisk, setDeleteFilesOnDisk] = React.useState(false);
   const [deleteLoading, setDeleteLoading] = React.useState(false);
+  const [titleDeleteTypedConfirmation, setTitleDeleteTypedConfirmation] =
+    React.useState("");
+  const [mediaFileToDelete, setMediaFileToDelete] =
+    React.useState<TitleMediaFile | null>(null);
+  const [mediaFileDeleteLoading, setMediaFileDeleteLoading] = React.useState(false);
+  const [mediaFileDeleteTypedConfirmation, setMediaFileDeleteTypedConfirmation] =
+    React.useState("");
+  const [subtitleToBlacklist, setSubtitleToBlacklist] =
+    React.useState<SubtitleDownloadRecord | null>(null);
+  const [subtitleDeleteLoading, setSubtitleDeleteLoading] = React.useState(false);
+  const [subtitleDeleteTypedConfirmation, setSubtitleDeleteTypedConfirmation] =
+    React.useState("");
   const [fixMatchOpen, setFixMatchOpen] = React.useState(false);
   const [wantedActionLoading, setWantedActionLoading] = React.useState<
     "pause" | "resume" | "reset" | null
   >(null);
+  const titleDeletePreviewVariables = React.useMemo(
+    () =>
+      title && deleteDialogOpen && deleteFilesOnDisk
+        ? { input: { titleId: title.id } }
+        : null,
+    [deleteDialogOpen, deleteFilesOnDisk, title],
+  );
+  const {
+    preview: titleDeletePreview,
+    loading: titleDeletePreviewLoading,
+    error: titleDeletePreviewError,
+  } = useDeletePreview(
+    deleteTitlePreviewQuery,
+    "deleteTitlePreview",
+    titleDeletePreviewVariables,
+    deleteDialogOpen && title !== null && deleteFilesOnDisk,
+  );
+  const mediaFileDeletePreviewVariables = React.useMemo(
+    () =>
+      mediaFileToDelete ? { input: { fileId: mediaFileToDelete.id } } : null,
+    [mediaFileToDelete],
+  );
+  const {
+    preview: mediaFileDeletePreview,
+    loading: mediaFileDeletePreviewLoading,
+    error: mediaFileDeletePreviewError,
+  } = useDeletePreview(
+    deleteMediaFilePreviewQuery,
+    "deleteMediaFilePreview",
+    mediaFileDeletePreviewVariables,
+    mediaFileToDelete !== null,
+  );
+  const subtitleDeletePreviewVariables = React.useMemo(
+    () =>
+      subtitleToBlacklist
+        ? { input: { subtitleDownloadId: subtitleToBlacklist.id } }
+        : null,
+    [subtitleToBlacklist],
+  );
+  const {
+    preview: subtitleDeletePreview,
+    loading: subtitleDeletePreviewLoading,
+    error: subtitleDeletePreviewError,
+  } = useDeletePreview(
+    deleteSubtitlePreviewQuery,
+    "deleteSubtitlePreview",
+    subtitleDeletePreviewVariables,
+    subtitleToBlacklist !== null,
+  );
 
   const refreshTitleDetail = React.useCallback(async () => {
     const snapshot = await fetchTitleOverviewSnapshot<
@@ -353,17 +420,11 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
     [titleId, client, refreshTitleDetail],
   );
 
-  const handleDeleteMediaFile = React.useCallback(async (fileId: string) => {
-    try {
-      const { error } = await client.mutation(deleteMediaFileMutation, {
-        input: { fileId, deleteFromDisk: true },
-      }).toPromise();
-      if (error) throw error;
-      await refreshTitleDetail();
-    } catch (error: unknown) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
-    }
-  }, [client, refreshTitleDetail, setGlobalStatus, t]);
+  const handleDeleteMediaFile = React.useCallback((fileId: string) => {
+    const file = mediaFiles.find((candidate) => candidate.id === fileId) ?? null;
+    setMediaFileToDelete(file);
+    setMediaFileDeleteTypedConfirmation("");
+  }, [mediaFiles]);
 
   const handleSetTitleMonitored = React.useCallback(
     async (monitored: boolean) => {
@@ -602,6 +663,7 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
 
   const handleRequestDeleteTitle = React.useCallback(() => {
     setDeleteFilesOnDisk(false);
+    setTitleDeleteTypedConfirmation("");
     setDeleteDialogOpen(true);
   }, []);
 
@@ -622,17 +684,36 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
     if (deleteLoading) return;
     setDeleteDialogOpen(false);
     setDeleteFilesOnDisk(false);
+    setTitleDeleteTypedConfirmation("");
   }, [deleteLoading]);
+
+  React.useEffect(() => {
+    if (!deleteFilesOnDisk) {
+      setTitleDeleteTypedConfirmation("");
+    }
+  }, [deleteFilesOnDisk]);
 
   const handleConfirmDeleteTitle = React.useCallback(async () => {
     if (!title) return;
     setDeleteLoading(true);
     try {
-      const payload: { titleId: string; deleteFilesOnDisk?: boolean } = {
+      const payload: {
+        titleId: string;
+        deleteFilesOnDisk?: boolean;
+        previewFingerprint?: string;
+        typedConfirmation?: string;
+      } = {
         titleId: title.id,
       };
       if (deleteFilesOnDisk) {
+        if (!titleDeletePreview) {
+          throw new Error("Delete preview is not ready yet.");
+        }
         payload.deleteFilesOnDisk = true;
+        payload.previewFingerprint = titleDeletePreview.fingerprint;
+        if (titleDeleteTypedConfirmation.trim()) {
+          payload.typedConfirmation = titleDeleteTypedConfirmation.trim();
+        }
       }
 
       const { error } = await client.mutation(deleteTitleMutation, {
@@ -660,9 +741,112 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
     onBackToList,
     onTitleNotFound,
     setGlobalStatus,
+    titleDeletePreview,
+    titleDeleteTypedConfirmation,
     t,
     title,
   ]);
+
+  const handleCancelDeleteMediaFile = React.useCallback(() => {
+    if (mediaFileDeleteLoading) return;
+    setMediaFileToDelete(null);
+    setMediaFileDeleteTypedConfirmation("");
+  }, [mediaFileDeleteLoading]);
+
+  const handleConfirmDeleteMediaFile = React.useCallback(async () => {
+    if (!mediaFileToDelete || !mediaFileDeletePreview) return;
+    setMediaFileDeleteLoading(true);
+    try {
+      const { error } = await client.mutation(deleteMediaFileMutation, {
+        input: {
+          fileId: mediaFileToDelete.id,
+          deleteFromDisk: true,
+          previewFingerprint: mediaFileDeletePreview.fingerprint,
+          typedConfirmation: mediaFileDeleteTypedConfirmation.trim() || undefined,
+        },
+      }).toPromise();
+      if (error) throw error;
+      await refreshTitleDetail();
+      setMediaFileToDelete(null);
+      setMediaFileDeleteTypedConfirmation("");
+    } catch (error: unknown) {
+      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+    } finally {
+      setMediaFileDeleteLoading(false);
+    }
+  }, [
+    client,
+    mediaFileDeletePreview,
+    mediaFileDeleteTypedConfirmation,
+    mediaFileToDelete,
+    refreshTitleDetail,
+    setGlobalStatus,
+    t,
+  ]);
+
+  const handleRequestBlacklistSubtitle = React.useCallback((subtitleDownloadId: string) => {
+    const download =
+      subtitleDownloads.find((candidate) => candidate.id === subtitleDownloadId) ?? null;
+    setSubtitleToBlacklist(download);
+    setSubtitleDeleteTypedConfirmation("");
+  }, [subtitleDownloads]);
+
+  const handleCancelBlacklistSubtitle = React.useCallback(() => {
+    if (subtitleDeleteLoading) return;
+    setSubtitleToBlacklist(null);
+    setSubtitleDeleteTypedConfirmation("");
+  }, [subtitleDeleteLoading]);
+
+  const handleConfirmBlacklistSubtitle = React.useCallback(async () => {
+    if (!subtitleToBlacklist || !subtitleDeletePreview) return;
+    setSubtitleDeleteLoading(true);
+    try {
+      const { error } = await client.mutation(blacklistSubtitleMutation, {
+        input: {
+          subtitleDownloadId: subtitleToBlacklist.id,
+          previewFingerprint: subtitleDeletePreview.fingerprint,
+          typedConfirmation: subtitleDeleteTypedConfirmation.trim() || undefined,
+        },
+      }).toPromise();
+      if (error) throw error;
+      setGlobalStatus(t("subtitle.blacklisted"));
+      await refreshSubtitleDownloads();
+      setSubtitleToBlacklist(null);
+      setSubtitleDeleteTypedConfirmation("");
+    } catch (error: unknown) {
+      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+    } finally {
+      setSubtitleDeleteLoading(false);
+    }
+  }, [
+    client,
+    refreshSubtitleDownloads,
+    setGlobalStatus,
+    subtitleDeletePreview,
+    subtitleDeleteTypedConfirmation,
+    subtitleToBlacklist,
+    t,
+  ]);
+
+  const deleteTitleConfirmDisabled =
+    deleteFilesOnDisk &&
+    (titleDeletePreviewLoading ||
+      !!titleDeletePreviewError ||
+      !titleDeletePreview ||
+      (titleDeletePreview.requiresTypedConfirmation &&
+        titleDeleteTypedConfirmation.trim() !== "DELETE"));
+  const deleteMediaFileConfirmDisabled =
+    mediaFileDeletePreviewLoading ||
+    !!mediaFileDeletePreviewError ||
+    !mediaFileDeletePreview ||
+    (mediaFileDeletePreview.requiresTypedConfirmation &&
+      mediaFileDeleteTypedConfirmation.trim() !== "DELETE");
+  const deleteSubtitleConfirmDisabled =
+    subtitleDeletePreviewLoading ||
+    !!subtitleDeletePreviewError ||
+    !subtitleDeletePreview ||
+    (subtitleDeletePreview.requiresTypedConfirmation &&
+      subtitleDeleteTypedConfirmation.trim() !== "DELETE");
 
   const IMPORT_KINDS = React.useMemo(
     () =>
@@ -720,6 +904,8 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
         mediaFiles={mediaFiles}
         subtitleDownloads={subtitleDownloads}
         onDeleteFile={handleDeleteMediaFile}
+        onRequestBlacklistSubtitle={handleRequestBlacklistSubtitle}
+        blacklistingId={subtitleDeleteLoading ? subtitleToBlacklist?.id ?? null : null}
         onRefreshSubtitles={refreshSubtitleDownloads}
         onOpenFixMatch={() => setFixMatchOpen(true)}
       />
@@ -740,17 +926,67 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
         confirmLabel={t("label.delete")}
         cancelLabel={t("label.cancel")}
         isBusy={deleteLoading}
+        confirmDisabled={deleteTitleConfirmDisabled}
         onConfirm={handleConfirmDeleteTitle}
         onCancel={handleCancelDeleteTitle}
       >
-        <label className="flex items-center gap-2">
-          <Checkbox
-            checked={deleteFilesOnDisk}
-            onCheckedChange={(checked) => setDeleteFilesOnDisk(checked === true)}
-            disabled={deleteLoading}
-          />
-          <span className="text-sm text-muted-foreground">{t("title.deleteFilesOnDisk")}</span>
-        </label>
+        <div className="space-y-3">
+          <label className="flex items-center gap-2">
+            <Checkbox
+              checked={deleteFilesOnDisk}
+              onCheckedChange={(checked) => setDeleteFilesOnDisk(checked === true)}
+              disabled={deleteLoading}
+            />
+            <span className="text-sm text-muted-foreground">{t("title.deleteFilesOnDisk")}</span>
+          </label>
+          {deleteFilesOnDisk ? (
+            <DeletePreviewSummary
+              preview={titleDeletePreview}
+              loading={titleDeletePreviewLoading}
+              error={titleDeletePreviewError}
+              typedConfirmation={titleDeleteTypedConfirmation}
+              onTypedConfirmationChange={setTitleDeleteTypedConfirmation}
+            />
+          ) : null}
+        </div>
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={mediaFileToDelete !== null}
+        title={t("mediaFile.delete")}
+        description={mediaFileToDelete?.filePath ?? t("mediaFile.delete")}
+        confirmLabel={t("label.delete")}
+        cancelLabel={t("label.cancel")}
+        isBusy={mediaFileDeleteLoading}
+        confirmDisabled={deleteMediaFileConfirmDisabled}
+        onConfirm={handleConfirmDeleteMediaFile}
+        onCancel={handleCancelDeleteMediaFile}
+      >
+        <DeletePreviewSummary
+          preview={mediaFileDeletePreview}
+          loading={mediaFileDeletePreviewLoading}
+          error={mediaFileDeletePreviewError}
+          typedConfirmation={mediaFileDeleteTypedConfirmation}
+          onTypedConfirmationChange={setMediaFileDeleteTypedConfirmation}
+        />
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={subtitleToBlacklist !== null}
+        title={t("subtitle.blacklist")}
+        description={subtitleToBlacklist?.filePath ?? t("subtitle.blacklist")}
+        confirmLabel={t("label.delete")}
+        cancelLabel={t("label.cancel")}
+        isBusy={subtitleDeleteLoading}
+        confirmDisabled={deleteSubtitleConfirmDisabled}
+        onConfirm={handleConfirmBlacklistSubtitle}
+        onCancel={handleCancelBlacklistSubtitle}
+      >
+        <DeletePreviewSummary
+          preview={subtitleDeletePreview}
+          loading={subtitleDeletePreviewLoading}
+          error={subtitleDeletePreviewError}
+          typedConfirmation={subtitleDeleteTypedConfirmation}
+          onTypedConfirmationChange={setSubtitleDeleteTypedConfirmation}
+        />
       </ConfirmDialog>
     </>
   );

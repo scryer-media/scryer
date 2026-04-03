@@ -550,10 +550,28 @@ pub const VIDEO_EXTENSIONS: &[&str] = &[
     "mkv", "mp4", "avi", "wmv", "mov", "m4v", "ts", "m2ts", "webm", "flv", "ogv",
 ];
 
+pub const SUBTITLE_EXTENSIONS: &[&str] = &["srt", "ass", "ssa", "sub", "vtt", "idx"];
+
+pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "avif"];
+
 pub fn is_video_file(path: &std::path::Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| VIDEO_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+pub fn is_subtitle_file(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| SUBTITLE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+pub fn is_image_file(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| IMAGE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
         .unwrap_or(false)
 }
 
@@ -1252,6 +1270,7 @@ pub enum ConfigFieldType {
     String,
     #[serde(alias = "secret")]
     Password,
+    Multiline,
     Bool,
     Select,
     Number,
@@ -1262,6 +1281,7 @@ impl ConfigFieldType {
         match self {
             Self::String => "string",
             Self::Password => "password",
+            Self::Multiline => "multiline",
             Self::Bool => "bool",
             Self::Select => "select",
             Self::Number => "number",
@@ -1272,6 +1292,7 @@ impl ConfigFieldType {
         match value {
             "string" => Some(Self::String),
             "password" | "secret" => Some(Self::Password),
+            "multiline" => Some(Self::Multiline),
             "bool" => Some(Self::Bool),
             "select" => Some(Self::Select),
             "number" => Some(Self::Number),
@@ -1290,7 +1311,7 @@ pub struct ConfigFieldDef {
     pub key: String,
     /// Human-readable label for the form field.
     pub label: String,
-    /// Field type: "string", "password", "bool", "select", "number".
+    /// Field type: "string", "password", "multiline", "bool", "select", "number".
     pub field_type: ConfigFieldType,
     #[serde(default)]
     pub required: bool,
@@ -1312,24 +1333,21 @@ pub struct ConfigFieldOption {
 
 // ── Notification types ──────────────────────────────────────────────
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChannelType {
-    Webhook,
-}
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ChannelType(String);
 
 impl ChannelType {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Webhook => "webhook",
-        }
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
     }
 
     pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "webhook" => Some(Self::Webhook),
-            _ => None,
+        let normalized = value.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            return None;
         }
+        Some(Self(normalized))
     }
 }
 

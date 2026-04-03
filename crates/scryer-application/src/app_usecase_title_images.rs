@@ -32,6 +32,31 @@ pub async fn start_background_fanart_loop(
     start_background_image_loop(app, token, TitleImageKind::Fanart).await
 }
 
+async fn wait_for_image_loop_to_resume(
+    app: &AppUseCase,
+    token: &tokio_util::sync::CancellationToken,
+    kind: TitleImageKind,
+) -> bool {
+    let active_scans = app.services.library_scan_tracker.list_active().await;
+    if active_scans.is_empty() {
+        return true;
+    }
+
+    info!(
+        kind = kind.as_str(),
+        active_scans = active_scans.len(),
+        "image loop: pausing while library scan is active"
+    );
+
+    tokio::select! {
+        _ = token.cancelled() => false,
+        _ = app.services.library_scan_tracker.wait_until_idle() => {
+            info!(kind = kind.as_str(), "image loop: resuming after library scan");
+            true
+        }
+    }
+}
+
 async fn start_background_image_loop(
     app: AppUseCase,
     token: tokio_util::sync::CancellationToken,
@@ -65,9 +90,16 @@ async fn start_background_image_loop(
 
         let mut retry_delay = IMAGE_RETRY_BASE;
         'drain: loop {
-            tokio::time::sleep(IMAGE_COLLECT_WINDOW).await;
+            if !wait_for_image_loop_to_resume(&app, &token, kind).await {
+                return;
+            }
 
-            if token.is_cancelled() {
+            tokio::select! {
+                _ = token.cancelled() => return,
+                _ = tokio::time::sleep(IMAGE_COLLECT_WINDOW) => {}
+            }
+
+            if !wait_for_image_loop_to_resume(&app, &token, kind).await {
                 return;
             }
 

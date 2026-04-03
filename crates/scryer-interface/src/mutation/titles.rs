@@ -141,6 +141,8 @@ impl TitleMutations {
             &actor,
             &input.title_id,
             input.delete_files_on_disk.unwrap_or(false),
+            input.preview_fingerprint.as_deref(),
+            input.typed_confirmation.as_deref(),
         )
         .await
         .map(|_| true)

@@ -15,6 +15,7 @@ use crate::types::{RawContainer, RawTrack, TrackKind};
 const HDR10PLUS_SAMPLE_LIMIT_BYTES: u64 = 4 * 1024 * 1024;
 const MP4_DOVI_TYPES: [&str; 2] = ["dvcC", "dvvC"];
 const MOV_TKHD_FLAG_ENABLED: u32 = 0x000001;
+const MP4_BOX_MAX_DEPTH: usize = 10;
 
 #[derive(Debug)]
 struct PreparedMp4 {
@@ -42,6 +43,12 @@ struct Mp4TrackMetadata {
     default_track: bool,
 }
 
+#[derive(Debug, Clone, Default)]
+struct Mp4ChapterMetadata {
+    chpl_count: Option<i32>,
+    chapter_track_ids: Vec<u32>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Mp4BoxHeader {
     name: [u8; 4],
@@ -58,6 +65,10 @@ pub(crate) fn parse_mp4(path: &Path) -> Result<RawContainer, MediaInfoError> {
     let mut cursor = Cursor::new(prepared.metadata.as_slice());
     let ctx = mp4parse::read_mp4(&mut cursor)
         .map_err(|e| MediaInfoError::Parse(format!("mp4 parse: {e:?}")))?;
+    let num_chapters = match count_mp4_chapters(&prepared.metadata, &ctx) {
+        0 => None,
+        count => Some(count),
+    };
 
     // The movie-level timescale converts track-header durations to seconds.
     let movie_timescale = ctx.timescale.map(|MediaTimeScale(ts)| ts);
@@ -91,7 +102,7 @@ pub(crate) fn parse_mp4(path: &Path) -> Result<RawContainer, MediaInfoError> {
     Ok(RawContainer {
         format_name,
         duration_seconds,
-        num_chapters: None,
+        num_chapters,
         tracks: tracks.into_iter().map(|track| track.raw).collect(),
     })
 }
@@ -221,7 +232,6 @@ fn build_mp4_tracks(
                 raw.frame_rate_fps = estimate_frame_rate(track);
             }
             (TrackKind::Audio, Some(SampleEntry::Audio(audio))) => {
-                raw.channels = Some(audio.channelcount as i32);
                 let fallback_codec_id = audio_codec_id(&audio.codec_specific)
                     .unwrap_or_else(|| codec_type_to_fourcc(audio.codec_type));
                 if raw.codec_id == "unknown" {
@@ -233,6 +243,11 @@ fn build_mp4_tracks(
                 {
                     raw.codec_private = Some(esds.decoder_specific_data.iter().copied().collect());
                 }
+                raw.channels = mp4_audio_channels(
+                    &raw.codec_id,
+                    raw.codec_private.as_deref(),
+                    Some(audio.channelcount),
+                );
             }
             (TrackKind::Video, Some(SampleEntry::Unknown)) | (TrackKind::Video, None) => {
                 if let Some(tkhd) = track.tkhd.as_ref() {
@@ -246,6 +261,10 @@ fn build_mp4_tracks(
                 raw.frame_rate_fps = estimate_frame_rate(track);
             }
             _ => {}
+        }
+
+        if kind == TrackKind::Audio && raw.channels.is_none() {
+            raw.channels = mp4_audio_channels(&raw.codec_id, raw.codec_private.as_deref(), None);
         }
 
         if let Some(bit_rate_bps) = estimate_track_bitrate(track, duration_seconds) {
@@ -412,6 +431,225 @@ fn parse_mp4_track_metadata(data: &[u8]) -> HashMap<u32, Mp4TrackMetadata> {
     metadata
 }
 
+fn count_mp4_chapters(data: &[u8], ctx: &MediaContext) -> i32 {
+    let metadata = parse_mp4_chapter_metadata(data);
+    if let Some(count) = metadata.chpl_count {
+        return count;
+    }
+
+    metadata
+        .chapter_track_ids
+        .iter()
+        .filter_map(|track_id| {
+            ctx.tracks
+                .iter()
+                .find(|track| track.track_id == Some(*track_id))
+                .and_then(mp4_track_sample_count)
+        })
+        .sum()
+}
+
+fn parse_mp4_chapter_metadata(data: &[u8]) -> Mp4ChapterMetadata {
+    let mut metadata = Mp4ChapterMetadata::default();
+    walk_mp4_boxes(
+        data,
+        MP4_BOX_MAX_DEPTH,
+        |header, payload, _depth| match &header.name {
+            b"moov" | b"udta" | b"trak" | b"tref" => Some(payload),
+            b"meta" => payload.get(4..),
+            _ => None,
+        },
+        |header, payload, _depth| match &header.name {
+            b"chpl" => {
+                if metadata.chpl_count.is_none() {
+                    metadata.chpl_count = parse_chpl_count(payload);
+                }
+            }
+            b"chap" => {
+                metadata
+                    .chapter_track_ids
+                    .extend(parse_chap_track_ids(payload));
+            }
+            _ => {}
+        },
+    );
+    metadata.chapter_track_ids.sort_unstable();
+    metadata.chapter_track_ids.dedup();
+    metadata
+}
+
+fn parse_chpl_count(data: &[u8]) -> Option<i32> {
+    if data.len() < 5 {
+        return None;
+    }
+    let offset = if data[0] == 0 { 4 } else { 8 };
+    data.get(offset).copied().map(i32::from)
+}
+
+fn parse_chap_track_ids(data: &[u8]) -> Vec<u32> {
+    data.chunks_exact(4).filter_map(read_be_u32).collect()
+}
+
+fn mp4_track_sample_count(track: &mp4parse::Track) -> Option<i32> {
+    if let Some(stsz) = track.stsz.as_ref() {
+        if !stsz.sample_sizes.is_empty() {
+            return i32::try_from(stsz.sample_sizes.len()).ok();
+        }
+        if stsz.sample_size > 0 {
+            let count: u64 = track
+                .stts
+                .as_ref()
+                .map(|stts| {
+                    stts.samples
+                        .iter()
+                        .map(|sample| u64::from(sample.sample_count))
+                        .sum()
+                })
+                .unwrap_or(0);
+            return i32::try_from(count).ok();
+        }
+    }
+
+    track.stts.as_ref().and_then(|stts| {
+        let count: u64 = stts
+            .samples
+            .iter()
+            .map(|sample| u64::from(sample.sample_count))
+            .sum();
+        i32::try_from(count).ok()
+    })
+}
+
+fn mp4_audio_channels(
+    codec_id: &str,
+    codec_private: Option<&[u8]>,
+    sample_entry_channels: Option<u32>,
+) -> Option<i32> {
+    let codec_specific_channels = codec_private.and_then(|codec_private| match codec_id {
+        "mp4a" => parse_aac_audio_specific_config_channels(codec_private),
+        "ac-3" => parse_dac3_channels(codec_private),
+        "ec-3" => parse_dec3_channels(codec_private),
+        _ => None,
+    });
+    let sample_entry_channels = sample_entry_channels
+        .filter(|channels| *channels > 0)
+        .map(|channels| channels as i32);
+
+    match (codec_specific_channels, sample_entry_channels) {
+        (Some(codec_specific_channels), Some(sample_entry_channels)) => {
+            Some(codec_specific_channels.max(sample_entry_channels))
+        }
+        (Some(codec_specific_channels), None) => Some(codec_specific_channels),
+        (None, Some(sample_entry_channels)) => Some(sample_entry_channels),
+        (None, None) => None,
+    }
+}
+
+fn parse_aac_audio_specific_config_channels(data: &[u8]) -> Option<i32> {
+    const AAC_CHANNEL_CONFIGS: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 8, 0, 0, 0, 7, 8, 0, 8, 0];
+
+    let mut bits = BitCursor::new(data);
+    let audio_object_type = bits.read_aac_audio_object_type()?;
+    bits.read_aac_sample_rate()?;
+    let mut channel_config = bits.read_bits(4)? as usize;
+
+    if matches!(audio_object_type, 5 | 29) {
+        bits.read_aac_sample_rate()?;
+        let ext_audio_object_type = bits.read_aac_audio_object_type()?;
+        if ext_audio_object_type == 22 {
+            channel_config = bits.read_bits(4)? as usize;
+        }
+    }
+
+    let channels = *AAC_CHANNEL_CONFIGS.get(channel_config)?;
+    (channels > 0).then_some(i32::from(channels))
+}
+
+fn parse_dac3_channels(data: &[u8]) -> Option<i32> {
+    let mut bits = BitCursor::new(data);
+    bits.read_bits(2)?;
+    bits.read_bits(5)?;
+    bits.read_bits(3)?;
+    let acmod = bits.read_bits(3)? as usize;
+    let lfeon = bits.read_bits(1)? as i32;
+    Some(ac3_channel_count(acmod) + lfeon)
+}
+
+fn parse_dec3_channels(data: &[u8]) -> Option<i32> {
+    let mut bits = BitCursor::new(data);
+    bits.read_bits(13)?;
+    let num_ind_sub = bits.read_bits(3)? as usize + 1;
+    if num_ind_sub == 0 {
+        return None;
+    }
+
+    bits.read_bits(2)?;
+    bits.read_bits(5)?;
+    bits.read_bits(1)?;
+    bits.read_bits(1)?;
+    bits.read_bits(3)?;
+    let acmod = bits.read_bits(3)? as usize;
+    let lfeon = bits.read_bits(1)? as i32;
+    Some(ac3_channel_count(acmod) + lfeon)
+}
+
+fn ac3_channel_count(acmod: usize) -> i32 {
+    const AC3_CHANNELS_BY_ACMOD: [i32; 8] = [2, 1, 2, 3, 3, 4, 4, 5];
+    AC3_CHANNELS_BY_ACMOD.get(acmod).copied().unwrap_or(0)
+}
+
+struct BitCursor<'a> {
+    data: &'a [u8],
+    bit_offset: usize,
+}
+
+impl<'a> BitCursor<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self {
+            data,
+            bit_offset: 0,
+        }
+    }
+
+    fn read_bits(&mut self, count: usize) -> Option<u32> {
+        if count == 0 || count > 32 {
+            return None;
+        }
+
+        let mut value = 0_u32;
+        for _ in 0..count {
+            let byte = *self.data.get(self.bit_offset / 8)?;
+            let shift = 7 - (self.bit_offset % 8);
+            value = (value << 1) | u32::from((byte >> shift) & 1);
+            self.bit_offset += 1;
+        }
+        Some(value)
+    }
+
+    fn read_aac_audio_object_type(&mut self) -> Option<u8> {
+        let object_type = self.read_bits(5)? as u8;
+        if object_type == 31 {
+            Some(32 + self.read_bits(6)? as u8)
+        } else {
+            Some(object_type)
+        }
+    }
+
+    fn read_aac_sample_rate(&mut self) -> Option<u32> {
+        const AAC_SAMPLE_RATES: [u32; 13] = [
+            96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025,
+            8_000, 7_350,
+        ];
+
+        let sample_rate_index = self.read_bits(4)? as usize;
+        if sample_rate_index == 0xF {
+            self.read_bits(24)
+        } else {
+            AAC_SAMPLE_RATES.get(sample_rate_index).copied()
+        }
+    }
+}
+
 fn parse_moov(data: &[u8], metadata: &mut HashMap<u32, Mp4TrackMetadata>) {
     for_each_mp4_box(data, |header, payload| {
         if &header.name == b"trak" {
@@ -438,12 +676,20 @@ fn parse_trak(data: &[u8]) -> Mp4TrackMetadata {
 }
 
 fn parse_kind_boxes(data: &[u8], track: &mut Mp4TrackMetadata) {
-    for_each_mp4_box(data, |header, payload| {
-        if &header.name == b"kind" {
-            apply_kind_metadata(payload, track);
-        }
-        parse_kind_boxes(payload, track);
-    });
+    walk_mp4_boxes(
+        data,
+        MP4_BOX_MAX_DEPTH,
+        |header, payload, _depth| match &header.name {
+            b"mdia" | b"minf" | b"stbl" | b"udta" => Some(payload),
+            b"meta" => payload.get(4..),
+            _ => None,
+        },
+        |header, payload, _depth| {
+            if &header.name == b"kind" {
+                apply_kind_metadata(payload, track);
+            }
+        },
+    );
 }
 
 fn parse_mdia(data: &[u8], track: &mut Mp4TrackMetadata) {
@@ -514,8 +760,31 @@ fn parse_stsd(data: &[u8], track: &mut Mp4TrackMetadata) {
                     }
                 });
             }
+        } else if is_audio_sample_entry(&fourcc)
+            && let Some(child_offset) = audio_sample_entry_child_offset(payload)
+        {
+            for_each_mp4_box(&payload[child_offset..], |child, child_payload| {
+                let child_name = fourcc_to_string(child.name);
+                if matches!(child_name.as_str(), "dac3" | "dec3") {
+                    track.codec_private = Some(child_payload.to_vec());
+                }
+            });
         }
     }
+}
+
+fn audio_sample_entry_child_offset(payload: &[u8]) -> Option<usize> {
+    if payload.len() < 28 {
+        return None;
+    }
+    let version = read_be_u16(&payload[8..10])?;
+    let offset = match version {
+        0 => 28,
+        1 => 44,
+        2 => 64,
+        _ => return None,
+    };
+    payload.get(offset..).map(|_| offset)
 }
 
 fn apply_tkhd_metadata(data: &[u8], track: &mut Mp4TrackMetadata) {
@@ -568,6 +837,12 @@ fn parse_name_box(data: &[u8]) -> Option<String> {
 }
 
 fn apply_kind_metadata(data: &[u8], track: &mut Mp4TrackMetadata) {
+    if data.len() < 6 {
+        return;
+    }
+    if !matches!(data.get(0..4), Some([0, 0, 0, 0])) {
+        return;
+    }
     let Some(payload) = data.get(4..) else {
         return;
     };
@@ -616,6 +891,48 @@ fn for_each_mp4_box(mut data: &[u8], mut f: impl FnMut(Mp4BoxHeader, &[u8])) {
             break;
         }
         data = &data[size..];
+    }
+}
+
+fn walk_mp4_boxes<'a, FDescend, FVisit>(
+    data: &'a [u8],
+    max_depth: usize,
+    mut should_descend: FDescend,
+    mut visit: FVisit,
+) where
+    FDescend: FnMut(Mp4BoxHeader, &'a [u8], usize) -> Option<&'a [u8]>,
+    FVisit: FnMut(Mp4BoxHeader, &'a [u8], usize),
+{
+    let mut stack = vec![(data, 0_usize)];
+
+    while let Some((mut current, depth)) = stack.pop() {
+        let mut children = Vec::new();
+
+        while let Some(header) = read_box_header_from_bytes(current) {
+            let size = header.size as usize;
+            if size < header.header_size || size > current.len() {
+                break;
+            }
+
+            let payload = &current[header.header_size..size];
+            visit(header, payload, depth);
+
+            if depth < max_depth
+                && let Some(child_payload) = should_descend(header, payload, depth)
+                && !child_payload.is_empty()
+            {
+                children.push((child_payload, depth + 1));
+            }
+
+            if size == current.len() {
+                break;
+            }
+            current = &current[size..];
+        }
+
+        for child in children.into_iter().rev() {
+            stack.push(child);
+        }
     }
 }
 
@@ -938,6 +1255,12 @@ mod tests {
         out
     }
 
+    fn make_meta_box(payload: &[u8]) -> Vec<u8> {
+        let mut full_box = vec![0_u8; 4];
+        full_box.extend_from_slice(payload);
+        make_box(b"meta", &full_box)
+    }
+
     #[test]
     fn codec_type_to_fourcc_roundtrips() {
         assert_eq!(codec_type_to_fourcc(CodecType::H264), "avc1");
@@ -1003,5 +1326,105 @@ mod tests {
         assert_eq!(track.track_id, Some(7));
         assert!(track.default_track);
         assert!(track.forced);
+    }
+
+    #[test]
+    fn parse_trak_ignores_kind_box_hidden_inside_leaf_payload() {
+        let kind_payload = [
+            [0_u8, 0, 0, 0].as_slice(),
+            b"urn:mpeg:dash:role:2011\0forced-subtitle\0".as_slice(),
+        ]
+        .concat();
+
+        let trak_payload = make_box(
+            b"udta",
+            &make_box(b"name", &make_box(b"kind", &kind_payload)),
+        );
+
+        let track = parse_trak(&trak_payload);
+
+        assert!(!track.forced);
+    }
+
+    #[test]
+    fn parse_trak_stops_descending_past_max_depth() {
+        let kind_payload = [
+            [0_u8, 0, 0, 0].as_slice(),
+            b"urn:mpeg:dash:role:2011\0forced-subtitle\0".as_slice(),
+        ]
+        .concat();
+
+        let mut nested = make_box(b"kind", &kind_payload);
+        for _ in 0..=MP4_BOX_MAX_DEPTH {
+            nested = make_meta_box(&nested);
+        }
+
+        let track = parse_trak(&make_box(b"udta", &nested));
+
+        assert!(!track.forced);
+    }
+
+    #[test]
+    fn parse_chpl_counts_chapters() {
+        let chpl_payload = [[0_u8, 0, 0, 0].as_slice(), &[3], &[0_u8; 27]].concat();
+        let metadata = parse_mp4_chapter_metadata(&make_box(
+            b"moov",
+            &make_box(b"udta", &make_box(b"chpl", &chpl_payload)),
+        ));
+
+        assert_eq!(metadata.chpl_count, Some(3));
+    }
+
+    #[test]
+    fn parse_chpl_ignores_boxes_hidden_inside_ilst_metadata() {
+        let chpl_payload = [[0_u8, 0, 0, 0].as_slice(), &[3], &[0_u8; 27]].concat();
+        let metadata = parse_mp4_chapter_metadata(&make_box(
+            b"moov",
+            &make_box(
+                b"udta",
+                &make_meta_box(&make_box(b"ilst", &make_box(b"chpl", &chpl_payload))),
+            ),
+        ));
+
+        assert_eq!(metadata.chpl_count, None);
+    }
+
+    #[test]
+    fn parse_chap_track_ids_reads_references() {
+        let ids = parse_chap_track_ids(&[0, 0, 0, 7, 0, 0, 0, 9]);
+        assert_eq!(ids, vec![7, 9]);
+    }
+
+    #[test]
+    fn parses_aac_audio_specific_config_channel_count() {
+        assert_eq!(
+            parse_aac_audio_specific_config_channels(&[0x11, 0xB0]),
+            Some(6)
+        );
+    }
+
+    #[test]
+    fn parses_ac3_and_eac3_channel_counts_from_codec_private() {
+        assert_eq!(parse_dac3_channels(&[0x00, 0x3C, 0x00]), Some(6));
+        assert_eq!(
+            parse_dec3_channels(&[0x00, 0x00, 0x00, 0x0F, 0x00]),
+            Some(6)
+        );
+    }
+
+    #[test]
+    fn combines_codec_specific_audio_channels_with_sample_entry_defaults() {
+        assert_eq!(
+            mp4_audio_channels("mp4a", Some(&[0x11, 0xB0]), Some(2)),
+            Some(6)
+        );
+        assert_eq!(
+            mp4_audio_channels("mp4a", Some(&[0x13, 0x08]), Some(2)),
+            Some(2)
+        );
+        assert_eq!(
+            mp4_audio_channels("ac-3", Some(&[0x00, 0x3C, 0x00]), None),
+            Some(6)
+        );
     }
 }

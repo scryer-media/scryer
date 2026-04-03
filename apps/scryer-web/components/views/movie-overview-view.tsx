@@ -1,6 +1,5 @@
 
 import * as React from "react";
-import { useClient } from "urql";
 import { Ban, FolderOpen, HardDrive, Loader2, Pause, Play, RotateCcw, Search, Subtitles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,8 +30,6 @@ import { MediaRenamePlanPanel } from "@/components/common/media-rename-plan-pane
 import { OverviewControlPanel } from "@/components/views/overview-control-panel";
 import { OverviewBackLink } from "@/components/views/overview-back-link";
 import { SubtitleSearchModal } from "@/components/views/subtitle-search-modal";
-import { blacklistSubtitleMutation } from "@/lib/graphql/mutations";
-import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { TitlePoster } from "@/components/title-poster";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
 import type { WantedSearchPhase, WantedStatus } from "@/lib/types";
@@ -358,6 +355,8 @@ type Props = {
   mediaFiles: TitleMediaFile[];
   subtitleDownloads: SubtitleDownloadRecord[];
   onDeleteFile?: (fileId: string) => void;
+  onRequestBlacklistSubtitle?: (subtitleDownloadId: string) => void;
+  blacklistingId?: string | null;
   onRefreshSubtitles?: () => void;
   onOpenFixMatch?: () => void;
 };
@@ -398,34 +397,17 @@ export function MovieOverviewView({
   mediaFiles,
   subtitleDownloads,
   onDeleteFile,
+  onRequestBlacklistSubtitle,
+  blacklistingId = null,
   onRefreshSubtitles,
   onOpenFixMatch,
 }: Props) {
   const t = useTranslate();
-  const setGlobalStatus = useGlobalStatus();
-  const client = useClient();
   const [historyOpen, setHistoryOpen] = React.useState(false);
   const [subtitleSearchTarget, setSubtitleSearchTarget] = React.useState<{
     mediaFileId: string;
     filePath: string;
   } | null>(null);
-  const [blacklistingId, setBlacklistingId] = React.useState<string | null>(null);
-
-  const handleBlacklistSubtitle = React.useCallback(async (downloadId: string) => {
-    setBlacklistingId(downloadId);
-    try {
-      const { error } = await client
-        .mutation(blacklistSubtitleMutation, { input: { subtitleDownloadId: downloadId } })
-        .toPromise();
-      if (error) throw error;
-      setGlobalStatus(t("subtitle.blacklisted"));
-      onRefreshSubtitles?.();
-    } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
-    } finally {
-      setBlacklistingId(null);
-    }
-  }, [client, setGlobalStatus, t, onRefreshSubtitles]);
   if (loading) {
     return (
       <div className="space-y-4">
@@ -916,7 +898,7 @@ export function MovieOverviewView({
                             className="ml-0.5 hidden rounded p-0.5 text-blue-500/60 hover:bg-red-500/20 hover:text-red-400 group-hover:inline-flex"
                             title={t("subtitle.blacklist")}
                             disabled={blacklistingId === dl.id}
-                            onClick={() => void handleBlacklistSubtitle(dl.id)}
+                            onClick={() => onRequestBlacklistSubtitle?.(dl.id)}
                           >
                             <Ban className="h-3 w-3" />
                           </button>

@@ -13,6 +13,8 @@ pub struct WorkflowOperationRecord {
     pub id: String,
     pub operation_type: String,
     pub status: String,
+    pub job_key: Option<String>,
+    pub trigger_source: Option<String>,
     pub actor_user_id: Option<String>,
     pub title_id: Option<String>,
     pub collection_id: Option<String>,
@@ -21,8 +23,23 @@ pub struct WorkflowOperationRecord {
     pub media_file_id: Option<String>,
     pub external_reference: Option<String>,
     pub progress_json: Option<String>,
+    pub summary_json: Option<String>,
+    pub summary_text: Option<String>,
+    pub error_text: Option<String>,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct LibraryProbeSignatureRecord {
+    pub title_id: String,
+    pub path: String,
+    pub probe_signature_scheme: Option<String>,
+    pub probe_signature_value: Option<String>,
+    pub last_probed_at: Option<String>,
+    pub last_changed_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

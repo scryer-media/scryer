@@ -68,9 +68,11 @@ function statusIcon(status: LibraryScanProgress["status"]) {
 export function LibraryScanToast({
   session,
   t,
+  titleOverride,
 }: {
   session: LibraryScanProgress;
   t: Translate;
+  titleOverride?: string;
 }) {
   const terminal = isTerminal(session.status);
   const metadataPercent = percentForPhase(
@@ -92,7 +94,7 @@ export function LibraryScanToast({
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <p className="text-sm font-semibold text-foreground">
-              {t("settings.libraryScanToastTitle", {
+              {titleOverride ?? t("settings.libraryScanToastTitle", {
                 facet: facetLabel(session.facet, t),
               })}
             </p>

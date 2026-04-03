@@ -18,6 +18,11 @@ const FALLBACK_DURATION_PROBE_PACKETS: usize = 50_000;
 const STREAM_PROBE_PACKET_LIMIT: usize = 20_000;
 const STREAM_PROBE_MAX_BYTES_PER_PID: u64 = 256 * 1024;
 const DOVI_VIDEO_STREAM_DESCRIPTOR: u8 = 0xB0;
+const ISO_639_LANGUAGE_DESCRIPTOR: u8 = 0x0A;
+const TELETEXT_DESCRIPTOR: u8 = 0x56;
+const SUBTITLING_DESCRIPTOR: u8 = 0x59;
+const DVB_EXTENSION_DESCRIPTOR: u8 = 0x7F;
+const SUPPLEMENTARY_AUDIO_DESCRIPTOR: u8 = 0x06;
 const AC3_CHANNELS_BY_ACMOD: [u8; 8] = [2, 1, 2, 3, 3, 4, 4, 5];
 const AC3_SAMPLE_RATES: [u32; 4] = [48_000, 44_100, 32_000, 0];
 const AC3_BITRATES_KBPS: [u32; 19] = [
@@ -296,7 +301,7 @@ fn build_track(es: &EsEntry) -> RawTrack {
         height: None,
         channels: None,
         bit_rate_bps: None,
-        language: extract_language(&es.descriptors),
+        language: extract_language(kind, &es.descriptors),
         frame_rate_fps: None,
         color_transfer: None,
         dovi_config: es.dovi_config.clone(),
@@ -358,26 +363,63 @@ fn classify_private_pes(descriptors: &[u8]) -> (TrackKind, &'static str) {
     (TrackKind::Audio, "unknown")
 }
 
-fn extract_language(descriptors: &[u8]) -> Option<String> {
+fn extract_language(kind: TrackKind, descriptors: &[u8]) -> Option<String> {
+    let mut best: Option<(u8, String)> = None;
     let mut pos = 0;
     while pos + 2 <= descriptors.len() {
         let tag = descriptors[pos];
         let len = descriptors[pos + 1] as usize;
+        let data_start = pos + 2;
         let desc_end = (pos + 2 + len).min(descriptors.len());
 
-        if tag == 0x0A && len >= 4 && pos + 5 <= descriptors.len() {
-            let lang = std::str::from_utf8(&descriptors[pos + 2..pos + 5])
-                .ok()
-                .map(|s| s.trim_end_matches('\0').to_owned())
-                .filter(|s| !s.is_empty());
-            if lang.is_some() {
-                return lang;
+        let candidate = match (kind, tag) {
+            (TrackKind::Subtitle, SUBTITLING_DESCRIPTOR) if len >= 8 => {
+                parse_descriptor_language(&descriptors[data_start..data_start + 3])
+                    .map(|lang| (2, lang))
             }
+            (TrackKind::Subtitle, TELETEXT_DESCRIPTOR) if len >= 5 => {
+                parse_descriptor_language(&descriptors[data_start..data_start + 3])
+                    .map(|lang| (1, lang))
+            }
+            (TrackKind::Audio, DVB_EXTENSION_DESCRIPTOR)
+                if len >= 5
+                    && descriptors.get(data_start).copied()
+                        == Some(SUPPLEMENTARY_AUDIO_DESCRIPTOR) =>
+            {
+                let flags = descriptors.get(data_start + 1).copied().unwrap_or(0);
+                if (flags & 0x01) != 0 {
+                    parse_descriptor_language(&descriptors[data_start + 2..data_start + 5])
+                        .map(|lang| (3, lang))
+                } else {
+                    None
+                }
+            }
+            (_, ISO_639_LANGUAGE_DESCRIPTOR) if len >= 4 => {
+                parse_descriptor_language(&descriptors[data_start..data_start + 3])
+                    .map(|lang| (0, lang))
+            }
+            _ => None,
+        };
+
+        if let Some((priority, language)) = candidate
+            && best
+                .as_ref()
+                .is_none_or(|(best_priority, _)| priority > *best_priority)
+        {
+            best = Some((priority, language));
         }
 
         pos = desc_end;
     }
-    None
+
+    best.map(|(_, language)| language)
+}
+
+fn parse_descriptor_language(data: &[u8]) -> Option<String> {
+    std::str::from_utf8(data)
+        .ok()
+        .map(|value| value.trim_end_matches('\0').to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 fn extract_dovi_config(descriptors: &[u8]) -> Option<Vec<u8>> {
@@ -1405,5 +1447,54 @@ mod tests {
         let data = [0x56, 0xE0, 0x06, 0x20, 0x00, 0x12, 0x10];
         let header = find_latm_header(&data).unwrap();
         assert_eq!(header.channels, 2);
+    }
+
+    #[test]
+    fn subtitle_language_prefers_subtitling_descriptor() {
+        let descriptors = [
+            ISO_639_LANGUAGE_DESCRIPTOR,
+            4,
+            b'e',
+            b'n',
+            b'g',
+            0,
+            SUBTITLING_DESCRIPTOR,
+            8,
+            b'j',
+            b'p',
+            b'n',
+            0x10,
+            0,
+            1,
+            0,
+            2,
+        ];
+        assert_eq!(
+            extract_language(TrackKind::Subtitle, &descriptors),
+            Some("jpn".to_string())
+        );
+    }
+
+    #[test]
+    fn audio_language_prefers_supplementary_audio_override() {
+        let descriptors = [
+            ISO_639_LANGUAGE_DESCRIPTOR,
+            4,
+            b'e',
+            b'n',
+            b'g',
+            0,
+            DVB_EXTENSION_DESCRIPTOR,
+            5,
+            SUPPLEMENTARY_AUDIO_DESCRIPTOR,
+            0x01,
+            b'j',
+            b'p',
+            b'n',
+        ];
+        assert_eq!(
+            extract_language(TrackKind::Audio, &descriptors),
+            Some("jpn".to_string())
+        );
     }
 }

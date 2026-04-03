@@ -7,8 +7,17 @@ use crate::subtitles::provider::{OpenSubtitlesProvider, SubtitleMediaKind};
 use crate::subtitles::search::SubtitleSearchOrchestrator;
 use crate::subtitles::sync;
 use crate::subtitles::wanted::{SubtitleLanguagePref, compute_missing_subtitles_from_streams};
-use crate::{AppResult, AppUseCase, SubtitleSettings as AppSubtitleSettings};
+use crate::{
+    AppResult, AppUseCase, JobKey, JobTriggerSource, SubtitleSettings as AppSubtitleSettings,
+};
 use scryer_domain::SubtitleDownload;
+
+impl AppUseCase {
+    pub(crate) async fn run_subtitle_search_job(&self) -> AppResult<String> {
+        run_subtitle_search_cycle(self).await?;
+        Ok("Subtitle search cycle completed".to_string())
+    }
+}
 
 /// Background subtitle poller — searches for missing subtitles on a schedule.
 pub async fn start_background_subtitle_poller(
@@ -31,12 +40,24 @@ pub async fn start_background_subtitle_poller(
     info!("background subtitle poller started");
 
     let interval_hours = settings.search_interval_hours.max(1) as u64;
+    app.set_job_next_run_at(
+        JobKey::SubtitleSearch,
+        Utc::now() + chrono::Duration::seconds(120),
+    )
+    .await;
 
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_hours * 3600));
     interval.tick().await; // consume first tick
 
     // Initial delay to let services fully initialize
     tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+
+    if let Err(err) = app
+        .run_scheduled_job_now(JobKey::SubtitleSearch, JobTriggerSource::ScheduledStartup)
+        .await
+    {
+        warn!(error = %err, "initial subtitle search cycle failed");
+    }
 
     loop {
         tokio::select! {
@@ -45,7 +66,15 @@ pub async fn start_background_subtitle_poller(
                 return;
             }
             _ = interval.tick() => {
-                if let Err(err) = run_subtitle_search_cycle(&app).await {
+                app.set_job_next_run_at(
+                    JobKey::SubtitleSearch,
+                    Utc::now() + chrono::Duration::hours(interval_hours as i64),
+                )
+                .await;
+                if let Err(err) = app
+                    .run_scheduled_job_now(JobKey::SubtitleSearch, JobTriggerSource::ScheduledInterval)
+                    .await
+                {
                     warn!(error = %err, "subtitle search cycle failed");
                 }
             }

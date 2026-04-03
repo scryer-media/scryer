@@ -21,7 +21,7 @@ fn row_to_channel(
         .try_get("channel_type")
         .map_err(|e| AppError::Repository(e.to_string()))?;
     let channel_type = scryer_domain::ChannelType::parse(&channel_type_str)
-        .ok_or_else(|| AppError::Repository(format!("unknown channel_type: {channel_type_str}")))?;
+        .ok_or_else(|| AppError::Repository(format!("invalid channel_type: {channel_type_str}")))?;
     let config_json_raw: String = row
         .try_get("config_json")
         .map_err(|e| AppError::Repository(e.to_string()))?;

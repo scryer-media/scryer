@@ -276,7 +276,7 @@ fn row_to_title_media_file(row: &SqliteRow) -> AppResult<TitleMediaFile> {
         .unwrap_or(None)
         .and_then(|json| serde_json::from_str(&json).ok())
         .unwrap_or_default();
-    let audio_streams: Vec<scryer_application::AudioStreamDetail> = row
+    let mut audio_streams: Vec<scryer_application::AudioStreamDetail> = row
         .try_get::<Option<String>, _>("audio_streams_json")
         .unwrap_or(None)
         .and_then(|json| serde_json::from_str(&json).ok())
@@ -291,11 +291,30 @@ fn row_to_title_media_file(row: &SqliteRow) -> AppResult<TitleMediaFile> {
         .unwrap_or(None)
         .and_then(|json| serde_json::from_str(&json).ok())
         .unwrap_or_default();
-    let subtitle_streams: Vec<scryer_application::SubtitleStreamDetail> = row
+    let mut subtitle_streams: Vec<scryer_application::SubtitleStreamDetail> = row
         .try_get::<Option<String>, _>("subtitle_streams_json")
         .unwrap_or(None)
         .and_then(|json| serde_json::from_str(&json).ok())
         .unwrap_or_default();
+
+    let audio_languages = scryer_application::normalize_detected_audio_languages(
+        audio_languages.iter().map(String::as_str),
+    );
+    for stream in &mut audio_streams {
+        stream.language = stream
+            .language
+            .as_deref()
+            .and_then(scryer_application::normalize_detected_audio_language_code);
+    }
+    let subtitle_languages = scryer_application::normalize_detected_subtitle_languages(
+        subtitle_languages.iter().map(String::as_str),
+    );
+    for stream in &mut subtitle_streams {
+        stream.language = stream
+            .language
+            .as_deref()
+            .and_then(scryer_application::normalize_detected_subtitle_language_code);
+    }
 
     // Rich schema fields (added by migration 0037)
     let scene_name: Option<String> = row.try_get("scene_name").unwrap_or(None);

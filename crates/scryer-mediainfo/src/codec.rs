@@ -24,6 +24,8 @@ pub(crate) fn normalize_codec_name(codec_id: &str) -> Option<String> {
         "V_AV1" => "av1",
         "V_VP9" => "vp9",
         "V_MPEG4/ISO/SP" => "mpeg4",
+        "V_MPEG2" => "mpeg2video",
+        "V_MPEG1" => "mpeg1video",
         "V_MS/VFW/FOURCC" => return None,
 
         // --- MKV audio ---
@@ -42,6 +44,7 @@ pub(crate) fn normalize_codec_name(codec_id: &str) -> Option<String> {
         "S_HDMV/PGS" => "hdmv_pgs_subtitle",
         "S_VOBSUB" => "dvd_subtitle",
         "S_TEXT/WEBVTT" => "webvtt",
+        "D_WEBVTT/SUBTITLES" | "D_WEBVTT/CAPTIONS" => "webvtt",
 
         // --- MP4 FourCC ---
         "avc1" | "avc3" => "h264",
@@ -71,6 +74,60 @@ pub(crate) fn normalize_codec_name(codec_id: &str) -> Option<String> {
         }
     };
     Some(name.into())
+}
+
+pub(crate) fn normalize_pcm_codec_name(codec_id: &str, bit_depth: Option<i32>) -> Option<String> {
+    if !codec_id.starts_with("A_PCM/") {
+        return None;
+    }
+
+    let depth = bit_depth.unwrap_or_default();
+    let codec_name = match (
+        codec_id.contains("/FLOAT"),
+        codec_id.contains("/BIG"),
+        depth,
+    ) {
+        (true, true, 32) => "pcm_f32be",
+        (true, false, 32) => "pcm_f32le",
+        (true, true, 64) => "pcm_f64be",
+        (true, false, 64) => "pcm_f64le",
+        (false, _, 8) => "pcm_s8",
+        (false, true, 16) => "pcm_s16be",
+        (false, false, 16) => "pcm_s16le",
+        (false, true, 24) => "pcm_s24be",
+        (false, false, 24) => "pcm_s24le",
+        (false, true, 32) => "pcm_s32be",
+        (false, false, 32) => "pcm_s32le",
+        _ => "pcm",
+    };
+
+    Some(codec_name.to_owned())
+}
+
+pub(crate) fn normalize_video_fourcc_codec_name(fourcc: &str) -> Option<String> {
+    let codec_name = match fourcc.trim_end_matches('\0') {
+        "H264" | "h264" | "X264" | "x264" | "avc1" | "AVC1" => "h264",
+        "HEVC" | "hevc" | "H265" | "h265" | "hvc1" | "HVC1" | "hev1" | "HEV1" => "hevc",
+        "XVID" | "xvid" | "DX50" | "dx50" | "DIVX" | "divx" | "DIV3" | "div3" | "DIV4" | "div4"
+        | "DIV5" | "div5" | "MP4V" | "mp4v" | "FMP4" | "fmp4" => "mpeg4",
+        "MJPG" | "mjpg" => "mjpeg",
+        "WVC1" | "wvc1" => "vc1",
+        "WMV3" | "wmv3" => "wmv3",
+        "MP2V" | "mp2v" | "mpg2" | "MPG2" => "mpeg2video",
+        "MP1V" | "mp1v" | "mpg1" | "MPG1" => "mpeg1video",
+        "VP80" | "vp80" => "vp8",
+        "VP90" | "vp90" => "vp9",
+        _ => return None,
+    };
+
+    Some(codec_name.to_owned())
+}
+
+pub(crate) fn normalize_vfw_codec_name(codec_private: Option<&[u8]>) -> Option<String> {
+    let compression = codec_private
+        .and_then(|data| data.get(16..20))
+        .and_then(|fourcc| std::str::from_utf8(fourcc).ok())?;
+    normalize_video_fourcc_codec_name(compression)
 }
 
 /// Extracts codec profile and bit depth from an H.264 AVCDecoderConfigurationRecord.
@@ -746,5 +803,40 @@ mod tests {
         assert_eq!(map_h265_profile(2).as_deref(), Some("Main 10"));
         assert_eq!(map_h265_profile(3).as_deref(), Some("Main Still Picture"));
         assert_eq!(map_h265_profile(0), None);
+    }
+
+    #[test]
+    fn normalizes_pcm_codec_names_from_depth_and_endianness() {
+        assert_eq!(
+            normalize_pcm_codec_name("A_PCM/INT/LIT", Some(24)).as_deref(),
+            Some("pcm_s24le")
+        );
+        assert_eq!(
+            normalize_pcm_codec_name("A_PCM/INT/BIG", Some(16)).as_deref(),
+            Some("pcm_s16be")
+        );
+        assert_eq!(
+            normalize_pcm_codec_name("A_PCM/FLOAT/IEEE", Some(32)).as_deref(),
+            Some("pcm_f32le")
+        );
+    }
+
+    #[test]
+    fn normalizes_vfw_fourcc_video_codecs() {
+        assert_eq!(
+            normalize_codec_name("V_MPEG2").as_deref(),
+            Some("mpeg2video")
+        );
+        assert_eq!(
+            normalize_video_fourcc_codec_name("MPG2").as_deref(),
+            Some("mpeg2video")
+        );
+        assert_eq!(
+            normalize_vfw_codec_name(Some(&[
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b'M', b'P', b'G', b'2'
+            ]))
+            .as_deref(),
+            Some("mpeg2video")
+        );
     }
 }

@@ -21,9 +21,9 @@ use scryer_application::{
     MovieFacetHandler, SeriesFacetHandler, TitleImageKind, TitleImageRepository,
     start_background_acquisition_poller, start_background_banner_loop,
     start_background_fanart_loop, start_background_hydration_loop,
-    start_background_post_hydration_title_scan_workers, start_background_poster_loop,
-    start_background_subtitle_poller, start_download_queue_poller, start_notification_dispatcher,
-    tracked_downloads::TrackedDownloadHandle,
+    start_background_library_refresh_loop, start_background_post_hydration_title_scan_workers,
+    start_background_poster_loop, start_background_subtitle_poller, start_download_queue_poller,
+    start_notification_dispatcher, tracked_downloads::TrackedDownloadHandle,
 };
 use scryer_infrastructure::{
     FileSystemLibraryRenamer, FileSystemLibraryScanner, FileSystemStagedNzbStore,
@@ -577,6 +577,8 @@ async fn bootstrap_application(
     services.pp_scripts = Arc::new(db.clone());
     services.plugin_installations = Arc::new(db.clone());
     services.system_info = Arc::new(db.clone());
+    services.job_runs = Arc::new(db.clone());
+    services.library_probe_signatures = Arc::new(db.clone());
     services.title_images = Arc::new(db.clone());
     services.title_image_processor = title_image_processor;
     services.housekeeping = Arc::new(db.clone());
@@ -604,6 +606,12 @@ async fn bootstrap_application(
         },
         facet_registry,
     );
+
+    app_use_case
+        .services
+        .library_scan_tracker
+        .set_job_run_tracker(app_use_case.services.job_run_tracker.clone())
+        .await;
 
     // Seed built-in plugin rows and rebuild provider from DB state.
     // This ensures user enable/disable toggles are respected after restart.
@@ -659,6 +667,10 @@ async fn bootstrap_application(
         ));
     }
     tokio::spawn(start_background_acquisition_poller(
+        app_use_case.clone(),
+        shutdown_token.child_token(),
+    ));
+    tokio::spawn(start_background_library_refresh_loop(
         app_use_case.clone(),
         shutdown_token.child_token(),
     ));

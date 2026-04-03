@@ -13,6 +13,7 @@ mod app_usecase_housekeeping;
 mod app_usecase_import;
 mod app_usecase_indexer_test;
 mod app_usecase_integration;
+mod app_usecase_jobs;
 pub(crate) mod app_usecase_library;
 mod app_usecase_notifications;
 mod app_usecase_pending;
@@ -34,11 +35,14 @@ mod facet_series;
 pub mod failed_download_handler;
 pub mod filesystem_walk;
 pub(crate) mod import_checks;
+mod jobs;
 mod library_rename;
 mod library_scan;
 mod library_scan_progress;
 pub mod managed_rules;
 mod media_analyzer;
+mod media_language;
+mod media_language_data;
 pub(crate) mod nfo;
 pub(crate) mod normalize;
 mod notification_dispatcher;
@@ -55,6 +59,7 @@ pub mod subtitles;
 pub mod tracked_downloads;
 mod types;
 pub mod upgrade;
+mod user_delete;
 mod user_rule_input;
 
 use crate::activity::ActivityStream;
@@ -94,6 +99,7 @@ pub use app_usecase_import::{
     try_import_completed_downloads,
 };
 pub use app_usecase_integration::start_download_queue_poller;
+pub use app_usecase_jobs::start_background_library_refresh_loop;
 pub use app_usecase_plugins::{RegistryPlugin, RulePackRegistryEntry, RulePackTemplate};
 pub use app_usecase_post_processing::{PostProcessingContext, run_post_processing};
 pub use app_usecase_rss::RssSyncReport;
@@ -119,9 +125,17 @@ pub use library_rename::{
     RenameApplyStatus, RenameCollisionPolicy, RenameMissingMetadataPolicy, RenamePlan,
     RenamePlanItem, RenameWriteAction, build_rename_plan_fingerprint, render_rename_template,
 };
+pub use media_language::{
+    normalize_detected_audio_language_code, normalize_detected_audio_languages,
+    normalize_detected_subtitle_language_code, normalize_detected_subtitle_languages,
+};
 use post_hydration_title_scan_queue::PostHydrationTitleScanQueue;
 
 pub(crate) const GLOBAL_LIBRARY_SCAN_ANALYSIS_CONCURRENCY: usize = 4;
+pub use jobs::{
+    JobCategory, JobDefinition, JobKey, JobRun, JobRunRecord, JobRunStatus, JobRunTracker,
+    JobScheduleInfo, JobScheduleKind, JobSection, JobTriggerSource, LibraryProbeSignature,
+};
 pub use library_scan::{
     AnibridgeSourceMapping, AnimeEpisodeMapping, AnimeMapping, AnimeMovie, BulkMetadataResult,
     EpisodeMetadata, LibraryDirectoryScanResult, LibraryFile, LibraryFileBatch,
@@ -130,18 +144,19 @@ pub use library_scan::{
     SeasonMetadata, SeriesMetadata, source_signature_from_std_metadata,
 };
 pub use library_scan_progress::{
-    LibraryScanPhaseProgress, LibraryScanSession, LibraryScanStatus, LibraryScanTitleAttachResult,
-    LibraryScanTracker,
+    LibraryScanMode, LibraryScanPhaseProgress, LibraryScanSession, LibraryScanStatus,
+    LibraryScanTitleAttachResult, LibraryScanTracker,
 };
 pub use media_analyzer::NativeMediaAnalyzer;
 pub use notification_dispatcher::start_notification_dispatcher;
 pub use null_repositories::{
     NullAcquisitionStateRepository, NullBlocklistRepository, NullDownloadSubmissionRepository,
     NullFileImporter, NullHousekeepingRepository, NullImportRepository, NullIndexerStatsTracker,
-    NullMediaFileRepository, NullNotificationChannelRepository,
-    NullNotificationSubscriptionRepository, NullPendingReleaseRepository,
-    NullPluginInstallationRepository, NullPostProcessingScriptRepository, NullRuleSetRepository,
-    NullSettingsRepository, NullStagedNzbStore, NullSystemInfoProvider, NullTitleHistoryRepository,
+    NullJobRunRepository, NullLibraryProbeRepository, NullMediaFileRepository,
+    NullNotificationChannelRepository, NullNotificationSubscriptionRepository,
+    NullPendingReleaseRepository, NullPluginInstallationRepository,
+    NullPostProcessingScriptRepository, NullRuleSetRepository, NullSettingsRepository,
+    NullStagedNzbStore, NullSystemInfoProvider, NullTitleHistoryRepository,
     NullTitleImageProcessor, NullTitleImageRepository, NullWantedItemRepository,
 };
 pub use quality_profile::{
@@ -170,9 +185,21 @@ pub use types::{
     TitleReleaseBlocklistEntry, WantedCompleteTransition, WantedGrabTransition, WantedItem,
     WantedPauseTransition, WantedSearchTransition, WantedStatus,
 };
+pub use user_delete::DeletePreview;
 
 const SETTINGS_SCOPE_SYSTEM: &str = "system";
 const SETTINGS_SCOPE_MEDIA: &str = "media";
+
+pub(crate) fn parsed_episode_lookup_season(
+    ep_meta: &ParsedEpisodeMetadata,
+    default_season: &str,
+) -> String {
+    if ep_meta.season == Some(0) {
+        "0".to_string()
+    } else {
+        default_season.to_string()
+    }
+}
 const INHERIT_QUALITY_PROFILE_VALUE: &str = "__inherit__";
 const NATIVE_DOWNLOAD_CLIENT_TYPES: [&str; 4] = ["nzbget", "sabnzbd", "qbittorrent", "weaver"];
 
@@ -288,6 +315,7 @@ pub struct AppServices {
     pub import_history_broadcast: broadcast::Sender<()>,
     pub settings_changed_broadcast: broadcast::Sender<Vec<String>>,
     pub library_scan_tracker: LibraryScanTracker,
+    pub job_run_tracker: JobRunTracker,
     pub post_hydration_title_scan_queue: PostHydrationTitleScanQueue,
     pub acquisition_wake: Arc<tokio::sync::Notify>,
     pub hydration_wake: Arc<tokio::sync::Notify>,
@@ -302,6 +330,8 @@ pub struct AppServices {
     pub rss_seen_guids: Arc<tokio::sync::RwLock<HashSet<String>>>,
     pub subtitle_downloads: Arc<dyn SubtitleDownloadRepository>,
     pub import_artifacts: Arc<dyn ImportArtifactRepository>,
+    pub job_runs: Arc<dyn JobRunRepository>,
+    pub library_probe_signatures: Arc<dyn LibraryProbeRepository>,
     pub staged_nzb_store: Arc<dyn StagedNzbStore>,
     pub staged_nzb_pipeline_limit: Arc<Semaphore>,
     pub library_scan_analysis_limit: Arc<Semaphore>,
@@ -373,6 +403,7 @@ impl AppServices {
             import_history_broadcast: import_history_tx,
             settings_changed_broadcast: settings_changed_tx,
             library_scan_tracker: LibraryScanTracker::new(),
+            job_run_tracker: JobRunTracker::new(),
             post_hydration_title_scan_queue: PostHydrationTitleScanQueue::new(),
             acquisition_wake: Arc::new(tokio::sync::Notify::new()),
             hydration_wake: Arc::new(tokio::sync::Notify::new()),
@@ -387,6 +418,8 @@ impl AppServices {
             health_check_results: Arc::new(tokio::sync::RwLock::new(Vec::new())),
             rss_seen_guids: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
             import_artifacts: Arc::new(null_repositories::NullImportArtifactRepository),
+            job_runs: Arc::new(null_repositories::NullJobRunRepository),
+            library_probe_signatures: Arc::new(null_repositories::NullLibraryProbeRepository),
             staged_nzb_store: Arc::new(null_repositories::NullStagedNzbStore),
             staged_nzb_pipeline_limit: Arc::new(Semaphore::new(4)),
             library_scan_analysis_limit: Arc::new(Semaphore::new(
@@ -611,6 +644,10 @@ pub trait TitleImageProcessor: Send + Sync {
 #[async_trait]
 pub trait ShowRepository: Send + Sync {
     async fn list_collections_for_title(&self, title_id: &str) -> AppResult<Vec<Collection>>;
+    async fn list_collections_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<Collection>>>;
     async fn get_collection_by_id(&self, collection_id: &str) -> AppResult<Option<Collection>>;
     async fn get_collection_by_ordered_path(
         &self,
@@ -968,6 +1005,31 @@ pub trait ImportArtifactRepository: Send + Sync {
         source_ref: &str,
         result: &str,
     ) -> AppResult<u64>;
+}
+
+#[async_trait]
+pub trait JobRunRepository: Send + Sync {
+    async fn create_job_run(&self, run: &JobRunRecord) -> AppResult<JobRunRecord>;
+
+    async fn update_job_run(&self, run: &JobRunRecord) -> AppResult<JobRunRecord>;
+
+    async fn get_job_run(&self, run_id: &str) -> AppResult<Option<JobRunRecord>>;
+
+    async fn list_job_runs(
+        &self,
+        job_key: Option<JobKey>,
+        limit: usize,
+    ) -> AppResult<Vec<JobRunRecord>>;
+
+    async fn list_active_job_runs(&self) -> AppResult<Vec<JobRunRecord>>;
+}
+
+#[async_trait]
+pub trait LibraryProbeRepository: Send + Sync {
+    async fn get_probe_signature(&self, title_id: &str)
+    -> AppResult<Option<LibraryProbeSignature>>;
+
+    async fn upsert_probe_signature(&self, probe: &LibraryProbeSignature) -> AppResult<()>;
 }
 
 #[async_trait]
@@ -2013,6 +2075,7 @@ pub trait SubtitleDownloadRepository: Send + Sync {
         &self,
         title_id: &str,
     ) -> AppResult<Vec<scryer_domain::SubtitleDownload>>;
+    async fn get(&self, id: &str) -> AppResult<Option<scryer_domain::SubtitleDownload>>;
     async fn list_for_media_file(
         &self,
         media_file_id: &str,
@@ -2323,6 +2386,24 @@ mod tests {
                 .filter(|item| item.title_id == title_id)
                 .cloned()
                 .collect())
+        }
+
+        async fn list_collections_for_titles(
+            &self,
+            title_ids: &[String],
+        ) -> AppResult<HashMap<String, Vec<Collection>>> {
+            let collections = self.collections.lock().await;
+            let wanted = title_ids.iter().cloned().collect::<HashSet<_>>();
+            let mut grouped = HashMap::<String, Vec<Collection>>::new();
+            for collection in collections.iter() {
+                if wanted.contains(&collection.title_id) {
+                    grouped
+                        .entry(collection.title_id.clone())
+                        .or_default()
+                        .push(collection.clone());
+                }
+            }
+            Ok(grouped)
         }
 
         async fn get_collection_by_id(&self, collection_id: &str) -> AppResult<Option<Collection>> {
@@ -3896,7 +3977,7 @@ mod tests {
             .await
             .expect("create title");
 
-        app.delete_title(&user, &created.id, false)
+        app.delete_title(&user, &created.id, false, None, None)
             .await
             .expect("delete title");
 
@@ -4028,7 +4109,7 @@ mod tests {
             },
         ];
 
-        app.delete_title(&user, &created.id, false)
+        app.delete_title(&user, &created.id, false, None, None)
             .await
             .expect("delete title");
 

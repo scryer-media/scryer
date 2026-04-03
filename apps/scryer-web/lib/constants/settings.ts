@@ -1,4 +1,4 @@
-import type { SettingsSection, ViewId, ContentSettingsSection } from "@/components/root/types";
+import type { SettingsSection, ViewId, ContentSettingsSection, SystemSection } from "@/components/root/types";
 import type { ViewCategoryId } from "@/lib/types/quality-profiles";
 import type { Facet } from "@/lib/types/titles";
 import { FACET_REGISTRY, MEDIA_VIEW_IDS, SCOPE_IDS } from "@/lib/facets/registry";
@@ -106,6 +106,11 @@ export const CONTENT_SETTINGS_SUB_PAGE_PATH_TO_ID: Record<string, ContentSetting
   quality: "quality",
   renaming: "renaming",
   routing: "routing",
+};
+
+export const SYSTEM_SECTION_PATH_TO_ID: Record<string, SystemSection> = {
+  overview: "overview",
+  jobs: "jobs",
 };
 
 export const viewToFacet: Record<string, Facet> = Object.fromEntries(

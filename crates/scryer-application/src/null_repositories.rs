@@ -15,7 +15,8 @@ use scryer_domain::{BlocklistEntry, TitleHistoryEventType, TitleHistoryRecord};
 use crate::{
     AppError, AppResult, BlocklistRepository, DownloadSubmission, DownloadSubmissionRepository,
     FileImporter, HousekeepingRepository, ImportArtifact, ImportArtifactRepository,
-    ImportRepository, IndexerQueryStats, IndexerStatsTracker, MediaFileRepository,
+    ImportRepository, IndexerQueryStats, IndexerStatsTracker, JobKey, JobRunRecord,
+    JobRunRepository, LibraryProbeRepository, LibraryProbeSignature, MediaFileRepository,
     NewBlocklistEntry, NewTitleHistoryEvent, NotificationChannelRepository,
     NotificationSubscriptionRepository, PendingRelease, PendingReleaseRepository, PendingStagedNzb,
     PluginInstallationRepository, PostProcessingScriptRepository, ReleaseDecision,
@@ -883,6 +884,9 @@ impl crate::SubtitleDownloadRepository for NullSubtitleDownloadRepository {
     ) -> AppResult<Vec<scryer_domain::SubtitleDownload>> {
         Ok(Vec::new())
     }
+    async fn get(&self, _id: &str) -> AppResult<Option<scryer_domain::SubtitleDownload>> {
+        Ok(None)
+    }
     async fn list_for_media_file(
         &self,
         _media_file_id: &str,
@@ -914,6 +918,53 @@ impl crate::SubtitleDownloadRepository for NullSubtitleDownloadRepository {
         _language: &str,
         _reason: Option<&str>,
     ) -> AppResult<()> {
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+pub struct NullJobRunRepository;
+
+#[async_trait]
+impl JobRunRepository for NullJobRunRepository {
+    async fn create_job_run(&self, run: &JobRunRecord) -> AppResult<JobRunRecord> {
+        Ok(run.clone())
+    }
+
+    async fn update_job_run(&self, run: &JobRunRecord) -> AppResult<JobRunRecord> {
+        Ok(run.clone())
+    }
+
+    async fn get_job_run(&self, _run_id: &str) -> AppResult<Option<JobRunRecord>> {
+        Ok(None)
+    }
+
+    async fn list_job_runs(
+        &self,
+        _job_key: Option<JobKey>,
+        _limit: usize,
+    ) -> AppResult<Vec<JobRunRecord>> {
+        Ok(Vec::new())
+    }
+
+    async fn list_active_job_runs(&self) -> AppResult<Vec<JobRunRecord>> {
+        Ok(Vec::new())
+    }
+}
+
+#[derive(Default)]
+pub struct NullLibraryProbeRepository;
+
+#[async_trait]
+impl LibraryProbeRepository for NullLibraryProbeRepository {
+    async fn get_probe_signature(
+        &self,
+        _title_id: &str,
+    ) -> AppResult<Option<LibraryProbeSignature>> {
+        Ok(None)
+    }
+
+    async fn upsert_probe_signature(&self, _probe: &LibraryProbeSignature) -> AppResult<()> {
         Ok(())
     }
 }
@@ -999,6 +1050,12 @@ pub mod test_nulls {
     impl ShowRepository for NullShowRepository {
         async fn list_collections_for_title(&self, _: &str) -> AppResult<Vec<Collection>> {
             Ok(vec![])
+        }
+        async fn list_collections_for_titles(
+            &self,
+            _: &[String],
+        ) -> AppResult<std::collections::HashMap<String, Vec<Collection>>> {
+            Ok(std::collections::HashMap::new())
         }
         async fn get_collection_by_id(&self, _: &str) -> AppResult<Option<Collection>> {
             Ok(None)

@@ -10,6 +10,7 @@ type ConfirmDialogProps = {
   confirmLabel: string;
   cancelLabel: string;
   isBusy?: boolean;
+  confirmDisabled?: boolean;
   children?: ReactNode;
   onConfirm: () => Promise<void> | void;
   onCancel: () => void;
@@ -22,6 +23,7 @@ export function ConfirmDialog({
   confirmLabel,
   cancelLabel,
   isBusy = false,
+  confirmDisabled = false,
   children,
   onConfirm,
   onCancel,
@@ -64,7 +66,12 @@ export function ConfirmDialog({
           <Button type="button" variant="secondary" onClick={onCancel} disabled={isBusy}>
             {cancelLabel}
           </Button>
-          <Button type="button" variant="destructive" onClick={onConfirm} disabled={isBusy}>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={onConfirm}
+            disabled={isBusy || confirmDisabled}
+          >
             {confirmLabel}
           </Button>
         </div>

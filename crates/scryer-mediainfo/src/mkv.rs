@@ -4,21 +4,28 @@ use std::path::Path;
 use matroska_demuxer::{Frame, MatroskaFile, TrackType, TransferCharacteristics};
 
 use crate::MediaInfoError;
-use crate::codec::normalize_codec_name;
+use crate::codec::{normalize_codec_name, normalize_pcm_codec_name, normalize_vfw_codec_name};
 use crate::probe::ProbeBudget;
 use crate::types::{RawContainer, RawTrack, TrackKind};
 
 const HDR10PLUS_SCAN_MAX_BYTES: u64 = 4 * 1024 * 1024;
-const HDR10PLUS_SCAN_MAX_FRAMES: usize = 2048;
+const MKV_FPS_SCAN_MAX_BYTES: u64 = 8 * 1024 * 1024;
+const MKV_FPS_SCAN_MAX_FRAMES: usize = 96;
+const MKV_CHAPTER_SCAN_MAX_BYTES: usize = 2 * 1024 * 1024;
+const EBML_ID_CHAPTERS: u32 = 0x1043_A770;
+const EBML_ID_EDITION_ENTRY: u32 = 0x45B9;
+const EBML_ID_CHAPTER_ATOM: u32 = 0xB6;
+const EBML_ID_CHAPTER_TIME_START: u32 = 0x91;
 
 fn normalize_mkv_track_language(
-    language_bcp47: Option<&str>,
+    kind: TrackKind,
+    _language_bcp47: Option<&str>,
     language: Option<&str>,
 ) -> Option<String> {
-    language_bcp47
-        .or(language)
-        .filter(|value| !value.is_empty() && *value != "und")
-        .map(str::to_owned)
+    if let Some(language) = language {
+        return normalize_explicit_mkv_language_tag(language);
+    }
+    (kind != TrackKind::Video).then_some("eng".to_owned())
 }
 
 /// Parse an MKV/WebM file into a [`RawContainer`].
@@ -41,7 +48,9 @@ pub(crate) fn parse_mkv(path: &Path) -> Result<RawContainer, MediaInfoError> {
     // get nanoseconds, then divide by 1e9 to get seconds.
     let timestamp_scale_ns = mkv.info().timestamp_scale().get() as f64;
     let duration_seconds = mkv.info().duration().map(|d| d * timestamp_scale_ns / 1e9);
-    let num_chapters = Some(count_mkv_chapters(&mkv));
+    let num_chapters = Some(
+        scan_mkv_chapter_count_ffprobe_style(path).unwrap_or_else(|| count_mkv_chapters(&mkv)),
+    );
 
     // -- tracks ----------------------------------------------------------
     let mut tracks: Vec<RawTrack> = Vec::new();
@@ -56,16 +65,26 @@ pub(crate) fn parse_mkv(path: &Path) -> Result<RawContainer, MediaInfoError> {
         };
 
         let codec_id_str = entry.codec_id();
+        let audio_bit_depth = entry
+            .audio()
+            .and_then(|audio| audio.bit_depth())
+            .map(|depth| depth.get() as i32);
         let mut raw = RawTrack {
             kind,
             codec_id: codec_id_str.to_owned(),
-            codec_name: normalize_codec_name(codec_id_str),
+            codec_name: normalize_pcm_codec_name(codec_id_str, audio_bit_depth)
+                .or_else(|| {
+                    (codec_id_str == "V_MS/VFW/FOURCC")
+                        .then(|| normalize_vfw_codec_name(entry.codec_private()))
+                        .flatten()
+                })
+                .or_else(|| normalize_codec_name(codec_id_str)),
             codec_private: entry.codec_private().map(|b| b.to_vec()),
             width: None,
             height: None,
             channels: None,
             bit_rate_bps: None,
-            language: normalize_mkv_track_language(entry.language_bcp47(), entry.language()),
+            language: normalize_mkv_track_language(kind, entry.language_bcp47(), entry.language()),
             name: entry.name().map(str::to_owned),
             forced: entry.flag_forced(),
             default_track: entry.flag_default(),
@@ -131,7 +150,15 @@ pub(crate) fn parse_mkv(path: &Path) -> Result<RawContainer, MediaInfoError> {
         video_track.bit_rate_bps = Some((file_size as f64 * 8.0 / duration_seconds) as i64);
     }
 
-    scan_first_hevc_frame_for_hdr10plus(&mut mkv, &track_index, &mut tracks)?;
+    scan_video_frames_for_metadata(&mut mkv, &track_index, &mut tracks)?;
+
+    if let Some(video_track) = tracks
+        .iter_mut()
+        .find(|track| track.kind == TrackKind::Video)
+        && video_track.frame_rate_fps.is_none()
+    {
+        video_track.frame_rate_fps = fallback_frame_rate_from_timestamp_scale(timestamp_scale_ns);
+    }
 
     Ok(RawContainer {
         format_name,
@@ -143,18 +170,154 @@ pub(crate) fn parse_mkv(path: &Path) -> Result<RawContainer, MediaInfoError> {
 
 fn count_mkv_chapters<R: std::io::Read + std::io::Seek>(mkv: &MatroskaFile<R>) -> i32 {
     mkv.chapters()
-        .map(|editions| {
-            editions
-                .iter()
-                .map(|edition| edition.chapter_atoms().len() as i32)
-                .sum()
+        .and_then(|editions| editions.first())
+        .map(|edition| {
+            count_ffprobe_style_chapter_starts(
+                edition
+                    .chapter_atoms()
+                    .iter()
+                    .map(|chapter| chapter.time_start()),
+            )
         })
         .unwrap_or(0)
 }
 
-/// Scan only until the first HEVC video frame is seen, with explicit budgets,
-/// so MKV/WebM analysis stays header-driven instead of frame-walking.
-fn scan_first_hevc_frame_for_hdr10plus<R: std::io::Read + std::io::Seek>(
+fn normalize_explicit_mkv_language_tag(language: &str) -> Option<String> {
+    let trimmed = language.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("und") {
+        return None;
+    }
+    Some(trimmed.to_owned())
+}
+
+fn scan_mkv_chapter_count_ffprobe_style(path: &Path) -> Option<i32> {
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut buf = vec![0_u8; MKV_CHAPTER_SCAN_MAX_BYTES];
+    let n = {
+        let mut total = 0;
+        while total < buf.len() {
+            match file.read(&mut buf[total..]) {
+                Ok(0) => break,
+                Ok(read) => total += read,
+                Err(_) => break,
+            }
+        }
+        total
+    };
+    count_mkv_chapters_ffprobe_style_from_bytes(&buf[..n])
+}
+
+fn count_mkv_chapters_ffprobe_style_from_bytes(data: &[u8]) -> Option<i32> {
+    let chapters_payload = find_ebml_element_payload(data, EBML_ID_CHAPTERS)?;
+    let first_edition_payload =
+        find_first_direct_ebml_child(chapters_payload, EBML_ID_EDITION_ENTRY)?;
+    Some(count_top_level_mkv_chapters_ffprobe_style(
+        first_edition_payload,
+    ))
+}
+
+fn find_ebml_element_payload(mut data: &[u8], target_id: u32) -> Option<&[u8]> {
+    while !data.is_empty() {
+        let (id, payload, consumed) = next_ebml_element(data)?;
+        if id == target_id {
+            return Some(payload);
+        }
+        data = &data[consumed..];
+    }
+    None
+}
+
+fn find_first_direct_ebml_child(data: &[u8], target_id: u32) -> Option<&[u8]> {
+    let mut current = data;
+    while !current.is_empty() {
+        let (id, payload, consumed) = next_ebml_element(current)?;
+        if id == target_id {
+            return Some(payload);
+        }
+        current = &current[consumed..];
+    }
+    None
+}
+
+fn count_top_level_mkv_chapters_ffprobe_style(data: &[u8]) -> i32 {
+    let mut starts = Vec::new();
+    let mut current = data;
+    while !current.is_empty() {
+        let Some((id, payload, consumed)) = next_ebml_element(current) else {
+            break;
+        };
+        if id == EBML_ID_CHAPTER_ATOM
+            && let Some(start_payload) =
+                find_first_direct_ebml_child(payload, EBML_ID_CHAPTER_TIME_START)
+            && let Some(start) = parse_ebml_uint(start_payload)
+        {
+            starts.push(start);
+        }
+        current = &current[consumed..];
+    }
+    count_ffprobe_style_chapter_starts(starts)
+}
+
+fn count_ffprobe_style_chapter_starts(starts: impl IntoIterator<Item = u64>) -> i32 {
+    let mut max_start = None;
+    let mut count = 0_i32;
+    for start in starts {
+        if max_start.is_none_or(|max_start| start > max_start) {
+            max_start = Some(start);
+            count += 1;
+        }
+    }
+    count
+}
+
+fn next_ebml_element(data: &[u8]) -> Option<(u32, &[u8], usize)> {
+    let (id, id_len) = parse_ebml_id(data)?;
+    let (size, size_len) = parse_ebml_vint(&data[id_len..])?;
+    let payload_start = id_len + size_len;
+    let payload_end = payload_start.checked_add(size)?;
+    if payload_end > data.len() {
+        return None;
+    }
+    Some((id, &data[payload_start..payload_end], payload_end))
+}
+
+fn parse_ebml_id(data: &[u8]) -> Option<(u32, usize)> {
+    if data.is_empty() {
+        return None;
+    }
+    let first = data[0];
+    if first == 0 {
+        return None;
+    }
+    let len = first.leading_zeros() as usize + 1;
+    if len == 0 || len > 4 || len > data.len() {
+        return None;
+    }
+
+    let mut value = 0_u32;
+    for &byte in &data[..len] {
+        value = (value << 8) | u32::from(byte);
+    }
+    Some((value, len))
+}
+
+fn parse_ebml_uint(data: &[u8]) -> Option<u64> {
+    if data.is_empty() || data.len() > 8 {
+        return None;
+    }
+
+    let mut value = 0_u64;
+    for &byte in data {
+        value = (value << 8) | u64::from(byte);
+    }
+    Some(value)
+}
+
+/// Scan a bounded number of video frames to fill the remaining ffprobe-style
+/// gaps without turning MKV analysis back into a deep payload walk.
+fn scan_video_frames_for_metadata<R: std::io::Read + std::io::Seek>(
     mkv: &mut MatroskaFile<R>,
     track_index: &HashMap<u64, usize>,
     tracks: &mut [RawTrack],
@@ -174,13 +337,36 @@ fn scan_first_hevc_frame_for_hdr10plus<R: std::io::Read + std::io::Seek>(
             .as_deref()
             .map(crate::codec::hevc_nal_length_size)
     });
-    let Some((hevc_track_num, nal_length_size)) = hevc_video_track_num.zip(hevc_nal_len) else {
-        return Ok(());
+    let fps_track_num = tracks
+        .iter()
+        .position(|track| track.kind == TrackKind::Video)
+        .and_then(|track_idx| {
+            track_index
+                .iter()
+                .find_map(|(&num, &idx)| (idx == track_idx).then_some(num))
+        });
+
+    let (hevc_track_num, nal_length_size) = match hevc_video_track_num.zip(hevc_nal_len) {
+        Some(values) => values,
+        None => {
+            if fps_track_num.is_none() {
+                return Ok(());
+            }
+            (0, 0)
+        }
     };
 
-    let mut payload_budget = ProbeBudget::new(HDR10PLUS_SCAN_MAX_BYTES);
+    if hevc_video_track_num.is_none() && fps_track_num.is_none() {
+        return Ok(());
+    }
+
+    let mut payload_budget = ProbeBudget::new(MKV_FPS_SCAN_MAX_BYTES.max(HDR10PLUS_SCAN_MAX_BYTES));
     let mut frame = Frame::default();
-    for _ in 0..HDR10PLUS_SCAN_MAX_FRAMES {
+    let mut fps_timestamps = Vec::new();
+    let mut fps_done = fps_track_num.is_none();
+    let mut hdr_done = hevc_video_track_num.is_none();
+
+    for _ in 0..MKV_FPS_SCAN_MAX_FRAMES {
         let has_frame = mkv
             .next_frame(&mut frame)
             .map_err(|e| MediaInfoError::Parse(format!("matroska frame read: {e}")))?;
@@ -193,17 +379,89 @@ fn scan_first_hevc_frame_for_hdr10plus<R: std::io::Read + std::io::Seek>(
         }
         payload_budget.consume(frame.data.len());
 
-        if frame.track == hevc_track_num {
+        if !fps_done && Some(frame.track) == fps_track_num {
+            if fps_timestamps.last().copied() != Some(frame.timestamp) {
+                fps_timestamps.push(frame.timestamp);
+            }
+            if let Some(fps) = estimate_frame_rate_from_timestamps(&fps_timestamps)
+                && let Some(&idx) = track_index.get(&frame.track)
+                && should_replace_frame_rate(tracks[idx].frame_rate_fps, fps)
+            {
+                tracks[idx].frame_rate_fps = Some(fps);
+                fps_done = true;
+            }
+        }
+
+        if !hdr_done && frame.track == hevc_track_num {
             if crate::codec::scan_hevc_frame_for_hdr10plus(&frame.data, nal_length_size)
                 && let Some(&idx) = track_index.get(&hevc_track_num)
             {
                 tracks[idx].has_hdr10plus = true;
             }
+            hdr_done = true;
+        }
+
+        if fps_done && hdr_done {
             break;
         }
     }
 
+    if !fps_done
+        && let Some(fps) = estimate_frame_rate_from_timestamps(&fps_timestamps)
+        && let Some(track_num) = fps_track_num
+        && let Some(&idx) = track_index.get(&track_num)
+        && should_replace_frame_rate(tracks[idx].frame_rate_fps, fps)
+    {
+        tracks[idx].frame_rate_fps = Some(fps);
+    }
+
     Ok(())
+}
+
+fn estimate_frame_rate_from_timestamps(timestamps: &[u64]) -> Option<f64> {
+    if timestamps.len() < 4 {
+        return None;
+    }
+
+    let mut deltas: Vec<u64> = timestamps
+        .windows(2)
+        .filter_map(|window| window[1].checked_sub(window[0]))
+        .filter(|delta| *delta > 0)
+        .collect();
+    if deltas.is_empty() {
+        return None;
+    }
+
+    deltas.sort_unstable();
+    let median_delta = deltas[deltas.len() / 2] as f64;
+    let delta_seconds = median_delta / 1000.0;
+    if delta_seconds <= 0.0 {
+        return None;
+    }
+
+    let fps = 1.0 / delta_seconds;
+    if (1.0..=240.0).contains(&fps) {
+        Some(fps)
+    } else {
+        None
+    }
+}
+
+fn fallback_frame_rate_from_timestamp_scale(timestamp_scale_ns: f64) -> Option<f64> {
+    if timestamp_scale_ns <= 0.0 {
+        return None;
+    }
+
+    let fps = 1e9 / timestamp_scale_ns;
+    (1.0..=1000.0).contains(&fps).then_some(fps)
+}
+
+fn should_replace_frame_rate(existing: Option<f64>, observed: f64) -> bool {
+    match existing {
+        None => true,
+        Some(current) if current <= 0.0 => true,
+        Some(current) => current < 10.0 && observed >= current * 10.0,
+    }
 }
 
 /// Convert a [`TransferCharacteristics`] enum value to the ITU-T H.273 numeric
@@ -302,7 +560,8 @@ fn parse_ebml_vint(data: &[u8]) -> Option<(usize, usize)> {
     if len > 8 || len > data.len() {
         return None;
     }
-    let mut value = (first & (0xFF >> len)) as usize;
+    let value_mask = if len == 8 { 0 } else { 0xFF >> len };
+    let mut value = (first & value_mask) as usize;
     for &b in &data[1..len] {
         value = (value << 8) | b as usize;
     }
@@ -312,6 +571,22 @@ fn parse_ebml_vint(data: &[u8]) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_ebml_element(id: &[u8], payload: &[u8]) -> Vec<u8> {
+        assert!(payload.len() < 0x7F);
+        let mut element = Vec::with_capacity(id.len() + 1 + payload.len());
+        element.extend_from_slice(id);
+        element.push(0x80 | payload.len() as u8);
+        element.extend_from_slice(payload);
+        element
+    }
+
+    fn make_chapter_atom(start: u64, nested: &[u8]) -> Vec<u8> {
+        let mut payload = make_ebml_element(&[0x73, 0xC4], &[1]);
+        payload.extend_from_slice(&make_ebml_element(&[0x91], &start.to_be_bytes()));
+        payload.extend_from_slice(nested);
+        make_ebml_element(&[0xB6], &payload)
+    }
 
     #[test]
     fn transfer_itu_values() {
@@ -334,17 +609,136 @@ mod tests {
     }
 
     #[test]
-    fn normalize_track_language_preserves_unknown() {
-        assert_eq!(normalize_mkv_track_language(None, None), None);
-        assert_eq!(normalize_mkv_track_language(Some(""), None), None);
-        assert_eq!(normalize_mkv_track_language(None, Some("und")), None);
+    fn normalize_track_language_matches_ffmpeg_matroska_metadata_rules() {
         assert_eq!(
-            normalize_mkv_track_language(Some("jpn"), Some("eng")),
-            Some("jpn".to_string())
+            normalize_mkv_track_language(TrackKind::Video, None, None),
+            None
         );
         assert_eq!(
-            normalize_mkv_track_language(None, Some("eng")),
+            normalize_mkv_track_language(TrackKind::Audio, Some("en-US"), None),
             Some("eng".to_string())
         );
+        assert_eq!(
+            normalize_mkv_track_language(TrackKind::Subtitle, None, Some("en-US")),
+            Some("en-US".to_string())
+        );
+        assert_eq!(
+            normalize_mkv_track_language(TrackKind::Subtitle, Some("pt-BR"), Some("por")),
+            Some("por".to_string())
+        );
+        assert_eq!(
+            normalize_mkv_track_language(TrackKind::Subtitle, Some("fil"), Some("fil")),
+            Some("fil".to_string())
+        );
+        assert_eq!(
+            normalize_mkv_track_language(TrackKind::Subtitle, Some("jad"), Some("und")),
+            None
+        );
+        assert_eq!(
+            normalize_mkv_track_language(TrackKind::Subtitle, None, Some("zxx")),
+            Some("zxx".to_string())
+        );
+        assert_eq!(
+            normalize_mkv_track_language(TrackKind::Audio, Some("ja-JP"), Some("eng")),
+            Some("eng".to_string())
+        );
+        assert_eq!(
+            normalize_mkv_track_language(TrackKind::Audio, None, None),
+            Some("eng".to_string())
+        );
+    }
+
+    #[test]
+    fn count_ffprobe_style_chapter_starts_matches_ffmpeg_guard() {
+        assert_eq!(
+            count_ffprobe_style_chapter_starts([0, 90, 1320, 6, 51, 1429]),
+            4
+        );
+        assert_eq!(
+            count_ffprobe_style_chapter_starts([0, 15, 105, 1226, 1315, 1409]),
+            6
+        );
+    }
+
+    #[test]
+    fn chapter_scan_uses_first_edition_only() {
+        let first_edition = [
+            make_chapter_atom(0, &[]),
+            make_chapter_atom(90, &[]),
+            make_chapter_atom(742, &[]),
+        ]
+        .concat();
+        let second_edition = [
+            make_chapter_atom(33, &[]),
+            make_chapter_atom(73, &[]),
+            make_chapter_atom(164, &[]),
+            make_chapter_atom(636, &[]),
+        ]
+        .concat();
+        let chapters = make_ebml_element(
+            &[0x10, 0x43, 0xA7, 0x70],
+            &[
+                make_ebml_element(&[0x45, 0xB9], &first_edition),
+                make_ebml_element(&[0x45, 0xB9], &second_edition),
+            ]
+            .concat(),
+        );
+
+        assert_eq!(
+            count_mkv_chapters_ffprobe_style_from_bytes(&chapters),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn chapter_scan_ignores_nested_atoms_and_backwards_starts() {
+        let nested = make_chapter_atom(105, &[]);
+        let edition = [
+            make_chapter_atom(0, &nested),
+            make_chapter_atom(90, &[]),
+            make_chapter_atom(15, &[]),
+            make_chapter_atom(1409, &[]),
+        ]
+        .concat();
+        let chapters = make_ebml_element(
+            &[0x10, 0x43, 0xA7, 0x70],
+            &make_ebml_element(&[0x45, 0xB9], &edition),
+        );
+
+        assert_eq!(
+            count_mkv_chapters_ffprobe_style_from_bytes(&chapters),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn estimate_frame_rate_from_timestamp_deltas_uses_millisecond_units() {
+        let fps = estimate_frame_rate_from_timestamps(&[0, 40, 80, 120, 160]);
+        assert_eq!(fps, Some(25.0));
+    }
+
+    #[test]
+    fn estimate_frame_rate_requires_more_than_sparse_samples() {
+        assert_eq!(estimate_frame_rate_from_timestamps(&[0, 1000]), None);
+        assert_eq!(estimate_frame_rate_from_timestamps(&[0, 1000, 2000]), None);
+    }
+
+    #[test]
+    fn fallback_frame_rate_uses_timestamp_scale_timebase() {
+        assert_eq!(
+            fallback_frame_rate_from_timestamp_scale(1_000_000.0),
+            Some(1000.0)
+        );
+        let approx_24fps = fallback_frame_rate_from_timestamp_scale(41_666_667.0).unwrap();
+        assert!((approx_24fps - 24.0).abs() < 0.001);
+        assert_eq!(fallback_frame_rate_from_timestamp_scale(0.0), None);
+    }
+
+    #[test]
+    fn only_replaces_clearly_bogus_existing_frame_rates() {
+        assert!(should_replace_frame_rate(None, 24.0));
+        assert!(should_replace_frame_rate(Some(1.0), 1000.0));
+        assert!(!should_replace_frame_rate(Some(24.0), 6.0));
+        assert!(!should_replace_frame_rate(Some(23.976), 24.0));
     }
 }

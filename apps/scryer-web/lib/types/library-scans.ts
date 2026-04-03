@@ -10,6 +10,9 @@ export const libraryScanStatusValues = [
 
 export type LibraryScanStatus = (typeof libraryScanStatusValues)[number];
 
+export const libraryScanModeValues = ["full", "additive"] as const;
+export type LibraryScanMode = (typeof libraryScanModeValues)[number];
+
 export type LibraryScanPhaseProgress = {
   total: number;
   completed: number;
@@ -19,6 +22,7 @@ export type LibraryScanPhaseProgress = {
 export type LibraryScanProgress = {
   sessionId: string;
   facet: Facet;
+  mode: LibraryScanMode;
   status: LibraryScanStatus;
   startedAt: string;
   updatedAt: string;

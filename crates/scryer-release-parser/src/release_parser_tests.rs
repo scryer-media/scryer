@@ -856,6 +856,18 @@ fn parse_numbered_special_marker_without_title_words_as_special() {
 }
 
 #[test]
+fn parse_explicit_standard_episode_with_special_in_title_stays_standard_episode() {
+    let parsed = parse_release_metadata(
+        "Attack on Titan - S04E29 - The Final Chapters Special 1 1080p WEB-DL",
+    );
+    let episode = parsed.episode.expect("episode metadata");
+    assert_eq!(episode.season, Some(4));
+    assert_eq!(episode.episode_numbers, vec![29]);
+    assert_eq!(episode.special_kind, None);
+    assert!(episode.special_absolute_episode_numbers.is_empty());
+}
+
+#[test]
 fn release_group_repost_suffix_is_ignored() {
     let parsed = parse_release_metadata(
         "Series.S01E08.Haunted.Hayride.720p.AMZN.WEBRip.DDP5.1.x264-NTb-postbot",

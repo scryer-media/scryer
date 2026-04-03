@@ -10,7 +10,7 @@ import {
   libraryScanProgressSubscriptionQuery,
 } from "@/lib/graphql/queries";
 import { useDeferredWsSubscription } from "@/lib/hooks/use-deferred-ws-subscription";
-import type { Facet, LibraryScanProgress, LibraryScanStatus } from "@/lib/types";
+import type { Facet, LibraryScanMode, LibraryScanProgress, LibraryScanStatus } from "@/lib/types";
 
 const TERMINAL_TOAST_DURATION_MS = 6_000;
 
@@ -33,6 +33,10 @@ function normalizeStatus(value: unknown): LibraryScanStatus {
     default:
       return "running";
   }
+}
+
+function normalizeMode(value: unknown): LibraryScanMode {
+  return value === "additive" ? "additive" : "full";
 }
 
 function normalizeNumber(value: unknown): number {
@@ -71,6 +75,7 @@ function normalizeLibraryScanProgress(
   return {
     sessionId: value.sessionId,
     facet: normalizeFacet(value.facet),
+    mode: normalizeMode(value.mode),
     status: normalizeStatus(value.status),
     startedAt:
       typeof value.startedAt === "string"
@@ -157,7 +162,10 @@ export function LibraryScanProgressProvider({
         : [];
       const normalizedSessions = rawSessions
         .map(normalizeLibraryScanProgress)
-        .filter((session): session is LibraryScanProgress => session !== null);
+        .filter(
+          (session): session is LibraryScanProgress =>
+            session !== null && session.mode === "full",
+        );
 
       setSessionsById((current) => {
         const next = { ...current };
@@ -183,7 +191,7 @@ export function LibraryScanProgressProvider({
       const normalized = normalizeLibraryScanProgress(
         result.data?.libraryScanProgress,
       );
-      if (normalized) {
+      if (normalized && normalized.mode === "full") {
         upsertSession(normalized);
       }
     },
@@ -239,7 +247,10 @@ export function LibraryScanProgressProvider({
       ),
       getActiveSession: (facet: Facet) =>
         Object.values(sessionsById).find(
-          (session) => session.facet === facet && !isTerminal(session.status),
+          (session) =>
+            session.mode === "full" &&
+            session.facet === facet &&
+            !isTerminal(session.status),
         ) ?? null,
     }),
     [sessionsById],

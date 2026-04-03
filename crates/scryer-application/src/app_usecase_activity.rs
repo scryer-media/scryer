@@ -1,6 +1,35 @@
 use super::*;
 
 impl AppUseCase {
+    /// Canonical reactive bus event for title-list/detail refresh. Flows that
+    /// change title-visible UI state should emit this instead of open-coding
+    /// scan- or workflow-specific refresh signals.
+    pub(crate) async fn emit_title_updated_activity(
+        &self,
+        actor_user_id: Option<String>,
+        title: &Title,
+    ) {
+        if let Err(error) = self
+            .services
+            .record_activity_event(
+                actor_user_id,
+                Some(title.id.clone()),
+                Some(title.facet.as_str().to_string()),
+                ActivityKind::TitleUpdated,
+                format!("title updated for {}", title.name),
+                ActivitySeverity::Info,
+                vec![ActivityChannel::WebUi],
+            )
+            .await
+        {
+            tracing::warn!(
+                title_id = %title.id,
+                error = %error,
+                "failed to record title updated activity event"
+            );
+        }
+    }
+
     pub async fn evaluate_policy(
         &self,
         actor: &User,

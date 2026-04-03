@@ -253,6 +253,19 @@ const NOTIFICATION_SUBSCRIPTION_FIELDS = `
     createdAt
     updatedAt`;
 
+const DELETE_PREVIEW_FIELDS = `
+    fingerprint
+    totalFileCount
+    mediaCount
+    subtitleCount
+    imageCount
+    otherCount
+    directoryCount
+    requiresTypedConfirmation
+    typedConfirmationPrompt
+    targetLabel
+    samplePaths`;
+
 export const titleDetailQuery = `query TitleDetail($id: String!) {
   title(id: $id) {${TITLE_CORE_FIELDS}
     collections {${TITLE_COLLECTION_FIELDS}
@@ -313,6 +326,21 @@ export const titleOverviewInitQuery = `query TitleOverviewInit($id: String!, $bl
     attemptedAt
   }
   subtitleDownloads(titleId: $id) {${SUBTITLE_DOWNLOAD_FIELDS}
+  }
+}`;
+
+export const deleteTitlePreviewQuery = `query DeleteTitlePreview($input: DeleteTitlePreviewInput!) {
+  deleteTitlePreview(input: $input) {${DELETE_PREVIEW_FIELDS}
+  }
+}`;
+
+export const deleteMediaFilePreviewQuery = `query DeleteMediaFilePreview($input: DeleteMediaFilePreviewInput!) {
+  deleteMediaFilePreview(input: $input) {${DELETE_PREVIEW_FIELDS}
+  }
+}`;
+
+export const deleteSubtitlePreviewQuery = `query DeleteSubtitlePreview($input: DeleteSubtitlePreviewInput!) {
+  deleteSubtitlePreview(input: $input) {${DELETE_PREVIEW_FIELDS}
   }
 }`;
 
@@ -535,8 +563,7 @@ export const searchForEpisodeQuery = `query SearchIndexersForEpisode($titleId: S
   }
 }`;
 
-export const titlesQuery = `query Titles($facet: MediaFacetValue, $query: String) {
-  titles(facet: $facet, query: $query) {
+const TITLE_LIST_FIELDS = `
     id
     name
     facet
@@ -553,7 +580,17 @@ export const titlesQuery = `query Titles($facet: MediaFacetValue, $query: String
     externalIds {
       source
       value
-    }
+    }`;
+
+export const titlesQuery = `query Titles($facet: MediaFacetValue, $query: String) {
+  titles(facet: $facet, query: $query) {
+${TITLE_LIST_FIELDS}
+  }
+}`;
+
+export const titleListEntryQuery = `query TitleListEntry($id: String!) {
+  title(id: $id) {
+${TITLE_LIST_FIELDS}
   }
 }`;
 
@@ -615,6 +652,7 @@ export const activeLibraryScansQuery = `query ActiveLibraryScans {
   activeLibraryScans {
     sessionId
     facet
+    mode
     status
     startedAt
     updatedAt
@@ -645,6 +683,7 @@ export const libraryScanProgressSubscriptionQuery = `subscription LibraryScanPro
   libraryScanProgress {
     sessionId
     facet
+    mode
     status
     startedAt
     updatedAt
@@ -668,6 +707,92 @@ export const libraryScanProgressSubscriptionQuery = `subscription LibraryScanPro
       skipped
       unmatched
     }
+  }
+}`;
+
+export const jobsQuery = `query Jobs {
+  jobs {
+    key
+    displayName
+    description
+    category
+    section
+    manualTriggerAllowed
+    usesLibraryScanProgress
+    schedule {
+      kind
+      description
+      intervalSeconds
+      initialDelaySeconds
+      nextRunAt
+    }
+  }
+}`;
+
+export const JOB_RUN_FIELDS = `
+  id
+  jobKey
+  displayName
+  category
+  section
+  status
+  triggerSource
+  startedAt
+  completedAt
+  summaryText
+  errorText
+  progressJson
+  libraryScanProgress {
+    sessionId
+    facet
+    mode
+    status
+    startedAt
+    updatedAt
+    foundTitles
+    metadataTotalKnown
+    fileTotalKnown
+    metadataProgress {
+      total
+      completed
+      failed
+    }
+    fileProgress {
+      total
+      completed
+      failed
+    }
+    summary {
+      scanned
+      matched
+      imported
+      skipped
+      unmatched
+    }
+  }
+`;
+
+export const activeJobRunsQuery = `query ActiveJobRuns {
+  activeJobRuns {
+${JOB_RUN_FIELDS}
+  }
+}`;
+
+export const jobRunsQuery = `query JobRuns($jobKey: JobKeyValue!, $limit: Int) {
+  jobRuns(jobKey: $jobKey, limit: $limit) {
+${JOB_RUN_FIELDS}
+  }
+}`;
+
+export const recentJobRunsQuery = `query RecentJobRuns($limit: Int) {
+  recentJobRuns(limit: $limit) {
+${JOB_RUN_FIELDS}
+  }
+}`;
+
+export const jobRunEventsSubscription = `subscription JobRunEvents {
+  jobRunEvents {
+${JOB_RUN_FIELDS}
   }
 }`;
 

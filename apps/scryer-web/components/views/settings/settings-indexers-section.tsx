@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { RenderBooleanIcon } from "@/components/common/boolean-icon";
 import {
   Table,
@@ -244,6 +245,24 @@ function DynamicConfigField({
             ))}
           </SelectContent>
         </Select>
+        {field.helpText ? (
+          <p className="mt-1 text-xs text-muted-foreground">{field.helpText}</p>
+        ) : null}
+      </label>
+    );
+  }
+
+  if (field.fieldType === "multiline") {
+    return (
+      <label>
+        <Label className="mb-2 block">{field.label}</Label>
+        <Textarea
+          value={value}
+          onChange={(e) => onChange(field.key, e.target.value)}
+          required={field.required}
+          placeholder={field.defaultValue ?? ""}
+          rows={6}
+        />
         {field.helpText ? (
           <p className="mt-1 text-xs text-muted-foreground">{field.helpText}</p>
         ) : null}

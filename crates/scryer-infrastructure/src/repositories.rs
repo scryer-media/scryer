@@ -3,17 +3,18 @@ use scryer_application::{
     AcquisitionStateRepository, AppError, AppResult, BlocklistRepository,
     DownloadClientConfigRepository, DownloadSubmission, DownloadSubmissionRepository,
     EventRepository, HousekeepingRepository, ImportArtifact, ImportArtifactRepository,
-    ImportRepository, IndexerConfigRepository, InsertMediaFileInput, MediaFileRepository,
-    NewBlocklistEntry, NewTitleHistoryEvent, NotificationChannelRepository,
-    NotificationSubscriptionRepository, PendingRelease, PendingReleaseRepository,
-    PendingReleaseStatus, PluginInstallationRepository, PostProcessingScriptRepository,
-    PrimaryCollectionSummary, QualityProfile as ApplicationQualityProfile,
-    QualityProfileRepository, ReleaseAttemptRepository, ReleaseDecision,
-    ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature, RuleSetRepository,
-    SettingsRepository, ShowRepository, SuccessfulGrabCommit, SystemInfoProvider,
-    TitleHistoryFilter, TitleHistoryPage, TitleHistoryRepository, TitleMediaFile,
-    TitleMediaSizeSummary, TitleMetadataUpdate, TitleReleaseBlocklistEntry, TitleRepository,
-    UserRepository, WantedItem, WantedItemRepository,
+    ImportRepository, IndexerConfigRepository, InsertMediaFileInput, JobKey, JobRunRecord,
+    JobRunRepository, JobRunStatus, JobTriggerSource, LibraryProbeRepository,
+    LibraryProbeSignature, MediaFileRepository, NewBlocklistEntry, NewTitleHistoryEvent,
+    NotificationChannelRepository, NotificationSubscriptionRepository, PendingRelease,
+    PendingReleaseRepository, PendingReleaseStatus, PluginInstallationRepository,
+    PostProcessingScriptRepository, PrimaryCollectionSummary,
+    QualityProfile as ApplicationQualityProfile, QualityProfileRepository,
+    ReleaseAttemptRepository, ReleaseDecision, ReleaseDownloadAttemptOutcome,
+    ReleaseDownloadFailureSignature, RuleSetRepository, SettingsRepository, ShowRepository,
+    SuccessfulGrabCommit, SystemInfoProvider, TitleHistoryFilter, TitleHistoryPage,
+    TitleHistoryRepository, TitleMediaFile, TitleMediaSizeSummary, TitleMetadataUpdate,
+    TitleReleaseBlocklistEntry, TitleRepository, UserRepository, WantedItem, WantedItemRepository,
 };
 use scryer_domain::{
     BlocklistEntry, CalendarEpisode, Collection, CollectionType, DownloadClientConfig, Entitlement,
@@ -21,8 +22,53 @@ use scryer_domain::{
     NotificationChannelConfig, NotificationSubscription, PluginInstallation, PostProcessingScript,
     PostProcessingScriptRun, RuleSet, Title, TitleHistoryEventType, TitleHistoryRecord, User,
 };
+use std::collections::HashMap;
 
 use crate::sqlite_services::SqliteServices;
+
+fn parse_rfc3339_or_now(value: Option<String>) -> chrono::DateTime<chrono::Utc> {
+    value
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(&value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .unwrap_or_else(chrono::Utc::now)
+}
+
+fn job_run_record_from_workflow(record: crate::WorkflowOperationRecord) -> AppResult<JobRunRecord> {
+    let job_key = record
+        .job_key
+        .as_deref()
+        .and_then(JobKey::parse)
+        .ok_or_else(|| AppError::Repository("workflow operation missing valid job_key".into()))?;
+    let trigger_source = record
+        .trigger_source
+        .as_deref()
+        .and_then(JobTriggerSource::parse)
+        .ok_or_else(|| {
+            AppError::Repository("workflow operation missing valid trigger_source".into())
+        })?;
+    let status = JobRunStatus::parse(&record.status)
+        .ok_or_else(|| AppError::Repository("workflow operation missing valid status".into()))?;
+
+    Ok(JobRunRecord {
+        id: record.id,
+        job_key,
+        operation_type: record.operation_type,
+        status,
+        trigger_source,
+        actor_user_id: record.actor_user_id,
+        progress_json: record.progress_json,
+        summary_json: record.summary_json,
+        summary_text: record.summary_text,
+        error_text: record.error_text,
+        started_at: parse_rfc3339_or_now(record.started_at),
+        completed_at: record
+            .completed_at
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(&value).ok())
+            .map(|value| value.with_timezone(&chrono::Utc)),
+        created_at: parse_rfc3339_or_now(Some(record.created_at)),
+        updated_at: parse_rfc3339_or_now(Some(record.updated_at)),
+    })
+}
 
 macro_rules! db_call {
     ($self:ident, $cmd:ident { $($field:ident),* $(,)? }) => {{
@@ -141,6 +187,22 @@ impl ShowRepository for SqliteServices {
     async fn list_collections_for_title(&self, title_id: &str) -> AppResult<Vec<Collection>> {
         let title_id = title_id.to_string();
         db_call!(self, ListCollectionsForTitle { title_id })
+    }
+
+    async fn list_collections_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<Collection>>> {
+        let title_ids = title_ids.to_vec();
+        let collections = db_call!(self, ListCollectionsForTitles { title_ids })?;
+        let mut grouped = HashMap::<String, Vec<Collection>>::new();
+        for collection in collections {
+            grouped
+                .entry(collection.title_id.clone())
+                .or_default()
+                .push(collection);
+        }
+        Ok(grouped)
     }
 
     async fn list_primary_collection_summaries(
@@ -726,6 +788,116 @@ impl ImportArtifactRepository for SqliteServices {
     ) -> AppResult<u64> {
         self.count_import_artifacts_by_result(source_system, source_ref, result)
             .await
+    }
+}
+
+#[async_trait]
+impl JobRunRepository for SqliteServices {
+    async fn create_job_run(&self, run: &JobRunRecord) -> AppResult<JobRunRecord> {
+        let record = crate::queries::workflow::create_job_workflow_operation_query(
+            &self.pool,
+            run.operation_type.clone(),
+            run.status.as_str().to_string(),
+            run.job_key.as_str().to_string(),
+            run.trigger_source.as_str().to_string(),
+            run.actor_user_id.clone(),
+            run.progress_json.clone(),
+            run.summary_json.clone(),
+            run.summary_text.clone(),
+            run.error_text.clone(),
+            Some(run.started_at.to_rfc3339()),
+            run.completed_at.map(|value| value.to_rfc3339()),
+        )
+        .await?;
+
+        job_run_record_from_workflow(record)
+    }
+
+    async fn update_job_run(&self, run: &JobRunRecord) -> AppResult<JobRunRecord> {
+        let record = crate::queries::workflow::update_job_workflow_operation_query(
+            &self.pool,
+            &run.id,
+            run.status.as_str(),
+            run.progress_json.clone(),
+            run.summary_json.clone(),
+            run.summary_text.clone(),
+            run.error_text.clone(),
+            run.completed_at.map(|value| value.to_rfc3339()),
+        )
+        .await?;
+
+        job_run_record_from_workflow(record)
+    }
+
+    async fn get_job_run(&self, run_id: &str) -> AppResult<Option<JobRunRecord>> {
+        crate::queries::workflow::get_workflow_operation_by_id_query(&self.pool, run_id)
+            .await?
+            .map(job_run_record_from_workflow)
+            .transpose()
+    }
+
+    async fn list_job_runs(
+        &self,
+        job_key: Option<JobKey>,
+        limit: usize,
+    ) -> AppResult<Vec<JobRunRecord>> {
+        crate::queries::workflow::list_job_workflow_operations_query(
+            &self.pool,
+            job_key.map(JobKey::as_str),
+            limit as i64,
+        )
+        .await?
+        .into_iter()
+        .map(job_run_record_from_workflow)
+        .collect()
+    }
+
+    async fn list_active_job_runs(&self) -> AppResult<Vec<JobRunRecord>> {
+        crate::queries::workflow::list_active_job_workflow_operations_query(&self.pool)
+            .await?
+            .into_iter()
+            .map(job_run_record_from_workflow)
+            .collect()
+    }
+}
+
+#[async_trait]
+impl LibraryProbeRepository for SqliteServices {
+    async fn get_probe_signature(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Option<LibraryProbeSignature>> {
+        Ok(
+            crate::queries::workflow::get_library_probe_signature_query(&self.pool, title_id)
+                .await?
+                .map(|record| LibraryProbeSignature {
+                    title_id: record.title_id,
+                    path: record.path,
+                    probe_signature_scheme: record.probe_signature_scheme,
+                    probe_signature_value: record.probe_signature_value,
+                    last_probed_at: record
+                        .last_probed_at
+                        .and_then(|value| chrono::DateTime::parse_from_rfc3339(&value).ok())
+                        .map(|value| value.with_timezone(&chrono::Utc)),
+                    last_changed_at: record
+                        .last_changed_at
+                        .and_then(|value| chrono::DateTime::parse_from_rfc3339(&value).ok())
+                        .map(|value| value.with_timezone(&chrono::Utc)),
+                }),
+        )
+    }
+
+    async fn upsert_probe_signature(&self, probe: &LibraryProbeSignature) -> AppResult<()> {
+        crate::queries::workflow::upsert_library_probe_signature_query(
+            &self.pool,
+            &probe.title_id,
+            &probe.path,
+            probe.probe_signature_scheme.clone(),
+            probe.probe_signature_value.clone(),
+            probe.last_probed_at.map(|value| value.to_rfc3339()),
+            probe.last_changed_at.map(|value| value.to_rfc3339()),
+        )
+        .await
     }
 }
 
@@ -1528,6 +1700,10 @@ impl scryer_application::SubtitleDownloadRepository for SqliteServices {
         title_id: &str,
     ) -> AppResult<Vec<scryer_domain::SubtitleDownload>> {
         crate::queries::subtitle::list_subtitle_downloads_for_title(&self.pool, title_id).await
+    }
+
+    async fn get(&self, id: &str) -> AppResult<Option<scryer_domain::SubtitleDownload>> {
+        crate::queries::subtitle::get_subtitle_download(&self.pool, id).await
     }
 
     async fn list_for_media_file(

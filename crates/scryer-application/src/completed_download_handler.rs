@@ -686,6 +686,24 @@ mod tests {
                 .collect())
         }
 
+        async fn list_collections_for_titles(
+            &self,
+            title_ids: &[String],
+        ) -> AppResult<std::collections::HashMap<String, Vec<Collection>>> {
+            let collections = self.collections.lock().await;
+            let wanted = title_ids.iter().cloned().collect::<HashSet<_>>();
+            let mut grouped = std::collections::HashMap::<String, Vec<Collection>>::new();
+            for collection in collections.iter() {
+                if wanted.contains(&collection.title_id) {
+                    grouped
+                        .entry(collection.title_id.clone())
+                        .or_default()
+                        .push(collection.clone());
+                }
+            }
+            Ok(grouped)
+        }
+
         async fn get_collection_by_id(&self, collection_id: &str) -> AppResult<Option<Collection>> {
             let collections = self.collections.lock().await;
             Ok(collections

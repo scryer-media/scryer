@@ -55,6 +55,26 @@ pub async fn list_subtitle_downloads_for_media_file(
     Ok(out)
 }
 
+pub async fn get_subtitle_download(
+    pool: &SqlitePool,
+    id: &str,
+) -> AppResult<Option<SubtitleDownload>> {
+    let row = sqlx::query(
+        "SELECT id, media_file_id, title_id, episode_id, language, provider,
+                provider_file_id, file_path, score, hearing_impaired, forced,
+                ai_translated, machine_translated, uploader, release_info,
+                synced, downloaded_at
+         FROM subtitle_downloads
+         WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| AppError::Repository(e.to_string()))?;
+
+    row.map(|row| row_to_subtitle_download(&row)).transpose()
+}
+
 pub async fn insert_subtitle_download(
     pool: &SqlitePool,
     download: &SubtitleDownload,

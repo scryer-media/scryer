@@ -6,6 +6,8 @@ use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_
 pub struct BlacklistSubtitleInput {
     pub subtitle_download_id: String,
     pub reason: Option<String>,
+    pub preview_fingerprint: Option<String>,
+    pub typed_confirmation: Option<String>,
 }
 
 type GqlResult<T> = async_graphql::Result<T>;
@@ -367,39 +369,22 @@ impl SubtitleMutations {
         input: BlacklistSubtitleInput,
     ) -> GqlResult<bool> {
         let app = app_from_ctx(ctx)?;
-        let _actor = actor_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let preview_fingerprint = input.preview_fingerprint.as_deref().ok_or_else(|| {
+            async_graphql::Error::new(
+                "delete preview confirmation is required before deleting subtitle files on disk",
+            )
+        })?;
 
-        // Delete the download record (returns the record so we have the file_path)
-        let record = app
-            .services
-            .subtitle_downloads
-            .delete(&input.subtitle_download_id)
-            .await
-            .map_err(to_gql_error)?
-            .ok_or_else(|| async_graphql::Error::new("subtitle download not found"))?;
-
-        // Delete the file from disk
-        let path = std::path::Path::new(&record.file_path);
-        if path.exists()
-            && let Err(err) = tokio::fs::remove_file(path).await
-        {
-            tracing::warn!(error = %err, path = %record.file_path, "failed to delete subtitle file");
-        }
-
-        // Insert into blacklist
-        if let Some(provider_file_id) = &record.provider_file_id {
-            app.services
-                .subtitle_downloads
-                .blacklist(
-                    &record.media_file_id,
-                    &record.provider,
-                    provider_file_id,
-                    &record.language,
-                    input.reason.as_deref(),
-                )
-                .await
-                .map_err(to_gql_error)?;
-        }
+        app.blacklist_subtitle_download(
+            &actor,
+            &input.subtitle_download_id,
+            input.reason.as_deref(),
+            preview_fingerprint,
+            input.typed_confirmation.as_deref(),
+        )
+        .await
+        .map_err(to_gql_error)?;
 
         Ok(true)
     }

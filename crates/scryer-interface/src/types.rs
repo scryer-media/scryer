@@ -2,6 +2,9 @@ use async_graphql::{Enum, InputObject, SimpleObject};
 use scryer_application::{
     ActivityChannel as AppActivityChannel, ActivityKind as AppActivityKind,
     ActivitySeverity as AppActivitySeverity, DownloadSourceKind as AppDownloadSourceKind,
+    JobCategory as AppJobCategory, JobKey as AppJobKey, JobRunStatus as AppJobRunStatus,
+    JobScheduleKind as AppJobScheduleKind, JobSection as AppJobSection,
+    JobTriggerSource as AppJobTriggerSource, LibraryScanMode as AppLibraryScanMode,
     LibraryScanStatus as AppLibraryScanStatus, PendingReleaseStatus as AppPendingReleaseStatus,
     ScoringOverrides as AppScoringOverrides, ScoringPersona as AppScoringPersona,
     WantedStatus as AppWantedStatus,
@@ -414,6 +417,7 @@ pub enum ActivityKindValue {
     SettingSaved,
     MovieFetched,
     MovieAdded,
+    TitleUpdated,
     MetadataHydrationStarted,
     MetadataHydrationCompleted,
     MetadataHydrationFailed,
@@ -437,6 +441,7 @@ impl ActivityKindValue {
             AppActivityKind::SettingSaved => Self::SettingSaved,
             AppActivityKind::MovieFetched => Self::MovieFetched,
             AppActivityKind::MovieAdded => Self::MovieAdded,
+            AppActivityKind::TitleUpdated => Self::TitleUpdated,
             AppActivityKind::MetadataHydrationStarted => Self::MetadataHydrationStarted,
             AppActivityKind::MetadataHydrationCompleted => Self::MetadataHydrationCompleted,
             AppActivityKind::MetadataHydrationFailed => Self::MetadataHydrationFailed,
@@ -895,6 +900,184 @@ pub struct ActivityEventPayload {
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(rename_items = "snake_case")]
+pub enum JobKeyValue {
+    LibraryScanMovies,
+    LibraryScanSeries,
+    LibraryScanAnime,
+    BackgroundLibraryRefreshMovies,
+    BackgroundLibraryRefreshSeries,
+    BackgroundLibraryRefreshAnime,
+    RssSync,
+    SubtitleSearch,
+    MetadataRefresh,
+    PluginRegistryRefresh,
+    Housekeeping,
+    HealthChecks,
+    WantedSync,
+    PendingReleaseProcessing,
+    StagedNzbPrune,
+}
+
+impl JobKeyValue {
+    pub fn into_application(self) -> AppJobKey {
+        match self {
+            Self::LibraryScanMovies => AppJobKey::LibraryScanMovies,
+            Self::LibraryScanSeries => AppJobKey::LibraryScanSeries,
+            Self::LibraryScanAnime => AppJobKey::LibraryScanAnime,
+            Self::BackgroundLibraryRefreshMovies => AppJobKey::BackgroundLibraryRefreshMovies,
+            Self::BackgroundLibraryRefreshSeries => AppJobKey::BackgroundLibraryRefreshSeries,
+            Self::BackgroundLibraryRefreshAnime => AppJobKey::BackgroundLibraryRefreshAnime,
+            Self::RssSync => AppJobKey::RssSync,
+            Self::SubtitleSearch => AppJobKey::SubtitleSearch,
+            Self::MetadataRefresh => AppJobKey::MetadataRefresh,
+            Self::PluginRegistryRefresh => AppJobKey::PluginRegistryRefresh,
+            Self::Housekeeping => AppJobKey::Housekeeping,
+            Self::HealthChecks => AppJobKey::HealthChecks,
+            Self::WantedSync => AppJobKey::WantedSync,
+            Self::PendingReleaseProcessing => AppJobKey::PendingReleaseProcessing,
+            Self::StagedNzbPrune => AppJobKey::StagedNzbPrune,
+        }
+    }
+
+    pub fn from_application(value: AppJobKey) -> Self {
+        match value {
+            AppJobKey::LibraryScanMovies => Self::LibraryScanMovies,
+            AppJobKey::LibraryScanSeries => Self::LibraryScanSeries,
+            AppJobKey::LibraryScanAnime => Self::LibraryScanAnime,
+            AppJobKey::BackgroundLibraryRefreshMovies => Self::BackgroundLibraryRefreshMovies,
+            AppJobKey::BackgroundLibraryRefreshSeries => Self::BackgroundLibraryRefreshSeries,
+            AppJobKey::BackgroundLibraryRefreshAnime => Self::BackgroundLibraryRefreshAnime,
+            AppJobKey::RssSync => Self::RssSync,
+            AppJobKey::SubtitleSearch => Self::SubtitleSearch,
+            AppJobKey::MetadataRefresh => Self::MetadataRefresh,
+            AppJobKey::PluginRegistryRefresh => Self::PluginRegistryRefresh,
+            AppJobKey::Housekeeping => Self::Housekeeping,
+            AppJobKey::HealthChecks => Self::HealthChecks,
+            AppJobKey::WantedSync => Self::WantedSync,
+            AppJobKey::PendingReleaseProcessing => Self::PendingReleaseProcessing,
+            AppJobKey::StagedNzbPrune => Self::StagedNzbPrune,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "lowercase")]
+pub enum JobCategoryValue {
+    Library,
+    Acquisition,
+    Maintenance,
+    Subtitles,
+    System,
+}
+
+impl JobCategoryValue {
+    pub fn from_application(value: AppJobCategory) -> Self {
+        match value {
+            AppJobCategory::Library => Self::Library,
+            AppJobCategory::Acquisition => Self::Acquisition,
+            AppJobCategory::Maintenance => Self::Maintenance,
+            AppJobCategory::Subtitles => Self::Subtitles,
+            AppJobCategory::System => Self::System,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "lowercase")]
+pub enum JobSectionValue {
+    Primary,
+    Maintenance,
+}
+
+impl JobSectionValue {
+    pub fn from_application(value: AppJobSection) -> Self {
+        match value {
+            AppJobSection::Primary => Self::Primary,
+            AppJobSection::Maintenance => Self::Maintenance,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "snake_case")]
+pub enum JobScheduleKindValue {
+    Manual,
+    Interval,
+    StartupAndInterval,
+}
+
+impl JobScheduleKindValue {
+    pub fn from_application(value: AppJobScheduleKind) -> Self {
+        match value {
+            AppJobScheduleKind::Manual => Self::Manual,
+            AppJobScheduleKind::Interval => Self::Interval,
+            AppJobScheduleKind::StartupAndInterval => Self::StartupAndInterval,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "snake_case")]
+pub enum JobTriggerSourceValue {
+    Manual,
+    ScheduledStartup,
+    ScheduledInterval,
+    SystemInternal,
+}
+
+impl JobTriggerSourceValue {
+    pub fn from_application(value: AppJobTriggerSource) -> Self {
+        match value {
+            AppJobTriggerSource::Manual => Self::Manual,
+            AppJobTriggerSource::ScheduledStartup => Self::ScheduledStartup,
+            AppJobTriggerSource::ScheduledInterval => Self::ScheduledInterval,
+            AppJobTriggerSource::SystemInternal => Self::SystemInternal,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "snake_case")]
+pub enum JobRunStatusValue {
+    Queued,
+    Discovering,
+    Running,
+    Completed,
+    Warning,
+    Failed,
+}
+
+impl JobRunStatusValue {
+    pub fn from_application(value: AppJobRunStatus) -> Self {
+        match value {
+            AppJobRunStatus::Queued => Self::Queued,
+            AppJobRunStatus::Discovering => Self::Discovering,
+            AppJobRunStatus::Running => Self::Running,
+            AppJobRunStatus::Completed => Self::Completed,
+            AppJobRunStatus::Warning => Self::Warning,
+            AppJobRunStatus::Failed => Self::Failed,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "snake_case")]
+pub enum LibraryScanModeValue {
+    Full,
+    Additive,
+}
+
+impl LibraryScanModeValue {
+    pub fn from_application(value: AppLibraryScanMode) -> Self {
+        match value {
+            AppLibraryScanMode::Full => Self::Full,
+            AppLibraryScanMode::Additive => Self::Additive,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "snake_case")]
 pub enum LibraryScanStatusValue {
     Discovering,
     Running,
@@ -926,6 +1109,7 @@ pub struct LibraryScanPhaseProgressPayload {
 pub struct LibraryScanProgressPayload {
     pub session_id: String,
     pub facet: MediaFacetValue,
+    pub mode: LibraryScanModeValue,
     pub status: LibraryScanStatusValue,
     pub started_at: String,
     pub updated_at: String,
@@ -935,6 +1119,44 @@ pub struct LibraryScanProgressPayload {
     pub metadata_progress: LibraryScanPhaseProgressPayload,
     pub file_progress: LibraryScanPhaseProgressPayload,
     pub summary: Option<LibraryScanSummaryPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct JobScheduleInfoPayload {
+    pub kind: JobScheduleKindValue,
+    pub description: String,
+    pub interval_seconds: Option<i32>,
+    pub initial_delay_seconds: Option<i32>,
+    pub next_run_at: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct JobDefinitionPayload {
+    pub key: JobKeyValue,
+    pub display_name: String,
+    pub description: String,
+    pub category: JobCategoryValue,
+    pub section: JobSectionValue,
+    pub manual_trigger_allowed: bool,
+    pub uses_library_scan_progress: bool,
+    pub schedule: JobScheduleInfoPayload,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct JobRunPayload {
+    pub id: String,
+    pub job_key: JobKeyValue,
+    pub display_name: String,
+    pub category: JobCategoryValue,
+    pub section: JobSectionValue,
+    pub status: JobRunStatusValue,
+    pub trigger_source: JobTriggerSourceValue,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+    pub summary_text: Option<String>,
+    pub error_text: Option<String>,
+    pub progress_json: Option<String>,
+    pub library_scan_progress: Option<LibraryScanProgressPayload>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -1189,6 +1411,21 @@ pub struct LibraryScanSummaryPayload {
     pub imported: i32,
     pub skipped: i32,
     pub unmatched: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct DeletePreviewPayload {
+    pub fingerprint: String,
+    pub total_file_count: i32,
+    pub media_count: i32,
+    pub subtitle_count: i32,
+    pub image_count: i32,
+    pub other_count: i32,
+    pub directory_count: i32,
+    pub requires_typed_confirmation: bool,
+    pub typed_confirmation_prompt: Option<String>,
+    pub target_label: String,
+    pub sample_paths: Vec<String>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -1871,6 +2108,13 @@ pub struct TestIndexerConnectionInput {
 pub struct DeleteTitleInput {
     pub title_id: String,
     pub delete_files_on_disk: Option<bool>,
+    pub preview_fingerprint: Option<String>,
+    pub typed_confirmation: Option<String>,
+}
+
+#[derive(InputObject)]
+pub struct DeleteTitlePreviewInput {
+    pub title_id: String,
 }
 
 #[derive(InputObject)]
@@ -2000,6 +2244,18 @@ pub struct DeleteEpisodeInput {
 pub struct DeleteMediaFileInput {
     pub file_id: String,
     pub delete_from_disk: Option<bool>,
+    pub preview_fingerprint: Option<String>,
+    pub typed_confirmation: Option<String>,
+}
+
+#[derive(InputObject)]
+pub struct DeleteMediaFilePreviewInput {
+    pub file_id: String,
+}
+
+#[derive(InputObject)]
+pub struct DeleteSubtitlePreviewInput {
+    pub subtitle_download_id: String,
 }
 
 #[derive(InputObject)]

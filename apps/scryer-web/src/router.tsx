@@ -77,6 +77,7 @@ export const router = createBrowserRouter(
         { path: "/settings/subtitles", element: <ShellRoute /> },
         { path: "/settings/recycle-bin", element: <ShellRoute /> },
         { path: "/system", element: <ShellRoute /> },
+        { path: "/system/jobs", element: <ShellRoute /> },
         { path: "*", element: <ShellRoute /> },
       ],
     },

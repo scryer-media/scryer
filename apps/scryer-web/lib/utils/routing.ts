@@ -1,9 +1,14 @@
 import type { LocaleCode } from "@/lib/i18n";
-import type { ContentSettingsSection, SettingsSection, ViewId } from "@/components/root/types";
+import type { ContentSettingsSection, SettingsSection, SystemSection, ViewId } from "@/components/root/types";
 import { normalizeLocale } from "@/lib/i18n";
 import { AVAILABLE_LANGUAGES } from "@/lib/i18n";
 import { URL_PATH_SEGMENTS } from "@/lib/constants/settings";
-import { SETTINGS_SECTION_PATH_TO_ID, CONTENT_SECTION_PATH_TO_ID, CONTENT_SETTINGS_SUB_PAGE_PATH_TO_ID } from "@/lib/constants/settings";
+import {
+  SETTINGS_SECTION_PATH_TO_ID,
+  CONTENT_SECTION_PATH_TO_ID,
+  CONTENT_SETTINGS_SUB_PAGE_PATH_TO_ID,
+  SYSTEM_SECTION_PATH_TO_ID,
+} from "@/lib/constants/settings";
 import { isMediaView } from "@/lib/facets/registry";
 
 export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
@@ -36,10 +41,14 @@ export function buildViewPath(
   nextView: ViewId,
   nextSettingsSection?: SettingsSection,
   nextContentSection?: ContentSettingsSection,
+  nextSystemSection?: SystemSection,
 ) {
   const base = `/${nextView}`;
   if (nextView === "settings" && nextSettingsSection && nextSettingsSection !== "profile") {
     return `${base}/${SETTINGS_SECTION_PATH[nextSettingsSection]}`;
+  }
+  if (nextView === "system" && nextSystemSection && nextSystemSection !== "overview") {
+    return `${base}/${nextSystemSection}`;
   }
   if (isMediaView(nextView)) {
     if (nextContentSection && nextContentSection !== "overview") {
@@ -80,6 +89,13 @@ export function parseContentSectionFromPath(value: string | null, subValue?: str
     return "general";
   }
   return CONTENT_SECTION_PATH_TO_ID[value] ?? "overview";
+}
+
+export function parseSystemSectionFromPath(value: string | null): SystemSection {
+  if (!value) {
+    return "overview";
+  }
+  return SYSTEM_SECTION_PATH_TO_ID[value] ?? "overview";
 }
 
 export function parseLanguageFromParam(value: string | null): LocaleCode | null {

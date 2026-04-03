@@ -3,6 +3,7 @@ mod collections;
 mod config;
 mod downloads;
 mod external_import;
+mod jobs;
 mod library;
 mod notifications;
 mod plugins;
@@ -22,6 +23,7 @@ pub struct MutationRoot(
     titles::TitleMutations,
     collections::CollectionMutations,
     downloads::DownloadMutations,
+    jobs::JobMutations,
     config::ConfigMutations,
     settings::SettingsMutations,
     users::UserMutations,

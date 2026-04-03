@@ -6,7 +6,10 @@ WORKDIR /workspace
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \
+      gdb \
+      gawk \
       pkg-config \
+      procps \
       libssl-dev \
       libsqlite3-dev \
       mold \

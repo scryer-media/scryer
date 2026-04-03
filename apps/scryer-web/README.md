@@ -10,6 +10,11 @@ npm install
 npm run dev
 ```
 
+The Vite dev server proxies `/graphql`, `/health`, `/admin`, and `/images`
+to `http://127.0.0.1:8080` by default so subscriptions work when the Rust
+backend is running locally. Override the proxy target with
+`SCRYER_DEV_PROXY_TARGET` if your backend is elsewhere.
+
 ## Environment
 
 - `SCRYER_BASE_PATH` (optional): Router basename for dev/proxy testing. Defaults to `/`.

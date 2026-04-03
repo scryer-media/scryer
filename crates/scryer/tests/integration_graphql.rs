@@ -12,6 +12,7 @@ use scryer_application::{
 use scryer_domain::{Collection, CollectionType, Episode, ExternalId, Id, MediaFacet, Title};
 use scryer_infrastructure::{FileSystemLibraryRenamer, SettingDefinitionSeed, SqliteServices};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
@@ -196,6 +197,14 @@ struct FailingShowRepo {
 impl ShowRepository for FailingShowRepo {
     async fn list_collections_for_title(&self, title_id: &str) -> AppResult<Vec<Collection>> {
         <SqliteServices as ShowRepository>::list_collections_for_title(&self.inner, title_id).await
+    }
+
+    async fn list_collections_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<Collection>>> {
+        <SqliteServices as ShowRepository>::list_collections_for_titles(&self.inner, title_ids)
+            .await
     }
 
     async fn get_collection_by_id(&self, collection_id: &str) -> AppResult<Option<Collection>> {
@@ -4695,6 +4704,7 @@ async fn graphql_introspection_exposes_activity_enums() {
         .iter()
         .filter_map(|value| value["name"].as_str())
         .collect();
+    assert!(activity_kind_names.contains(&"title_updated"));
     assert!(activity_kind_names.contains(&"metadata_hydration_completed"));
     assert!(activity_kind_names.contains(&"import_rejected"));
 
@@ -5428,6 +5438,249 @@ async fn graphql_scan_title_library() {
             .iter()
             .all(|tag| tag != "scryer:season-folder:disabled")
     );
+
+    let activity_kinds = activity_kinds_for_title(&ctx, &title.id).await;
+    assert!(activity_kinds.iter().any(|kind| kind == "title_updated"));
+}
+
+#[tokio::test]
+async fn graphql_scan_title_library_keeps_standard_episode_titles_with_special_in_name() {
+    let ctx = TestContext::new().await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let (title, _season_one_collection) =
+        create_series_scan_title(&ctx, media_root.path(), "Attack on Titan", vec![]).await;
+
+    let season_four = ctx
+        .db
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Season,
+            collection_index: "4".to_string(),
+            label: Some("Season 4".to_string()),
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: Some("29".to_string()),
+            last_episode_number: Some("30".to_string()),
+            interstitial_movie: None,
+            specials_movies: vec![],
+            interstitial_season_episode: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create season four collection");
+    let episode_29 = ctx
+        .db
+        .create_episode(Episode {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_id: Some(season_four.id.clone()),
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some("29".to_string()),
+            season_number: Some("4".to_string()),
+            episode_label: Some("S04E29".to_string()),
+            title: Some("The Final Chapters Special 1".to_string()),
+            air_date: None,
+            duration_seconds: Some(1440),
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: None,
+            overview: None,
+            tvdb_id: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create episode 29");
+    let episode_30 = ctx
+        .db
+        .create_episode(Episode {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_id: Some(season_four.id.clone()),
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some("30".to_string()),
+            season_number: Some("4".to_string()),
+            episode_label: Some("S04E30".to_string()),
+            title: Some("The Final Chapters Special 2".to_string()),
+            air_date: None,
+            duration_seconds: Some(1440),
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: None,
+            overview: None,
+            tvdb_id: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create episode 30");
+
+    let season_dir = media_root.path().join(&title.name).join("Season 04");
+    std::fs::create_dir_all(&season_dir).expect("create season dir");
+    let file_path_29 =
+        season_dir.join("Attack.on.Titan.S04E29.The.Final.Chapters.Special.1.1080p.WEB-DL.mkv");
+    std::fs::write(&file_path_29, b"not-a-real-video").expect("write episode 29");
+    let file_path_30 =
+        season_dir.join("Attack.on.Titan.S04E30.The.Final.Chapters.Special.2.1080p.WEB-DL.mkv");
+    std::fs::write(&file_path_30, b"not-a-real-video").expect("write episode 30");
+
+    let body = gql(
+        &ctx,
+        r#"mutation($input: TitleIdInput!) {
+            scanTitleLibrary(input: $input) {
+                scanned
+                matched
+                imported
+                skipped
+                unmatched
+            }
+        }"#,
+        json!({ "input": { "titleId": title.id.clone() } }),
+    )
+    .await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["scanTitleLibrary"]["scanned"], 2);
+    assert_eq!(body["data"]["scanTitleLibrary"]["matched"], 2);
+    assert_eq!(body["data"]["scanTitleLibrary"]["imported"], 2);
+    assert_eq!(body["data"]["scanTitleLibrary"]["skipped"], 0);
+    assert_eq!(body["data"]["scanTitleLibrary"]["unmatched"], 0);
+
+    let body = gql(
+        &ctx,
+        r#"query($id: String!) {
+            title(id: $id) {
+                mediaFiles {
+                    episodeId
+                    filePath
+                }
+            }
+        }"#,
+        json!({ "id": title.id.clone() }),
+    )
+    .await;
+    assert_no_errors(&body);
+    let files = body["data"]["title"]["mediaFiles"]
+        .as_array()
+        .expect("media files array");
+    assert_eq!(files.len(), 2);
+    assert!(files.iter().any(|file| {
+        file["episodeId"] == episode_29.id
+            && file["filePath"] == file_path_29.to_string_lossy().to_string()
+    }));
+    assert!(files.iter().any(|file| {
+        file["episodeId"] == episode_30.id
+            && file["filePath"] == file_path_30.to_string_lossy().to_string()
+    }));
+}
+
+#[tokio::test]
+async fn graphql_scan_title_library_matches_numbered_special_episode_on_disk() {
+    let ctx = TestContext::new().await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let (title, _season_one_collection) =
+        create_series_scan_title(&ctx, media_root.path(), "Special Scan Show", vec![]).await;
+
+    let specials_collection = ctx
+        .db
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Season,
+            collection_index: "0".to_string(),
+            label: Some("Specials".to_string()),
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: Some("1".to_string()),
+            last_episode_number: Some("1".to_string()),
+            interstitial_movie: None,
+            specials_movies: vec![],
+            interstitial_season_episode: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create specials collection");
+    let special_episode = ctx
+        .db
+        .create_episode(Episode {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_id: Some(specials_collection.id.clone()),
+            episode_type: scryer_domain::EpisodeType::Special,
+            episode_number: Some("1".to_string()),
+            season_number: Some("0".to_string()),
+            episode_label: Some("S00E01".to_string()),
+            title: Some("OVA 1".to_string()),
+            air_date: None,
+            duration_seconds: Some(1440),
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: None,
+            overview: None,
+            tvdb_id: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create special episode");
+
+    let specials_dir = media_root.path().join(&title.name).join("Specials");
+    std::fs::create_dir_all(&specials_dir).expect("create specials dir");
+    let file_path = specials_dir.join("Special Scan Show - 01 - OVA 1080p WEB-DL.mkv");
+    std::fs::write(&file_path, b"not-a-real-video").expect("write special episode");
+
+    let body = gql(
+        &ctx,
+        r#"mutation($input: TitleIdInput!) {
+            scanTitleLibrary(input: $input) {
+                scanned
+                matched
+                imported
+                skipped
+                unmatched
+            }
+        }"#,
+        json!({ "input": { "titleId": title.id.clone() } }),
+    )
+    .await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["scanTitleLibrary"]["scanned"], 1);
+    assert_eq!(body["data"]["scanTitleLibrary"]["matched"], 1);
+    assert_eq!(body["data"]["scanTitleLibrary"]["imported"], 1);
+    assert_eq!(body["data"]["scanTitleLibrary"]["skipped"], 0);
+    assert_eq!(body["data"]["scanTitleLibrary"]["unmatched"], 0);
+
+    let body = gql(
+        &ctx,
+        r#"query($id: String!) {
+            title(id: $id) {
+                mediaFiles {
+                    episodeId
+                    filePath
+                }
+            }
+        }"#,
+        json!({ "id": title.id.clone() }),
+    )
+    .await;
+    assert_no_errors(&body);
+    let files = body["data"]["title"]["mediaFiles"]
+        .as_array()
+        .expect("media files array");
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0]["episodeId"], special_episode.id);
+    assert_eq!(
+        files[0]["filePath"],
+        file_path.to_string_lossy().to_string()
+    );
 }
 
 #[tokio::test]
@@ -5898,7 +6151,7 @@ async fn library_anime_scan_hydrates_and_relinks_files_from_discovered_folder_pa
 
     let mut hydrated_title = None;
     let mut linked_files = Vec::new();
-    for _ in 0..40 {
+    for _ in 0..100 {
         let titles = ctx
             .db
             .list(Some(MediaFacet::Anime), None)
@@ -5910,7 +6163,9 @@ async fn library_anime_scan_hydrates_and_relinks_files_from_discovered_folder_pa
             .list_media_files_for_title(&titles[0].id)
             .await
             .expect("list media files");
-        if titles[0].metadata_fetched_at.is_some() && !files.is_empty() {
+        if titles[0].metadata_fetched_at.is_some()
+            && files.iter().any(|file| file.episode_id.is_some())
+        {
             hydrated_title = Some(titles[0].clone());
             linked_files = files;
             break;
@@ -6015,6 +6270,17 @@ async fn library_anime_scan_relinks_existing_hydrated_titles_from_discovered_fol
     .await;
     assert_no_errors(&update);
 
+    let token = tokio_util::sync::CancellationToken::new();
+    let post_hydration_scan_token = token.clone();
+    let post_hydration_scan_app = ctx.app.clone();
+    tokio::spawn(async move {
+        scryer_application::start_background_post_hydration_title_scan_workers(
+            post_hydration_scan_app,
+            post_hydration_scan_token,
+        )
+        .await;
+    });
+
     let admin = ctx.app.find_or_create_default_user().await.unwrap();
     let summary = ctx
         .app
@@ -6026,7 +6292,7 @@ async fn library_anime_scan_relinks_existing_hydrated_titles_from_discovered_fol
     assert_eq!(summary.skipped, 1);
 
     let mut linked_files = Vec::new();
-    for _ in 0..10 {
+    for _ in 0..100 {
         linked_files = ctx
             .db
             .list_media_files_for_title(&title.id)
@@ -6037,6 +6303,8 @@ async fn library_anime_scan_relinks_existing_hydrated_titles_from_discovered_fol
         }
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
+
+    token.cancel();
 
     let refreshed_title = ctx
         .db
@@ -6371,6 +6639,67 @@ async fn library_series_scan_creates_unmonitored_titles() {
     assert_eq!(titles.len(), 1);
     assert_eq!(titles[0].name, "Bluey");
     assert!(!titles[0].monitored);
+}
+
+#[tokio::test]
+async fn library_series_scan_counts_new_title_files_before_post_hydration_scan_progress() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let show_dir = media_root.path().join("Bluey");
+    let season_dir = show_dir.join("Season 01");
+    std::fs::create_dir_all(&season_dir).expect("create show dir");
+    std::fs::write(
+        show_dir.join("tvshow.nfo"),
+        r#"<tvshow><title>Bluey</title><tvdbid>81189</tvdbid></tvshow>"#,
+    )
+    .expect("write tvshow.nfo");
+    std::fs::write(
+        season_dir.join("Bluey.S01E01.720p.WEB-DL.mkv"),
+        b"not-a-real-video",
+    )
+    .expect("write fake episode");
+
+    let update = gql(
+        &ctx,
+        r#"
+        mutation UpdateLibraryPaths($input: UpdateLibraryPathsInput!) {
+          updateLibraryPaths(input: $input) {
+            moviePath
+            seriesPath
+            animePath
+          }
+        }
+        "#,
+        json!({
+          "input": {
+            "moviePath": "/tmp/movies-unused",
+            "seriesPath": media_root.path().display().to_string(),
+            "animePath": "/tmp/anime-unused"
+          }
+        }),
+    )
+    .await;
+    assert_no_errors(&update);
+
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let summary = ctx
+        .app
+        .scan_library(&admin, MediaFacet::Series)
+        .await
+        .expect("scan library");
+
+    assert_eq!(summary.scanned, 1);
+    assert_eq!(summary.imported, 1);
+
+    let active_sessions = ctx.app.services.library_scan_tracker.list_active().await;
+    assert_eq!(active_sessions.len(), 1);
+    assert_eq!(active_sessions[0].facet, MediaFacet::Series);
+    assert!(active_sessions[0].file_total_known);
+    assert_eq!(active_sessions[0].file_progress.total, 1);
+    assert_eq!(active_sessions[0].file_progress.completed, 0);
+    assert_eq!(active_sessions[0].found_titles, 1);
 }
 
 #[tokio::test]
@@ -7342,6 +7671,7 @@ async fn graphql_fix_title_match_movie_updates_identity_and_history() {
             .iter()
             .any(|kind| kind == "metadata_hydration_completed")
     );
+    assert!(activity_kinds.iter().any(|kind| kind == "title_updated"));
 }
 
 #[tokio::test]
@@ -7580,6 +7910,7 @@ async fn graphql_fix_title_match_series_rebuilds_and_relinks_library() {
             .iter()
             .any(|kind| kind == "metadata_hydration_completed")
     );
+    assert!(activity_kinds.iter().any(|kind| kind == "title_updated"));
 }
 
 #[tokio::test]

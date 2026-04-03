@@ -183,6 +183,12 @@ fn compare_fixture_corpus_against_ffprobe() {
             .and_then(|duration| duration.parse::<f64>().ok())
             .map(|duration| duration.round() as i32)
             .unwrap_or_default();
+        let native_num_chapters = analysis.num_chapters.unwrap_or_default();
+        let ffprobe_num_chapters = ffprobe
+            .get("chapters")
+            .and_then(Value::as_array)
+            .map(|chapters| chapters.len() as i32)
+            .unwrap_or_default();
 
         let checks = [
             (
@@ -300,6 +306,15 @@ fn compare_fixture_corpus_against_ffprobe() {
                 path.file_name().unwrap().to_string_lossy(),
                 native_duration,
                 ffprobe_duration
+            ));
+        }
+
+        if native_num_chapters != ffprobe_num_chapters {
+            mismatches.push(format!(
+                "{} num_chapters mismatch: native={} ffprobe={}",
+                path.file_name().unwrap().to_string_lossy(),
+                native_num_chapters,
+                ffprobe_num_chapters
             ));
         }
 

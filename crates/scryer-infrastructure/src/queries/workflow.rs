@@ -8,8 +8,76 @@ use sqlx::Row;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::types::{
-    ReleaseDownloadFailureSignatureRecord, TitleReleaseBlocklistRecord, WorkflowOperationRecord,
+    LibraryProbeSignatureRecord, ReleaseDownloadFailureSignatureRecord,
+    TitleReleaseBlocklistRecord, WorkflowOperationRecord,
 };
+
+fn workflow_operation_from_row(
+    row: &sqlx::sqlite::SqliteRow,
+) -> AppResult<WorkflowOperationRecord> {
+    Ok(WorkflowOperationRecord {
+        id: row
+            .try_get("id")
+            .map_err(|err| AppError::Repository(err.to_string()))?,
+        operation_type: row
+            .try_get("operation_type")
+            .map_err(|err| AppError::Repository(err.to_string()))?,
+        status: row
+            .try_get("status")
+            .map_err(|err| AppError::Repository(err.to_string()))?,
+        job_key: row
+            .try_get("job_key")
+            .map_err(|err| AppError::Repository(err.to_string()))?,
+        trigger_source: row
+            .try_get("trigger_source")
+            .map_err(|err| AppError::Repository(err.to_string()))?,
+        actor_user_id: row
+            .try_get("actor_user_id")
+            .map_err(|err| AppError::Repository(err.to_string()))?,
+        title_id: row
+            .try_get("title_id")
+            .map_err(|err| AppError::Repository(err.to_string()))?,
+        collection_id: row
+            .try_get("collection_id")
+            .map_err(|err| AppError::Repository(err.to_string()))?,
+        episode_id: row
+            .try_get("episode_id")
+            .map_err(|err| AppError::Repository(err.to_string()))?,
+        release_id: row
+            .try_get("release_id")
+            .map_err(|err| AppError::Repository(err.to_string()))?,
+        media_file_id: row
+            .try_get("media_file_id")
+            .map_err(|err| AppError::Repository(err.to_string()))?,
+        external_reference: row
+            .try_get("external_reference")
+            .map_err(|err| AppError::Repository(err.to_string()))?,
+        progress_json: row
+            .try_get("progress_json")
+            .map_err(|err| AppError::Repository(err.to_string()))?,
+        summary_json: row
+            .try_get("summary_json")
+            .map_err(|err| AppError::Repository(err.to_string()))?,
+        summary_text: row
+            .try_get("summary_text")
+            .map_err(|err| AppError::Repository(err.to_string()))?,
+        error_text: row
+            .try_get("error_text")
+            .map_err(|err| AppError::Repository(err.to_string()))?,
+        started_at: row
+            .try_get("started_at")
+            .map_err(|err| AppError::Repository(err.to_string()))?,
+        completed_at: row
+            .try_get("completed_at")
+            .map_err(|err| AppError::Repository(err.to_string()))?,
+        created_at: row
+            .try_get("created_at")
+            .map_err(|err| AppError::Repository(err.to_string()))?,
+        updated_at: row
+            .try_get("updated_at")
+            .map_err(|err| AppError::Repository(err.to_string()))?,
+    })
+}
 
 pub(crate) async fn create_workflow_operation_query(
     pool: &SqlitePool,
@@ -26,8 +94,8 @@ pub(crate) async fn create_workflow_operation_query(
 
     sqlx::query(
         "INSERT INTO workflow_operations
-         (id, operation_type, status, actor_user_id, progress_json, started_at, completed_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         (id, operation_type, status, actor_user_id, progress_json, job_key, trigger_source, summary_json, summary_text, error_text, started_at, completed_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&operation_type)
@@ -46,6 +114,8 @@ pub(crate) async fn create_workflow_operation_query(
         id,
         operation_type,
         status,
+        job_key: None,
+        trigger_source: None,
         actor_user_id,
         title_id: None,
         collection_id: None,
@@ -54,11 +124,261 @@ pub(crate) async fn create_workflow_operation_query(
         media_file_id: None,
         external_reference: None,
         progress_json,
+        summary_json: None,
+        summary_text: None,
+        error_text: None,
         started_at: Some(started_at),
         completed_at,
         created_at: now.clone(),
         updated_at: now,
     })
+}
+
+pub(crate) async fn create_job_workflow_operation_query(
+    pool: &SqlitePool,
+    operation_type: String,
+    status: String,
+    job_key: String,
+    trigger_source: String,
+    actor_user_id: Option<String>,
+    progress_json: Option<String>,
+    summary_json: Option<String>,
+    summary_text: Option<String>,
+    error_text: Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+) -> AppResult<WorkflowOperationRecord> {
+    let id = Id::new().0;
+    let now = Utc::now().to_rfc3339();
+    let started_at = started_at.unwrap_or_else(|| now.clone());
+
+    sqlx::query(
+        "INSERT INTO workflow_operations
+         (id, operation_type, status, job_key, trigger_source, actor_user_id, progress_json, summary_json, summary_text, error_text, started_at, completed_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&operation_type)
+    .bind(&status)
+    .bind(&job_key)
+    .bind(&trigger_source)
+    .bind(&actor_user_id)
+    .bind(&progress_json)
+    .bind(&summary_json)
+    .bind(&summary_text)
+    .bind(&error_text)
+    .bind(&started_at)
+    .bind(&completed_at)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(WorkflowOperationRecord {
+        id,
+        operation_type,
+        status,
+        job_key: Some(job_key),
+        trigger_source: Some(trigger_source),
+        actor_user_id,
+        title_id: None,
+        collection_id: None,
+        episode_id: None,
+        release_id: None,
+        media_file_id: None,
+        external_reference: None,
+        progress_json,
+        summary_json,
+        summary_text,
+        error_text,
+        started_at: Some(started_at),
+        completed_at,
+        created_at: now.clone(),
+        updated_at: now,
+    })
+}
+
+pub(crate) async fn update_job_workflow_operation_query(
+    pool: &SqlitePool,
+    id: &str,
+    status: &str,
+    progress_json: Option<String>,
+    summary_json: Option<String>,
+    summary_text: Option<String>,
+    error_text: Option<String>,
+    completed_at: Option<String>,
+) -> AppResult<WorkflowOperationRecord> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE workflow_operations
+         SET status = ?,
+             progress_json = ?,
+             summary_json = ?,
+             summary_text = ?,
+             error_text = ?,
+             completed_at = ?,
+             updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(status)
+    .bind(&progress_json)
+    .bind(&summary_json)
+    .bind(&summary_text)
+    .bind(&error_text)
+    .bind(&completed_at)
+    .bind(&now)
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    get_workflow_operation_by_id_query(pool, id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("workflow operation {id}")))
+}
+
+pub(crate) async fn get_workflow_operation_by_id_query(
+    pool: &SqlitePool,
+    id: &str,
+) -> AppResult<Option<WorkflowOperationRecord>> {
+    let row = sqlx::query("SELECT * FROM workflow_operations WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    row.as_ref().map(workflow_operation_from_row).transpose()
+}
+
+pub(crate) async fn list_job_workflow_operations_query(
+    pool: &SqlitePool,
+    job_key: Option<&str>,
+    limit: i64,
+) -> AppResult<Vec<WorkflowOperationRecord>> {
+    let rows = if let Some(job_key) = job_key {
+        sqlx::query(
+            "SELECT *
+             FROM workflow_operations
+             WHERE job_key = ?
+             ORDER BY COALESCE(started_at, created_at) DESC
+             LIMIT ?",
+        )
+        .bind(job_key)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?
+    } else {
+        sqlx::query(
+            "SELECT *
+             FROM workflow_operations
+             WHERE job_key IS NOT NULL
+             ORDER BY COALESCE(started_at, created_at) DESC
+             LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?
+    };
+
+    rows.iter().map(workflow_operation_from_row).collect()
+}
+
+pub(crate) async fn list_active_job_workflow_operations_query(
+    pool: &SqlitePool,
+) -> AppResult<Vec<WorkflowOperationRecord>> {
+    let rows = sqlx::query(
+        "SELECT *
+         FROM workflow_operations
+         WHERE job_key IS NOT NULL
+           AND status IN ('queued', 'running', 'discovering')
+         ORDER BY COALESCE(started_at, created_at) ASC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    rows.iter().map(workflow_operation_from_row).collect()
+}
+
+pub(crate) async fn upsert_library_probe_signature_query(
+    pool: &SqlitePool,
+    title_id: &str,
+    path: &str,
+    probe_signature_scheme: Option<String>,
+    probe_signature_value: Option<String>,
+    last_probed_at: Option<String>,
+    last_changed_at: Option<String>,
+) -> AppResult<()> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO library_probe_signatures
+         (title_id, path, probe_signature_scheme, probe_signature_value, last_probed_at, last_changed_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(title_id) DO UPDATE SET
+            path = excluded.path,
+            probe_signature_scheme = excluded.probe_signature_scheme,
+            probe_signature_value = excluded.probe_signature_value,
+            last_probed_at = excluded.last_probed_at,
+            last_changed_at = excluded.last_changed_at,
+            updated_at = excluded.updated_at",
+    )
+    .bind(title_id)
+    .bind(path)
+    .bind(probe_signature_scheme)
+    .bind(probe_signature_value)
+    .bind(last_probed_at)
+    .bind(last_changed_at)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    Ok(())
+}
+
+pub(crate) async fn get_library_probe_signature_query(
+    pool: &SqlitePool,
+    title_id: &str,
+) -> AppResult<Option<LibraryProbeSignatureRecord>> {
+    let row = sqlx::query("SELECT * FROM library_probe_signatures WHERE title_id = ?")
+        .bind(title_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    row.map(|row| {
+        Ok(LibraryProbeSignatureRecord {
+            title_id: row
+                .try_get("title_id")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+            path: row
+                .try_get("path")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+            probe_signature_scheme: row
+                .try_get("probe_signature_scheme")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+            probe_signature_value: row
+                .try_get("probe_signature_value")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+            last_probed_at: row
+                .try_get("last_probed_at")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+            last_changed_at: row
+                .try_get("last_changed_at")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+            created_at: row
+                .try_get("created_at")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+            updated_at: row
+                .try_get("updated_at")
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+        })
+    })
+    .transpose()
 }
 
 pub(crate) async fn create_release_download_attempt_query(

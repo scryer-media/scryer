@@ -1,6 +1,7 @@
 use crate::{
     ActivityChannel, ActivityKind, ActivitySeverity, AppError, AppResult, AppUseCase,
     ImportArtifact, WantedCompleteTransition,
+    activity::{NotificationMediaUpdate, build_lifecycle_notification_metadata},
     app_usecase_post_processing::{PostProcessingContext, spawn_post_processing},
     nfo::{render_episode_nfo, render_movie_nfo, render_plexmatch, render_tvshow_nfo},
     parse_release_metadata, render_rename_template, require,
@@ -12,7 +13,6 @@ use scryer_domain::{
     ImportType, MediaFacet, NotificationEventType, Title, User, is_video_file,
 };
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -1248,11 +1248,12 @@ async fn import_movie_download(
                 )
                 .await;
             {
-                let mut meta = HashMap::new();
-                meta.insert("title_name".to_string(), serde_json::json!(title.name));
-                if let Some(ref poster) = title.poster_url {
-                    meta.insert("poster_url".to_string(), serde_json::json!(poster));
-                }
+                let meta = build_lifecycle_notification_metadata(
+                    title,
+                    [NotificationMediaUpdate::created(
+                        dest_path.to_string_lossy().to_string(),
+                    )],
+                );
                 let envelope = crate::activity::NotificationEnvelope {
                     event_type: NotificationEventType::Download,
                     title: format!("Downloaded: {}", title.name),
@@ -1814,12 +1815,13 @@ async fn import_interstitial_movie_download(
         )
         .await;
     {
-        let mut meta = HashMap::new();
-        meta.insert("title_name".to_string(), serde_json::json!(title.name));
+        let mut meta = build_lifecycle_notification_metadata(
+            title,
+            [NotificationMediaUpdate::created(
+                dest_path.to_string_lossy().to_string(),
+            )],
+        );
         meta.insert("movie_name".to_string(), serde_json::json!(movie.name));
-        if let Some(ref poster) = title.poster_url {
-            meta.insert("poster_url".to_string(), serde_json::json!(poster));
-        }
         let envelope = crate::activity::NotificationEnvelope {
             event_type: NotificationEventType::Download,
             title: format!("Downloaded: {} - {}", title.name, movie.name),
@@ -1939,6 +1941,7 @@ async fn import_series_download(
     let mut failed_count: usize = 0;
     let mut last_error: Option<String> = None;
     let mut last_rejection_skip_reason: Option<ImportSkipReason> = None;
+    let mut imported_updates: Vec<NotificationMediaUpdate> = Vec::new();
 
     for source_video in video_files {
         match import_single_episode_file(
@@ -1956,7 +1959,10 @@ async fn import_series_download(
         )
         .await
         {
-            Ok(EpisodeImportOutcome::Imported) => imported_count += 1,
+            Ok(EpisodeImportOutcome::Imported { dest_path }) => {
+                imported_count += 1;
+                imported_updates.push(NotificationMediaUpdate::created(dest_path));
+            }
             Ok(EpisodeImportOutcome::Skipped) => skipped_count += 1,
             Ok(EpisodeImportOutcome::Rejected {
                 message,
@@ -2046,11 +2052,7 @@ async fn import_series_download(
             )
             .await;
         {
-            let mut meta = HashMap::new();
-            meta.insert("title_name".to_string(), serde_json::json!(title.name));
-            if let Some(ref poster) = title.poster_url {
-                meta.insert("poster_url".to_string(), serde_json::json!(poster));
-            }
+            let meta = build_lifecycle_notification_metadata(title, imported_updates);
             let envelope = crate::activity::NotificationEnvelope {
                 event_type: NotificationEventType::ImportComplete,
                 title: format!("Import complete: {}", title.name),
@@ -2077,7 +2079,9 @@ async fn import_series_download(
 }
 
 enum EpisodeImportOutcome {
-    Imported,
+    Imported {
+        dest_path: String,
+    },
     Skipped,
     Rejected {
         message: String,
@@ -2271,7 +2275,9 @@ async fn import_single_episode_file(
                         for episode_id in &target_episode_ids {
                             mark_wanted_completed(app, &title.id, Some(episode_id), None).await;
                         }
-                        return Ok(EpisodeImportOutcome::Imported);
+                        return Ok(EpisodeImportOutcome::Imported {
+                            dest_path: dest_path.to_string_lossy().to_string(),
+                        });
                     }
                     Ok(crate::upgrade::UpgradeResult::Rejected(rejection)) => {
                         persist_file_import_artifact(
@@ -2465,7 +2471,9 @@ async fn import_single_episode_file(
         quality: parsed.quality.clone(),
     });
 
-    Ok(EpisodeImportOutcome::Imported)
+    Ok(EpisodeImportOutcome::Imported {
+        dest_path: dest_path.to_string_lossy().to_string(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -2728,11 +2736,7 @@ pub(crate) async fn resolve_target_episodes(
 ) -> Vec<scryer_domain::Episode> {
     let mut episodes = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let target_season = if ep_meta.special_kind.is_some() || ep_meta.season == Some(0) {
-        "0".to_string()
-    } else {
-        season_str.to_string()
-    };
+    let target_season = crate::parsed_episode_lookup_season(ep_meta, season_str);
 
     if let Some(air_date) = ep_meta.air_date {
         let air_date_str = air_date.format("%Y-%m-%d").to_string();
@@ -3613,6 +3617,17 @@ pub async fn execute_manual_import(
         }
     }
 
+    let imported_updates: Vec<NotificationMediaUpdate> = results
+        .iter()
+        .filter(|result| result.success)
+        .filter_map(|result| {
+            result
+                .dest_path
+                .as_ref()
+                .map(|path| NotificationMediaUpdate::created(path.clone()))
+        })
+        .collect();
+
     // Emit summary event
     let success_count = results.iter().filter(|r| r.success).count();
     let event_message = format!(
@@ -3631,11 +3646,7 @@ pub async fn execute_manual_import(
         )
         .await;
     {
-        let mut meta = HashMap::new();
-        meta.insert("title_name".to_string(), serde_json::json!(title.name));
-        if let Some(ref poster) = title.poster_url {
-            meta.insert("poster_url".to_string(), serde_json::json!(poster));
-        }
+        let meta = build_lifecycle_notification_metadata(&title, imported_updates);
         let envelope = crate::activity::NotificationEnvelope {
             event_type: NotificationEventType::ImportComplete,
             title: format!("Import complete: {}", title.name),

@@ -9,6 +9,7 @@ import {
 import type {
   ContentSettingsSection,
   SettingsSection,
+  SystemSection,
   Translate,
   ViewId,
 } from "@/components/root/types";
@@ -29,6 +30,7 @@ type BuildRouteCommandsArgs = {
     nextView: ViewId,
     nextSettingsSection?: SettingsSection,
     nextContentSection?: ContentSettingsSection,
+    nextSystemSection?: SystemSection,
   ) => void;
 };
 
@@ -37,9 +39,10 @@ function buildNavigate(
   view: ViewId,
   settingsSection?: SettingsSection,
   contentSection?: ContentSettingsSection,
+  systemSection?: SystemSection,
 ): () => void {
   return () => {
-    onNavigate(view, settingsSection, contentSection);
+    onNavigate(view, settingsSection, contentSection, systemSection);
   };
 }
 
@@ -144,6 +147,14 @@ export function buildRouteCommands({ t, onNavigate }: BuildRouteCommandsArgs): R
       keywords: ["system", "health", "status", "database", "worker"],
       icon: MonitorCog,
       onSelect: buildNavigate(onNavigate, "system"),
+    },
+    {
+      id: "system-jobs",
+      label: t("system.jobsTitle"),
+      description: t("system.jobsTitle"),
+      keywords: ["system", "jobs", "scheduler", "background", "rss", "library"],
+      icon: MonitorCog,
+      onSelect: buildNavigate(onNavigate, "system", undefined, undefined, "jobs"),
     },
   ];
 }
