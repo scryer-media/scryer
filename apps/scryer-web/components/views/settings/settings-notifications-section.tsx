@@ -16,14 +16,15 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import type { Translate } from "@/components/root/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import type {
+  ConfigFieldDef,
   NotificationChannel,
   NotificationChannelDraft,
+  NotificationProviderType,
   NotificationSubscription,
   NotificationSubscriptionDraft,
-  NotificationProviderType,
-  ConfigFieldDef,
 } from "@/lib/types";
 
 type SettingsNotificationsSectionProps = {
@@ -53,11 +54,47 @@ type SettingsNotificationsSectionProps = {
   eventTypes: string[];
 };
 
-const SCOPE_OPTIONS = [
-  { value: "global", label: "Global" },
-  { value: "facet", label: "Facet" },
-  { value: "title", label: "Title" },
-];
+const SCOPE_OPTIONS = ["global", "facet", "title"] as const;
+
+const NOTIFICATION_EVENT_LABEL_KEYS: Record<string, string> = {
+  grab: "settings.notificationEvent.grab",
+  download: "settings.notificationEvent.download",
+  upgrade: "settings.notificationEvent.upgrade",
+  import_complete: "settings.notificationEvent.importComplete",
+  import_rejected: "settings.notificationEvent.importRejected",
+  rename: "settings.notificationEvent.rename",
+  title_added: "settings.notificationEvent.titleAdded",
+  title_deleted: "settings.notificationEvent.titleDeleted",
+  file_deleted: "settings.notificationEvent.fileDeleted",
+  file_deleted_for_upgrade: "settings.notificationEvent.fileDeletedForUpgrade",
+  post_processing_completed: "settings.notificationEvent.postProcessingCompleted",
+  subtitle_downloaded: "settings.notificationEvent.subtitleDownloaded",
+  subtitle_search_failed: "settings.notificationEvent.subtitleSearchFailed",
+  health_issue: "settings.notificationEvent.healthIssue",
+  health_restored: "settings.notificationEvent.healthRestored",
+  application_update: "settings.notificationEvent.applicationUpdate",
+  manual_interaction_required: "settings.notificationEvent.manualInteractionRequired",
+  test: "settings.notificationEvent.test",
+};
+
+function humanizeSnakeCase(value: string) {
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+function notificationEventLabel(eventType: string, t: Translate) {
+  const key = NOTIFICATION_EVENT_LABEL_KEYS[eventType];
+  return key ? t(key) : humanizeSnakeCase(eventType);
+}
+
+function notificationScopeLabel(scope: string, t: Translate) {
+  const key = `settings.notificationScope.${scope}`;
+  const translated = t(key);
+  return translated === key ? humanizeSnakeCase(scope) : translated;
+}
 
 function DynamicConfigField({
   field,
@@ -427,16 +464,16 @@ export function SettingsNotificationsSection({
             <TableBody>
               {subscriptions.map((sub) => (
                 <TableRow key={sub.id}>
-                  <TableCell>{sub.eventType}</TableCell>
+                  <TableCell>{notificationEventLabel(sub.eventType, t)}</TableCell>
                   <TableCell>{channelNameById(channels, sub.channelId)}</TableCell>
                   <TableCell>
-                    {sub.scope}
+                    {notificationScopeLabel(sub.scope, t)}
                     {sub.scopeId ? ` (${sub.scopeId})` : ""}
                   </TableCell>
                   <TableCell className="text-center">
                     <RenderBooleanIcon
                       value={sub.isEnabled}
-                      label={`${t("label.enabled")}: ${sub.eventType}`}
+                      label={`${t("label.enabled")}: ${notificationEventLabel(sub.eventType, t)}`}
                     />
                   </TableCell>
                   <TableCell className="text-right">
@@ -515,7 +552,9 @@ export function SettingsNotificationsSection({
                     </SelectTrigger>
                     <SelectContent>
                       {eventTypes.map((et) => (
-                        <SelectItem key={et} value={et}>{et}</SelectItem>
+                        <SelectItem key={et} value={et}>
+                          {notificationEventLabel(et, t)}
+                        </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -556,8 +595,10 @@ export function SettingsNotificationsSection({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {SCOPE_OPTIONS.map((opt) => (
-                        <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                      {SCOPE_OPTIONS.map((scope) => (
+                        <SelectItem key={scope} value={scope}>
+                          {notificationScopeLabel(scope, t)}
+                        </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -566,7 +607,7 @@ export function SettingsNotificationsSection({
 
               {subscriptionDraft.scope !== "global" ? (
                 <label>
-                  <Label className="mb-2 block">Scope ID</Label>
+                  <Label className="mb-2 block">{t("settings.notificationScopeId")}</Label>
                   <Input
                     value={subscriptionDraft.scopeId}
                     onChange={(event) =>
@@ -575,7 +616,11 @@ export function SettingsNotificationsSection({
                         scopeId: event.target.value,
                       }))
                     }
-                    placeholder={subscriptionDraft.scope === "facet" ? "movie, tv, anime" : "Title ID"}
+                    placeholder={
+                      subscriptionDraft.scope === "facet"
+                        ? t("settings.notificationScopeIdPlaceholderFacet")
+                        : t("settings.notificationScopeIdPlaceholderTitle")
+                    }
                   />
                 </label>
               ) : null}

@@ -681,18 +681,14 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
                             sync = sync_summary_suffix(sync_result.as_ref()),
                             "subtitle downloaded"
                         );
-                        let _ = app
-                            .services
-                            .record_activity_event(
-                                None,
-                                Some(title.id.clone()),
-                                None,
-                                crate::ActivityKind::SubtitleDownloaded,
-                                event_msg,
-                                crate::ActivitySeverity::Success,
-                                vec![crate::ActivityChannel::WebUi],
-                            )
-                            .await;
+                        let _ = event_msg;
+                        app.emit_subtitle_downloaded_event(
+                            title,
+                            Some(dest_path.display().to_string()),
+                            Some(lang_pref.code.clone()),
+                            Some(best.provider.clone()),
+                        )
+                        .await;
                     }
                     Err(err) => {
                         let event_msg = format!(
@@ -705,18 +701,13 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
                             language = %lang_pref.code,
                             "subtitle download failed"
                         );
-                        let _ = app
-                            .services
-                            .record_activity_event(
-                                None,
-                                Some(title.id.clone()),
-                                None,
-                                crate::ActivityKind::SubtitleSearchFailed,
-                                event_msg,
-                                crate::ActivitySeverity::Warning,
-                                vec![crate::ActivityChannel::WebUi],
-                            )
-                            .await;
+                        let _ = event_msg;
+                        app.emit_subtitle_search_failed_event(
+                            title,
+                            Some(lang_pref.code.clone()),
+                            Some(err.to_string()),
+                        )
+                        .await;
                     }
                 }
 

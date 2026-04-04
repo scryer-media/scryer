@@ -1,4 +1,5 @@
 use super::*;
+use scryer_domain::ConfigurationChangeAction;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
@@ -79,15 +80,13 @@ impl AppUseCase {
         let created_at = chrono::Utc::now().to_rfc3339();
 
         info!(filename = %filename, size_bytes, "database backup created");
-
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                None,
-                EventType::ActionTriggered,
-                format!("database backup created: {filename}"),
-            )
-            .await?;
+        self.emit_configuration_changed_event(
+            Some(actor.id.clone()),
+            "backup",
+            Some(filename.clone()),
+            ConfigurationChangeAction::Saved,
+        )
+        .await;
 
         Ok(BackupInfo {
             filename,
@@ -132,6 +131,13 @@ impl AppUseCase {
             .map_err(|e| AppError::Repository(format!("failed to delete backup: {e}")))?;
 
         info!(filename, "backup deleted");
+        self.emit_configuration_changed_event(
+            Some(actor.id.clone()),
+            "backup",
+            Some(filename.to_string()),
+            ConfigurationChangeAction::Deleted,
+        )
+        .await;
         Ok(true)
     }
 

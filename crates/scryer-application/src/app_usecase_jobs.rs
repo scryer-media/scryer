@@ -1,5 +1,11 @@
 use super::*;
+use crate::domain_events::new_job_run_domain_event;
+use crate::event_views::replay_active_job_runs;
 use chrono::Utc;
+use scryer_domain::{
+    DomainEventFilter, DomainEventPayload, DomainEventType, JobNextRunUpdatedEventData,
+    JobRunCompletedEventData, JobRunFailedEventData, JobRunStartedEventData,
+};
 use serde_json::json;
 use tokio::sync::broadcast;
 use tracing::warn;
@@ -81,6 +87,51 @@ impl JobExecutionOutcome {
 }
 
 impl AppUseCase {
+    async fn load_active_job_run_projection(&self) -> AppResult<Vec<JobRun>> {
+        let mut events = Vec::new();
+        let mut after_sequence = 0i64;
+
+        loop {
+            let batch = self
+                .services
+                .domain_events
+                .list(&DomainEventFilter {
+                    after_sequence: Some(after_sequence),
+                    event_types: Some(vec![
+                        DomainEventType::JobRunStarted,
+                        DomainEventType::JobRunCompleted,
+                        DomainEventType::JobRunFailed,
+                        DomainEventType::LibraryScanStarted,
+                        DomainEventType::LibraryScanProgressed,
+                        DomainEventType::LibraryScanCompleted,
+                        DomainEventType::LibraryScanFailed,
+                    ]),
+                    limit: 500,
+                    ..DomainEventFilter::default()
+                })
+                .await?;
+            if batch.is_empty() {
+                break;
+            }
+
+            after_sequence = batch
+                .last()
+                .map(|event| event.sequence)
+                .unwrap_or(after_sequence);
+            let count = batch.len();
+            events.extend(batch);
+            if count < 500 {
+                break;
+            }
+        }
+
+        let mut runs = replay_active_job_runs(&events)
+            .into_values()
+            .collect::<Vec<_>>();
+        runs.sort_by(|left, right| left.started_at.cmp(&right.started_at));
+        Ok(runs)
+    }
+
     pub async fn list_jobs(&self, actor: &User) -> AppResult<Vec<JobDefinition>> {
         require(actor, &Entitlement::ManageConfig)?;
         let next_runs = self.services.job_run_tracker.all_next_runs().await;
@@ -89,7 +140,12 @@ impl AppUseCase {
 
     pub async fn active_job_runs(&self, actor: &User) -> AppResult<Vec<JobRun>> {
         require(actor, &Entitlement::ManageConfig)?;
-        Ok(self.services.job_run_tracker.list_active().await)
+        let runs = self.services.job_run_tracker.list_active().await;
+        if runs.is_empty() {
+            self.load_active_job_run_projection().await
+        } else {
+            Ok(runs)
+        }
     }
 
     pub async fn list_job_runs(
@@ -99,7 +155,14 @@ impl AppUseCase {
         limit: usize,
     ) -> AppResult<Vec<JobRun>> {
         require(actor, &Entitlement::ManageConfig)?;
-        let active_runs = self.services.job_run_tracker.list_active().await;
+        let active_runs = {
+            let runs = self.services.job_run_tracker.list_active().await;
+            if runs.is_empty() {
+                self.load_active_job_run_projection().await?
+            } else {
+                runs
+            }
+        };
         let active_runs_by_id = active_runs
             .into_iter()
             .map(|run| (run.id.clone(), run))
@@ -124,7 +187,14 @@ impl AppUseCase {
 
     pub async fn list_recent_job_runs(&self, actor: &User, limit: usize) -> AppResult<Vec<JobRun>> {
         require(actor, &Entitlement::ManageConfig)?;
-        let active_runs = self.services.job_run_tracker.list_active().await;
+        let active_runs = {
+            let runs = self.services.job_run_tracker.list_active().await;
+            if runs.is_empty() {
+                self.load_active_job_run_projection().await?
+            } else {
+                runs
+            }
+        };
         let active_runs_by_id = active_runs
             .into_iter()
             .map(|run| (run.id.clone(), run))
@@ -149,7 +219,41 @@ impl AppUseCase {
 
     pub fn subscribe_job_run_events(&self, actor: &User) -> AppResult<broadcast::Receiver<JobRun>> {
         require(actor, &Entitlement::ManageConfig)?;
-        Ok(self.services.job_run_tracker.subscribe())
+        let (tx, rx) = broadcast::channel(128);
+        let app = self.clone();
+        tokio::spawn(async move {
+            let mut receiver = app.services.job_run_tracker.subscribe();
+            let mut initial_runs = app.services.job_run_tracker.list_active().await;
+            if initial_runs.is_empty() {
+                initial_runs = match app.load_active_job_run_projection().await {
+                    Ok(runs) => runs,
+                    Err(error) => {
+                        tracing::warn!("job run subscription initial load failed: {error}");
+                        return;
+                    }
+                };
+            }
+            for run in initial_runs {
+                if tx.send(run).is_err() {
+                    return;
+                }
+            }
+
+            loop {
+                match receiver.recv().await {
+                    Ok(run) => {
+                        if tx.send(run).is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::debug!("job run subscription lagged, skipped {n} tracker updates");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        Ok(rx)
     }
 
     pub async fn trigger_job(&self, actor: &User, job_key: JobKey) -> AppResult<JobRun> {
@@ -163,6 +267,19 @@ impl AppUseCase {
         self.services
             .job_run_tracker
             .upsert_active_run(run_payload.clone())
+            .await;
+        let _ = self
+            .services
+            .append_domain_event(new_job_run_domain_event(
+                Some(actor.id.clone()),
+                run.id.clone(),
+                DomainEventPayload::JobRunStarted(JobRunStartedEventData {
+                    run_id: run.id.clone(),
+                    job_key: run.job_key.as_str().to_string(),
+                    operation_type: run.operation_type.clone(),
+                    trigger_source: run.trigger_source.as_str().to_string(),
+                }),
+            ))
             .await;
 
         let app = self.clone();
@@ -190,6 +307,19 @@ impl AppUseCase {
             .job_run_tracker
             .upsert_active_run(run_payload)
             .await;
+        let _ = self
+            .services
+            .append_domain_event(new_job_run_domain_event(
+                None,
+                run.id.clone(),
+                DomainEventPayload::JobRunStarted(JobRunStartedEventData {
+                    run_id: run.id.clone(),
+                    job_key: run.job_key.as_str().to_string(),
+                    operation_type: run.operation_type.clone(),
+                    trigger_source: run.trigger_source.as_str().to_string(),
+                }),
+            ))
+            .await;
         self.run_job_run(run, None).await
     }
 
@@ -197,6 +327,17 @@ impl AppUseCase {
         self.services
             .job_run_tracker
             .set_next_run_at(job_key, next_run_at)
+            .await;
+        let _ = self
+            .services
+            .append_domain_event(new_job_run_domain_event(
+                None,
+                job_key.as_str().to_string(),
+                DomainEventPayload::JobNextRunUpdated(JobNextRunUpdatedEventData {
+                    job_key: job_key.as_str().to_string(),
+                    next_run_at: Some(next_run_at.to_rfc3339()),
+                }),
+            ))
             .await;
     }
 
@@ -445,6 +586,27 @@ impl AppUseCase {
             .job_run_tracker
             .upsert_active_run(JobRun::from_record(&updated, library_scan_progress))
             .await;
+        let payload = if matches!(run.status, JobRunStatus::Failed) {
+            DomainEventPayload::JobRunFailed(JobRunFailedEventData {
+                run_id: run.id.clone(),
+                job_key: run.job_key.as_str().to_string(),
+                error_text: run.error_text.clone(),
+            })
+        } else {
+            DomainEventPayload::JobRunCompleted(JobRunCompletedEventData {
+                run_id: run.id.clone(),
+                job_key: run.job_key.as_str().to_string(),
+                summary_text: run.summary_text.clone(),
+            })
+        };
+        let _ = self
+            .services
+            .append_domain_event(new_job_run_domain_event(
+                updated.actor_user_id.clone(),
+                updated.id.clone(),
+                payload,
+            ))
+            .await;
         Ok(())
     }
 
@@ -460,6 +622,18 @@ impl AppUseCase {
         self.services
             .job_run_tracker
             .upsert_active_run(JobRun::from_record(&updated, None))
+            .await;
+        let _ = self
+            .services
+            .append_domain_event(new_job_run_domain_event(
+                updated.actor_user_id.clone(),
+                updated.id.clone(),
+                DomainEventPayload::JobRunFailed(JobRunFailedEventData {
+                    run_id: updated.id.clone(),
+                    job_key: updated.job_key.as_str().to_string(),
+                    error_text: updated.error_text.clone(),
+                }),
+            ))
             .await;
         Ok(())
     }

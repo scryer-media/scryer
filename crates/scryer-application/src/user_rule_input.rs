@@ -46,20 +46,8 @@ pub(crate) fn build_rule_input(
     let is_retagged = is_retagged_release(parsed);
     let (episode_release_type, is_season_pack, is_multi_episode) = release_type_details(parsed);
 
-    // Merge indexer-reported languages (e.g. NZBGeek "English") into the
-    // title-parsed set so that convenience rules like required_audio_languages
-    // see them. Normalize via the app-layer ISO table so indexer input gets
-    // the same broad language coverage as detected media metadata.
-    let mut languages_audio = parsed.languages_audio.clone();
-    if let Some(indexer_langs) = release_runtime.indexer_languages {
-        for raw in indexer_langs {
-            if let Some(code) = crate::normalize_detected_audio_language_code(raw)
-                && !languages_audio.contains(&code)
-            {
-                languages_audio.push(code);
-            }
-        }
-    }
+    let languages_audio =
+        crate::release_audio_language_hints(parsed, release_runtime.indexer_languages);
 
     UserRuleInput {
         release: ReleaseDoc {

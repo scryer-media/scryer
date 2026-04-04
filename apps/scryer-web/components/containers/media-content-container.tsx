@@ -8,7 +8,6 @@ import {
   deleteTitleMutation,
   setTitleMonitoredMutation,
   updateRuleSetMutation,
-  saveQualityProfileSettingsMutation,
 } from "@/lib/graphql/mutations";
 import {
   titlesQuery,
@@ -25,8 +24,6 @@ import {
 import { useClient } from "urql";
 import type { ContentSettingsSection, ViewId } from "@/components/root/types";
 import {
-  parseQualityProfileCatalogEntries,
-  qualityProfileEntryToMutationInput,
   toProfileOptions,
 } from "@/lib/utils/quality-profiles";
 import { useDownloadClientRouting } from "@/lib/hooks/use-download-client-routing";
@@ -35,7 +32,6 @@ import { useMediaSettings } from "@/lib/hooks/use-media-settings";
 import { useQueueFormState } from "@/lib/hooks/use-queue-form-state";
 import { useTitleManagementState } from "@/lib/hooks/use-title-management-state";
 import type { Release, TitleRecord, RuleSetRecord } from "@/lib/types";
-import type { ScoringPersonaId } from "@/lib/types/quality-profiles";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { DeletePreviewSummary } from "@/components/common/delete-preview-summary";
@@ -47,7 +43,6 @@ import { useSearchContext } from "@/lib/context/search-context";
 import { useDeletePreview } from "@/lib/hooks/use-delete-preview";
 import { useTitleListReactiveRefresh } from "@/lib/hooks/use-title-list-reactive-refresh";
 import { toast } from "sonner";
-
 type MediaContentContainerProps = {
   view: ViewId;
   contentSettingsSection: ContentSettingsSection;
@@ -150,11 +145,13 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     mediaSettingsSaving,
     qualityProfiles,
     qualityProfileEntries,
-    qualityProfilesText,
     qualityProfileParseError,
     globalQualityProfileId,
+    globalScoringPersona,
     categoryQualityProfileOverrides,
-    setCategoryQualityProfileOverrides,
+    categoryRequiredAudioLanguages,
+    saveCategoryRequiredAudioLanguages,
+    categoryPersonaSelections,
     categoryRenameTemplates,
     setCategoryRenameTemplates,
     categoryRenameCollisionPolicies,
@@ -175,6 +172,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     setNfoWriteOnImport,
     plexmatchWriteOnImport,
     setPlexmatchWriteOnImport,
+    saveCategoryQualityProfileOverride,
+    saveCategoryScoringPersonaOverride,
     updateCategoryMediaProfileSettings,
     refreshMediaSettings,
   } = useMediaSettings({
@@ -882,51 +881,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     }
   }, [t, titleStatus, setTitleStatus]);
 
-  const handleFacetPersonaSave = React.useCallback(
-    async (persona: ScoringPersonaId | null) => {
-      const entries = parseQualityProfileCatalogEntries(qualityProfilesText);
-      const overrideId = categoryQualityProfileOverrides[activeQualityScopeId];
-      const effectiveProfileId =
-        !overrideId || overrideId === QUALITY_PROFILE_INHERIT_VALUE
-          ? globalQualityProfileId
-          : overrideId;
-      const entry = entries.find((e) => e.id === effectiveProfileId);
-      if (!entry) return;
-      const nextOverrides = { ...entry.criteria.facet_persona_overrides };
-      if (persona === null) {
-        delete nextOverrides[activeQualityScopeId];
-      } else {
-        nextOverrides[activeQualityScopeId] = persona;
-      }
-      const updatedEntry = {
-        ...entry,
-        criteria: { ...entry.criteria, facet_persona_overrides: nextOverrides },
-      };
-      const nextEntries = entries.map((candidate) =>
-        candidate.id === updatedEntry.id ? updatedEntry : candidate,
-      );
-      await client
-        .mutation(saveQualityProfileSettingsMutation, {
-          input: {
-            profiles: nextEntries.map(qualityProfileEntryToMutationInput),
-            globalProfileId: null,
-            categorySelections: [],
-            replaceExisting: true,
-          },
-        })
-        .toPromise();
-      await refreshMediaSettings();
-    },
-    [
-      qualityProfilesText,
-      categoryQualityProfileOverrides,
-      activeQualityScopeId,
-      globalQualityProfileId,
-      client,
-      refreshMediaSettings,
-    ],
-  );
-
   // Load media settings once per view/scope change (subscription handles live updates).
   // Deferred pattern: StrictMode unmount/remount cancels the stale call.
   React.useEffect(() => {
@@ -1030,12 +984,14 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           mediaSettingsLoading,
           qualityProfiles: qualityProfiles,
           qualityProfileEntries,
-          qualityProfilesText,
           qualityProfileParseError,
           globalQualityProfileId,
+          globalScoringPersona,
           categoryQualityProfileOverrides,
+          categoryRequiredAudioLanguages,
+          saveCategoryRequiredAudioLanguages,
+          categoryPersonaSelections,
           activeQualityScopeId,
-          setCategoryQualityProfileOverrides,
           categoryRenameTemplates,
           setCategoryRenameTemplates,
           categoryRenameCollisionPolicies,
@@ -1058,7 +1014,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           setPlexmatchWriteOnImport,
           qualityProfileInheritValue: QUALITY_PROFILE_INHERIT_VALUE,
           toProfileOptions,
-          handleFacetPersonaSave,
+          handleFacetPersonaSave: saveCategoryScoringPersonaOverride,
+          saveCategoryQualityProfileOverride,
           updateCategoryMediaProfileSettings,
           mediaSettingsSaving,
           titleNameForQueue,

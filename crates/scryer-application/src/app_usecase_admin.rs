@@ -1,4 +1,6 @@
 use super::*;
+use crate::event_views::history_event_from_domain_event;
+use scryer_domain::ConfigurationChangeAction;
 
 #[cfg(unix)]
 fn to_u64<T: Into<u64>>(value: T) -> u64 {
@@ -11,14 +13,14 @@ impl AppUseCase {
 
         let titles = self.services.titles.list(None, None).await?;
         let users = self.services.users.list_all().await?;
-        let recent_events = self.services.events.list(None, 12, 0).await?;
+        let recent_activity = self.recent_activity(actor, 12, 0).await?;
 
         let mut titles_movie = 0usize;
         let mut titles_tv = 0usize;
         let mut titles_anime = 0usize;
         let titles_other = 0usize;
         let mut monitored_titles = 0usize;
-        let mut recent_event_preview = Vec::with_capacity(std::cmp::min(3, recent_events.len()));
+        let mut recent_event_preview = Vec::with_capacity(std::cmp::min(3, recent_activity.len()));
 
         for title in &titles {
             if title.monitored {
@@ -32,7 +34,7 @@ impl AppUseCase {
             }
         }
 
-        for event in recent_events.iter().take(3) {
+        for event in recent_activity.iter().take(3) {
             recent_event_preview.push(event.message.clone());
         }
 
@@ -76,7 +78,7 @@ impl AppUseCase {
             titles_tv,
             titles_anime,
             titles_other,
-            recent_events: recent_events.len(),
+            recent_events: recent_activity.len(),
             recent_event_preview,
             db_migration_version,
             db_pending_migrations,
@@ -138,7 +140,52 @@ impl AppUseCase {
     }
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<HistoryEvent> {
-        self.services.event_broadcast.subscribe()
+        let (tx, rx) = broadcast::channel(128);
+        let app = self.clone();
+        tokio::spawn(async move {
+            let mut wake_rx = app.services.domain_event_broadcast.subscribe();
+            let mut cursor = 0_i64;
+
+            loop {
+                let events = match app
+                    .services
+                    .domain_events
+                    .list_after_sequence(cursor, 100)
+                    .await
+                {
+                    Ok(events) if !events.is_empty() => events,
+                    Ok(_) => match wake_rx.recv().await {
+                        Ok(sequence) => {
+                            if sequence > cursor {
+                                cursor = sequence.saturating_sub(1);
+                            }
+                            continue;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::debug!(
+                                "history event subscription lagged, skipped {n} wakeups"
+                            );
+                            continue;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    },
+                    Err(error) => {
+                        tracing::warn!("history event subscription replay failed: {error}");
+                        break;
+                    }
+                };
+
+                for event in events {
+                    cursor = event.sequence;
+                    if let Some(history) = history_event_from_domain_event(&event) {
+                        if tx.send(history).is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+        rx
     }
 
     pub async fn ensure_default_admin(&self, username: &str, password: &str) -> AppResult<User> {
@@ -179,6 +226,13 @@ impl AppUseCase {
 
         let user = self.services.users.create(user).await?;
         self.cache_jwt_signing_key(&user).await?;
+        self.emit_configuration_changed_event(
+            None,
+            "user",
+            Some(user.id.clone()),
+            ConfigurationChangeAction::Saved,
+        )
+        .await;
         Ok(user)
     }
 
@@ -233,15 +287,13 @@ impl AppUseCase {
 
         let user = self.services.users.create(user).await?;
         self.cache_jwt_signing_key(&user).await?;
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                None,
-                EventType::ActionTriggered,
-                format!("user created: {}", username),
-            )
-            .await?;
-
+        self.emit_configuration_changed_event(
+            Some(actor.id.clone()),
+            "user",
+            Some(user.id.clone()),
+            ConfigurationChangeAction::Saved,
+        )
+        .await;
         Ok(user)
     }
 
@@ -299,15 +351,13 @@ impl AppUseCase {
             .update_password_hash(user_id, password_hash)
             .await?;
         self.refresh_cached_jwt_signing_key(&user).await?;
-
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                None,
-                EventType::ActionTriggered,
-                format!("user password updated: {}", user.username),
-            )
-            .await?;
+        self.emit_configuration_changed_event(
+            Some(actor.id.clone()),
+            "user_password",
+            Some(user.id.clone()),
+            ConfigurationChangeAction::Updated,
+        )
+        .await;
 
         Ok(user)
     }
@@ -346,15 +396,13 @@ impl AppUseCase {
             .await?;
         self.evict_cached_jwt_signing_key(user_id).await;
         self.refresh_cached_jwt_signing_key(&user).await?;
-
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                None,
-                EventType::ActionTriggered,
-                format!("user entitlements updated: {}", user.username),
-            )
-            .await?;
+        self.emit_configuration_changed_event(
+            Some(actor.id.clone()),
+            "user_entitlements",
+            Some(user.id.clone()),
+            ConfigurationChangeAction::Updated,
+        )
+        .await;
 
         Ok(user)
     }
@@ -375,15 +423,13 @@ impl AppUseCase {
 
         self.services.users.delete(user_id).await?;
         self.evict_cached_jwt_signing_key(user_id).await;
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                None,
-                EventType::ActionTriggered,
-                format!("user deleted: {}", user.username),
-            )
-            .await?;
-
+        self.emit_configuration_changed_event(
+            Some(actor.id.clone()),
+            "user",
+            Some(user.id),
+            ConfigurationChangeAction::Deleted,
+        )
+        .await;
         Ok(())
     }
 }

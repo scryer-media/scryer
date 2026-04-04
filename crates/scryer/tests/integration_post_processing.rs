@@ -8,7 +8,7 @@ use common::TestContext;
 use scryer_application::{
     ActivityKind, ActivitySeverity, PostProcessingContext, run_post_processing,
 };
-use scryer_domain::{MediaFacet, PostProcessingScript};
+use scryer_domain::{MediaFacet, PostProcessingScript, User};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -77,7 +77,11 @@ fn movie_context(
 async fn last_post_processing_event(
     app: &scryer_application::AppUseCase,
 ) -> Option<scryer_application::ActivityEvent> {
-    let events = app.services.activity_stream.list(10, 0).await;
+    let actor = User::new_admin("admin");
+    let events = app
+        .recent_activity(&actor, 10, 0)
+        .await
+        .expect("recent activity");
     events
         .into_iter()
         .find(|e| e.kind == ActivityKind::PostProcessingCompleted)

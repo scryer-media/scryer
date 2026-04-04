@@ -259,6 +259,32 @@ impl ShowRepository for FailingShowRepo {
         .await
     }
 
+    async fn update_collection_interstitial_movie(
+        &self,
+        collection_id: &str,
+        interstitial_movie: scryer_domain::InterstitialMovieMetadata,
+    ) -> AppResult<Collection> {
+        <SqliteServices as ShowRepository>::update_collection_interstitial_movie(
+            &self.inner,
+            collection_id,
+            interstitial_movie,
+        )
+        .await
+    }
+
+    async fn update_collection_specials_movies(
+        &self,
+        collection_id: &str,
+        specials_movies: Vec<scryer_domain::InterstitialMovieMetadata>,
+    ) -> AppResult<Collection> {
+        <SqliteServices as ShowRepository>::update_collection_specials_movies(
+            &self.inner,
+            collection_id,
+            specials_movies,
+        )
+        .await
+    }
+
     async fn update_interstitial_season_episode(
         &self,
         collection_id: &str,
@@ -666,6 +692,33 @@ async fn seed_typed_settings_definitions(ctx: &TestContext) {
                 key_name: "quality.profile_id".into(),
                 data_type: "string".into(),
                 default_value_json: "\"4k\"".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "quality.scoring_persona".into(),
+                data_type: "string".into(),
+                default_value_json: "\"Balanced\"".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "audio.required_languages".into(),
+                data_type: "json".into(),
+                default_value_json: "[]".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "audio.required_languages.title_override".into(),
+                data_type: "json".into(),
+                default_value_json: "null".into(),
                 is_sensitive: false,
                 validation_json: None,
             },
@@ -2849,6 +2902,15 @@ async fn graphql_introspection_exposes_typed_settings_fields() {
           serviceSettings: __type(name: "ServiceSettingsPayload") {
             fields { name }
           }
+          qualityProfileSettings: __type(name: "QualityProfileSettingsPayload") {
+            fields { name }
+          }
+          qualityProfileCriteriaPayload: __type(name: "QualityProfileCriteriaPayload") {
+            fields { name }
+          }
+          qualityProfileCriteriaInput: __type(name: "QualityProfileCriteriaInput") {
+            inputFields { name }
+          }
         }
         "#,
         json!({}),
@@ -2871,6 +2933,7 @@ async fn graphql_introspection_exposes_typed_settings_fields() {
     assert!(query_names.contains(&"qualityProfileSettings"));
     assert!(query_names.contains(&"downloadClientRouting"));
     assert!(query_names.contains(&"indexerRouting"));
+    assert!(!query_names.contains(&"convenienceSettings"));
     assert!(!query_names.contains(&"adminSettings"));
 
     let mutation_fields = body["data"]["mutationRoot"]["fields"]
@@ -2888,6 +2951,7 @@ async fn graphql_introspection_exposes_typed_settings_fields() {
     assert!(mutation_names.contains(&"saveQualityProfileSettings"));
     assert!(mutation_names.contains(&"updateDownloadClientRouting"));
     assert!(mutation_names.contains(&"updateIndexerRouting"));
+    assert!(!mutation_names.contains(&"updateQualityProfileFacetPersona"));
     assert!(!mutation_names.contains(&"saveAdminSettings"));
 
     let subtitle_fields = body["data"]["subtitleSettings"]["fields"]
@@ -2920,6 +2984,7 @@ async fn graphql_introspection_exposes_typed_settings_fields() {
         .collect();
     assert!(media_names.contains(&"libraryPath"));
     assert!(media_names.contains(&"rootFolders"));
+    assert!(media_names.contains(&"requiredAudioLanguages"));
     assert!(media_names.contains(&"renameTemplate"));
 
     let library_fields = body["data"]["libraryPaths"]["fields"]
@@ -2942,6 +3007,40 @@ async fn graphql_introspection_exposes_typed_settings_fields() {
         .collect();
     assert!(service_names.contains(&"tlsCertPath"));
     assert!(service_names.contains(&"tlsKeyPath"));
+
+    let quality_profile_settings_fields = body["data"]["qualityProfileSettings"]["fields"]
+        .as_array()
+        .expect("QualityProfileSettingsPayload should expose fields");
+    let quality_profile_settings_names: Vec<&str> = quality_profile_settings_fields
+        .iter()
+        .filter_map(|field| field["name"].as_str())
+        .collect();
+    assert!(quality_profile_settings_names.contains(&"globalScoringPersona"));
+    assert!(quality_profile_settings_names.contains(&"categoryPersonaSelections"));
+
+    let criteria_payload_fields = body["data"]["qualityProfileCriteriaPayload"]["fields"]
+        .as_array()
+        .expect("QualityProfileCriteriaPayload should expose fields");
+    let criteria_payload_names: Vec<&str> = criteria_payload_fields
+        .iter()
+        .filter_map(|field| field["name"].as_str())
+        .collect();
+    assert!(!criteria_payload_names.contains(&"requiredAudioLanguages"));
+    assert!(!criteria_payload_names.contains(&"scoringPersona"));
+    assert!(!criteria_payload_names.contains(&"facetPersonaOverrides"));
+    assert!(!criteria_payload_names.contains(&"atmosPreferred"));
+
+    let criteria_input_fields = body["data"]["qualityProfileCriteriaInput"]["inputFields"]
+        .as_array()
+        .expect("QualityProfileCriteriaInput should expose inputFields");
+    let criteria_input_names: Vec<&str> = criteria_input_fields
+        .iter()
+        .filter_map(|field| field["name"].as_str())
+        .collect();
+    assert!(!criteria_input_names.contains(&"requiredAudioLanguages"));
+    assert!(!criteria_input_names.contains(&"scoringPersona"));
+    assert!(!criteria_input_names.contains(&"facetPersonaOverrides"));
+    assert!(!criteria_input_names.contains(&"atmosPreferred"));
 }
 
 #[tokio::test]
@@ -2956,6 +3055,7 @@ async fn graphql_typed_media_settings_round_trip() {
             scope
             libraryPath
             rootFolders { path isDefault }
+            requiredAudioLanguages
             renameTemplate
             renameCollisionPolicy
             renameMissingMetadataPolicy
@@ -2976,6 +3076,7 @@ async fn graphql_typed_media_settings_round_trip() {
               { "path": "/library/anime-main", "isDefault": true },
               { "path": "/library/anime-archive", "isDefault": false }
             ],
+            "requiredAudioLanguages": ["eng", "jpn"],
             "renameTemplate": "{title} [{quality}].{ext}",
             "renameCollisionPolicy": "replace_if_better",
             "renameMissingMetadataPolicy": "skip",
@@ -2997,6 +3098,8 @@ async fn graphql_typed_media_settings_round_trip() {
     assert_eq!(updated["libraryPath"], "/library/anime-main");
     assert_eq!(updated["rootFolders"][0]["path"], "/library/anime-main");
     assert_eq!(updated["rootFolders"][0]["isDefault"], true);
+    assert_eq!(updated["requiredAudioLanguages"][0], "eng");
+    assert_eq!(updated["requiredAudioLanguages"][1], "jpn");
     assert_eq!(updated["renameTemplate"], "{title} [{quality}].{ext}");
     assert_eq!(updated["renameCollisionPolicy"], "replace_if_better");
     assert_eq!(updated["renameMissingMetadataPolicy"], "skip");
@@ -3016,6 +3119,7 @@ async fn graphql_typed_media_settings_round_trip() {
             scope
             libraryPath
             rootFolders { path isDefault }
+            requiredAudioLanguages
             renameTemplate
             renameCollisionPolicy
             renameMissingMetadataPolicy
@@ -3038,6 +3142,8 @@ async fn graphql_typed_media_settings_round_trip() {
     assert_eq!(settings["scope"], "anime");
     assert_eq!(settings["libraryPath"], "/library/anime-main");
     assert_eq!(settings["rootFolders"][1]["path"], "/library/anime-archive");
+    assert_eq!(settings["requiredAudioLanguages"][0], "eng");
+    assert_eq!(settings["requiredAudioLanguages"][1], "jpn");
     assert_eq!(settings["renameTemplate"], "{title} [{quality}].{ext}");
     assert_eq!(settings["renameCollisionPolicy"], "replace_if_better");
     assert_eq!(settings["renameMissingMetadataPolicy"], "skip");
@@ -3447,19 +3553,24 @@ async fn graphql_quality_profile_settings_round_trip() {
         mutation SaveQualityProfileSettings($input: SaveQualityProfileSettingsInput!) {
           saveQualityProfileSettings(input: $input) {
             globalProfileId
+            globalScoringPersona
             profiles {
               id
               name
               criteria {
                 qualityTiers
-                requiredAudioLanguages
-                scoringPersona
               }
             }
             categorySelections {
               scope
               overrideProfileId
               effectiveProfileId
+              inheritsGlobal
+            }
+            categoryPersonaSelections {
+              scope
+              overridePersona
+              effectivePersona
               inheritsGlobal
             }
           }
@@ -3481,25 +3592,19 @@ async fn graphql_quality_profile_settings_round_trip() {
                   "videoCodecBlocklist": [],
                   "audioCodecAllowlist": [],
                   "audioCodecBlocklist": [],
-                  "atmosPreferred": true,
                   "dolbyVisionAllowed": true,
                   "detectedHdrAllowed": true,
                   "preferRemux": false,
                   "allowBdDisk": true,
                   "allowUpgrades": true,
-                  "preferDualAudio": true,
-                  "requiredAudioLanguages": ["jpn", "eng"],
-                  "scoringPersona": "Audiophile",
                   "scoringOverrides": {},
                   "cutoffTier": null,
-                  "minScoreToGrab": null,
-                  "facetPersonaOverrides": [
-                    { "scope": "anime", "persona": "Compatible" }
-                  ]
+                  "minScoreToGrab": null
                 }
               }
             ],
             "globalProfileId": "custom-audio",
+            "globalScoringPersona": "Audiophile",
             "categorySelections": [
               {
                 "scope": "movie",
@@ -3510,6 +3615,13 @@ async fn graphql_quality_profile_settings_round_trip() {
                 "scope": "series",
                 "profileId": null,
                 "inheritGlobal": true
+              }
+            ],
+            "categoryPersonaSelections": [
+              {
+                "scope": "anime",
+                "persona": "Compatible",
+                "inheritGlobal": false
               }
             ],
             "replaceExisting": false
@@ -3523,14 +3635,19 @@ async fn graphql_quality_profile_settings_round_trip() {
         "custom-audio"
     );
     assert_eq!(
-        update["data"]["saveQualityProfileSettings"]["profiles"]
+        update["data"]["saveQualityProfileSettings"]["globalScoringPersona"],
+        "Audiophile"
+    );
+    let anime_persona_selection =
+        update["data"]["saveQualityProfileSettings"]["categoryPersonaSelections"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|profile| profile["id"] == "custom-audio")
-            .unwrap()["criteria"]["requiredAudioLanguages"][0],
-        "jpn"
-    );
+            .find(|selection| selection["scope"] == "anime")
+            .unwrap();
+    assert_eq!(anime_persona_selection["overridePersona"], "Compatible");
+    assert_eq!(anime_persona_selection["effectivePersona"], "Compatible");
+    assert_eq!(anime_persona_selection["inheritsGlobal"], false);
 
     let read = gql(
         &ctx,
@@ -3538,21 +3655,23 @@ async fn graphql_quality_profile_settings_round_trip() {
         query QualityProfileSettings {
           qualityProfileSettings {
             globalProfileId
+            globalScoringPersona
             profiles {
               id
               criteria {
-                requiredAudioLanguages
-                scoringPersona
-                facetPersonaOverrides {
-                  scope
-                  persona
-                }
+                qualityTiers
               }
             }
             categorySelections {
               scope
               overrideProfileId
               effectiveProfileId
+              inheritsGlobal
+            }
+            categoryPersonaSelections {
+              scope
+              overridePersona
+              effectivePersona
               inheritsGlobal
             }
           }
@@ -3565,6 +3684,7 @@ async fn graphql_quality_profile_settings_round_trip() {
 
     let settings = &read["data"]["qualityProfileSettings"];
     assert_eq!(settings["globalProfileId"], "custom-audio");
+    assert_eq!(settings["globalScoringPersona"], "Audiophile");
     let movie_selection = settings["categorySelections"]
         .as_array()
         .unwrap()
@@ -3573,6 +3693,122 @@ async fn graphql_quality_profile_settings_round_trip() {
         .unwrap();
     assert_eq!(movie_selection["overrideProfileId"], "custom-audio");
     assert_eq!(movie_selection["inheritsGlobal"], false);
+
+    let anime_persona_selection = settings["categoryPersonaSelections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|selection| selection["scope"] == "anime")
+        .unwrap();
+    assert_eq!(anime_persona_selection["overridePersona"], "Compatible");
+    assert_eq!(anime_persona_selection["effectivePersona"], "Compatible");
+    assert_eq!(anime_persona_selection["inheritsGlobal"], false);
+}
+
+#[tokio::test]
+async fn graphql_quality_profile_settings_updates_category_persona_selection_round_trip() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    let seed = gql(
+        &ctx,
+        r#"
+        mutation SaveQualityProfileSettings($input: SaveQualityProfileSettingsInput!) {
+          saveQualityProfileSettings(input: $input) {
+            profiles {
+              id
+            }
+          }
+        }
+        "#,
+        json!({
+          "input": {
+            "profiles": [
+              {
+                "id": "custom-audio",
+                "name": "Custom Audio",
+                "criteria": {
+                  "qualityTiers": ["2160P", "1080P"],
+                  "archivalQuality": "2160P",
+                  "allowUnknownQuality": false,
+                  "sourceAllowlist": [],
+                  "sourceBlocklist": [],
+                  "videoCodecAllowlist": [],
+                  "videoCodecBlocklist": [],
+                  "audioCodecAllowlist": [],
+                  "audioCodecBlocklist": [],
+                  "dolbyVisionAllowed": true,
+                  "detectedHdrAllowed": true,
+                  "preferRemux": false,
+                  "allowBdDisk": true,
+                  "allowUpgrades": true,
+                  "scoringOverrides": {},
+                  "cutoffTier": null,
+                  "minScoreToGrab": null
+                }
+              }
+            ],
+            "globalProfileId": null,
+            "globalScoringPersona": "Balanced",
+            "categorySelections": [],
+            "categoryPersonaSelections": [],
+            "replaceExisting": false
+          }
+        }),
+    )
+    .await;
+    assert_no_errors(&seed);
+
+    let update = gql(
+        &ctx,
+        r#"
+        mutation SaveQualityProfileSettings($input: SaveQualityProfileSettingsInput!) {
+          saveQualityProfileSettings(input: $input) {
+            globalScoringPersona
+            profiles {
+              id
+            }
+            categoryPersonaSelections {
+              scope
+              overridePersona
+              effectivePersona
+              inheritsGlobal
+            }
+          }
+        }
+        "#,
+        json!({
+          "input": {
+            "profiles": [],
+            "globalProfileId": null,
+            "globalScoringPersona": "Balanced",
+            "categorySelections": [],
+            "categoryPersonaSelections": [
+              {
+                "scope": "anime",
+                "persona": "Compatible",
+                "inheritGlobal": false
+              }
+            ],
+            "replaceExisting": false
+          }
+        }),
+    )
+    .await;
+    assert_no_errors(&update);
+
+    assert_eq!(
+        update["data"]["saveQualityProfileSettings"]["globalScoringPersona"],
+        "Balanced"
+    );
+    let anime_override = update["data"]["saveQualityProfileSettings"]["categoryPersonaSelections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["scope"] == "anime")
+        .unwrap();
+    assert_eq!(anime_override["overridePersona"], "Compatible");
+    assert_eq!(anime_override["effectivePersona"], "Compatible");
+    assert_eq!(anime_override["inheritsGlobal"], false);
 }
 
 #[tokio::test]
@@ -4918,6 +5154,27 @@ async fn graphql_titles_expose_episode_progress_excluding_specials() {
         .await
         .expect("create specials collection");
 
+    let season_zero_collection = ctx
+        .db
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Season,
+            collection_index: "0".to_string(),
+            label: Some("Season 0".to_string()),
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: None,
+            last_episode_number: None,
+            interstitial_movie: None,
+            specials_movies: vec![],
+            interstitial_season_episode: None,
+            monitored: false,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create season zero collection");
+
     let regular_episode_1 =
         create_series_scan_episode(&ctx, &title, &season_collection, "1", "1", "S01E01").await;
     let regular_episode_2 =
@@ -4928,10 +5185,19 @@ async fn graphql_titles_expose_episode_progress_excluding_specials() {
         create_series_scan_episode(&ctx, &title, &specials_collection, "0", "1", "S00E01").await;
     let _special_episode_2 =
         create_series_scan_episode(&ctx, &title, &specials_collection, "0", "2", "S00E02").await;
+    let season_zero_episode_1 =
+        create_series_scan_episode(&ctx, &title, &season_zero_collection, "0", "3", "S00E03").await;
+    let _season_zero_episode_2 =
+        create_series_scan_episode(&ctx, &title, &season_zero_collection, "0", "4", "S00E04").await;
 
-    for (index, episode) in [regular_episode_1, regular_episode_2, special_episode_1]
-        .into_iter()
-        .enumerate()
+    for (index, episode) in [
+        regular_episode_1,
+        regular_episode_2,
+        special_episode_1,
+        season_zero_episode_1,
+    ]
+    .into_iter()
+    .enumerate()
     {
         let file_path = media_root
             .path()

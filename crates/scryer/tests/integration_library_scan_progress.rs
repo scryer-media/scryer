@@ -2,10 +2,14 @@
 
 mod common;
 
+use chrono::Utc;
 use serde_json::json;
 
 use common::TestContext;
-use scryer_domain::MediaFacet;
+use scryer_domain::{
+    DomainEventPayload, DomainEventStream, Id, LibraryScanProgressedEventData,
+    LibraryScanStartedEventData, MediaFacet, NewDomainEvent,
+};
 
 async fn gql(ctx: &TestContext, query: &str, variables: serde_json::Value) -> serde_json::Value {
     let client = ctx.http_client();
@@ -30,38 +34,53 @@ fn assert_no_errors(body: &serde_json::Value) {
 async fn active_library_scans_query_returns_progress_snapshot() {
     let ctx = TestContext::new().await;
 
-    let session = ctx
-        .app
+    ctx.app
         .services
-        .library_scan_tracker
-        .start_session(MediaFacet::Series)
+        .append_domain_event(NewDomainEvent {
+            event_id: Id::new().0,
+            occurred_at: Utc::now(),
+            actor_user_id: None,
+            title_id: None,
+            facet: Some(MediaFacet::Series),
+            correlation_id: None,
+            causation_id: None,
+            schema_version: 1,
+            stream: DomainEventStream::LibraryScan {
+                session_id: "session-1".to_string(),
+            },
+            payload: DomainEventPayload::LibraryScanStarted(LibraryScanStartedEventData {
+                session_id: "session-1".to_string(),
+                mode: "full".to_string(),
+            }),
+        })
         .await
-        .expect("start library scan session");
+        .expect("append library scan started event");
     ctx.app
         .services
-        .library_scan_tracker
-        .set_found_titles(&session.session_id, 12)
-        .await;
-    ctx.app
-        .services
-        .library_scan_tracker
-        .add_metadata_total(&session.session_id, 4)
-        .await;
-    ctx.app
-        .services
-        .library_scan_tracker
-        .increment_metadata_completed(&session.session_id, 2)
-        .await;
-    ctx.app
-        .services
-        .library_scan_tracker
-        .add_file_total(&session.session_id, 9)
-        .await;
-    ctx.app
-        .services
-        .library_scan_tracker
-        .increment_file_completed(&session.session_id, 5)
-        .await;
+        .append_domain_event(NewDomainEvent {
+            event_id: Id::new().0,
+            occurred_at: Utc::now(),
+            actor_user_id: None,
+            title_id: None,
+            facet: Some(MediaFacet::Series),
+            correlation_id: None,
+            causation_id: None,
+            schema_version: 1,
+            stream: DomainEventStream::LibraryScan {
+                session_id: "session-1".to_string(),
+            },
+            payload: DomainEventPayload::LibraryScanProgressed(LibraryScanProgressedEventData {
+                session_id: "session-1".to_string(),
+                status: "running".to_string(),
+                found_titles: 12,
+                titles_completed: 2,
+                titles_total: Some(4),
+                files_completed: 5,
+                files_total: Some(9),
+            }),
+        })
+        .await
+        .expect("append library scan progressed event");
 
     let body = gql(
         &ctx,
@@ -75,7 +94,7 @@ async fn active_library_scans_query_returns_progress_snapshot() {
         .as_array()
         .expect("activeLibraryScans should be an array");
     assert_eq!(scans.len(), 1);
-    assert_eq!(scans[0]["sessionId"], session.session_id);
+    assert_eq!(scans[0]["sessionId"], "session-1");
     assert_eq!(scans[0]["facet"], "tv");
     assert_eq!(scans[0]["status"], "running");
     assert_eq!(scans[0]["foundTitles"], 12);

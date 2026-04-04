@@ -1,4 +1,5 @@
 use super::*;
+use crate::DownloadSourceKind;
 
 // ── extract_http_status_from_message ─────────────────────────────────────────
 
@@ -100,4 +101,66 @@ fn non_repository_error_is_not_http_error() {
 fn connection_refused_is_not_http_error() {
     let err = AppError::Repository("connection refused".to_string());
     assert!(!is_indexer_http_error(&err));
+}
+
+fn make_search_result(
+    source: &str,
+    title: &str,
+    download_url: &str,
+    source_kind: DownloadSourceKind,
+) -> IndexerSearchResult {
+    IndexerSearchResult {
+        source: source.to_string(),
+        title: title.to_string(),
+        link: None,
+        download_url: Some(download_url.to_string()),
+        source_kind: Some(source_kind),
+        size_bytes: None,
+        published_at: None,
+        thumbs_up: None,
+        thumbs_down: None,
+        indexer_languages: None,
+        indexer_subtitles: None,
+        indexer_grabs: None,
+        password_hint: None,
+        parsed_release_metadata: Some(parse_release_metadata(title)),
+        quality_profile_decision: None,
+        extra: HashMap::new(),
+        guid: None,
+        info_url: None,
+    }
+}
+
+#[test]
+fn cross_indexer_release_dedup_prefers_higher_priority_source() {
+    let results = vec![
+        make_search_result(
+            "Lower Priority",
+            "Firefly.S01E12.720p.WEB-DL.x264-NTb",
+            "https://example.test/low",
+            DownloadSourceKind::NzbUrl,
+        ),
+        make_search_result(
+            "Higher Priority",
+            "Firefly.S01E12.720p.WEB-DL.x264-NTb",
+            "https://example.test/high",
+            DownloadSourceKind::NzbUrl,
+        ),
+    ];
+
+    let deduped = dedupe_cross_indexer_release_results(
+        results,
+        &HashMap::from([
+            ("Lower Priority".to_string(), 50),
+            ("Higher Priority".to_string(), 10),
+        ]),
+        "nzb",
+    );
+
+    assert_eq!(deduped.len(), 1);
+    assert_eq!(deduped[0].source, "Higher Priority");
+    assert_eq!(
+        deduped[0].download_url.as_deref(),
+        Some("https://example.test/high")
+    );
 }

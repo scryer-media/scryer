@@ -1,4 +1,4 @@
-use async_graphql::{Enum, InputObject, SimpleObject};
+use async_graphql::{Enum, InputObject, Json, SimpleObject};
 use scryer_application::{
     ActivityChannel as AppActivityChannel, ActivityKind as AppActivityKind,
     ActivitySeverity as AppActivitySeverity, DownloadSourceKind as AppDownloadSourceKind,
@@ -10,8 +10,8 @@ use scryer_application::{
     WantedStatus as AppWantedStatus,
 };
 use scryer_domain::{
-    DownloadQueueState, ImportDecision, ImportSkipReason, ImportStatus, ImportType, MediaFacet,
-    TitleMatchType, TrackedDownloadState, TrackedDownloadStatus,
+    DomainEventType, DownloadQueueState, ImportDecision, ImportSkipReason, ImportStatus,
+    ImportType, MediaFacet, TitleMatchType, TrackedDownloadState, TrackedDownloadStatus,
 };
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
@@ -231,6 +231,122 @@ impl DownloadQueueStateValue {
             DownloadQueueState::Completed => Self::Completed,
             DownloadQueueState::ImportPending => Self::ImportPending,
             DownloadQueueState::Failed => Self::Failed,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "snake_case")]
+pub enum DomainEventTypeValue {
+    TitleAdded,
+    TitleUpdated,
+    TitleDeleted,
+    ConfigurationChanged,
+    DiscoverySearchCompleted,
+    MetadataHydrationUpdated,
+    ReleaseGrabbed,
+    DownloadFailed,
+    ImportCompleted,
+    ImportRejected,
+    MediaFileImported,
+    MediaFileRenamed,
+    MediaFileDeleted,
+    MediaFileUpgraded,
+    AcquisitionSearchCompleted,
+    AcquisitionCandidateRejected,
+    ImportRequested,
+    ImportRecoveryCompleted,
+    DownloadQueueItemCommandIssued,
+    PostProcessingCompleted,
+    SubtitleDownloaded,
+    SubtitleSearchFailed,
+    LibraryScanStarted,
+    LibraryScanTitleDiscovered,
+    LibraryScanProgressed,
+    LibraryScanCompleted,
+    LibraryScanFailed,
+    JobRunStarted,
+    JobRunCompleted,
+    JobRunFailed,
+    JobNextRunUpdated,
+    DownloadQueueItemUpserted,
+    DownloadQueueItemRemoved,
+}
+
+impl DomainEventTypeValue {
+    pub fn from_domain(value: DomainEventType) -> Self {
+        match value {
+            DomainEventType::TitleAdded => Self::TitleAdded,
+            DomainEventType::TitleUpdated => Self::TitleUpdated,
+            DomainEventType::TitleDeleted => Self::TitleDeleted,
+            DomainEventType::ConfigurationChanged => Self::ConfigurationChanged,
+            DomainEventType::DiscoverySearchCompleted => Self::DiscoverySearchCompleted,
+            DomainEventType::MetadataHydrationUpdated => Self::MetadataHydrationUpdated,
+            DomainEventType::ReleaseGrabbed => Self::ReleaseGrabbed,
+            DomainEventType::DownloadFailed => Self::DownloadFailed,
+            DomainEventType::ImportCompleted => Self::ImportCompleted,
+            DomainEventType::ImportRejected => Self::ImportRejected,
+            DomainEventType::MediaFileImported => Self::MediaFileImported,
+            DomainEventType::MediaFileRenamed => Self::MediaFileRenamed,
+            DomainEventType::MediaFileDeleted => Self::MediaFileDeleted,
+            DomainEventType::MediaFileUpgraded => Self::MediaFileUpgraded,
+            DomainEventType::AcquisitionSearchCompleted => Self::AcquisitionSearchCompleted,
+            DomainEventType::AcquisitionCandidateRejected => Self::AcquisitionCandidateRejected,
+            DomainEventType::ImportRequested => Self::ImportRequested,
+            DomainEventType::ImportRecoveryCompleted => Self::ImportRecoveryCompleted,
+            DomainEventType::DownloadQueueItemCommandIssued => Self::DownloadQueueItemCommandIssued,
+            DomainEventType::PostProcessingCompleted => Self::PostProcessingCompleted,
+            DomainEventType::SubtitleDownloaded => Self::SubtitleDownloaded,
+            DomainEventType::SubtitleSearchFailed => Self::SubtitleSearchFailed,
+            DomainEventType::LibraryScanStarted => Self::LibraryScanStarted,
+            DomainEventType::LibraryScanTitleDiscovered => Self::LibraryScanTitleDiscovered,
+            DomainEventType::LibraryScanProgressed => Self::LibraryScanProgressed,
+            DomainEventType::LibraryScanCompleted => Self::LibraryScanCompleted,
+            DomainEventType::LibraryScanFailed => Self::LibraryScanFailed,
+            DomainEventType::JobRunStarted => Self::JobRunStarted,
+            DomainEventType::JobRunCompleted => Self::JobRunCompleted,
+            DomainEventType::JobRunFailed => Self::JobRunFailed,
+            DomainEventType::JobNextRunUpdated => Self::JobNextRunUpdated,
+            DomainEventType::DownloadQueueItemUpserted => Self::DownloadQueueItemUpserted,
+            DomainEventType::DownloadQueueItemRemoved => Self::DownloadQueueItemRemoved,
+        }
+    }
+
+    pub fn into_domain(self) -> DomainEventType {
+        match self {
+            Self::TitleAdded => DomainEventType::TitleAdded,
+            Self::TitleUpdated => DomainEventType::TitleUpdated,
+            Self::TitleDeleted => DomainEventType::TitleDeleted,
+            Self::ConfigurationChanged => DomainEventType::ConfigurationChanged,
+            Self::DiscoverySearchCompleted => DomainEventType::DiscoverySearchCompleted,
+            Self::MetadataHydrationUpdated => DomainEventType::MetadataHydrationUpdated,
+            Self::ReleaseGrabbed => DomainEventType::ReleaseGrabbed,
+            Self::DownloadFailed => DomainEventType::DownloadFailed,
+            Self::ImportCompleted => DomainEventType::ImportCompleted,
+            Self::ImportRejected => DomainEventType::ImportRejected,
+            Self::MediaFileImported => DomainEventType::MediaFileImported,
+            Self::MediaFileRenamed => DomainEventType::MediaFileRenamed,
+            Self::MediaFileDeleted => DomainEventType::MediaFileDeleted,
+            Self::MediaFileUpgraded => DomainEventType::MediaFileUpgraded,
+            Self::AcquisitionSearchCompleted => DomainEventType::AcquisitionSearchCompleted,
+            Self::AcquisitionCandidateRejected => DomainEventType::AcquisitionCandidateRejected,
+            Self::ImportRequested => DomainEventType::ImportRequested,
+            Self::ImportRecoveryCompleted => DomainEventType::ImportRecoveryCompleted,
+            Self::DownloadQueueItemCommandIssued => DomainEventType::DownloadQueueItemCommandIssued,
+            Self::PostProcessingCompleted => DomainEventType::PostProcessingCompleted,
+            Self::SubtitleDownloaded => DomainEventType::SubtitleDownloaded,
+            Self::SubtitleSearchFailed => DomainEventType::SubtitleSearchFailed,
+            Self::LibraryScanStarted => DomainEventType::LibraryScanStarted,
+            Self::LibraryScanTitleDiscovered => DomainEventType::LibraryScanTitleDiscovered,
+            Self::LibraryScanProgressed => DomainEventType::LibraryScanProgressed,
+            Self::LibraryScanCompleted => DomainEventType::LibraryScanCompleted,
+            Self::LibraryScanFailed => DomainEventType::LibraryScanFailed,
+            Self::JobRunStarted => DomainEventType::JobRunStarted,
+            Self::JobRunCompleted => DomainEventType::JobRunCompleted,
+            Self::JobRunFailed => DomainEventType::JobRunFailed,
+            Self::JobNextRunUpdated => DomainEventType::JobNextRunUpdated,
+            Self::DownloadQueueItemUpserted => DomainEventType::DownloadQueueItemUpserted,
+            Self::DownloadQueueItemRemoved => DomainEventType::DownloadQueueItemRemoved,
         }
     }
 }
@@ -898,6 +1014,20 @@ pub struct ActivityEventPayload {
     pub occurred_at: String,
 }
 
+#[derive(SimpleObject, Clone)]
+pub struct DomainEventEnvelopePayload {
+    pub sequence: i64,
+    pub event_id: String,
+    pub occurred_at: String,
+    pub actor_user_id: Option<String>,
+    pub title_id: Option<String>,
+    pub facet: Option<MediaFacetValue>,
+    pub event_type: DomainEventTypeValue,
+    pub stream_kind: String,
+    pub stream_id: Option<String>,
+    pub payload_json: Json<serde_json::Value>,
+}
+
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(rename_items = "snake_case")]
 pub enum JobKeyValue {
@@ -1549,12 +1679,6 @@ pub struct ScoringOverridesPayload {
 }
 
 #[derive(SimpleObject, Clone)]
-pub struct FacetScoringPersonaOverridePayload {
-    pub scope: ContentScopeValue,
-    pub persona: ScoringPersonaValue,
-}
-
-#[derive(SimpleObject, Clone)]
 pub struct QualityProfileCriteriaPayload {
     pub quality_tiers: Vec<String>,
     pub archival_quality: Option<String>,
@@ -1565,25 +1689,14 @@ pub struct QualityProfileCriteriaPayload {
     pub video_codec_blocklist: Vec<String>,
     pub audio_codec_allowlist: Vec<String>,
     pub audio_codec_blocklist: Vec<String>,
-    #[graphql(
-        deprecation = "Deprecated compatibility field. Use persona scoring or user rules instead."
-    )]
-    pub atmos_preferred: bool,
     pub dolby_vision_allowed: bool,
     pub detected_hdr_allowed: bool,
     pub prefer_remux: bool,
     pub allow_bd_disk: bool,
     pub allow_upgrades: bool,
-    #[graphql(
-        deprecation = "Deprecated compatibility field. Use required audio languages or user rules instead."
-    )]
-    pub prefer_dual_audio: bool,
-    pub required_audio_languages: Vec<String>,
-    pub scoring_persona: ScoringPersonaValue,
     pub scoring_overrides: ScoringOverridesPayload,
     pub cutoff_tier: Option<String>,
     pub min_score_to_grab: Option<i32>,
-    pub facet_persona_overrides: Vec<FacetScoringPersonaOverridePayload>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -1602,10 +1715,20 @@ pub struct QualityProfileSelectionPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+pub struct FacetScoringPersonaSelectionPayload {
+    pub scope: ContentScopeValue,
+    pub override_persona: Option<ScoringPersonaValue>,
+    pub effective_persona: ScoringPersonaValue,
+    pub inherits_global: bool,
+}
+
+#[derive(SimpleObject, Clone)]
 pub struct QualityProfileSettingsPayload {
     pub profiles: Vec<QualityProfilePayload>,
     pub global_profile_id: String,
+    pub global_scoring_persona: ScoringPersonaValue,
     pub category_selections: Vec<QualityProfileSelectionPayload>,
+    pub category_persona_selections: Vec<FacetScoringPersonaSelectionPayload>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -1632,6 +1755,7 @@ pub struct MediaSettingsPayload {
     pub scope: ContentScopeValue,
     pub library_path: String,
     pub root_folders: Vec<RootFolderPayload>,
+    pub required_audio_languages: Vec<String>,
     pub rename_template: String,
     pub rename_collision_policy: String,
     pub rename_missing_metadata_policy: String,
@@ -1844,6 +1968,7 @@ pub struct UpdateMediaSettingsInput {
     pub scope: ContentScopeValue,
     pub library_path: Option<String>,
     pub root_folders: Option<Vec<RootFolderInput>>,
+    pub required_audio_languages: Option<Vec<String>>,
     pub rename_template: Option<String>,
     pub rename_collision_policy: Option<String>,
     pub rename_missing_metadata_policy: Option<String>,
@@ -1922,12 +2047,6 @@ impl ScoringOverridesInput {
 }
 
 #[derive(InputObject, Clone)]
-pub struct FacetScoringPersonaOverrideInput {
-    pub scope: ContentScopeValue,
-    pub persona: ScoringPersonaValue,
-}
-
-#[derive(InputObject, Clone)]
 pub struct QualityProfileCriteriaInput {
     pub quality_tiers: Vec<String>,
     pub archival_quality: Option<String>,
@@ -1938,25 +2057,14 @@ pub struct QualityProfileCriteriaInput {
     pub video_codec_blocklist: Vec<String>,
     pub audio_codec_allowlist: Vec<String>,
     pub audio_codec_blocklist: Vec<String>,
-    #[graphql(
-        deprecation = "Deprecated compatibility field. Use persona scoring or user rules instead."
-    )]
-    pub atmos_preferred: Option<bool>,
     pub dolby_vision_allowed: bool,
     pub detected_hdr_allowed: bool,
     pub prefer_remux: bool,
     pub allow_bd_disk: bool,
     pub allow_upgrades: bool,
-    #[graphql(
-        deprecation = "Deprecated compatibility field. Use required audio languages or user rules instead."
-    )]
-    pub prefer_dual_audio: Option<bool>,
-    pub required_audio_languages: Vec<String>,
-    pub scoring_persona: ScoringPersonaValue,
     pub scoring_overrides: ScoringOverridesInput,
     pub cutoff_tier: Option<String>,
     pub min_score_to_grab: Option<i32>,
-    pub facet_persona_overrides: Vec<FacetScoringPersonaOverrideInput>,
 }
 
 #[derive(InputObject, Clone)]
@@ -1974,10 +2082,19 @@ pub struct QualityProfileSelectionInput {
 }
 
 #[derive(InputObject, Clone)]
+pub struct FacetScoringPersonaSelectionInput {
+    pub scope: ContentScopeValue,
+    pub persona: Option<ScoringPersonaValue>,
+    pub inherit_global: bool,
+}
+
+#[derive(InputObject, Clone)]
 pub struct SaveQualityProfileSettingsInput {
     pub profiles: Vec<QualityProfileInput>,
     pub global_profile_id: Option<String>,
+    pub global_scoring_persona: Option<ScoringPersonaValue>,
     pub category_selections: Vec<QualityProfileSelectionInput>,
+    pub category_persona_selections: Vec<FacetScoringPersonaSelectionInput>,
     pub replace_existing: bool,
 }
 
@@ -2326,6 +2443,7 @@ pub struct WantedItemPayload {
     pub title_name: Option<String>,
     pub episode_id: Option<String>,
     pub collection_id: Option<String>,
+    pub season_number: Option<String>,
     pub media_type: WantedMediaTypeValue,
     pub search_phase: WantedSearchPhaseValue,
     pub next_search_at: Option<String>,
@@ -2432,35 +2550,14 @@ pub struct ValidateRuleSetInput {
     pub rule_set_id: Option<String>,
 }
 
-// ── Convenience Settings ──────────────────────────────────────────────────
-
-#[derive(InputObject)]
-pub struct SetConvenienceRequiredAudioInput {
-    /// "global", "movie", "series", or "anime"
-    pub scope: String,
-    /// ISO 639-2/3 language codes. Empty = remove the rule.
-    pub languages: Vec<String>,
-}
-
 #[derive(InputObject)]
 pub struct SetTitleRequiredAudioInput {
     pub title_id: String,
     /// The facet of the title: "movie", "tv", or "anime"
     pub facet: MediaFacetValue,
-    /// Language codes for this title. Empty or null = remove override (inherit from facet).
+    /// `null` removes the override and inherits from the facet.
+    /// `[]` stores an explicit "no required languages" override for the title.
     pub languages: Option<Vec<String>>,
-}
-
-#[derive(SimpleObject)]
-pub struct ConvenienceSettingsPayload {
-    pub required_audio: Vec<ConvenienceAudioSettingPayload>,
-}
-
-#[derive(SimpleObject)]
-pub struct ConvenienceAudioSettingPayload {
-    pub scope: String,
-    pub languages: Vec<String>,
-    pub rule_set_id: Option<String>,
 }
 
 #[derive(SimpleObject, Clone)]

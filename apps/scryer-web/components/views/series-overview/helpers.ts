@@ -117,15 +117,20 @@ export function parseSeasonSortValue(collection: TitleCollection) {
 }
 
 export function isSpecialsCollection(collection: TitleCollection) {
-  return collection.collectionType === "specials" || parseSeasonSortValue(collection) === 0;
+  if (collection.collectionType === "interstitial") {
+    return false;
+  }
+  return collection.collectionType === "specials"
+    || (collection.collectionType === "season" && parseSeasonSortValue(collection) === 0);
 }
 
 export function seasonHeading(collection: TitleCollection) {
   if (collection.collectionType === "interstitial") {
     return collection.label?.trim() || "Movie";
   }
-  if (collection.collectionType === "specials") {
-    return collection.label?.trim() || "Specials";
+  const label = collection.label?.trim();
+  if (isSpecialsCollection(collection)) {
+    return !label || /^season\s*0+$/i.test(label) ? "Specials" : label;
   }
   const indexValue = collection.collectionIndex.trim();
   const normalizedIndex = indexValue.match(/^\d+$/)
@@ -133,7 +138,6 @@ export function seasonHeading(collection: TitleCollection) {
       ? "Specials"
       : `Season ${indexValue}`
     : indexValue;
-  const label = collection.label?.trim();
   if (label && normalizedIndex && normalizedIndex !== "Specials") {
     return `${normalizedIndex}: ${label}`;
   }

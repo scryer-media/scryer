@@ -3,12 +3,14 @@ use std::path::Path;
 
 use chrono::Utc;
 
-use crate::activity::{ActivityChannel, ActivityKind, ActivitySeverity};
+use crate::domain_events::{new_title_domain_event, title_context_snapshot};
 use crate::{
     AppUseCase, ReleaseDownloadAttemptOutcome, WantedSearchTransition,
     normalize_release_attempt_hint, normalize_release_attempt_title,
 };
-use scryer_domain::{ImportSkipReason, MediaFacet, Title};
+use scryer_domain::{
+    DomainEventPayload, ImportRejectedEventData, ImportSkipReason, ImportStatus, MediaFacet, Title,
+};
 use tracing::warn;
 
 pub(crate) enum ImportedFileGateDecision {
@@ -34,20 +36,25 @@ pub(crate) fn facet_to_category_hint(facet: &MediaFacet) -> &'static str {
 
 pub(crate) fn build_import_profile_decision(
     profile: &crate::QualityProfile,
+    required_audio_languages: &[String],
+    persona: &crate::ScoringPersona,
     parsed: &crate::ParsedReleaseMetadata,
     category_hint: &str,
     runtime_minutes: Option<i32>,
     size_bytes: Option<i64>,
     has_existing_file: bool,
 ) -> crate::QualityProfileDecision {
-    let persona = profile.criteria.resolve_persona(Some(category_hint));
+    let mut resolved_profile = profile.clone();
+    resolved_profile.criteria.required_audio_languages = required_audio_languages.to_vec();
+    resolved_profile.criteria.scoring_persona = persona.clone();
+    resolved_profile.criteria.facet_persona_overrides.clear();
     let weights = crate::scoring_weights::build_weights_for_category(
         persona,
-        &profile.criteria.scoring_overrides,
+        &resolved_profile.criteria.scoring_overrides,
         Some(category_hint),
     );
     let mut decision = crate::quality_profile::evaluate_against_profile_for_category(
-        profile,
+        &resolved_profile,
         parsed,
         has_existing_file,
         &weights,
@@ -124,27 +131,6 @@ pub(crate) fn build_media_file_analysis(
     }
 }
 
-pub(crate) fn missing_audio_languages<'a>(
-    required: &'a [String],
-    actual: &[String],
-) -> Vec<&'a str> {
-    let actual_upper: std::collections::HashSet<String> =
-        crate::normalize_detected_audio_languages(actual.iter().map(String::as_str))
-            .into_iter()
-            .map(|language| language.to_ascii_uppercase())
-            .collect();
-    required
-        .iter()
-        .filter(|required_language| {
-            let normalized = crate::normalize_detected_audio_language_code(required_language)
-                .unwrap_or_else(|| required_language.trim().to_ascii_lowercase())
-                .to_ascii_uppercase();
-            !normalized.is_empty() && !actual_upper.contains(&normalized)
-        })
-        .map(String::as_str)
-        .collect()
-}
-
 /// Probe a file at the given path and validate it against the quality profile and user rules.
 /// The file does NOT need to be at its final destination — this can probe a file in-place
 /// at its download location before any move/copy.
@@ -179,9 +165,25 @@ pub(crate) async fn probe_and_validate(
         });
     }
 
-    if !quality_profile.criteria.required_audio_languages.is_empty() {
-        let missing = missing_audio_languages(
-            &quality_profile.criteria.required_audio_languages,
+    let category_hint = facet_to_category_hint(&title.facet);
+    let required_audio_languages = app
+        .resolve_required_audio_languages(
+            Some(&title.id),
+            Some(category_hint),
+            Some(quality_profile),
+        )
+        .await
+        .unwrap_or_else(|error| {
+            warn!(
+                error = %error,
+                title_id = %title.id,
+                "failed to resolve required audio languages, using canonical default"
+            );
+            Vec::new()
+        });
+    if !required_audio_languages.is_empty() {
+        let missing = crate::missing_required_audio_languages(
+            &required_audio_languages,
             &analysis.audio_languages,
         );
         if !missing.is_empty() {
@@ -196,6 +198,21 @@ pub(crate) async fn probe_and_validate(
             });
         }
     }
+    let persona = app
+        .resolve_scoring_persona(
+            Some(category_hint),
+            Some(quality_profile),
+            Some(category_hint),
+        )
+        .await
+        .unwrap_or_else(|error| {
+            warn!(
+                error = %error,
+                title_id = %title.id,
+                "failed to resolve scoring persona, using canonical default"
+            );
+            crate::ScoringPersona::default()
+        });
 
     let user_rules_engine = app
         .services
@@ -206,8 +223,10 @@ pub(crate) async fn probe_and_validate(
     if !user_rules_engine.is_empty() {
         let decision = build_import_profile_decision(
             quality_profile,
+            &required_audio_languages,
+            &persona,
             parsed,
-            facet_to_category_hint(&title.facet),
+            category_hint,
             title.runtime_minutes,
             Some(size_bytes),
             has_existing_file,
@@ -539,7 +558,8 @@ fn format_audio_channels(channels: i32) -> String {
 
 /// Compute acquisition score from a gate acceptance, applying mediainfo rescoring.
 /// Returns the final score and the rescored parsed metadata (for logging).
-pub(crate) fn compute_acquisition_score(
+pub(crate) async fn compute_acquisition_score(
+    app: &AppUseCase,
     parsed: &crate::ParsedReleaseMetadata,
     acceptance: &ImportedFileAcceptance,
     profile: &crate::QualityProfile,
@@ -549,8 +569,18 @@ pub(crate) fn compute_acquisition_score(
 ) -> i32 {
     let (rescored, changes) = rescore_from_mediainfo(parsed, acceptance);
     let category = facet_to_category_hint(&title.facet);
+    let required_audio_languages = app
+        .resolve_required_audio_languages(Some(&title.id), Some(category), Some(profile))
+        .await
+        .unwrap_or_default();
+    let persona = app
+        .resolve_scoring_persona(Some(category), Some(profile), Some(category))
+        .await
+        .unwrap_or_default();
     let decision = build_import_profile_decision(
         profile,
+        &required_audio_languages,
+        &persona,
         &rescored,
         category,
         title.runtime_minutes,
@@ -645,26 +675,28 @@ pub(crate) async fn reject_imported_file(
 
     reset_wanted_items_for_retry(app, &title.id, episode_ids).await;
 
+    let reason = Some(format!(
+        "{}{}",
+        rejection.message,
+        if rejection.blocking_rule_codes.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", rejection.blocking_rule_codes.join(", "))
+        }
+    ));
     let _ = app
         .services
-        .record_activity_event(
+        .append_domain_event(new_title_domain_event(
             actor_user_id.map(str::to_owned),
-            Some(title.id.clone()),
-            None,
-            ActivityKind::ImportRejected,
-            format!(
-                "Rejected import for '{}': {}{}",
-                title.name,
-                rejection.message,
-                if rejection.blocking_rule_codes.is_empty() {
-                    String::new()
-                } else {
-                    format!(" [{}]", rejection.blocking_rule_codes.join(", "))
-                }
-            ),
-            ActivitySeverity::Warning,
-            vec![ActivityChannel::WebUi],
-        )
+            title,
+            DomainEventPayload::ImportRejected(ImportRejectedEventData {
+                title: Some(title_context_snapshot(title)),
+                status: ImportStatus::Skipped,
+                source_path: Some(path.display().to_string()),
+                reason,
+                episode_ids: episode_ids.to_vec(),
+            }),
+        ))
         .await;
 }
 

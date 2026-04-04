@@ -90,21 +90,6 @@ impl RulesMutations {
         Ok(crate::mappers::from_rule_set(rule_set))
     }
 
-    // ── Convenience settings ───────────────────────────────────────────
-
-    async fn set_convenience_required_audio(
-        &self,
-        ctx: &Context<'_>,
-        input: SetConvenienceRequiredAudioInput,
-    ) -> GqlResult<bool> {
-        let app = app_from_ctx(ctx)?;
-        let actor = actor_from_ctx(ctx)?;
-        app.set_convenience_required_audio(&actor, &input.scope, input.languages)
-            .await
-            .map_err(to_gql_error)?;
-        Ok(true)
-    }
-
     async fn set_title_required_audio(
         &self,
         ctx: &Context<'_>,

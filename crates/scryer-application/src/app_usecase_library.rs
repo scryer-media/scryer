@@ -4,13 +4,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use super::*;
+use crate::activity::NotificationMediaUpdate;
+use crate::domain_events::{
+    created_media_update, deleted_media_update, new_library_scan_domain_event,
+    new_title_domain_event, title_context_snapshot,
+};
 use crate::library_scan::source_signature_from_std_metadata;
 use crate::nfo::{looks_like_movie_nfo, parse_nfo};
-use crate::{
-    NotificationEnvelope,
-    activity::{NotificationMediaUpdate, build_lifecycle_notification_metadata},
+use scryer_domain::{
+    DomainEventPayload, LibraryScanCompletedEventData, LibraryScanFailedEventData,
+    LibraryScanProgressedEventData, LibraryScanStartedEventData,
+    LibraryScanTitleDiscoveredEventData, MediaFileRenamedEventData, VIDEO_EXTENSIONS,
 };
-use scryer_domain::{NotificationEventType, VIDEO_EXTENSIONS};
 use tracing::{info, warn};
 
 const METADATA_TYPE_MOVIE: &str = "movie";
@@ -914,15 +919,133 @@ async fn track_title_for_library_scan_session(
             .await;
     }
 
+    if result.new_title {
+        let folder_path = title
+            .folder_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string());
+        let _ = app
+            .services
+            .append_domain_event(new_library_scan_domain_event(
+                None,
+                session_id.to_string(),
+                title.facet.clone(),
+                DomainEventPayload::LibraryScanTitleDiscovered(
+                    LibraryScanTitleDiscoveredEventData {
+                        session_id: session_id.to_string(),
+                        title_id: title.id.clone(),
+                        title_name: title.name.clone(),
+                        facet: title.facet.clone(),
+                        discovered_file_count: result.added_file_count as i64,
+                        folder_path,
+                    },
+                ),
+            ))
+            .await;
+    }
+
+    publish_library_scan_progress_event(app, session_id).await;
+
     Some(result)
 }
 
 async fn maybe_complete_library_scan_session(app: &AppUseCase, session_id: &str) {
-    let _ = app
+    if let Some(session) = app
         .services
         .library_scan_tracker
         .complete_if_finished(session_id)
+        .await
+    {
+        let _ = app
+            .services
+            .append_domain_event(new_library_scan_domain_event(
+                None,
+                session.session_id.clone(),
+                session.facet.clone(),
+                DomainEventPayload::LibraryScanCompleted(LibraryScanCompletedEventData {
+                    session_id: session.session_id.clone(),
+                    status: session.status.as_str().to_string(),
+                    found_titles: session.found_titles as i64,
+                    titles_completed: session.metadata_progress.completed as i64,
+                    titles_total: Some(session.metadata_progress.total as i64),
+                    files_completed: session.file_progress.completed as i64,
+                    files_total: Some(session.file_progress.total as i64),
+                }),
+            ))
+            .await;
+    }
+}
+
+async fn publish_library_scan_started_event(app: &AppUseCase, session: &LibraryScanSession) {
+    let _ = app
+        .services
+        .append_domain_event(new_library_scan_domain_event(
+            None,
+            session.session_id.clone(),
+            session.facet.clone(),
+            DomainEventPayload::LibraryScanStarted(LibraryScanStartedEventData {
+                session_id: session.session_id.clone(),
+                mode: session.mode.as_str().to_string(),
+            }),
+        ))
         .await;
+}
+
+async fn publish_library_scan_progress_event(app: &AppUseCase, session_id: &str) {
+    let Some(session) = app
+        .services
+        .library_scan_tracker
+        .get_session(session_id)
+        .await
+    else {
+        return;
+    };
+
+    let _ = app
+        .services
+        .append_domain_event(new_library_scan_domain_event(
+            None,
+            session.session_id.clone(),
+            session.facet.clone(),
+            DomainEventPayload::LibraryScanProgressed(LibraryScanProgressedEventData {
+                session_id: session.session_id.clone(),
+                status: session.status.as_str().to_string(),
+                found_titles: session.found_titles as i64,
+                titles_completed: session.metadata_progress.completed as i64,
+                titles_total: session
+                    .metadata_total_known
+                    .then_some(session.metadata_progress.total as i64),
+                files_completed: session.file_progress.completed as i64,
+                files_total: session
+                    .file_total_known
+                    .then_some(session.file_progress.total as i64),
+            }),
+        ))
+        .await;
+}
+
+async fn fail_library_scan_session(app: &AppUseCase, session_id: &str) {
+    if let Some(session) = app
+        .services
+        .library_scan_tracker
+        .fail_session(session_id)
+        .await
+    {
+        let _ = app
+            .services
+            .append_domain_event(new_library_scan_domain_event(
+                None,
+                session.session_id.clone(),
+                session.facet.clone(),
+                DomainEventPayload::LibraryScanFailed(LibraryScanFailedEventData {
+                    session_id: session.session_id.clone(),
+                    error_message: "library scan failed".to_string(),
+                }),
+            ))
+            .await;
+    }
 }
 
 async fn prepare_tracked_episodic_title_for_library_scan_session(
@@ -976,6 +1099,7 @@ async fn prepare_tracked_episodic_title_for_library_scan_session(
             .increment_file_completed(session_id, attach_result.added_file_count)
             .await;
     }
+    publish_library_scan_progress_event(app, session_id).await;
     app.services
         .library_scan_tracker
         .release_title(&title.id)
@@ -1189,6 +1313,7 @@ async fn prepare_series_title_for_full_library_scan(
 }
 
 async fn flush_title_scan_progress_batch(
+    app: &AppUseCase,
     tracker: &LibraryScanTracker,
     session_id: Option<&str>,
     pending_progress: &mut TitleScanProgressDelta,
@@ -1212,6 +1337,7 @@ async fn flush_title_scan_progress_batch(
             .increment_file_failed(session_id, delta.failed)
             .await;
     }
+    publish_library_scan_progress_event(app, session_id).await;
 }
 
 fn file_source_signature_from_metadata(
@@ -1641,18 +1767,6 @@ impl AppUseCase {
             )
             .await?;
 
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                Some(title.id.clone()),
-                EventType::ActionTriggered,
-                format!(
-                    "rename preview generated (total: {}, renamable: {}, conflicts: {}, errors: {})",
-                    plan.total, plan.renamable, plan.conflicts, plan.errors
-                ),
-            )
-            .await?;
-
         Ok(plan)
     }
 
@@ -1669,8 +1783,6 @@ impl AppUseCase {
         let template = self.read_rename_template(handler.as_ref()).await?;
         let collision_policy = self.read_collision_policy(handler.as_ref()).await?;
         let missing_metadata_policy = self.read_missing_metadata_policy(handler.as_ref()).await?;
-        let facet_label = handler.facet_id();
-
         let mut titles = self.services.titles.list(Some(facet.clone()), None).await?;
         titles.sort_by(|left, right| left.id.cmp(&right.id));
 
@@ -1698,18 +1810,6 @@ impl AppUseCase {
             missing_metadata_policy,
             items,
         );
-
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                None,
-                EventType::ActionTriggered,
-                format!(
-                    "facet rename preview generated for {facet_label} (total: {}, renamable: {}, conflicts: {}, errors: {})",
-                    plan.total, plan.renamable, plan.conflicts, plan.errors
-                ),
-            )
-            .await?;
 
         Ok(plan)
     }
@@ -1752,21 +1852,9 @@ impl AppUseCase {
     async fn apply_rename_plan(
         &self,
         actor: &User,
-        title_id_hint: Option<&str>,
+        _title_id_hint: Option<&str>,
         preview: RenamePlan,
     ) -> AppResult<RenameApplyResult> {
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                title_id_hint.map(std::string::ToString::to_string),
-                EventType::ActionTriggered,
-                format!(
-                    "rename apply started (total: {}, renamable: {}, conflicts: {}, errors: {})",
-                    preview.total, preview.renamable, preview.conflicts, preview.errors
-                ),
-            )
-            .await?;
-
         self.services
             .library_renamer
             .validate_targets(&preview)
@@ -1818,45 +1906,15 @@ impl AppUseCase {
             items: item_results,
         };
 
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                title_id_hint.map(std::string::ToString::to_string),
-                EventType::ActionCompleted,
-                format!(
-                    "rename apply complete (applied: {}, skipped: {}, failed: {})",
-                    result.applied, result.skipped, result.failed
-                ),
-            )
-            .await?;
-
-        for item in &result.items {
-            let final_path = item
-                .final_path
-                .as_deref()
-                .unwrap_or(item.current_path.as_str());
-            self.services
-                .record_event(
-                    Some(actor.id.clone()),
-                    title_id_hint.map(std::string::ToString::to_string),
-                    EventType::ActionCompleted,
-                    format!(
-                        "rename item {} -> {} ({})",
-                        item.current_path,
-                        final_path,
-                        item.status.as_str()
-                    ),
-                )
-                .await?;
-        }
-
         self.emit_rename_notifications(actor, &result.items).await;
 
         Ok(result)
     }
 
     async fn emit_rename_notifications(&self, actor: &User, items: &[RenameApplyItemResult]) {
-        let mut grouped: HashMap<String, (Title, Vec<NotificationMediaUpdate>)> = HashMap::new();
+        let mut grouped: HashMap<String, (Title, Vec<NotificationMediaUpdate>, Vec<String>)> =
+            HashMap::new();
+        let mut cached_episode_ids_by_file: HashMap<String, Vec<String>> = HashMap::new();
 
         for item in items {
             if !matches!(item.status, RenameApplyStatus::Applied) {
@@ -1880,16 +1938,42 @@ impl AppUseCase {
                 }
             };
 
+            let episode_ids = if let Some(media_file_id) = item.media_file_id.as_deref() {
+                if let Some(cached) = cached_episode_ids_by_file.get(media_file_id) {
+                    cached.clone()
+                } else {
+                    let ids = self
+                        .services
+                        .media_files
+                        .list_media_files_for_title(&title.id)
+                        .await
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|media_file| media_file.id == media_file_id)
+                        .filter_map(|media_file| media_file.episode_id)
+                        .collect::<Vec<_>>();
+                    cached_episode_ids_by_file.insert(media_file_id.to_string(), ids.clone());
+                    ids
+                }
+            } else {
+                Vec::new()
+            };
+
             let entry = grouped
                 .entry(title.id.clone())
-                .or_insert_with(|| (title.clone(), Vec::new()));
+                .or_insert_with(|| (title.clone(), Vec::new(), Vec::new()));
             entry
                 .1
                 .push(NotificationMediaUpdate::deleted(item.current_path.clone()));
             entry.1.push(NotificationMediaUpdate::created(final_path));
+            for episode_id in episode_ids {
+                if !entry.2.contains(&episode_id) {
+                    entry.2.push(episode_id);
+                }
+            }
         }
 
-        for (title_id, (title, updates)) in grouped {
+        for (_title_id, (title, updates, episode_ids)) in grouped {
             if updates.is_empty() {
                 continue;
             }
@@ -1898,33 +1982,31 @@ impl AppUseCase {
                 .iter()
                 .filter(|u| u.update_type == "created")
                 .count();
-            let metadata = build_lifecycle_notification_metadata(&title, updates);
-            let envelope = NotificationEnvelope {
-                event_type: NotificationEventType::Rename,
-                title: format!("Renamed: {}", title.name),
-                body: format!("Renamed {} file(s) for '{}'.", renamed_files, title.name),
-                facet: Some(title.facet.as_str().to_string()),
-                metadata,
-            };
-
+            let domain_updates = updates
+                .iter()
+                .map(|update| match update.update_type {
+                    "deleted" => deleted_media_update(update.path.clone()),
+                    _ => created_media_update(update.path.clone()),
+                })
+                .collect();
             if let Err(error) = self
                 .services
-                .record_activity_event_with_notification(
+                .append_domain_event(new_title_domain_event(
                     Some(actor.id.clone()),
-                    Some(title_id),
-                    None,
-                    ActivityKind::SystemNotice,
-                    format!("rename completed for '{}'", title.name),
-                    ActivitySeverity::Success,
-                    vec![ActivityChannel::WebUi],
-                    envelope,
-                )
+                    &title,
+                    DomainEventPayload::MediaFileRenamed(MediaFileRenamedEventData {
+                        title: title_context_snapshot(&title),
+                        media_updates: domain_updates,
+                        renamed_count: renamed_files as i32,
+                        episode_ids,
+                    }),
+                ))
                 .await
             {
                 warn!(
                     error = %error,
                     title = title.name.as_str(),
-                    "failed to emit rename notification"
+                    "failed to append media file renamed domain event"
                 );
             }
         }
@@ -2268,6 +2350,7 @@ impl AppUseCase {
                 .start_session(facet.clone())
                 .await?
         };
+        publish_library_scan_started_event(self, &session).await;
 
         let result = async {
             let path_key = match facet {
@@ -2301,17 +2384,14 @@ impl AppUseCase {
                 .library_scan_tracker
                 .set_summary(&session.session_id, summary.clone())
                 .await;
+            publish_library_scan_progress_event(self, &session.session_id).await;
             maybe_complete_library_scan_session(self, &session.session_id).await;
             Ok(summary)
         }
         .await;
 
         if result.is_err() {
-            let _ = self
-                .services
-                .library_scan_tracker
-                .fail_session(&session.session_id)
-                .await;
+            fail_library_scan_session(self, &session.session_id).await;
         }
 
         result
@@ -2367,6 +2447,7 @@ impl AppUseCase {
                 .library_scan_tracker
                 .add_file_total(session_id, file_chunk.len())
                 .await;
+            publish_library_scan_progress_event(self, session_id).await;
 
             let (candidates, batch_lookups) = preload_movie_library_scan_candidates(
                 self.services.metadata_gateway.clone(),
@@ -2585,6 +2666,7 @@ impl AppUseCase {
                     .increment_file_completed(session_id, 1)
                     .await;
             }
+            publish_library_scan_progress_event(self, session_id).await;
         }
 
         let _ = self
@@ -2597,6 +2679,7 @@ impl AppUseCase {
             .library_scan_tracker
             .mark_file_total_known_if_resolved(session_id)
             .await;
+        publish_library_scan_progress_event(self, session_id).await;
 
         info!(
             path = %library_path,
@@ -2640,6 +2723,7 @@ impl AppUseCase {
             .library_scan_tracker
             .set_found_titles(session_id, folders_count)
             .await;
+        publish_library_scan_progress_event(self, session_id).await;
 
         let mut existing_titles = self.services.titles.list(Some(facet.clone()), None).await?;
         let mut existing_titles_by_name: HashMap<String, usize> = HashMap::new();
@@ -2999,6 +3083,7 @@ impl AppUseCase {
                 LibraryScanMode::Additive,
             )
             .await?;
+        publish_library_scan_started_event(self, &session).await;
 
         let result = async {
             let path_key = match facet {
@@ -3037,17 +3122,14 @@ impl AppUseCase {
                 .library_scan_tracker
                 .set_summary(&session.session_id, summary.clone())
                 .await;
+            publish_library_scan_progress_event(self, &session.session_id).await;
             maybe_complete_library_scan_session(self, &session.session_id).await;
             Ok(summary)
         }
         .await;
 
         if result.is_err() {
-            let _ = self
-                .services
-                .library_scan_tracker
-                .fail_session(&session.session_id)
-                .await;
+            fail_library_scan_session(self, &session.session_id).await;
         }
 
         result
@@ -3074,6 +3156,7 @@ impl AppUseCase {
             .library_scan_tracker
             .set_found_titles(session_id, folders.len())
             .await;
+        publish_library_scan_progress_event(self, session_id).await;
 
         let mut summary = LibraryScanSummary::default();
         let mut metadata_lookups = 0usize;
@@ -3311,6 +3394,7 @@ impl AppUseCase {
             .library_scan_tracker
             .mark_file_total_known(session_id)
             .await;
+        publish_library_scan_progress_event(self, session_id).await;
 
         info!(
             path = %library_path,
@@ -3431,6 +3515,7 @@ impl AppUseCase {
             .library_scan_tracker
             .set_found_titles(session_id, entries.len())
             .await;
+        publish_library_scan_progress_event(self, session_id).await;
 
         let mut summary = LibraryScanSummary::default();
         let mut metadata_lookups = 0usize;
@@ -3658,6 +3743,7 @@ impl AppUseCase {
             .library_scan_tracker
             .mark_file_total_known(session_id)
             .await;
+        publish_library_scan_progress_event(self, session_id).await;
 
         info!(
             path = %library_path,
@@ -3763,6 +3849,7 @@ impl AppUseCase {
                         .increment_file_completed(session_id, 1)
                         .await;
                 }
+                publish_library_scan_progress_event(self, session_id).await;
 
                 for collection in collections {
                     let Some(ordered_path) = collection.ordered_path.as_deref() else {
@@ -4001,6 +4088,7 @@ impl AppUseCase {
                         summary.unmatched += 1;
                         pending_progress.absorb(TitleScanProgressDelta::completed(1));
                         flush_title_scan_progress_batch(
+                            self,
                             &library_scan_tracker,
                             session_id,
                             &mut pending_progress,
@@ -4018,6 +4106,7 @@ impl AppUseCase {
                     summary.unmatched += 1;
                     pending_progress.absorb(TitleScanProgressDelta::completed(1));
                     flush_title_scan_progress_batch(
+                        self,
                         &library_scan_tracker,
                         session_id,
                         &mut pending_progress,
@@ -4044,6 +4133,7 @@ impl AppUseCase {
                             summary.skipped += 1;
                             pending_progress.absorb(TitleScanProgressDelta::completed(1));
                             flush_title_scan_progress_batch(
+                                self,
                                 &library_scan_tracker,
                                 session_id,
                                 &mut pending_progress,
@@ -4135,6 +4225,7 @@ impl AppUseCase {
                     pending_progress.absorb(outcome.progress);
                     title_updated_in_batch |= outcome.title_updated;
                     flush_title_scan_progress_batch(
+                        self,
                         &library_scan_tracker,
                         session_id,
                         &mut pending_progress,
@@ -4203,6 +4294,7 @@ impl AppUseCase {
                 pending_progress.absorb(outcome.progress);
                 title_updated_in_batch |= outcome.title_updated;
                 flush_title_scan_progress_batch(
+                    self,
                     &library_scan_tracker,
                     session_id,
                     &mut pending_progress,
@@ -4222,8 +4314,13 @@ impl AppUseCase {
             }
         }
 
-        flush_title_scan_progress_batch(&library_scan_tracker, session_id, &mut pending_progress)
-            .await;
+        flush_title_scan_progress_batch(
+            self,
+            &library_scan_tracker,
+            session_id,
+            &mut pending_progress,
+        )
+        .await;
 
         let mut title_updated_after_scan = false;
         for stale_path in remaining_existing_paths {
@@ -4275,20 +4372,6 @@ impl AppUseCase {
             db_elapsed = db_elapsed.saturating_add(db_started.elapsed());
             title_updated_after_scan = true;
         }
-
-        let db_started = Instant::now();
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                Some(title.id.clone()),
-                EventType::ActionCompleted,
-                format!(
-                    "title scan completed: {} imported, {} skipped, {} unmatched",
-                    summary.imported, summary.skipped, summary.unmatched
-                ),
-            )
-            .await?;
-        db_elapsed = db_elapsed.saturating_add(db_started.elapsed());
 
         if title_updated_after_scan {
             self.emit_title_updated_activity(actor_user_id, &title)

@@ -497,6 +497,10 @@ const fr: LocaleDictionary = {
   "queue.manualImportFailed": "Échec de la mise en file d'attente de l'importation manuelle.",
   "queue.manualImportTooltip":
     "L'importation manuelle est disponible pour les éléments de file d'attente nécessitant une attention.",
+  "queue.releaseTitle": "Release",
+  "queue.blockReason": "Raison du blocage",
+  "queue.showDetails": "Afficher les détails",
+  "queue.hideDetails": "Masquer les détails",
   "queue.pause": "Pause",
   "queue.pausing": "Mise en pause…",
   "queue.pauseSuccess": "Téléchargement mis en pause.",

@@ -497,6 +497,10 @@ const ja: LocaleDictionary = {
   "queue.manualImportFailed": "手動インポートのキュー追加に失敗しました。",
   "queue.manualImportTooltip":
     "手動インポートは対応が必要なキューアイテムで利用できます。",
+  "queue.releaseTitle": "リリース",
+  "queue.blockReason": "ブロック理由",
+  "queue.showDetails": "詳細を表示",
+  "queue.hideDetails": "詳細を隠す",
   "queue.pause": "一時停止",
   "queue.pausing": "一時停止中…",
   "queue.pauseSuccess": "ダウンロードを一時停止しました。",

@@ -497,6 +497,10 @@ const it: LocaleDictionary = {
   "queue.manualImportFailed": "Accodamento importazione manuale fallito.",
   "queue.manualImportTooltip":
     "L'importazione manuale è disponibile per gli elementi in coda che richiedono attenzione.",
+  "queue.releaseTitle": "Release",
+  "queue.blockReason": "Motivo del blocco",
+  "queue.showDetails": "Mostra dettagli",
+  "queue.hideDetails": "Nascondi dettagli",
   "queue.pause": "Pausa",
   "queue.pausing": "Messa in pausa…",
   "queue.pauseSuccess": "Download messo in pausa.",

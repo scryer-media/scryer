@@ -339,7 +339,7 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
             keptProfiles.push({
               id: `wizard-${facet}`,
               name: profileName,
-              criteria: { ...template.criteria, scoring_persona: prefs.persona },
+              criteria: { ...template.criteria },
             });
           }
         }
@@ -349,9 +349,15 @@ export function SetupWizardContainer({ t, isReentry }: SetupWizardContainerProps
             input: {
               profiles: keptProfiles.map(qualityProfileEntryToMutationInput),
               globalProfileId: null,
+              globalScoringPersona: null,
               categorySelections: WIZARD_FACETS.map(({ facet }) => ({
                 scope: facet,
                 profileId: `wizard-${facet}`,
+                inheritGlobal: false,
+              })),
+              categoryPersonaSelections: WIZARD_FACETS.map(({ facet }) => ({
+                scope: facet,
+                persona: facetPrefs[facet].persona,
                 inheritGlobal: false,
               })),
               replaceExisting: true,

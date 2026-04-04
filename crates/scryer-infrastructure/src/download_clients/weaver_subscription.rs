@@ -9,10 +9,10 @@
 //! falls back to GraphQL HTTP polling so the UI stays up-to-date. When the
 //! WebSocket reconnects the poller is stopped and real-time push resumes.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use futures_util::{SinkExt, StreamExt};
-use scryer_application::AppUseCase;
+use scryer_application::{AppUseCase, publish_download_queue_snapshot_events};
 use scryer_domain::DownloadQueueState;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::{ClientRequestBuilder, Message};
@@ -112,7 +112,7 @@ const POLL_FALLBACK_INTERVAL_SECS: u64 = 2;
 /// subscription and:
 ///
 /// 1. Maps incoming job snapshots to `Vec<DownloadQueueItem>`
-/// 2. Broadcasts them through `download_queue_broadcast`
+/// 2. Projects queue changes onto the domain event bus
 /// 3. Triggers auto-import for newly completed downloads
 ///
 /// Reconnects automatically on disconnect with exponential backoff.
@@ -224,6 +224,7 @@ async fn run_fallback_poller(
 ) {
     let mut interval =
         tokio::time::interval(std::time::Duration::from_secs(POLL_FALLBACK_INTERVAL_SECS));
+    let mut previous_items = HashMap::new();
 
     loop {
         tokio::select! {
@@ -241,7 +242,13 @@ async fn run_fallback_poller(
 
                         emit_queue_metrics(&items);
 
-                        let _ = app.services.download_queue_broadcast.send(items);
+                        publish_download_queue_snapshot_events(
+                            &app,
+                            Some(actor.id.clone()),
+                            &mut previous_items,
+                            &items,
+                        )
+                        .await;
                     }
                     Err(error) => {
                         warn!(error = %error, "weaver fallback poll failed");
@@ -395,6 +402,7 @@ async fn run_subscription(
     // ── From here on the subscription is live; any failure is a Disconnected. ──
 
     let mut imported_job_ids: HashSet<String> = HashSet::new();
+    let mut previous_items = HashMap::new();
 
     loop {
         let msg = tokio::select! {
@@ -416,6 +424,7 @@ async fn run_subscription(
                     actor,
                     &mut write,
                     &mut imported_job_ids,
+                    &mut previous_items,
                     last_cursor,
                 )
                 .await
@@ -440,6 +449,7 @@ async fn handle_ws_message<S>(
     actor: &scryer_domain::User,
     write: &mut futures_util::stream::SplitSink<S, Message>,
     imported_job_ids: &mut HashSet<String>,
+    previous_items: &mut HashMap<String, scryer_domain::DownloadQueueItem>,
     last_cursor: &mut Option<String>,
 ) -> Result<(), String>
 where
@@ -465,6 +475,7 @@ where
                             app,
                             actor,
                             imported_job_ids,
+                            previous_items,
                         )
                         .await;
                     }
@@ -543,6 +554,7 @@ async fn process_job_snapshot(
     app: &AppUseCase,
     actor: &scryer_domain::User,
     imported_job_ids: &mut HashSet<String>,
+    previous_items: &mut HashMap<String, scryer_domain::DownloadQueueItem>,
 ) {
     let mut items: Vec<scryer_domain::DownloadQueueItem> =
         jobs.iter().map(weaver_item_to_queue_item).collect();
@@ -568,8 +580,8 @@ async fn process_job_snapshot(
 
     emit_queue_metrics(&items);
 
-    // Broadcast to scryer's download queue channel (feeds the UI subscription).
-    let _ = app.services.download_queue_broadcast.send(items.clone());
+    publish_download_queue_snapshot_events(app, Some(actor.id.clone()), previous_items, &items)
+        .await;
 
     maybe_import_completed_items(&items, app, actor, imported_job_ids).await;
 }

@@ -412,9 +412,9 @@ pub fn tracked_download_id(client_type: &str, item_id: &str) -> String {
 mod tests {
     use super::*;
     use crate::null_repositories::test_nulls::{
-        NullDownloadClient, NullDownloadClientConfigRepository, NullEventRepository,
-        NullIndexerClient, NullQualityProfileRepository, NullReleaseAttemptRepository,
-        NullShowRepository, NullTitleRepository, NullUserRepository,
+        NullDownloadClient, NullDownloadClientConfigRepository, NullIndexerClient,
+        NullQualityProfileRepository, NullReleaseAttemptRepository, NullShowRepository,
+        NullTitleRepository, NullUserRepository,
     };
     use crate::{
         AppError, AppResult, AppServices, AppUseCase, DownloadSubmissionRepository, FacetRegistry,
@@ -585,7 +585,6 @@ mod tests {
             Arc::new(NullTitleRepository),
             Arc::new(NullShowRepository),
             Arc::new(NullUserRepository),
-            Arc::new(NullEventRepository),
             Arc::new(TestIndexerConfigRepo),
             Arc::new(NullIndexerClient),
             Arc::new(NullDownloadClient),
@@ -728,7 +727,6 @@ mod tests {
             Arc::new(NullTitleRepository),
             Arc::new(NullShowRepository),
             Arc::new(NullUserRepository),
-            Arc::new(NullEventRepository),
             Arc::new(TestIndexerConfigRepo),
             Arc::new(NullIndexerClient),
             Arc::new(NullDownloadClient),

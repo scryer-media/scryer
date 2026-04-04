@@ -9,6 +9,7 @@ export const TLS_CERT_PATH_KEY = "tls.cert_path";
 export const TLS_KEY_PATH_KEY = "tls.key_path";
 export const QUALITY_PROFILE_ID_KEY = "quality.profile_id";
 export const QUALITY_PROFILE_CATALOG_KEY = "quality.profiles";
+export const SCORING_PERSONA_KEY = "quality.scoring_persona";
 export const RENAME_TEMPLATE_KEY = "rename.template";
 export const RENAME_COLLISION_POLICY_KEY = "rename.collision_policy";
 export const RENAME_MISSING_METADATA_POLICY_KEY = "rename.missing_metadata_policy";

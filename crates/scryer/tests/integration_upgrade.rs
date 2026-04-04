@@ -198,7 +198,10 @@ async fn upgrade_replaces_old_file_with_new() {
     assert_eq!(files[0].acquisition_score, Some(650));
 
     // Activity event should be recorded
-    let events = app.services.activity_stream.list(10, 0).await;
+    let events = app
+        .recent_activity(&actor, 10, 0)
+        .await
+        .expect("recent activity");
     let upgrade_event = last_upgrade_event(&events).expect("should have upgrade event");
     assert_eq!(upgrade_event.severity, ActivitySeverity::Success);
     assert!(upgrade_event.message.contains("400"));

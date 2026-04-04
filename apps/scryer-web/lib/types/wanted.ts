@@ -15,6 +15,8 @@ export type WantedItem = {
   titleId: string;
   titleName: string | null;
   episodeId: string | null;
+  collectionId: string | null;
+  seasonNumber: string | null;
   mediaType: WantedMediaType;
   searchPhase: WantedSearchPhase;
   nextSearchAt: string | null;

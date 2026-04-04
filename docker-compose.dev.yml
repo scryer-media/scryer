@@ -73,10 +73,12 @@ services:
       - ./tmp/scryer-config:/config
       - ./tmp/scryer-media/movies:/data/movies
       - ./tmp/scryer-media/series:/data/series
-      - /Volumes/Media/Anime:/data/anime:ro
+     # - /Volumes/Media/Anime:/data/anime:ro
+      - /Volumes/Media/Movies:/data/movies:ro
       - ./tmp/nzbget-downloads:/nzbget-downloads
       - ./tmp/sabnzbd-downloads:/sabnzbd-downloads
       - ./tmp/weaver-downloads:/weaver-downloads
+      - ./tmp/fake-bleach/:/bleach
     ports:
       - "8080:8080"
 

@@ -12,6 +12,13 @@ export type FacetQualityPrefs = {
   persona: ScoringPersonaId;
 };
 
+export type FacetScoringPersonaSelectionRecord = {
+  scope: ViewCategoryId;
+  overridePersona: ScoringPersonaId | null;
+  effectivePersona: ScoringPersonaId;
+  inheritsGlobal: boolean;
+};
+
 export type ScoringOverridesPayload = {
   allow_x265_non4k?: boolean | null;
   block_dv_without_fallback?: boolean | null;
@@ -33,14 +40,11 @@ export type QualityProfileCriteriaPayload = {
   dolby_vision_allowed: boolean;
   detected_hdr_allowed: boolean;
   prefer_remux: boolean;
-  required_audio_languages: string[];
   allow_bd_disk: boolean;
   allow_upgrades: boolean;
-  scoring_persona: ScoringPersonaId;
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string | null;
   min_score_to_grab: number | null;
-  facet_persona_overrides: Record<string, ScoringPersonaId>;
 };
 
 export type ParsedQualityProfileEntry = ParsedQualityProfile & {
@@ -69,15 +73,9 @@ export type QualityProfileGraphCriteriaPayload = {
   preferRemux: boolean;
   allowBdDisk: boolean;
   allowUpgrades: boolean;
-  requiredAudioLanguages: string[];
-  scoringPersona: ScoringPersonaId;
   scoringOverrides: ScoringOverridesPayload;
   cutoffTier: string | null;
   minScoreToGrab: number | null;
-  facetPersonaOverrides: Array<{
-    scope: ViewCategoryId;
-    persona: ScoringPersonaId;
-  }>;
 };
 
 export type QualityProfileGraphPayload = {
@@ -88,8 +86,10 @@ export type QualityProfileGraphPayload = {
 
 export type QualityProfileSettingsPayload = {
   globalProfileId: string;
+  globalScoringPersona: ScoringPersonaId;
   profiles: QualityProfileGraphPayload[];
   categorySelections: QualityProfileSelectionRecord[];
+  categoryPersonaSelections: FacetScoringPersonaSelectionRecord[];
 };
 
 export type CommittedQualityProfileDraft = {
@@ -112,14 +112,11 @@ export type QualityProfileDraft = {
   dolby_vision_allowed: boolean;
   detected_hdr_allowed: boolean;
   prefer_remux: boolean;
-  required_audio_languages: string[];
   allow_bd_disk: boolean;
   allow_upgrades: boolean;
-  scoring_persona: ScoringPersonaId;
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string;
   min_score_to_grab: number | null;
-  facet_persona_overrides: Record<string, ScoringPersonaId>;
 };
 
 export type JsonPrimitive = string | number | boolean | null;

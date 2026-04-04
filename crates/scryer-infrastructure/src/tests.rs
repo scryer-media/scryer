@@ -515,6 +515,164 @@ async fn migration_bootstrap_rejects_unknown_or_newer_schema_history() {
 }
 
 #[tokio::test]
+async fn specials_convergence_migration_repoints_legacy_season_zero_references() {
+    let db = std::env::temp_dir().join(format!(
+        "scryer_specials_convergence_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let _ = SqliteServices::new(db.to_string_lossy())
+        .await
+        .expect("db should initialize");
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&sqlite_url_with_create(db.to_string_lossy().as_ref()))
+        .await
+        .expect("pool should open");
+
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO titles (id, name, name_normalized, facet, monitored, status, tags, external_ids, created_at)
+         VALUES (?, ?, ?, ?, 1, 'active', '[]', '[]', ?)",
+    )
+    .bind("title-series")
+    .bind("Legacy Series")
+    .bind("legacy series")
+    .bind("series")
+    .bind(&now)
+    .execute(&pool)
+    .await
+    .expect("insert title");
+
+    sqlx::query(
+        "INSERT INTO collections
+         (id, title_id, collection_type, collection_index, label, monitored, created_at, special_movies_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("legacy-specials")
+    .bind("title-series")
+    .bind("season")
+    .bind("0")
+    .bind("Season 0")
+    .bind(0i64)
+    .bind(&now)
+    .bind("[]")
+    .execute(&pool)
+    .await
+    .expect("insert legacy specials");
+
+    sqlx::query(
+        "INSERT INTO collections
+         (id, title_id, collection_type, collection_index, label, monitored, created_at, special_movies_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("canonical-specials")
+    .bind("title-series")
+    .bind("specials")
+    .bind("0")
+    .bind("Specials")
+    .bind(0i64)
+    .bind(&now)
+    .bind("[]")
+    .execute(&pool)
+    .await
+    .expect("insert canonical specials");
+
+    sqlx::query(
+        "INSERT INTO episodes
+         (id, title_id, collection_id, episode_type, episode_number, season_number, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("episode-legacy")
+    .bind("title-series")
+    .bind("legacy-specials")
+    .bind("special")
+    .bind("1")
+    .bind("0")
+    .bind(&now)
+    .execute(&pool)
+    .await
+    .expect("insert legacy episode");
+
+    sqlx::query(
+        "INSERT INTO wanted_items
+         (id, title_id, media_type, search_phase, status, created_at, updated_at, collection_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("wanted-legacy")
+    .bind("title-series")
+    .bind("episode")
+    .bind("primary")
+    .bind("wanted")
+    .bind(&now)
+    .bind(&now)
+    .bind("legacy-specials")
+    .execute(&pool)
+    .await
+    .expect("insert legacy wanted item");
+
+    sqlx::query(
+        "INSERT INTO wanted_items
+         (id, title_id, media_type, search_phase, status, created_at, updated_at, collection_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("wanted-canonical")
+    .bind("title-series")
+    .bind("episode")
+    .bind("primary")
+    .bind("wanted")
+    .bind(&now)
+    .bind(&now)
+    .bind("canonical-specials")
+    .execute(&pool)
+    .await
+    .expect("insert canonical wanted item");
+
+    let migration_sql =
+        include_str!("../../scryer/src/db/migrations/0070_specials_collection_convergence.sql");
+    for statement in migration_sql
+        .split(';')
+        .map(str::trim)
+        .filter(|statement| !statement.is_empty())
+    {
+        sqlx::query(statement)
+            .execute(&pool)
+            .await
+            .expect("run migration statement");
+    }
+
+    let collections: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, collection_type FROM collections WHERE title_id = ? ORDER BY id",
+    )
+    .bind("title-series")
+    .fetch_all(&pool)
+    .await
+    .expect("load collections");
+    assert_eq!(
+        collections,
+        vec![("canonical-specials".to_string(), "specials".to_string())]
+    );
+
+    let episode_collection: String =
+        sqlx::query_scalar("SELECT collection_id FROM episodes WHERE id = ?")
+            .bind("episode-legacy")
+            .fetch_one(&pool)
+            .await
+            .expect("load migrated episode collection");
+    assert_eq!(episode_collection, "canonical-specials");
+
+    let wanted_ids: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM wanted_items WHERE collection_id = ? ORDER BY id")
+            .bind("canonical-specials")
+            .fetch_all(&pool)
+            .await
+            .expect("load wanted items");
+    assert_eq!(wanted_ids, vec!["wanted-canonical".to_string()]);
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
 async fn migrations_apply_then_validate_is_idempotent() {
     let db = std::env::temp_dir().join(format!(
         "scryer_validate_then_apply_{}.db",

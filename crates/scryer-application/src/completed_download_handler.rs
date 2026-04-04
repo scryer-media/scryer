@@ -4,15 +4,17 @@
 //! Phase 2 (import): run the import pipeline, verify completion across passes.
 
 use scryer_domain::{
-    CompletedDownload, DownloadQueueState, ImportDecision, ImportResult, ImportSkipReason,
-    ImportStatus, NotificationEventType, TitleMatchType, TrackedDownloadState,
-    TrackedDownloadStatus,
+    CompletedDownload, DownloadQueueState, ImportDecision, ImportRejectedEventData, ImportResult,
+    ImportSkipReason, ImportStatus, TitleMatchType, TrackedDownloadState, TrackedDownloadStatus,
 };
 use std::collections::HashSet;
 
 use crate::app_usecase_import::import_completed_download;
+use crate::domain_events::{
+    new_global_domain_event, new_title_domain_event, title_context_snapshot,
+};
 use crate::tracked_downloads::TrackedDownload;
-use crate::{ActivityChannel, ActivityKind, ActivitySeverity, AppUseCase, User};
+use crate::{AppUseCase, User};
 
 enum ExpectedEpisodeResolution {
     NotApplicable,
@@ -483,37 +485,43 @@ async fn set_state_to_import_blocked(app: &AppUseCase, td: &mut TrackedDownload)
         .cloned()
         .unwrap_or_else(|| "Manual interaction required for this download.".to_string());
 
-    let mut metadata = std::collections::HashMap::new();
-    metadata.insert(
-        "download_client_item_id".to_string(),
-        serde_json::json!(td.client_item.download_client_item_id),
-    );
-    metadata.insert(
-        "download_title".to_string(),
-        serde_json::json!(td.client_item.title_name),
-    );
-
-    let envelope = crate::activity::NotificationEnvelope {
-        event_type: NotificationEventType::ManualInteractionRequired,
-        title: format!("Manual interaction required: {}", td.client_item.title_name),
-        body: message.clone(),
-        facet: td.facet.clone(),
-        metadata,
+    let event = match td.title_id.as_ref() {
+        Some(title_id) => match app.services.titles.get_by_id(title_id).await {
+            Ok(Some(title)) => new_title_domain_event(
+                None,
+                &title,
+                scryer_domain::DomainEventPayload::ImportRejected(ImportRejectedEventData {
+                    title: Some(title_context_snapshot(&title)),
+                    status: ImportStatus::Skipped,
+                    source_path: Some(td.client_item.title_name.clone()),
+                    reason: Some(message),
+                    episode_ids: Vec::new(),
+                }),
+            ),
+            _ => new_global_domain_event(
+                None,
+                scryer_domain::DomainEventPayload::ImportRejected(ImportRejectedEventData {
+                    title: None,
+                    status: ImportStatus::Skipped,
+                    source_path: Some(td.client_item.title_name.clone()),
+                    reason: Some(message),
+                    episode_ids: Vec::new(),
+                }),
+            ),
+        },
+        None => new_global_domain_event(
+            None,
+            scryer_domain::DomainEventPayload::ImportRejected(ImportRejectedEventData {
+                title: None,
+                status: ImportStatus::Skipped,
+                source_path: Some(td.client_item.title_name.clone()),
+                reason: Some(message),
+                episode_ids: Vec::new(),
+            }),
+        ),
     };
 
-    let _ = app
-        .services
-        .record_activity_event_with_notification(
-            None,
-            td.title_id.clone(),
-            td.facet.clone(),
-            ActivityKind::SystemNotice,
-            message,
-            ActivitySeverity::Warning,
-            vec![ActivityChannel::WebUi, ActivityChannel::Toast],
-            envelope,
-        )
-        .await;
+    let _ = app.services.append_domain_event(event).await;
 }
 
 async fn total_successful_artifacts(app: &AppUseCase, td: &TrackedDownload) -> u64 {
@@ -549,11 +557,11 @@ async fn current_visible_video_file_count(app: &AppUseCase, td: &TrackedDownload
 mod tests {
     use super::*;
     use crate::null_repositories::test_nulls::{
-        NullDownloadClient, NullDownloadClientConfigRepository, NullEventRepository,
-        NullIndexerClient, NullReleaseAttemptRepository, NullUserRepository,
+        NullDownloadClient, NullDownloadClientConfigRepository, NullIndexerClient,
+        NullReleaseAttemptRepository, NullUserRepository,
     };
     use crate::{
-        AppError, AppResult, AppServices, AppUseCase, FacetRegistry, ImportArtifact,
+        ActivityKind, AppError, AppResult, AppServices, AppUseCase, FacetRegistry, ImportArtifact,
         ImportArtifactRepository, IndexerConfigRepository, JwtAuthConfig, QualityProfile,
         QualityProfileRepository, ShowRepository, TitleMetadataUpdate, TitleRepository,
     };
@@ -561,8 +569,8 @@ mod tests {
     use chrono::Utc;
     use scryer_domain::{
         CalendarEpisode, Collection, CollectionType, DownloadQueueItem, DownloadQueueState,
-        Episode, EpisodeType, Id, MediaFacet, NotificationEventType, Title, TitleMatchType,
-        TrackedDownloadState, TrackedDownloadStatus, User,
+        Episode, EpisodeType, Id, MediaFacet, Title, TitleMatchType, TrackedDownloadState,
+        TrackedDownloadStatus, User,
     };
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -738,6 +746,22 @@ mod tests {
             _: Option<String>,
             _: Option<String>,
             _: Option<bool>,
+        ) -> AppResult<Collection> {
+            Err(AppError::Repository("not needed in test".into()))
+        }
+
+        async fn update_collection_interstitial_movie(
+            &self,
+            _: &str,
+            _: scryer_domain::InterstitialMovieMetadata,
+        ) -> AppResult<Collection> {
+            Err(AppError::Repository("not needed in test".into()))
+        }
+
+        async fn update_collection_specials_movies(
+            &self,
+            _: &str,
+            _: Vec<scryer_domain::InterstitialMovieMetadata>,
         ) -> AppResult<Collection> {
             Err(AppError::Repository("not needed in test".into()))
         }
@@ -975,6 +999,15 @@ mod tests {
         ) -> AppResult<Vec<QualityProfile>> {
             Ok(vec![])
         }
+
+        async fn replace_quality_profiles(
+            &self,
+            _: &str,
+            _: Option<String>,
+            _: Vec<QualityProfile>,
+        ) -> AppResult<()> {
+            Ok(())
+        }
     }
 
     fn build_app(
@@ -992,7 +1025,6 @@ mod tests {
                 episodes: Arc::new(Mutex::new(episodes)),
             }),
             Arc::new(NullUserRepository),
-            Arc::new(NullEventRepository),
             Arc::new(TestIndexerConfigRepo),
             Arc::new(NullIndexerClient),
             Arc::new(NullDownloadClient),
@@ -1467,12 +1499,7 @@ mod tests {
 
         let activity = app.recent_activity(&actor, 10, 0).await.unwrap();
         assert_eq!(activity.len(), 1);
-        assert_eq!(
-            activity[0]
-                .notification
-                .as_ref()
-                .map(|notification| notification.event_type),
-            Some(NotificationEventType::ManualInteractionRequired)
-        );
+        assert_eq!(activity[0].kind, ActivityKind::ImportRejected);
+        assert!(activity[0].message.contains("Manual interaction required"));
     }
 }

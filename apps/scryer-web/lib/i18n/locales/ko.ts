@@ -497,6 +497,10 @@ const ko: LocaleDictionary = {
   "queue.manualImportFailed": "수동 가져오기 대기열 추가 실패.",
   "queue.manualImportTooltip":
     "수동 가져오기는 주의가 필요한 대기열 항목에서 사용할 수 있습니다.",
+  "queue.releaseTitle": "릴리스",
+  "queue.blockReason": "차단 사유",
+  "queue.showDetails": "세부 정보 표시",
+  "queue.hideDetails": "세부 정보 숨기기",
   "queue.pause": "일시 중지",
   "queue.pausing": "일시 중지 중…",
   "queue.pauseSuccess": "다운로드가 일시 중지되었습니다.",

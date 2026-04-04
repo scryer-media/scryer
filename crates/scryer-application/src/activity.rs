@@ -1,12 +1,10 @@
 use chrono::{DateTime, Utc};
-use scryer_domain::{NotificationEventType, Title};
-use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
-use tokio::sync::Mutex;
+#[cfg(test)]
+use scryer_domain::Title;
+#[cfg(test)]
+use std::collections::HashMap;
 
 use crate::Id;
-
-pub const ACTIVITY_EVENT_LIMIT: usize = 100;
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum ActivityKind {
@@ -93,20 +91,6 @@ impl ActivityKind {
     }
 }
 
-/// Envelope attached to an `ActivityEvent` to trigger notification dispatch.
-///
-/// Events that carry this envelope are automatically routed to notification
-/// plugins by the background notification dispatcher. Events without it are
-/// UI-only (existing behaviour preserved).
-#[derive(Clone, Debug, PartialEq)]
-pub struct NotificationEnvelope {
-    pub event_type: NotificationEventType,
-    pub title: String,
-    pub body: String,
-    pub facet: Option<String>,
-    pub metadata: HashMap<String, serde_json::Value>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NotificationMediaUpdate {
     pub path: String,
@@ -121,13 +105,6 @@ impl NotificationMediaUpdate {
         }
     }
 
-    pub fn modified(path: impl Into<String>) -> Self {
-        Self {
-            path: path.into(),
-            update_type: "modified",
-        }
-    }
-
     pub fn deleted(path: impl Into<String>) -> Self {
         Self {
             path: path.into(),
@@ -136,6 +113,7 @@ impl NotificationMediaUpdate {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn build_lifecycle_notification_metadata(
     title: &Title,
     media_updates: impl IntoIterator<Item = NotificationMediaUpdate>,
@@ -217,7 +195,6 @@ pub struct ActivityEvent {
     pub facet: Option<String>,
     pub message: String,
     pub occurred_at: DateTime<Utc>,
-    pub notification: Option<NotificationEnvelope>,
 }
 
 impl ActivityEvent {
@@ -239,7 +216,6 @@ impl ActivityEvent {
             facet: None,
             message,
             occurred_at: Utc::now(),
-            notification: None,
         }
     }
 
@@ -262,50 +238,6 @@ impl ActivityEvent {
     pub fn with_facet(mut self, facet: String) -> Self {
         self.facet = Some(facet);
         self
-    }
-
-    pub fn with_notification(mut self, envelope: NotificationEnvelope) -> Self {
-        self.notification = Some(envelope);
-        self
-    }
-}
-
-#[derive(Clone)]
-pub struct ActivityStream {
-    entries: Arc<Mutex<VecDeque<ActivityEvent>>>,
-}
-
-impl ActivityStream {
-    pub fn new() -> Self {
-        Self {
-            entries: Arc::new(Mutex::new(VecDeque::new())),
-        }
-    }
-
-    pub async fn push(&self, event: ActivityEvent) {
-        let mut entries = self.entries.lock().await;
-        entries.push_back(event);
-        while entries.len() > ACTIVITY_EVENT_LIMIT {
-            let _ = entries.pop_front();
-        }
-    }
-
-    pub async fn list(&self, limit: i64, offset: i64) -> Vec<ActivityEvent> {
-        let limit = if limit <= 0 {
-            ACTIVITY_EVENT_LIMIT
-        } else {
-            limit as usize
-        };
-        let offset = if offset <= 0 { 0 } else { offset as usize };
-
-        let entries = self.entries.lock().await;
-        entries
-            .iter()
-            .rev()
-            .skip(offset)
-            .take(limit)
-            .cloned()
-            .collect()
     }
 }
 

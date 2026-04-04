@@ -6,7 +6,7 @@ use crate::types::{
 use crate::{
     migrations,
     queries::{
-        blocklist as blocklist_queries, download_client::*, event::*, housekeeping, indexer::*,
+        blocklist as blocklist_queries, download_client::*, housekeeping, indexer::*,
         notification_channel, notification_subscription, plugin_installation::*,
         post_processing_script as pp_queries, quality::*, rule_set::*, settings::*, title::*,
         title_history as th_queries, user::*, workflow::*,
@@ -21,7 +21,7 @@ use scryer_application::{
 };
 use scryer_domain::{
     BlocklistEntry, CalendarEpisode, Collection, CollectionType, DownloadClientConfig, Episode,
-    HistoryEvent, ImportRecord, IndexerConfig, MediaFacet, PluginInstallation, RuleSet, Title,
+    ImportRecord, IndexerConfig, MediaFacet, PluginInstallation, RuleSet, Title,
     TitleHistoryRecord, User,
 };
 use sqlx::SqlitePool;
@@ -103,6 +103,16 @@ pub(crate) enum DbCommand {
         monitored: Option<bool>,
         reply: Sender<AppResult<Collection>>,
     },
+    UpdateCollectionInterstitialMovie {
+        collection_id: String,
+        interstitial_movie: scryer_domain::InterstitialMovieMetadata,
+        reply: Sender<AppResult<Collection>>,
+    },
+    UpdateCollectionSpecialsMovies {
+        collection_id: String,
+        specials_movies: Vec<scryer_domain::InterstitialMovieMetadata>,
+        reply: Sender<AppResult<Collection>>,
+    },
     UpdateInterstitialSeasonEpisode {
         collection_id: String,
         season_episode: Option<String>,
@@ -161,16 +171,6 @@ pub(crate) enum DbCommand {
     },
     ClearMetadataLanguageForAll {
         reply: Sender<AppResult<u64>>,
-    },
-    ListEvents {
-        title_id: Option<String>,
-        limit: i64,
-        offset: i64,
-        reply: Sender<AppResult<Vec<HistoryEvent>>>,
-    },
-    AppendEvent {
-        event: HistoryEvent,
-        reply: Sender<AppResult<()>>,
     },
     ListUsers {
         reply: Sender<AppResult<Vec<User>>>,
@@ -819,10 +819,6 @@ pub(crate) enum DbCommand {
         channel_id: String,
         reply: Sender<AppResult<Vec<scryer_domain::NotificationSubscription>>>,
     },
-    ListNotificationSubscriptionsForEvent {
-        event_type: String,
-        reply: Sender<AppResult<Vec<scryer_domain::NotificationSubscription>>>,
-    },
     CreateNotificationSubscription {
         sub: scryer_domain::NotificationSubscription,
         reply: Sender<AppResult<scryer_domain::NotificationSubscription>>,
@@ -849,6 +845,10 @@ pub(crate) enum DbCommand {
         reply: Sender<AppResult<u32>>,
     },
     DeleteHistoryEventsOlderThan {
+        days: i64,
+        reply: Sender<AppResult<u32>>,
+    },
+    DeleteDomainEventsOlderThan {
         days: i64,
         reply: Sender<AppResult<u32>>,
     },
@@ -1036,6 +1036,34 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                         .await,
                     );
                 }
+                DbCommand::UpdateCollectionInterstitialMovie {
+                    collection_id,
+                    interstitial_movie,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        update_collection_interstitial_movie_query(
+                            &pool,
+                            &collection_id,
+                            &interstitial_movie,
+                        )
+                        .await,
+                    );
+                }
+                DbCommand::UpdateCollectionSpecialsMovies {
+                    collection_id,
+                    specials_movies,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        update_collection_specials_movies_query(
+                            &pool,
+                            &collection_id,
+                            &specials_movies,
+                        )
+                        .await,
+                    );
+                }
                 DbCommand::UpdateInterstitialSeasonEpisode {
                     collection_id,
                     season_episode,
@@ -1132,17 +1160,6 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 }
                 DbCommand::ClearMetadataLanguageForAll { reply } => {
                     let _ = reply.send(clear_metadata_language_for_all_query(&pool).await);
-                }
-                DbCommand::ListEvents {
-                    title_id,
-                    limit,
-                    offset,
-                    reply,
-                } => {
-                    let _ = reply.send(list_events_query(&pool, title_id, limit, offset).await);
-                }
-                DbCommand::AppendEvent { event, reply } => {
-                    let _ = reply.send(append_event_query(&pool, &event).await);
                 }
                 DbCommand::ListUsers { reply } => {
                     let _ = reply.send(list_users_query(&pool).await);
@@ -2366,15 +2383,6 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                         notification_subscription::list_notification_subscriptions_for_channel_query(&pool, &channel_id).await,
                     );
                 }
-                DbCommand::ListNotificationSubscriptionsForEvent { event_type, reply } => {
-                    let _ = reply.send(
-                        notification_subscription::list_notification_subscriptions_for_event_query(
-                            &pool,
-                            &event_type,
-                        )
-                        .await,
-                    );
-                }
                 DbCommand::CreateNotificationSubscription { sub, reply } => {
                     let _ = reply.send(
                         notification_subscription::create_notification_subscription_query(
@@ -2421,6 +2429,11 @@ pub(crate) fn spawn_db_command_worker(pool: SqlitePool) -> mpsc::Sender<DbComman
                 DbCommand::DeleteHistoryEventsOlderThan { days, reply } => {
                     let _ = reply.send(
                         housekeeping::delete_history_events_older_than_query(&pool, days).await,
+                    );
+                }
+                DbCommand::DeleteDomainEventsOlderThan { days, reply } => {
+                    let _ = reply.send(
+                        housekeeping::delete_domain_events_older_than_query(&pool, days).await,
                     );
                 }
                 DbCommand::ListAllMediaFilePaths { reply } => {

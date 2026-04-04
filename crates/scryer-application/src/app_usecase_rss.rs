@@ -1,8 +1,9 @@
 use super::*;
 use crate::acquisition_policy::evaluate_upgrade;
 use crate::delay_profile::DelayProfile;
+use crate::domain_events::{new_title_domain_event, title_context_snapshot};
 use chrono::{DateTime, Utc};
-use scryer_domain::NotificationEventType;
+use scryer_domain::{DomainEventPayload, ReleaseGrabbedEventData};
 use std::collections::{HashMap, HashSet};
 use tracing::{info, warn};
 
@@ -437,6 +438,7 @@ impl AppUseCase {
         let scored = match self
             .score_rss_releases(
                 releases,
+                &title.id,
                 title.imdb_id.clone(),
                 tvdb_id.clone(),
                 Some(category.clone()),
@@ -542,6 +544,7 @@ impl AppUseCase {
             let scored = match self
                 .score_rss_releases(
                     &owned_releases,
+                    &title.id,
                     title.imdb_id.clone(),
                     tvdb_id.clone(),
                     Some(category.clone()),
@@ -607,6 +610,7 @@ impl AppUseCase {
     async fn score_rss_releases(
         &self,
         releases: &[IndexerSearchResult],
+        title_id: &str,
         imdb_id: Option<String>,
         tvdb_id: Option<String>,
         category: Option<String>,
@@ -621,148 +625,28 @@ impl AppUseCase {
                 category.as_deref(),
             )
             .await?;
+        let scope_id = self.quality_profile_scope_id(
+            imdb_id.as_deref(),
+            tvdb_id.as_deref(),
+            category.as_deref(),
+        );
+        let indexer_routing = self.resolve_indexer_routing(scope_id.as_deref()).await;
 
-        let failed_signatures = self
-            .services
-            .release_attempts
-            .list_failed_release_signatures(5000)
-            .await
-            .unwrap_or_default();
-
-        let failed_source_hints: HashSet<String> = failed_signatures
-            .iter()
-            .filter_map(|s| normalize_release_attempt_hint(s.source_hint.as_deref()))
-            .collect();
-        let failed_source_titles: HashSet<String> = failed_signatures
-            .iter()
-            .filter_map(|s| normalize_release_attempt_title(s.source_title.as_deref()))
-            .collect();
-
-        let user_rules_engine = self
-            .services
-            .user_rules
-            .read()
-            .map(|guard| guard.clone())
-            .unwrap_or_else(|_| scryer_rules::UserRulesEngine::empty());
-        let mut user_evaluator = user_rules_engine.evaluator();
-
-        let mut scored = Vec::new();
-        let mut seen = HashSet::new();
-
-        for result in releases {
-            let key = result
-                .download_url
-                .as_deref()
-                .or(result.link.as_deref())
-                .unwrap_or(&result.title)
-                .to_string();
-            if !seen.insert(key) {
-                continue;
-            }
-
-            if crate::app_usecase_discovery::is_release_blocklisted(
-                result,
-                &failed_source_hints,
-                &failed_source_titles,
-            ) {
-                continue;
-            }
-
-            let parsed = parse_release_metadata(&result.title);
-            let persona = quality_profile
-                .criteria
-                .resolve_persona(category.as_deref());
-            let weights = crate::scoring_weights::build_weights_for_category(
-                persona,
-                &quality_profile.criteria.scoring_overrides,
-                category.as_deref(),
-            );
-            let mut decision = crate::quality_profile::evaluate_against_profile_for_category(
+        Ok(self
+            .score_release_results(
+                releases.to_vec(),
                 &quality_profile,
-                &parsed,
-                false,
-                &weights,
+                Some(title_id),
+                scope_id.as_deref(),
+                indexer_routing.as_ref(),
                 category.as_deref(),
-            );
-            apply_age_scoring(&mut decision, result.published_at.as_deref());
-            crate::quality_profile::apply_size_scoring_for_category(
-                &mut decision,
-                &parsed,
-                result.size_bytes,
-                category.as_deref(),
+                title_tags,
                 runtime_minutes,
-                &weights,
-            );
-
-            if !user_rules_engine.is_empty() {
-                let user_input = crate::app_usecase_discovery::build_user_rule_input(
-                    &parsed,
-                    &quality_profile,
-                    result,
-                    &decision,
-                    category.as_deref(),
-                    title_tags,
-                    runtime_minutes,
-                );
-                let facet = category.as_deref().unwrap_or("movie");
-                match user_evaluator.evaluate(&user_input, facet) {
-                    Ok(eval_result) => {
-                        for entry in eval_result.entries {
-                            decision.log_with_source(
-                                &entry.code,
-                                entry.delta,
-                                crate::quality_profile::ScoringSource::UserRule {
-                                    id: entry.rule_set_id,
-                                    name: entry.rule_set_name,
-                                },
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "RSS sync: user rule evaluation failed");
-                    }
-                }
-            }
-
-            scored.push(IndexerSearchResult {
-                parsed_release_metadata: Some(parsed),
-                quality_profile_decision: Some(decision),
-                ..result.clone()
-            });
-        }
-
-        scored.sort_by(|a, b| {
-            let a_allowed = a
-                .quality_profile_decision
-                .as_ref()
-                .map(|d| d.allowed)
-                .unwrap_or(false);
-            let b_allowed = b
-                .quality_profile_decision
-                .as_ref()
-                .map(|d| d.allowed)
-                .unwrap_or(false);
-
-            match (a_allowed, b_allowed) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                _ => {
-                    let a_score = a
-                        .quality_profile_decision
-                        .as_ref()
-                        .map(|d| d.preference_score)
-                        .unwrap_or(0);
-                    let b_score = b
-                        .quality_profile_decision
-                        .as_ref()
-                        .map(|d| d.preference_score)
-                        .unwrap_or(0);
-                    b_score.cmp(&a_score)
-                }
-            }
-        });
-
-        Ok(scored)
+                None,
+                None,
+                None,
+            )
+            .await)
     }
 
     /// Try to grab the best candidate from scored RSS releases.
@@ -853,9 +737,11 @@ impl AppUseCase {
             return;
         }
 
-        let thresholds = self
-            .acquisition_thresholds(&profile.criteria.scoring_persona)
-            .await;
+        let persona = self
+            .resolve_scoring_persona(Some(category), Some(&profile), Some(category))
+            .await
+            .unwrap_or_default();
+        let thresholds = self.acquisition_thresholds(&persona).await;
         let decision = evaluate_upgrade(
             candidate_score,
             wanted.current_score,
@@ -1086,39 +972,20 @@ impl AppUseCase {
                     })
                     .await;
 
-                {
-                    let mut grab_meta = HashMap::new();
-                    grab_meta.insert("title_name".to_string(), serde_json::json!(title.name));
-                    grab_meta.insert("release_title".to_string(), serde_json::json!(best.title));
-                    grab_meta.insert("indexer".to_string(), serde_json::json!(best.source));
-                    grab_meta.insert("score".to_string(), serde_json::json!(candidate_score));
-                    let grab_envelope = crate::activity::NotificationEnvelope {
-                        event_type: NotificationEventType::Grab,
-                        title: format!("Grabbed: {}", title.name),
-                        body: format!(
-                            "RSS sync grabbed '{}' for {} (score: {})",
-                            best.title, title.name, candidate_score
-                        ),
-                        facet: Some(format!("{:?}", title.facet).to_lowercase()),
-                        metadata: grab_meta,
-                    };
-                    let _ = self
-                        .services
-                        .record_activity_event_with_notification(
-                            None,
-                            Some(title.id.clone()),
-                            None,
-                            ActivityKind::MovieDownloaded,
-                            format!(
-                                "RSS sync grabbed: {} (score: {})",
-                                best.title, candidate_score
-                            ),
-                            ActivitySeverity::Success,
-                            vec![ActivityChannel::WebUi, ActivityChannel::Toast],
-                            grab_envelope,
-                        )
-                        .await;
-                }
+                let _ = self
+                    .services
+                    .append_domain_event(new_title_domain_event(
+                        None,
+                        &title,
+                        DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+                            title: title_context_snapshot(&title),
+                            source_title: Some(best.title.clone()),
+                            source_hint: Some(best.source.clone()),
+                            download_id: None,
+                            episode_ids: Vec::new(),
+                        }),
+                    ))
+                    .await;
 
                 report.releases_grabbed += 1;
             }

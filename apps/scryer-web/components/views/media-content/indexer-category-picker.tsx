@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useTranslate } from "@/lib/context/translate-context";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { resolveFloatingPanelPlacement } from "@/lib/floating-panel";
 import { ChevronDown } from "lucide-react";
 
 export type ViewCategoryId = "movie" | "series" | "anime";
@@ -160,6 +161,20 @@ type IndexerCategoryPickerProps = {
   onChange: (categories: string[]) => void;
 };
 
+function isSameRect(previous: DOMRect | null, next: DOMRect): boolean {
+  if (!previous) {
+    return false;
+  }
+  return (
+    previous.top === next.top &&
+    previous.left === next.left &&
+    previous.width === next.width &&
+    previous.height === next.height &&
+    previous.bottom === next.bottom &&
+    previous.right === next.right
+  );
+}
+
 export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
   value,
   scope,
@@ -176,15 +191,27 @@ export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
   );
   const [pickerRect, setPickerRect] = React.useState<DOMRect | null>(null);
 
+  const syncPickerRect = React.useCallback(() => {
+    if (!pickerRef.current || typeof window === "undefined") {
+      return;
+    }
+    const nextRect = pickerRef.current.getBoundingClientRect();
+    setPickerRect((previous) => (isSameRect(previous, nextRect) ? previous : nextRect));
+  }, []);
+
   React.useEffect(() => {
     if (!isOpen) {
       setDraftCategories(getSortedCategoryCodesByScope(scope, value));
       return;
     }
-    if (pickerRef.current && typeof window !== "undefined") {
-      setPickerRect(pickerRef.current.getBoundingClientRect());
-    }
   }, [isOpen, scope, value]);
+
+  React.useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+    syncPickerRect();
+  }, [isOpen, scope, syncPickerRect]);
 
   React.useEffect(() => {
     if (!isOpen) {
@@ -202,27 +229,30 @@ export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
       }
     };
 
-    const handleScrollOrResize = () => {
-      if (!pickerRef.current || typeof window === "undefined") {
-        return;
-      }
-      setPickerRect(pickerRef.current.getBoundingClientRect());
-    };
-
     document.addEventListener("mousedown", handlePointerDown);
-    window.addEventListener("scroll", handleScrollOrResize, true);
-    window.addEventListener("resize", handleScrollOrResize, true);
+    window.addEventListener("scroll", syncPickerRect, true);
+    window.addEventListener("resize", syncPickerRect, true);
     return () => {
       document.removeEventListener("mousedown", handlePointerDown);
-      window.removeEventListener("scroll", handleScrollOrResize, true);
-      window.removeEventListener("resize", handleScrollOrResize, true);
+      window.removeEventListener("scroll", syncPickerRect, true);
+      window.removeEventListener("resize", syncPickerRect, true);
     };
-  }, [isOpen]);
+  }, [isOpen, syncPickerRect]);
 
   const selectedSet = React.useMemo(
     () => new Set<string>(normalizeCategoryCodes(draftCategories)),
     [draftCategories],
   );
+  const panelPlacement = React.useMemo(() => {
+    if (!pickerRect) {
+      return null;
+    }
+    return resolveFloatingPanelPlacement({
+      anchorRect: pickerRect,
+      desiredWidth: Math.max(260, Math.round(pickerRect.width)),
+      desiredMaxHeight: 320,
+    });
+  }, [pickerRect]);
 
   const toggleCategory = (code: string) => {
     setDraftCategories((previous) => {
@@ -253,16 +283,17 @@ export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
     });
   };
 
-  const floatingPanel = isOpen && pickerRect && !disabled
+  const floatingPanel = isOpen && panelPlacement && !disabled
     ? createPortal(
         <div
           ref={floatingPanelRef}
-          className="z-50 max-h-80 overflow-y-auto rounded-xl border border-border bg-popover p-2 shadow-lg"
+          className="z-50 overflow-y-auto rounded-xl border border-border bg-popover p-2 shadow-lg"
           style={{
             position: "fixed",
-            top: pickerRect.bottom + 4,
-            left: pickerRect.left,
-            width: Math.max(260, Math.round(pickerRect.width)),
+            top: panelPlacement.top,
+            left: panelPlacement.left,
+            width: panelPlacement.width,
+            maxHeight: panelPlacement.maxHeight,
           }}
         >
           {INDEXER_CATEGORY_GROUPS_BY_SCOPE[scope].map((groupKey) => {

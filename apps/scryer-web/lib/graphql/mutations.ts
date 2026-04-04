@@ -310,8 +310,6 @@ const qualityProfileCriteriaFields = `
       preferRemux
       allowBdDisk
       allowUpgrades
-      requiredAudioLanguages
-      scoringPersona
       scoringOverrides {
         allowX265Non4K
         blockDvWithoutFallback
@@ -320,14 +318,11 @@ const qualityProfileCriteriaFields = `
         blockUpscaled
       }
       cutoffTier
-      minScoreToGrab
-      facetPersonaOverrides {
-        scope
-        persona
-      }`;
+      minScoreToGrab`;
 
 const qualityProfileSettingsFieldSelection = `
     globalProfileId
+    globalScoringPersona
     profiles {
       id
       name
@@ -338,6 +333,12 @@ const qualityProfileSettingsFieldSelection = `
       scope
       overrideProfileId
       effectiveProfileId
+      inheritsGlobal
+    }
+    categoryPersonaSelections {
+      scope
+      overridePersona
+      effectivePersona
       inheritsGlobal
     }`;
 
@@ -363,6 +364,7 @@ const mediaSettingsFieldSelection = `
       path
       isDefault
     }
+    requiredAudioLanguages
     renameTemplate
     renameCollisionPolicy
     renameMissingMetadataPolicy
@@ -837,12 +839,6 @@ export const validateRuleSetMutation = `mutation ValidateRuleSet($input: Validat
     valid
     errors
   }
-}`;
-
-// ── Convenience Rules ──────────────────────────────────────────────────
-
-export const setConvenienceRequiredAudioMutation = `mutation SetConvenienceRequiredAudio($input: SetConvenienceRequiredAudioInput!) {
-  setConvenienceRequiredAudio(input: $input)
 }`;
 
 export const setTitleRequiredAudioMutation = `mutation SetTitleRequiredAudio($input: SetTitleRequiredAudioInput!) {

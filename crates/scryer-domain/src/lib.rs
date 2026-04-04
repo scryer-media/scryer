@@ -1006,6 +1006,647 @@ pub enum EventType {
     Error,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum DomainEventType {
+    TitleAdded,
+    TitleUpdated,
+    TitleDeleted,
+    ConfigurationChanged,
+    DiscoverySearchCompleted,
+    MetadataHydrationUpdated,
+    ReleaseGrabbed,
+    DownloadFailed,
+    ImportCompleted,
+    ImportRejected,
+    MediaFileImported,
+    MediaFileRenamed,
+    MediaFileDeleted,
+    MediaFileUpgraded,
+    AcquisitionSearchCompleted,
+    AcquisitionCandidateRejected,
+    ImportRequested,
+    ImportRecoveryCompleted,
+    DownloadQueueItemCommandIssued,
+    PostProcessingCompleted,
+    SubtitleDownloaded,
+    SubtitleSearchFailed,
+    LibraryScanStarted,
+    LibraryScanTitleDiscovered,
+    LibraryScanProgressed,
+    LibraryScanCompleted,
+    LibraryScanFailed,
+    JobRunStarted,
+    JobRunCompleted,
+    JobRunFailed,
+    JobNextRunUpdated,
+    DownloadQueueItemUpserted,
+    DownloadQueueItemRemoved,
+}
+
+impl DomainEventType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TitleAdded => "title_added",
+            Self::TitleUpdated => "title_updated",
+            Self::TitleDeleted => "title_deleted",
+            Self::ConfigurationChanged => "configuration_changed",
+            Self::DiscoverySearchCompleted => "discovery_search_completed",
+            Self::MetadataHydrationUpdated => "metadata_hydration_updated",
+            Self::ReleaseGrabbed => "release_grabbed",
+            Self::DownloadFailed => "download_failed",
+            Self::ImportCompleted => "import_completed",
+            Self::ImportRejected => "import_rejected",
+            Self::MediaFileImported => "media_file_imported",
+            Self::MediaFileRenamed => "media_file_renamed",
+            Self::MediaFileDeleted => "media_file_deleted",
+            Self::MediaFileUpgraded => "media_file_upgraded",
+            Self::AcquisitionSearchCompleted => "acquisition_search_completed",
+            Self::AcquisitionCandidateRejected => "acquisition_candidate_rejected",
+            Self::ImportRequested => "import_requested",
+            Self::ImportRecoveryCompleted => "import_recovery_completed",
+            Self::DownloadQueueItemCommandIssued => "download_queue_item_command_issued",
+            Self::PostProcessingCompleted => "post_processing_completed",
+            Self::SubtitleDownloaded => "subtitle_downloaded",
+            Self::SubtitleSearchFailed => "subtitle_search_failed",
+            Self::LibraryScanStarted => "library_scan_started",
+            Self::LibraryScanTitleDiscovered => "library_scan_title_discovered",
+            Self::LibraryScanProgressed => "library_scan_progressed",
+            Self::LibraryScanCompleted => "library_scan_completed",
+            Self::LibraryScanFailed => "library_scan_failed",
+            Self::JobRunStarted => "job_run_started",
+            Self::JobRunCompleted => "job_run_completed",
+            Self::JobRunFailed => "job_run_failed",
+            Self::JobNextRunUpdated => "job_next_run_updated",
+            Self::DownloadQueueItemUpserted => "download_queue_item_upserted",
+            Self::DownloadQueueItemRemoved => "download_queue_item_removed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "title_added" => Some(Self::TitleAdded),
+            "title_updated" => Some(Self::TitleUpdated),
+            "title_deleted" => Some(Self::TitleDeleted),
+            "configuration_changed" => Some(Self::ConfigurationChanged),
+            "discovery_search_completed" => Some(Self::DiscoverySearchCompleted),
+            "metadata_hydration_updated" => Some(Self::MetadataHydrationUpdated),
+            "release_grabbed" => Some(Self::ReleaseGrabbed),
+            "download_failed" => Some(Self::DownloadFailed),
+            "import_completed" => Some(Self::ImportCompleted),
+            "import_rejected" => Some(Self::ImportRejected),
+            "media_file_imported" => Some(Self::MediaFileImported),
+            "media_file_renamed" => Some(Self::MediaFileRenamed),
+            "media_file_deleted" => Some(Self::MediaFileDeleted),
+            "media_file_upgraded" => Some(Self::MediaFileUpgraded),
+            "acquisition_search_completed" => Some(Self::AcquisitionSearchCompleted),
+            "acquisition_candidate_rejected" => Some(Self::AcquisitionCandidateRejected),
+            "import_requested" => Some(Self::ImportRequested),
+            "import_recovery_completed" => Some(Self::ImportRecoveryCompleted),
+            "download_queue_item_command_issued" => Some(Self::DownloadQueueItemCommandIssued),
+            "post_processing_completed" => Some(Self::PostProcessingCompleted),
+            "subtitle_downloaded" => Some(Self::SubtitleDownloaded),
+            "subtitle_search_failed" => Some(Self::SubtitleSearchFailed),
+            "library_scan_started" => Some(Self::LibraryScanStarted),
+            "library_scan_title_discovered" => Some(Self::LibraryScanTitleDiscovered),
+            "library_scan_progressed" => Some(Self::LibraryScanProgressed),
+            "library_scan_completed" => Some(Self::LibraryScanCompleted),
+            "library_scan_failed" => Some(Self::LibraryScanFailed),
+            "job_run_started" => Some(Self::JobRunStarted),
+            "job_run_completed" => Some(Self::JobRunCompleted),
+            "job_run_failed" => Some(Self::JobRunFailed),
+            "job_next_run_updated" => Some(Self::JobNextRunUpdated),
+            "download_queue_item_upserted" => Some(Self::DownloadQueueItemUpserted),
+            "download_queue_item_removed" => Some(Self::DownloadQueueItemRemoved),
+            _ => None,
+        }
+    }
+
+    pub fn all() -> &'static [DomainEventType] {
+        &[
+            Self::TitleAdded,
+            Self::TitleUpdated,
+            Self::TitleDeleted,
+            Self::ConfigurationChanged,
+            Self::DiscoverySearchCompleted,
+            Self::MetadataHydrationUpdated,
+            Self::ReleaseGrabbed,
+            Self::DownloadFailed,
+            Self::ImportCompleted,
+            Self::ImportRejected,
+            Self::MediaFileImported,
+            Self::MediaFileRenamed,
+            Self::MediaFileDeleted,
+            Self::MediaFileUpgraded,
+            Self::AcquisitionSearchCompleted,
+            Self::AcquisitionCandidateRejected,
+            Self::ImportRequested,
+            Self::ImportRecoveryCompleted,
+            Self::DownloadQueueItemCommandIssued,
+            Self::PostProcessingCompleted,
+            Self::SubtitleDownloaded,
+            Self::SubtitleSearchFailed,
+            Self::LibraryScanStarted,
+            Self::LibraryScanTitleDiscovered,
+            Self::LibraryScanProgressed,
+            Self::LibraryScanCompleted,
+            Self::LibraryScanFailed,
+            Self::JobRunStarted,
+            Self::JobRunCompleted,
+            Self::JobRunFailed,
+            Self::JobNextRunUpdated,
+            Self::DownloadQueueItemUpserted,
+            Self::DownloadQueueItemRemoved,
+        ]
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaUpdateType {
+    #[default]
+    Created,
+    Modified,
+    Deleted,
+}
+
+impl MediaUpdateType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Modified => "modified",
+            Self::Deleted => "deleted",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaPathUpdate {
+    pub path: String,
+    pub update_type: MediaUpdateType,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DomainExternalIds {
+    pub imdb_id: Option<String>,
+    pub tmdb_id: Option<String>,
+    pub tvdb_id: Option<String>,
+    pub anidb_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TitleContextSnapshot {
+    pub title_name: String,
+    pub facet: MediaFacet,
+    pub external_ids: DomainExternalIds,
+    pub poster_url: Option<String>,
+    pub year: Option<i32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TitleAddedEventData {
+    pub title: TitleContextSnapshot,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TitleUpdatedEventData {
+    pub title: TitleContextSnapshot,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TitleDeletedEventData {
+    pub title: TitleContextSnapshot,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigurationChangeAction {
+    Saved,
+    Updated,
+    Deleted,
+    Reordered,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConfigurationChangedEventData {
+    pub resource_type: String,
+    pub resource_id: Option<String>,
+    pub action: ConfigurationChangeAction,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiscoverySearchCompletedEventData {
+    pub search_type: String,
+    pub query: Option<String>,
+    pub result_count: i64,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MetadataHydrationState {
+    Started,
+    Completed,
+    Failed,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MetadataHydrationUpdatedEventData {
+    pub title: TitleContextSnapshot,
+    pub state: MetadataHydrationState,
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleaseGrabbedEventData {
+    pub title: TitleContextSnapshot,
+    pub source_title: Option<String>,
+    pub source_hint: Option<String>,
+    pub download_id: Option<String>,
+    #[serde(default)]
+    pub episode_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DownloadFailedEventData {
+    pub title: Option<TitleContextSnapshot>,
+    pub source_title: Option<String>,
+    pub source_hint: Option<String>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImportCompletedEventData {
+    pub title: TitleContextSnapshot,
+    pub media_updates: Vec<MediaPathUpdate>,
+    pub imported_count: i32,
+    #[serde(default)]
+    pub episode_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImportRejectedEventData {
+    pub title: Option<TitleContextSnapshot>,
+    pub status: ImportStatus,
+    pub source_path: Option<String>,
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub episode_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaFileImportedEventData {
+    pub title: TitleContextSnapshot,
+    pub media_updates: Vec<MediaPathUpdate>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaFileRenamedEventData {
+    pub title: TitleContextSnapshot,
+    pub media_updates: Vec<MediaPathUpdate>,
+    pub renamed_count: i32,
+    #[serde(default)]
+    pub episode_ids: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaFileDeletedReason {
+    Deleted,
+    UpgradeCleanup,
+    MissingOnDisk,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaFileDeletedEventData {
+    pub title: TitleContextSnapshot,
+    pub media_updates: Vec<MediaPathUpdate>,
+    pub file_id: Option<String>,
+    pub reason: MediaFileDeletedReason,
+    #[serde(default)]
+    pub episode_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaFileUpgradedEventData {
+    pub title: TitleContextSnapshot,
+    pub media_updates: Vec<MediaPathUpdate>,
+    pub previous_file_id: Option<String>,
+    pub current_file_id: Option<String>,
+    pub old_score: Option<i32>,
+    pub new_score: Option<i32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AcquisitionSearchCompletedEventData {
+    pub title: TitleContextSnapshot,
+    pub result_count: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AcquisitionCandidateRejectedEventData {
+    pub title: TitleContextSnapshot,
+    pub source_title: String,
+    pub reason_code: String,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportRequestKind {
+    Manual,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImportRequestedEventData {
+    pub title: Option<TitleContextSnapshot>,
+    pub client_type: String,
+    pub source_ref: String,
+    pub request_kind: ImportRequestKind,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImportRecoveryCompletedEventData {
+    pub recovered_count: i64,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DownloadQueueCommandAction {
+    Pause,
+    Resume,
+    Delete,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DownloadQueueItemCommandIssuedEventData {
+    pub item_id: String,
+    pub action: DownloadQueueCommandAction,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PostProcessingResult {
+    Succeeded,
+    TimedOut,
+    Failed,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PostProcessingCompletedEventData {
+    pub title: TitleContextSnapshot,
+    pub script_name: String,
+    pub result: PostProcessingResult,
+    pub exit_code: Option<i32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SubtitleDownloadedEventData {
+    pub title: TitleContextSnapshot,
+    pub subtitle_path: Option<String>,
+    pub language: Option<String>,
+    pub provider: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SubtitleSearchFailedEventData {
+    pub title: TitleContextSnapshot,
+    pub language: Option<String>,
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LibraryScanStartedEventData {
+    pub session_id: String,
+    pub mode: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LibraryScanTitleDiscoveredEventData {
+    pub session_id: String,
+    pub title_id: String,
+    pub title_name: String,
+    pub facet: MediaFacet,
+    pub discovered_file_count: i64,
+    pub folder_path: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LibraryScanProgressedEventData {
+    pub session_id: String,
+    pub status: String,
+    pub found_titles: i64,
+    pub titles_completed: i64,
+    pub titles_total: Option<i64>,
+    pub files_completed: i64,
+    pub files_total: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LibraryScanCompletedEventData {
+    pub session_id: String,
+    pub status: String,
+    pub found_titles: i64,
+    pub titles_completed: i64,
+    pub titles_total: Option<i64>,
+    pub files_completed: i64,
+    pub files_total: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LibraryScanFailedEventData {
+    pub session_id: String,
+    pub error_message: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JobRunStartedEventData {
+    pub run_id: String,
+    pub job_key: String,
+    pub operation_type: String,
+    pub trigger_source: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JobRunCompletedEventData {
+    pub run_id: String,
+    pub job_key: String,
+    pub summary_text: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JobRunFailedEventData {
+    pub run_id: String,
+    pub job_key: String,
+    pub error_text: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JobNextRunUpdatedEventData {
+    pub job_key: String,
+    pub next_run_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DownloadQueueItemUpsertedEventData {
+    pub item: DownloadQueueItem,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DownloadQueueItemRemovedEventData {
+    pub download_client_item_id: String,
+    pub client_type: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum DomainEventPayload {
+    TitleAdded(TitleAddedEventData),
+    TitleUpdated(TitleUpdatedEventData),
+    TitleDeleted(TitleDeletedEventData),
+    ConfigurationChanged(ConfigurationChangedEventData),
+    DiscoverySearchCompleted(DiscoverySearchCompletedEventData),
+    MetadataHydrationUpdated(MetadataHydrationUpdatedEventData),
+    ReleaseGrabbed(ReleaseGrabbedEventData),
+    DownloadFailed(DownloadFailedEventData),
+    ImportCompleted(ImportCompletedEventData),
+    ImportRejected(ImportRejectedEventData),
+    MediaFileImported(MediaFileImportedEventData),
+    MediaFileRenamed(MediaFileRenamedEventData),
+    MediaFileDeleted(MediaFileDeletedEventData),
+    MediaFileUpgraded(MediaFileUpgradedEventData),
+    AcquisitionSearchCompleted(AcquisitionSearchCompletedEventData),
+    AcquisitionCandidateRejected(AcquisitionCandidateRejectedEventData),
+    ImportRequested(ImportRequestedEventData),
+    ImportRecoveryCompleted(ImportRecoveryCompletedEventData),
+    DownloadQueueItemCommandIssued(DownloadQueueItemCommandIssuedEventData),
+    PostProcessingCompleted(PostProcessingCompletedEventData),
+    SubtitleDownloaded(SubtitleDownloadedEventData),
+    SubtitleSearchFailed(SubtitleSearchFailedEventData),
+    LibraryScanStarted(LibraryScanStartedEventData),
+    LibraryScanTitleDiscovered(LibraryScanTitleDiscoveredEventData),
+    LibraryScanProgressed(LibraryScanProgressedEventData),
+    LibraryScanCompleted(LibraryScanCompletedEventData),
+    LibraryScanFailed(LibraryScanFailedEventData),
+    JobRunStarted(JobRunStartedEventData),
+    JobRunCompleted(JobRunCompletedEventData),
+    JobRunFailed(JobRunFailedEventData),
+    JobNextRunUpdated(JobNextRunUpdatedEventData),
+    DownloadQueueItemUpserted(DownloadQueueItemUpsertedEventData),
+    DownloadQueueItemRemoved(DownloadQueueItemRemovedEventData),
+}
+
+impl DomainEventPayload {
+    pub fn event_type(&self) -> DomainEventType {
+        match self {
+            Self::TitleAdded(_) => DomainEventType::TitleAdded,
+            Self::TitleUpdated(_) => DomainEventType::TitleUpdated,
+            Self::TitleDeleted(_) => DomainEventType::TitleDeleted,
+            Self::ConfigurationChanged(_) => DomainEventType::ConfigurationChanged,
+            Self::DiscoverySearchCompleted(_) => DomainEventType::DiscoverySearchCompleted,
+            Self::MetadataHydrationUpdated(_) => DomainEventType::MetadataHydrationUpdated,
+            Self::ReleaseGrabbed(_) => DomainEventType::ReleaseGrabbed,
+            Self::DownloadFailed(_) => DomainEventType::DownloadFailed,
+            Self::ImportCompleted(_) => DomainEventType::ImportCompleted,
+            Self::ImportRejected(_) => DomainEventType::ImportRejected,
+            Self::MediaFileImported(_) => DomainEventType::MediaFileImported,
+            Self::MediaFileRenamed(_) => DomainEventType::MediaFileRenamed,
+            Self::MediaFileDeleted(_) => DomainEventType::MediaFileDeleted,
+            Self::MediaFileUpgraded(_) => DomainEventType::MediaFileUpgraded,
+            Self::AcquisitionSearchCompleted(_) => DomainEventType::AcquisitionSearchCompleted,
+            Self::AcquisitionCandidateRejected(_) => DomainEventType::AcquisitionCandidateRejected,
+            Self::ImportRequested(_) => DomainEventType::ImportRequested,
+            Self::ImportRecoveryCompleted(_) => DomainEventType::ImportRecoveryCompleted,
+            Self::DownloadQueueItemCommandIssued(_) => {
+                DomainEventType::DownloadQueueItemCommandIssued
+            }
+            Self::PostProcessingCompleted(_) => DomainEventType::PostProcessingCompleted,
+            Self::SubtitleDownloaded(_) => DomainEventType::SubtitleDownloaded,
+            Self::SubtitleSearchFailed(_) => DomainEventType::SubtitleSearchFailed,
+            Self::LibraryScanStarted(_) => DomainEventType::LibraryScanStarted,
+            Self::LibraryScanTitleDiscovered(_) => DomainEventType::LibraryScanTitleDiscovered,
+            Self::LibraryScanProgressed(_) => DomainEventType::LibraryScanProgressed,
+            Self::LibraryScanCompleted(_) => DomainEventType::LibraryScanCompleted,
+            Self::LibraryScanFailed(_) => DomainEventType::LibraryScanFailed,
+            Self::JobRunStarted(_) => DomainEventType::JobRunStarted,
+            Self::JobRunCompleted(_) => DomainEventType::JobRunCompleted,
+            Self::JobRunFailed(_) => DomainEventType::JobRunFailed,
+            Self::JobNextRunUpdated(_) => DomainEventType::JobNextRunUpdated,
+            Self::DownloadQueueItemUpserted(_) => DomainEventType::DownloadQueueItemUpserted,
+            Self::DownloadQueueItemRemoved(_) => DomainEventType::DownloadQueueItemRemoved,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+pub enum DomainEventStream {
+    Global,
+    Title { title_id: String },
+    LibraryScan { session_id: String },
+    JobRun { run_id: String },
+    DownloadQueueItem { item_id: String },
+}
+
+impl DomainEventStream {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Global => "global",
+            Self::Title { .. } => "title",
+            Self::LibraryScan { .. } => "library_scan",
+            Self::JobRun { .. } => "job_run",
+            Self::DownloadQueueItem { .. } => "download_queue_item",
+        }
+    }
+
+    pub fn identifier(&self) -> Option<&str> {
+        match self {
+            Self::Global => None,
+            Self::Title { title_id } => Some(title_id.as_str()),
+            Self::LibraryScan { session_id } => Some(session_id.as_str()),
+            Self::JobRun { run_id } => Some(run_id.as_str()),
+            Self::DownloadQueueItem { item_id } => Some(item_id.as_str()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DomainEvent {
+    pub sequence: i64,
+    pub event_id: String,
+    pub occurred_at: DateTime<Utc>,
+    pub actor_user_id: Option<String>,
+    pub title_id: Option<String>,
+    pub facet: Option<MediaFacet>,
+    pub correlation_id: Option<String>,
+    pub causation_id: Option<String>,
+    pub schema_version: i32,
+    pub stream: DomainEventStream,
+    pub payload: DomainEventPayload,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NewDomainEvent {
+    pub event_id: String,
+    pub occurred_at: DateTime<Utc>,
+    pub actor_user_id: Option<String>,
+    pub title_id: Option<String>,
+    pub facet: Option<MediaFacet>,
+    pub correlation_id: Option<String>,
+    pub causation_id: Option<String>,
+    pub schema_version: i32,
+    pub stream: DomainEventStream,
+    pub payload: DomainEventPayload,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DomainEventFilter {
+    pub event_types: Option<Vec<DomainEventType>>,
+    pub title_id: Option<String>,
+    pub facet: Option<MediaFacet>,
+    pub after_sequence: Option<i64>,
+    pub before_sequence: Option<i64>,
+    pub limit: usize,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestedMode {
@@ -1399,11 +2040,15 @@ pub enum NotificationEventType {
     Download,
     Upgrade,
     ImportComplete,
+    ImportRejected,
     Rename,
     TitleAdded,
     TitleDeleted,
     FileDeleted,
     FileDeletedForUpgrade,
+    PostProcessingCompleted,
+    SubtitleDownloaded,
+    SubtitleSearchFailed,
     HealthIssue,
     HealthRestored,
     ApplicationUpdate,
@@ -1418,11 +2063,15 @@ impl NotificationEventType {
             Self::Download => "download",
             Self::Upgrade => "upgrade",
             Self::ImportComplete => "import_complete",
+            Self::ImportRejected => "import_rejected",
             Self::Rename => "rename",
             Self::TitleAdded => "title_added",
             Self::TitleDeleted => "title_deleted",
             Self::FileDeleted => "file_deleted",
             Self::FileDeletedForUpgrade => "file_deleted_for_upgrade",
+            Self::PostProcessingCompleted => "post_processing_completed",
+            Self::SubtitleDownloaded => "subtitle_downloaded",
+            Self::SubtitleSearchFailed => "subtitle_search_failed",
             Self::HealthIssue => "health_issue",
             Self::HealthRestored => "health_restored",
             Self::ApplicationUpdate => "application_update",
@@ -1437,11 +2086,15 @@ impl NotificationEventType {
             Self::Download,
             Self::Upgrade,
             Self::ImportComplete,
+            Self::ImportRejected,
             Self::Rename,
             Self::TitleAdded,
             Self::TitleDeleted,
             Self::FileDeleted,
             Self::FileDeletedForUpgrade,
+            Self::PostProcessingCompleted,
+            Self::SubtitleDownloaded,
+            Self::SubtitleSearchFailed,
             Self::HealthIssue,
             Self::HealthRestored,
             Self::ApplicationUpdate,
@@ -1456,16 +2109,26 @@ impl NotificationEventType {
             "download" => Some(Self::Download),
             "upgrade" => Some(Self::Upgrade),
             "import_complete" => Some(Self::ImportComplete),
+            "import_rejected" => Some(Self::ImportRejected),
             "rename" => Some(Self::Rename),
             "title_added" => Some(Self::TitleAdded),
             "title_deleted" => Some(Self::TitleDeleted),
             "file_deleted" => Some(Self::FileDeleted),
             "file_deleted_for_upgrade" => Some(Self::FileDeletedForUpgrade),
+            "post_processing_completed" => Some(Self::PostProcessingCompleted),
+            "subtitle_downloaded" => Some(Self::SubtitleDownloaded),
+            "subtitle_search_failed" => Some(Self::SubtitleSearchFailed),
             "health_issue" => Some(Self::HealthIssue),
             "health_restored" => Some(Self::HealthRestored),
             "application_update" => Some(Self::ApplicationUpdate),
             "manual_interaction_required" => Some(Self::ManualInteractionRequired),
             "test" => Some(Self::Test),
+            "release_grabbed" => Some(Self::Grab),
+            "download_failed" => Some(Self::Download),
+            "media_file_upgraded" => Some(Self::Upgrade),
+            "import_completed" => Some(Self::ImportComplete),
+            "media_file_renamed" => Some(Self::Rename),
+            "media_file_deleted" => Some(Self::FileDeleted),
             _ => None,
         }
     }

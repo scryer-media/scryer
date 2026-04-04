@@ -3,7 +3,6 @@ use scryer_domain::{
     Id, NotificationChannelConfig, NotificationEventType, NotificationSubscription,
 };
 use std::collections::HashMap;
-use tracing::{info, warn};
 
 use crate::{AppError, AppResult, AppUseCase};
 
@@ -131,7 +130,7 @@ impl AppUseCase {
         let metadata = HashMap::new();
         client
             .send_notification(
-                NotificationEventType::Test.as_str(),
+                "test",
                 "Scryer Test Notification",
                 "This is a test notification from Scryer.",
                 &metadata,
@@ -233,81 +232,6 @@ impl AppUseCase {
         crate::require(actor, &scryer_domain::Entitlement::ManageConfig)?;
         let repo = self.notification_subscriptions()?;
         repo.delete_subscription(id).await
-    }
-
-    /// Dispatch a notification for a given event type. Finds matching
-    /// subscriptions, resolves channels, and sends through plugins.
-    pub async fn dispatch_notification(
-        &self,
-        event_type: &str,
-        title: &str,
-        message: &str,
-        metadata: &HashMap<String, serde_json::Value>,
-    ) {
-        let sub_repo = match self.notification_subscriptions() {
-            Ok(r) => r,
-            Err(_) => return, // notifications not configured
-        };
-        let ch_repo = match self.notification_channels() {
-            Ok(r) => r,
-            Err(_) => return,
-        };
-        let provider = match self.services.notification_provider.as_ref() {
-            Some(p) => p,
-            None => return,
-        };
-
-        let subscriptions = match sub_repo.list_subscriptions_for_event(event_type).await {
-            Ok(subs) => subs,
-            Err(e) => {
-                warn!(error = %e, event_type, "failed to list notification subscriptions");
-                return;
-            }
-        };
-
-        for sub in subscriptions {
-            if !sub.is_enabled {
-                continue;
-            }
-
-            let channel = match ch_repo.get_channel(&sub.channel_id).await {
-                Ok(Some(ch)) if ch.is_enabled => ch,
-                _ => continue,
-            };
-
-            let client = match provider.client_for_channel(&channel) {
-                Some(c) => c,
-                None => {
-                    warn!(
-                        channel_type = channel.channel_type.as_str(),
-                        channel_name = channel.name.as_str(),
-                        "no notification plugin available for channel type"
-                    );
-                    continue;
-                }
-            };
-
-            match client
-                .send_notification(event_type, title, message, metadata)
-                .await
-            {
-                Ok(()) => {
-                    info!(
-                        event_type,
-                        channel = channel.name.as_str(),
-                        "notification dispatched"
-                    );
-                }
-                Err(e) => {
-                    warn!(
-                        event_type,
-                        channel = channel.name.as_str(),
-                        error = %e,
-                        "notification dispatch failed"
-                    );
-                }
-            }
-        }
     }
 
     pub fn available_notification_provider_types(&self) -> Vec<String> {

@@ -1,5 +1,6 @@
 use super::*;
-use crate::post_download_gate::{facet_to_category_hint, missing_audio_languages};
+use crate::missing_required_audio_languages;
+use crate::post_download_gate::facet_to_category_hint;
 use scryer_domain::{ExternalId, MediaFacet, Title};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -413,7 +414,7 @@ fn find_video_files_follows_symlinked_directories() {
 fn missing_audio_languages_all_present() {
     let required = vec!["JPN".to_string(), "ENG".to_string()];
     let actual = vec!["jpn".to_string(), "eng".to_string()];
-    assert!(missing_audio_languages(&required, &actual).is_empty());
+    assert!(missing_required_audio_languages(&required, &actual).is_empty());
 }
 
 #[test]
@@ -421,44 +422,44 @@ fn missing_audio_languages_case_normalization() {
     // media analysis emits lowercase codes; profile stores uppercase
     let required = vec!["JPN".to_string()];
     let actual = vec!["jpn".to_string()];
-    assert!(missing_audio_languages(&required, &actual).is_empty());
+    assert!(missing_required_audio_languages(&required, &actual).is_empty());
 }
 
 #[test]
 fn missing_audio_languages_accepts_full_iso_language_names() {
     let required = vec!["Filipino".to_string()];
     let actual = vec!["fil-PH".to_string()];
-    assert!(missing_audio_languages(&required, &actual).is_empty());
+    assert!(missing_required_audio_languages(&required, &actual).is_empty());
 }
 
 #[test]
 fn missing_audio_languages_one_missing() {
     let required = vec!["JPN".to_string(), "ENG".to_string()];
     let actual = vec!["eng".to_string()];
-    let missing = missing_audio_languages(&required, &actual);
-    assert_eq!(missing, vec!["JPN"]);
+    let missing = missing_required_audio_languages(&required, &actual);
+    assert_eq!(missing, vec!["jpn"]);
 }
 
 #[test]
 fn missing_audio_languages_all_missing() {
     let required = vec!["JPN".to_string()];
     let actual = vec!["eng".to_string(), "spa".to_string()];
-    let missing = missing_audio_languages(&required, &actual);
-    assert_eq!(missing, vec!["JPN"]);
+    let missing = missing_required_audio_languages(&required, &actual);
+    assert_eq!(missing, vec!["jpn"]);
 }
 
 #[test]
 fn missing_audio_languages_empty_required_always_passes() {
     let required: Vec<String> = vec![];
     let actual = vec!["eng".to_string()];
-    assert!(missing_audio_languages(&required, &actual).is_empty());
+    assert!(missing_required_audio_languages(&required, &actual).is_empty());
 }
 
 #[test]
 fn missing_audio_languages_empty_actual_returns_all_required() {
     let required = vec!["JPN".to_string(), "ENG".to_string()];
     let actual: Vec<String> = vec![];
-    let missing = missing_audio_languages(&required, &actual);
+    let missing = missing_required_audio_languages(&required, &actual);
     assert_eq!(missing.len(), 2);
 }
 

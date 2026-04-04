@@ -1,7 +1,7 @@
 pub mod blocklist;
 pub mod common;
+pub mod domain_event;
 pub mod download_client;
-pub mod event;
 pub mod housekeeping;
 pub mod indexer;
 pub mod media_file;

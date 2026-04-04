@@ -9,6 +9,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import {
   buildQualityProfileTemplate,
+  buildDefaultCategoryPersonaSelections,
   coerceProfileSetting,
   createUniqueProfileId,
   dedupeOrdered,
@@ -19,6 +20,7 @@ import {
   parseQualityProfileCatalog,
   qualityProfileSettingsToCatalogText,
   qualityProfileSettingsToCategoryOverrides,
+  qualityProfileSettingsToCategoryPersonaSelections,
   qualityProfileCatalogEntryFromDraft,
   qualityProfileEntryToMutationInput,
   resolveQualityProfileCatalogState,
@@ -36,18 +38,21 @@ import {
   QUALITY_PROFILE_CATALOG_KEY,
   QUALITY_PROFILE_ID_KEY,
   QUALITY_PROFILE_INHERIT_VALUE,
+  SCORING_PERSONA_KEY,
   QUALITY_PROFILE_SCOPE_IDS,
 } from "@/lib/constants/settings";
 import { useSettingsSubscription } from "@/lib/hooks/use-settings-subscription";
 import type {
   CommittedQualityProfileDraft,
   DownloadClientRecord,
+  FacetScoringPersonaSelectionRecord,
   ParsedQualityProfile,
   ParsedQualityProfileEntry,
   QualityProfileCriteriaPayload,
   QualityProfileDraft,
   QualityProfileSettingsPayload,
   QualityProfileListField,
+  ScoringPersonaId,
   ViewCategoryId,
 } from "@/lib/types";
 
@@ -126,12 +131,19 @@ export type UseQualityProfilesManagerResult = {
   removeQualityTier: (qualityTier: string) => void;
   updateQualityProfilesGlobal: (event?: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
   saveGlobalQualityProfile: (value: string) => Promise<void> | void;
+  saveGlobalScoringPersona: (persona: ScoringPersonaId) => Promise<void> | void;
   globalQualityProfileId: string;
   setGlobalQualityProfileId: (value: string) => void;
+  globalScoringPersona: ScoringPersonaId;
   categoryQualityProfileOverrides: Record<ViewCategoryId, string>;
   setCategoryQualityProfileOverrides: React.Dispatch<
     React.SetStateAction<Record<ViewCategoryId, string>>
   >;
+  categoryPersonaSelections: Record<ViewCategoryId, FacetScoringPersonaSelectionRecord>;
+  saveCategoryScoringPersona: (
+    scopeId: ViewCategoryId,
+    persona: ScoringPersonaId | null,
+  ) => Promise<void> | void;
   categoryQualityProfileSaving: Record<ViewCategoryId, boolean>;
   saveCategoryQualityProfile: (scopeId: ViewCategoryId, value: string) => Promise<void> | void;
   deleteQualityProfile: (profileId: string) => Promise<void>;
@@ -158,9 +170,14 @@ export function useQualityProfilesManager(
   );
   const [qualityProfileDraftOriginalName, setQualityProfileDraftOriginalName] = React.useState("");
   const [globalQualityProfileId, setGlobalQualityProfileId] = React.useState("default");
+  const [globalScoringPersona, setGlobalScoringPersona] =
+    React.useState<ScoringPersonaId>("Balanced");
   const [categoryQualityProfileOverrides, setCategoryQualityProfileOverrides] = React.useState<
     Record<ViewCategoryId, string>
   >({ ...DEFAULT_CATEGORY_QUALITY_PROFILES });
+  const [categoryPersonaSelections, setCategoryPersonaSelections] = React.useState<
+    Record<ViewCategoryId, FacetScoringPersonaSelectionRecord>
+  >({ ...buildDefaultCategoryPersonaSelections() });
   const [categoryQualityProfileSaving, setCategoryQualityProfileSaving] = React.useState<
     Record<ViewCategoryId, boolean>
   >({ ...DEFAULT_CATEGORY_QUALITY_SAVING });
@@ -301,12 +318,28 @@ export function useQualityProfilesManager(
       setQualityProfileDraft(nextDefaultDraft);
       setQualityProfileDraftOriginalName(nextDefaultDraft.name);
       setGlobalQualityProfileId(validGlobalProfile);
+      setGlobalScoringPersona(payload?.globalScoringPersona ?? "Balanced");
 
       const nextOverrides = qualityProfileSettingsToCategoryOverrides(payload);
       setCategoryQualityProfileOverrides((previous) =>
         QUALITY_PROFILE_SCOPE_IDS.every((scopeId) => previous[scopeId] === nextOverrides[scopeId])
           ? previous
           : nextOverrides,
+      );
+      const nextPersonaSelections =
+        qualityProfileSettingsToCategoryPersonaSelections(payload);
+      setCategoryPersonaSelections((previous) =>
+        QUALITY_PROFILE_SCOPE_IDS.every((scopeId) => {
+          const current = previous[scopeId];
+          const next = nextPersonaSelections[scopeId];
+          return (
+            current.overridePersona === next.overridePersona &&
+            current.effectivePersona === next.effectivePersona &&
+            current.inheritsGlobal === next.inheritsGlobal
+          );
+        })
+          ? previous
+          : nextPersonaSelections,
       );
     },
     [],
@@ -359,7 +392,11 @@ export function useQualityProfilesManager(
   useSettingsSubscription(
     React.useCallback(
       (keys: string[]) => {
-        if (keys.includes(QUALITY_PROFILE_CATALOG_KEY) || keys.includes(QUALITY_PROFILE_ID_KEY)) {
+        if (
+          keys.includes(QUALITY_PROFILE_CATALOG_KEY) ||
+          keys.includes(QUALITY_PROFILE_ID_KEY) ||
+          keys.includes(SCORING_PERSONA_KEY)
+        ) {
           void refreshQualityProfiles();
         }
       },
@@ -615,6 +652,37 @@ export function useQualityProfilesManager(
     [qualityProfiles, client, setGlobalStatus, t],
   );
 
+  const saveGlobalScoringPersona = React.useCallback(
+    async (persona: ScoringPersonaId) => {
+      setQualityProfilesSaving(true);
+      try {
+        const { data, error } = await client
+          .mutation(saveQualityProfileSettingsMutation, {
+            input: {
+              profiles: [],
+              globalProfileId: null,
+              globalScoringPersona: persona,
+              categorySelections: [],
+              categoryPersonaSelections: [],
+              replaceExisting: false,
+            },
+          })
+          .toPromise();
+        if (error) throw error;
+
+        applyQualityProfileSettingsPayload(data?.saveQualityProfileSettings);
+        setGlobalStatus(t("settings.qualitySettingsSaved"));
+      } catch (error) {
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.failedToUpdate"),
+        );
+      } finally {
+        setQualityProfilesSaving(false);
+      }
+    },
+    [applyQualityProfileSettingsPayload, client, setGlobalStatus, t],
+  );
+
   const saveCategoryQualityProfile = React.useCallback(
     async (scopeId: ViewCategoryId, value: string) => {
       const normalizedScope = QUALITY_PROFILE_SCOPE_IDS.includes(
@@ -686,6 +754,55 @@ export function useQualityProfilesManager(
     [qualityProfiles, client, setGlobalStatus, t],
   );
 
+  const saveCategoryScoringPersona = React.useCallback(
+    async (scopeId: ViewCategoryId, persona: ScoringPersonaId | null) => {
+      const normalizedScope = QUALITY_PROFILE_SCOPE_IDS.includes(
+        scopeId as (typeof QUALITY_PROFILE_SCOPE_IDS)[number],
+      )
+        ? scopeId
+        : ("movie" as ViewCategoryId);
+
+      setCategoryQualityProfileSaving((previous) => ({
+        ...previous,
+        [normalizedScope]: true,
+      }));
+      try {
+        const { data, error } = await client
+          .mutation(saveQualityProfileSettingsMutation, {
+            input: {
+              profiles: [],
+              globalProfileId: null,
+              globalScoringPersona: null,
+              categorySelections: [],
+              categoryPersonaSelections: [
+                {
+                  scope: normalizedScope,
+                  persona,
+                  inheritGlobal: persona === null,
+                },
+              ],
+              replaceExisting: false,
+            },
+          })
+          .toPromise();
+        if (error) throw error;
+
+        applyQualityProfileSettingsPayload(data?.saveQualityProfileSettings);
+        setGlobalStatus(t("settings.qualitySettingsSaved"));
+      } catch (error) {
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.failedToUpdate"),
+        );
+      } finally {
+        setCategoryQualityProfileSaving((previous) => ({
+          ...previous,
+          [normalizedScope]: false,
+        }));
+      }
+    },
+    [applyQualityProfileSettingsPayload, client, setGlobalStatus, t],
+  );
+
   return {
     mediaSettingsLoading,
     initialLoadComplete,
@@ -717,10 +834,14 @@ export function useQualityProfilesManager(
     removeQualityTier,
     updateQualityProfilesGlobal,
     saveGlobalQualityProfile,
+    saveGlobalScoringPersona,
     globalQualityProfileId,
     setGlobalQualityProfileId,
+    globalScoringPersona,
     categoryQualityProfileOverrides,
     setCategoryQualityProfileOverrides,
+    categoryPersonaSelections,
+    saveCategoryScoringPersona,
     categoryQualityProfileSaving,
     saveCategoryQualityProfile,
     deleteQualityProfile,

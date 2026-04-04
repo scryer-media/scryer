@@ -7,8 +7,8 @@ use scryer_application::{
     TitleReleaseBlocklistEntry,
 };
 use scryer_domain::{
-    CalendarEpisode, Collection, DownloadClientConfig, DownloadQueueItem, Episode, IndexerConfig,
-    PluginInstallation, PolicyOutput, RuleSet, Title, TitleHistoryRecord, User,
+    CalendarEpisode, Collection, DomainEvent, DownloadClientConfig, DownloadQueueItem, Episode,
+    IndexerConfig, PluginInstallation, PolicyOutput, RuleSet, Title, TitleHistoryRecord, User,
 };
 use scryer_infrastructure::WorkflowOperationRecord;
 use scryer_rules;
@@ -28,25 +28,9 @@ pub(crate) fn from_scoring_overrides(
     }
 }
 
-pub(crate) fn from_content_scope(scope: &str) -> Option<ContentScopeValue> {
-    ContentScopeValue::parse(scope)
-}
-
 pub(crate) fn from_quality_profile_criteria(
     criteria: QualityProfileCriteria,
 ) -> QualityProfileCriteriaPayload {
-    let mut facet_persona_overrides: Vec<FacetScoringPersonaOverridePayload> = criteria
-        .facet_persona_overrides
-        .into_iter()
-        .filter_map(|(scope, persona)| {
-            from_content_scope(&scope).map(|scope| FacetScoringPersonaOverridePayload {
-                scope,
-                persona: ScoringPersonaValue::from_application(persona),
-            })
-        })
-        .collect();
-    facet_persona_overrides.sort_by_key(|entry| entry.scope.as_scope_id());
-
     QualityProfileCriteriaPayload {
         quality_tiers: criteria.quality_tiers,
         archival_quality: criteria.archival_quality,
@@ -57,19 +41,14 @@ pub(crate) fn from_quality_profile_criteria(
         video_codec_blocklist: criteria.video_codec_blocklist,
         audio_codec_allowlist: criteria.audio_codec_allowlist,
         audio_codec_blocklist: criteria.audio_codec_blocklist,
-        atmos_preferred: criteria.atmos_preferred,
         dolby_vision_allowed: criteria.dolby_vision_allowed,
         detected_hdr_allowed: criteria.detected_hdr_allowed,
         prefer_remux: criteria.prefer_remux,
         allow_bd_disk: criteria.allow_bd_disk,
         allow_upgrades: criteria.allow_upgrades,
-        prefer_dual_audio: criteria.prefer_dual_audio,
-        required_audio_languages: criteria.required_audio_languages,
-        scoring_persona: ScoringPersonaValue::from_application(criteria.scoring_persona),
         scoring_overrides: from_scoring_overrides(criteria.scoring_overrides),
         cutoff_tier: criteria.cutoff_tier,
         min_score_to_grab: criteria.min_score_to_grab,
-        facet_persona_overrides,
     }
 }
 
@@ -870,6 +849,7 @@ pub(crate) fn from_wanted_item(item: scryer_application::WantedItem) -> WantedIt
         title_name: item.title_name,
         episode_id: item.episode_id,
         collection_id: item.collection_id,
+        season_number: item.season_number,
         media_type: WantedMediaTypeValue::parse(&item.media_type)
             .expect("wanted item media_type should map to GraphQL enum"),
         search_phase: WantedSearchPhaseValue::parse(&item.search_phase)
@@ -1017,6 +997,39 @@ pub(crate) fn from_notification_subscription(
         is_enabled: sub.is_enabled,
         created_at: sub.created_at.to_rfc3339(),
         updated_at: sub.updated_at.to_rfc3339(),
+    }
+}
+
+pub(crate) fn from_domain_event(event: DomainEvent) -> DomainEventEnvelopePayload {
+    let (stream_kind, stream_id) = match event.stream {
+        scryer_domain::DomainEventStream::Global => ("global".to_string(), None),
+        scryer_domain::DomainEventStream::Title { title_id } => {
+            ("title".to_string(), Some(title_id))
+        }
+        scryer_domain::DomainEventStream::LibraryScan { session_id } => {
+            ("library_scan".to_string(), Some(session_id))
+        }
+        scryer_domain::DomainEventStream::JobRun { run_id } => {
+            ("job_run".to_string(), Some(run_id))
+        }
+        scryer_domain::DomainEventStream::DownloadQueueItem { item_id } => {
+            ("download_queue_item".to_string(), Some(item_id))
+        }
+    };
+
+    DomainEventEnvelopePayload {
+        sequence: event.sequence,
+        event_id: event.event_id,
+        occurred_at: event.occurred_at.to_rfc3339(),
+        actor_user_id: event.actor_user_id,
+        title_id: event.title_id,
+        facet: event.facet.map(MediaFacetValue::from_domain),
+        event_type: DomainEventTypeValue::from_domain(event.payload.event_type()),
+        stream_kind,
+        stream_id,
+        payload_json: async_graphql::Json(
+            serde_json::to_value(event.payload).unwrap_or(serde_json::Value::Null),
+        ),
     }
 }
 

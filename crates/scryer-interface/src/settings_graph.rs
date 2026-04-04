@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use async_graphql::{Error, Result as GqlResult};
 use scryer_application::{
     AppUseCase, QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY, QUALITY_PROFILE_INHERIT_VALUE,
-    QualityProfile, QualityProfileCriteria,
+    QualityProfile, QualityProfileCriteria, REQUIRED_AUDIO_LANGUAGES_KEY, SCORING_PERSONA_KEY,
+    TITLE_REQUIRED_AUDIO_OVERRIDE_KEY,
 };
 use scryer_domain::RootFolderEntry;
 use scryer_infrastructure::{SettingsValueRecord, SqliteServices};
@@ -107,6 +108,80 @@ fn read_override_setting_string(record: &Option<SettingsValueRecord>) -> Option<
         .as_ref()
         .and_then(|record| record.value_json.as_deref())
         .and_then(parse_string_json)
+}
+
+pub(crate) fn parse_string_list_json(raw_json: &str) -> Option<Vec<String>> {
+    serde_json::from_str::<Vec<String>>(raw_json)
+        .ok()
+        .map(normalize_audio_languages)
+}
+
+fn read_effective_setting_string_list(record: &Option<SettingsValueRecord>) -> Option<Vec<String>> {
+    record
+        .as_ref()
+        .and_then(|record| parse_string_list_json(&record.effective_value_json))
+}
+
+pub(crate) fn normalize_audio_languages(values: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for value in values {
+        if let Some(code) = scryer_application::normalize_detected_audio_language_code(&value)
+            && !normalized.contains(&code)
+        {
+            normalized.push(code);
+        }
+    }
+    normalized
+}
+
+fn parse_scoring_persona_value(value: Option<String>) -> ScoringPersonaValue {
+    match value.as_deref().map(str::trim) {
+        Some("Audiophile" | "audiophile") => ScoringPersonaValue::Audiophile,
+        Some("Efficient" | "efficient") => ScoringPersonaValue::Efficient,
+        Some("Compatible" | "compatible") => ScoringPersonaValue::Compatible,
+        _ => ScoringPersonaValue::Balanced,
+    }
+}
+
+pub(crate) async fn load_required_audio_languages_for_scope(
+    db: &SqliteServices,
+    scope: ContentScopeValue,
+) -> GqlResult<Vec<String>> {
+    let record = db
+        .get_setting_with_defaults(
+            SETTINGS_SCOPE_SYSTEM,
+            REQUIRED_AUDIO_LANGUAGES_KEY,
+            Some(scope.as_scope_id().to_string()),
+        )
+        .await
+        .map_err(|error| Error::new(error.to_string()))?;
+    Ok(read_effective_setting_string_list(&record).unwrap_or_default())
+}
+
+pub(crate) async fn load_title_required_audio_override(
+    db: &SqliteServices,
+    title_id: &str,
+) -> GqlResult<Option<Vec<String>>> {
+    let record = db
+        .get_setting_with_defaults(
+            SETTINGS_SCOPE_SYSTEM,
+            TITLE_REQUIRED_AUDIO_OVERRIDE_KEY,
+            Some(title_id.to_string()),
+        )
+        .await
+        .map_err(|error| Error::new(error.to_string()))?;
+
+    let raw_value = record
+        .as_ref()
+        .and_then(|record| record.value_json.as_deref())
+        .filter(|value| !value.trim().is_empty());
+    let Some(raw_value) = raw_value else {
+        return Ok(None);
+    };
+
+    serde_json::from_str::<Option<Vec<String>>>(raw_value)
+        .map(|value| value.map(normalize_audio_languages))
+        .map_err(|error| Error::new(format!("failed to parse title audio override: {error}")))
 }
 
 fn normalize_quality_profile(profile: QualityProfile) -> QualityProfile {
@@ -217,8 +292,15 @@ pub(crate) async fn load_quality_profile_settings_payload(
         .map_err(|error| Error::new(error.to_string()))?;
     let global_profile_id =
         resolve_global_profile_id(&profiles, read_effective_setting_string(&global_setting));
+    let global_persona_setting = db
+        .get_setting_with_defaults(SETTINGS_SCOPE_SYSTEM, SCORING_PERSONA_KEY, None::<String>)
+        .await
+        .map_err(|error| Error::new(error.to_string()))?;
+    let global_scoring_persona =
+        parse_scoring_persona_value(read_effective_setting_string(&global_persona_setting));
 
     let mut category_selections = Vec::with_capacity(3);
+    let mut category_persona_selections = Vec::with_capacity(3);
     for scope in [
         ContentScopeValue::Movie,
         ContentScopeValue::Series,
@@ -245,16 +327,40 @@ pub(crate) async fn load_quality_profile_settings_payload(
             effective_profile_id,
             inherits_global: true, // patched below
         });
+
+        let persona_record = db
+            .get_setting_with_defaults(
+                SETTINGS_SCOPE_SYSTEM,
+                SCORING_PERSONA_KEY,
+                Some(scope.as_scope_id().to_string()),
+            )
+            .await
+            .map_err(|error| Error::new(error.to_string()))?;
+        let override_persona = read_override_setting_string(&persona_record)
+            .filter(|value| value != QUALITY_PROFILE_INHERIT_VALUE)
+            .map(|value| parse_scoring_persona_value(Some(value)));
+        let effective_persona = override_persona.unwrap_or(global_scoring_persona);
+        category_persona_selections.push(FacetScoringPersonaSelectionPayload {
+            scope,
+            override_persona,
+            effective_persona,
+            inherits_global: true, // patched below
+        });
     }
 
     for selection in &mut category_selections {
         selection.inherits_global = selection.override_profile_id.is_none();
     }
+    for selection in &mut category_persona_selections {
+        selection.inherits_global = selection.override_persona.is_none();
+    }
 
     Ok(QualityProfileSettingsPayload {
         profiles: profiles.into_iter().map(from_quality_profile).collect(),
         global_profile_id,
+        global_scoring_persona,
         category_selections,
+        category_persona_selections,
     })
 }
 
@@ -263,13 +369,6 @@ pub(crate) fn quality_profile_from_input(
     existing: Option<&QualityProfile>,
 ) -> GqlResult<QualityProfile> {
     let criteria = input.criteria;
-    let mut facet_persona_overrides = HashMap::new();
-    for override_entry in criteria.facet_persona_overrides {
-        facet_persona_overrides.insert(
-            override_entry.scope.as_scope_id().to_string(),
-            override_entry.persona.into_application(),
-        );
-    }
 
     let profile = normalize_quality_profile(QualityProfile {
         id: input.id,
@@ -284,27 +383,21 @@ pub(crate) fn quality_profile_from_input(
             video_codec_blocklist: criteria.video_codec_blocklist,
             audio_codec_allowlist: criteria.audio_codec_allowlist,
             audio_codec_blocklist: criteria.audio_codec_blocklist,
-            atmos_preferred: criteria.atmos_preferred.unwrap_or(
-                existing
-                    .map(|profile| profile.criteria.atmos_preferred)
-                    .unwrap_or(false),
-            ),
+            atmos_preferred: existing
+                .map(|profile| profile.criteria.atmos_preferred)
+                .unwrap_or(false),
             dolby_vision_allowed: criteria.dolby_vision_allowed,
             detected_hdr_allowed: criteria.detected_hdr_allowed,
             prefer_remux: criteria.prefer_remux,
             allow_bd_disk: criteria.allow_bd_disk,
             allow_upgrades: criteria.allow_upgrades,
-            prefer_dual_audio: criteria.prefer_dual_audio.unwrap_or(
-                existing
-                    .map(|profile| profile.criteria.prefer_dual_audio)
-                    .unwrap_or(false),
-            ),
-            required_audio_languages: criteria.required_audio_languages,
-            scoring_persona: criteria.scoring_persona.into_application(),
+            prefer_dual_audio: false,
+            required_audio_languages: Vec::new(),
+            scoring_persona: scryer_application::ScoringPersona::Balanced,
             scoring_overrides: criteria.scoring_overrides.into_application(),
             cutoff_tier: criteria.cutoff_tier,
             min_score_to_grab: criteria.min_score_to_grab,
-            facet_persona_overrides,
+            facet_persona_overrides: HashMap::new(),
         },
     });
 
@@ -629,6 +722,7 @@ pub(crate) async fn load_media_settings_payload(
 
     let library_path = read_effective_setting_string(&library_record)
         .unwrap_or_else(|| default_library_path(scope).to_string());
+    let required_audio_languages = load_required_audio_languages_for_scope(db, scope).await?;
     let root_folders = app
         .root_folders_for_facet(&scope.into_media_facet())
         .await
@@ -644,6 +738,7 @@ pub(crate) async fn load_media_settings_payload(
         scope,
         library_path,
         root_folders,
+        required_audio_languages,
         rename_template: read_effective_setting_string(&scoped_rename_template)
             .or_else(|| read_effective_setting_string(&global_rename_template))
             .unwrap_or_else(|| default_rename_template(scope).to_string()),
@@ -783,6 +878,20 @@ pub(crate) async fn persist_media_settings(
         .await
         .map_err(|error| Error::new(error.to_string()))?;
         changed_keys.push(RENAME_TEMPLATE_KEY.to_string());
+    }
+
+    if let Some(required_audio_languages) = input.required_audio_languages {
+        db.upsert_setting_value(
+            SETTINGS_SCOPE_SYSTEM,
+            REQUIRED_AUDIO_LANGUAGES_KEY,
+            scope_id.clone(),
+            encode_json(&normalize_audio_languages(required_audio_languages))?,
+            SETTINGS_SOURCE_TYPED_GRAPHQL,
+            updated_by_user_id.clone(),
+        )
+        .await
+        .map_err(|error| Error::new(error.to_string()))?;
+        changed_keys.push(REQUIRED_AUDIO_LANGUAGES_KEY.to_string());
     }
 
     if let Some(policy) = normalize_optional_text(input.rename_collision_policy) {

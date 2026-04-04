@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::warn;
@@ -7,6 +7,10 @@ use super::*;
 use crate::acquisition_policy::AcquisitionThresholds;
 use crate::scoring_weights::ScoringPersona;
 use crate::subtitles::{normalize_subtitle_language_code, wanted::SubtitleLanguagePref};
+use crate::{
+    AUDIO_PERSONA_MIGRATION_SENTINEL_KEY, REQUIRED_AUDIO_LANGUAGES_KEY, SCORING_PERSONA_KEY,
+    TITLE_REQUIRED_AUDIO_OVERRIDE_KEY,
+};
 
 const SETTINGS_SOURCE_TYPED_GRAPHQL: &str = "typed_graphql";
 
@@ -147,6 +151,42 @@ fn normalize_delay_profile(mut profile: crate::DelayProfile) -> crate::DelayProf
     profile
 }
 
+fn parse_scoring_persona_setting(value: Option<String>) -> Option<ScoringPersona> {
+    match value?.trim() {
+        "Balanced" | "balanced" => Some(ScoringPersona::Balanced),
+        "Audiophile" | "audiophile" => Some(ScoringPersona::Audiophile),
+        "Efficient" | "efficient" => Some(ScoringPersona::Efficient),
+        "Compatible" | "compatible" => Some(ScoringPersona::Compatible),
+        _ => None,
+    }
+}
+
+fn global_persona_as_setting(persona: &ScoringPersona) -> &'static str {
+    match persona {
+        ScoringPersona::Balanced => "balanced",
+        ScoringPersona::Audiophile => "audiophile",
+        ScoringPersona::Efficient => "efficient",
+        ScoringPersona::Compatible => "compatible",
+    }
+}
+
+fn extract_languages_from_required_audio_rego(rego: &str) -> Vec<String> {
+    for line in rego.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("_required_langs := {")
+            && let Some(set_body) = rest.strip_suffix('}')
+        {
+            return normalize_required_audio_languages(
+                set_body
+                    .split(',')
+                    .map(|value| value.trim().trim_matches('"').to_string()),
+            );
+        }
+    }
+
+    Vec::new()
+}
+
 impl AppUseCase {
     pub(crate) async fn read_setting_bool_value(
         &self,
@@ -210,6 +250,411 @@ impl AppUseCase {
                 updated_by_user_id,
             )
             .await
+    }
+
+    pub(crate) async fn load_facet_required_audio_languages(
+        &self,
+        scope_id: &str,
+    ) -> AppResult<Vec<String>> {
+        Ok(normalize_required_audio_languages(
+            self.read_setting_json_value::<Vec<String>>(
+                REQUIRED_AUDIO_LANGUAGES_KEY,
+                Some(scope_id),
+            )
+            .await?
+            .unwrap_or_default(),
+        ))
+    }
+
+    pub(crate) async fn load_title_required_audio_override(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Option<Vec<String>>> {
+        let raw_value = self
+            .services
+            .settings
+            .get_setting_json(
+                SETTINGS_SCOPE_SYSTEM,
+                TITLE_REQUIRED_AUDIO_OVERRIDE_KEY,
+                Some(title_id.to_string()),
+            )
+            .await?;
+
+        let Some(raw_value) = raw_value else {
+            return Ok(None);
+        };
+
+        serde_json::from_str::<Option<Vec<String>>>(&raw_value)
+            .map(|value| value.map(normalize_required_audio_languages))
+            .map_err(|error| {
+                AppError::Repository(format!(
+                    "failed to parse setting '{TITLE_REQUIRED_AUDIO_OVERRIDE_KEY}' JSON value: {error}"
+                ))
+            })
+    }
+
+    pub(crate) async fn resolve_required_audio_languages(
+        &self,
+        title_id: Option<&str>,
+        scope_id: Option<&str>,
+        _quality_profile: Option<&crate::QualityProfile>,
+    ) -> AppResult<Vec<String>> {
+        if let Some(title_id) = title_id
+            && let Some(languages) = self.load_title_required_audio_override(title_id).await?
+        {
+            return Ok(languages);
+        }
+
+        if let Some(scope_id) = scope_id {
+            let languages = self.load_facet_required_audio_languages(scope_id).await?;
+            if !languages.is_empty() {
+                return Ok(languages);
+            }
+        }
+
+        Ok(Vec::new())
+    }
+
+    pub(crate) async fn resolve_scoring_persona(
+        &self,
+        scope_id: Option<&str>,
+        _quality_profile: Option<&crate::QualityProfile>,
+        _category_hint: Option<&str>,
+    ) -> AppResult<ScoringPersona> {
+        if let Some(scope_id) = scope_id
+            && let Some(persona) = parse_scoring_persona_setting(
+                self.read_setting_string_value(SCORING_PERSONA_KEY, Some(scope_id))
+                    .await?,
+            )
+        {
+            return Ok(persona);
+        }
+
+        if let Some(persona) = parse_scoring_persona_setting(
+            self.read_setting_string_value(SCORING_PERSONA_KEY, None)
+                .await?,
+        ) {
+            return Ok(persona);
+        }
+
+        Ok(ScoringPersona::default())
+    }
+
+    pub async fn set_title_required_audio_override(
+        &self,
+        actor: &User,
+        title_id: &str,
+        languages: Option<Vec<String>>,
+    ) -> AppResult<()> {
+        require(actor, &Entitlement::ManageTitle)?;
+
+        let payload = languages.map(normalize_required_audio_languages);
+        self.services
+            .settings
+            .upsert_setting_json(
+                SETTINGS_SCOPE_SYSTEM,
+                TITLE_REQUIRED_AUDIO_OVERRIDE_KEY,
+                Some(title_id.trim().to_string()),
+                serde_json::to_string(&payload)
+                    .map_err(|error| AppError::Repository(error.to_string()))?,
+                SETTINGS_SOURCE_TYPED_GRAPHQL,
+                Some(actor.id.clone()),
+            )
+            .await
+    }
+
+    pub async fn set_facet_required_audio_languages(
+        &self,
+        actor: &User,
+        scope_id: &str,
+        languages: Vec<String>,
+    ) -> AppResult<()> {
+        require(actor, &Entitlement::ManageConfig)?;
+
+        let normalized = normalize_required_audio_languages(languages);
+        self.services
+            .settings
+            .upsert_setting_json(
+                SETTINGS_SCOPE_SYSTEM,
+                REQUIRED_AUDIO_LANGUAGES_KEY,
+                Some(scope_id.trim().to_string()),
+                serde_json::to_string(&normalized)
+                    .map_err(|error| AppError::Repository(error.to_string()))?,
+                SETTINGS_SOURCE_TYPED_GRAPHQL,
+                Some(actor.id.clone()),
+            )
+            .await
+    }
+
+    pub async fn migrate_canonical_audio_persona_settings(&self) -> AppResult<()> {
+        if self
+            .read_setting_bool_value(AUDIO_PERSONA_MIGRATION_SENTINEL_KEY, None)
+            .await?
+            == Some(true)
+        {
+            return Ok(());
+        }
+
+        let mut changed_keys = Vec::new();
+
+        let existing_global_persona = parse_scoring_persona_setting(
+            self.read_setting_string_value(SCORING_PERSONA_KEY, None)
+                .await?,
+        );
+        let existing_facet_personas = {
+            let mut values = HashMap::new();
+            for scope_id in ["movie", "series", "anime"] {
+                if let Some(persona) = parse_scoring_persona_setting(
+                    self.read_setting_string_value(SCORING_PERSONA_KEY, Some(scope_id))
+                        .await?,
+                ) {
+                    values.insert(scope_id.to_string(), persona);
+                }
+            }
+            values
+        };
+
+        let profiles = self
+            .services
+            .quality_profiles
+            .list_quality_profiles(SETTINGS_SCOPE_SYSTEM, None)
+            .await
+            .unwrap_or_default();
+        let mut selected_profile_ids_by_scope = HashMap::new();
+        for scope_id in ["movie", "series", "anime"] {
+            selected_profile_ids_by_scope.insert(
+                scope_id.to_string(),
+                self.read_setting_string_value(QUALITY_PROFILE_ID_KEY, Some(scope_id))
+                    .await?,
+            );
+        }
+
+        let global_profile_id = self
+            .read_setting_string_value(QUALITY_PROFILE_ID_KEY, None)
+            .await?;
+        let selected_global_profile = global_profile_id
+            .as_deref()
+            .and_then(|profile_id| profiles.iter().find(|profile| profile.id == profile_id))
+            .or_else(|| profiles.first());
+        let global_persona = existing_global_persona.unwrap_or_else(|| {
+            selected_global_profile
+                .map(|profile| profile.criteria.scoring_persona.clone())
+                .unwrap_or_default()
+        });
+
+        self.upsert_system_setting_json(
+            SCORING_PERSONA_KEY,
+            &global_persona_as_setting(&global_persona),
+            None,
+        )
+        .await?;
+        changed_keys.push(SCORING_PERSONA_KEY.to_string());
+
+        for scope_id in ["movie", "series", "anime"] {
+            let selected_profile_id = selected_profile_ids_by_scope
+                .get(scope_id)
+                .cloned()
+                .flatten();
+            let profile = selected_profile_id
+                .as_deref()
+                .and_then(|profile_id| profiles.iter().find(|profile| profile.id == profile_id))
+                .or(selected_global_profile);
+            let effective_persona = existing_facet_personas
+                .get(scope_id)
+                .cloned()
+                .or_else(|| {
+                    profile.and_then(|profile| {
+                        profile
+                            .criteria
+                            .facet_persona_overrides
+                            .get(scope_id)
+                            .cloned()
+                            .or_else(|| Some(profile.criteria.scoring_persona.clone()))
+                    })
+                })
+                .unwrap_or_else(|| global_persona.clone());
+
+            if effective_persona != global_persona {
+                self.services
+                    .settings
+                    .upsert_setting_json(
+                        SETTINGS_SCOPE_SYSTEM,
+                        SCORING_PERSONA_KEY,
+                        Some(scope_id.to_string()),
+                        serde_json::to_string(&global_persona_as_setting(&effective_persona))
+                            .map_err(|error| AppError::Repository(error.to_string()))?,
+                        "startup-migration",
+                        None,
+                    )
+                    .await?;
+                if !changed_keys.iter().any(|key| key == SCORING_PERSONA_KEY) {
+                    changed_keys.push(SCORING_PERSONA_KEY.to_string());
+                }
+            }
+        }
+
+        let managed_required_audio = self
+            .services
+            .rule_sets
+            .list_rule_sets_by_managed_key_prefix("convenience:required-audio:")
+            .await
+            .unwrap_or_default();
+        let mut global_required_audio = Vec::new();
+        let mut facet_required_audio = HashMap::<String, Vec<String>>::new();
+        let mut title_overrides = Vec::<(String, Vec<String>)>::new();
+
+        for rule_set in &managed_required_audio {
+            let Some(managed_key) = rule_set.managed_key.as_deref() else {
+                continue;
+            };
+            let languages = extract_languages_from_required_audio_rego(&rule_set.rego_source);
+            if let Some(title_id) = managed_key.strip_prefix("convenience:required-audio:title:") {
+                title_overrides.push((title_id.to_string(), languages));
+            } else if let Some(scope_id) = managed_key.strip_prefix("convenience:required-audio:") {
+                if scope_id == "global" {
+                    global_required_audio = languages;
+                } else {
+                    facet_required_audio.insert(scope_id.to_string(), languages);
+                }
+            }
+        }
+
+        for scope_id in ["movie", "series", "anime"] {
+            let current = self.load_facet_required_audio_languages(scope_id).await?;
+            if !current.is_empty() {
+                continue;
+            }
+
+            let migrated = facet_required_audio
+                .get(scope_id)
+                .cloned()
+                .or_else(|| {
+                    (!global_required_audio.is_empty()).then(|| global_required_audio.clone())
+                })
+                .or_else(|| {
+                    let selected_profile_id = selected_profile_ids_by_scope
+                        .get(scope_id)
+                        .cloned()
+                        .flatten();
+                    selected_profile_id
+                        .as_deref()
+                        .and_then(|profile_id| {
+                            profiles.iter().find(|profile| profile.id == profile_id)
+                        })
+                        .or(selected_global_profile)
+                        .map(|profile| {
+                            normalize_required_audio_languages(
+                                profile.criteria.required_audio_languages.clone(),
+                            )
+                        })
+                })
+                .unwrap_or_default();
+
+            self.services
+                .settings
+                .upsert_setting_json(
+                    SETTINGS_SCOPE_SYSTEM,
+                    REQUIRED_AUDIO_LANGUAGES_KEY,
+                    Some(scope_id.to_string()),
+                    serde_json::to_string(&migrated)
+                        .map_err(|error| AppError::Repository(error.to_string()))?,
+                    "startup-migration",
+                    None,
+                )
+                .await?;
+            if !changed_keys
+                .iter()
+                .any(|key| key == REQUIRED_AUDIO_LANGUAGES_KEY)
+            {
+                changed_keys.push(REQUIRED_AUDIO_LANGUAGES_KEY.to_string());
+            }
+        }
+
+        for (title_id, languages) in title_overrides {
+            self.services
+                .settings
+                .upsert_setting_json(
+                    SETTINGS_SCOPE_SYSTEM,
+                    TITLE_REQUIRED_AUDIO_OVERRIDE_KEY,
+                    Some(title_id),
+                    serde_json::to_string(&Some(languages))
+                        .map_err(|error| AppError::Repository(error.to_string()))?,
+                    "startup-migration",
+                    None,
+                )
+                .await?;
+            if !changed_keys
+                .iter()
+                .any(|key| key == TITLE_REQUIRED_AUDIO_OVERRIDE_KEY)
+            {
+                changed_keys.push(TITLE_REQUIRED_AUDIO_OVERRIDE_KEY.to_string());
+            }
+        }
+
+        for rule_set in managed_required_audio {
+            self.services
+                .rule_sets
+                .delete_rule_set(&rule_set.id)
+                .await?;
+        }
+
+        let legacy_dual_rules = self.services.rule_sets.list_rule_sets().await?;
+        for rule_set in legacy_dual_rules {
+            let managed_key = rule_set.managed_key.as_deref().unwrap_or_default();
+            let description = rule_set.description.as_str();
+            let rego_source = rule_set.rego_source.as_str();
+            if managed_key.starts_with("convenience:prefer-dual-audio:")
+                || description.contains("legacy-prefer-dual-audio:")
+                || rego_source.contains("legacy-prefer-dual-audio:")
+            {
+                self.services
+                    .rule_sets
+                    .delete_rule_set(&rule_set.id)
+                    .await?;
+            }
+        }
+
+        let scrubbed_profiles: Vec<crate::QualityProfile> = profiles
+            .into_iter()
+            .map(|mut profile| {
+                profile.criteria.prefer_dual_audio = false;
+                profile.criteria.required_audio_languages.clear();
+                profile.criteria.scoring_persona = ScoringPersona::Balanced;
+                profile.criteria.facet_persona_overrides.clear();
+                profile
+            })
+            .collect();
+        self.services
+            .quality_profiles
+            .replace_quality_profiles(SETTINGS_SCOPE_SYSTEM, None, scrubbed_profiles)
+            .await?;
+        if !changed_keys
+            .iter()
+            .any(|key| key == QUALITY_PROFILE_CATALOG_KEY)
+        {
+            changed_keys.push(QUALITY_PROFILE_CATALOG_KEY.to_string());
+        }
+
+        self.rebuild_user_rules_engine().await?;
+
+        if !changed_keys.is_empty() {
+            let _ = self.services.settings_changed_broadcast.send(changed_keys);
+        }
+
+        self.services
+            .settings
+            .upsert_setting_json(
+                SETTINGS_SCOPE_SYSTEM,
+                AUDIO_PERSONA_MIGRATION_SENTINEL_KEY,
+                None,
+                serde_json::to_string(&true)
+                    .map_err(|error| AppError::Repository(error.to_string()))?,
+                "startup-migration",
+                None,
+            )
+            .await?;
+
+        Ok(())
     }
 
     async fn load_subtitle_settings(&self) -> AppResult<SubtitleSettings> {
@@ -509,18 +954,13 @@ impl AppUseCase {
             changed_keys.push(SUBTITLES_OPENSUBTITLES_PASSWORD_KEY.to_string());
         }
 
-        let _ = self
-            .services
-            .record_activity_event(
-                Some(actor.id.clone()),
-                None,
-                None,
-                ActivityKind::SettingSaved,
-                "subtitle settings updated".to_string(),
-                ActivitySeverity::Success,
-                vec![ActivityChannel::Toast, ActivityChannel::WebUi],
-            )
-            .await;
+        self.emit_configuration_changed_event(
+            Some(actor.id.clone()),
+            "subtitle_settings",
+            None,
+            scryer_domain::ConfigurationChangeAction::Updated,
+        )
+        .await;
         let _ = self.services.settings_changed_broadcast.send(changed_keys);
 
         self.load_subtitle_settings().await
@@ -602,18 +1042,13 @@ impl AppUseCase {
         )
         .await?;
 
-        let _ = self
-            .services
-            .record_activity_event(
-                Some(actor.id.clone()),
-                None,
-                None,
-                ActivityKind::SettingSaved,
-                "acquisition settings updated".to_string(),
-                ActivitySeverity::Success,
-                vec![ActivityChannel::Toast, ActivityChannel::WebUi],
-            )
-            .await;
+        self.emit_configuration_changed_event(
+            Some(actor.id.clone()),
+            "acquisition_settings",
+            None,
+            scryer_domain::ConfigurationChangeAction::Updated,
+        )
+        .await;
         let _ = self.services.settings_changed_broadcast.send(vec![
             ACQUISITION_ENABLED_KEY.to_string(),
             ACQUISITION_UPGRADE_COOLDOWN_HOURS_KEY.to_string(),
@@ -661,18 +1096,13 @@ impl AppUseCase {
         )
         .await?;
 
-        let _ = self
-            .services
-            .record_activity_event(
-                Some(actor.id.clone()),
-                None,
-                None,
-                ActivityKind::SettingSaved,
-                format!("delay profile '{}' saved", profile.name),
-                ActivitySeverity::Success,
-                vec![ActivityChannel::Toast, ActivityChannel::WebUi],
-            )
-            .await;
+        self.emit_configuration_changed_event(
+            Some(actor.id.clone()),
+            "delay_profile",
+            Some(profile.id.clone()),
+            scryer_domain::ConfigurationChangeAction::Saved,
+        )
+        .await;
         let _ = self.services.settings_changed_broadcast.send(vec![
             crate::delay_profile::DELAY_PROFILE_CATALOG_KEY.to_string(),
         ]);
@@ -707,18 +1137,13 @@ impl AppUseCase {
         )
         .await?;
 
-        let _ = self
-            .services
-            .record_activity_event(
-                Some(actor.id.clone()),
-                None,
-                None,
-                ActivityKind::SettingSaved,
-                format!("delay profile '{}' deleted", profile_id),
-                ActivitySeverity::Success,
-                vec![ActivityChannel::Toast, ActivityChannel::WebUi],
-            )
-            .await;
+        self.emit_configuration_changed_event(
+            Some(actor.id.clone()),
+            "delay_profile",
+            Some(profile_id.clone()),
+            scryer_domain::ConfigurationChangeAction::Deleted,
+        )
+        .await;
         let _ = self.services.settings_changed_broadcast.send(vec![
             crate::delay_profile::DELAY_PROFILE_CATALOG_KEY.to_string(),
         ]);

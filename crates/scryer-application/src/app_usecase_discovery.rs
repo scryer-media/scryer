@@ -65,7 +65,7 @@ pub(crate) fn is_indexer_http_error(error: &AppError) -> bool {
     extract_indexer_http_status(error).is_some_and(is_4xx_or_5xx_status)
 }
 
-fn release_search_key(result: &IndexerSearchResult) -> String {
+pub(crate) fn release_search_key(result: &IndexerSearchResult) -> String {
     if let Some(download_url) = result
         .download_url
         .as_deref()
@@ -87,7 +87,139 @@ fn release_search_key(result: &IndexerSearchResult) -> String {
     result.title.clone()
 }
 
+pub(crate) fn dedupe_cross_indexer_release_results(
+    results: Vec<IndexerSearchResult>,
+    indexer_priority_by_name: &HashMap<String, i64>,
+    preferred_source_kind: &str,
+) -> Vec<IndexerSearchResult> {
+    let mut best_by_key: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let mut remove_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
+
+    for (idx, result) in results.iter().enumerate() {
+        let key = result
+            .parsed_release_metadata
+            .as_ref()
+            .map(crate::release_dedup::build_release_dedup_key)
+            .unwrap_or_default();
+        if key.is_empty() {
+            continue;
+        }
+
+        if let Some(&existing_idx) = best_by_key.get(&key) {
+            let existing = &results[existing_idx];
+
+            let existing_prio = indexer_priority_by_name
+                .get(&existing.source)
+                .copied()
+                .unwrap_or(i64::MAX);
+            let new_prio = indexer_priority_by_name
+                .get(&result.source)
+                .copied()
+                .unwrap_or(i64::MAX);
+
+            let new_wins = if new_prio != existing_prio {
+                new_prio < existing_prio
+            } else {
+                let existing_preferred =
+                    source_kind_matches_preference(existing, preferred_source_kind);
+                let new_preferred = source_kind_matches_preference(result, preferred_source_kind);
+                new_preferred && !existing_preferred
+            };
+
+            if new_wins {
+                remove_indices.insert(existing_idx);
+                best_by_key.insert(key, idx);
+            } else {
+                remove_indices.insert(idx);
+            }
+        } else {
+            best_by_key.insert(key, idx);
+        }
+    }
+
+    if remove_indices.is_empty() {
+        return results;
+    }
+
+    let before = results.len();
+    let mut idx = 0usize;
+    let mut deduped = results;
+    deduped.retain(|_| {
+        let keep = !remove_indices.contains(&idx);
+        idx += 1;
+        keep
+    });
+    info!(before, after = deduped.len(), "cross-indexer release dedup");
+    deduped
+}
+
 impl AppUseCase {
+    pub(crate) async fn download_source_capabilities(&self) -> (bool, bool, String) {
+        let clients = self
+            .services
+            .download_client_configs
+            .list(None)
+            .await
+            .unwrap_or_default();
+        let enabled: Vec<_> = clients.iter().filter(|c| c.is_enabled).collect();
+        let plugin_provider = self.services.download_client_plugin_provider.as_ref();
+        let client_accepts = |c: &&scryer_domain::DownloadClientConfig,
+                              kind: DownloadSourceKind| {
+            let inputs = crate::accepted_inputs_for_client(&c.client_type, plugin_provider);
+            inputs.contains(&kind)
+        };
+        let has_usenet = enabled
+            .iter()
+            .any(|c| client_accepts(c, DownloadSourceKind::NzbFile));
+        let has_torrent = enabled.iter().any(|c| {
+            client_accepts(c, DownloadSourceKind::TorrentFile)
+                || client_accepts(c, DownloadSourceKind::MagnetUri)
+        });
+        let preferred = enabled
+            .iter()
+            .min_by_key(|c| c.client_priority)
+            .map(|c| {
+                if client_accepts(c, DownloadSourceKind::NzbFile) {
+                    "nzb"
+                } else {
+                    "torrent"
+                }
+            })
+            .unwrap_or("nzb")
+            .to_string();
+
+        (has_usenet, has_torrent, preferred)
+    }
+
+    pub(crate) async fn build_indexer_priority_by_name(
+        &self,
+        indexer_routing: Option<&IndexerRoutingPlan>,
+    ) -> HashMap<String, i64> {
+        let Some(plan) = indexer_routing else {
+            return HashMap::new();
+        };
+
+        let configs = self
+            .services
+            .indexer_configs
+            .list(None)
+            .await
+            .unwrap_or_default();
+        let id_to_name: std::collections::HashMap<&str, &str> = configs
+            .iter()
+            .map(|c| (c.id.as_str(), c.name.as_str()))
+            .collect();
+        plan.entries
+            .iter()
+            .filter_map(|(id, entry)| {
+                id_to_name
+                    .get(id.as_str())
+                    .map(|name| (name.to_string(), entry.priority))
+            })
+            .collect()
+    }
+
     pub(crate) async fn record_indexer_http_error_timestamp(&self, error: &AppError) {
         if !is_indexer_http_error(error) {
             return;
@@ -103,6 +235,240 @@ impl AppUseCase {
         }
     }
 
+    pub(crate) async fn score_release_results(
+        &self,
+        mut raw_results: Vec<IndexerSearchResult>,
+        quality_profile: &QualityProfile,
+        title_id: Option<&str>,
+        scope_id: Option<&str>,
+        indexer_routing: Option<&IndexerRoutingPlan>,
+        category: Option<&str>,
+        title_tags: &[String],
+        runtime_minutes: Option<i32>,
+        season: Option<u32>,
+        episode: Option<u32>,
+        absolute_episode: Option<u32>,
+    ) -> Vec<IndexerSearchResult> {
+        let failed_signatures = match self
+            .services
+            .release_attempts
+            .list_failed_release_signatures(5000)
+            .await
+        {
+            Ok(items) => items,
+            Err(error) => {
+                warn!(error = %error, "failed to load failed release blocklist signatures");
+                Vec::new()
+            }
+        };
+
+        let failed_source_hints: std::collections::HashSet<String> = failed_signatures
+            .iter()
+            .filter_map(|signature| {
+                normalize_release_attempt_hint(signature.source_hint.as_deref())
+            })
+            .collect();
+        let failed_source_titles: std::collections::HashSet<String> = failed_signatures
+            .iter()
+            .filter_map(|signature| {
+                normalize_release_attempt_title(signature.source_title.as_deref())
+            })
+            .collect();
+
+        let (has_usenet_client, has_torrent_client, preferred_source_kind) =
+            self.download_source_capabilities().await;
+
+        raw_results.retain(|result| match result.source_kind {
+            Some(DownloadSourceKind::NzbFile | DownloadSourceKind::NzbUrl) => has_usenet_client,
+            Some(DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri) => {
+                has_torrent_client
+            }
+            None => true,
+        });
+
+        let user_rules_engine = self
+            .services
+            .user_rules
+            .read()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| scryer_rules::UserRulesEngine::empty());
+        let mut user_evaluator = user_rules_engine.evaluator();
+        let resolved_persona = self
+            .resolve_scoring_persona(scope_id, Some(quality_profile), category)
+            .await
+            .unwrap_or_else(|error| {
+                warn!(error = %error, "failed to resolve scoring persona, using canonical default");
+                crate::ScoringPersona::default()
+            });
+        let required_audio_languages = self
+            .resolve_required_audio_languages(title_id, scope_id, Some(quality_profile))
+            .await
+            .unwrap_or_else(|error| {
+                warn!(
+                    error = %error,
+                    "failed to resolve required audio languages, using canonical default"
+                );
+                Vec::new()
+            });
+        let mut resolved_profile = quality_profile.clone();
+        resolved_profile.criteria.required_audio_languages = required_audio_languages;
+        resolved_profile.criteria.scoring_persona = resolved_persona.clone();
+        resolved_profile.criteria.facet_persona_overrides.clear();
+
+        let mut scored = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        for result in raw_results {
+            let key = release_search_key(&result);
+            if !seen.insert(key) {
+                continue;
+            }
+
+            if is_release_blocklisted(&result, &failed_source_hints, &failed_source_titles) {
+                continue;
+            }
+
+            let parsed_release_metadata = parse_release_metadata(&result.title);
+            let mut scored_release_metadata = parsed_release_metadata.clone();
+            scored_release_metadata.languages_audio = crate::release_audio_language_hints(
+                &parsed_release_metadata,
+                result.indexer_languages.as_deref(),
+            );
+
+            if let Some(ref ep_meta) = scored_release_metadata.episode {
+                if let Some(wanted_season) = season
+                    && let Some(parsed_season) = ep_meta.season
+                    && parsed_season != wanted_season
+                {
+                    continue;
+                }
+                if let Some(wanted_episode) = episode {
+                    if !ep_meta.episode_numbers.is_empty()
+                        && !ep_meta.episode_numbers.contains(&wanted_episode)
+                    {
+                        continue;
+                    }
+                    if ep_meta.episode_numbers.is_empty()
+                        && let (Some(parsed_abs), Some(wanted_abs)) =
+                            (ep_meta.absolute_episode, absolute_episode)
+                        && parsed_abs != wanted_abs
+                    {
+                        continue;
+                    }
+                }
+            }
+
+            let weights = crate::scoring_weights::build_weights_for_category(
+                &resolved_persona,
+                &resolved_profile.criteria.scoring_overrides,
+                category,
+            );
+            let mut decision = evaluate_against_profile_for_category(
+                &resolved_profile,
+                &scored_release_metadata,
+                false,
+                &weights,
+                category,
+            );
+            apply_age_scoring(&mut decision, result.published_at.as_deref());
+            crate::quality_profile::apply_size_scoring_for_category(
+                &mut decision,
+                &scored_release_metadata,
+                result.size_bytes,
+                category,
+                runtime_minutes,
+                &weights,
+            );
+
+            if !user_rules_engine.is_empty() {
+                let user_input = crate::app_usecase_discovery::build_user_rule_input(
+                    &scored_release_metadata,
+                    &resolved_profile,
+                    &result,
+                    &decision,
+                    category,
+                    title_tags,
+                    runtime_minutes,
+                );
+                let facet = category.unwrap_or("movie");
+                match user_evaluator.evaluate(&user_input, facet) {
+                    Ok(eval_result) => {
+                        for entry in eval_result.entries {
+                            decision.log_with_source(
+                                &entry.code,
+                                entry.delta,
+                                ScoringSource::UserRule {
+                                    id: entry.rule_set_id,
+                                    name: entry.rule_set_name,
+                                },
+                            );
+                        }
+                        for err in eval_result.errors {
+                            decision.log_with_source(
+                                "user_rule_error",
+                                0,
+                                ScoringSource::UserRule {
+                                    id: err.rule_set_id,
+                                    name: err.rule_set_name,
+                                },
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        warn!(error = %error, "user rule evaluation failed for release");
+                    }
+                }
+            }
+
+            scored.push(IndexerSearchResult {
+                parsed_release_metadata: Some(scored_release_metadata),
+                quality_profile_decision: Some(decision),
+                ..result
+            });
+        }
+
+        let indexer_priority_by_name = self.build_indexer_priority_by_name(indexer_routing).await;
+        let mut scored = dedupe_cross_indexer_release_results(
+            scored,
+            &indexer_priority_by_name,
+            preferred_source_kind.as_str(),
+        );
+
+        scored.sort_by(|left, right| {
+            let left_allowed = left
+                .quality_profile_decision
+                .as_ref()
+                .map(|decision| decision.allowed)
+                .unwrap_or(true);
+            let right_allowed = right
+                .quality_profile_decision
+                .as_ref()
+                .map(|decision| decision.allowed)
+                .unwrap_or(true);
+
+            match (left_allowed, right_allowed) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => {
+                    let left_score = left
+                        .quality_profile_decision
+                        .as_ref()
+                        .map(|decision| decision.preference_score)
+                        .unwrap_or(0);
+                    let right_score = right
+                        .quality_profile_decision
+                        .as_ref()
+                        .map(|decision| decision.preference_score)
+                        .unwrap_or(0);
+
+                    right_score.cmp(&left_score)
+                }
+            }
+        });
+
+        scored
+    }
+
     /// Internal search+score pipeline shared by both user-facing search and background acquisition.
     pub(crate) async fn search_and_score_releases(
         &self,
@@ -112,6 +478,7 @@ impl AppUseCase {
         anidb_id: Option<String>,
         category: Option<String>,
         facet: Option<String>,
+        title_id: Option<&str>,
         title_tags: &[String],
         caller_label: &str,
         mode: SearchMode,
@@ -232,331 +599,21 @@ impl AppUseCase {
             return Err(AppError::Repository(details));
         }
 
-        let failed_signatures = match self
-            .services
-            .release_attempts
-            .list_failed_release_signatures(5000)
-            .await
-        {
-            Ok(items) => items,
-            Err(error) => {
-                warn!(error = %error, "failed to load failed release blocklist signatures");
-                Vec::new()
-            }
-        };
-
-        let failed_source_hints: std::collections::HashSet<String> = failed_signatures
-            .iter()
-            .filter_map(|signature| {
-                normalize_release_attempt_hint(signature.source_hint.as_deref())
-            })
-            .collect();
-        let failed_source_titles: std::collections::HashSet<String> = failed_signatures
-            .iter()
-            .filter_map(|signature| {
-                normalize_release_attempt_title(signature.source_title.as_deref())
-            })
-            .collect();
-
-        // Determine which source kinds (NZB, torrent) the user can actually use
-        // based on their enabled download clients' declared capabilities, and
-        // which kind is preferred (lowest client_priority wins).
-        let (has_usenet_client, has_torrent_client, preferred_source_kind) = {
-            let clients = self
-                .services
-                .download_client_configs
-                .list(None)
-                .await
-                .unwrap_or_default();
-            let enabled: Vec<_> = clients.iter().filter(|c| c.is_enabled).collect();
-            let plugin_provider = self.services.download_client_plugin_provider.as_ref();
-            let client_accepts = |c: &&scryer_domain::DownloadClientConfig,
-                                  kind: DownloadSourceKind| {
-                let inputs = crate::accepted_inputs_for_client(&c.client_type, plugin_provider);
-                inputs.contains(&kind)
-            };
-            let has_usenet = enabled
-                .iter()
-                .any(|c| client_accepts(c, DownloadSourceKind::NzbFile));
-            let has_torrent = enabled.iter().any(|c| {
-                client_accepts(c, DownloadSourceKind::TorrentFile)
-                    || client_accepts(c, DownloadSourceKind::MagnetUri)
-            });
-            let preferred = enabled
-                .iter()
-                .min_by_key(|c| c.client_priority)
-                .map(|c| {
-                    if client_accepts(c, DownloadSourceKind::NzbFile) {
-                        "nzb"
-                    } else {
-                        "torrent"
-                    }
-                })
-                .unwrap_or("nzb");
-            (has_usenet, has_torrent, preferred)
-        };
-
-        // Filter out results with no compatible download client before expensive parsing/scoring.
-        raw_results.retain(|r| match r.source_kind {
-            Some(DownloadSourceKind::NzbFile | DownloadSourceKind::NzbUrl) => has_usenet_client,
-            Some(DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri) => {
-                has_torrent_client
-            }
-            None => true,
-        });
-
-        // Clone the user rules engine for this batch (cheap Arc clone).
-        let user_rules_engine = self
-            .services
-            .user_rules
-            .read()
-            .map(|guard| guard.clone())
-            .unwrap_or_else(|_| scryer_rules::UserRulesEngine::empty());
-        let mut user_evaluator = user_rules_engine.evaluator();
-
-        let mut deduped = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-
-        for result in raw_results {
-            let key = release_search_key(&result);
-            if !seen.insert(key) {
-                continue;
-            }
-
-            if is_release_blocklisted(&result, &failed_source_hints, &failed_source_titles) {
-                continue;
-            }
-
-            let parsed_release_metadata = parse_release_metadata(&result.title);
-
-            // Post-filter: skip results whose parsed season/episode doesn't match
-            // the requested values. Indexers don't always respect API params.
-            if let Some(ref ep_meta) = parsed_release_metadata.episode {
-                if let Some(wanted_season) = season
-                    && let Some(parsed_season) = ep_meta.season
-                    && parsed_season != wanted_season
-                {
-                    continue;
-                }
-                if let Some(wanted_episode) = episode {
-                    // For SxxExx-style releases, check episode_numbers
-                    if !ep_meta.episode_numbers.is_empty()
-                        && !ep_meta.episode_numbers.contains(&wanted_episode)
-                    {
-                        continue;
-                    }
-                    // For absolute-numbered releases (common in anime), check
-                    // against the known absolute episode number from TVDB
-                    if ep_meta.episode_numbers.is_empty()
-                        && let (Some(parsed_abs), Some(wanted_abs)) =
-                            (ep_meta.absolute_episode, absolute_episode)
-                        && parsed_abs != wanted_abs
-                    {
-                        continue;
-                    }
-                }
-            }
-
-            let persona = quality_profile
-                .criteria
-                .resolve_persona(category.as_deref());
-            let weights = crate::scoring_weights::build_weights_for_category(
-                persona,
-                &quality_profile.criteria.scoring_overrides,
-                category.as_deref(),
-            );
-            let mut decision = evaluate_against_profile_for_category(
+        Ok(self
+            .score_release_results(
+                raw_results,
                 &quality_profile,
-                &parsed_release_metadata,
-                false,
-                &weights,
+                title_id,
+                scope_id.as_deref(),
+                indexer_routing.as_ref(),
                 category.as_deref(),
-            );
-            apply_age_scoring(&mut decision, result.published_at.as_deref());
-            crate::quality_profile::apply_size_scoring_for_category(
-                &mut decision,
-                &parsed_release_metadata,
-                result.size_bytes,
-                category.as_deref(),
+                title_tags,
                 runtime_minutes,
-                &weights,
-            );
-            // ── User rules (additive, after all built-in scoring) ───────
-            // NZBGeek vote scoring is now handled by plugin-declared Rego
-            // policies (nzbgeek_vote_penalty, nzbgeek_language_bonus) that
-            // run as part of the user rules evaluation below.
-            if !user_rules_engine.is_empty() {
-                let user_input = crate::app_usecase_discovery::build_user_rule_input(
-                    &parsed_release_metadata,
-                    &quality_profile,
-                    &result,
-                    &decision,
-                    category.as_deref(),
-                    title_tags,
-                    runtime_minutes,
-                );
-                let facet = category.as_deref().unwrap_or("movie");
-                match user_evaluator.evaluate(&user_input, facet) {
-                    Ok(eval_result) => {
-                        for entry in eval_result.entries {
-                            decision.log_with_source(
-                                &entry.code,
-                                entry.delta,
-                                ScoringSource::UserRule {
-                                    id: entry.rule_set_id,
-                                    name: entry.rule_set_name,
-                                },
-                            );
-                        }
-                        for err in eval_result.errors {
-                            decision.log_with_source(
-                                "user_rule_error",
-                                0,
-                                ScoringSource::UserRule {
-                                    id: err.rule_set_id,
-                                    name: err.rule_set_name,
-                                },
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "user rule evaluation failed for release");
-                    }
-                }
-            }
-
-            deduped.push(IndexerSearchResult {
-                parsed_release_metadata: Some(parsed_release_metadata),
-                quality_profile_decision: Some(decision),
-                ..result
-            });
-        }
-
-        // Cross-indexer dedup: same release from multiple indexers.
-        // Prefer: (1) higher-priority indexer for this facet, (2) source kind
-        // matching the user's highest-priority download client.
-        {
-            // Build indexer name → priority lookup from the routing plan.
-            // Indexers not in the routing plan get MAX priority (lowest preference).
-            let indexer_priority_by_name: std::collections::HashMap<String, i64> =
-                if let Some(ref plan) = indexer_routing {
-                    let configs = self
-                        .services
-                        .indexer_configs
-                        .list(None)
-                        .await
-                        .unwrap_or_default();
-                    let id_to_name: std::collections::HashMap<&str, &str> = configs
-                        .iter()
-                        .map(|c| (c.id.as_str(), c.name.as_str()))
-                        .collect();
-                    plan.entries
-                        .iter()
-                        .filter_map(|(id, entry)| {
-                            id_to_name
-                                .get(id.as_str())
-                                .map(|name| (name.to_string(), entry.priority))
-                        })
-                        .collect()
-                } else {
-                    std::collections::HashMap::new()
-                };
-
-            let mut best_by_key: std::collections::HashMap<String, usize> =
-                std::collections::HashMap::new();
-            let mut remove_indices: std::collections::HashSet<usize> =
-                std::collections::HashSet::new();
-
-            for (idx, result) in deduped.iter().enumerate() {
-                let key = result
-                    .parsed_release_metadata
-                    .as_ref()
-                    .map(crate::release_dedup::build_release_dedup_key)
-                    .unwrap_or_default();
-                if key.is_empty() {
-                    continue;
-                }
-
-                if let Some(&existing_idx) = best_by_key.get(&key) {
-                    let existing = &deduped[existing_idx];
-
-                    // Compare indexer priority first (lower = better)
-                    let existing_prio = indexer_priority_by_name
-                        .get(&existing.source)
-                        .copied()
-                        .unwrap_or(i64::MAX);
-                    let new_prio = indexer_priority_by_name
-                        .get(&result.source)
-                        .copied()
-                        .unwrap_or(i64::MAX);
-
-                    let new_wins = if new_prio != existing_prio {
-                        new_prio < existing_prio
-                    } else {
-                        // Same indexer priority — break tie by download client preference
-                        let existing_preferred =
-                            source_kind_matches_preference(existing, preferred_source_kind);
-                        let new_preferred =
-                            source_kind_matches_preference(result, preferred_source_kind);
-                        new_preferred && !existing_preferred
-                    };
-
-                    if new_wins {
-                        remove_indices.insert(existing_idx);
-                        best_by_key.insert(key, idx);
-                    } else {
-                        remove_indices.insert(idx);
-                    }
-                } else {
-                    best_by_key.insert(key, idx);
-                }
-            }
-
-            if !remove_indices.is_empty() {
-                let before = deduped.len();
-                let mut idx = 0usize;
-                deduped.retain(|_| {
-                    let keep = !remove_indices.contains(&idx);
-                    idx += 1;
-                    keep
-                });
-                info!(before, after = deduped.len(), "cross-indexer release dedup");
-            }
-        }
-
-        deduped.sort_by(|left, right| {
-            let left_allowed = left
-                .quality_profile_decision
-                .as_ref()
-                .map(|decision| decision.allowed)
-                .unwrap_or(true);
-            let right_allowed = right
-                .quality_profile_decision
-                .as_ref()
-                .map(|decision| decision.allowed)
-                .unwrap_or(true);
-
-            match (left_allowed, right_allowed) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                _ => {
-                    let left_score = left
-                        .quality_profile_decision
-                        .as_ref()
-                        .map(|decision| decision.preference_score)
-                        .unwrap_or(0);
-                    let right_score = right
-                        .quality_profile_decision
-                        .as_ref()
-                        .map(|decision| decision.preference_score)
-                        .unwrap_or(0);
-
-                    right_score.cmp(&left_score)
-                }
-            }
-        });
-
-        Ok(deduped)
+                season,
+                episode,
+                absolute_episode,
+            )
+            .await)
     }
 
     async fn search_indexer_queries(
@@ -580,6 +637,7 @@ impl AppUseCase {
             anidb_id,
             category,
             facet,
+            None,
             &[],
             &actor.id,
             SearchMode::Interactive,
@@ -659,23 +717,13 @@ impl AppUseCase {
             count = results.len(),
             "indexer search returned results"
         );
-        let _ = self
-            .services
-            .record_activity_event(
-                Some(actor.id.clone()),
-                None,
-                None,
-                ActivityKind::MovieFetched,
-                format!(
-                    "{} searched: {} ({} results)",
-                    activity_media_label,
-                    display_source,
-                    results.len()
-                ),
-                ActivitySeverity::Info,
-                vec![ActivityChannel::WebUi],
-            )
-            .await;
+        self.emit_discovery_search_completed_event(
+            Some(actor.id.clone()),
+            activity_media_label.to_string(),
+            Some(display_source),
+            results.len() as i64,
+        )
+        .await;
 
         Ok(results)
     }
@@ -754,25 +802,16 @@ impl AppUseCase {
 
         let activity_media_label = activity_media_label(normalized_category.as_deref());
 
-        let _ = self
-            .services
-            .record_activity_event(
-                Some(actor.id.clone()),
-                None,
-                None,
-                ActivityKind::MovieFetched,
-                format!(
-                    "{} searched: {} S{:0>2}E{:0>2} ({} results)",
-                    activity_media_label,
-                    normalized_title,
-                    season_num,
-                    episode_num,
-                    results.len()
-                ),
-                ActivitySeverity::Info,
-                vec![ActivityChannel::WebUi],
-            )
-            .await;
+        self.emit_discovery_search_completed_event(
+            Some(actor.id.clone()),
+            activity_media_label.to_string(),
+            Some(format!(
+                "{} S{:0>2}E{:0>2}",
+                normalized_title, season_num, episode_num
+            )),
+            results.len() as i64,
+        )
+        .await;
 
         Ok(results)
     }
@@ -839,23 +878,13 @@ impl AppUseCase {
             )
             .await?;
 
-        let _ = self
-            .services
-            .record_activity_event(
-                Some(actor.id.clone()),
-                None,
-                None,
-                ActivityKind::MovieFetched,
-                format!(
-                    "{} searched: {} ({} results)",
-                    category,
-                    query,
-                    results.len()
-                ),
-                ActivitySeverity::Info,
-                vec![ActivityChannel::WebUi],
-            )
-            .await;
+        self.emit_discovery_search_completed_event(
+            Some(actor.id.clone()),
+            category,
+            Some(query),
+            results.len() as i64,
+        )
+        .await;
 
         Ok(results)
     }
@@ -987,23 +1016,13 @@ impl AppUseCase {
             )
             .await?;
 
-        let _ = self
-            .services
-            .record_activity_event(
-                Some(actor.id.clone()),
-                None,
-                None,
-                ActivityKind::MovieFetched,
-                format!(
-                    "{} searched: {} ({} results)",
-                    category,
-                    queries[0],
-                    results.len()
-                ),
-                ActivitySeverity::Info,
-                vec![ActivityChannel::WebUi],
-            )
-            .await;
+        self.emit_discovery_search_completed_event(
+            Some(actor.id.clone()),
+            category,
+            queries.into_iter().next(),
+            results.len() as i64,
+        )
+        .await;
 
         Ok(results)
     }
@@ -1154,7 +1173,7 @@ impl AppUseCase {
         }
     }
 
-    fn quality_profile_scope_id(
+    pub(crate) fn quality_profile_scope_id(
         &self,
         imdb_id: Option<&str>,
         tvdb_id: Option<&str>,

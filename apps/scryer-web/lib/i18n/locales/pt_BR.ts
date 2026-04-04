@@ -485,6 +485,10 @@ const pt_BR: LocaleDictionary = {
   "queue.manualImportFailed": "Falha ao adicionar importação manual à fila.",
   "queue.manualImportTooltip":
     "A importação manual está disponível para itens da fila que precisam de atenção.",
+  "queue.releaseTitle": "Release",
+  "queue.blockReason": "Motivo do bloqueio",
+  "queue.showDetails": "Mostrar detalhes",
+  "queue.hideDetails": "Ocultar detalhes",
   "queue.pause": "Pausar",
   "queue.pausing": "Pausando…",
   "queue.pauseSuccess": "Download pausado.",

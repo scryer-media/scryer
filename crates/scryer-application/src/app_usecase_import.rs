@@ -1,16 +1,20 @@
 use crate::{
-    ActivityChannel, ActivityKind, ActivitySeverity, AppError, AppResult, AppUseCase,
-    ImportArtifact, WantedCompleteTransition,
-    activity::{NotificationMediaUpdate, build_lifecycle_notification_metadata},
+    AppError, AppResult, AppUseCase, ImportArtifact, WantedCompleteTransition,
+    activity::NotificationMediaUpdate,
     app_usecase_post_processing::{PostProcessingContext, spawn_post_processing},
+    domain_events::{
+        created_media_update, new_global_domain_event, new_title_domain_event,
+        title_context_snapshot,
+    },
     nfo::{render_episode_nfo, render_movie_nfo, render_plexmatch, render_tvshow_nfo},
     parse_release_metadata, render_rename_template, require,
 };
 use chrono::Utc;
 use scryer_domain::{
-    Collection, CollectionType, CompletedDownload, DownloadQueueItem, DownloadQueueState,
-    Entitlement, EventType, Id, ImportDecision, ImportResult, ImportSkipReason, ImportStatus,
-    ImportType, MediaFacet, NotificationEventType, Title, User, is_video_file,
+    Collection, CollectionType, CompletedDownload, DomainEventPayload, DownloadQueueItem,
+    DownloadQueueState, Entitlement, Id, ImportCompletedEventData, ImportDecision,
+    ImportRejectedEventData, ImportResult, ImportSkipReason, ImportStatus, ImportType, MediaFacet,
+    Title, User, is_video_file,
 };
 use std::collections::BTreeMap;
 use std::collections::HashSet;
@@ -123,21 +127,11 @@ pub async fn try_import_completed_downloads(
     {
         Ok(recovered) if recovered > 0 => {
             tracing::warn!(recovered, "recovered stale processing imports → failed");
-            let _ = app
-                .services
-                .record_activity_event(
-                    Some(actor.id.clone()),
-                    None,
-                    None,
-                    ActivityKind::SystemNotice,
-                    format!(
-                        "{} stale import(s) recovered as failed — check import history",
-                        recovered
-                    ),
-                    ActivitySeverity::Warning,
-                    vec![ActivityChannel::WebUi],
-                )
-                .await;
+            app.emit_import_recovery_completed_event(
+                Some(actor.id.clone()),
+                i64::try_from(recovered).unwrap_or(i64::MAX),
+            )
+            .await;
         }
         Err(error) => {
             tracing::warn!(error = %error, "failed to recover stale processing imports");
@@ -629,26 +623,17 @@ async fn run_import(
                 completed.name
             );
 
-            let _ = app
-                .services
-                .record_event(
-                    Some(actor.id.clone()),
-                    None,
-                    EventType::Error,
-                    unmatched_msg.clone(),
-                )
-                .await;
-
             app.services
-                .record_activity_event(
+                .append_domain_event(new_global_domain_event(
                     Some(actor.id.clone()),
-                    None,
-                    None,
-                    ActivityKind::SystemNotice,
-                    unmatched_msg,
-                    ActivitySeverity::Warning,
-                    vec![ActivityChannel::WebUi],
-                )
+                    DomainEventPayload::ImportRejected(ImportRejectedEventData {
+                        title: None,
+                        status: ImportStatus::Skipped,
+                        source_path: Some(completed.dest_dir.clone()),
+                        reason: Some(unmatched_msg),
+                        episode_ids: Vec::new(),
+                    }),
+                ))
                 .await?;
 
             return Ok(result);
@@ -872,8 +857,12 @@ async fn import_movie_download(
 
     // Upgrade check: if there are existing files, score and compare
     if !existing_files.is_empty() {
+        let (required_audio_languages, persona) =
+            resolve_import_audio_persona(app, title, &quality_profile).await;
         let new_decision = crate::post_download_gate::build_import_profile_decision(
             &quality_profile,
+            &required_audio_languages,
+            &persona,
             &parsed,
             crate::post_download_gate::facet_to_category_hint(&title.facet),
             title.runtime_minutes,
@@ -1095,13 +1084,15 @@ async fn import_movie_download(
 
             // Compute acquisition score with mediainfo rescore
             let acq_score = crate::post_download_gate::compute_acquisition_score(
+                app,
                 &parsed,
                 &accepted,
                 &quality_profile,
                 title,
                 file_result.size_bytes as i64,
                 !existing_files.is_empty(),
-            );
+            )
+            .await;
 
             // Record media file with rich metadata
             let media_file_input = crate::InsertMediaFileInput {
@@ -1231,49 +1222,20 @@ async fn import_movie_download(
                 .update_import_status_and_notify(import_id, ImportStatus::Completed, result_json)
                 .await?;
 
-            // Emit events
-            let event_message = format!(
-                "Imported '{}' via {} to {}",
-                title.name,
-                file_result.strategy.as_str(),
-                dest_path.display()
-            );
-            let _ = app
-                .services
-                .record_event(
+            app.services
+                .append_domain_event(new_title_domain_event(
                     Some(actor.id.clone()),
-                    Some(title.id.clone()),
-                    EventType::ActionCompleted,
-                    event_message.clone(),
-                )
-                .await;
-            {
-                let meta = build_lifecycle_notification_metadata(
                     title,
-                    [NotificationMediaUpdate::created(
-                        dest_path.to_string_lossy().to_string(),
-                    )],
-                );
-                let envelope = crate::activity::NotificationEnvelope {
-                    event_type: NotificationEventType::Download,
-                    title: format!("Downloaded: {}", title.name),
-                    body: event_message.clone(),
-                    facet: Some(format!("{:?}", title.facet).to_lowercase()),
-                    metadata: meta,
-                };
-                app.services
-                    .record_activity_event_with_notification(
-                        Some(actor.id.clone()),
-                        Some(title.id.clone()),
-                        None,
-                        ActivityKind::MovieDownloaded,
-                        event_message,
-                        ActivitySeverity::Success,
-                        vec![ActivityChannel::WebUi],
-                        envelope,
-                    )
-                    .await?;
-            }
+                    DomainEventPayload::ImportCompleted(ImportCompletedEventData {
+                        title: title_context_snapshot(title),
+                        media_updates: vec![created_media_update(
+                            dest_path.to_string_lossy().to_string(),
+                        )],
+                        imported_count: 1,
+                        episode_ids: Vec::new(),
+                    }),
+                ))
+                .await?;
 
             Ok(result)
         }
@@ -1408,8 +1370,12 @@ async fn import_interstitial_movie_download(
 
     // Upgrade check: if there's an existing file for this interstitial, score and compare
     if !collection_files.is_empty() {
+        let (required_audio_languages, persona) =
+            resolve_import_audio_persona(app, title, &quality_profile).await;
         let new_decision = crate::post_download_gate::build_import_profile_decision(
             &quality_profile,
+            &required_audio_languages,
+            &persona,
             &parsed,
             crate::post_download_gate::facet_to_category_hint(&title.facet),
             Some(movie.runtime_minutes),
@@ -1651,13 +1617,15 @@ async fn import_interstitial_movie_download(
         }
         crate::post_download_gate::ImportedFileGateDecision::Accepted(accepted) => {
             let acq_score = crate::post_download_gate::compute_acquisition_score(
+                app,
                 &parsed,
                 &accepted,
                 &quality_profile,
                 title,
                 file_result.size_bytes as i64,
                 !collection_files.is_empty(),
-            );
+            )
+            .await;
 
             // Persist media analysis from the gate
             let imported_media_file_id = if let Ok(file_id) = app
@@ -1800,48 +1768,20 @@ async fn import_interstitial_movie_download(
         .update_import_status_and_notify(import_id, ImportStatus::Completed, result_json)
         .await?;
 
-    // Emit activity event
-    let event_message = format!(
-        "Imported interstitial movie '{}' ({}) for '{}'",
-        movie.name, season_episode, title.name
-    );
-    let _ = app
-        .services
-        .record_event(
+    app.services
+        .append_domain_event(new_title_domain_event(
             Some(actor.id.clone()),
-            Some(title.id.clone()),
-            EventType::ActionCompleted,
-            event_message.clone(),
-        )
-        .await;
-    {
-        let mut meta = build_lifecycle_notification_metadata(
             title,
-            [NotificationMediaUpdate::created(
-                dest_path.to_string_lossy().to_string(),
-            )],
-        );
-        meta.insert("movie_name".to_string(), serde_json::json!(movie.name));
-        let envelope = crate::activity::NotificationEnvelope {
-            event_type: NotificationEventType::Download,
-            title: format!("Downloaded: {} - {}", title.name, movie.name),
-            body: event_message.clone(),
-            facet: Some("anime".to_string()),
-            metadata: meta,
-        };
-        app.services
-            .record_activity_event_with_notification(
-                Some(actor.id.clone()),
-                Some(title.id.clone()),
-                None,
-                ActivityKind::MovieDownloaded,
-                event_message,
-                ActivitySeverity::Success,
-                vec![ActivityChannel::WebUi],
-                envelope,
-            )
-            .await?;
-    }
+            DomainEventPayload::ImportCompleted(ImportCompletedEventData {
+                title: title_context_snapshot(title),
+                media_updates: vec![created_media_update(
+                    dest_path.to_string_lossy().to_string(),
+                )],
+                imported_count: 1,
+                episode_ids: Vec::new(),
+            }),
+        ))
+        .await?;
 
     Ok(result)
 }
@@ -1942,6 +1882,7 @@ async fn import_series_download(
     let mut last_error: Option<String> = None;
     let mut last_rejection_skip_reason: Option<ImportSkipReason> = None;
     let mut imported_updates: Vec<NotificationMediaUpdate> = Vec::new();
+    let mut imported_episode_ids: Vec<String> = Vec::new();
 
     for source_video in video_files {
         match import_single_episode_file(
@@ -1959,9 +1900,13 @@ async fn import_series_download(
         )
         .await
         {
-            Ok(EpisodeImportOutcome::Imported { dest_path }) => {
+            Ok(EpisodeImportOutcome::Imported {
+                dest_path,
+                episode_ids,
+            }) => {
                 imported_count += 1;
                 imported_updates.push(NotificationMediaUpdate::created(dest_path));
+                imported_episode_ids.extend(episode_ids);
             }
             Ok(EpisodeImportOutcome::Skipped) => skipped_count += 1,
             Ok(EpisodeImportOutcome::Rejected {
@@ -2036,43 +1981,21 @@ async fn import_series_download(
         .await?;
 
     if imported_count > 0 {
-        let event_message = format!(
-            "Imported {} of {} episode files for '{}'",
-            imported_count,
-            video_files.len(),
-            title.name
-        );
-        let _ = app
-            .services
-            .record_event(
+        app.services
+            .append_domain_event(new_title_domain_event(
                 Some(actor.id.clone()),
-                Some(title.id.clone()),
-                EventType::ActionCompleted,
-                event_message.clone(),
-            )
-            .await;
-        {
-            let meta = build_lifecycle_notification_metadata(title, imported_updates);
-            let envelope = crate::activity::NotificationEnvelope {
-                event_type: NotificationEventType::ImportComplete,
-                title: format!("Import complete: {}", title.name),
-                body: event_message.clone(),
-                facet: Some(format!("{:?}", title.facet).to_lowercase()),
-                metadata: meta,
-            };
-            app.services
-                .record_activity_event_with_notification(
-                    Some(actor.id.clone()),
-                    Some(title.id.clone()),
-                    None,
-                    ActivityKind::SeriesEpisodeImported,
-                    event_message,
-                    ActivitySeverity::Success,
-                    vec![ActivityChannel::WebUi],
-                    envelope,
-                )
-                .await?;
-        }
+                title,
+                DomainEventPayload::ImportCompleted(ImportCompletedEventData {
+                    title: title_context_snapshot(title),
+                    media_updates: imported_updates
+                        .into_iter()
+                        .map(|update| created_media_update(update.path))
+                        .collect(),
+                    imported_count: imported_count as i32,
+                    episode_ids: imported_episode_ids,
+                }),
+            ))
+            .await?;
     }
 
     Ok(result)
@@ -2081,6 +2004,7 @@ async fn import_series_download(
 enum EpisodeImportOutcome {
     Imported {
         dest_path: String,
+        episode_ids: Vec<String>,
     },
     Skipped,
     Rejected {
@@ -2213,8 +2137,12 @@ async fn import_single_episode_file(
 
     // Upgrade check for episodes: find existing file for same dest path
     if !existing_files.is_empty() {
+        let (required_audio_languages, persona) =
+            resolve_import_audio_persona(app, title, quality_profile).await;
         let new_decision = crate::post_download_gate::build_import_profile_decision(
             quality_profile,
+            &required_audio_languages,
+            &persona,
             &parsed,
             crate::post_download_gate::facet_to_category_hint(&title.facet),
             title.runtime_minutes,
@@ -2277,6 +2205,7 @@ async fn import_single_episode_file(
                         }
                         return Ok(EpisodeImportOutcome::Imported {
                             dest_path: dest_path.to_string_lossy().to_string(),
+                            episode_ids: target_episode_ids.clone(),
                         });
                     }
                     Ok(crate::upgrade::UpgradeResult::Rejected(rejection)) => {
@@ -2387,13 +2316,15 @@ async fn import_single_episode_file(
         .iter()
         .any(|file| file.file_path == existing_dest_path.as_str());
     let acq_score = crate::post_download_gate::compute_acquisition_score(
+        app,
         &parsed,
         &accepted,
         quality_profile,
         title,
         file_result.size_bytes as i64,
         has_existing,
-    );
+    )
+    .await;
 
     let media_file_input = crate::InsertMediaFileInput {
         title_id: title.id.clone(),
@@ -2473,6 +2404,7 @@ async fn import_single_episode_file(
 
     Ok(EpisodeImportOutcome::Imported {
         dest_path: dest_path.to_string_lossy().to_string(),
+        episode_ids: target_episode_ids,
     })
 }
 
@@ -2726,6 +2658,32 @@ async fn resolve_import_quality_profile(
             crate::default_quality_profile_for_search()
         }
     }
+}
+
+async fn resolve_import_audio_persona(
+    app: &AppUseCase,
+    title: &scryer_domain::Title,
+    quality_profile: &crate::QualityProfile,
+) -> (Vec<String>, crate::ScoringPersona) {
+    let category_hint = crate::post_download_gate::facet_to_category_hint(&title.facet);
+    let required_audio_languages = app
+        .resolve_required_audio_languages(
+            Some(&title.id),
+            Some(category_hint),
+            Some(quality_profile),
+        )
+        .await
+        .unwrap_or_default();
+    let persona = app
+        .resolve_scoring_persona(
+            Some(category_hint),
+            Some(quality_profile),
+            Some(category_hint),
+        )
+        .await
+        .unwrap_or_default();
+
+    (required_audio_languages, persona)
 }
 
 pub(crate) async fn resolve_target_episodes(
@@ -3628,45 +3586,27 @@ pub async fn execute_manual_import(
         })
         .collect();
 
-    // Emit summary event
     let success_count = results.iter().filter(|r| r.success).count();
-    let event_message = format!(
-        "Manual import: {} of {} files imported for '{}'",
-        success_count,
-        results.len(),
-        title.name
-    );
-    let _ = app
-        .services
-        .record_event(
+    let episode_ids = results
+        .iter()
+        .filter(|result| result.success)
+        .map(|result| result.episode_id.clone())
+        .collect::<Vec<_>>();
+    app.services
+        .append_domain_event(new_title_domain_event(
             Some(actor.id.clone()),
-            Some(title.id.clone()),
-            EventType::ActionCompleted,
-            event_message.clone(),
-        )
-        .await;
-    {
-        let meta = build_lifecycle_notification_metadata(&title, imported_updates);
-        let envelope = crate::activity::NotificationEnvelope {
-            event_type: NotificationEventType::ImportComplete,
-            title: format!("Import complete: {}", title.name),
-            body: event_message.clone(),
-            facet: Some(format!("{:?}", title.facet).to_lowercase()),
-            metadata: meta,
-        };
-        app.services
-            .record_activity_event_with_notification(
-                Some(actor.id.clone()),
-                Some(title.id.clone()),
-                None,
-                ActivityKind::SeriesEpisodeImported,
-                event_message,
-                ActivitySeverity::Success,
-                vec![ActivityChannel::WebUi],
-                envelope,
-            )
-            .await?;
-    }
+            &title,
+            DomainEventPayload::ImportCompleted(ImportCompletedEventData {
+                title: title_context_snapshot(&title),
+                media_updates: imported_updates
+                    .into_iter()
+                    .map(|update| created_media_update(update.path))
+                    .collect(),
+                imported_count: success_count as i32,
+                episode_ids,
+            }),
+        ))
+        .await?;
 
     Ok(results)
 }

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use scryer_domain::ImportFileResult;
-use scryer_domain::{ImportRecord, ImportStatus};
+use scryer_domain::{DomainEvent, DomainEventFilter, ImportRecord, ImportStatus, NewDomainEvent};
 
 use scryer_domain::RuleSet;
 
@@ -13,11 +13,11 @@ use scryer_domain::PluginInstallation;
 use scryer_domain::{BlocklistEntry, TitleHistoryEventType, TitleHistoryRecord};
 
 use crate::{
-    AppError, AppResult, BlocklistRepository, DownloadSubmission, DownloadSubmissionRepository,
-    FileImporter, HousekeepingRepository, ImportArtifact, ImportArtifactRepository,
-    ImportRepository, IndexerQueryStats, IndexerStatsTracker, JobKey, JobRunRecord,
-    JobRunRepository, LibraryProbeRepository, LibraryProbeSignature, MediaFileRepository,
-    NewBlocklistEntry, NewTitleHistoryEvent, NotificationChannelRepository,
+    AppError, AppResult, BlocklistRepository, DomainEventRepository, DownloadSubmission,
+    DownloadSubmissionRepository, FileImporter, HousekeepingRepository, ImportArtifact,
+    ImportArtifactRepository, ImportRepository, IndexerQueryStats, IndexerStatsTracker, JobKey,
+    JobRunRecord, JobRunRepository, LibraryProbeRepository, LibraryProbeSignature,
+    MediaFileRepository, NewBlocklistEntry, NewTitleHistoryEvent, NotificationChannelRepository,
     NotificationSubscriptionRepository, PendingRelease, PendingReleaseRepository, PendingStagedNzb,
     PluginInstallationRepository, PostProcessingScriptRepository, ReleaseDecision,
     RuleSetRepository, SettingsRepository, StagedNzbRef, StagedNzbStore, SystemInfoProvider,
@@ -570,7 +570,7 @@ impl NotificationSubscriptionRepository for NullNotificationSubscriptionReposito
     }
     async fn list_subscriptions_for_event(
         &self,
-        _event_type: &str,
+        _event_type: scryer_domain::NotificationEventType,
     ) -> AppResult<Vec<scryer_domain::NotificationSubscription>> {
         Ok(vec![])
     }
@@ -598,6 +598,40 @@ impl NotificationSubscriptionRepository for NullNotificationSubscriptionReposito
 }
 
 #[derive(Default)]
+pub struct NullDomainEventRepository;
+
+#[async_trait]
+impl DomainEventRepository for NullDomainEventRepository {
+    async fn append(&self, _: NewDomainEvent) -> AppResult<DomainEvent> {
+        Err(AppError::Repository(
+            "domain event repository is not configured".to_string(),
+        ))
+    }
+
+    async fn append_many(&self, _: Vec<NewDomainEvent>) -> AppResult<Vec<DomainEvent>> {
+        Err(AppError::Repository(
+            "domain event repository is not configured".to_string(),
+        ))
+    }
+
+    async fn list(&self, _: &DomainEventFilter) -> AppResult<Vec<DomainEvent>> {
+        Ok(vec![])
+    }
+
+    async fn list_after_sequence(&self, _: i64, _: usize) -> AppResult<Vec<DomainEvent>> {
+        Ok(vec![])
+    }
+
+    async fn get_subscriber_offset(&self, _: &str) -> AppResult<i64> {
+        Ok(0)
+    }
+
+    async fn set_subscriber_offset(&self, _: &str, _: i64) -> AppResult<()> {
+        Ok(())
+    }
+}
+
+#[derive(Default)]
 pub struct NullHousekeepingRepository;
 
 #[async_trait]
@@ -612,6 +646,9 @@ impl HousekeepingRepository for NullHousekeepingRepository {
         Ok(0)
     }
     async fn delete_history_events_older_than(&self, _days: i64) -> AppResult<u32> {
+        Ok(0)
+    }
+    async fn delete_domain_events_older_than(&self, _days: i64) -> AppResult<u32> {
         Ok(0)
     }
     async fn list_all_media_file_paths(&self) -> AppResult<Vec<(String, String)>> {
@@ -973,16 +1010,16 @@ impl LibraryProbeRepository for NullLibraryProbeRepository {
 pub mod test_nulls {
     use crate::{
         AppError, AppResult, DownloadClient, DownloadClientAddRequest,
-        DownloadClientConfigRepository, DownloadGrabResult, EventRepository, IndexerClient,
-        IndexerRoutingPlan, IndexerSearchResponse, PrimaryCollectionSummary, QualityProfile,
-        QualityProfileRepository, ReleaseAttemptRepository, ReleaseDownloadAttemptOutcome,
-        ReleaseDownloadFailureSignature, SearchMode, ShowRepository, TitleMetadataUpdate,
-        TitleReleaseBlocklistEntry, TitleRepository, UserRepository,
+        DownloadClientConfigRepository, DownloadGrabResult, IndexerClient, IndexerRoutingPlan,
+        IndexerSearchResponse, PrimaryCollectionSummary, QualityProfile, QualityProfileRepository,
+        ReleaseAttemptRepository, ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature,
+        SearchMode, ShowRepository, TitleMetadataUpdate, TitleReleaseBlocklistEntry,
+        TitleRepository, UserRepository,
     };
     use async_trait::async_trait;
     use scryer_domain::{
-        CalendarEpisode, Collection, DownloadClientConfig, Entitlement, Episode, HistoryEvent,
-        MediaFacet, Title, User,
+        CalendarEpisode, Collection, DownloadClientConfig, Entitlement, Episode, MediaFacet, Title,
+        User,
     };
 
     #[derive(Default)]
@@ -1076,6 +1113,20 @@ pub mod test_nulls {
             _: Option<String>,
             _: Option<String>,
             _: Option<bool>,
+        ) -> AppResult<Collection> {
+            Err(AppError::Repository("not configured".into()))
+        }
+        async fn update_collection_interstitial_movie(
+            &self,
+            _: &str,
+            _: scryer_domain::InterstitialMovieMetadata,
+        ) -> AppResult<Collection> {
+            Err(AppError::Repository("not configured".into()))
+        }
+        async fn update_collection_specials_movies(
+            &self,
+            _: &str,
+            _: Vec<scryer_domain::InterstitialMovieMetadata>,
         ) -> AppResult<Collection> {
             Err(AppError::Repository("not configured".into()))
         }
@@ -1186,19 +1237,6 @@ pub mod test_nulls {
             Err(AppError::Repository("not configured".into()))
         }
         async fn delete(&self, _: &str) -> AppResult<()> {
-            Ok(())
-        }
-    }
-
-    #[derive(Default)]
-    pub struct NullEventRepository;
-
-    #[async_trait]
-    impl EventRepository for NullEventRepository {
-        async fn list(&self, _: Option<String>, _: i64, _: i64) -> AppResult<Vec<HistoryEvent>> {
-            Ok(vec![])
-        }
-        async fn append(&self, _: HistoryEvent) -> AppResult<()> {
             Ok(())
         }
     }
@@ -1328,6 +1366,15 @@ pub mod test_nulls {
             _: Option<String>,
         ) -> AppResult<Vec<QualityProfile>> {
             Ok(vec![])
+        }
+
+        async fn replace_quality_profiles(
+            &self,
+            _: &str,
+            _: Option<String>,
+            _: Vec<QualityProfile>,
+        ) -> AppResult<()> {
+            Ok(())
         }
     }
 }

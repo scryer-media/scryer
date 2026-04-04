@@ -14,8 +14,10 @@ import {
 import { SearchResultBuckets } from "@/components/common/release-search-results";
 import { TitleHistoryModal } from "@/components/common/title-history-modal";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 import type { Translate } from "@/components/root/types";
 import type { Release, WantedItem } from "@/lib/types";
+import { useClient } from "urql";
 import type {
   MediaRenamePlan,
   TitleReleaseBlocklistEntry,
@@ -33,6 +35,8 @@ import { SubtitleSearchModal } from "@/components/views/subtitle-search-modal";
 import { TitlePoster } from "@/components/title-poster";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
 import type { WantedSearchPhase, WantedStatus } from "@/lib/types";
+import { SubtitleLanguagePicker } from "@/components/common/subtitle-language-picker";
+import { setTitleRequiredAudioMutation } from "@/lib/graphql/mutations";
 
 const imdbLogoUrl = `${import.meta.env.BASE_URL}media-sites/imdb.svg`;
 const tmdbLogoUrl = `${import.meta.env.BASE_URL}media-sites/tmdb.svg`;
@@ -187,19 +191,27 @@ function TitleSettingsPanel({
   qualityProfiles,
   defaultRootFolder,
   onUpdateTitleOptions,
+  onTitleChanged,
   onOpenFixMatch,
 }: {
   title: TitleDetail;
   qualityProfiles: { id: string; name: string }[];
   defaultRootFolder: string;
   onUpdateTitleOptions: (options: TitleOptionUpdates) => Promise<void>;
+  onTitleChanged?: () => Promise<void> | void;
   onOpenFixMatch?: () => void;
 }) {
   const t = useTranslate();
+  const client = useClient();
+  const setGlobalStatus = useGlobalStatus();
   const currentProfileId = title.qualityProfileId?.trim() || INHERIT_VALUE;
   const currentRootFolder = title.rootFolderPath?.trim() || "";
+  const requiredAudioLanguages =
+    title.effectiveRequiredAudioLanguages ?? [];
+  const hasAudioOverride = title.inheritsRequiredAudioLanguages === false;
   const [rootFolderDraft, setRootFolderDraft] = React.useState(currentRootFolder || defaultRootFolder);
   const [saving, setSaving] = React.useState(false);
+  const [audioSaving, setAudioSaving] = React.useState(false);
 
   // Sync draft when title changes externally
   React.useEffect(() => {
@@ -234,6 +246,44 @@ function TitleSettingsPanel({
       await onUpdateTitleOptions({ rootFolderPath: trimmed });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleRequiredAudioChange = async (languages: string[]) => {
+    setAudioSaving(true);
+    try {
+      const { error } = await client
+        .mutation(setTitleRequiredAudioMutation, {
+          input: { titleId: title.id, facet: title.facet, languages },
+        })
+        .toPromise();
+      if (error) {
+        throw error;
+      }
+      await onTitleChanged?.();
+    } catch {
+      setGlobalStatus(t("status.failedToUpdate"));
+    } finally {
+      setAudioSaving(false);
+    }
+  };
+
+  const handleResetAudioOverride = async () => {
+    setAudioSaving(true);
+    try {
+      const { error } = await client
+        .mutation(setTitleRequiredAudioMutation, {
+          input: { titleId: title.id, facet: title.facet, languages: null },
+        })
+        .toPromise();
+      if (error) {
+        throw error;
+      }
+      await onTitleChanged?.();
+    } catch {
+      setGlobalStatus(t("status.failedToUpdate"));
+    } finally {
+      setAudioSaving(false);
     }
   };
 
@@ -291,6 +341,28 @@ function TitleSettingsPanel({
             )}
           </div>
         </div>
+
+        <div className="min-w-0">
+          <label className="mb-1 block text-xs font-medium text-muted-foreground">
+            {t("title.requiredAudioLanguages")}
+          </label>
+          <SubtitleLanguagePicker
+            value={requiredAudioLanguages}
+            onChange={(codes) => void handleRequiredAudioChange(codes)}
+            compact
+            disabled={audioSaving}
+          />
+          {hasAudioOverride ? (
+            <button
+              type="button"
+              className="mt-1 text-xs text-primary hover:underline"
+              onClick={() => void handleResetAudioOverride()}
+              disabled={audioSaving}
+            >
+              {t("title.requiredAudioResetInherit")}
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {onOpenFixMatch ? (
@@ -337,6 +409,7 @@ type Props = {
   onQueue: (r: Release) => void;
   onSearchMonitored: () => void;
   onRefreshAndScan: () => void;
+  onTitleChanged?: () => Promise<void> | void;
   onPreviewRename: () => void;
   onApplyRename: () => void;
   onBackToList?: () => void;
@@ -379,6 +452,7 @@ export function MovieOverviewView({
   onQueue,
   onSearchMonitored,
   onRefreshAndScan,
+  onTitleChanged,
   onPreviewRename,
   onApplyRename,
   onBackToList,
@@ -724,6 +798,7 @@ export function MovieOverviewView({
               qualityProfiles={qualityProfiles}
               defaultRootFolder={defaultRootFolder}
               onUpdateTitleOptions={onUpdateTitleOptions}
+              onTitleChanged={onTitleChanged}
               onOpenFixMatch={onOpenFixMatch}
             />
         )}

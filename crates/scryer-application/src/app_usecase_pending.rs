@@ -1,7 +1,7 @@
 use super::*;
+use crate::domain_events::{new_title_domain_event, title_context_snapshot};
 use chrono::{Duration, Utc};
-use scryer_domain::NotificationEventType;
-use std::collections::HashMap;
+use scryer_domain::{DomainEventPayload, ReleaseGrabbedEventData};
 use tracing::{info, warn};
 
 use crate::delay_profile::DelayProfile;
@@ -396,9 +396,11 @@ impl AppUseCase {
             return Ok(false);
         }
 
-        let thresholds = self
-            .acquisition_thresholds(&profile.criteria.scoring_persona)
-            .await;
+        let persona = self
+            .resolve_scoring_persona(Some(category), Some(&profile), Some(category))
+            .await
+            .unwrap_or_default();
+        let thresholds = self.acquisition_thresholds(&persona).await;
         let decision = crate::acquisition_policy::evaluate_upgrade(
             pr.release_score,
             wanted.current_score,
@@ -510,6 +512,7 @@ impl AppUseCase {
                     "source": "pending_release",
                 })
                 .to_string();
+                let download_job_id = grab.job_id.clone();
 
                 self.services
                     .acquisition_state
@@ -532,41 +535,20 @@ impl AppUseCase {
                     })
                     .await?;
 
-                {
-                    let mut grab_meta = HashMap::new();
-                    grab_meta.insert("title_name".to_string(), serde_json::json!(title.name));
-                    grab_meta.insert(
-                        "release_title".to_string(),
-                        serde_json::json!(pr.release_title),
-                    );
-                    grab_meta.insert("score".to_string(), serde_json::json!(pr.release_score));
-                    let grab_envelope = crate::activity::NotificationEnvelope {
-                        event_type: NotificationEventType::Grab,
-                        title: format!("Grabbed: {}", title.name),
-                        body: format!(
-                            "Pending release '{}' grabbed for {} (score: {})",
-                            pr.release_title, title.name, pr.release_score
-                        ),
-                        facet: Some(format!("{:?}", title.facet).to_lowercase()),
-                        metadata: grab_meta,
-                    };
-                    let _ = self
-                        .services
-                        .record_activity_event_with_notification(
-                            None,
-                            Some(title.id.clone()),
-                            None,
-                            ActivityKind::MovieDownloaded,
-                            format!(
-                                "Pending release grabbed: {} (score: {})",
-                                pr.release_title, pr.release_score
-                            ),
-                            ActivitySeverity::Success,
-                            vec![ActivityChannel::WebUi, ActivityChannel::Toast],
-                            grab_envelope,
-                        )
-                        .await;
-                }
+                let _ = self
+                    .services
+                    .append_domain_event(new_title_domain_event(
+                        None,
+                        &title,
+                        DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+                            title: title_context_snapshot(&title),
+                            source_title: Some(pr.release_title.clone()),
+                            source_hint: None,
+                            download_id: Some(download_job_id),
+                            episode_ids: wanted.episode_id.iter().cloned().collect(),
+                        }),
+                    ))
+                    .await;
 
                 Ok(true)
             }

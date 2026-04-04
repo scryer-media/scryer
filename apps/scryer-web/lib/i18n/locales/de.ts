@@ -497,6 +497,10 @@ const de: LocaleDictionary = {
   "queue.manualImportFailed": "Manueller Import konnte nicht eingereiht werden.",
   "queue.manualImportTooltip":
     "Manueller Import ist für Warteschlangenelemente verfügbar, die Aufmerksamkeit erfordern.",
+  "queue.releaseTitle": "Release",
+  "queue.blockReason": "Sperrgrund",
+  "queue.showDetails": "Details anzeigen",
+  "queue.hideDetails": "Details ausblenden",
   "queue.pause": "Pausieren",
   "queue.pausing": "Wird pausiert…",
   "queue.pauseSuccess": "Download pausiert.",

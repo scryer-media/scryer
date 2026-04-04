@@ -368,7 +368,6 @@ fn bootstrap_plugins(provider: Option<MockPluginProvider>) -> TestHarness {
         Arc::new(NullTitleRepository),
         Arc::new(NullShowRepository),
         Arc::new(NullUserRepository),
-        Arc::new(NullEventRepository),
         indexer_config_repo.clone() as Arc<dyn IndexerConfigRepository>,
         Arc::new(NullIndexerClient),
         Arc::new(NullDownloadClient),

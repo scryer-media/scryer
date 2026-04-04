@@ -1,9 +1,12 @@
 use super::*;
 use crate::acquisition_policy::{AcquisitionThresholds, compute_search_schedule, evaluate_upgrade};
+use crate::domain_events::{
+    new_global_domain_event, new_title_domain_event, title_context_snapshot,
+};
 use crate::types::PendingReleaseStatus;
 use chrono::{DateTime, Duration, NaiveDate, Utc};
-use scryer_domain::NotificationEventType;
-use std::collections::HashMap;
+use scryer_domain::{DomainEventPayload, DownloadFailedEventData, ReleaseGrabbedEventData};
+use std::collections::{HashMap, HashSet};
 use tracing::{info, trace, warn};
 
 use crate::{JobKey, JobTriggerSource};
@@ -174,6 +177,8 @@ impl AppUseCase {
             .iter()
             .filter_map(|f| f.episode_id.clone())
             .collect();
+        let mut eligible_episode_ids = HashSet::new();
+        let mut eligible_interstitial_collection_ids = HashSet::new();
 
         for collection in &collections {
             if !collection.monitored {
@@ -191,13 +196,10 @@ impl AppUseCase {
             };
 
             for episode in &episodes {
-                if !episode.monitored {
+                if !episode.monitored || episodes_with_files.contains(&episode.id) {
                     continue;
                 }
-
-                if episodes_with_files.contains(&episode.id) {
-                    continue;
-                }
+                eligible_episode_ids.insert(episode.id.clone());
 
                 let baseline_date = episode.air_date.clone();
 
@@ -298,6 +300,7 @@ impl AppUseCase {
                         continue;
                     }
                 }
+                eligible_interstitial_collection_ids.insert(collection.id.clone());
 
                 let baseline_date = movie.digital_release_date.clone();
                 let schedule =
@@ -343,6 +346,81 @@ impl AppUseCase {
                         "failed to upsert wanted item for interstitial movie"
                     );
                 }
+            }
+        }
+
+        self.reconcile_series_wanted_scope(
+            title,
+            &eligible_episode_ids,
+            &eligible_interstitial_collection_ids,
+        )
+        .await;
+    }
+
+    async fn reconcile_series_wanted_scope(
+        &self,
+        title: &Title,
+        eligible_episode_ids: &HashSet<String>,
+        eligible_interstitial_collection_ids: &HashSet<String>,
+    ) {
+        let existing_items = match self
+            .services
+            .wanted_items
+            .list_wanted_items(None, None, Some(&title.id), 5000, 0)
+            .await
+        {
+            Ok(items) => items,
+            Err(err) => {
+                warn!(
+                    title_id = title.id.as_str(),
+                    error = %err,
+                    "failed to list existing wanted items for reconciliation"
+                );
+                return;
+            }
+        };
+
+        let stale_episode_ids: HashSet<String> = existing_items
+            .iter()
+            .filter(|item| item.media_type == "episode")
+            .filter_map(|item| item.episode_id.clone())
+            .filter(|episode_id| !eligible_episode_ids.contains(episode_id))
+            .collect();
+        for episode_id in stale_episode_ids {
+            if let Err(err) = self
+                .services
+                .wanted_items
+                .delete_wanted_items_for_episode(&episode_id)
+                .await
+            {
+                warn!(
+                    title_id = title.id.as_str(),
+                    episode_id,
+                    error = %err,
+                    "failed to delete stale episode wanted items during reconciliation"
+                );
+            }
+        }
+
+        let stale_interstitial_collection_ids: HashSet<String> = existing_items
+            .iter()
+            .filter(|item| item.media_type == "interstitial_movie")
+            .filter_map(|item| item.collection_id.clone())
+            .filter(|collection_id| !eligible_interstitial_collection_ids.contains(collection_id))
+            .collect();
+        for collection_id in stale_interstitial_collection_ids {
+            if let Err(err) = self
+                .services
+                .wanted_items
+                .delete_wanted_items_for_collection(&collection_id)
+                .await
+            {
+                warn!(
+                    title_id = title.id.as_str(),
+                    collection_id,
+                    error = %err,
+                    "failed to delete stale interstitial wanted items during reconciliation"
+                );
             }
         }
     }
@@ -663,18 +741,21 @@ pub(crate) async fn process_download_failure(
                     )
                 };
 
-                let _ = app
-                    .services
-                    .record_activity_event(
-                        None,
-                        Some(item.title_id.clone()),
-                        None,
-                        ActivityKind::AcquisitionDownloadFailed,
-                        message,
-                        ActivitySeverity::Warning,
-                        vec![ActivityChannel::WebUi, ActivityChannel::Toast],
-                    )
-                    .await;
+                if let Ok(Some(title)) = app.services.titles.get_by_id(&item.title_id).await {
+                    let _ = app
+                        .services
+                        .append_domain_event(new_title_domain_event(
+                            None,
+                            &title,
+                            DomainEventPayload::DownloadFailed(DownloadFailedEventData {
+                                title: Some(title_context_snapshot(&title)),
+                                source_title: Some(context.release_title.clone()),
+                                source_hint: Some(context.client_item_id.clone()),
+                                error_message: Some(message),
+                            }),
+                        ))
+                        .await;
+                }
 
                 if immediate_research {
                     FailureHandlingOutcome::RequeuedFreshSearch
@@ -686,21 +767,40 @@ pub(crate) async fn process_download_failure(
             FailureHandlingOutcome::RecordedOnly
         }
     } else {
-        let _ = app
-            .services
-            .record_activity_event(
-                None,
-                resolved_title_id.clone(),
-                None,
-                ActivityKind::AcquisitionDownloadFailed,
-                format!(
-                    "Download failed: {} — {}",
-                    context.release_title, context.reason
-                ),
-                ActivitySeverity::Error,
-                vec![ActivityChannel::WebUi, ActivityChannel::Toast],
-            )
-            .await;
+        let message = format!(
+            "Download failed: {} — {}",
+            context.release_title, context.reason
+        );
+        if let Some(title_id) = resolved_title_id.as_deref()
+            && let Ok(Some(title)) = app.services.titles.get_by_id(title_id).await
+        {
+            let _ = app
+                .services
+                .append_domain_event(new_title_domain_event(
+                    None,
+                    &title,
+                    DomainEventPayload::DownloadFailed(DownloadFailedEventData {
+                        title: Some(title_context_snapshot(&title)),
+                        source_title: Some(context.release_title.clone()),
+                        source_hint: Some(context.client_item_id.clone()),
+                        error_message: Some(message),
+                    }),
+                ))
+                .await;
+        } else {
+            let _ = app
+                .services
+                .append_domain_event(new_global_domain_event(
+                    None,
+                    DomainEventPayload::DownloadFailed(DownloadFailedEventData {
+                        title: None,
+                        source_title: Some(context.release_title.clone()),
+                        source_hint: Some(context.client_item_id.clone()),
+                        error_message: Some(message),
+                    }),
+                ))
+                .await;
+        }
         FailureHandlingOutcome::RecordedOnly
     };
 
@@ -1210,6 +1310,7 @@ async fn process_single_wanted_item(
                     anidb_id.clone(),
                     Some(category.clone()),
                     Some(title.facet.as_str().to_string()),
+                    Some(title.id.as_str()),
                     &title.tags,
                     "background_acquisition_season_pack",
                     SearchMode::Auto,
@@ -1350,6 +1451,7 @@ async fn process_single_wanted_item(
 
                         match grab_result {
                             Ok(grab) => {
+                                let download_job_id = grab.job_id.clone();
                                 let facet_label = serde_json::to_string(&title.facet)
                                     .unwrap_or_else(|_| "\"other\"".to_string())
                                     .trim_matches('"')
@@ -1402,31 +1504,25 @@ async fn process_single_wanted_item(
                                 );
                                 grab_meta
                                     .insert("score".to_string(), serde_json::json!(pack_score));
-                                let grab_envelope = crate::activity::NotificationEnvelope {
-                                    event_type: NotificationEventType::Grab,
-                                    title: format!("Grabbed: {} S{:0>2}", title.name, season_num),
-                                    body: format!(
-                                        "Season pack '{}' grabbed for {}",
-                                        best_pack.title, title.name
-                                    ),
-                                    facet: Some(format!("{:?}", title.facet).to_lowercase()),
-                                    metadata: grab_meta,
-                                };
                                 let _ = app
                                     .services
-                                    .record_activity_event_with_notification(
+                                    .append_domain_event(new_title_domain_event(
                                         None,
-                                        Some(title.id.clone()),
-                                        None,
-                                        ActivityKind::AcquisitionCandidateAccepted,
-                                        format!(
-                                            "season pack grabbed: {} S{:0>2} '{}' (score: {})",
-                                            title.name, season_num, best_pack.title, pack_score,
+                                        &title,
+                                        DomainEventPayload::ReleaseGrabbed(
+                                            ReleaseGrabbedEventData {
+                                                title: title_context_snapshot(&title),
+                                                source_title: Some(best_pack.title.clone()),
+                                                source_hint: Some(best_pack.source.clone()),
+                                                download_id: Some(download_job_id),
+                                                episode_ids: item
+                                                    .episode_id
+                                                    .iter()
+                                                    .cloned()
+                                                    .collect(),
+                                            },
                                         ),
-                                        ActivitySeverity::Success,
-                                        vec![ActivityChannel::WebUi, ActivityChannel::Toast],
-                                        grab_envelope,
-                                    )
+                                    ))
                                     .await;
                                 info!(
                                     title = title.name.as_str(),
@@ -1512,6 +1608,7 @@ async fn process_single_wanted_item(
             anidb_id,
             Some(category.clone()),
             Some(title.facet.as_str().to_string()),
+            Some(title.id.as_str()),
             &title.tags,
             "background_acquisition",
             SearchMode::Auto,
@@ -1534,18 +1631,7 @@ async fn process_single_wanted_item(
         }
     };
 
-    // Emit search completed activity
-    let _ = app
-        .services
-        .record_activity_event(
-            None,
-            Some(title.id.clone()),
-            None,
-            ActivityKind::AcquisitionSearchCompleted,
-            format!("{} results for '{}'", results.len(), title.name),
-            ActivitySeverity::Info,
-            vec![ActivityChannel::WebUi],
-        )
+    app.emit_acquisition_search_completed_event(None, &title, results.len() as i64)
         .await;
 
     if results.is_empty() {
@@ -1603,9 +1689,11 @@ async fn process_single_wanted_item(
         return Ok(());
     }
 
-    let thresholds = app
-        .acquisition_thresholds(&profile.criteria.scoring_persona)
-        .await;
+    let persona = app
+        .resolve_scoring_persona(Some(&category), Some(&profile), Some(&category))
+        .await
+        .unwrap_or_default();
+    let thresholds = app.acquisition_thresholds(&persona).await;
 
     // Load existing media files for repack group validation.
     let existing_files = app
@@ -1743,23 +1831,13 @@ async fn process_single_wanted_item(
             .await;
 
         if !decision.is_accept() {
-            let _ = app
-                .services
-                .record_activity_event(
-                    None,
-                    Some(title.id.clone()),
-                    None,
-                    ActivityKind::AcquisitionCandidateRejected,
-                    format!(
-                        "{}: '{}' ({})",
-                        decision.code(),
-                        candidate.title,
-                        title.name
-                    ),
-                    ActivitySeverity::Info,
-                    vec![ActivityChannel::WebUi],
-                )
-                .await;
+            app.emit_acquisition_candidate_rejected_event(
+                None,
+                &title,
+                candidate.title.clone(),
+                decision.code().to_string(),
+            )
+            .await;
             // Upgrade policy rejection is quality-based.  Candidates are sorted
             // by score descending, so no lower-scored candidate can satisfy a
             // stricter delta requirement.  Stop the loop entirely.
@@ -1966,58 +2044,6 @@ async fn process_single_wanted_item(
                     .await;
 
                 // Record title history: Grabbed
-                {
-                    let mut data = HashMap::new();
-                    data.insert("indexer".into(), serde_json::json!(&candidate.source));
-                    data.insert(
-                        "download_client".into(),
-                        serde_json::json!(&grab.client_type),
-                    );
-                    if let Some(rg) = candidate
-                        .parsed_release_metadata
-                        .as_ref()
-                        .and_then(|m| m.release_group.as_ref())
-                    {
-                        data.insert("release_group".into(), serde_json::json!(rg));
-                    }
-                    if let Some(sz) = candidate.size_bytes {
-                        data.insert("size_bytes".into(), serde_json::json!(sz));
-                    }
-                    if let Some(proto) = &candidate.source_kind {
-                        data.insert("protocol".into(), serde_json::json!(format!("{:?}", proto)));
-                    }
-                    if let Some(pub_at) = &candidate.published_at {
-                        data.insert("published_date".into(), serde_json::json!(pub_at));
-                    }
-                    if let Some(url) = &candidate.info_url {
-                        data.insert("info_url".into(), serde_json::json!(url));
-                    }
-                    data.insert("score".into(), serde_json::json!(candidate_score));
-                    if grab_attempts > 1 {
-                        data.insert(
-                            "fallthrough_attempt".into(),
-                            serde_json::json!(grab_attempts),
-                        );
-                    }
-                    let _ = app
-                        .services
-                        .record_title_history(NewTitleHistoryEvent {
-                            title_id: title.id.clone(),
-                            episode_id: episode.as_ref().map(|e| e.id.clone()),
-                            collection_id: None,
-                            event_type: TitleHistoryEventType::Grabbed,
-                            source_title: source_title.clone(),
-                            quality: candidate
-                                .parsed_release_metadata
-                                .as_ref()
-                                .and_then(|m| m.quality.as_ref())
-                                .map(|q| q.to_string()),
-                            download_id: Some(grab.job_id.clone()),
-                            data,
-                        })
-                        .await;
-                }
-
                 // Record download submission for auto-import matching
                 let facet_str =
                     serde_json::to_string(&title.facet).unwrap_or_else(|_| "\"other\"".to_string());
@@ -2027,6 +2053,7 @@ async fn process_single_wanted_item(
                     "grabbed_at": now.to_rfc3339(),
                 })
                 .to_string();
+                let download_job_id = grab.job_id.clone();
 
                 app.services
                     .acquisition_state
@@ -2066,42 +2093,20 @@ async fn process_single_wanted_item(
                 )
                 .await;
 
-                {
-                    let mut grab_meta = HashMap::new();
-                    grab_meta.insert("title_name".to_string(), serde_json::json!(title.name));
-                    grab_meta.insert(
-                        "release_title".to_string(),
-                        serde_json::json!(candidate.title),
-                    );
-                    grab_meta.insert("indexer".to_string(), serde_json::json!(candidate.source));
-                    grab_meta.insert("score".to_string(), serde_json::json!(candidate_score));
-                    let grab_envelope = crate::activity::NotificationEnvelope {
-                        event_type: NotificationEventType::Grab,
-                        title: format!("Grabbed: {}", title.name),
-                        body: format!(
-                            "'{}' auto-grabbed for {} (score: {})",
-                            candidate.title, title.name, candidate_score
-                        ),
-                        facet: Some(format!("{:?}", title.facet).to_lowercase()),
-                        metadata: grab_meta,
-                    };
-                    let _ = app
-                        .services
-                        .record_activity_event_with_notification(
-                            None,
-                            Some(title.id.clone()),
-                            None,
-                            ActivityKind::MovieDownloaded,
-                            format!(
-                                "auto-grabbed: {} (score: {})",
-                                candidate.title, candidate_score
-                            ),
-                            ActivitySeverity::Success,
-                            vec![ActivityChannel::WebUi, ActivityChannel::Toast],
-                            grab_envelope,
-                        )
-                        .await;
-                }
+                let _ = app
+                    .services
+                    .append_domain_event(new_title_domain_event(
+                        None,
+                        &title,
+                        DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+                            title: title_context_snapshot(&title),
+                            source_title: Some(candidate.title.clone()),
+                            source_hint: Some(candidate.source.clone()),
+                            download_id: Some(download_job_id),
+                            episode_ids: item.episode_id.iter().cloned().collect(),
+                        }),
+                    ))
+                    .await;
 
                 return Ok(());
             }
@@ -2130,18 +2135,25 @@ async fn process_single_wanted_item(
 
                 let _ = app
                     .services
-                    .record_activity_event(
+                    .append_domain_event(new_title_domain_event(
                         None,
-                        Some(title.id.clone()),
-                        None,
-                        ActivityKind::AcquisitionDownloadFailed,
-                        format!(
-                            "grab failed for '{}' (attempt {}/10, trying next): {}",
-                            candidate.title, grab_attempts, err
-                        ),
-                        ActivitySeverity::Warning,
-                        vec![ActivityChannel::WebUi],
-                    )
+                        &title,
+                        DomainEventPayload::DownloadFailed(DownloadFailedEventData {
+                            title: Some(title_context_snapshot(&title)),
+                            source_title: Some(candidate.title.clone()),
+                            source_hint: Some(
+                                candidate
+                                    .download_url
+                                    .clone()
+                                    .or_else(|| candidate.link.clone())
+                                    .unwrap_or_else(|| candidate.source.clone()),
+                            ),
+                            error_message: Some(format!(
+                                "grab failed for '{}' (attempt {}/10, trying next): {}",
+                                candidate.title, grab_attempts, err
+                            )),
+                        }),
+                    ))
                     .await;
 
                 // If ALL download clients for this source kind are down, mark it
@@ -2302,21 +2314,22 @@ async fn recover_from_standby_candidates(
                         .await;
                 }
 
-                let _ = app
-                    .services
-                    .record_activity_event(
-                        None,
-                        Some(item.title_id.clone()),
-                        None,
-                        ActivityKind::AcquisitionCandidateAccepted,
-                        format!(
-                            "standby reacquisition grabbed '{}' after '{}' failed",
-                            standby.release_title, failed_release_title
-                        ),
-                        ActivitySeverity::Success,
-                        vec![ActivityChannel::WebUi, ActivityChannel::Toast],
-                    )
-                    .await;
+                if let Ok(Some(title)) = app.services.titles.get_by_id(&item.title_id).await {
+                    let _ = app
+                        .services
+                        .append_domain_event(new_title_domain_event(
+                            None,
+                            &title,
+                            DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+                                title: title_context_snapshot(&title),
+                                source_title: Some(standby.release_title.clone()),
+                                source_hint: None,
+                                download_id: None,
+                                episode_ids: item.episode_id.iter().cloned().collect(),
+                            }),
+                        ))
+                        .await;
+                }
 
                 return true;
             }

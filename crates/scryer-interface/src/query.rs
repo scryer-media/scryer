@@ -7,19 +7,28 @@ use scryer_domain::{PolicyInput, TitleHistoryEventType};
 use crate::context::{actor_from_ctx, app_from_ctx, settings_db_from_ctx, to_gql_error};
 use crate::mappers::{
     from_activity_event, from_backup_info, from_calendar_episode, from_collection,
-    from_delete_preview, from_disk_space, from_download_client_config, from_download_queue_item,
-    from_episode, from_health_check_result, from_indexer_config, from_job_definition, from_job_run,
-    from_library_scan_session, from_media_rename_plan, from_pending_release, from_provider_type,
-    from_release_decision, from_system_health, from_title, from_title_history_page,
-    from_title_history_record, from_title_media_file, from_title_release_blocklist_entry,
-    from_user, from_wanted_item,
+    from_delete_preview, from_disk_space, from_domain_event, from_download_client_config,
+    from_download_queue_item, from_episode, from_health_check_result, from_indexer_config,
+    from_job_definition, from_job_run, from_library_scan_session, from_media_rename_plan,
+    from_pending_release, from_provider_type, from_release_decision, from_system_health,
+    from_title, from_title_history_page, from_title_history_record, from_title_media_file,
+    from_title_release_blocklist_entry, from_user, from_wanted_item,
 };
 use crate::settings_graph::{
     load_download_client_routing, load_indexer_routing, load_library_paths_payload,
     load_media_settings_payload, load_quality_profile_settings_payload,
-    load_service_settings_payload,
+    load_required_audio_languages_for_scope, load_service_settings_payload,
+    load_title_required_audio_override,
 };
 use crate::types::*;
+
+fn title_scope_from_facet(facet: MediaFacetValue) -> ContentScopeValue {
+    match facet {
+        MediaFacetValue::Movie => ContentScopeValue::Movie,
+        MediaFacetValue::Tv => ContentScopeValue::Series,
+        MediaFacetValue::Anime => ContentScopeValue::Anime,
+    }
+}
 
 fn from_subtitle_settings(
     settings: scryer_application::SubtitleSettings,
@@ -520,6 +529,37 @@ impl QueryRoot {
             .await
             .map_err(to_gql_error)?;
         Ok(events.into_iter().map(from_activity_event).collect())
+    }
+
+    async fn domain_events(
+        &self,
+        ctx: &Context<'_>,
+        event_types: Option<Vec<DomainEventTypeValue>>,
+        title_id: Option<String>,
+        facet: Option<MediaFacetValue>,
+        after_sequence: Option<i64>,
+        limit: Option<i32>,
+    ) -> GqlResult<Vec<DomainEventEnvelopePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let filter = scryer_domain::DomainEventFilter {
+            event_types: event_types.map(|types| {
+                types
+                    .into_iter()
+                    .map(DomainEventTypeValue::into_domain)
+                    .collect()
+            }),
+            title_id,
+            facet: facet.map(MediaFacetValue::into_domain),
+            after_sequence,
+            before_sequence: None,
+            limit: limit.unwrap_or(100).max(1) as usize,
+        };
+        let events = app
+            .list_domain_events(&actor, &filter)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(events.into_iter().map(from_domain_event).collect())
     }
 
     async fn active_library_scans(
@@ -1068,31 +1108,6 @@ impl QueryRoot {
 
         let rule_set = app.get_rule_set(&actor, &id).await.map_err(to_gql_error)?;
         Ok(rule_set.map(crate::mappers::from_rule_set))
-    }
-
-    async fn convenience_settings(
-        &self,
-        ctx: &Context<'_>,
-    ) -> GqlResult<ConvenienceSettingsPayload> {
-        let app = app_from_ctx(ctx)?;
-        let actor = actor_from_ctx(ctx)?;
-
-        let settings = app
-            .get_convenience_settings(&actor)
-            .await
-            .map_err(to_gql_error)?;
-
-        Ok(ConvenienceSettingsPayload {
-            required_audio: settings
-                .required_audio
-                .into_iter()
-                .map(|s| ConvenienceAudioSettingPayload {
-                    scope: s.scope,
-                    languages: s.languages,
-                    rule_set_id: s.rule_set_id,
-                })
-                .collect(),
-        })
     }
 
     // ── Post-Processing Scripts ──────────────────────────────────────────
@@ -1645,6 +1660,32 @@ impl QueryRoot {
 
 #[ComplexObject]
 impl TitlePayload {
+    async fn required_audio_languages_override(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Option<Vec<String>>> {
+        let db = settings_db_from_ctx(ctx)?;
+        load_title_required_audio_override(&db, &self.id).await
+    }
+
+    async fn effective_required_audio_languages(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<String>> {
+        let db = settings_db_from_ctx(ctx)?;
+        if let Some(languages) = load_title_required_audio_override(&db, &self.id).await? {
+            return Ok(languages);
+        }
+        load_required_audio_languages_for_scope(&db, title_scope_from_facet(self.facet)).await
+    }
+
+    async fn inherits_required_audio_languages(&self, ctx: &Context<'_>) -> GqlResult<bool> {
+        let db = settings_db_from_ctx(ctx)?;
+        Ok(load_title_required_audio_override(&db, &self.id)
+            .await?
+            .is_none())
+    }
+
     async fn collections(&self, ctx: &Context<'_>) -> GqlResult<Vec<CollectionPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;

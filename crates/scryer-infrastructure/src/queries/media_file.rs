@@ -7,6 +7,12 @@ use scryer_domain::Id;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
+const RECYCLE_BIN_PATH_SEGMENT: &str = "/.scryer-recycle/";
+
+fn live_media_file_predicate(alias: &str) -> String {
+    format!("instr({alias}.file_path, '{RECYCLE_BIN_PATH_SEGMENT}') = 0")
+}
+
 pub(crate) async fn insert_media_file_query(
     pool: &SqlitePool,
     input: &InsertMediaFileInput,
@@ -104,7 +110,7 @@ pub(crate) async fn list_media_files_for_title_query(
     pool: &SqlitePool,
     title_id: &str,
 ) -> AppResult<Vec<TitleMediaFile>> {
-    let rows: Vec<SqliteRow> = sqlx::query(
+    let sql = format!(
         "SELECT mf.id, mf.title_id, fem.episode_id, mf.file_path,
                 mf.size_bytes, mf.source_signature_scheme, mf.source_signature_value,
                 mf.quality_id, mf.scan_status, mf.created_at,
@@ -125,12 +131,15 @@ pub(crate) async fn list_media_files_for_title_query(
          FROM media_files mf
          LEFT JOIN file_episode_map fem ON fem.file_id = mf.id
          WHERE mf.title_id = ?
+           AND {}
          ORDER BY mf.created_at DESC",
-    )
-    .bind(title_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|err| AppError::Repository(err.to_string()))?;
+        live_media_file_predicate("mf")
+    );
+    let rows: Vec<SqliteRow> = sqlx::query(&sql)
+        .bind(title_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
 
     let mut out = Vec::with_capacity(rows.len());
     for row in &rows {
@@ -152,7 +161,10 @@ pub(crate) async fn list_title_media_size_summaries_query(
         "SELECT title_id, COALESCE(SUM(CASE WHEN size_bytes > 0 THEN size_bytes ELSE 0 END), 0) AS total_size_bytes
          FROM media_files
          WHERE title_id IN ({placeholders})
+           AND {}
          GROUP BY title_id"
+        ,
+        live_media_file_predicate("media_files")
     );
 
     let mut query = sqlx::query(&sql);
@@ -192,13 +204,16 @@ pub(crate) async fn list_title_episode_progress_summaries_query(
     let sql = format!(
         "SELECT e.title_id,
                 COUNT(DISTINCT e.id) AS total_episodes,
-                COUNT(DISTINCT CASE WHEN fem.file_id IS NOT NULL THEN e.id END) AS owned_episodes
+                COUNT(DISTINCT CASE WHEN mf.id IS NOT NULL THEN e.id END) AS owned_episodes
          FROM episodes e
          INNER JOIN collections c ON c.id = e.collection_id
          LEFT JOIN file_episode_map fem ON fem.episode_id = e.id
+         LEFT JOIN media_files mf ON mf.id = fem.file_id AND {}
          WHERE e.title_id IN ({placeholders})
            AND c.collection_type <> 'specials'
-         GROUP BY e.title_id"
+           AND c.collection_index <> '0'
+         GROUP BY e.title_id",
+        live_media_file_predicate("mf")
     );
 
     let mut query = sqlx::query(&sql);
@@ -588,4 +603,214 @@ pub(crate) async fn delete_media_file_query(pool: &SqlitePool, file_id: &str) ->
         .map_err(|err| AppError::Repository(err.to_string()))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sqlite_services::SqliteServices;
+    use chrono::Utc;
+    use scryer_application::{MediaFileRepository, ShowRepository, TitleRepository};
+    use scryer_domain::{Collection, CollectionType, Episode, MediaFacet, Title};
+
+    fn make_test_series_title(id: &str) -> Title {
+        Title {
+            id: id.to_string(),
+            name: "Live Query Test".to_string(),
+            facet: MediaFacet::Series,
+            monitored: true,
+            tags: vec![],
+            external_ids: vec![],
+            created_by: None,
+            created_at: Utc::now(),
+            year: Some(2026),
+            overview: Some("overview".to_string()),
+            poster_url: None,
+            poster_source_url: None,
+            banner_url: None,
+            banner_source_url: None,
+            background_url: None,
+            background_source_url: None,
+            sort_title: None,
+            slug: None,
+            imdb_id: None,
+            runtime_minutes: None,
+            genres: vec![],
+            content_status: None,
+            language: None,
+            first_aired: None,
+            network: None,
+            studio: None,
+            country: None,
+            aliases: vec![],
+            tagged_aliases: vec![],
+            metadata_language: None,
+            metadata_fetched_at: None,
+            min_availability: None,
+            digital_release_date: None,
+            folder_path: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn recycled_media_files_are_excluded_from_live_title_queries() {
+        let db = std::env::temp_dir().join(format!(
+            "scryer_media_file_live_query_{}.db",
+            chrono::Utc::now().timestamp_micros()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("db should initialize");
+
+        let title = make_test_series_title("title-live-query");
+        <SqliteServices as TitleRepository>::create(&services, title.clone())
+            .await
+            .expect("title should insert");
+
+        let collection = Collection {
+            id: "collection-live-query".to_string(),
+            title_id: title.id.clone(),
+            collection_type: CollectionType::Season,
+            collection_index: "1".to_string(),
+            label: Some("Season 1".to_string()),
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: Some("1".to_string()),
+            last_episode_number: Some("2".to_string()),
+            interstitial_movie: None,
+            specials_movies: vec![],
+            interstitial_season_episode: None,
+            monitored: true,
+            created_at: Utc::now(),
+        };
+        <SqliteServices as ShowRepository>::create_collection(&services, collection.clone())
+            .await
+            .expect("collection should insert");
+
+        let episode_one = Episode {
+            id: "episode-live-query-1".to_string(),
+            title_id: title.id.clone(),
+            collection_id: Some(collection.id.clone()),
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some("1".to_string()),
+            season_number: Some("1".to_string()),
+            episode_label: Some("S01E01".to_string()),
+            title: Some("Episode 1".to_string()),
+            air_date: None,
+            duration_seconds: None,
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: None,
+            overview: None,
+            tvdb_id: None,
+            monitored: true,
+            created_at: Utc::now(),
+        };
+        let episode_two = Episode {
+            id: "episode-live-query-2".to_string(),
+            title_id: title.id.clone(),
+            collection_id: Some(collection.id.clone()),
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some("2".to_string()),
+            season_number: Some("1".to_string()),
+            episode_label: Some("S01E02".to_string()),
+            title: Some("Episode 2".to_string()),
+            air_date: None,
+            duration_seconds: None,
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: None,
+            overview: None,
+            tvdb_id: None,
+            monitored: true,
+            created_at: Utc::now(),
+        };
+        <SqliteServices as ShowRepository>::create_episode(&services, episode_one.clone())
+            .await
+            .expect("episode one should insert");
+        <SqliteServices as ShowRepository>::create_episode(&services, episode_two.clone())
+            .await
+            .expect("episode two should insert");
+
+        let live_file_id = <SqliteServices as MediaFileRepository>::insert_media_file(
+            &services,
+            &InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: "/library/Show/Season 01/Show - S01E01.mkv".to_string(),
+                size_bytes: 1_000,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("live media file should insert");
+        <SqliteServices as MediaFileRepository>::link_file_to_episode(
+            &services,
+            &live_file_id,
+            &episode_one.id,
+        )
+        .await
+        .expect("live file should link");
+
+        let recycled_file_id = <SqliteServices as MediaFileRepository>::insert_media_file(
+            &services,
+            &InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path:
+                    "/library/Show/.scryer-recycle/20260404_000000_deadbeef/Show - S01E02.mkv"
+                        .to_string(),
+                size_bytes: 9_999,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("recycled media file should insert");
+        <SqliteServices as MediaFileRepository>::link_file_to_episode(
+            &services,
+            &recycled_file_id,
+            &episode_two.id,
+        )
+        .await
+        .expect("recycled file should link");
+
+        let live_files = <SqliteServices as MediaFileRepository>::list_media_files_for_title(
+            &services, &title.id,
+        )
+        .await
+        .expect("list media files should succeed");
+        assert_eq!(live_files.len(), 1);
+        assert_eq!(live_files[0].id, live_file_id);
+        assert_eq!(
+            live_files[0].file_path,
+            "/library/Show/Season 01/Show - S01E01.mkv"
+        );
+
+        let size_summaries =
+            <SqliteServices as MediaFileRepository>::list_title_media_size_summaries(
+                &services,
+                std::slice::from_ref(&title.id),
+            )
+            .await
+            .expect("size summaries should succeed");
+        assert_eq!(size_summaries.len(), 1);
+        assert_eq!(size_summaries[0].title_id, title.id);
+        assert_eq!(size_summaries[0].total_size_bytes, 1_000);
+
+        let episode_progress =
+            <SqliteServices as MediaFileRepository>::list_title_episode_progress_summaries(
+                &services,
+                std::slice::from_ref(&title.id),
+            )
+            .await
+            .expect("episode progress summaries should succeed");
+        assert_eq!(episode_progress.len(), 1);
+        assert_eq!(episode_progress[0].title_id, title.id);
+        assert_eq!(episode_progress[0].total_episodes, 2);
+        assert_eq!(episode_progress[0].owned_episodes, 1);
+
+        let _ = std::fs::remove_file(db);
+    }
 }

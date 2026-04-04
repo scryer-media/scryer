@@ -1,6 +1,6 @@
 use chrono::Utc;
 use scryer_application::{AppError, AppResult};
-use scryer_domain::NotificationSubscription;
+use scryer_domain::{NotificationEventType, NotificationSubscription};
 use sqlx::{Row, SqlitePool};
 
 use super::common::parse_utc_datetime;
@@ -15,7 +15,7 @@ fn row_to_subscription(row: &sqlx::sqlite::SqliteRow) -> AppResult<NotificationS
     let event_type_str: String = row
         .try_get("event_type")
         .map_err(|e| AppError::Repository(e.to_string()))?;
-    let event_type = scryer_domain::NotificationEventType::parse(&event_type_str)
+    let event_type = NotificationEventType::parse(&event_type_str)
         .ok_or_else(|| AppError::Repository(format!("unknown event_type: {event_type_str}")))?;
     let scope: String = row
         .try_get("scope")
@@ -77,13 +77,13 @@ pub(crate) async fn list_notification_subscriptions_for_channel_query(
 
 pub(crate) async fn list_notification_subscriptions_for_event_query(
     pool: &SqlitePool,
-    event_type: &str,
+    event_type: NotificationEventType,
 ) -> AppResult<Vec<NotificationSubscription>> {
     let rows = sqlx::query(
         "SELECT id, channel_id, event_type, scope, scope_id, is_enabled, created_at, updated_at
          FROM notification_subscriptions WHERE event_type = ? ORDER BY created_at DESC",
     )
-    .bind(event_type)
+    .bind(event_type.as_str())
     .fetch_all(pool)
     .await
     .map_err(|e| AppError::Repository(e.to_string()))?;

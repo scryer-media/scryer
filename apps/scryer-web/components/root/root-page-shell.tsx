@@ -437,7 +437,7 @@ function AuthenticatedHomePage({
     <ScryerGraphqlProvider language={uiLanguage}>
     <TranslateContext.Provider value={t}>
     <GlobalStatusContext.Provider value={setGlobalStatus}>
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="flex min-h-screen flex-col bg-background text-foreground">
       {serviceRestarting && (
         <BackendRestartOverlay />
       )}
@@ -485,7 +485,7 @@ function AuthenticatedHomePage({
               </div>
             ) : null}
 
-            <div className="mx-auto w-full max-w-[1480px] px-3 pb-10 pt-4">
+            <div className="mx-auto flex w-full max-w-[1480px] flex-1 min-h-0 px-3 pb-10 pt-4">
               <RootSidebar
                 topNav={topNav}
                 view={view}
@@ -495,7 +495,7 @@ function AuthenticatedHomePage({
                 entitlements={entitlements}
                 onNavigate={navigateTo}
               >
-                <main className="min-h-[70vh]">
+                <main className={view === "wanted" ? "flex min-h-0 flex-1 flex-col" : "min-h-[70vh]"}>
                   <Suspense fallback={<ViewLoadingFallback />}>
                     <MainContent
                       view={view}

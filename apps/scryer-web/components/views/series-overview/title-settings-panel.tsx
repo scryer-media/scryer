@@ -12,7 +12,7 @@ import {
 import { MediaRenamePlanPanel } from "@/components/common/media-rename-plan-panel";
 import { SubtitleLanguagePicker } from "@/components/common/subtitle-language-picker";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
-import { convenienceSettingsQuery, mediaRenamePreviewQuery } from "@/lib/graphql/queries";
+import { mediaRenamePreviewQuery } from "@/lib/graphql/queries";
 import { applyMediaRenameMutation, setTitleRequiredAudioMutation } from "@/lib/graphql/mutations";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { TitleDetail } from "@/components/containers/series-overview-container";
@@ -57,71 +57,49 @@ export function TitleSettingsPanel({
   const t = useTranslate();
   const client = useClient();
   const setGlobalStatus = useGlobalStatus();
-
-  const [requiredAudioLanguages, setRequiredAudioLanguages] = React.useState<string[]>([]);
-  const [inheritedAudioLanguages, setInheritedAudioLanguages] = React.useState<string[]>([]);
-  const [hasAudioOverride, setHasAudioOverride] = React.useState(false);
-  const [audioLoaded, setAudioLoaded] = React.useState(false);
+  const requiredAudioLanguages =
+    title.effectiveRequiredAudioLanguages ?? [];
+  const hasAudioOverride = title.inheritsRequiredAudioLanguages === false;
   const [renamePlan, setRenamePlan] = React.useState<MediaRenamePlan | null>(null);
   const [renamePreviewing, setRenamePreviewing] = React.useState(false);
   const [renameApplying, setRenameApplying] = React.useState(false);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const { data } = await client.query(convenienceSettingsQuery, {}).toPromise();
-        if (cancelled || !data?.convenienceSettings) return;
-        const settings = data.convenienceSettings.requiredAudio as {
-          scope: string;
-          languages: string[];
-        }[];
-        const titleScope = `title:${title.id}`;
-        const titleMatch = settings.find((r) => r.scope === titleScope);
-        const facetMatch = settings.find((r) => r.scope === title.facet);
-        setInheritedAudioLanguages(facetMatch?.languages ?? []);
-        if (titleMatch) {
-          setRequiredAudioLanguages(titleMatch.languages);
-          setHasAudioOverride(true);
-        } else {
-          setRequiredAudioLanguages(facetMatch?.languages ?? []);
-          setHasAudioOverride(false);
-        }
-        setAudioLoaded(true);
-      } catch {
-        // silently ignore — non-critical
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [client, title.id, title.facet]);
+  const [audioSaving, setAudioSaving] = React.useState(false);
 
   const handleRequiredAudioChange = async (languages: string[]) => {
-    setRequiredAudioLanguages(languages);
-    setHasAudioOverride(true);
+    setAudioSaving(true);
     try {
-      await client
+      const { error } = await client
         .mutation(setTitleRequiredAudioMutation, {
           input: { titleId: title.id, facet: title.facet, languages },
         })
         .toPromise();
+      if (error) {
+        throw error;
+      }
+      await onTitleChanged?.();
     } catch {
-      // silently ignore
+      setGlobalStatus(t("status.failedToUpdate"));
+    } finally {
+      setAudioSaving(false);
     }
   };
 
   const handleResetAudioOverride = async () => {
-    setRequiredAudioLanguages(inheritedAudioLanguages);
-    setHasAudioOverride(false);
+    setAudioSaving(true);
     try {
-      await client
+      const { error } = await client
         .mutation(setTitleRequiredAudioMutation, {
-          input: { titleId: title.id, facet: title.facet, languages: [] },
+          input: { titleId: title.id, facet: title.facet, languages: null },
         })
         .toPromise();
+      if (error) {
+        throw error;
+      }
+      await onTitleChanged?.();
     } catch {
-      // silently ignore
+      setGlobalStatus(t("status.failedToUpdate"));
+    } finally {
+      setAudioSaving(false);
     }
   };
 
@@ -330,27 +308,27 @@ export function TitleSettingsPanel({
           </Select>
         </div>
 
-        {audioLoaded ? (
-          <div className="min-w-0 xl:max-w-72">
-            <label className="mb-1 block text-xs font-medium text-muted-foreground">
-              {t("title.requiredAudioLanguages")}
-            </label>
-            <SubtitleLanguagePicker
-              value={requiredAudioLanguages}
-              onChange={(codes) => void handleRequiredAudioChange(codes)}
-              compact
-            />
-            {hasAudioOverride ? (
-              <button
-                type="button"
-                className="mt-1 text-xs text-primary hover:underline"
-                onClick={() => void handleResetAudioOverride()}
-              >
-                {t("title.requiredAudioResetInherit")}
-              </button>
-            ) : null}
-          </div>
-        ) : null}
+        <div className="min-w-0 xl:max-w-72">
+          <label className="mb-1 block text-xs font-medium text-muted-foreground">
+            {t("title.requiredAudioLanguages")}
+          </label>
+          <SubtitleLanguagePicker
+            value={requiredAudioLanguages}
+            onChange={(codes) => void handleRequiredAudioChange(codes)}
+            compact
+            disabled={audioSaving}
+          />
+          {hasAudioOverride ? (
+            <button
+              type="button"
+              className="mt-1 text-xs text-primary hover:underline"
+              onClick={() => void handleResetAudioOverride()}
+              disabled={audioSaving}
+            >
+              {t("title.requiredAudioResetInherit")}
+            </button>
+          ) : null}
+        </div>
 
         {title.facet === "anime" ? (
           <>

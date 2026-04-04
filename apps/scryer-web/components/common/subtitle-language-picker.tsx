@@ -9,6 +9,7 @@ import {
   type SubtitleLanguage,
 } from "@/lib/constants/subtitle-languages";
 import { useTranslate } from "@/lib/context/translate-context";
+import { resolveFloatingPanelPlacement } from "@/lib/floating-panel";
 import { cn } from "@/lib/utils";
 
 type SubtitleLanguagePickerProps = {
@@ -17,6 +18,7 @@ type SubtitleLanguagePickerProps = {
   className?: string;
   buttonClassName?: string;
   compact?: boolean;
+  disabled?: boolean;
 };
 
 function matchesFilter(lang: SubtitleLanguage, filter: string): boolean {
@@ -34,6 +36,7 @@ export const SubtitleLanguagePicker = React.memo(function SubtitleLanguagePicker
   className,
   buttonClassName,
   compact = false,
+  disabled = false,
 }: SubtitleLanguagePickerProps) {
   const t = useTranslate();
   const pickerRef = React.useRef<HTMLDivElement>(null);
@@ -60,6 +63,10 @@ export const SubtitleLanguagePicker = React.memo(function SubtitleLanguagePicker
     if (!isOpen) {
       return;
     }
+    if (disabled) {
+      setIsOpen(false);
+      return;
+    }
     const handlePointerDown = (event: MouseEvent) => {
       if (
         !pickerRef.current?.contains(event.target as Node) &&
@@ -84,7 +91,7 @@ export const SubtitleLanguagePicker = React.memo(function SubtitleLanguagePicker
       window.removeEventListener("scroll", handleScrollOrResize, true);
       window.removeEventListener("resize", handleScrollOrResize, true);
     };
-  }, [isOpen]);
+  }, [disabled, isOpen]);
 
   const selectedSet = React.useMemo(() => new Set<string>(value), [value]);
   const selectedLabel = React.useMemo(() => {
@@ -103,6 +110,16 @@ export const SubtitleLanguagePicker = React.memo(function SubtitleLanguagePicker
         : SUBTITLE_LANGUAGES,
     [filter],
   );
+  const panelPlacement = React.useMemo(() => {
+    if (!pickerRect) {
+      return null;
+    }
+    return resolveFloatingPanelPlacement({
+      anchorRect: pickerRect,
+      desiredWidth: Math.max(320, Math.round(pickerRect.width)),
+      desiredMaxHeight: 320,
+    });
+  }, [pickerRect]);
 
   const toggleLanguage = (code: string) => {
     const next = new Set(value);
@@ -120,16 +137,17 @@ export const SubtitleLanguagePicker = React.memo(function SubtitleLanguagePicker
   };
 
   const floatingPanel =
-    isOpen && pickerRect
+    isOpen && panelPlacement
       ? createPortal(
           <div
             ref={floatingPanelRef}
-            className="z-50 max-h-80 overflow-hidden rounded-xl border border-border bg-popover shadow-lg"
+            className="z-50 flex flex-col overflow-hidden rounded-xl border border-border bg-popover shadow-lg"
             style={{
               position: "fixed",
-              top: pickerRect.bottom + 4,
-              left: pickerRect.left,
-              width: Math.max(320, Math.round(pickerRect.width)),
+              top: panelPlacement.top,
+              left: panelPlacement.left,
+              width: panelPlacement.width,
+              maxHeight: panelPlacement.maxHeight,
             }}
           >
             {/* Search input */}
@@ -148,7 +166,7 @@ export const SubtitleLanguagePicker = React.memo(function SubtitleLanguagePicker
             </div>
 
             {/* Language list */}
-            <div className="max-h-64 overflow-y-auto p-2">
+            <div className="min-h-0 flex-1 overflow-y-auto p-2">
               {filteredLanguages.length === 0 ? (
                 <p className="px-2 py-3 text-center text-sm text-muted-foreground">
                   {t("settings.sub.languagePickerEmpty")}
@@ -198,8 +216,13 @@ export const SubtitleLanguagePicker = React.memo(function SubtitleLanguagePicker
           compact && "h-9 min-h-9 py-0",
           buttonClassName,
         )}
-        onClick={() => setIsOpen((previous) => !previous)}
+        onClick={() => {
+          if (!disabled) {
+            setIsOpen((previous) => !previous);
+          }
+        }}
         aria-label={t("settings.sub.languagePickerAriaLabel")}
+        disabled={disabled}
       >
         {compact ? (
           <span className={cn("min-w-0 flex-1 truncate text-left", value.length === 0 && "text-muted-foreground")}>

@@ -19,16 +19,23 @@ import {
   QUALITY_PROFILE_CATALOG_KEY,
   QUALITY_PROFILE_ID_KEY,
   QUALITY_PROFILE_INHERIT_VALUE,
+  SCORING_PERSONA_KEY,
   QUALITY_PROFILE_SCOPE_IDS,
 } from "@/lib/constants/settings";
 import type { ViewId } from "@/components/root/types";
 import type { SearchableQualityProfileBody } from "@/lib/utils/media-content";
-import type { ParsedQualityProfileEntry } from "@/lib/types/quality-profiles";
+import type {
+  FacetScoringPersonaSelectionRecord,
+  ParsedQualityProfileEntry,
+  ScoringPersonaId,
+} from "@/lib/types/quality-profiles";
 import {
   coerceProfileSetting,
+  buildDefaultCategoryPersonaSelections,
   isValidProfileSelection,
   qualityProfileSettingsToCatalogText,
   qualityProfileSettingsToCategoryOverrides,
+  qualityProfileSettingsToCategoryPersonaSelections,
   resolveQualityProfileCatalogState,
 } from "@/lib/utils/quality-profiles";
 import type { RootFolderOption } from "@/lib/types/titles";
@@ -56,13 +63,13 @@ export type UseMediaSettingsResult = {
   mediaSettingsSaving: boolean;
   qualityProfiles: SearchableQualityProfileBody[];
   qualityProfileEntries: ParsedQualityProfileEntry[];
-  qualityProfilesText: string;
   qualityProfileParseError: string;
   globalQualityProfileId: string;
+  globalScoringPersona: ScoringPersonaId;
   categoryQualityProfileOverrides: Record<ViewCategoryId, string>;
-  setCategoryQualityProfileOverrides: React.Dispatch<
-    React.SetStateAction<Record<ViewCategoryId, string>>
-  >;
+  categoryRequiredAudioLanguages: Record<ViewCategoryId, string[]>;
+  saveCategoryRequiredAudioLanguages: (languages: string[]) => Promise<void> | void;
+  categoryPersonaSelections: Record<ViewCategoryId, FacetScoringPersonaSelectionRecord>;
   categoryRenameTemplates: Record<ViewCategoryId, string>;
   setCategoryRenameTemplates: React.Dispatch<
     React.SetStateAction<Record<ViewCategoryId, string>>
@@ -104,6 +111,10 @@ export type UseMediaSettingsResult = {
     React.SetStateAction<Record<ViewCategoryId, string>>
   >;
   saveSetting: (scope: string, scopeId: string | undefined, keyName: string, value: string) => void;
+  saveCategoryQualityProfileOverride: (value: string) => Promise<void> | void;
+  saveCategoryScoringPersonaOverride: (
+    persona: ScoringPersonaId | null,
+  ) => Promise<void> | void;
   updateCategoryMediaProfileSettings: (
     event: React.FormEvent<HTMLFormElement>,
   ) => Promise<void> | void;
@@ -128,6 +139,11 @@ const DEFAULT_RECAP_POLICY = "download_all";
 const ALLOWED_RECAP_POLICIES = new Set(["download_all", "skip_recap"]);
 const DEFAULT_RENAME_TEMPLATE =
   "{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}";
+const DEFAULT_CATEGORY_REQUIRED_AUDIO_LANGUAGES: Record<ViewCategoryId, string[]> = {
+  movie: [],
+  series: [],
+  anime: [],
+};
 
 function buildMediaSettingsInitVariables(activeQualityScopeId: ViewCategoryId) {
   return {
@@ -157,16 +173,25 @@ export function useMediaSettings({
   const [qualityProfileEntries, setQualityProfileEntries] = React.useState<
     ParsedQualityProfileEntry[]
   >([]);
-  const [qualityProfilesText, setQualityProfilesText] = React.useState("");
   const [qualityProfileParseError, setQualityProfileParseError] =
     React.useState("");
   const [globalQualityProfileId, setGlobalQualityProfileId] =
     React.useState("");
+  const [globalScoringPersona, setGlobalScoringPersona] =
+    React.useState<ScoringPersonaId>("Balanced");
   const [categoryQualityProfileOverrides, setCategoryQualityProfileOverrides] =
     React.useState<Record<ViewCategoryId, string>>({
       movie: QUALITY_PROFILE_INHERIT_VALUE,
       series: QUALITY_PROFILE_INHERIT_VALUE,
       anime: QUALITY_PROFILE_INHERIT_VALUE,
+    });
+  const [categoryRequiredAudioLanguages, setCategoryRequiredAudioLanguages] =
+    React.useState<Record<ViewCategoryId, string[]>>({
+      ...DEFAULT_CATEGORY_REQUIRED_AUDIO_LANGUAGES,
+    });
+  const [categoryPersonaSelections, setCategoryPersonaSelections] =
+    React.useState<Record<ViewCategoryId, FacetScoringPersonaSelectionRecord>>({
+      ...buildDefaultCategoryPersonaSelections(),
     });
   const [categoryRenameTemplates, setCategoryRenameTemplates] = React.useState<
     Record<ViewCategoryId, string>
@@ -346,8 +371,6 @@ export function useMediaSettings({
       );
 
       setQualityProfileEntries(resolved.entries);
-      setQualityProfilesText(resolved.text);
-
       return resolved.profiles;
     },
     [t],
@@ -441,6 +464,11 @@ export function useMediaSettings({
       setGlobalQualityProfileId((current) =>
         current === resolvedGlobalId ? current : resolvedGlobalId,
       );
+      setGlobalScoringPersona((current) =>
+        current === (qualityProfileSettings?.globalScoringPersona ?? "Balanced")
+          ? current
+          : (qualityProfileSettings?.globalScoringPersona ?? "Balanced"),
+      );
 
       setQualityProfiles((currentProfiles) =>
         currentProfiles.length === nextProfiles.length &&
@@ -459,8 +487,33 @@ export function useMediaSettings({
           ? previous
           : nextOverrides,
       );
+      const nextPersonaSelections =
+        qualityProfileSettingsToCategoryPersonaSelections(qualityProfileSettings);
+      setCategoryPersonaSelections((previous) =>
+        QUALITY_PROFILE_SCOPE_IDS.every((scopeId) => {
+          const current = previous[scopeId];
+          const next = nextPersonaSelections[scopeId];
+          return (
+            current.overridePersona === next.overridePersona &&
+            current.effectivePersona === next.effectivePersona &&
+            current.inheritsGlobal === next.inheritsGlobal
+          );
+        })
+          ? previous
+          : nextPersonaSelections,
+      );
 
       if (mediaSettings) {
+        setCategoryRequiredAudioLanguages((previous) => {
+          const nextLanguages = mediaSettings.requiredAudioLanguages ?? [];
+          const currentLanguages = previous[activeQualityScopeId] ?? [];
+          const same =
+            currentLanguages.length === nextLanguages.length &&
+            currentLanguages.every((value, index) => value === nextLanguages[index]);
+          return same
+            ? previous
+            : { ...previous, [activeQualityScopeId]: nextLanguages };
+        });
         setCategoryRenameTemplates((previous) => {
           const nextTemplate = mediaSettings.renameTemplate || DEFAULT_RENAME_TEMPLATE;
           if (previous[activeQualityScopeId] === nextTemplate) {
@@ -546,6 +599,7 @@ export function useMediaSettings({
       normalizeRenameMissingMetadataPolicy,
       normalizeFillerPolicy,
       normalizeRecapPolicy,
+      setGlobalScoringPersona,
       view,
     ],
   );
@@ -578,55 +632,44 @@ export function useMediaSettings({
     t,
   ]);
 
-  const updateCategoryMediaProfileSettings = React.useCallback(
-    async (event: React.FormEvent<HTMLFormElement>) => {
-      event.preventDefault();
-      const path =
-        view === "movies"
-          ? moviesPath.trim()
-          : view === "series"
-            ? seriesPath.trim()
-            : "";
-      if ((view === "movies" || view === "series") && !path) {
-        const requiredMessage =
-          view === "movies"
-            ? t("settings.moviesPathRequired")
-            : t("settings.seriesPathRequired");
-        setGlobalStatus(requiredMessage);
+  const saveCategoryQualityProfileOverride = React.useCallback(
+    async (rawValue: string) => {
+      const previousProfile = categoryQualityProfileOverrides[activeQualityScopeId];
+      const selectedProfile = coerceProfileSetting(rawValue);
+
+      if (selectedProfile === previousProfile) {
         return;
       }
 
-      const selectedProfile = coerceProfileSetting(
-        categoryQualityProfileOverrides[activeQualityScopeId],
-      );
-      const renameTemplate =
-        categoryRenameTemplates[activeQualityScopeId].trim();
-      const renameCollisionPolicy = normalizeRenameCollisionPolicy(
-        categoryRenameCollisionPolicies[activeQualityScopeId],
-      );
-      const renameMissingMetadataPolicy = normalizeRenameMissingMetadataPolicy(
-        categoryRenameMissingMetadataPolicies[activeQualityScopeId],
+      setCategoryQualityProfileOverrides((previous) =>
+        previous[activeQualityScopeId] === selectedProfile
+          ? previous
+          : { ...previous, [activeQualityScopeId]: selectedProfile },
       );
 
-      if (!renameTemplate) {
-        setGlobalStatus(t("settings.renameTemplateRequired"));
-        return;
-      }
       if (
         selectedProfile !== QUALITY_PROFILE_INHERIT_VALUE &&
         !isValidProfileSelection(qualityProfiles, selectedProfile)
       ) {
         const invalidId = selectedProfile || t("label.default");
-        setQualityProfileParseError(
-          t("settings.qualityProfileUnknown", { id: invalidId }),
-        );
-        setGlobalStatus(t("settings.qualityProfileUnknown", { id: invalidId }));
+        const message = t("settings.qualityProfileUnknown", { id: invalidId });
+        setCategoryQualityProfileOverrides((previous) => ({
+          ...previous,
+          [activeQualityScopeId]: previousProfile,
+        }));
+        setQualityProfileParseError(message);
+        setGlobalStatus(message);
         return;
       }
 
       if (!qualityProfiles.length) {
-        setQualityProfileParseError(t("settings.qualityProfileCatalogInvalid"));
-        setGlobalStatus(t("settings.qualityProfileCatalogInvalid"));
+        const message = t("settings.qualityProfileCatalogInvalid");
+        setCategoryQualityProfileOverrides((previous) => ({
+          ...previous,
+          [activeQualityScopeId]: previousProfile,
+        }));
+        setQualityProfileParseError(message);
+        setGlobalStatus(message);
         return;
       }
 
@@ -634,10 +677,6 @@ export function useMediaSettings({
       setQualityProfileParseError("");
 
       try {
-        let qualityProfileResponse: {
-          saveQualityProfileSettings: QualityProfileSettingsPayload;
-        } | null = null;
-
         const { data: qualityProfileData, error: qualityProfileError } = await client
           .mutation(saveQualityProfileSettingsMutation, {
             input: {
@@ -658,12 +697,198 @@ export function useMediaSettings({
           })
           .toPromise();
         if (qualityProfileError) throw qualityProfileError;
-        qualityProfileResponse = qualityProfileData;
 
+        applyMediaSettingsFromPayload(
+          qualityProfileData?.saveQualityProfileSettings,
+          undefined,
+        );
+        setGlobalStatus(t("settings.qualitySettingsSaved"));
+      } catch (error) {
+        setCategoryQualityProfileOverrides((previous) => ({
+          ...previous,
+          [activeQualityScopeId]: previousProfile,
+        }));
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.failedToUpdate"),
+        );
+      } finally {
+        setMediaSettingsSaving(false);
+      }
+    },
+    [
+      activeQualityScopeId,
+      applyMediaSettingsFromPayload,
+      categoryQualityProfileOverrides,
+      client,
+      qualityProfiles,
+      setGlobalStatus,
+      t,
+    ],
+  );
+
+  const saveCategoryScoringPersonaOverride = React.useCallback(
+    async (persona: ScoringPersonaId | null) => {
+      const previousSelection = categoryPersonaSelections[activeQualityScopeId];
+      const nextSelection: FacetScoringPersonaSelectionRecord = {
+        scope: activeQualityScopeId,
+        overridePersona: persona,
+        effectivePersona: persona ?? globalScoringPersona,
+        inheritsGlobal: persona === null,
+      };
+
+      setCategoryPersonaSelections((previous) => ({
+        ...previous,
+        [activeQualityScopeId]: nextSelection,
+      }));
+      setMediaSettingsSaving(true);
+      try {
+        const { data, error } = await client
+          .mutation(saveQualityProfileSettingsMutation, {
+            input: {
+              profiles: [],
+              globalProfileId: null,
+              globalScoringPersona: null,
+              categorySelections: [],
+              categoryPersonaSelections: [
+                {
+                  scope: activeQualityScopeId,
+                  persona,
+                  inheritGlobal: persona === null,
+                },
+              ],
+              replaceExisting: false,
+            },
+          })
+          .toPromise();
+        if (error) {
+          throw error;
+        }
+
+        applyMediaSettingsFromPayload(
+          data?.saveQualityProfileSettings,
+          undefined,
+        );
+        setGlobalStatus(t("settings.qualitySettingsSaved"));
+      } catch (error) {
+        setCategoryPersonaSelections((previous) => ({
+          ...previous,
+          [activeQualityScopeId]: previousSelection,
+        }));
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.failedToUpdate"),
+        );
+        throw error;
+      } finally {
+        setMediaSettingsSaving(false);
+      }
+    },
+    [
+      activeQualityScopeId,
+      applyMediaSettingsFromPayload,
+      categoryPersonaSelections,
+      client,
+      globalScoringPersona,
+      setGlobalStatus,
+      t,
+    ],
+  );
+
+  const saveCategoryRequiredAudioLanguages = React.useCallback(
+    async (languages: string[]) => {
+      const previousLanguages = categoryRequiredAudioLanguages[activeQualityScopeId] ?? [];
+      const nextLanguages = [...languages];
+      const same =
+        previousLanguages.length === nextLanguages.length &&
+        previousLanguages.every((value, index) => value === nextLanguages[index]);
+      if (same) {
+        return;
+      }
+
+      setCategoryRequiredAudioLanguages((previous) => ({
+        ...previous,
+        [activeQualityScopeId]: nextLanguages,
+      }));
+      setMediaSettingsSaving(true);
+
+      try {
+        const { data, error } = await client
+          .mutation(updateMediaSettingsMutation, {
+            input: {
+              scope: activeQualityScopeId,
+              requiredAudioLanguages: nextLanguages,
+            },
+          })
+          .toPromise();
+        if (error) {
+          throw error;
+        }
+
+        applyMediaSettingsFromPayload(undefined, data?.updateMediaSettings);
+        setGlobalStatus(t("settings.qualitySettingsSaved"));
+      } catch (error) {
+        setCategoryRequiredAudioLanguages((previous) => ({
+          ...previous,
+          [activeQualityScopeId]: previousLanguages,
+        }));
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.failedToUpdate"),
+        );
+        throw error;
+      } finally {
+        setMediaSettingsSaving(false);
+      }
+    },
+    [
+      activeQualityScopeId,
+      applyMediaSettingsFromPayload,
+      categoryRequiredAudioLanguages,
+      client,
+      setGlobalStatus,
+      t,
+    ],
+  );
+
+  const updateCategoryMediaProfileSettings = React.useCallback(
+    async (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      const path =
+        view === "movies"
+          ? moviesPath.trim()
+          : view === "series"
+            ? seriesPath.trim()
+            : "";
+      if ((view === "movies" || view === "series") && !path) {
+        const requiredMessage =
+          view === "movies"
+            ? t("settings.moviesPathRequired")
+            : t("settings.seriesPathRequired");
+        setGlobalStatus(requiredMessage);
+        return;
+      }
+
+      const renameTemplate =
+        categoryRenameTemplates[activeQualityScopeId].trim();
+      const renameCollisionPolicy = normalizeRenameCollisionPolicy(
+        categoryRenameCollisionPolicies[activeQualityScopeId],
+      );
+      const renameMissingMetadataPolicy = normalizeRenameMissingMetadataPolicy(
+        categoryRenameMissingMetadataPolicies[activeQualityScopeId],
+      );
+
+      if (!renameTemplate) {
+        setGlobalStatus(t("settings.renameTemplateRequired"));
+        return;
+      }
+      setMediaSettingsSaving(true);
+      setQualityProfileParseError("");
+
+      try {
         const { data: mediaData, error: mediaError } = await client
           .mutation(updateMediaSettingsMutation, {
             input: {
               scope: activeQualityScopeId,
+              requiredAudioLanguages:
+                categoryRequiredAudioLanguages[activeQualityScopeId] ?? [],
               ...(view === "movies" || view === "series"
                 ? {
                     libraryPath: path,
@@ -699,7 +924,7 @@ export function useMediaSettings({
         if (mediaError) throw mediaError;
 
         applyMediaSettingsFromPayload(
-          qualityProfileResponse?.saveQualityProfileSettings,
+          undefined,
           mediaData?.updateMediaSettings,
         );
 
@@ -721,11 +946,11 @@ export function useMediaSettings({
     [
       activeQualityScopeId,
       categoryFillerPolicies,
+      categoryRequiredAudioLanguages,
       categoryRecapPolicies,
       categoryInterSeasonMovies,
       categoryMonitorFillerMovies,
       categoryMonitorSpecials,
-      categoryQualityProfileOverrides,
       categoryRenameCollisionPolicies,
       categoryRenameMissingMetadataPolicies,
       categoryRenameTemplates,
@@ -736,7 +961,6 @@ export function useMediaSettings({
       normalizeRecapPolicy,
       normalizeRenameCollisionPolicy,
       normalizeRenameMissingMetadataPolicy,
-      qualityProfiles,
       client,
       setGlobalStatus,
       t,
@@ -797,6 +1021,8 @@ export function useMediaSettings({
       new Set([
         QUALITY_PROFILE_CATALOG_KEY,
         QUALITY_PROFILE_ID_KEY,
+        SCORING_PERSONA_KEY,
+        "audio.required_languages",
         "rename.template",
         "rename.template.movie.global",
         "rename.template.series.global",
@@ -849,11 +1075,13 @@ export function useMediaSettings({
     mediaSettingsSaving,
     qualityProfiles,
     qualityProfileEntries,
-    qualityProfilesText,
     qualityProfileParseError,
     globalQualityProfileId,
+    globalScoringPersona,
     categoryQualityProfileOverrides,
-    setCategoryQualityProfileOverrides,
+    categoryRequiredAudioLanguages,
+    saveCategoryRequiredAudioLanguages,
+    categoryPersonaSelections,
     categoryRenameTemplates,
     setCategoryRenameTemplates,
     categoryRenameCollisionPolicies,
@@ -875,6 +1103,8 @@ export function useMediaSettings({
     plexmatchWriteOnImport,
     setPlexmatchWriteOnImport,
     saveSetting,
+    saveCategoryQualityProfileOverride,
+    saveCategoryScoringPersonaOverride,
     updateCategoryMediaProfileSettings,
     refreshMediaSettings,
     refreshCategoryValidation,

@@ -380,7 +380,6 @@ async fn bootstrap_application(
 
     let titles = Arc::new(db.clone());
     let users = Arc::new(db.clone());
-    let events = Arc::new(db.clone());
     let shows = Arc::new(db.clone());
     let indexer_configs: Arc<dyn scryer_application::IndexerConfigRepository> =
         Arc::new(db.clone());
@@ -520,7 +519,6 @@ async fn bootstrap_application(
         titles,
         shows,
         users,
-        events,
         indexer_configs,
         indexer_client,
         download_client,
@@ -564,6 +562,7 @@ async fn bootstrap_application(
     services.library_scanner = library_scanner;
     services.library_renamer = library_renamer;
     services.acquisition_state = Arc::new(db.clone());
+    services.domain_events = Arc::new(db.clone());
     services.download_submissions = Arc::new(db.clone());
     services.imports = Arc::new(db.clone());
     services.import_artifacts = Arc::new(db.clone());
@@ -620,6 +619,12 @@ async fn bootstrap_application(
     }
     if let Err(e) = app_use_case.migrate_legacy_persona_preferences().await {
         tracing::warn!(error = %e, "failed to migrate legacy persona preferences on startup");
+    }
+    if let Err(e) = app_use_case
+        .migrate_canonical_audio_persona_settings()
+        .await
+    {
+        tracing::warn!(error = %e, "failed to migrate canonical audio/persona settings on startup");
     }
     if let Err(e) = app_use_case.rebuild_plugin_provider().await {
         tracing::warn!(error = %e, "failed to rebuild plugin provider from DB state");

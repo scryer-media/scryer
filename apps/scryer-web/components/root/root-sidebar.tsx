@@ -439,7 +439,7 @@ function RootSidebarContent({
 
 export const RootSidebar = React.memo(function RootSidebar(props: RootSidebarProps) {
   return (
-    <SidebarProvider>
+    <SidebarProvider className="h-full">
       <RootSidebarContent {...props} />
     </SidebarProvider>
   );

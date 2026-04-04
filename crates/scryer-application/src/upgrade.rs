@@ -6,15 +6,18 @@
 
 use std::path::PathBuf;
 
-use crate::activity::{
-    ActivityChannel, ActivityKind, ActivitySeverity, NotificationMediaUpdate,
-    build_lifecycle_notification_metadata,
+use crate::domain_events::{
+    created_media_update, deleted_media_update, modified_media_update, new_title_domain_event,
+    title_context_snapshot,
 };
 use crate::recycle_bin::{self, RecycleBinConfig, RecycleManifest};
 use crate::release_parser::ParsedReleaseMetadata;
 use crate::types::TitleMediaFile;
 use crate::{AppError, AppResult, AppUseCase, InsertMediaFileInput, ReleaseDownloadAttemptOutcome};
-use scryer_domain::{CompletedDownload, NotificationEventType, Title, User};
+use scryer_domain::{
+    CompletedDownload, DomainEventPayload, MediaFileDeletedEventData, MediaFileDeletedReason,
+    MediaFileUpgradedEventData, Title, User,
+};
 
 /// Result of a successful upgrade operation.
 #[derive(Debug)]
@@ -103,8 +106,22 @@ pub async fn execute_upgrade(
         new_score
     } else {
         let category = crate::post_download_gate::facet_to_category_hint(&title.facet);
+        let required_audio_languages = app
+            .resolve_required_audio_languages(
+                Some(&title.id),
+                Some(category),
+                Some(quality_profile),
+            )
+            .await
+            .unwrap_or_default();
+        let persona = app
+            .resolve_scoring_persona(Some(category), Some(quality_profile), Some(category))
+            .await
+            .unwrap_or_default();
         let decision = crate::post_download_gate::build_import_profile_decision(
             quality_profile,
+            &required_audio_languages,
+            &persona,
             &rescored_parsed,
             category,
             title.runtime_minutes,
@@ -249,52 +266,47 @@ pub async fn execute_upgrade(
         }
     }
 
-    // 8. Record activity event
-    let message = format!(
-        "Upgraded file for '{}': score {} → {} (delta +{})",
-        title.name,
-        old_score,
-        final_score,
-        final_score - old_score
-    );
     {
-        let mut meta = if existing_file.file_path == dest_path.to_string_lossy() {
-            build_lifecycle_notification_metadata(
-                title,
-                [NotificationMediaUpdate::modified(
-                    dest_path.to_string_lossy().to_string(),
-                )],
-            )
+        let media_updates = if existing_file.file_path == dest_path.to_string_lossy() {
+            vec![modified_media_update(
+                dest_path.to_string_lossy().to_string(),
+            )]
         } else {
-            build_lifecycle_notification_metadata(
-                title,
-                [
-                    NotificationMediaUpdate::deleted(existing_file.file_path.clone()),
-                    NotificationMediaUpdate::created(dest_path.to_string_lossy().to_string()),
-                ],
-            )
-        };
-        meta.insert("old_score".to_string(), serde_json::json!(old_score));
-        meta.insert("new_score".to_string(), serde_json::json!(final_score));
-        let envelope = crate::activity::NotificationEnvelope {
-            event_type: NotificationEventType::Upgrade,
-            title: format!("Upgraded: {}", title.name),
-            body: message.clone(),
-            facet: Some(format!("{:?}", title.facet).to_lowercase()),
-            metadata: meta,
+            vec![
+                deleted_media_update(existing_file.file_path.clone()),
+                created_media_update(dest_path.to_string_lossy().to_string()),
+            ]
         };
         app.services
-            .record_activity_event_with_notification(
+            .append_domain_event(new_title_domain_event(
                 None,
-                Some(title.id.clone()),
-                None,
-                ActivityKind::FileUpgraded,
-                message,
-                ActivitySeverity::Success,
-                vec![ActivityChannel::WebUi, ActivityChannel::Toast],
-                envelope,
-            )
+                title,
+                DomainEventPayload::MediaFileUpgraded(MediaFileUpgradedEventData {
+                    title: title_context_snapshot(title),
+                    media_updates,
+                    previous_file_id: Some(existing_file.id.clone()),
+                    current_file_id: Some(new_file_id.clone()),
+                    old_score: Some(old_score),
+                    new_score: Some(final_score),
+                }),
+            ))
             .await?;
+
+        if existing_file.file_path != dest_path.to_string_lossy() {
+            app.services
+                .append_domain_event(new_title_domain_event(
+                    None,
+                    title,
+                    DomainEventPayload::MediaFileDeleted(MediaFileDeletedEventData {
+                        title: title_context_snapshot(title),
+                        media_updates: vec![deleted_media_update(existing_file.file_path.clone())],
+                        file_id: Some(existing_file.id.clone()),
+                        reason: MediaFileDeletedReason::UpgradeCleanup,
+                        episode_ids: target_episode_ids.to_vec(),
+                    }),
+                ))
+                .await?;
+        }
     }
 
     Ok(UpgradeResult::Upgraded(UpgradeOutcome {

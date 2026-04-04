@@ -1,5 +1,13 @@
 use super::*;
-use std::collections::HashMap;
+use crate::domain_events::new_download_queue_domain_event;
+use crate::event_views::{
+    apply_download_queue_projection_event, replay_download_queue_state, sorted_download_queue_items,
+};
+use scryer_domain::{
+    DomainEventFilter, DomainEventPayload, DomainEventType, DownloadQueueItemRemovedEventData,
+    DownloadQueueItemUpsertedEventData,
+};
+use std::collections::{HashMap, HashSet};
 
 fn extract_url_origin(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
@@ -47,6 +55,58 @@ pub(crate) fn resolve_indexer_base_url(
 
     derive_indexer_base_url_from_config_json(config_json)
         .ok_or_else(|| AppError::Validation("base URL is required".into()))
+}
+
+fn download_queue_projection_key(item: &DownloadQueueItem) -> String {
+    format!("{}::{}", item.client_type, item.download_client_item_id)
+}
+
+pub async fn publish_download_queue_snapshot_events(
+    app: &AppUseCase,
+    actor_user_id: Option<String>,
+    previous_items: &mut HashMap<String, DownloadQueueItem>,
+    items: &[DownloadQueueItem],
+) {
+    let mut next_items = HashMap::with_capacity(items.len());
+    let mut domain_events = Vec::new();
+
+    for item in items {
+        let key = download_queue_projection_key(item);
+        let changed = previous_items
+            .get(&key)
+            .is_none_or(|previous| previous != item);
+        if changed {
+            domain_events.push(new_download_queue_domain_event(
+                actor_user_id.clone(),
+                key.clone(),
+                DomainEventPayload::DownloadQueueItemUpserted(DownloadQueueItemUpsertedEventData {
+                    item: item.clone(),
+                }),
+            ));
+        }
+        next_items.insert(key, item.clone());
+    }
+
+    for (key, previous_item) in previous_items.iter() {
+        if !next_items.contains_key(key) {
+            domain_events.push(new_download_queue_domain_event(
+                actor_user_id.clone(),
+                key.clone(),
+                DomainEventPayload::DownloadQueueItemRemoved(DownloadQueueItemRemovedEventData {
+                    download_client_item_id: previous_item.download_client_item_id.clone(),
+                    client_type: Some(previous_item.client_type.clone()),
+                }),
+            ));
+        }
+    }
+
+    *previous_items = next_items;
+
+    if !domain_events.is_empty()
+        && let Err(error) = app.services.append_domain_events(domain_events).await
+    {
+        tracing::warn!(error = %error, "failed to append download queue domain events");
+    }
 }
 
 impl AppUseCase {
@@ -260,29 +320,12 @@ impl AppUseCase {
                 normalized_config_json,
             )
             .await?;
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                None,
-                EventType::ActionTriggered,
-                format!("indexer config updated: {}", updated.id),
-            )
-            .await?;
-
         Ok(updated)
     }
 
     pub async fn delete_indexer_config(&self, actor: &User, config_id: &str) -> AppResult<()> {
         require(actor, &Entitlement::ManageConfig)?;
         self.services.indexer_configs.delete(config_id).await?;
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                None,
-                EventType::ActionTriggered,
-                format!("indexer config deleted: {config_id}"),
-            )
-            .await?;
         Ok(())
     }
 
@@ -641,7 +684,105 @@ impl AppUseCase {
         actor: &User,
     ) -> AppResult<broadcast::Receiver<Vec<DownloadQueueItem>>> {
         require(actor, &Entitlement::ManageConfig)?;
-        Ok(self.services.download_queue_broadcast.subscribe())
+        let (tx, rx) = broadcast::channel(32);
+        let app = self.clone();
+        tokio::spawn(async move {
+            let event_types = vec![
+                DomainEventType::DownloadQueueItemUpserted,
+                DomainEventType::DownloadQueueItemRemoved,
+            ];
+            let mut wake_rx = app.services.domain_event_broadcast.subscribe();
+            let mut events = Vec::new();
+            let mut after_sequence = 0_i64;
+
+            loop {
+                let batch = match app
+                    .services
+                    .domain_events
+                    .list(&DomainEventFilter {
+                        event_types: Some(event_types.clone()),
+                        after_sequence: Some(after_sequence),
+                        limit: 500,
+                        ..DomainEventFilter::default()
+                    })
+                    .await
+                {
+                    Ok(batch) => batch,
+                    Err(error) => {
+                        tracing::warn!("download queue subscription initial load failed: {error}");
+                        return;
+                    }
+                };
+                if batch.is_empty() {
+                    break;
+                }
+                after_sequence = batch
+                    .last()
+                    .map(|event| event.sequence)
+                    .unwrap_or(after_sequence);
+                let count = batch.len();
+                events.extend(batch);
+                if count < 500 {
+                    break;
+                }
+            }
+
+            let mut cursor = events.last().map(|event| event.sequence).unwrap_or(0);
+            let mut items = replay_download_queue_state(&events);
+            let initial = sorted_download_queue_items(&items);
+            if !initial.is_empty() {
+                if tx.send(initial).is_err() {
+                    return;
+                }
+            }
+
+            loop {
+                let next_events = match app
+                    .services
+                    .domain_events
+                    .list(&DomainEventFilter {
+                        event_types: Some(event_types.clone()),
+                        after_sequence: Some(cursor),
+                        limit: 100,
+                        ..DomainEventFilter::default()
+                    })
+                    .await
+                {
+                    Ok(events) if !events.is_empty() => events,
+                    Ok(_) => match wake_rx.recv().await {
+                        Ok(sequence) => {
+                            if sequence > cursor {
+                                cursor = sequence.saturating_sub(1);
+                            }
+                            continue;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::debug!(
+                                "download queue subscription lagged, skipped {n} wakeups"
+                            );
+                            continue;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    },
+                    Err(error) => {
+                        tracing::warn!("download queue subscription replay failed: {error}");
+                        break;
+                    }
+                };
+
+                for event in next_events {
+                    cursor = event.sequence;
+                    if let Some(snapshot) =
+                        apply_download_queue_projection_event(&mut items, &event)
+                    {
+                        if tx.send(snapshot).is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+        Ok(rx)
     }
 
     pub async fn queue_manual_import(
@@ -685,26 +826,18 @@ impl AppUseCase {
             )
             .await?;
 
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                title_id.clone(),
-                EventType::ActionTriggered,
-                format!(
-                    "manual import queued for {} ({source_ref})",
-                    normalized_client_type
-                ),
-            )
-            .await?;
-        self.record_activity_event(
-            actor,
-            title_id,
-            ActivityKind::SystemNotice,
-            format!("manual import queued for download item {source_ref}"),
-            ActivitySeverity::Info,
-            vec![ActivityChannel::WebUi, ActivityChannel::Toast],
+        let title = match title_id.as_deref() {
+            Some(id) => self.services.titles.get_by_id(id).await?,
+            None => None,
+        };
+        self.emit_import_requested_event(
+            Some(actor.id.clone()),
+            title.as_ref(),
+            normalized_client_type,
+            source_ref,
+            scryer_domain::ImportRequestKind::Manual,
         )
-        .await?;
+        .await;
 
         Ok(import_id)
     }
@@ -845,15 +978,12 @@ impl AppUseCase {
             .download_client
             .pause_queue_item(download_client_item_id)
             .await?;
-        self.record_activity_event(
-            actor,
-            None,
-            ActivityKind::SystemNotice,
-            format!("download paused: {download_client_item_id}"),
-            ActivitySeverity::Info,
-            vec![ActivityChannel::WebUi],
+        self.emit_download_queue_item_command_issued_event(
+            Some(actor.id.clone()),
+            download_client_item_id.to_string(),
+            scryer_domain::DownloadQueueCommandAction::Pause,
         )
-        .await?;
+        .await;
         Ok(())
     }
 
@@ -867,15 +997,12 @@ impl AppUseCase {
             .download_client
             .resume_queue_item(download_client_item_id)
             .await?;
-        self.record_activity_event(
-            actor,
-            None,
-            ActivityKind::SystemNotice,
-            format!("download resumed: {download_client_item_id}"),
-            ActivitySeverity::Info,
-            vec![ActivityChannel::WebUi],
+        self.emit_download_queue_item_command_issued_event(
+            Some(actor.id.clone()),
+            download_client_item_id.to_string(),
+            scryer_domain::DownloadQueueCommandAction::Resume,
         )
-        .await?;
+        .await;
         Ok(())
     }
 
@@ -890,15 +1017,12 @@ impl AppUseCase {
             .download_client
             .delete_queue_item(download_client_item_id, is_history)
             .await?;
-        self.record_activity_event(
-            actor,
-            None,
-            ActivityKind::SystemNotice,
-            format!("download deleted: {download_client_item_id}"),
-            ActivitySeverity::Info,
-            vec![ActivityChannel::WebUi],
+        self.emit_download_queue_item_command_issued_event(
+            Some(actor.id.clone()),
+            download_client_item_id.to_string(),
+            scryer_domain::DownloadQueueCommandAction::Delete,
         )
-        .await?;
+        .await;
         Ok(())
     }
 
@@ -959,15 +1083,13 @@ impl AppUseCase {
         };
 
         let created = self.services.download_client_configs.create(config).await?;
-        self.record_activity_event(
-            actor,
-            None,
-            ActivityKind::SettingSaved,
-            format!("download client created: {}", created.id),
-            ActivitySeverity::Success,
-            vec![ActivityChannel::WebUi, ActivityChannel::Toast],
+        self.emit_configuration_changed_event(
+            Some(actor.id.clone()),
+            "download_client",
+            Some(created.id.clone()),
+            scryer_domain::ConfigurationChangeAction::Saved,
         )
-        .await?;
+        .await;
 
         Ok(created)
     }
@@ -1026,15 +1148,13 @@ impl AppUseCase {
                 is_enabled,
             )
             .await?;
-        self.record_activity_event(
-            actor,
-            None,
-            ActivityKind::SettingSaved,
-            format!("download client updated: {}", updated.id),
-            ActivitySeverity::Success,
-            vec![ActivityChannel::WebUi, ActivityChannel::Toast],
+        self.emit_configuration_changed_event(
+            Some(actor.id.clone()),
+            "download_client",
+            Some(updated.id.clone()),
+            scryer_domain::ConfigurationChangeAction::Updated,
         )
-        .await?;
+        .await;
 
         Ok(updated)
     }
@@ -1054,15 +1174,13 @@ impl AppUseCase {
             .download_client_configs
             .delete(client_id)
             .await?;
-        self.record_activity_event(
-            actor,
-            None,
-            ActivityKind::SettingSaved,
-            format!("download client deleted: {client_id}"),
-            ActivitySeverity::Success,
-            vec![ActivityChannel::WebUi, ActivityChannel::Toast],
+        self.emit_configuration_changed_event(
+            Some(actor.id.clone()),
+            "download_client",
+            Some(client_id.to_string()),
+            scryer_domain::ConfigurationChangeAction::Deleted,
         )
-        .await?;
+        .await;
 
         Ok(())
     }
@@ -1087,7 +1205,6 @@ pub async fn start_download_queue_poller(
 ) {
     use crate::tracked_downloads::{TrackedDownloadService, tracked_download_id};
     use scryer_domain::TrackedDownloadState;
-    use std::collections::HashSet;
 
     let actor = match app.find_or_create_default_user().await {
         Ok(actor) => actor,
@@ -1098,6 +1215,7 @@ pub async fn start_download_queue_poller(
     };
 
     let mut tracker = TrackedDownloadService::new();
+    let mut previous_items: HashMap<String, DownloadQueueItem> = HashMap::new();
 
     tracing::info!("download queue poller started (2s interval, tracked downloads enabled)");
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
@@ -1237,10 +1355,13 @@ pub async fn start_download_queue_poller(
                             metrics::gauge!("scryer_download_queue_items", "state" => *label).set(count as f64);
                         }
 
-                        let _ = app
-                            .services
-                            .download_queue_broadcast
-                            .send(items);
+                        publish_download_queue_snapshot_events(
+                            &app,
+                            Some(actor.id.clone()),
+                            &mut previous_items,
+                            &items,
+                        )
+                        .await;
                     }
                     Err(error) => {
                         tracing::warn!(error = %error, "download queue poll failed");

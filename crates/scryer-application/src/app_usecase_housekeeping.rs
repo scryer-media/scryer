@@ -76,6 +76,11 @@ impl AppUseCase {
             .housekeeping
             .delete_history_events_older_than(365)
             .await?;
+        let stale_domain_events = self
+            .services
+            .housekeeping
+            .delete_domain_events_older_than(365)
+            .await?;
 
         // 6. Stale staged NZB artifacts (> 1 hour old)
         let staged_nzb_artifacts_pruned = self
@@ -110,6 +115,7 @@ impl AppUseCase {
             stale_release_attempts,
             expired_event_outboxes,
             stale_history_events,
+            stale_domain_events,
             staged_nzb_artifacts_pruned,
             recycled_purged,
             "housekeeping completed"

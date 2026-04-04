@@ -747,6 +747,96 @@ pub(crate) async fn update_collection_query(
         .ok_or_else(|| AppError::NotFound(format!("collection {}", collection_id)))
 }
 
+pub(crate) async fn update_collection_interstitial_movie_query(
+    pool: &SqlitePool,
+    collection_id: &str,
+    interstitial_movie: &InterstitialMovieMetadata,
+) -> AppResult<Collection> {
+    let result = sqlx::query(
+        "UPDATE collections SET
+            interstitial_tvdb_id = ?,
+            interstitial_name = ?,
+            interstitial_slug = ?,
+            interstitial_year = ?,
+            interstitial_content_status = ?,
+            interstitial_overview = ?,
+            interstitial_poster_url = ?,
+            interstitial_language = ?,
+            interstitial_runtime_minutes = ?,
+            interstitial_sort_title = ?,
+            interstitial_imdb_id = ?,
+            interstitial_genres_json = ?,
+            interstitial_studio = ?,
+            interstitial_digital_release_date = ?,
+            interstitial_association_confidence = ?,
+            interstitial_continuity_status = ?,
+            interstitial_movie_form = ?,
+            interstitial_confidence = ?,
+            interstitial_signal_summary = ?,
+            interstitial_placement = ?,
+            interstitial_movie_tmdb_id = ?,
+            interstitial_movie_mal_id = ?,
+            interstitial_movie_anidb_id = ?
+         WHERE id = ?",
+    )
+    .bind(&interstitial_movie.tvdb_id)
+    .bind(&interstitial_movie.name)
+    .bind(&interstitial_movie.slug)
+    .bind(interstitial_movie.year)
+    .bind(&interstitial_movie.content_status)
+    .bind(&interstitial_movie.overview)
+    .bind(&interstitial_movie.poster_url)
+    .bind(&interstitial_movie.language)
+    .bind(interstitial_movie.runtime_minutes)
+    .bind(&interstitial_movie.sort_title)
+    .bind(&interstitial_movie.imdb_id)
+    .bind(serde_json::to_string(&interstitial_movie.genres).unwrap_or_else(|_| "[]".to_string()))
+    .bind(&interstitial_movie.studio)
+    .bind(&interstitial_movie.digital_release_date)
+    .bind(&interstitial_movie.association_confidence)
+    .bind(&interstitial_movie.continuity_status)
+    .bind(&interstitial_movie.movie_form)
+    .bind(&interstitial_movie.confidence)
+    .bind(&interstitial_movie.signal_summary)
+    .bind(&interstitial_movie.placement)
+    .bind(&interstitial_movie.movie_tmdb_id)
+    .bind(&interstitial_movie.movie_mal_id)
+    .bind(&interstitial_movie.movie_anidb_id)
+    .bind(collection_id)
+    .execute(pool)
+    .await
+    .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound(format!("collection {}", collection_id)));
+    }
+
+    get_collection_by_id_query(pool, collection_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("collection {}", collection_id)))
+}
+
+pub(crate) async fn update_collection_specials_movies_query(
+    pool: &SqlitePool,
+    collection_id: &str,
+    specials_movies: &[InterstitialMovieMetadata],
+) -> AppResult<Collection> {
+    let result = sqlx::query("UPDATE collections SET special_movies_json = ? WHERE id = ?")
+        .bind(serde_json::to_string(specials_movies).unwrap_or_else(|_| "[]".to_string()))
+        .bind(collection_id)
+        .execute(pool)
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound(format!("collection {}", collection_id)));
+    }
+
+    get_collection_by_id_query(pool, collection_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("collection {}", collection_id)))
+}
+
 pub(crate) async fn list_episodes_for_collection_query(
     pool: &SqlitePool,
     collection_id: &str,

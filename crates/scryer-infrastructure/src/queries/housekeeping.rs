@@ -67,6 +67,22 @@ pub(crate) async fn delete_history_events_older_than_query(
     Ok(result.rows_affected() as u32)
 }
 
+pub(crate) async fn delete_domain_events_older_than_query(
+    pool: &SqlitePool,
+    days: i64,
+) -> AppResult<u32> {
+    let modifier = format!("-{days} days");
+    let result = sqlx::query("DELETE FROM domain_events WHERE occurred_at < datetime('now', ?)")
+        .bind(&modifier)
+        .execute(pool)
+        .await
+        .map_err(|e| {
+            AppError::Repository(format!("housekeeping: domain_events cleanup failed: {e}"))
+        })?;
+
+    Ok(result.rows_affected() as u32)
+}
+
 pub(crate) async fn list_all_media_file_paths_query(
     pool: &SqlitePool,
 ) -> AppResult<Vec<(String, String)>> {

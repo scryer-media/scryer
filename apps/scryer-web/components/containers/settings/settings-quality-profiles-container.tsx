@@ -33,14 +33,18 @@ export function SettingsQualityProfilesContainer() {
     removeQualityTier,
     updateQualityProfilesGlobal,
     saveGlobalQualityProfile,
+    saveGlobalScoringPersona,
     updateQualityProfileDraft,
     globalQualityProfileId,
     setGlobalQualityProfileId,
+    globalScoringPersona,
     categoryQualityProfileOverrides,
     setCategoryQualityProfileOverrides,
+    categoryPersonaSelections,
     categoryQualityProfileSaving,
     deleteQualityProfile,
     saveCategoryQualityProfile,
+    saveCategoryScoringPersona,
     toProfileOptions,
   } = useQualityProfilesManager();
 
@@ -73,15 +77,19 @@ export function SettingsQualityProfilesContainer() {
       toProfileOptions={toProfileOptions}
       globalQualityProfileId={globalQualityProfileId}
       setGlobalQualityProfileId={setGlobalQualityProfileId}
+      globalScoringPersona={globalScoringPersona}
       categoryQualityProfileOverrides={categoryQualityProfileOverrides}
       setCategoryQualityProfileOverrides={setCategoryQualityProfileOverrides}
+      categoryPersonaSelections={categoryPersonaSelections}
     mediaSettingsLoading={mediaSettingsLoading}
     initialLoadComplete={initialLoadComplete}
     qualityProfilesSaving={qualityProfilesSaving}
     updateQualityProfilesGlobal={updateQualityProfilesGlobal}
     saveGlobalQualityProfile={saveGlobalQualityProfile}
+    saveGlobalScoringPersona={saveGlobalScoringPersona}
     categoryQualityProfileSaving={categoryQualityProfileSaving}
     saveCategoryQualityProfile={saveCategoryQualityProfile}
+    saveCategoryScoringPersona={saveCategoryScoringPersona}
     archivalQualityOptions={archivalQualityOptions}
     deleteQualityProfile={deleteQualityProfile}
   />

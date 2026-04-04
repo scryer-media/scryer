@@ -89,9 +89,9 @@ mod tests {
     use super::*;
     use crate::NullSettingsRepository;
     use crate::null_repositories::test_nulls::{
-        NullDownloadClient, NullDownloadClientConfigRepository, NullEventRepository,
-        NullIndexerClient, NullQualityProfileRepository, NullReleaseAttemptRepository,
-        NullShowRepository, NullTitleRepository, NullUserRepository,
+        NullDownloadClient, NullDownloadClientConfigRepository, NullIndexerClient,
+        NullQualityProfileRepository, NullReleaseAttemptRepository, NullShowRepository,
+        NullTitleRepository, NullUserRepository,
     };
     use async_trait::async_trait;
     use std::sync::Arc;
@@ -187,7 +187,6 @@ mod tests {
             Arc::new(NullTitleRepository),
             Arc::new(NullShowRepository),
             Arc::new(NullUserRepository),
-            Arc::new(NullEventRepository),
             indexer_configs,
             Arc::new(NullIndexerClient),
             Arc::new(NullDownloadClient),

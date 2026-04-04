@@ -26,8 +26,11 @@ mod app_usecase_settings;
 mod app_usecase_subtitles;
 mod app_usecase_title_images;
 pub(crate) mod archive_extractor;
+mod audio_requirements;
 pub mod completed_download_handler;
 mod delay_profile;
+mod domain_events;
+mod event_views;
 pub(crate) mod facet_handler;
 mod facet_movie;
 mod facet_registry;
@@ -55,6 +58,7 @@ pub mod release_dedup;
 mod release_group_db;
 mod release_parser;
 mod scoring_weights;
+mod settings_keys;
 pub mod subtitles;
 pub mod tracked_downloads;
 mod types;
@@ -62,18 +66,17 @@ pub mod upgrade;
 mod user_delete;
 mod user_rule_input;
 
-use crate::activity::ActivityStream;
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use rand_core::OsRng;
 use ring::digest as ring_digest;
 use scryer_domain::{
-    BlocklistEntry, CalendarEpisode, Collection, CollectionType, CompletedDownload,
-    DownloadClientConfig, DownloadQueueItem, DownloadQueueState, Entitlement, Episode, EventType,
-    ExternalId, HistoryEvent, Id, ImportFileResult, ImportRecord, ImportResult, ImportStatus,
-    IndexerConfig, MediaFacet, NewDownloadClientConfig, NewIndexerConfig, NewTitle,
-    PluginInstallation, PolicyInput, PolicyOutput, RuleSet, TaggedAlias, Title,
-    TitleHistoryEventType, TitleHistoryRecord, User,
+    BlocklistEntry, CalendarEpisode, Collection, CollectionType, CompletedDownload, DomainEvent,
+    DomainEventFilter, DomainEventType, DownloadClientConfig, DownloadQueueItem,
+    DownloadQueueState, Entitlement, Episode, ExternalId, HistoryEvent, Id, ImportFileResult,
+    ImportRecord, ImportResult, ImportStatus, IndexerConfig, MediaFacet, NewDomainEvent,
+    NewDownloadClientConfig, NewIndexerConfig, NewTitle, PluginInstallation, PolicyInput,
+    PolicyOutput, RuleSet, TaggedAlias, Title, TitleHistoryEventType, TitleHistoryRecord, User,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -84,9 +87,7 @@ pub type AppResult<T> = Result<T, AppError>;
 
 use crate::quality_profile::resolve_profile_id_for_title;
 pub use acquisition_policy::AcquisitionThresholds;
-pub use activity::{
-    ActivityChannel, ActivityEvent, ActivityKind, ActivitySeverity, NotificationEnvelope,
-};
+pub use activity::{ActivityChannel, ActivityEvent, ActivityKind, ActivitySeverity};
 pub use app_usecase_acquisition::start_background_acquisition_poller;
 pub use app_usecase_backup::BackupService;
 pub use app_usecase_catalog::{
@@ -103,16 +104,25 @@ pub use app_usecase_jobs::start_background_library_refresh_loop;
 pub use app_usecase_plugins::{RegistryPlugin, RulePackRegistryEntry, RulePackTemplate};
 pub use app_usecase_post_processing::{PostProcessingContext, run_post_processing};
 pub use app_usecase_rss::RssSyncReport;
-pub use app_usecase_rules::{ConvenienceAudioSetting, ConvenienceSettings};
 pub use app_usecase_settings::{AcquisitionSettings, SubtitleSettings, UpdateSubtitleSettings};
 pub use app_usecase_subtitles::{spawn_subtitle_search_for_file, start_background_subtitle_poller};
 pub use app_usecase_title_images::start_background_banner_loop;
 pub use app_usecase_title_images::start_background_fanart_loop;
 pub use app_usecase_title_images::start_background_poster_loop;
+pub(crate) use audio_requirements::{
+    missing_required_audio_languages, normalize_required_audio_languages,
+    release_audio_language_hints,
+};
 pub use delay_profile::{
     DELAY_PROFILE_CATALOG_KEY, DelayDecision, DelayProfile, PreferredProtocol, is_usenet_source,
     parse_delay_profile_catalog, resolve_delay_decision, resolve_delay_profile,
     validate_delay_profile_catalog,
+};
+pub use event_views::{
+    apply_download_queue_projection_event, apply_job_next_run_projection_event,
+    apply_job_run_projection_event, apply_library_scan_projection_event, replay_active_job_runs,
+    replay_download_queue_state, replay_job_next_runs, replay_library_scan_state,
+    sorted_download_queue_items,
 };
 pub use facet_handler::{
     FacetHandler, HydrationResult, movie_to_hydration_result, series_to_hydration_result,
@@ -132,6 +142,7 @@ pub use media_language::{
 use post_hydration_title_scan_queue::PostHydrationTitleScanQueue;
 
 pub(crate) const GLOBAL_LIBRARY_SCAN_ANALYSIS_CONCURRENCY: usize = 4;
+pub use app_usecase_integration::publish_download_queue_snapshot_events;
 pub use jobs::{
     JobCategory, JobDefinition, JobKey, JobRun, JobRunRecord, JobRunStatus, JobRunTracker,
     JobScheduleInfo, JobScheduleKind, JobSection, JobTriggerSource, LibraryProbeSignature,
@@ -150,13 +161,13 @@ pub use library_scan_progress::{
 pub use media_analyzer::NativeMediaAnalyzer;
 pub use notification_dispatcher::start_notification_dispatcher;
 pub use null_repositories::{
-    NullAcquisitionStateRepository, NullBlocklistRepository, NullDownloadSubmissionRepository,
-    NullFileImporter, NullHousekeepingRepository, NullImportRepository, NullIndexerStatsTracker,
-    NullJobRunRepository, NullLibraryProbeRepository, NullMediaFileRepository,
-    NullNotificationChannelRepository, NullNotificationSubscriptionRepository,
-    NullPendingReleaseRepository, NullPluginInstallationRepository,
-    NullPostProcessingScriptRepository, NullRuleSetRepository, NullSettingsRepository,
-    NullStagedNzbStore, NullSystemInfoProvider, NullTitleHistoryRepository,
+    NullAcquisitionStateRepository, NullBlocklistRepository, NullDomainEventRepository,
+    NullDownloadSubmissionRepository, NullFileImporter, NullHousekeepingRepository,
+    NullImportRepository, NullIndexerStatsTracker, NullJobRunRepository,
+    NullLibraryProbeRepository, NullMediaFileRepository, NullNotificationChannelRepository,
+    NullNotificationSubscriptionRepository, NullPendingReleaseRepository,
+    NullPluginInstallationRepository, NullPostProcessingScriptRepository, NullRuleSetRepository,
+    NullSettingsRepository, NullStagedNzbStore, NullSystemInfoProvider, NullTitleHistoryRepository,
     NullTitleImageProcessor, NullTitleImageRepository, NullWantedItemRepository,
 };
 pub use quality_profile::{
@@ -172,6 +183,10 @@ pub use release_parser::{
 };
 pub use scoring_weights::{
     ScoringOverrides, ScoringPersona, ScoringWeights, build_weights, build_weights_for_category,
+};
+pub use settings_keys::{
+    AUDIO_PERSONA_MIGRATION_SENTINEL_KEY, REQUIRED_AUDIO_LANGUAGES_KEY, SCORING_PERSONA_KEY,
+    TITLE_REQUIRED_AUDIO_OVERRIDE_KEY,
 };
 pub(crate) use types::JwtClaims;
 pub use types::{
@@ -276,7 +291,7 @@ pub struct AppServices {
     pub titles: Arc<dyn TitleRepository>,
     pub shows: Arc<dyn ShowRepository>,
     pub users: Arc<dyn UserRepository>,
-    pub events: Arc<dyn EventRepository>,
+    pub domain_events: Arc<dyn DomainEventRepository>,
     pub indexer_configs: Arc<dyn IndexerConfigRepository>,
     pub indexer_client: Arc<dyn IndexerClient>,
     pub download_client: Arc<dyn DownloadClient>,
@@ -308,10 +323,7 @@ pub struct AppServices {
     pub notification_subscriptions: Option<Arc<dyn NotificationSubscriptionRepository>>,
     pub notification_provider: Option<Arc<dyn NotificationPluginProvider>>,
     pub db_path: String,
-    pub activity_stream: ActivityStream,
-    pub event_broadcast: broadcast::Sender<HistoryEvent>,
-    pub activity_event_broadcast: broadcast::Sender<ActivityEvent>,
-    pub download_queue_broadcast: broadcast::Sender<Vec<DownloadQueueItem>>,
+    pub domain_event_broadcast: broadcast::Sender<i64>,
     pub import_history_broadcast: broadcast::Sender<()>,
     pub settings_changed_broadcast: broadcast::Sender<Vec<String>>,
     pub library_scan_tracker: LibraryScanTracker,
@@ -343,7 +355,6 @@ impl AppServices {
         titles: Arc<dyn TitleRepository>,
         shows: Arc<dyn ShowRepository>,
         users: Arc<dyn UserRepository>,
-        events: Arc<dyn EventRepository>,
         indexer_configs: Arc<dyn IndexerConfigRepository>,
         indexer_client: Arc<dyn IndexerClient>,
         download_client: Arc<dyn DownloadClient>,
@@ -353,16 +364,14 @@ impl AppServices {
         quality_profiles: Arc<dyn QualityProfileRepository>,
         db_path: String,
     ) -> Self {
-        let (tx, _rx) = broadcast::channel(256);
-        let (activity_tx, _activity_rx) = broadcast::channel(256);
-        let (queue_tx, _queue_rx) = broadcast::channel(16);
+        let (domain_event_tx, _domain_event_rx) = broadcast::channel(256);
         let (import_history_tx, _) = broadcast::channel::<()>(16);
         let (settings_changed_tx, _) = broadcast::channel::<Vec<String>>(16);
         Self {
             titles,
             shows,
             users,
-            events,
+            domain_events: Arc::new(NullDomainEventRepository),
             indexer_configs,
             indexer_client,
             download_client,
@@ -396,10 +405,7 @@ impl AppServices {
             notification_subscriptions: None,
             notification_provider: None,
             db_path,
-            activity_stream: ActivityStream::new(),
-            event_broadcast: tx,
-            activity_event_broadcast: activity_tx,
-            download_queue_broadcast: queue_tx,
+            domain_event_broadcast: domain_event_tx,
             import_history_broadcast: import_history_tx,
             settings_changed_broadcast: settings_changed_tx,
             library_scan_tracker: LibraryScanTracker::new(),
@@ -429,80 +435,21 @@ impl AppServices {
         }
     }
 
-    async fn record_event(
-        &self,
-        actor_user_id: Option<String>,
-        title_id: Option<String>,
-        event_type: EventType,
-        message: String,
-    ) -> AppResult<()> {
-        let event = HistoryEvent {
-            id: Id::new().0,
-            event_type,
-            actor_user_id,
-            title_id,
-            message,
-            occurred_at: Utc::now(),
-        };
-
-        self.events
-            .append(event.clone())
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        let activity = ActivityEvent::new(
-            ActivityKind::SystemNotice,
-            event.actor_user_id.clone(),
-            event.title_id.clone(),
-            event.message.clone(),
-            ActivitySeverity::Info,
-            vec![ActivityChannel::WebUi],
-        );
-        self.activity_stream.push(activity.clone()).await;
-        let _ = self.activity_event_broadcast.send(activity);
-        let _ = self.event_broadcast.send(event);
-        Ok(())
+    pub async fn append_domain_event(&self, event: NewDomainEvent) -> AppResult<DomainEvent> {
+        let stored = self.domain_events.append(event).await?;
+        let _ = self.domain_event_broadcast.send(stored.sequence);
+        Ok(stored)
     }
 
-    pub async fn record_activity_event(
+    pub async fn append_domain_events(
         &self,
-        actor_user_id: Option<String>,
-        title_id: Option<String>,
-        facet: Option<String>,
-        kind: ActivityKind,
-        message: String,
-        severity: ActivitySeverity,
-        channels: Vec<ActivityChannel>,
-    ) -> AppResult<()> {
-        let mut event =
-            ActivityEvent::new(kind, actor_user_id, title_id, message, severity, channels);
-        if let Some(f) = facet {
-            event = event.with_facet(f);
+        events: Vec<NewDomainEvent>,
+    ) -> AppResult<Vec<DomainEvent>> {
+        let stored = self.domain_events.append_many(events).await?;
+        if let Some(last) = stored.last() {
+            let _ = self.domain_event_broadcast.send(last.sequence);
         }
-        self.activity_stream.push(event.clone()).await;
-        let _ = self.activity_event_broadcast.send(event);
-        Ok(())
-    }
-
-    pub async fn record_activity_event_with_notification(
-        &self,
-        actor_user_id: Option<String>,
-        title_id: Option<String>,
-        facet: Option<String>,
-        kind: ActivityKind,
-        message: String,
-        severity: ActivitySeverity,
-        channels: Vec<ActivityChannel>,
-        envelope: crate::activity::NotificationEnvelope,
-    ) -> AppResult<()> {
-        let mut event =
-            ActivityEvent::new(kind, actor_user_id, title_id, message, severity, channels)
-                .with_notification(envelope);
-        if let Some(f) = facet {
-            event = event.with_facet(f);
-        }
-        self.activity_stream.push(event.clone()).await;
-        let _ = self.activity_event_broadcast.send(event);
-        Ok(())
+        Ok(stored)
     }
 
     pub async fn update_import_status_and_notify(
@@ -518,57 +465,66 @@ impl AppServices {
             let _ = self.import_history_broadcast.send(());
         }
 
-        // Dual-write: emit title history event from import result
         if let Some(ref json) = result_json
             && let Ok(result) = serde_json::from_str::<ImportResult>(json)
-            && let Some(ref title_id) = result.title_id
         {
-            let event_type = match status {
-                ImportStatus::Completed => TitleHistoryEventType::Imported,
-                ImportStatus::Failed => TitleHistoryEventType::ImportFailed,
-                ImportStatus::Skipped => TitleHistoryEventType::ImportSkipped,
-                _ => return Ok(()),
-            };
-            let mut data = std::collections::HashMap::new();
-            data.insert("import_id".into(), serde_json::json!(import_id));
-            data.insert("source_path".into(), serde_json::json!(result.source_path));
-            if let Some(ref dp) = result.dest_path {
-                data.insert("dest_path".into(), serde_json::json!(dp));
+            if matches!(status, ImportStatus::Failed | ImportStatus::Skipped) {
+                let title = match result.title_id.as_ref() {
+                    Some(title_id) => self
+                        .titles
+                        .get_by_id(title_id)
+                        .await?
+                        .map(|title| crate::domain_events::title_context_snapshot(&title)),
+                    None => None,
+                };
+                let reason = result
+                    .error_message
+                    .clone()
+                    .or_else(|| result.skip_reason.map(|reason| reason.as_str().to_string()));
+
+                let event = if let Some(title_id) = result.title_id.as_ref() {
+                    let facet = title.as_ref().map(|snapshot| snapshot.facet.clone());
+                    NewDomainEvent {
+                        event_id: Id::new().0,
+                        occurred_at: Utc::now(),
+                        actor_user_id: None,
+                        title_id: Some(title_id.clone()),
+                        facet,
+                        correlation_id: None,
+                        causation_id: None,
+                        schema_version: 1,
+                        stream: scryer_domain::DomainEventStream::Title {
+                            title_id: title_id.clone(),
+                        },
+                        payload: scryer_domain::DomainEventPayload::ImportRejected(
+                            scryer_domain::ImportRejectedEventData {
+                                title,
+                                status,
+                                source_path: Some(result.source_path.clone()),
+                                reason,
+                                episode_ids: Vec::new(),
+                            },
+                        ),
+                    }
+                } else {
+                    crate::domain_events::new_global_domain_event(
+                        None,
+                        scryer_domain::DomainEventPayload::ImportRejected(
+                            scryer_domain::ImportRejectedEventData {
+                                title: None,
+                                status,
+                                source_path: Some(result.source_path.clone()),
+                                reason,
+                                episode_ids: Vec::new(),
+                            },
+                        ),
+                    )
+                };
+
+                let _ = self.append_domain_event(event).await;
             }
-            if let Some(ref msg) = result.error_message {
-                data.insert("message".into(), serde_json::json!(msg));
-            }
-            if let Some(ref sr) = result.skip_reason {
-                data.insert("skip_reason".into(), serde_json::json!(sr.as_str()));
-            }
-            data.insert(
-                "decision".into(),
-                serde_json::json!(result.decision.as_str()),
-            );
-            if let Some(sz) = result.file_size_bytes {
-                data.insert("size_bytes".into(), serde_json::json!(sz));
-            }
-            let _ = self
-                .title_history
-                .record_event(&NewTitleHistoryEvent {
-                    title_id: title_id.clone(),
-                    episode_id: None,
-                    collection_id: None,
-                    event_type,
-                    source_title: Some(result.source_path.clone()),
-                    quality: None,
-                    download_id: None,
-                    data,
-                })
-                .await;
         }
         Ok(())
-    }
-
-    pub async fn record_title_history(&self, event: NewTitleHistoryEvent) -> AppResult<String> {
-        let id = self.title_history.record_event(&event).await?;
-        let _ = self.import_history_broadcast.send(());
-        Ok(id)
     }
 }
 
@@ -665,6 +621,16 @@ pub trait ShowRepository: Send + Sync {
         last_episode_number: Option<String>,
         monitored: Option<bool>,
     ) -> AppResult<Collection>;
+    async fn update_collection_interstitial_movie(
+        &self,
+        collection_id: &str,
+        interstitial_movie: scryer_domain::InterstitialMovieMetadata,
+    ) -> AppResult<Collection>;
+    async fn update_collection_specials_movies(
+        &self,
+        collection_id: &str,
+        specials_movies: Vec<scryer_domain::InterstitialMovieMetadata>,
+    ) -> AppResult<Collection>;
     async fn update_interstitial_season_episode(
         &self,
         collection_id: &str,
@@ -739,14 +705,17 @@ pub trait UserRepository: Send + Sync {
 }
 
 #[async_trait]
-pub trait EventRepository: Send + Sync {
-    async fn list(
+pub trait DomainEventRepository: Send + Sync {
+    async fn append(&self, event: NewDomainEvent) -> AppResult<DomainEvent>;
+    async fn append_many(&self, events: Vec<NewDomainEvent>) -> AppResult<Vec<DomainEvent>>;
+    async fn list(&self, filter: &DomainEventFilter) -> AppResult<Vec<DomainEvent>>;
+    async fn list_after_sequence(
         &self,
-        title_id: Option<String>,
-        limit: i64,
-        offset: i64,
-    ) -> AppResult<Vec<HistoryEvent>>;
-    async fn append(&self, event: HistoryEvent) -> AppResult<()>;
+        after_sequence: i64,
+        limit: usize,
+    ) -> AppResult<Vec<DomainEvent>>;
+    async fn get_subscriber_offset(&self, subscriber: &str) -> AppResult<i64>;
+    async fn set_subscriber_offset(&self, subscriber: &str, sequence: i64) -> AppResult<()>;
 }
 
 #[async_trait]
@@ -824,6 +793,7 @@ pub trait HousekeepingRepository: Send + Sync {
     async fn delete_release_attempts_older_than(&self, days: i64) -> AppResult<u32>;
     async fn delete_dispatched_event_outboxes_older_than(&self, days: i64) -> AppResult<u32>;
     async fn delete_history_events_older_than(&self, days: i64) -> AppResult<u32>;
+    async fn delete_domain_events_older_than(&self, days: i64) -> AppResult<u32>;
     async fn list_all_media_file_paths(&self) -> AppResult<Vec<(String, String)>>;
     async fn delete_media_files_by_ids(&self, ids: &[String]) -> AppResult<u32>;
 }
@@ -861,6 +831,12 @@ pub trait QualityProfileRepository: Send + Sync {
         scope: &str,
         scope_id: Option<String>,
     ) -> AppResult<Vec<QualityProfile>>;
+    async fn replace_quality_profiles(
+        &self,
+        scope: &str,
+        scope_id: Option<String>,
+        profiles: Vec<QualityProfile>,
+    ) -> AppResult<()>;
 }
 
 #[async_trait]
@@ -1851,7 +1827,7 @@ pub trait NotificationSubscriptionRepository: Send + Sync {
     ) -> AppResult<Vec<scryer_domain::NotificationSubscription>>;
     async fn list_subscriptions_for_event(
         &self,
-        event_type: &str,
+        event_type: scryer_domain::NotificationEventType,
     ) -> AppResult<Vec<scryer_domain::NotificationSubscription>>;
     async fn create_subscription(
         &self,
@@ -2367,8 +2343,107 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct MockEventRepo {
-        store: Arc<Mutex<Vec<HistoryEvent>>>,
+    struct MockDomainEventRepo {
+        events: Arc<Mutex<Vec<DomainEvent>>>,
+        subscriber_offsets: Arc<Mutex<HashMap<String, i64>>>,
+    }
+
+    #[async_trait]
+    impl DomainEventRepository for MockDomainEventRepo {
+        async fn append(&self, event: NewDomainEvent) -> AppResult<DomainEvent> {
+            let mut events = self.events.lock().await;
+            let sequence = events
+                .last()
+                .map(|existing| existing.sequence + 1)
+                .unwrap_or(1);
+            let stored = DomainEvent {
+                sequence,
+                event_id: event.event_id,
+                occurred_at: event.occurred_at,
+                actor_user_id: event.actor_user_id,
+                title_id: event.title_id,
+                facet: event.facet,
+                correlation_id: event.correlation_id,
+                causation_id: event.causation_id,
+                schema_version: event.schema_version,
+                stream: event.stream,
+                payload: event.payload,
+            };
+            events.push(stored.clone());
+            Ok(stored)
+        }
+
+        async fn append_many(&self, events: Vec<NewDomainEvent>) -> AppResult<Vec<DomainEvent>> {
+            let mut stored = Vec::with_capacity(events.len());
+            for event in events {
+                stored.push(self.append(event).await?);
+            }
+            Ok(stored)
+        }
+
+        async fn list(&self, filter: &DomainEventFilter) -> AppResult<Vec<DomainEvent>> {
+            let events = self.events.lock().await;
+            let limit = if filter.limit == 0 {
+                usize::MAX
+            } else {
+                filter.limit
+            };
+            let iter: Box<dyn Iterator<Item = &DomainEvent>> =
+                if filter.after_sequence.is_some() && filter.before_sequence.is_none() {
+                    Box::new(events.iter())
+                } else {
+                    Box::new(events.iter().rev())
+                };
+            Ok(iter
+                .filter(|event| {
+                    filter
+                        .after_sequence
+                        .is_none_or(|after| event.sequence > after)
+                        && filter
+                            .before_sequence
+                            .is_none_or(|before| event.sequence < before)
+                        && filter.title_id.as_ref().is_none_or(|title_id| {
+                            event.title_id.as_deref() == Some(title_id.as_str())
+                        })
+                        && filter
+                            .facet
+                            .as_ref()
+                            .is_none_or(|facet| event.facet.as_ref() == Some(facet))
+                        && filter.event_types.as_ref().is_none_or(|event_types| {
+                            event_types
+                                .iter()
+                                .any(|event_type| &event.payload.event_type() == event_type)
+                        })
+                })
+                .take(limit)
+                .cloned()
+                .collect())
+        }
+
+        async fn list_after_sequence(
+            &self,
+            after_sequence: i64,
+            limit: usize,
+        ) -> AppResult<Vec<DomainEvent>> {
+            let events = self.events.lock().await;
+            Ok(events
+                .iter()
+                .filter(|event| event.sequence > after_sequence)
+                .take(limit)
+                .cloned()
+                .collect())
+        }
+
+        async fn get_subscriber_offset(&self, subscriber: &str) -> AppResult<i64> {
+            let offsets = self.subscriber_offsets.lock().await;
+            Ok(*offsets.get(subscriber).unwrap_or(&0))
+        }
+
+        async fn set_subscriber_offset(&self, subscriber: &str, sequence: i64) -> AppResult<()> {
+            let mut offsets = self.subscriber_offsets.lock().await;
+            offsets.insert(subscriber.to_string(), sequence);
+            Ok(())
+        }
     }
 
     #[derive(Default)]
@@ -2469,6 +2544,34 @@ mod tests {
                 item.monitored = value;
             }
 
+            Ok(item.clone())
+        }
+
+        async fn update_collection_interstitial_movie(
+            &self,
+            collection_id: &str,
+            interstitial_movie: scryer_domain::InterstitialMovieMetadata,
+        ) -> AppResult<Collection> {
+            let mut collections = self.collections.lock().await;
+            let item = collections
+                .iter_mut()
+                .find(|entry| entry.id == collection_id)
+                .ok_or_else(|| AppError::NotFound(format!("collection {}", collection_id)))?;
+            item.interstitial_movie = Some(interstitial_movie);
+            Ok(item.clone())
+        }
+
+        async fn update_collection_specials_movies(
+            &self,
+            collection_id: &str,
+            specials_movies: Vec<scryer_domain::InterstitialMovieMetadata>,
+        ) -> AppResult<Collection> {
+            let mut collections = self.collections.lock().await;
+            let item = collections
+                .iter_mut()
+                .find(|entry| entry.id == collection_id)
+                .ok_or_else(|| AppError::NotFound(format!("collection {}", collection_id)))?;
+            item.specials_movies = specials_movies;
             Ok(item.clone())
         }
 
@@ -2894,6 +2997,15 @@ mod tests {
             _scope_id: Option<String>,
         ) -> AppResult<Vec<QualityProfile>> {
             Ok(vec![])
+        }
+
+        async fn replace_quality_profiles(
+            &self,
+            _scope: &str,
+            _scope_id: Option<String>,
+            _profiles: Vec<QualityProfile>,
+        ) -> AppResult<()> {
+            Ok(())
         }
     }
 
@@ -3614,33 +3726,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
-    impl EventRepository for MockEventRepo {
-        async fn list(
-            &self,
-            title_id: Option<String>,
-            limit: i64,
-            offset: i64,
-        ) -> AppResult<Vec<HistoryEvent>> {
-            let mut events = self.store.lock().await.clone();
-            if let Some(id) = title_id {
-                events.retain(|event| event.title_id.as_ref() == Some(&id));
-            }
-            let start = usize::try_from(offset.max(0)).unwrap_or(0);
-            let end = start.saturating_add(usize::try_from(limit.max(0)).unwrap_or(0));
-            Ok(events
-                .into_iter()
-                .skip(start)
-                .take(end.saturating_sub(start))
-                .collect())
-        }
-
-        async fn append(&self, event: HistoryEvent) -> AppResult<()> {
-            self.store.lock().await.push(event);
-            Ok(())
-        }
-    }
-
     #[derive(Default, Clone)]
     struct StubDownloadClient {
         queue_items: Arc<Mutex<Vec<DownloadQueueItem>>>,
@@ -3691,7 +3776,6 @@ mod tests {
     fn bootstrap_with_user_repo(users: Arc<MockUserRepo>) -> (AppUseCase, User) {
         let titles = Arc::new(MockTitleRepo::default());
         let shows = Arc::new(MockShowRepo::default());
-        let events = Arc::new(MockEventRepo::default());
         let indexer_configs = Arc::new(MockIndexerConfigRepo::default());
         let download_client_configs = Arc::new(MockDownloadClientConfigRepo::default());
         let release_attempts = Arc::new(MockReleaseAttemptRepo);
@@ -3700,11 +3784,10 @@ mod tests {
         let download_client = Arc::new(StubDownloadClient::default());
         let indexer_client = Arc::new(MockIndexerClient);
 
-        let services = AppServices::with_default_channels(
+        let mut services = AppServices::with_default_channels(
             titles,
             shows,
             users,
-            events,
             indexer_configs,
             indexer_client,
             download_client,
@@ -3714,6 +3797,7 @@ mod tests {
             quality_profiles,
             String::new(),
         );
+        services.domain_events = Arc::new(MockDomainEventRepo::default());
         let mut registry = FacetRegistry::new();
         registry.register(Arc::new(MovieFacetHandler));
         registry.register(Arc::new(SeriesFacetHandler::new(
@@ -3743,7 +3827,6 @@ mod tests {
         let titles = Arc::new(MockTitleRepo::default());
         let shows = Arc::new(MockShowRepo::default());
         let users = Arc::new(MockUserRepo::default());
-        let events = Arc::new(MockEventRepo::default());
         let indexer_configs = Arc::new(MockIndexerConfigRepo::default());
         let download_client_configs = Arc::new(MockDownloadClientConfigRepo::default());
         let release_attempts = Arc::new(MockReleaseAttemptRepo);
@@ -3755,7 +3838,6 @@ mod tests {
             titles,
             shows,
             users,
-            events,
             indexer_configs,
             indexer_client,
             download_client,
@@ -3765,6 +3847,7 @@ mod tests {
             quality_profiles,
             String::new(),
         );
+        services.domain_events = Arc::new(MockDomainEventRepo::default());
         services.download_submissions = download_submissions;
         services.pending_releases = pending_releases;
 
@@ -4659,6 +4742,225 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn monitoring_interstitial_collection_reconciles_stale_episode_wanted_items() {
+        let download_client = Arc::new(StubDownloadClient::default());
+        let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+        let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+        let wanted_items = Arc::new(TrackingWantedItemRepo::default());
+        let (app, user) = bootstrap_with_acquisition_tracking(
+            download_client,
+            download_submissions,
+            pending_releases,
+            wanted_items.clone(),
+        );
+
+        let title = app
+            .services
+            .titles
+            .create(Title {
+                id: Id::new().0,
+                name: "Interstitial Only".into(),
+                facet: MediaFacet::Anime,
+                monitored: false,
+                tags: vec!["scryer:monitor-type:none".into()],
+                external_ids: vec![],
+                created_by: Some(user.id.clone()),
+                created_at: Utc::now(),
+                year: None,
+                overview: None,
+                poster_url: None,
+                poster_source_url: None,
+                banner_url: None,
+                banner_source_url: None,
+                background_url: None,
+                background_source_url: None,
+                sort_title: None,
+                slug: None,
+                imdb_id: None,
+                runtime_minutes: None,
+                genres: vec![],
+                content_status: None,
+                language: None,
+                first_aired: None,
+                network: None,
+                studio: None,
+                country: None,
+                aliases: vec![],
+                tagged_aliases: vec![],
+                metadata_language: None,
+                metadata_fetched_at: None,
+                min_availability: None,
+                digital_release_date: None,
+                folder_path: None,
+            })
+            .await
+            .expect("create title");
+
+        let season_one = app
+            .services
+            .shows
+            .create_collection(Collection {
+                id: Id::new().0,
+                title_id: title.id.clone(),
+                collection_type: CollectionType::Season,
+                collection_index: "1".to_string(),
+                label: Some("Season 1".to_string()),
+                ordered_path: None,
+                narrative_order: Some("1".to_string()),
+                first_episode_number: Some("1".to_string()),
+                last_episode_number: Some("2".to_string()),
+                interstitial_movie: None,
+                specials_movies: vec![],
+                interstitial_season_episode: None,
+                monitored: false,
+                created_at: Utc::now(),
+            })
+            .await
+            .expect("create season one");
+
+        let episode_one = app
+            .services
+            .shows
+            .create_episode(Episode {
+                id: Id::new().0,
+                title_id: title.id.clone(),
+                collection_id: Some(season_one.id.clone()),
+                episode_type: scryer_domain::EpisodeType::Standard,
+                episode_number: Some("1".to_string()),
+                season_number: Some("1".to_string()),
+                episode_label: Some("S01E01".to_string()),
+                title: Some("Episode 1".to_string()),
+                air_date: Some("2024-01-01".to_string()),
+                duration_seconds: Some(1_440),
+                has_multi_audio: false,
+                has_subtitle: false,
+                is_filler: false,
+                is_recap: false,
+                absolute_number: None,
+                overview: None,
+                tvdb_id: None,
+                monitored: false,
+                created_at: Utc::now(),
+            })
+            .await
+            .expect("create episode one");
+
+        let episode_two = app
+            .services
+            .shows
+            .create_episode(Episode {
+                id: Id::new().0,
+                title_id: title.id.clone(),
+                collection_id: Some(season_one.id.clone()),
+                episode_type: scryer_domain::EpisodeType::Standard,
+                episode_number: Some("2".to_string()),
+                season_number: Some("1".to_string()),
+                episode_label: Some("S01E02".to_string()),
+                title: Some("Episode 2".to_string()),
+                air_date: Some("2024-01-08".to_string()),
+                duration_seconds: Some(1_440),
+                has_multi_audio: false,
+                has_subtitle: false,
+                is_filler: false,
+                is_recap: false,
+                absolute_number: None,
+                overview: None,
+                tvdb_id: None,
+                monitored: false,
+                created_at: Utc::now(),
+            })
+            .await
+            .expect("create episode two");
+
+        let interstitial = app
+            .services
+            .shows
+            .create_collection(Collection {
+                id: Id::new().0,
+                title_id: title.id.clone(),
+                collection_type: CollectionType::Interstitial,
+                collection_index: "1.1".to_string(),
+                label: Some("Movie 1".to_string()),
+                ordered_path: None,
+                narrative_order: Some("1.1".to_string()),
+                first_episode_number: None,
+                last_episode_number: None,
+                interstitial_movie: Some(scryer_domain::InterstitialMovieMetadata {
+                    tvdb_id: "movie-1".to_string(),
+                    name: "Movie 1".to_string(),
+                    slug: "movie-1".to_string(),
+                    year: Some(2024),
+                    content_status: "released".to_string(),
+                    overview: "Interstitial movie".to_string(),
+                    poster_url: String::new(),
+                    language: "ja".to_string(),
+                    runtime_minutes: 110,
+                    sort_title: "Movie 1".to_string(),
+                    imdb_id: String::new(),
+                    genres: vec!["action".to_string()],
+                    studio: "Studio".to_string(),
+                    digital_release_date: Some("2024-02-01".to_string()),
+                    association_confidence: Some("high".to_string()),
+                    continuity_status: Some("canon".to_string()),
+                    movie_form: None,
+                    confidence: None,
+                    signal_summary: None,
+                    placement: Some("between_seasons".to_string()),
+                    movie_tmdb_id: None,
+                    movie_mal_id: None,
+                    movie_anidb_id: None,
+                }),
+                specials_movies: vec![],
+                interstitial_season_episode: None,
+                monitored: false,
+                created_at: Utc::now(),
+            })
+            .await
+            .expect("create interstitial");
+
+        for episode_id in [&episode_one.id, &episode_two.id] {
+            wanted_items
+                .upsert_wanted_item(&WantedItem {
+                    id: Id::new().0,
+                    title_id: title.id.clone(),
+                    title_name: None,
+                    episode_id: Some(episode_id.clone()),
+                    collection_id: None,
+                    season_number: Some("1".to_string()),
+                    media_type: "episode".to_string(),
+                    search_phase: "primary".to_string(),
+                    next_search_at: Some(Utc::now().to_rfc3339()),
+                    last_search_at: None,
+                    search_count: 0,
+                    baseline_date: None,
+                    status: WantedStatus::Wanted,
+                    grabbed_release: None,
+                    current_score: None,
+                    created_at: Utc::now().to_rfc3339(),
+                    updated_at: Utc::now().to_rfc3339(),
+                })
+                .await
+                .expect("seed stale episode wanted item");
+        }
+
+        app.set_collection_monitored(&user, &interstitial.id, true)
+            .await
+            .expect("monitor interstitial collection");
+
+        let wanted = wanted_items
+            .list_wanted_items(None, None, Some(&title.id), 50, 0)
+            .await
+            .expect("list wanted items");
+        assert_eq!(wanted.len(), 1);
+        assert_eq!(wanted[0].media_type, "interstitial_movie");
+        assert_eq!(
+            wanted[0].collection_id.as_deref(),
+            Some(interstitial.id.as_str())
+        );
+        assert!(wanted.iter().all(|item| item.episode_id.is_none()));
+    }
+
+    #[tokio::test]
     async fn update_user_entitlements_changes_permissions() {
         let (app, user) = bootstrap();
 
@@ -5001,6 +5303,7 @@ mod tests {
             .find(|collection| collection.collection_type == CollectionType::Interstitial)
             .expect("interstitial collection should exist");
         assert_eq!(interstitial.collection_index, "1.1");
+        assert!(!interstitial.monitored);
         assert_eq!(
             interstitial
                 .interstitial_movie
@@ -5019,6 +5322,164 @@ mod tests {
             interstitial_episodes[0].title.as_deref(),
             Some("Mugen Train")
         );
+    }
+
+    #[tokio::test]
+    async fn series_season_zero_creates_canonical_specials_collection() {
+        let (app, user) = bootstrap();
+        let title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: "Arrested Development".into(),
+                    facet: MediaFacet::Series,
+                    monitored: true,
+                    tags: vec![],
+                    external_ids: vec![],
+                    min_availability: None,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create title");
+
+        let seasons = vec![
+            SeasonMetadata {
+                tvdb_id: 80,
+                number: 0,
+                label: "Specials".into(),
+                episode_type: "special".into(),
+            },
+            SeasonMetadata {
+                tvdb_id: 81,
+                number: 1,
+                label: "Season 1".into(),
+                episode_type: "official".into(),
+            },
+        ];
+        let episodes = vec![
+            EpisodeMetadata {
+                tvdb_id: 8001,
+                episode_number: 1,
+                name: "Special Episode".into(),
+                aired: "2003-11-01".into(),
+                runtime_minutes: 22,
+                is_filler: false,
+                is_recap: false,
+                overview: "Special".into(),
+                absolute_number: String::new(),
+                season_number: 0,
+            },
+            EpisodeMetadata {
+                tvdb_id: 8101,
+                episode_number: 1,
+                name: "Pilot".into(),
+                aired: "2003-11-02".into(),
+                runtime_minutes: 22,
+                is_filler: false,
+                is_recap: false,
+                overview: "Episode 1".into(),
+                absolute_number: "1".into(),
+                season_number: 1,
+            },
+        ];
+
+        app.create_series_seasons_and_episodes(&title, &seasons, &episodes, &[], &[])
+            .await;
+
+        let collections = app
+            .list_collections(&user, &title.id)
+            .await
+            .expect("list collections");
+        let specials = collections
+            .iter()
+            .find(|collection| {
+                collection.collection_type == CollectionType::Specials
+                    || (collection.collection_type == CollectionType::Season
+                        && collection.collection_index == "0")
+            })
+            .expect("specials collection should exist");
+        assert_eq!(specials.collection_type, CollectionType::Specials);
+        assert_eq!(specials.collection_index, "0");
+        assert!(!specials.monitored);
+    }
+
+    #[tokio::test]
+    async fn series_rollout_reuses_legacy_season_zero_specials_collection() {
+        let (app, user) = bootstrap();
+        let title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: "Legacy Specials Show".into(),
+                    facet: MediaFacet::Series,
+                    monitored: true,
+                    tags: vec![],
+                    external_ids: vec![],
+                    min_availability: None,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create title");
+
+        let legacy_specials = app
+            .create_collection(
+                &user,
+                title.id.clone(),
+                "season".into(),
+                "0".into(),
+                Some("Season 0".into()),
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("create legacy season zero collection");
+
+        let seasons = vec![SeasonMetadata {
+            tvdb_id: 90,
+            number: 0,
+            label: "Specials".into(),
+            episode_type: "special".into(),
+        }];
+        let episodes = vec![EpisodeMetadata {
+            tvdb_id: 9001,
+            episode_number: 1,
+            name: "Pilot Special".into(),
+            aired: "2004-01-01".into(),
+            runtime_minutes: 22,
+            is_filler: false,
+            is_recap: false,
+            overview: "Legacy special".into(),
+            absolute_number: String::new(),
+            season_number: 0,
+        }];
+
+        app.create_series_seasons_and_episodes(&title, &seasons, &episodes, &[], &[])
+            .await;
+
+        let collections = app
+            .list_collections(&user, &title.id)
+            .await
+            .expect("list collections");
+        let logical_specials: Vec<&Collection> = collections
+            .iter()
+            .filter(|collection| {
+                collection.collection_type == CollectionType::Specials
+                    || (collection.collection_type == CollectionType::Season
+                        && collection.collection_index == "0")
+            })
+            .collect();
+        assert_eq!(logical_specials.len(), 1);
+        assert_eq!(logical_specials[0].id, legacy_specials.id);
+        assert_eq!(logical_specials[0].collection_type, CollectionType::Season);
+
+        let episodes = app
+            .list_episodes(&user, &legacy_specials.id)
+            .await
+            .expect("list legacy season zero episodes");
+        assert_eq!(episodes.len(), 1);
     }
 
     #[tokio::test]
@@ -5266,7 +5727,7 @@ mod tests {
             .iter()
             .find(|collection| collection.collection_type == CollectionType::Interstitial)
             .expect("ordered movie collection should exist");
-        assert!(interstitial.monitored);
+        assert!(!interstitial.monitored);
         assert_eq!(
             interstitial
                 .interstitial_movie
@@ -5274,6 +5735,297 @@ mod tests {
                 .and_then(|movie| movie.continuity_status.as_deref()),
             Some("canon")
         );
+    }
+
+    #[tokio::test]
+    async fn anime_interstitial_refresh_updates_localized_collection_metadata() {
+        let (app, user) = bootstrap();
+        let title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: "My Hero Academia".into(),
+                    facet: MediaFacet::Anime,
+                    monitored: true,
+                    tags: vec![],
+                    external_ids: vec![],
+                    min_availability: None,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create title");
+
+        let seasons = vec![
+            SeasonMetadata {
+                tvdb_id: 10,
+                number: 0,
+                label: "Specials".into(),
+                episode_type: "special".into(),
+            },
+            SeasonMetadata {
+                tvdb_id: 11,
+                number: 1,
+                label: "Season 1".into(),
+                episode_type: "official".into(),
+            },
+        ];
+        let episodes = vec![
+            EpisodeMetadata {
+                tvdb_id: 1001,
+                episode_number: 1,
+                name: "Episode 1".into(),
+                aired: "2018-04-03".into(),
+                runtime_minutes: 24,
+                is_filler: false,
+                is_recap: false,
+                overview: "Episode 1".into(),
+                absolute_number: "1".into(),
+                season_number: 1,
+            },
+            EpisodeMetadata {
+                tvdb_id: 2001,
+                episode_number: 1,
+                name: "Two Heroes".into(),
+                aired: "2018-08-03".into(),
+                runtime_minutes: 96,
+                is_filler: false,
+                is_recap: false,
+                overview: "Movie special".into(),
+                absolute_number: String::new(),
+                season_number: 0,
+            },
+        ];
+        let anime_mappings = vec![AnimeMapping {
+            mal_id: Some(36665),
+            anilist_id: None,
+            anidb_id: None,
+            kitsu_id: None,
+            thetvdb_id: Some(305074),
+            themoviedb_id: Some(505262),
+            alt_tvdb_id: Some(149921),
+            thetvdb_season: Some(0),
+            score: None,
+            anime_media_type: "TV".into(),
+            global_media_type: "series".into(),
+            status: "finished".into(),
+            mapping_type: String::new(),
+            episode_mappings: vec![AnimeEpisodeMapping {
+                tvdb_season: 0,
+                episode_start: 1,
+                episode_end: 1,
+            }],
+        }];
+
+        let japanese_movie = AnimeMovie {
+            movie_tvdb_id: Some(149921),
+            movie_tmdb_id: Some(505262),
+            movie_imdb_id: Some("tt5626028".into()),
+            movie_mal_id: Some(36665),
+            movie_anidb_id: None,
+            name: "僕のヒーローアカデミア THE MOVIE ～2人の英雄～".into(),
+            slug: "my-hero-academia-the-movie-two-heroes".into(),
+            year: Some(2018),
+            content_status: "released".into(),
+            overview: "日本語概要".into(),
+            poster_url: "poster-ja".into(),
+            language: "jpn".into(),
+            runtime_minutes: 96,
+            sort_title: "僕のヒーローアカデミア THE MOVIE ～2人の英雄～".into(),
+            imdb_id: "tt5626028".into(),
+            genres: vec!["Action".into()],
+            studio: "Bones".into(),
+            digital_release_date: Some("2018-08-03".into()),
+            association_confidence: "high".into(),
+            continuity_status: "canon".into(),
+            movie_form: "movie".into(),
+            placement: "ordered".into(),
+            confidence: "high".into(),
+            signal_summary: "TVDB special linked to movie".into(),
+        };
+
+        app.create_series_seasons_and_episodes(
+            &title,
+            &seasons,
+            &episodes,
+            &anime_mappings,
+            std::slice::from_ref(&japanese_movie),
+        )
+        .await;
+
+        let english_movie = AnimeMovie {
+            name: "My Hero Academia: Two Heroes".into(),
+            overview: "English overview".into(),
+            poster_url: "poster-en".into(),
+            language: "eng".into(),
+            sort_title: "My Hero Academia: Two Heroes".into(),
+            ..japanese_movie.clone()
+        };
+
+        app.create_series_seasons_and_episodes(
+            &title,
+            &seasons,
+            &episodes,
+            &anime_mappings,
+            std::slice::from_ref(&english_movie),
+        )
+        .await;
+
+        let collections = app
+            .list_collections(&user, &title.id)
+            .await
+            .expect("list collections");
+        let interstitial = collections
+            .iter()
+            .find(|collection| collection.collection_type == CollectionType::Interstitial)
+            .expect("interstitial collection should exist");
+
+        assert_eq!(
+            interstitial.label.as_deref(),
+            Some("My Hero Academia: Two Heroes")
+        );
+        assert_eq!(
+            interstitial
+                .interstitial_movie
+                .as_ref()
+                .map(|movie| movie.name.as_str()),
+            Some("My Hero Academia: Two Heroes")
+        );
+        assert_eq!(
+            interstitial
+                .interstitial_movie
+                .as_ref()
+                .map(|movie| movie.overview.as_str()),
+            Some("English overview")
+        );
+        assert_eq!(
+            interstitial
+                .interstitial_movie
+                .as_ref()
+                .map(|movie| movie.language.as_str()),
+            Some("eng")
+        );
+    }
+
+    #[tokio::test]
+    async fn anime_specials_refresh_updates_localized_specials_movie_metadata() {
+        let (app, user) = bootstrap();
+        let title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: "Attack on Titan".into(),
+                    facet: MediaFacet::Anime,
+                    monitored: true,
+                    tags: vec![],
+                    external_ids: vec![],
+                    min_availability: None,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create title");
+
+        let seasons = vec![
+            SeasonMetadata {
+                tvdb_id: 10,
+                number: 0,
+                label: "Specials".into(),
+                episode_type: "special".into(),
+            },
+            SeasonMetadata {
+                tvdb_id: 11,
+                number: 1,
+                label: "Season 1".into(),
+                episode_type: "official".into(),
+            },
+        ];
+        let episodes = vec![EpisodeMetadata {
+            tvdb_id: 1001,
+            episode_number: 1,
+            name: "Episode 1".into(),
+            aired: "2013-04-07".into(),
+            runtime_minutes: 24,
+            is_filler: false,
+            is_recap: false,
+            overview: "Episode 1".into(),
+            absolute_number: "1".into(),
+            season_number: 1,
+        }];
+
+        let japanese_special = AnimeMovie {
+            movie_tvdb_id: Some(379088),
+            movie_tmdb_id: Some(379088),
+            movie_imdb_id: Some("tt3865768".into()),
+            movie_mal_id: Some(23775),
+            movie_anidb_id: None,
+            name: "進撃の巨人 前編～紅蓮の弓矢～".into(),
+            slug: "crimson-bow-and-arrow".into(),
+            year: Some(2014),
+            content_status: "released".into(),
+            overview: "日本語概要".into(),
+            poster_url: "poster-ja".into(),
+            language: "jpn".into(),
+            runtime_minutes: 120,
+            sort_title: "進撃の巨人 前編～紅蓮の弓矢～".into(),
+            imdb_id: "tt3865768".into(),
+            genres: vec!["Action".into()],
+            studio: "WIT Studio".into(),
+            digital_release_date: Some("2014-11-22".into()),
+            association_confidence: "high".into(),
+            continuity_status: "unknown".into(),
+            movie_form: "recap".into(),
+            placement: "specials".into(),
+            confidence: "high".into(),
+            signal_summary: "TVDB special category marks this as a recap".into(),
+        };
+
+        app.create_series_seasons_and_episodes(
+            &title,
+            &seasons,
+            &episodes,
+            &[],
+            std::slice::from_ref(&japanese_special),
+        )
+        .await;
+
+        let english_special = AnimeMovie {
+            name: "Attack on Titan: Crimson Bow and Arrow".into(),
+            overview: "English recap overview".into(),
+            poster_url: "poster-en".into(),
+            language: "eng".into(),
+            sort_title: "Attack on Titan: Crimson Bow and Arrow".into(),
+            ..japanese_special.clone()
+        };
+
+        app.create_series_seasons_and_episodes(
+            &title,
+            &seasons,
+            &episodes,
+            &[],
+            std::slice::from_ref(&english_special),
+        )
+        .await;
+
+        let collections = app
+            .list_collections(&user, &title.id)
+            .await
+            .expect("list collections");
+        let specials = collections
+            .iter()
+            .find(|collection| collection.collection_type == CollectionType::Specials)
+            .expect("specials collection should exist");
+
+        assert_eq!(specials.specials_movies.len(), 1);
+        assert_eq!(
+            specials.specials_movies[0].name,
+            "Attack on Titan: Crimson Bow and Arrow"
+        );
+        assert_eq!(
+            specials.specials_movies[0].overview,
+            "English recap overview"
+        );
+        assert_eq!(specials.specials_movies[0].language, "eng");
     }
 
     #[tokio::test]

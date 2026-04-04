@@ -1,7 +1,11 @@
 use super::*;
-use crate::activity::{NotificationMediaUpdate, build_lifecycle_notification_metadata};
+use crate::domain_events::{deleted_media_update, new_title_domain_event, title_context_snapshot};
 use crate::library_scan_progress::TrackedTitleFilesConsumption;
-use scryer_domain::{InterstitialMovieMetadata, NotificationEventType};
+use scryer_domain::{
+    DomainEventPayload, InterstitialMovieMetadata, MediaFileDeletedEventData,
+    MediaFileDeletedReason, MetadataHydrationState, ReleaseGrabbedEventData, TitleAddedEventData,
+    TitleDeletedEventData,
+};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::time::Duration;
@@ -60,6 +64,12 @@ impl HydrationCompletionOptions {
         post_hydration_title_scan_mode: PostHydrationTitleScanMode::None,
         sync_wanted_after_completion: false,
     };
+}
+
+fn is_logical_specials_collection(collection: &Collection) -> bool {
+    collection.collection_type == CollectionType::Specials
+        || (collection.collection_type == CollectionType::Season
+            && collection.collection_index == "0")
 }
 
 fn routing_entry_enabled(config: &serde_json::Value) -> bool {
@@ -387,60 +397,21 @@ mod anime_movie_mapping_tests {
 }
 
 impl AppUseCase {
-    async fn emit_hydration_activity(
-        &self,
-        title: &Title,
-        kind: ActivityKind,
-        severity: ActivitySeverity,
-        message: String,
-    ) {
-        if let Err(err) = self
-            .services
-            .record_activity_event(
-                None,
-                Some(title.id.clone()),
-                Some(format!("{:?}", title.facet).to_lowercase()),
-                kind,
-                message,
-                severity,
-                vec![ActivityChannel::WebUi],
-            )
-            .await
-        {
-            warn!(
-                title_id = %title.id,
-                error = %err,
-                "failed to record hydration activity event"
-            );
-        }
-    }
-
     async fn emit_hydration_started(&self, title: &Title) {
-        self.emit_hydration_activity(
-            title,
-            ActivityKind::MetadataHydrationStarted,
-            ActivitySeverity::Info,
-            format!("hydrating metadata for {}", title.name),
-        )
-        .await;
+        self.emit_metadata_hydration_updated_event(title, MetadataHydrationState::Started, None)
+            .await;
     }
 
     async fn emit_hydration_completed(&self, title: &Title) {
-        self.emit_hydration_activity(
-            title,
-            ActivityKind::MetadataHydrationCompleted,
-            ActivitySeverity::Success,
-            format!("metadata hydrated for {}", title.name),
-        )
-        .await;
+        self.emit_metadata_hydration_updated_event(title, MetadataHydrationState::Completed, None)
+            .await;
     }
 
     async fn emit_hydration_failed(&self, title: &Title, reason: &str) {
-        self.emit_hydration_activity(
+        self.emit_metadata_hydration_updated_event(
             title,
-            ActivityKind::MetadataHydrationFailed,
-            ActivitySeverity::Warning,
-            format!("metadata hydration failed for {}: {}", title.name, reason),
+            MetadataHydrationState::Failed,
+            Some(reason.to_string()),
         )
         .await;
     }
@@ -633,50 +604,14 @@ impl AppUseCase {
 
         let title = self.services.titles.create(title).await?;
         self.services
-            .record_event(
+            .append_domain_event(new_title_domain_event(
                 Some(actor.id.clone()),
-                Some(title.id.clone()),
-                EventType::TitleAdded,
-                format!("title added: {}", title.name),
-            )
+                &title,
+                DomainEventPayload::TitleAdded(TitleAddedEventData {
+                    title: title_context_snapshot(&title),
+                }),
+            ))
             .await?;
-
-        {
-            let facet_str = format!("{:?}", title.facet).to_lowercase();
-            let activity_kind = self
-                .facet_registry
-                .get(&title.facet)
-                .and_then(|h| h.title_added_activity_kind())
-                .unwrap_or(ActivityKind::MovieAdded);
-            let mut metadata = HashMap::new();
-            metadata.insert("title_name".to_string(), serde_json::json!(title.name));
-            if let Some(ref year) = title.year {
-                metadata.insert("title_year".to_string(), serde_json::json!(year));
-            }
-            metadata.insert("title_facet".to_string(), serde_json::json!(facet_str));
-            if let Some(ref poster) = title.poster_url {
-                metadata.insert("poster_url".to_string(), serde_json::json!(poster));
-            }
-            let envelope = crate::activity::NotificationEnvelope {
-                event_type: NotificationEventType::TitleAdded,
-                title: format!("{} added: {}", facet_str, title.name),
-                body: format!("{} has been added to your library.", title.name),
-                facet: Some(facet_str),
-                metadata,
-            };
-            self.services
-                .record_activity_event_with_notification(
-                    Some(actor.id.clone()),
-                    Some(title.id.clone()),
-                    None,
-                    activity_kind,
-                    format!("new title added: {}", title.name),
-                    ActivitySeverity::Info,
-                    vec![ActivityChannel::WebUi],
-                    envelope,
-                )
-                .await?;
-        }
 
         // Wake the background hydration loop to fetch rich metadata from SMG.
         // The title is already persisted — hydration happens asynchronously.
@@ -955,16 +890,29 @@ impl AppUseCase {
                 .iter()
                 .map(|collection| (collection.id.clone(), collection.clone()))
                 .collect();
-        let existing_collection_map: std::collections::HashMap<(CollectionType, String), String> =
-            existing_collections
+        let mut existing_collection_map: std::collections::HashMap<
+            (CollectionType, String),
+            String,
+        > = existing_collections
+            .iter()
+            .map(|c| {
+                (
+                    (c.collection_type, c.collection_index.clone()),
+                    c.id.clone(),
+                )
+            })
+            .collect();
+        if !existing_collection_map.contains_key(&(CollectionType::Specials, "0".to_string()))
+            && let Some(legacy_specials_id) = existing_collections
                 .iter()
-                .map(|c| {
-                    (
-                        (c.collection_type, c.collection_index.clone()),
-                        c.id.clone(),
-                    )
-                })
-                .collect();
+                .find(|collection| is_logical_specials_collection(collection))
+                .map(|collection| collection.id.clone())
+        {
+            existing_collection_map.insert(
+                (CollectionType::Specials, "0".to_string()),
+                legacy_specials_id,
+            );
+        }
         let mut existing_episode_lookup: std::collections::HashMap<(String, String), Episode> =
             self.services
                 .shows
@@ -1055,7 +1003,7 @@ impl AppUseCase {
         for season in best_season_by_number.values() {
             let season_monitored = seasons_with_episodes.contains(&season.number)
                 && should_monitor_season(&monitor_type, season.number, monitor_specials);
-            let collection_type = if season.number == 0 && title.facet == MediaFacet::Anime {
+            let collection_type = if season.number == 0 {
                 CollectionType::Specials
             } else {
                 CollectionType::Season
@@ -1085,6 +1033,30 @@ impl AppUseCase {
                         .await;
                     if let Some(existing) = existing_collections_by_id.get_mut(existing_id) {
                         existing.label = Some(season.label.clone());
+                    }
+                }
+                if season.number == 0
+                    && title.facet == MediaFacet::Anime
+                    && let Some(existing) = existing_collections_by_id.get(existing_id)
+                    && existing.specials_movies != specials_movies
+                {
+                    match self
+                        .services
+                        .shows
+                        .update_collection_specials_movies(existing_id, specials_movies.clone())
+                        .await
+                    {
+                        Ok(updated) => {
+                            existing_collections_by_id.insert(existing_id.clone(), updated);
+                        }
+                        Err(err) => {
+                            warn!(
+                                title_id = %title.id,
+                                collection_id = %existing_id,
+                                error = %err,
+                                "failed to update specials movie metadata"
+                            );
+                        }
                     }
                 }
                 season_number_to_collection.insert(season.number, existing_id.clone());
@@ -1202,6 +1174,7 @@ impl AppUseCase {
                     } else {
                         format!("Movie {}", seq + 1)
                     };
+                    let interstitial_movie = interstitial_movie_from_anime_movie(movie);
 
                     // Reuse existing interstitial collection if one already exists.
                     if let Some(existing_id) = existing_collection_map
@@ -1230,6 +1203,32 @@ impl AppUseCase {
                                 existing_collections_by_id.get_mut(existing_id)
                             {
                                 existing_coll.label = Some(label.clone());
+                            }
+                        }
+                        if let Some(existing_coll) = existing_collections_by_id.get(existing_id)
+                            && existing_coll.interstitial_movie.as_ref()
+                                != Some(&interstitial_movie)
+                        {
+                            match self
+                                .services
+                                .shows
+                                .update_collection_interstitial_movie(
+                                    existing_id,
+                                    interstitial_movie.clone(),
+                                )
+                                .await
+                            {
+                                Ok(updated) => {
+                                    existing_collections_by_id.insert(existing_id.clone(), updated);
+                                }
+                                Err(err) => {
+                                    warn!(
+                                        title_id = %title.id,
+                                        collection_id = %existing_id,
+                                        error = %err,
+                                        "failed to update interstitial movie metadata"
+                                    );
+                                }
                             }
                         }
 
@@ -1286,7 +1285,7 @@ impl AppUseCase {
                         narrative_order: Some(narrative_order.clone()),
                         first_episode_number: None,
                         last_episode_number: None,
-                        interstitial_movie: Some(interstitial_movie_from_anime_movie(movie)),
+                        interstitial_movie: Some(interstitial_movie),
                         specials_movies: vec![],
                         interstitial_season_episode: season_episode,
                         monitored: true,
@@ -1380,12 +1379,21 @@ impl AppUseCase {
                 .cloned()
                 .or_else(|| season_number_to_collection.get(&ep.season_number).cloned());
 
-            // If this episode is routed to an interstitial collection, update the
-            // collection label to the episode's name (once per collection).
+            // If this episode is routed to an interstitial collection and the
+            // collection is still using a generic placeholder label, update it
+            // to the episode's name (once per collection).
             if let Some(ref cid) = collection_id
                 && interstitial_episode_lookup.contains_key(&(ep.season_number, ep.episode_number))
                 && !ep.name.is_empty()
                 && labeled_collections.insert(cid.clone())
+                && existing_collections_by_id
+                    .get(cid)
+                    .is_some_and(|collection| {
+                        collection
+                            .label
+                            .as_deref()
+                            .is_none_or(|label| label.is_empty() || label.starts_with("Movie "))
+                    })
                 && let Err(err) = self
                     .services
                     .shows
@@ -1660,44 +1668,18 @@ impl AppUseCase {
         };
 
         self.services
-            .record_event(
+            .append_domain_event(new_title_domain_event(
                 Some(actor.id.clone()),
-                Some(title.id.clone()),
-                EventType::ActionTriggered,
-                format!(
-                    "download queued for title {} with job {}",
-                    title.name, grab.job_id
-                ),
-            )
+                &title,
+                DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+                    title: title_context_snapshot(&title),
+                    source_title: None,
+                    source_hint: None,
+                    download_id: Some(grab.job_id.clone()),
+                    episode_ids: Vec::new(),
+                }),
+            ))
             .await?;
-        {
-            let facet_str = format!("{:?}", title.facet).to_lowercase();
-            let mut grab_meta = HashMap::new();
-            grab_meta.insert("title_name".to_string(), serde_json::json!(title.name));
-            grab_meta.insert("title_facet".to_string(), serde_json::json!(facet_str));
-            if let Some(ref poster) = title.poster_url {
-                grab_meta.insert("poster_url".to_string(), serde_json::json!(poster));
-            }
-            let envelope = crate::activity::NotificationEnvelope {
-                event_type: NotificationEventType::Grab,
-                title: format!("Grabbed: {}", title.name),
-                body: format!("Download queued for {}", title.name),
-                facet: Some(facet_str),
-                metadata: grab_meta,
-            };
-            self.services
-                .record_activity_event_with_notification(
-                    Some(actor.id.clone()),
-                    Some(title.id.clone()),
-                    None,
-                    ActivityKind::MovieDownloaded,
-                    format!("movie downloaded: {}", title.name),
-                    ActivitySeverity::Success,
-                    vec![ActivityChannel::Toast, ActivityChannel::WebUi],
-                    envelope,
-                )
-                .await?;
-        }
 
         Ok((title, grab.job_id))
     }
@@ -1821,44 +1803,18 @@ impl AppUseCase {
         };
 
         self.services
-            .record_event(
+            .append_domain_event(new_title_domain_event(
                 Some(actor.id.clone()),
-                Some(title.id.clone()),
-                EventType::ActionTriggered,
-                format!(
-                    "download queued for existing title {} with job {}",
-                    title.name, grab.job_id
-                ),
-            )
+                &title,
+                DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+                    title: title_context_snapshot(&title),
+                    source_title: None,
+                    source_hint: None,
+                    download_id: Some(grab.job_id.clone()),
+                    episode_ids: Vec::new(),
+                }),
+            ))
             .await?;
-        {
-            let facet_str = format!("{:?}", title.facet).to_lowercase();
-            let mut grab_meta = HashMap::new();
-            grab_meta.insert("title_name".to_string(), serde_json::json!(title.name));
-            grab_meta.insert("title_facet".to_string(), serde_json::json!(facet_str));
-            if let Some(ref poster) = title.poster_url {
-                grab_meta.insert("poster_url".to_string(), serde_json::json!(poster));
-            }
-            let envelope = crate::activity::NotificationEnvelope {
-                event_type: NotificationEventType::Grab,
-                title: format!("Grabbed: {}", title.name),
-                body: format!("Download queued for {}", title.name),
-                facet: Some(facet_str),
-                metadata: grab_meta,
-            };
-            self.services
-                .record_activity_event_with_notification(
-                    Some(actor.id.clone()),
-                    Some(title.id.clone()),
-                    None,
-                    ActivityKind::MovieDownloaded,
-                    format!("movie downloaded: {}", title.name),
-                    ActivitySeverity::Success,
-                    vec![ActivityChannel::Toast, ActivityChannel::WebUi],
-                    envelope,
-                )
-                .await?;
-        }
 
         Ok(grab.job_id)
     }
@@ -2132,15 +2088,8 @@ impl AppUseCase {
         require(actor, &Entitlement::MonitorTitle)?;
 
         let title = self.persist_title_monitoring(id, monitored).await?;
-
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                Some(id.to_string()),
-                EventType::TitleUpdated,
-                format!("title {} monitoring set to {}", title.name, title.monitored),
-            )
-            .await?;
+        self.emit_title_updated_activity(Some(actor.id.clone()), &title)
+            .await;
         Ok(title)
     }
 
@@ -2155,18 +2104,10 @@ impl AppUseCase {
         let collection = self
             .apply_collection_monitoring_change(collection_id, monitored, true)
             .await?;
-
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                Some(collection.title_id.clone()),
-                EventType::TitleUpdated,
-                format!(
-                    "collection {} monitoring set to {}",
-                    collection_id, monitored
-                ),
-            )
-            .await?;
+        if let Some(title) = self.services.titles.get_by_id(&collection.title_id).await? {
+            self.emit_title_updated_activity(Some(actor.id.clone()), &title)
+                .await;
+        }
         Ok(collection)
     }
 
@@ -2181,15 +2122,10 @@ impl AppUseCase {
         let episode = self
             .apply_episode_monitoring_change(episode_id, monitored)
             .await?;
-
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                Some(episode.title_id.clone()),
-                EventType::TitleUpdated,
-                format!("episode {} monitoring set to {}", episode_id, monitored),
-            )
-            .await?;
+        if let Some(title) = self.services.titles.get_by_id(&episode.title_id).await? {
+            self.emit_title_updated_activity(Some(actor.id.clone()), &title)
+                .await;
+        }
         Ok(episode)
     }
 
@@ -2337,46 +2273,18 @@ impl AppUseCase {
             );
         }
 
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                Some(id.to_string()),
-                EventType::ActionTriggered,
-                format!("title deleted: {}", title.name),
-            )
-            .await?;
         self.services.titles.delete(id).await?;
 
-        // Emit activity event with notification envelope for title deleted
-        {
-            let facet_str = format!("{:?}", title.facet).to_lowercase();
-            let mut metadata = HashMap::new();
-            metadata.insert("title_name".to_string(), serde_json::json!(title.name));
-            if let Some(ref year) = title.year {
-                metadata.insert("title_year".to_string(), serde_json::json!(year));
-            }
-            metadata.insert("title_facet".to_string(), serde_json::json!(facet_str));
-            let envelope = crate::activity::NotificationEnvelope {
-                event_type: NotificationEventType::TitleDeleted,
-                title: format!("{} deleted: {}", facet_str, title.name),
-                body: format!("{} has been removed from your library.", title.name),
-                facet: Some(facet_str),
-                metadata,
-            };
-            let _ = self
-                .services
-                .record_activity_event_with_notification(
-                    Some(actor.id.clone()),
-                    Some(id.to_string()),
-                    None,
-                    ActivityKind::SystemNotice,
-                    format!("title deleted: {}", title.name),
-                    ActivitySeverity::Info,
-                    vec![ActivityChannel::WebUi],
-                    envelope,
-                )
-                .await;
-        }
+        let _ = self
+            .services
+            .append_domain_event(new_title_domain_event(
+                Some(actor.id.clone()),
+                &title,
+                DomainEventPayload::TitleDeleted(TitleDeletedEventData {
+                    title: title_context_snapshot(&title),
+                }),
+            ))
+            .await;
 
         Ok(())
     }
@@ -2417,65 +2325,22 @@ impl AppUseCase {
             "media file deleted"
         );
 
-        // Record title history: FileDeleted
-        {
-            let mut data = HashMap::new();
-            data.insert("file_path".into(), serde_json::json!(&media_file.file_path));
-            data.insert(
-                "size_bytes".into(),
-                serde_json::json!(media_file.size_bytes),
-            );
-            data.insert(
-                "reason".into(),
-                serde_json::json!(if delete_from_disk {
-                    "manual_disk"
-                } else {
-                    "manual_db_only"
-                }),
-            );
-            let _ = self
-                .services
-                .record_title_history(NewTitleHistoryEvent {
-                    title_id: media_file.title_id.clone(),
-                    episode_id: media_file.episode_id.clone(),
-                    collection_id: None,
-                    event_type: TitleHistoryEventType::FileDeleted,
-                    source_title: Some(media_file.file_path.clone()),
-                    quality: None,
-                    download_id: None,
-                    data,
-                })
-                .await;
-        }
-
         if delete_from_disk
             && let Ok(Some(title)) = self.services.titles.get_by_id(&media_file.title_id).await
         {
-            let metadata = build_lifecycle_notification_metadata(
-                &title,
-                [NotificationMediaUpdate::deleted(
-                    media_file.file_path.clone(),
-                )],
-            );
-            let envelope = crate::activity::NotificationEnvelope {
-                event_type: NotificationEventType::FileDeleted,
-                title: format!("File deleted: {}", title.name),
-                body: format!("Deleted media file from disk: {}", media_file.file_path),
-                facet: Some(title.facet.as_str().to_string()),
-                metadata,
-            };
             let _ = self
                 .services
-                .record_activity_event_with_notification(
+                .append_domain_event(new_title_domain_event(
                     Some(actor.id.clone()),
-                    Some(title.id.clone()),
-                    None,
-                    ActivityKind::SystemNotice,
-                    format!("file deleted from disk: {}", media_file.file_path),
-                    ActivitySeverity::Info,
-                    vec![ActivityChannel::WebUi],
-                    envelope,
-                )
+                    &title,
+                    DomainEventPayload::MediaFileDeleted(MediaFileDeletedEventData {
+                        title: title_context_snapshot(&title),
+                        media_updates: vec![deleted_media_update(media_file.file_path.clone())],
+                        file_id: Some(media_file.id.clone()),
+                        reason: MediaFileDeletedReason::Deleted,
+                        episode_ids: media_file.episode_id.iter().cloned().collect(),
+                    }),
+                ))
                 .await;
         }
 
@@ -2503,15 +2368,8 @@ impl AppUseCase {
             .titles
             .update_metadata(id, name, facet, tags)
             .await?;
-
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                Some(id.to_string()),
-                EventType::TitleUpdated,
-                format!("title metadata updated: {}", title.name),
-            )
-            .await?;
+        self.emit_title_updated_activity(Some(actor.id.clone()), &title)
+            .await;
         Ok(title)
     }
 
@@ -2629,48 +2487,9 @@ impl AppUseCase {
 
         let old_tvdb_id = extract_tvdb_id(&existing_title).map(|id| id.to_string());
 
-        let mut data = HashMap::new();
-        if let Some(old_tvdb_id) = old_tvdb_id.clone() {
-            data.insert(
-                "old_tvdb_id".to_string(),
-                serde_json::Value::String(old_tvdb_id),
-            );
-        }
-        data.insert(
-            "new_tvdb_id".to_string(),
-            serde_json::Value::String(target_tvdb_id.to_string()),
-        );
-        data.insert(
-            "source".to_string(),
-            serde_json::Value::String("manual".to_string()),
-        );
-
-        self.services
-            .record_title_history(NewTitleHistoryEvent {
-                title_id: refreshed_title.id.clone(),
-                episode_id: None,
-                collection_id: None,
-                event_type: TitleHistoryEventType::Rematched,
-                source_title: Some(refreshed_title.name.clone()),
-                quality: None,
-                download_id: None,
-                data,
-            })
-            .await?;
-
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                Some(refreshed_title.id.clone()),
-                EventType::TitleUpdated,
-                format!(
-                    "title match fixed: {} ({} -> {})",
-                    refreshed_title.name,
-                    old_tvdb_id.as_deref().unwrap_or("unknown"),
-                    target_tvdb_id
-                ),
-            )
-            .await?;
+        let _ = old_tvdb_id;
+        self.emit_title_updated_activity(Some(actor.id.clone()), &refreshed_title)
+            .await;
 
         Ok(FixTitleMatchResult {
             hydrated: refreshed_title.metadata_fetched_at.is_some(),
@@ -2799,18 +2618,6 @@ impl AppUseCase {
         };
 
         let collection = self.services.shows.create_collection(collection).await?;
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                Some(collection.title_id.clone()),
-                EventType::ActionTriggered,
-                format!(
-                    "collection created: {} ({})",
-                    collection.collection_index, collection.title_id
-                ),
-            )
-            .await?;
-
         Ok(collection)
     }
 
@@ -2901,18 +2708,6 @@ impl AppUseCase {
             AppError::Validation("at least one collection field must be provided".into())
         })?;
 
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                Some(collection.title_id.clone()),
-                EventType::ActionTriggered,
-                format!(
-                    "collection updated: {} ({})",
-                    collection.collection_index, collection.title_id
-                ),
-            )
-            .await?;
-
         Ok(collection)
     }
 
@@ -2968,15 +2763,6 @@ impl AppUseCase {
         };
 
         let episode = self.services.shows.create_episode(episode).await?;
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                Some(episode.title_id.clone()),
-                EventType::ActionTriggered,
-                format!("episode created for title {}", episode.title_id),
-            )
-            .await?;
-
         Ok(episode)
     }
 
@@ -3078,15 +2864,6 @@ impl AppUseCase {
             AppError::Validation("at least one episode field must be provided".into())
         })?;
 
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                Some(episode.title_id.clone()),
-                EventType::ActionTriggered,
-                format!("episode updated for title {}", episode.title_id),
-            )
-            .await?;
-
         Ok(episode)
     }
 
@@ -3094,15 +2871,6 @@ impl AppUseCase {
         require(actor, &Entitlement::ManageTitle)?;
 
         self.services.shows.delete_collection(collection_id).await?;
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                None,
-                EventType::ActionTriggered,
-                format!("collection deleted: {}", collection_id),
-            )
-            .await?;
-
         Ok(())
     }
 
@@ -3110,15 +2878,6 @@ impl AppUseCase {
         require(actor, &Entitlement::ManageTitle)?;
 
         self.services.shows.delete_episode(episode_id).await?;
-        self.services
-            .record_event(
-                Some(actor.id.clone()),
-                None,
-                EventType::ActionTriggered,
-                format!("episode deleted: {}", episode_id),
-            )
-            .await?;
-
         Ok(())
     }
 

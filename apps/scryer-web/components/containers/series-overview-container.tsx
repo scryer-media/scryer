@@ -65,6 +65,9 @@ export type TitleDetail = {
   aliases: string[];
   metadataLanguage: string | null;
   metadataFetchedAt: string | null;
+  requiredAudioLanguagesOverride?: string[] | null;
+  effectiveRequiredAudioLanguages?: string[];
+  inheritsRequiredAudioLanguages?: boolean;
   qualityProfileId?: string | null;
   rootFolderPath?: string | null;
   monitorType?: string | null;

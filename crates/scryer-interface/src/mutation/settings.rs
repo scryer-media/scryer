@@ -2,7 +2,7 @@ use async_graphql::{Context, Error, Object, Result as GqlResult};
 use chrono::Utc;
 use scryer_application::{
     AcquisitionSettings as AppAcquisitionSettings, QUALITY_PROFILE_CATALOG_KEY,
-    QUALITY_PROFILE_ID_KEY, QUALITY_PROFILE_INHERIT_VALUE,
+    QUALITY_PROFILE_ID_KEY, QUALITY_PROFILE_INHERIT_VALUE, SCORING_PERSONA_KEY,
     UpdateSubtitleSettings as AppUpdateSubtitleSettings,
 };
 use scryer_domain::Entitlement;
@@ -19,6 +19,8 @@ use crate::settings_graph::{
 };
 use crate::types::*;
 
+const SETTINGS_SCOPE_SYSTEM: &str = "system";
+const SETTINGS_SOURCE_TYPED_GRAPHQL: &str = "typed_graphql";
 #[derive(Default)]
 pub(crate) struct SettingsMutations;
 
@@ -92,24 +94,18 @@ fn from_delay_profile(profile: scryer_application::DelayProfile) -> DelayProfile
 async fn record_settings_saved(
     app: &scryer_application::AppUseCase,
     actor: &scryer_domain::User,
-    message: String,
+    resource_type: &str,
+    resource_id: Option<String>,
+    action: scryer_domain::ConfigurationChangeAction,
     changed_keys: Vec<String>,
 ) {
-    let _ = app
-        .services
-        .record_activity_event(
-            Some(actor.id.clone()),
-            None,
-            None,
-            scryer_application::ActivityKind::SettingSaved,
-            message,
-            scryer_application::ActivitySeverity::Success,
-            vec![
-                scryer_application::ActivityChannel::Toast,
-                scryer_application::ActivityChannel::WebUi,
-            ],
-        )
-        .await;
+    app.emit_configuration_changed_event(
+        Some(actor.id.clone()),
+        resource_type.to_string(),
+        resource_id,
+        action,
+    )
+    .await;
 
     let _ = app.services.settings_changed_broadcast.send(changed_keys);
 }
@@ -256,7 +252,9 @@ impl SettingsMutations {
         record_settings_saved(
             &app,
             &actor,
-            format!("media settings updated for {}", scope.as_scope_id()),
+            "media_settings",
+            Some(scope.as_scope_id().to_string()),
+            scryer_domain::ConfigurationChangeAction::Updated,
             changed_keys,
         )
         .await;
@@ -280,7 +278,9 @@ impl SettingsMutations {
         record_settings_saved(
             &app,
             &actor,
-            "library paths updated".to_string(),
+            "library_paths",
+            None,
+            scryer_domain::ConfigurationChangeAction::Updated,
             changed_keys,
         )
         .await;
@@ -304,7 +304,9 @@ impl SettingsMutations {
         record_settings_saved(
             &app,
             &actor,
-            "service settings updated".to_string(),
+            "service_settings",
+            None,
+            scryer_domain::ConfigurationChangeAction::Updated,
             changed_keys,
         )
         .await;
@@ -327,7 +329,7 @@ impl SettingsMutations {
         let existing_profiles = app
             .services
             .quality_profiles
-            .list_quality_profiles("system", None)
+            .list_quality_profiles(SETTINGS_SCOPE_SYSTEM, None)
             .await
             .map_err(to_gql_error)?;
         let existing_by_id = existing_profiles
@@ -375,12 +377,12 @@ impl SettingsMutations {
                     )));
                 }
                 db.upsert_setting_value(
-                    "system",
+                    SETTINGS_SCOPE_SYSTEM,
                     QUALITY_PROFILE_ID_KEY,
                     None,
                     serde_json::to_string(global_profile_id)
                         .map_err(|error| Error::new(error.to_string()))?,
-                    "typed_graphql",
+                    SETTINGS_SOURCE_TYPED_GRAPHQL,
                     Some(actor.id.clone()),
                 )
                 .await
@@ -411,11 +413,11 @@ impl SettingsMutations {
             };
 
             db.upsert_setting_value(
-                "system",
+                SETTINGS_SCOPE_SYSTEM,
                 QUALITY_PROFILE_ID_KEY,
                 Some(scope_id),
                 serde_json::to_string(&value).map_err(|error| Error::new(error.to_string()))?,
-                "typed_graphql",
+                SETTINGS_SOURCE_TYPED_GRAPHQL,
                 Some(actor.id.clone()),
             )
             .await
@@ -425,21 +427,56 @@ impl SettingsMutations {
             }
         }
 
-        let _ = app
-            .services
-            .record_activity_event(
+        if let Some(global_scoring_persona) = input.global_scoring_persona {
+            db.upsert_setting_value(
+                SETTINGS_SCOPE_SYSTEM,
+                SCORING_PERSONA_KEY,
+                None,
+                serde_json::to_string(&format!("{:?}", global_scoring_persona.into_application()))
+                    .map_err(|error| Error::new(error.to_string()))?,
+                SETTINGS_SOURCE_TYPED_GRAPHQL,
                 Some(actor.id.clone()),
-                None,
-                None,
-                scryer_application::ActivityKind::SettingSaved,
-                "quality profile settings updated".to_string(),
-                scryer_application::ActivitySeverity::Success,
-                vec![
-                    scryer_application::ActivityChannel::Toast,
-                    scryer_application::ActivityChannel::WebUi,
-                ],
             )
-            .await;
+            .await
+            .map_err(to_gql_error)?;
+            if !changed_keys.iter().any(|key| key == SCORING_PERSONA_KEY) {
+                changed_keys.push(SCORING_PERSONA_KEY.to_string());
+            }
+        }
+
+        for selection in input.category_persona_selections {
+            let scope_id = selection.scope.as_scope_id().to_string();
+            let value = if selection.inherit_global {
+                QUALITY_PROFILE_INHERIT_VALUE.to_string()
+            } else {
+                let persona = selection
+                    .persona
+                    .ok_or_else(|| Error::new("persona is required when inheritGlobal is false"))?;
+                format!("{:?}", persona.into_application())
+            };
+
+            db.upsert_setting_value(
+                SETTINGS_SCOPE_SYSTEM,
+                SCORING_PERSONA_KEY,
+                Some(scope_id),
+                serde_json::to_string(&value).map_err(|error| Error::new(error.to_string()))?,
+                SETTINGS_SOURCE_TYPED_GRAPHQL,
+                Some(actor.id.clone()),
+            )
+            .await
+            .map_err(to_gql_error)?;
+            if !changed_keys.iter().any(|key| key == SCORING_PERSONA_KEY) {
+                changed_keys.push(SCORING_PERSONA_KEY.to_string());
+            }
+        }
+
+        app.emit_configuration_changed_event(
+            Some(actor.id.clone()),
+            "quality_profiles",
+            None,
+            scryer_domain::ConfigurationChangeAction::Updated,
+        )
+        .await;
         if !changed_keys.is_empty() {
             let _ = app.services.settings_changed_broadcast.send(changed_keys);
         }
@@ -472,24 +509,13 @@ impl SettingsMutations {
         .await
         .map_err(to_gql_error)?;
 
-        let _ = app
-            .services
-            .record_activity_event(
-                Some(actor.id.clone()),
-                None,
-                None,
-                scryer_application::ActivityKind::SettingSaved,
-                format!(
-                    "download client routing updated for {}",
-                    scope.as_scope_id()
-                ),
-                scryer_application::ActivitySeverity::Success,
-                vec![
-                    scryer_application::ActivityChannel::Toast,
-                    scryer_application::ActivityChannel::WebUi,
-                ],
-            )
-            .await;
+        app.emit_configuration_changed_event(
+            Some(actor.id.clone()),
+            "download_client_routing",
+            Some(scope.as_scope_id().to_string()),
+            scryer_domain::ConfigurationChangeAction::Updated,
+        )
+        .await;
         let _ = app
             .services
             .settings_changed_broadcast
@@ -523,21 +549,13 @@ impl SettingsMutations {
         .await
         .map_err(to_gql_error)?;
 
-        let _ = app
-            .services
-            .record_activity_event(
-                Some(actor.id.clone()),
-                None,
-                None,
-                scryer_application::ActivityKind::SettingSaved,
-                format!("indexer routing updated for {}", scope.as_scope_id()),
-                scryer_application::ActivitySeverity::Success,
-                vec![
-                    scryer_application::ActivityChannel::Toast,
-                    scryer_application::ActivityChannel::WebUi,
-                ],
-            )
-            .await;
+        app.emit_configuration_changed_event(
+            Some(actor.id.clone()),
+            "indexer_routing",
+            Some(scope.as_scope_id().to_string()),
+            scryer_domain::ConfigurationChangeAction::Updated,
+        )
+        .await;
         let _ = app
             .services
             .settings_changed_broadcast
@@ -621,21 +639,13 @@ impl SettingsMutations {
         persist_quality_profile_catalog(&db, &remaining_profiles, Some(actor.id.clone()), true)
             .await?;
 
-        let _ = app
-            .services
-            .record_activity_event(
-                Some(actor.id.clone()),
-                None,
-                None,
-                scryer_application::ActivityKind::SettingSaved,
-                format!("quality profile '{profile_id}' deleted"),
-                scryer_application::ActivitySeverity::Success,
-                vec![
-                    scryer_application::ActivityChannel::Toast,
-                    scryer_application::ActivityChannel::WebUi,
-                ],
-            )
-            .await;
+        app.emit_configuration_changed_event(
+            Some(actor.id.clone()),
+            "quality_profile",
+            Some(profile_id.clone()),
+            scryer_domain::ConfigurationChangeAction::Deleted,
+        )
+        .await;
 
         let _ = app.services.settings_changed_broadcast.send(vec![
             "quality.profiles".to_string(),

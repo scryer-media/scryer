@@ -2,32 +2,245 @@ use async_graphql::{
     Context, Subscription,
     futures_util::stream::{self, BoxStream, unfold},
 };
-use scryer_domain::DownloadQueueState;
-use std::collections::HashSet;
+use scryer_application::{
+    apply_download_queue_projection_event, replay_download_queue_state, sorted_download_queue_items,
+};
+use scryer_domain::{
+    DomainEvent, DomainEventFilter, DomainEventType, DownloadQueueState, Entitlement,
+};
+use std::collections::{HashSet, VecDeque};
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::context::LogBuffer;
 use crate::context::{actor_from_ctx, app_from_ctx};
 use crate::mappers::{
-    from_activity_event, from_download_queue_item, from_job_run, from_library_scan_session,
+    from_activity_event, from_domain_event, from_download_queue_item, from_job_run,
+    from_library_scan_session,
 };
 use crate::types::{
-    ActivityEventPayload, DownloadQueueItemPayload, JobRunPayload, LibraryScanProgressPayload,
+    ActivityEventPayload, DomainEventEnvelopePayload, DownloadQueueItemPayload, JobRunPayload,
+    LibraryScanProgressPayload,
 };
 
 pub struct SubscriptionRoot;
 
+fn empty_box_stream<T: Send + 'static>() -> BoxStream<'static, T> {
+    Box::pin(stream::empty())
+}
+
+async fn load_domain_events_for_projection(
+    app: &scryer_application::AppUseCase,
+    event_types: Vec<DomainEventType>,
+) -> Result<(Vec<DomainEvent>, i64), scryer_application::AppError> {
+    let mut events = Vec::new();
+    let mut after_sequence = 0i64;
+
+    loop {
+        let batch = app
+            .services
+            .domain_events
+            .list(&DomainEventFilter {
+                event_types: Some(event_types.clone()),
+                after_sequence: Some(after_sequence),
+                limit: 500,
+                ..DomainEventFilter::default()
+            })
+            .await?;
+        if batch.is_empty() {
+            break;
+        }
+
+        after_sequence = batch
+            .last()
+            .map(|event| event.sequence)
+            .unwrap_or(after_sequence);
+        let count = batch.len();
+        events.extend(batch);
+        if count < 500 {
+            break;
+        }
+    }
+
+    Ok((events, after_sequence))
+}
+
+async fn library_scan_state_stream_from_domain_events(
+    app: scryer_application::AppUseCase,
+    initial_sessions: Vec<scryer_application::LibraryScanSession>,
+) -> BoxStream<'static, LibraryScanProgressPayload> {
+    let receiver = app.services.library_scan_tracker.subscribe();
+
+    let stream = unfold(
+        (receiver, VecDeque::from(initial_sessions)),
+        move |(mut receiver, mut pending)| async move {
+            loop {
+                if let Some(session) = pending.pop_front() {
+                    return Some((from_library_scan_session(session), (receiver, pending)));
+                }
+
+                match receiver.recv().await {
+                    Ok(session) => {
+                        pending.push_back(session);
+                    }
+                    Err(RecvError::Lagged(n)) => {
+                        tracing::debug!(
+                            "library_scan_state: receiver lagged, skipped {n} tracker updates"
+                        );
+                    }
+                    Err(RecvError::Closed) => return None,
+                }
+            }
+        },
+    );
+
+    Box::pin(stream)
+}
+
+async fn job_run_state_stream_from_domain_events(
+    app: scryer_application::AppUseCase,
+    initial_runs: Vec<scryer_application::JobRun>,
+) -> BoxStream<'static, JobRunPayload> {
+    let receiver = app.services.job_run_tracker.subscribe();
+
+    let stream = unfold(
+        (receiver, VecDeque::from(initial_runs)),
+        move |(mut receiver, mut pending)| async move {
+            loop {
+                if let Some(run) = pending.pop_front() {
+                    return Some((from_job_run(run), (receiver, pending)));
+                }
+
+                match receiver.recv().await {
+                    Ok(run) => {
+                        pending.push_back(run);
+                    }
+                    Err(RecvError::Lagged(n)) => {
+                        tracing::debug!(
+                            "job_run_state: receiver lagged, skipped {n} tracker updates"
+                        );
+                    }
+                    Err(RecvError::Closed) => return None,
+                }
+            }
+        },
+    );
+
+    Box::pin(stream)
+}
+
+async fn download_queue_state_stream_from_domain_events(
+    app: scryer_application::AppUseCase,
+    include_all_activity: bool,
+    include_history_only: bool,
+) -> BoxStream<'static, Vec<DownloadQueueItemPayload>> {
+    let receiver = app.services.domain_event_broadcast.subscribe();
+
+    let event_types = vec![
+        DomainEventType::DownloadQueueItemUpserted,
+        DomainEventType::DownloadQueueItemRemoved,
+    ];
+
+    let (events, cursor) = match load_domain_events_for_projection(&app, event_types.clone()).await
+    {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            tracing::warn!("download_queue_state: initial load failed: {error}");
+            return empty_box_stream();
+        }
+    };
+
+    let initial_items = replay_download_queue_state(&events);
+    let initial_snapshot = filter_download_queue_items(
+        sorted_download_queue_items(&initial_items),
+        include_all_activity,
+        include_history_only,
+    )
+    .into_iter()
+    .map(from_download_queue_item)
+    .collect::<Vec<_>>();
+
+    let pending_initial = if initial_snapshot.is_empty() {
+        VecDeque::new()
+    } else {
+        VecDeque::from(vec![initial_snapshot])
+    };
+
+    let stream = unfold(
+        (receiver, cursor, pending_initial, initial_items),
+        move |(mut receiver, mut cursor, mut pending, mut items)| {
+            let app = app.clone();
+            let event_types = event_types.clone();
+            async move {
+                loop {
+                    if let Some(snapshot) = pending.pop_front() {
+                        return Some((snapshot, (receiver, cursor, pending, items)));
+                    }
+
+                    let events = match app
+                        .services
+                        .domain_events
+                        .list(&DomainEventFilter {
+                            event_types: Some(event_types.clone()),
+                            after_sequence: Some(cursor),
+                            limit: 100,
+                            ..DomainEventFilter::default()
+                        })
+                        .await
+                    {
+                        Ok(events) if !events.is_empty() => events,
+                        Ok(_) => match receiver.recv().await {
+                            Ok(sequence) => {
+                                if sequence > cursor {
+                                    cursor = sequence.saturating_sub(1);
+                                }
+                                continue;
+                            }
+                            Err(RecvError::Lagged(n)) => {
+                                tracing::debug!(
+                                    "download_queue_state: receiver lagged, skipped {n} wakeups"
+                                );
+                                continue;
+                            }
+                            Err(RecvError::Closed) => return None,
+                        },
+                        Err(error) => {
+                            tracing::warn!("download_queue_state: list failed: {error}");
+                            return None;
+                        }
+                    };
+
+                    for event in events {
+                        cursor = event.sequence;
+                        if let Some(snapshot) =
+                            apply_download_queue_projection_event(&mut items, &event)
+                        {
+                            let payload = filter_download_queue_items(
+                                snapshot,
+                                include_all_activity,
+                                include_history_only,
+                            )
+                            .into_iter()
+                            .map(from_download_queue_item)
+                            .collect::<Vec<_>>();
+                            pending.push_back(payload);
+                        }
+                    }
+                }
+            }
+        },
+    );
+
+    Box::pin(stream)
+}
+
 #[Subscription]
 impl SubscriptionRoot {
     async fn activity_events(&self, ctx: &Context<'_>) -> BoxStream<'static, ActivityEventPayload> {
-        let empty_stream =
-            || -> BoxStream<'static, ActivityEventPayload> { Box::pin(stream::empty()) };
-
         let app = match app_from_ctx(ctx) {
             Ok(app) => app,
             Err(e) => {
                 tracing::warn!("activity_events: app_from_ctx failed: {e:?}");
-                return empty_stream();
+                return empty_box_stream();
             }
         };
 
@@ -35,15 +248,15 @@ impl SubscriptionRoot {
             Ok(actor) => actor,
             Err(e) => {
                 tracing::warn!("activity_events: actor_from_ctx failed: {e:?}");
-                return empty_stream();
+                return empty_box_stream();
             }
         };
 
-        let receiver = match app.subscribe_activity_events(&actor) {
+        let receiver = match app.subscribe_domain_event_sequences(&actor) {
             Ok(receiver) => receiver,
             Err(e) => {
                 tracing::warn!("activity_events: subscribe failed: {e}");
-                return empty_stream();
+                return empty_box_stream();
             }
         };
 
@@ -52,21 +265,143 @@ impl SubscriptionRoot {
             actor.id
         );
 
-        let stream = unfold(receiver, move |mut receiver| async move {
-            loop {
-                match receiver.recv().await {
-                    Ok(event) => return Some((from_activity_event(event), receiver)),
-                    Err(RecvError::Lagged(n)) => {
-                        tracing::debug!("activity_events: receiver lagged, skipped {n} messages");
-                        continue;
-                    }
-                    Err(RecvError::Closed) => {
-                        tracing::debug!("activity_events: broadcast channel closed");
-                        return None;
+        let stream = unfold(
+            (receiver, 0_i64, VecDeque::new()),
+            move |(mut receiver, mut cursor, mut pending): (
+                tokio::sync::broadcast::Receiver<i64>,
+                i64,
+                VecDeque<(i64, scryer_application::ActivityEvent)>,
+            )| {
+                let app = app.clone();
+                let actor = actor.clone();
+                async move {
+                    loop {
+                        if let Some((sequence, event)) = pending.pop_front() {
+                            cursor = sequence;
+                            return Some((from_activity_event(event), (receiver, cursor, pending)));
+                        }
+
+                        let events = match app
+                            .list_activity_events_after_sequence(&actor, cursor, 100)
+                            .await
+                        {
+                            Ok(events) if !events.is_empty() => events,
+                            Ok(_) => match receiver.recv().await {
+                                Ok(sequence) => {
+                                    if sequence > cursor {
+                                        cursor = sequence.saturating_sub(1);
+                                    }
+                                    continue;
+                                }
+                                Err(RecvError::Lagged(n)) => {
+                                    tracing::debug!(
+                                        "activity_events: receiver lagged, skipped {n} wakeups"
+                                    );
+                                    continue;
+                                }
+                                Err(RecvError::Closed) => {
+                                    tracing::debug!("activity_events: broadcast channel closed");
+                                    return None;
+                                }
+                            },
+                            Err(error) => {
+                                tracing::warn!("activity_events: list failed: {error}");
+                                return None;
+                            }
+                        };
+
+                        pending = events.into_iter().collect();
                     }
                 }
+            },
+        );
+
+        Box::pin(stream)
+    }
+
+    async fn domain_event_feed(
+        &self,
+        ctx: &Context<'_>,
+        after_sequence: Option<i64>,
+    ) -> BoxStream<'static, DomainEventEnvelopePayload> {
+        let app = match app_from_ctx(ctx) {
+            Ok(app) => app,
+            Err(error) => {
+                tracing::warn!("domain_event_feed: app_from_ctx failed: {error:?}");
+                return empty_box_stream();
             }
-        });
+        };
+
+        let actor = match actor_from_ctx(ctx) {
+            Ok(actor) => actor,
+            Err(error) => {
+                tracing::warn!("domain_event_feed: actor_from_ctx failed: {error:?}");
+                return empty_box_stream();
+            }
+        };
+
+        let receiver = match app.subscribe_domain_event_sequences(&actor) {
+            Ok(receiver) => receiver,
+            Err(error) => {
+                tracing::warn!("domain_event_feed: subscribe failed: {error}");
+                return empty_box_stream();
+            }
+        };
+
+        let initial_after = after_sequence.unwrap_or(0);
+        let stream = unfold(
+            (receiver, initial_after, VecDeque::<DomainEvent>::new()),
+            move |(mut receiver, mut cursor, mut pending)| {
+                let app = app.clone();
+                let actor = actor.clone();
+                async move {
+                    loop {
+                        if let Some(event) = pending.pop_front() {
+                            cursor = event.sequence;
+                            return Some((from_domain_event(event), (receiver, cursor, pending)));
+                        }
+
+                        let events = match app
+                            .list_domain_events(
+                                &actor,
+                                &scryer_domain::DomainEventFilter {
+                                    after_sequence: Some(cursor),
+                                    limit: 100,
+                                    ..scryer_domain::DomainEventFilter::default()
+                                },
+                            )
+                            .await
+                        {
+                            Ok(events) if !events.is_empty() => events,
+                            Ok(_) => match receiver.recv().await {
+                                Ok(sequence) => {
+                                    if sequence > cursor {
+                                        cursor = sequence.saturating_sub(1);
+                                    }
+                                    continue;
+                                }
+                                Err(RecvError::Lagged(n)) => {
+                                    tracing::debug!(
+                                        "domain_event_feed: receiver lagged, skipped {n} wakeups"
+                                    );
+                                    continue;
+                                }
+                                Err(RecvError::Closed) => return None,
+                            },
+                            Err(error) => {
+                                tracing::warn!("domain_event_feed: list failed: {error}");
+                                return None;
+                            }
+                        };
+
+                        if !events.is_empty() {
+                            pending = events.into_iter().collect();
+                            continue;
+                        }
+                    }
+                }
+            },
+        );
 
         Box::pin(stream)
     }
@@ -77,14 +412,11 @@ impl SubscriptionRoot {
         include_all_activity: Option<bool>,
         include_history_only: Option<bool>,
     ) -> BoxStream<'static, Vec<DownloadQueueItemPayload>> {
-        let empty_stream =
-            || -> BoxStream<'static, Vec<DownloadQueueItemPayload>> { Box::pin(stream::empty()) };
-
         let app = match app_from_ctx(ctx) {
             Ok(app) => app,
             Err(e) => {
                 tracing::warn!("download_queue sub: app_from_ctx failed: {e:?}");
-                return empty_stream();
+                return empty_box_stream();
             }
         };
 
@@ -92,78 +424,70 @@ impl SubscriptionRoot {
             Ok(actor) => actor,
             Err(e) => {
                 tracing::warn!("download_queue sub: actor_from_ctx failed: {e:?}");
-                return empty_stream();
+                return empty_box_stream();
             }
         };
-
-        let receiver = match app.subscribe_download_queue(&actor) {
-            Ok(receiver) => receiver,
-            Err(e) => {
-                tracing::warn!("download_queue sub: subscribe failed: {e}");
-                return empty_stream();
-            }
-        };
+        if !actor.has_entitlement(&Entitlement::ManageConfig) {
+            tracing::warn!("download_queue sub: insufficient entitlements");
+            return empty_box_stream();
+        }
 
         tracing::debug!(
             "download_queue sub: subscription started for user {}",
             actor.id
         );
 
-        let include_all_activity = include_all_activity.unwrap_or(false);
-        let include_history_only = include_history_only.unwrap_or(false);
+        download_queue_state_stream_from_domain_events(
+            app,
+            include_all_activity.unwrap_or(false),
+            include_history_only.unwrap_or(false),
+        )
+        .await
+    }
 
-        let stream = unfold(receiver, move |mut receiver| async move {
-            loop {
-                match receiver.recv().await {
-                    Ok(items) => {
-                        let mut items = filter_download_queue_items(
-                            items,
-                            include_all_activity,
-                            include_history_only,
-                        );
-
-                        if include_history_only {
-                            items.sort_by(|left, right| {
-                                parse_sort_value_desc(
-                                    right.last_updated_at.as_deref(),
-                                    left.last_updated_at.as_deref(),
-                                )
-                            });
-                            items.truncate(50);
-                        }
-
-                        let payloads = items.into_iter().map(from_download_queue_item).collect();
-                        return Some((payloads, receiver));
-                    }
-                    Err(RecvError::Lagged(n)) => {
-                        tracing::debug!(
-                            "download_queue sub: receiver lagged, skipped {n} messages"
-                        );
-                        continue;
-                    }
-                    Err(RecvError::Closed) => {
-                        tracing::debug!("download_queue sub: broadcast channel closed");
-                        return None;
-                    }
-                }
+    async fn download_queue_state(
+        &self,
+        ctx: &Context<'_>,
+        include_all_activity: Option<bool>,
+        include_history_only: Option<bool>,
+    ) -> BoxStream<'static, Vec<DownloadQueueItemPayload>> {
+        let app = match app_from_ctx(ctx) {
+            Ok(app) => app,
+            Err(e) => {
+                tracing::warn!("download_queue_state sub: app_from_ctx failed: {e:?}");
+                return empty_box_stream();
             }
-        });
+        };
 
-        Box::pin(stream)
+        let actor = match actor_from_ctx(ctx) {
+            Ok(actor) => actor,
+            Err(e) => {
+                tracing::warn!("download_queue_state sub: actor_from_ctx failed: {e:?}");
+                return empty_box_stream();
+            }
+        };
+        if !actor.has_entitlement(&Entitlement::ManageConfig) {
+            tracing::warn!("download_queue_state sub: insufficient entitlements");
+            return empty_box_stream();
+        }
+
+        download_queue_state_stream_from_domain_events(
+            app,
+            include_all_activity.unwrap_or(false),
+            include_history_only.unwrap_or(false),
+        )
+        .await
     }
 
     async fn library_scan_progress(
         &self,
         ctx: &Context<'_>,
     ) -> BoxStream<'static, LibraryScanProgressPayload> {
-        let empty_stream =
-            || -> BoxStream<'static, LibraryScanProgressPayload> { Box::pin(stream::empty()) };
-
         let app = match app_from_ctx(ctx) {
             Ok(app) => app,
             Err(e) => {
                 tracing::warn!("library_scan_progress: app_from_ctx failed: {e:?}");
-                return empty_stream();
+                return empty_box_stream();
             }
         };
 
@@ -171,52 +495,71 @@ impl SubscriptionRoot {
             Ok(actor) => actor,
             Err(e) => {
                 tracing::warn!("library_scan_progress: actor_from_ctx failed: {e:?}");
-                return empty_stream();
+                return empty_box_stream();
             }
         };
-
-        let receiver = match app.subscribe_library_scan_progress(&actor) {
-            Ok(receiver) => receiver,
-            Err(e) => {
-                tracing::warn!("library_scan_progress: subscribe failed: {e}");
-                return empty_stream();
-            }
-        };
+        if !actor.has_entitlement(&Entitlement::ViewCatalog) {
+            tracing::warn!("library_scan_progress: insufficient entitlements");
+            return empty_box_stream();
+        }
 
         tracing::debug!(
             "library_scan_progress: subscription started for user {}",
             actor.id
         );
 
-        let stream = unfold(receiver, move |mut receiver| async move {
-            loop {
-                match receiver.recv().await {
-                    Ok(session) => return Some((from_library_scan_session(session), receiver)),
-                    Err(RecvError::Lagged(n)) => {
-                        tracing::debug!(
-                            "library_scan_progress: receiver lagged, skipped {n} messages"
-                        );
-                        continue;
-                    }
-                    Err(RecvError::Closed) => {
-                        tracing::debug!("library_scan_progress: broadcast channel closed");
-                        return None;
-                    }
-                }
+        let initial_sessions = match app.active_library_scans(&actor).await {
+            Ok(sessions) => sessions,
+            Err(error) => {
+                tracing::warn!("library_scan_progress: initial load failed: {error}");
+                return empty_box_stream();
             }
-        });
+        };
 
-        Box::pin(stream)
+        library_scan_state_stream_from_domain_events(app, initial_sessions).await
+    }
+
+    async fn library_scan_state(
+        &self,
+        ctx: &Context<'_>,
+    ) -> BoxStream<'static, LibraryScanProgressPayload> {
+        let app = match app_from_ctx(ctx) {
+            Ok(app) => app,
+            Err(e) => {
+                tracing::warn!("library_scan_state: app_from_ctx failed: {e:?}");
+                return empty_box_stream();
+            }
+        };
+
+        let actor = match actor_from_ctx(ctx) {
+            Ok(actor) => actor,
+            Err(e) => {
+                tracing::warn!("library_scan_state: actor_from_ctx failed: {e:?}");
+                return empty_box_stream();
+            }
+        };
+        if !actor.has_entitlement(&Entitlement::ViewCatalog) {
+            tracing::warn!("library_scan_state: insufficient entitlements");
+            return empty_box_stream();
+        }
+
+        let initial_sessions = match app.active_library_scans(&actor).await {
+            Ok(sessions) => sessions,
+            Err(error) => {
+                tracing::warn!("library_scan_state: initial load failed: {error}");
+                return empty_box_stream();
+            }
+        };
+
+        library_scan_state_stream_from_domain_events(app, initial_sessions).await
     }
 
     async fn job_run_events(&self, ctx: &Context<'_>) -> BoxStream<'static, JobRunPayload> {
-        let empty_stream = || -> BoxStream<'static, JobRunPayload> { Box::pin(stream::empty()) };
-
         let app = match app_from_ctx(ctx) {
             Ok(app) => app,
             Err(error) => {
                 tracing::warn!("job_run_events: app_from_ctx failed: {error:?}");
-                return empty_stream();
+                return empty_box_stream();
             }
         };
 
@@ -224,55 +567,76 @@ impl SubscriptionRoot {
             Ok(actor) => actor,
             Err(error) => {
                 tracing::warn!("job_run_events: actor_from_ctx failed: {error:?}");
-                return empty_stream();
+                return empty_box_stream();
             }
         };
+        if !actor.has_entitlement(&Entitlement::ManageConfig) {
+            tracing::warn!("job_run_events: insufficient entitlements");
+            return empty_box_stream();
+        }
 
-        let receiver = match app.subscribe_job_run_events(&actor) {
-            Ok(receiver) => receiver,
+        let initial_runs = match app.active_job_runs(&actor).await {
+            Ok(runs) => runs,
             Err(error) => {
-                tracing::warn!("job_run_events: subscribe failed: {error}");
-                return empty_stream();
+                tracing::warn!("job_run_events: initial load failed: {error}");
+                return empty_box_stream();
             }
         };
 
-        let stream = unfold(receiver, move |mut receiver| async move {
-            loop {
-                match receiver.recv().await {
-                    Ok(event) => return Some((from_job_run(event), receiver)),
-                    Err(RecvError::Lagged(n)) => {
-                        tracing::debug!("job_run_events: receiver lagged, skipped {n} messages");
-                        continue;
-                    }
-                    Err(RecvError::Closed) => return None,
-                }
-            }
-        });
+        job_run_state_stream_from_domain_events(app, initial_runs).await
+    }
 
-        Box::pin(stream)
+    async fn job_run_state(&self, ctx: &Context<'_>) -> BoxStream<'static, JobRunPayload> {
+        let app = match app_from_ctx(ctx) {
+            Ok(app) => app,
+            Err(error) => {
+                tracing::warn!("job_run_state: app_from_ctx failed: {error:?}");
+                return empty_box_stream();
+            }
+        };
+
+        let actor = match actor_from_ctx(ctx) {
+            Ok(actor) => actor,
+            Err(error) => {
+                tracing::warn!("job_run_state: actor_from_ctx failed: {error:?}");
+                return empty_box_stream();
+            }
+        };
+        if !actor.has_entitlement(&Entitlement::ManageConfig) {
+            tracing::warn!("job_run_state: insufficient entitlements");
+            return empty_box_stream();
+        }
+
+        let initial_runs = match app.active_job_runs(&actor).await {
+            Ok(runs) => runs,
+            Err(error) => {
+                tracing::warn!("job_run_state: initial load failed: {error}");
+                return empty_box_stream();
+            }
+        };
+
+        job_run_state_stream_from_domain_events(app, initial_runs).await
     }
 
     async fn service_log_lines(&self, ctx: &Context<'_>) -> BoxStream<'static, String> {
-        let empty_stream = || -> BoxStream<'static, String> { Box::pin(stream::empty()) };
-
         let actor = match actor_from_ctx(ctx) {
             Ok(actor) => actor,
             Err(e) => {
                 tracing::warn!("service_log_lines: actor_from_ctx failed: {e:?}");
-                return empty_stream();
+                return empty_box_stream();
             }
         };
 
         if !actor.has_entitlement(&scryer_domain::Entitlement::ManageConfig) {
             tracing::warn!("service_log_lines: insufficient entitlements");
-            return empty_stream();
+            return empty_box_stream();
         }
 
         let receiver = match ctx.data_opt::<LogBuffer>() {
             Some(buf) => buf.subscribe(),
             None => {
                 tracing::warn!("service_log_lines: no LogBuffer in context");
-                return empty_stream();
+                return empty_box_stream();
             }
         };
 
@@ -301,13 +665,11 @@ impl SubscriptionRoot {
     }
 
     async fn import_history_changed(&self, ctx: &Context<'_>) -> BoxStream<'static, bool> {
-        let empty_stream = || -> BoxStream<'static, bool> { Box::pin(stream::empty()) };
-
         let app = match app_from_ctx(ctx) {
             Ok(app) => app,
             Err(e) => {
                 tracing::warn!("import_history_changed: app_from_ctx failed: {e:?}");
-                return empty_stream();
+                return empty_box_stream();
             }
         };
 
@@ -315,7 +677,7 @@ impl SubscriptionRoot {
             Ok(actor) => actor,
             Err(e) => {
                 tracing::warn!("import_history_changed: actor_from_ctx failed: {e:?}");
-                return empty_stream();
+                return empty_box_stream();
             }
         };
 
@@ -323,7 +685,7 @@ impl SubscriptionRoot {
             Ok(receiver) => receiver,
             Err(e) => {
                 tracing::warn!("import_history_changed: subscribe failed: {e}");
-                return empty_stream();
+                return empty_box_stream();
             }
         };
 
@@ -354,13 +716,11 @@ impl SubscriptionRoot {
     }
 
     async fn settings_changed(&self, ctx: &Context<'_>) -> BoxStream<'static, Vec<String>> {
-        let empty_stream = || -> BoxStream<'static, Vec<String>> { Box::pin(stream::empty()) };
-
         let app = match app_from_ctx(ctx) {
             Ok(app) => app,
             Err(e) => {
                 tracing::warn!("settings_changed: app_from_ctx failed: {e:?}");
-                return empty_stream();
+                return empty_box_stream();
             }
         };
 
@@ -368,7 +728,7 @@ impl SubscriptionRoot {
             Ok(actor) => actor,
             Err(e) => {
                 tracing::warn!("settings_changed: actor_from_ctx failed: {e:?}");
-                return empty_stream();
+                return empty_box_stream();
             }
         };
 
@@ -376,7 +736,7 @@ impl SubscriptionRoot {
             Ok(receiver) => receiver,
             Err(e) => {
                 tracing::warn!("settings_changed: subscribe failed: {e}");
-                return empty_stream();
+                return empty_box_stream();
             }
         };
 
@@ -403,16 +763,6 @@ impl SubscriptionRoot {
 
         Box::pin(stream)
     }
-}
-
-fn parse_sort_value_desc(left: Option<&str>, right: Option<&str>) -> std::cmp::Ordering {
-    fn parse(value: Option<&str>) -> i64 {
-        value
-            .and_then(|value| value.parse::<i64>().ok())
-            .unwrap_or(0)
-    }
-
-    parse(left).cmp(&parse(right))
 }
 
 fn filter_download_queue_items(

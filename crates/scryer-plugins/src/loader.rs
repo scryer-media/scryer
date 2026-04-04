@@ -190,6 +190,9 @@ fn apply_builtin_indexer_overrides(mut descriptor: PluginDescriptor) -> PluginDe
     }
     if descriptor.provider_type.eq_ignore_ascii_case("dognzb") {
         descriptor.default_base_url = Some(DOGNZB_DEFAULT_BASE_URL.to_string());
+        descriptor
+            .config_fields
+            .retain(|field| field.key != "api_path" && field.key != "additional_params");
     }
 
     descriptor

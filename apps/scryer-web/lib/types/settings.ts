@@ -38,6 +38,7 @@ export type MediaSettings = {
   scope: "movie" | "series" | "anime";
   libraryPath: string;
   rootFolders: { path: string; isDefault: boolean }[];
+  requiredAudioLanguages: string[];
   renameTemplate: string;
   renameCollisionPolicy: string;
   renameMissingMetadataPolicy: string;

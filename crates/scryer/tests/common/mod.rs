@@ -97,7 +97,6 @@ impl TestContext {
         let titles: Arc<dyn scryer_application::TitleRepository> = Arc::new(db.clone());
         let shows: Arc<dyn scryer_application::ShowRepository> = Arc::new(db.clone());
         let users: Arc<dyn scryer_application::UserRepository> = Arc::new(db.clone());
-        let events: Arc<dyn scryer_application::EventRepository> = Arc::new(db.clone());
         let indexer_configs: Arc<dyn scryer_application::IndexerConfigRepository> =
             Arc::new(db.clone());
         let download_client_configs: Arc<dyn scryer_application::DownloadClientConfigRepository> =
@@ -112,7 +111,6 @@ impl TestContext {
             titles,
             shows,
             users,
-            events,
             indexer_configs,
             Arc::new(indexer_client),
             Arc::new(nzbget),
@@ -130,6 +128,7 @@ impl TestContext {
         services.plugin_installations = Arc::new(db.clone());
         services.rule_sets = Arc::new(db.clone());
         services.acquisition_state = Arc::new(db.clone());
+        services.domain_events = Arc::new(db.clone());
         services.wanted_items = Arc::new(db.clone());
         services.title_history = Arc::new(db.clone());
         services.download_submissions = Arc::new(db.clone());

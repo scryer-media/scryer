@@ -497,6 +497,10 @@ const zh_CN: LocaleDictionary = {
   "queue.manualImportFailed": "手动导入加入队列失败。",
   "queue.manualImportTooltip":
     "手动导入可用于需要关注的队列项。",
+  "queue.releaseTitle": "发布项",
+  "queue.blockReason": "阻止原因",
+  "queue.showDetails": "显示详情",
+  "queue.hideDetails": "隐藏详情",
   "queue.pause": "暂停",
   "queue.pausing": "暂停中…",
   "queue.pauseSuccess": "下载已暂停。",

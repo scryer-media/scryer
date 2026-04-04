@@ -20,7 +20,6 @@ import type { ViewCategoryId } from "./media-content/indexer-category-picker";
 import { MediaLibrarySettingsPanel } from "./media-content/media-library-settings-panel";
 import { IndexerRoutingPanel } from "./media-content/indexer-routing-panel";
 import { DownloadClientRoutingPanel } from "./media-content/download-client-routing-panel";
-import { ConvenienceRulesPanel } from "./media-content/convenience-rules-panel";
 import { GeneralSettingsPanel } from "./media-content/general-settings-panel";
 import { QualitySettingsPanel } from "./media-content/quality-settings-panel";
 import { RenameSettingsPanel } from "./media-content/rename-settings-panel";
@@ -29,7 +28,11 @@ import { PosterGrid } from "./media-content/poster-grid";
 import { TitleTable } from "./media-content/title-table";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { RuleSetRecord } from "@/lib/types/rule-sets";
-import type { ParsedQualityProfileEntry, ScoringPersonaId } from "@/lib/types/quality-profiles";
+import type {
+  FacetScoringPersonaSelectionRecord,
+  ParsedQualityProfileEntry,
+  ScoringPersonaId,
+} from "@/lib/types/quality-profiles";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
 
 type Facet = "movie" | "tv" | "anime";
@@ -80,14 +83,14 @@ export function MediaContentView({
     mediaSettingsLoading: boolean;
     qualityProfiles: ParsedQualityProfile[];
     qualityProfileEntries: ParsedQualityProfileEntry[];
-    qualityProfilesText: string;
     qualityProfileParseError: string;
     globalQualityProfileId: string;
+    globalScoringPersona: ScoringPersonaId;
     categoryQualityProfileOverrides: Record<ViewCategoryId, string>;
+    categoryRequiredAudioLanguages: Record<ViewCategoryId, string[]>;
+    saveCategoryRequiredAudioLanguages: (languages: string[]) => Promise<void> | void;
+    categoryPersonaSelections: Record<ViewCategoryId, FacetScoringPersonaSelectionRecord>;
     activeQualityScopeId: ViewCategoryId;
-    setCategoryQualityProfileOverrides: React.Dispatch<
-      React.SetStateAction<Record<ViewCategoryId, string>>
-    >;
     categoryRenameTemplates: Record<ViewCategoryId, string>;
     setCategoryRenameTemplates: React.Dispatch<
       React.SetStateAction<Record<ViewCategoryId, string>>
@@ -130,8 +133,9 @@ export function MediaContentView({
     >;
     qualityProfileInheritValue: string;
     toProfileOptions: (profiles: ParsedQualityProfile[]) => QualityProfileOption[];
-    handleFacetPersonaSave: (persona: ScoringPersonaId | null) => Promise<void>;
+    handleFacetPersonaSave: (persona: ScoringPersonaId | null) => Promise<void> | void;
     saveSetting: (scope: string, scopeId: string | undefined, keyName: string, value: string) => void;
+    saveCategoryQualityProfileOverride: (value: string) => Promise<void> | void;
     updateCategoryMediaProfileSettings: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
     mediaSettingsSaving: boolean;
     titleNameForQueue: string;
@@ -210,12 +214,14 @@ export function MediaContentView({
     saveRootFolders,
     mediaSettingsLoading,
     qualityProfiles,
-    qualityProfileEntries,
     qualityProfileParseError,
     globalQualityProfileId,
+    globalScoringPersona,
     categoryQualityProfileOverrides,
+    categoryRequiredAudioLanguages,
+    saveCategoryRequiredAudioLanguages,
+    categoryPersonaSelections,
     activeQualityScopeId,
-    setCategoryQualityProfileOverrides,
     categoryRenameTemplates,
     setCategoryRenameTemplates,
     categoryRenameCollisionPolicies,
@@ -240,6 +246,7 @@ export function MediaContentView({
     toProfileOptions,
     handleFacetPersonaSave,
     saveSetting,
+    saveCategoryQualityProfileOverride,
     updateCategoryMediaProfileSettings,
     mediaSettingsSaving,
     titleNameForQueue,
@@ -319,16 +326,6 @@ export function MediaContentView({
 
   const mediaLibrarySettingsTitle =
     view === "series" ? t("settings.seriesLibrarySettings") : t("settings.moviesLibrarySettings");
-
-  const handleQualityProfileOverrideChange = React.useCallback(
-    (value: string) => {
-      setCategoryQualityProfileOverrides((previous) => ({
-        ...previous,
-        [activeQualityScopeId]: value,
-      }));
-    },
-    [activeQualityScopeId, setCategoryQualityProfileOverrides],
-  );
 
   const handleRenameTemplateChange = React.useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -485,16 +482,17 @@ export function MediaContentView({
           mediaSettingsLoading={mediaSettingsLoading}
           mediaSettingsSaving={mediaSettingsSaving}
           qualityProfiles={qualityProfiles}
-          qualityProfileEntries={qualityProfileEntries}
           qualityProfileParseError={qualityProfileParseError}
           categoryQualityProfileOverrides={categoryQualityProfileOverrides}
+          categoryRequiredAudioLanguages={categoryRequiredAudioLanguages}
+          saveCategoryRequiredAudioLanguages={saveCategoryRequiredAudioLanguages}
           activeQualityScopeId={activeQualityScopeId}
-          globalQualityProfileId={globalQualityProfileId}
+          globalScoringPersona={globalScoringPersona}
+          categoryPersonaSelections={categoryPersonaSelections}
           qualityProfileInheritValue={qualityProfileInheritValue}
           toProfileOptions={toProfileOptions}
-          handleQualityProfileOverrideChange={handleQualityProfileOverrideChange}
+          saveCategoryQualityProfileOverride={saveCategoryQualityProfileOverride}
           onFacetPersonaSave={handleFacetPersonaSave}
-          updateCategoryMediaProfileSettings={updateCategoryMediaProfileSettings}
         />
       ) : contentSettingsSection === "renaming" ? (
         <RenameSettingsPanel
@@ -568,9 +566,6 @@ export function MediaContentView({
             plexmatchWriteOnImport={plexmatchWriteOnImport}
             handlePlexmatchWriteChange={handlePlexmatchWriteChange}
           />
-          {(view === "movies" || view === "series" || view === "anime") ? (
-            <ConvenienceRulesPanel view={view} />
-          ) : null}
         </div>
       ) : (
         view === "movies" || view === "series" || view === "anime" ? (

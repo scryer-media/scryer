@@ -1,26 +1,27 @@
 use async_trait::async_trait;
 use scryer_application::{
-    AcquisitionStateRepository, AppError, AppResult, BlocklistRepository,
+    AcquisitionStateRepository, AppError, AppResult, BlocklistRepository, DomainEventRepository,
     DownloadClientConfigRepository, DownloadSubmission, DownloadSubmissionRepository,
-    EventRepository, HousekeepingRepository, ImportArtifact, ImportArtifactRepository,
-    ImportRepository, IndexerConfigRepository, InsertMediaFileInput, JobKey, JobRunRecord,
-    JobRunRepository, JobRunStatus, JobTriggerSource, LibraryProbeRepository,
-    LibraryProbeSignature, MediaFileRepository, NewBlocklistEntry, NewTitleHistoryEvent,
-    NotificationChannelRepository, NotificationSubscriptionRepository, PendingRelease,
-    PendingReleaseRepository, PendingReleaseStatus, PluginInstallationRepository,
-    PostProcessingScriptRepository, PrimaryCollectionSummary,
-    QualityProfile as ApplicationQualityProfile, QualityProfileRepository,
-    ReleaseAttemptRepository, ReleaseDecision, ReleaseDownloadAttemptOutcome,
-    ReleaseDownloadFailureSignature, RuleSetRepository, SettingsRepository, ShowRepository,
-    SuccessfulGrabCommit, SystemInfoProvider, TitleHistoryFilter, TitleHistoryPage,
-    TitleHistoryRepository, TitleMediaFile, TitleMediaSizeSummary, TitleMetadataUpdate,
-    TitleReleaseBlocklistEntry, TitleRepository, UserRepository, WantedItem, WantedItemRepository,
+    HousekeepingRepository, ImportArtifact, ImportArtifactRepository, ImportRepository,
+    IndexerConfigRepository, InsertMediaFileInput, JobKey, JobRunRecord, JobRunRepository,
+    JobRunStatus, JobTriggerSource, LibraryProbeRepository, LibraryProbeSignature,
+    MediaFileRepository, NewBlocklistEntry, NewTitleHistoryEvent, NotificationChannelRepository,
+    NotificationSubscriptionRepository, PendingRelease, PendingReleaseRepository,
+    PendingReleaseStatus, PluginInstallationRepository, PostProcessingScriptRepository,
+    PrimaryCollectionSummary, QualityProfile as ApplicationQualityProfile,
+    QualityProfileRepository, ReleaseAttemptRepository, ReleaseDecision,
+    ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature, RuleSetRepository,
+    SettingsRepository, ShowRepository, SuccessfulGrabCommit, SystemInfoProvider,
+    TitleHistoryFilter, TitleHistoryPage, TitleHistoryRepository, TitleMediaFile,
+    TitleMediaSizeSummary, TitleMetadataUpdate, TitleReleaseBlocklistEntry, TitleRepository,
+    UserRepository, WantedItem, WantedItemRepository,
 };
 use scryer_domain::{
-    BlocklistEntry, CalendarEpisode, Collection, CollectionType, DownloadClientConfig, Entitlement,
-    Episode, HistoryEvent, ImportRecord, ImportStatus, IndexerConfig, MediaFacet,
-    NotificationChannelConfig, NotificationSubscription, PluginInstallation, PostProcessingScript,
-    PostProcessingScriptRun, RuleSet, Title, TitleHistoryEventType, TitleHistoryRecord, User,
+    BlocklistEntry, CalendarEpisode, Collection, CollectionType, DomainEvent, DomainEventFilter,
+    DownloadClientConfig, Entitlement, Episode, ImportRecord, ImportStatus, IndexerConfig,
+    MediaFacet, NewDomainEvent, NotificationChannelConfig, NotificationSubscription,
+    PluginInstallation, PostProcessingScript, PostProcessingScriptRun, RuleSet, Title,
+    TitleHistoryEventType, TitleHistoryRecord, User,
 };
 use std::collections::HashMap;
 
@@ -257,6 +258,36 @@ impl ShowRepository for SqliteServices {
         )
     }
 
+    async fn update_collection_interstitial_movie(
+        &self,
+        collection_id: &str,
+        interstitial_movie: scryer_domain::InterstitialMovieMetadata,
+    ) -> AppResult<Collection> {
+        let collection_id = collection_id.to_string();
+        db_call!(
+            self,
+            UpdateCollectionInterstitialMovie {
+                collection_id,
+                interstitial_movie
+            }
+        )
+    }
+
+    async fn update_collection_specials_movies(
+        &self,
+        collection_id: &str,
+        specials_movies: Vec<scryer_domain::InterstitialMovieMetadata>,
+    ) -> AppResult<Collection> {
+        let collection_id = collection_id.to_string();
+        db_call!(
+            self,
+            UpdateCollectionSpecialsMovies {
+                collection_id,
+                specials_movies
+            }
+        )
+    }
+
     async fn update_interstitial_season_episode(
         &self,
         collection_id: &str,
@@ -448,25 +479,42 @@ impl UserRepository for SqliteServices {
 }
 
 #[async_trait]
-impl EventRepository for SqliteServices {
-    async fn list(
-        &self,
-        title_id: Option<String>,
-        limit: i64,
-        offset: i64,
-    ) -> AppResult<Vec<HistoryEvent>> {
-        db_call!(
-            self,
-            ListEvents {
-                title_id,
-                limit,
-                offset
-            }
-        )
+impl DomainEventRepository for SqliteServices {
+    async fn append(&self, event: NewDomainEvent) -> AppResult<DomainEvent> {
+        crate::queries::domain_event::append_domain_event_query(&self.pool, &event).await
     }
 
-    async fn append(&self, event: HistoryEvent) -> AppResult<()> {
-        db_call!(self, AppendEvent { event })
+    async fn append_many(&self, events: Vec<NewDomainEvent>) -> AppResult<Vec<DomainEvent>> {
+        crate::queries::domain_event::append_domain_events_query(&self.pool, &events).await
+    }
+
+    async fn list(&self, filter: &DomainEventFilter) -> AppResult<Vec<DomainEvent>> {
+        crate::queries::domain_event::list_domain_events_query(&self.pool, filter).await
+    }
+
+    async fn list_after_sequence(
+        &self,
+        after_sequence: i64,
+        limit: usize,
+    ) -> AppResult<Vec<DomainEvent>> {
+        crate::queries::domain_event::list_domain_events_after_sequence_query(
+            &self.pool,
+            after_sequence,
+            limit,
+        )
+        .await
+    }
+
+    async fn get_subscriber_offset(&self, subscriber: &str) -> AppResult<i64> {
+        crate::queries::domain_event::get_event_subscriber_offset_query(&self.pool, subscriber)
+            .await
+    }
+
+    async fn set_subscriber_offset(&self, subscriber: &str, sequence: i64) -> AppResult<()> {
+        crate::queries::domain_event::set_event_subscriber_offset_query(
+            &self.pool, subscriber, sequence,
+        )
+        .await
     }
 }
 
@@ -973,6 +1021,16 @@ impl QualityProfileRepository for SqliteServices {
         let scope = scope.to_string();
         db_call!(self, ListQualityProfiles { scope, scope_id })
     }
+
+    async fn replace_quality_profiles(
+        &self,
+        scope: &str,
+        scope_id: Option<String>,
+        profiles: Vec<ApplicationQualityProfile>,
+    ) -> AppResult<()> {
+        self.replace_quality_profiles(scope.to_string(), scope_id, profiles)
+            .await
+    }
 }
 
 #[async_trait]
@@ -1372,10 +1430,12 @@ impl NotificationSubscriptionRepository for SqliteServices {
 
     async fn list_subscriptions_for_event(
         &self,
-        event_type: &str,
+        event_type: scryer_domain::NotificationEventType,
     ) -> AppResult<Vec<NotificationSubscription>> {
-        let event_type = event_type.to_string();
-        db_call!(self, ListNotificationSubscriptionsForEvent { event_type })
+        crate::queries::notification_subscription::list_notification_subscriptions_for_event_query(
+            &self.pool, event_type,
+        )
+        .await
     }
 
     async fn create_subscription(
@@ -1414,6 +1474,10 @@ impl HousekeepingRepository for SqliteServices {
 
     async fn delete_history_events_older_than(&self, days: i64) -> AppResult<u32> {
         db_call!(self, DeleteHistoryEventsOlderThan { days })
+    }
+
+    async fn delete_domain_events_older_than(&self, days: i64) -> AppResult<u32> {
+        db_call!(self, DeleteDomainEventsOlderThan { days })
     }
 
     async fn list_all_media_file_paths(&self) -> AppResult<Vec<(String, String)>> {

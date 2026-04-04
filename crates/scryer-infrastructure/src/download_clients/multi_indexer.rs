@@ -431,6 +431,35 @@ impl MultiIndexerSearchClient {
             && episode.is_none()
     }
 
+    fn split_rss_category_requests(categories: Option<Vec<String>>) -> Vec<Option<Vec<String>>> {
+        let normalized: Vec<String> = categories
+            .unwrap_or_default()
+            .into_iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect();
+
+        if normalized.is_empty() {
+            vec![None]
+        } else if normalized.len() == 1 {
+            vec![Some(normalized)]
+        } else {
+            normalized
+                .into_iter()
+                .map(|value| Some(vec![value]))
+                .collect()
+        }
+    }
+
+    fn rss_feed_cache_key(indexer_id: &str, categories: Option<&[String]>) -> String {
+        match categories {
+            Some(categories) if !categories.is_empty() => {
+                format!("{indexer_id}:{}", categories.join(","))
+            }
+            _ => indexer_id.to_string(),
+        }
+    }
+
     async fn execute_strategy_tier(
         client: Arc<dyn IndexerClient>,
         category: Option<String>,
@@ -525,10 +554,7 @@ impl IndexerClient for MultiIndexerSearchClient {
             !ids.is_empty(),
             category
                 .as_ref()
-                .is_some_and(|value| !value.trim().is_empty())
-                || newznab_categories
-                    .as_ref()
-                    .is_some_and(|values| !values.is_empty()),
+                .is_some_and(|value| !value.trim().is_empty()),
             mode,
             season,
             episode,
@@ -657,6 +683,12 @@ impl IndexerClient for MultiIndexerSearchClient {
                     }
                 })
                 .unwrap_or_else(|| newznab_categories.clone());
+            let rss_category_requests = if is_rss_request {
+                Self::split_rss_category_requests(per_indexer_categories.clone())
+            } else {
+                vec![per_indexer_categories.clone()]
+            };
+            let pre_acquired_rss_categories = is_rss_request && rss_category_requests.len() > 1;
 
             // Skip indexers at or near their API quota for auto searches.
             if mode == SearchMode::Auto && self.stats_tracker.is_at_quota(&config.id) {
@@ -716,80 +748,95 @@ impl IndexerClient for MultiIndexerSearchClient {
             // regardless of query — the caller matches results downstream.
             let is_rss_only = !caps.supports_any_search() && caps.rss;
             if is_rss_only {
-                let cell = {
-                    let mut cache = self.rss_feed_cache.lock().await;
-                    cache
-                        .entry(config.id.clone())
-                        .or_insert_with(|| Arc::new(tokio::sync::OnceCell::new()))
-                        .clone()
-                };
-                let client = client.clone();
-                let query = query.clone();
-                let category = category.clone();
-                let per_indexer_categories = per_indexer_categories.clone();
-                let tagged_aliases = tagged_aliases.clone();
-                let indexer_id = config.id.clone();
-                let indexer_name = config.name.clone();
-                let rate_limiter = self.rate_limiter.clone();
-                let rate_limit_seconds = config.rate_limit_seconds;
-                let stats_tracker = self.stats_tracker.clone();
-                let backoff_tracker = self.backoff_tracker.clone();
-                let facet = facet.clone();
-
-                set.spawn(async move {
-                    let results = cell
-                        .get_or_init(|| async {
-                            rate_limiter
-                                .acquire(&indexer_id, rate_limit_seconds, mode)
-                                .await;
-                            let start = std::time::Instant::now();
-                            match tokio::time::timeout(
-                                std::time::Duration::from_secs(30),
-                                client.search(
-                                    query,
-                                    HashMap::new(),
-                                    category,
-                                    Some(facet),
-                                    per_indexer_categories,
-                                    None,
-                                    mode,
-                                    season,
-                                    episode,
-                                    absolute_episode,
-                                    tagged_aliases,
-                                ),
-                            ).await {
-                                Ok(Ok(response)) => {
-                                    info!(indexer = indexer_name.as_str(), count = response.results.len(), "RSS feed cached");
-                                    stats_tracker.record_query(&indexer_id, &indexer_name, true);
-                                    backoff_tracker.record_success(&indexer_id).await;
-                                    metrics::counter!("scryer_indexer_queries_total", "indexer" => indexer_name.clone(), "status" => "success", "mode" => "rss_cached").increment(1);
-                                    metrics::histogram!("scryer_indexer_query_duration_seconds", "indexer" => indexer_name.clone(), "mode" => "rss_cached").record(start.elapsed().as_secs_f64());
-                                    response.results
-                                }
-                                Ok(Err(err)) => {
-                                    warn!(indexer = indexer_name.as_str(), error = %err, "RSS feed fetch failed");
-                                    stats_tracker.record_query(&indexer_id, &indexer_name, false);
-                                    vec![]
-                                }
-                                Err(_) => {
-                                    warn!(indexer = indexer_name.as_str(), "RSS feed fetch timed out");
-                                    stats_tracker.record_query(&indexer_id, &indexer_name, false);
-                                    vec![]
-                                }
-                            }
-                        })
+                if pre_acquired_rss_categories {
+                    self.rate_limiter
+                        .acquire(&config.id, config.rate_limit_seconds, mode)
                         .await;
+                }
 
-                    let response = IndexerSearchResponse {
-                        results: results.clone(),
-                        api_current: None,
-                        api_max: None,
-                        grab_current: None,
-                        grab_max: None,
+                for rss_category_request in rss_category_requests {
+                    let cell = {
+                        let mut cache = self.rss_feed_cache.lock().await;
+                        cache
+                            .entry(Self::rss_feed_cache_key(
+                                &config.id,
+                                rss_category_request.as_deref(),
+                            ))
+                            .or_insert_with(|| Arc::new(tokio::sync::OnceCell::new()))
+                            .clone()
                     };
-                    (indexer_id, indexer_name, Ok(response))
-                });
+                    let client = client.clone();
+                    let query = query.clone();
+                    let category = category.clone();
+                    let tagged_aliases = tagged_aliases.clone();
+                    let indexer_id = config.id.clone();
+                    let indexer_name = config.name.clone();
+                    let rate_limiter = self.rate_limiter.clone();
+                    let rate_limit_seconds = config.rate_limit_seconds;
+                    let stats_tracker = self.stats_tracker.clone();
+                    let backoff_tracker = self.backoff_tracker.clone();
+                    let facet = facet.clone();
+                    let should_rate_limit = !pre_acquired_rss_categories;
+
+                    set.spawn(async move {
+                        let results = cell
+                            .get_or_init(|| async {
+                                if should_rate_limit {
+                                    rate_limiter
+                                        .acquire(&indexer_id, rate_limit_seconds, mode)
+                                        .await;
+                                }
+                                let start = std::time::Instant::now();
+                                match tokio::time::timeout(
+                                    std::time::Duration::from_secs(30),
+                                    client.search(
+                                        query,
+                                        HashMap::new(),
+                                        category,
+                                        Some(facet),
+                                        rss_category_request.clone(),
+                                        None,
+                                        mode,
+                                        season,
+                                        episode,
+                                        absolute_episode,
+                                        tagged_aliases,
+                                    ),
+                                )
+                                .await
+                                {
+                                    Ok(Ok(response)) => {
+                                        info!(indexer = indexer_name.as_str(), count = response.results.len(), "RSS feed cached");
+                                        stats_tracker.record_query(&indexer_id, &indexer_name, true);
+                                        backoff_tracker.record_success(&indexer_id).await;
+                                        metrics::counter!("scryer_indexer_queries_total", "indexer" => indexer_name.clone(), "status" => "success", "mode" => "rss_cached").increment(1);
+                                        metrics::histogram!("scryer_indexer_query_duration_seconds", "indexer" => indexer_name.clone(), "mode" => "rss_cached").record(start.elapsed().as_secs_f64());
+                                        response.results
+                                    }
+                                    Ok(Err(err)) => {
+                                        warn!(indexer = indexer_name.as_str(), error = %err, "RSS feed fetch failed");
+                                        stats_tracker.record_query(&indexer_id, &indexer_name, false);
+                                        vec![]
+                                    }
+                                    Err(_) => {
+                                        warn!(indexer = indexer_name.as_str(), "RSS feed fetch timed out");
+                                        stats_tracker.record_query(&indexer_id, &indexer_name, false);
+                                        vec![]
+                                    }
+                                }
+                            })
+                            .await;
+
+                        let response = IndexerSearchResponse {
+                            results: results.clone(),
+                            api_current: None,
+                            api_max: None,
+                            grab_current: None,
+                            grab_max: None,
+                        };
+                        (indexer_id, indexer_name, Ok(response))
+                    });
+                }
                 continue;
             }
 
@@ -820,136 +867,61 @@ impl IndexerClient for MultiIndexerSearchClient {
 
                 strategies.extend(alias_strategies);
             }
-
             let (primary_strategies, fallback_strategies) =
                 split_strategy_tiers(&facet, strategies);
 
-            self.rate_limiter
-                .acquire(&config.id, config.rate_limit_seconds, mode)
-                .await;
+            if pre_acquired_rss_categories {
+                self.rate_limiter
+                    .acquire(&config.id, config.rate_limit_seconds, mode)
+                    .await;
+            }
 
-            let indexer_id = config.id.clone();
-            let indexer_name = config.name.clone();
-            let facet = facet.clone();
-            let search_query = query.clone();
-            let category_for_indexer = category.clone();
-            let tagged_aliases_for_indexer = tagged_aliases.clone();
-            let stats_tracker = self.stats_tracker.clone();
-            let backoff_tracker = self.backoff_tracker.clone();
-
-            set.spawn(async move {
-                let mut collected_results = Vec::new();
-                let mut primary_had_success = false;
-                let mut primary_had_error = false;
-                let mut batch_health = StrategyBatchHealth::default();
-
-                let primary_outcomes = Self::execute_strategy_tier(
-                    client.clone(),
-                    category_for_indexer.clone(),
-                    facet.clone(),
-                    per_indexer_categories.clone(),
-                    mode,
-                    tagged_aliases_for_indexer.clone(),
-                    primary_strategies,
-                )
-                .await;
-
-                for outcome in primary_outcomes {
-                    match outcome.response {
-                        Ok(mut response) => {
-                            primary_had_success = true;
-                            batch_health.mark_success();
-                            info!(
-                                indexer = indexer_name.as_str(),
-                                strategy = outcome.label.as_str(),
-                                count = response.results.len(),
-                                "indexer returned results"
-                            );
-                            stats_tracker.record_query(&indexer_id, &indexer_name, true);
-                            stats_tracker.record_api_limits(
-                                &indexer_id,
-                                response.api_current,
-                                response.api_max,
-                                response.grab_current,
-                                response.grab_max,
-                            );
-                            backoff_tracker.record_success(&indexer_id).await;
-
-                            record_strategy_metrics(
-                                &indexer_name,
-                                &outcome.label,
-                                "success",
-                                outcome.elapsed,
-                                Some(response.results.len()),
-                            );
-
-                            filter_strategy_results(
-                                &mut response.results,
-                                &search_query,
-                                season,
-                                episode,
-                                &tagged_aliases_for_indexer,
-                                outcome.title_guard_mode,
-                                &outcome.label,
-                            );
-                            collected_results.append(&mut response.results);
-                        }
-                        Err(err) => {
-                            primary_had_error = true;
-                            batch_health.mark_error();
-                            warn!(
-                                indexer = indexer_name.as_str(),
-                                strategy = outcome.label.as_str(),
-                                error = %err,
-                                "indexer search failed"
-                            );
-                            stats_tracker.record_query(&indexer_id, &indexer_name, false);
-
-                            record_strategy_metrics(
-                                &indexer_name,
-                                &outcome.label,
-                                "error",
-                                outcome.elapsed,
-                                None,
-                            );
-                        }
-                    }
+            for rss_category_request in rss_category_requests {
+                if !pre_acquired_rss_categories {
+                    self.rate_limiter
+                        .acquire(&config.id, config.rate_limit_seconds, mode)
+                        .await;
                 }
 
-                if should_run_fallback_tier(
-                    &collected_results,
-                    primary_had_success,
-                    primary_had_error,
-                    &fallback_strategies,
-                ) {
-                    info!(
-                        indexer = indexer_name.as_str(),
-                        facet = facet.as_str(),
-                        query = search_query.as_str(),
-                        reason = "zero_id_results",
-                        "indexer search falling back to title tier"
-                    );
+                let indexer_id = config.id.clone();
+                let indexer_name = config.name.clone();
+                let facet = facet.clone();
+                let search_query = query.clone();
+                let category_for_indexer = category.clone();
+                let tagged_aliases_for_indexer = tagged_aliases.clone();
+                let stats_tracker = self.stats_tracker.clone();
+                let backoff_tracker = self.backoff_tracker.clone();
+                let client = client.clone();
+                let primary_strategies = primary_strategies.clone();
+                let fallback_strategies = fallback_strategies.clone();
 
-                    let fallback_outcomes = Self::execute_strategy_tier(
-                        client,
-                        category_for_indexer,
-                        facet,
-                        per_indexer_categories,
+                set.spawn(async move {
+                    let mut collected_results = Vec::new();
+                    let mut primary_had_success = false;
+                    let mut primary_had_error = false;
+                    let mut batch_health = StrategyBatchHealth::default();
+
+                    let primary_outcomes = Self::execute_strategy_tier(
+                        client.clone(),
+                        category_for_indexer.clone(),
+                        facet.clone(),
+                        rss_category_request.clone(),
                         mode,
                         tagged_aliases_for_indexer.clone(),
-                        fallback_strategies,
+                        primary_strategies,
                     )
                     .await;
 
-                    for outcome in fallback_outcomes {
+                    for outcome in primary_outcomes {
                         match outcome.response {
                             Ok(mut response) => {
+                                primary_had_success = true;
                                 batch_health.mark_success();
                                 info!(
                                     indexer = indexer_name.as_str(),
                                     strategy = outcome.label.as_str(),
                                     count = response.results.len(),
-                                    "indexer returned fallback results"
+                                    "indexer returned results"
                                 );
                                 stats_tracker.record_query(&indexer_id, &indexer_name, true);
                                 stats_tracker.record_api_limits(
@@ -981,12 +953,13 @@ impl IndexerClient for MultiIndexerSearchClient {
                                 collected_results.append(&mut response.results);
                             }
                             Err(err) => {
+                                primary_had_error = true;
                                 batch_health.mark_error();
                                 warn!(
                                     indexer = indexer_name.as_str(),
                                     strategy = outcome.label.as_str(),
                                     error = %err,
-                                    "indexer fallback search failed"
+                                    "indexer search failed"
                                 );
                                 stats_tracker.record_query(&indexer_id, &indexer_name, false);
 
@@ -1000,24 +973,110 @@ impl IndexerClient for MultiIndexerSearchClient {
                             }
                         }
                     }
-                }
 
-                batch_health
-                    .apply(&backoff_tracker, &indexer_id, &indexer_name)
-                    .await;
+                    if should_run_fallback_tier(
+                        &collected_results,
+                        primary_had_success,
+                        primary_had_error,
+                        &fallback_strategies,
+                    ) {
+                        info!(
+                            indexer = indexer_name.as_str(),
+                            facet = facet.as_str(),
+                            query = search_query.as_str(),
+                            reason = "zero_id_results",
+                            "indexer search falling back to title tier"
+                        );
 
-                (
-                    indexer_id,
-                    indexer_name,
-                    Ok(IndexerSearchResponse {
-                        results: collected_results,
-                        api_current: None,
-                        api_max: None,
-                        grab_current: None,
-                        grab_max: None,
-                    }),
-                )
-            });
+                        let fallback_outcomes = Self::execute_strategy_tier(
+                            client,
+                            category_for_indexer,
+                            facet,
+                            rss_category_request,
+                            mode,
+                            tagged_aliases_for_indexer.clone(),
+                            fallback_strategies,
+                        )
+                        .await;
+
+                        for outcome in fallback_outcomes {
+                            match outcome.response {
+                                Ok(mut response) => {
+                                    batch_health.mark_success();
+                                    info!(
+                                        indexer = indexer_name.as_str(),
+                                        strategy = outcome.label.as_str(),
+                                        count = response.results.len(),
+                                        "indexer returned fallback results"
+                                    );
+                                    stats_tracker.record_query(&indexer_id, &indexer_name, true);
+                                    stats_tracker.record_api_limits(
+                                        &indexer_id,
+                                        response.api_current,
+                                        response.api_max,
+                                        response.grab_current,
+                                        response.grab_max,
+                                    );
+                                    backoff_tracker.record_success(&indexer_id).await;
+
+                                    record_strategy_metrics(
+                                        &indexer_name,
+                                        &outcome.label,
+                                        "success",
+                                        outcome.elapsed,
+                                        Some(response.results.len()),
+                                    );
+
+                                    filter_strategy_results(
+                                        &mut response.results,
+                                        &search_query,
+                                        season,
+                                        episode,
+                                        &tagged_aliases_for_indexer,
+                                        outcome.title_guard_mode,
+                                        &outcome.label,
+                                    );
+                                    collected_results.append(&mut response.results);
+                                }
+                                Err(err) => {
+                                    batch_health.mark_error();
+                                    warn!(
+                                        indexer = indexer_name.as_str(),
+                                        strategy = outcome.label.as_str(),
+                                        error = %err,
+                                        "indexer fallback search failed"
+                                    );
+                                    stats_tracker.record_query(&indexer_id, &indexer_name, false);
+
+                                    record_strategy_metrics(
+                                        &indexer_name,
+                                        &outcome.label,
+                                        "error",
+                                        outcome.elapsed,
+                                        None,
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    batch_health
+                        .apply(&backoff_tracker, &indexer_id, &indexer_name)
+                        .await;
+
+                    (
+                        indexer_id,
+                        indexer_name,
+                        Ok(IndexerSearchResponse {
+                            results: collected_results,
+                            api_current: None,
+                            api_max: None,
+                            grab_current: None,
+                            grab_max: None,
+                        }),
+                    )
+                });
+            }
         }
 
         let mut all_results: Vec<IndexerSearchResult> = Vec::new();
@@ -1551,6 +1610,7 @@ mod tests {
         query: String,
         ids: HashMap<String, String>,
         facet: Option<String>,
+        categories: Vec<String>,
         season: Option<u32>,
         episode: Option<u32>,
         absolute_episode: Option<u32>,
@@ -1571,7 +1631,7 @@ mod tests {
             ids: HashMap<String, String>,
             _category: Option<String>,
             facet: Option<String>,
-            _newznab_categories: Option<Vec<String>>,
+            newznab_categories: Option<Vec<String>>,
             _indexer_routing: Option<IndexerRoutingPlan>,
             _mode: SearchMode,
             season: Option<u32>,
@@ -1583,6 +1643,7 @@ mod tests {
                 query,
                 ids,
                 facet,
+                categories: newznab_categories.unwrap_or_default(),
                 season,
                 episode,
                 absolute_episode,
@@ -1780,6 +1841,88 @@ mod tests {
 
         assert!(response.results.is_empty());
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn rss_sync_search_with_newznab_categories_still_uses_rss_mode() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let client = MultiIndexerSearchClient::new(
+            Arc::new(MockIndexerConfigRepository {
+                configs: vec![mock_indexer_config()],
+            }),
+            Arc::new(MockIndexerStatsTracker),
+            Arc::new(MockIndexerPluginProvider {
+                rss: true,
+                calls: calls.clone(),
+            }),
+        );
+
+        let response = client
+            .search(
+                String::new(),
+                HashMap::new(),
+                None,
+                None,
+                Some(vec!["2000".into(), "5030".into()]),
+                None,
+                SearchMode::Auto,
+                None,
+                None,
+                None,
+                vec![],
+            )
+            .await
+            .expect("rss sync search with categories should succeed");
+
+        assert!(response.results.is_empty());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn rss_sync_search_runs_each_newznab_category_in_a_separate_request() {
+        let mut caps = movie_caps();
+        caps.rss = true;
+        let (client, calls) =
+            scripted_search_client(caps, |call| match call.categories.as_slice() {
+                [category] if category == "2000" => {
+                    response_with_titles(&["Movies.Release.2000.1080p.WEB-DL"])
+                }
+                [category] if category == "5030" => {
+                    response_with_titles(&["Series.Release.5030.720p.WEB-DL"])
+                }
+                other => Err(AppError::Validation(format!(
+                    "unexpected rss categories: {:?}",
+                    other
+                ))),
+            });
+
+        let response = client
+            .search(
+                String::new(),
+                HashMap::new(),
+                None,
+                None,
+                Some(vec!["2000".into(), "5030".into()]),
+                None,
+                SearchMode::Auto,
+                None,
+                None,
+                None,
+                vec![],
+            )
+            .await
+            .expect("rss sync search should fan out per category");
+
+        let calls = calls.lock().expect("call log mutex");
+        let mut categories: Vec<Vec<String>> =
+            calls.iter().map(|call| call.categories.clone()).collect();
+        categories.sort();
+
+        assert_eq!(
+            categories,
+            vec![vec!["2000".to_string()], vec!["5030".to_string()]]
+        );
+        assert_eq!(response.results.len(), 2);
     }
 
     #[tokio::test]

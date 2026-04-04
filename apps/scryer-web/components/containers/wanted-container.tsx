@@ -507,55 +507,57 @@ export const WantedContainer = memo(function WantedContainer({ onOpenOverview }:
   );
 
   return (
-    <WantedView
-      tab={tab}
-      onTabChange={setTab}
-      wantedState={{
-        items,
-        total,
-        loading,
-        statusFilter,
-        setStatusFilter,
-        mediaTypeFilter,
-        setMediaTypeFilter,
-        offset,
-        setOffset,
-        limit,
-        refreshItems,
-        expandedItemId,
-        decisions,
-        decisionsLoading,
-        loadDecisions,
-        triggerSearch,
-        pauseItem,
-        resumeItem,
-        resetItem,
-      }}
-      cutoffState={{
-        items: cutoffItems,
-        loading: cutoffLoading,
-        facetFilter: cutoffFacetFilter,
-        setFacetFilter: setCutoffFacetFilter,
-        searchingId: cutoffSearchingId,
-        bulkSearching,
-        bulkProgress,
-        triggerSearch: cutoffTriggerSearch,
-        triggerBulkSearch: cutoffBulkSearch,
-        cancelBulkSearch,
-      }}
-      calendarState={{
-        episodes: calendarEpisodes,
-        loading: calendarLoading,
-        onDateRangeChange: handleCalendarDateRangeChange,
-        onEpisodeClick: handleCalendarEpisodeClick,
-      }}
-      pendingState={{
-        items: pendingItems,
-        loading: pendingLoading,
-        refreshItems: refreshPending,
-        forceGrab: forceGrabPending,
-        dismiss: dismissPending,
-      }}
-    />
+    <div className="flex h-full min-h-0 flex-col">
+      <WantedView
+        tab={tab}
+        onTabChange={setTab}
+        wantedState={{
+          items,
+          total,
+          loading,
+          statusFilter,
+          setStatusFilter,
+          mediaTypeFilter,
+          setMediaTypeFilter,
+          offset,
+          setOffset,
+          limit,
+          refreshItems,
+          expandedItemId,
+          decisions,
+          decisionsLoading,
+          loadDecisions,
+          triggerSearch,
+          pauseItem,
+          resumeItem,
+          resetItem,
+        }}
+        cutoffState={{
+          items: cutoffItems,
+          loading: cutoffLoading,
+          facetFilter: cutoffFacetFilter,
+          setFacetFilter: setCutoffFacetFilter,
+          searchingId: cutoffSearchingId,
+          bulkSearching,
+          bulkProgress,
+          triggerSearch: cutoffTriggerSearch,
+          triggerBulkSearch: cutoffBulkSearch,
+          cancelBulkSearch,
+        }}
+        calendarState={{
+          episodes: calendarEpisodes,
+          loading: calendarLoading,
+          onDateRangeChange: handleCalendarDateRangeChange,
+          onEpisodeClick: handleCalendarEpisodeClick,
+        }}
+        pendingState={{
+          items: pendingItems,
+          loading: pendingLoading,
+          refreshItems: refreshPending,
+          forceGrab: forceGrabPending,
+          dismiss: dismissPending,
+        }}
+      />
+    </div>
   );
 });

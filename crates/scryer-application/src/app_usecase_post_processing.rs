@@ -1,8 +1,9 @@
-use crate::{ActivityChannel, ActivityKind, ActivitySeverity, AppUseCase};
+use crate::AppUseCase;
 use chrono::Utc;
 use scryer_domain::{
-    ExecutionMode, Id, MediaFacet, PostProcessingScript, PostProcessingScriptRun, ScriptRunStatus,
-    ScriptType,
+    DomainEventPayload, DomainEventStream, DomainExternalIds, ExecutionMode, Id, MediaFacet,
+    NewDomainEvent, PostProcessingCompletedEventData, PostProcessingResult, PostProcessingScript,
+    PostProcessingScriptRun, ScriptRunStatus, ScriptType, TitleContextSnapshot,
 };
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -423,46 +424,59 @@ async fn execute_script(
 }
 
 async fn log_run_activity(ctx: &PostProcessingContext, run: &PostProcessingScriptRun) {
-    let (severity, message) = match run.status {
-        ScriptRunStatus::Success => (
-            ActivitySeverity::Success,
-            format!(
-                "Post-processing '{}' succeeded for '{}'",
-                run.script_name, ctx.title_name
-            ),
-        ),
-        ScriptRunStatus::Timeout => (
-            ActivitySeverity::Warning,
-            format!(
-                "Post-processing '{}' timed out for '{}'",
-                run.script_name, ctx.title_name
-            ),
-        ),
-        _ => (
-            ActivitySeverity::Warning,
-            format!(
-                "Post-processing '{}' failed (exit {}) for '{}'",
-                run.script_name,
-                run.exit_code
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "n/a".into()),
-                ctx.title_name
-            ),
-        ),
+    let result = match run.status {
+        ScriptRunStatus::Success => PostProcessingResult::Succeeded,
+        ScriptRunStatus::Timeout => PostProcessingResult::TimedOut,
+        _ => PostProcessingResult::Failed,
     };
+
+    if let Ok(Some(title)) = ctx.app.services.titles.get_by_id(&ctx.title_id).await {
+        ctx.app
+            .emit_post_processing_completed_event(
+                ctx.actor_id.clone(),
+                &title,
+                run.script_name.clone(),
+                result,
+                run.exit_code,
+            )
+            .await;
+        return;
+    }
+
+    let mut external_ids = DomainExternalIds::default();
+    external_ids.imdb_id = ctx.imdb_id.clone();
+    external_ids.tvdb_id = ctx.tvdb_id.clone();
 
     let _ = ctx
         .app
         .services
-        .record_activity_event(
-            ctx.actor_id.clone(),
-            Some(ctx.title_id.clone()),
-            None,
-            ActivityKind::PostProcessingCompleted,
-            message,
-            severity,
-            vec![ActivityChannel::WebUi],
-        )
+        .append_domain_event(NewDomainEvent {
+            event_id: Id::new().0,
+            occurred_at: Utc::now(),
+            actor_user_id: ctx.actor_id.clone(),
+            title_id: Some(ctx.title_id.clone()),
+            facet: Some(ctx.facet.clone()),
+            correlation_id: None,
+            causation_id: None,
+            schema_version: 1,
+            stream: DomainEventStream::Title {
+                title_id: ctx.title_id.clone(),
+            },
+            payload: DomainEventPayload::PostProcessingCompleted(
+                PostProcessingCompletedEventData {
+                    title: TitleContextSnapshot {
+                        title_name: ctx.title_name.clone(),
+                        facet: ctx.facet.clone(),
+                        external_ids,
+                        poster_url: None,
+                        year: ctx.year,
+                    },
+                    script_name: run.script_name.clone(),
+                    result,
+                    exit_code: run.exit_code,
+                },
+            ),
+        })
         .await;
 }
 

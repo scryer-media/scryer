@@ -186,7 +186,6 @@ async fn setup() -> (
     let titles: Arc<dyn scryer_application::TitleRepository> = Arc::new(db.clone());
     let shows: Arc<dyn scryer_application::ShowRepository> = Arc::new(db.clone());
     let users: Arc<dyn scryer_application::UserRepository> = Arc::new(db.clone());
-    let events: Arc<dyn scryer_application::EventRepository> = Arc::new(db.clone());
     let indexer_configs_repo: Arc<dyn scryer_application::IndexerConfigRepository> =
         Arc::new(db.clone());
     let download_client_configs: Arc<dyn scryer_application::DownloadClientConfigRepository> =
@@ -201,7 +200,6 @@ async fn setup() -> (
         titles,
         shows,
         users,
-        events,
         indexer_configs_repo,
         Arc::new(indexer_client),
         Arc::new(nzbget),

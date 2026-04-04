@@ -1,5 +1,6 @@
 import { Fragment, lazy, Suspense } from "react";
 import { useTranslate } from "@/lib/context/translate-context";
+import type { Translate } from "@/components/root/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -83,6 +84,25 @@ type WantedViewState = {
 
 const STATUS_OPTIONS: WantedStatus[] = ["wanted", "grabbed", "completed", "paused"];
 const MEDIA_TYPE_OPTIONS: WantedMediaType[] = ["movie", "episode", "interstitial_movie"];
+
+function formatWantedMediaType(mediaType: WantedMediaType) {
+  return mediaType === "interstitial_movie" ? "franchise movie" : mediaType;
+}
+
+function wantedItemContext(item: WantedItem, t: Translate) {
+  if (item.mediaType === "interstitial_movie") {
+    return t("wanted.context.franchiseMovie");
+  }
+  if (item.mediaType === "episode" && item.seasonNumber) {
+    return t("wanted.context.seasonEpisode", {
+      seasonNumber: item.seasonNumber,
+    });
+  }
+  if (item.mediaType === "episode") {
+    return t("wanted.context.episode");
+  }
+  return t("wanted.context.movie");
+}
 
 function statusBadge(status: WantedStatus) {
   const colors: Record<WantedStatus, string> = {
@@ -194,7 +214,7 @@ export function WantedView({ tab, onTabChange, wantedState, cutoffState, calenda
   const t = useTranslate();
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 md:flex md:h-full md:min-h-0 md:flex-col md:gap-4 md:space-y-0">
       <div className="overflow-x-auto">
         <ToggleGroup
           type="single"
@@ -275,9 +295,10 @@ function WantedItemsCard({ state }: { state: WantedViewState }) {
 
   const hasPrev = offset > 0;
   const hasNext = offset + limit < total;
+  const shouldScrollDesktopTable = !isMobile;
 
   return (
-    <Card>
+    <Card className={shouldScrollDesktopTable ? "flex min-h-0 flex-1 flex-col" : undefined}>
       <CardHeader>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <CardTitle>{t("wanted.title")}</CardTitle>
@@ -293,7 +314,7 @@ function WantedItemsCard({ state }: { state: WantedViewState }) {
           </Button>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className={shouldScrollDesktopTable ? "flex min-h-0 flex-1 flex-col space-y-3" : undefined}>
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
           <Select
             value={statusFilter ?? "__all__"}
@@ -329,7 +350,7 @@ function WantedItemsCard({ state }: { state: WantedViewState }) {
               <SelectItem value="__all__">{t("wanted.allTypes")}</SelectItem>
               {MEDIA_TYPE_OPTIONS.map((m) => (
                 <SelectItem key={m} value={m}>
-                  {m === "interstitial_movie" ? "franchise movie" : m}
+                  {formatWantedMediaType(m)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -357,12 +378,15 @@ function WantedItemsCard({ state }: { state: WantedViewState }) {
                         <p className="break-words text-sm font-medium text-foreground">
                           {item.titleName ?? item.titleId.slice(0, 8)}
                         </p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {wantedItemContext(item, t)}
+                        </p>
                       </button>
                       <div className="mt-2 flex flex-wrap gap-2">
                         {statusBadge(item.status)}
                         {phaseBadge(item.searchPhase)}
                         <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                          {item.mediaType === "interstitial_movie" ? "franchise movie" : item.mediaType}
+                          {formatWantedMediaType(item.mediaType)}
                         </span>
                       </div>
                     </div>
@@ -448,9 +472,17 @@ function WantedItemsCard({ state }: { state: WantedViewState }) {
             </div>
           )
         ) : (
-          <div className="overflow-x-auto">
+          <div
+            className={
+              shouldScrollDesktopTable
+                ? "min-h-0 flex-1 overflow-auto rounded-xl border border-border/60"
+                : "overflow-x-auto"
+            }
+          >
             <Table className="min-w-[980px]">
-              <TableHeader>
+              <TableHeader
+                className={shouldScrollDesktopTable ? "[&_th]:sticky [&_th]:top-0 [&_th]:z-10" : undefined}
+              >
                 <TableRow>
                   <TableHead className="w-8" />
                   <TableHead>{t("wanted.colTitle")}</TableHead>
@@ -479,10 +511,17 @@ function WantedItemsCard({ state }: { state: WantedViewState }) {
                           )}
                         </button>
                       </TableCell>
-                      <TableCell className="max-w-[200px] truncate text-sm" title={item.titleName ?? item.titleId}>
-                        {item.titleName ?? item.titleId.slice(0, 8)}
+                      <TableCell className="max-w-[260px] text-sm" title={item.titleName ?? item.titleId}>
+                        <div className="min-w-0">
+                          <div className="truncate font-medium">
+                            {item.titleName ?? item.titleId.slice(0, 8)}
+                          </div>
+                          <div className="truncate text-xs text-muted-foreground">
+                            {wantedItemContext(item, t)}
+                          </div>
+                        </div>
                       </TableCell>
-                      <TableCell>{item.mediaType === "interstitial_movie" ? "franchise movie" : item.mediaType}</TableCell>
+                      <TableCell>{formatWantedMediaType(item.mediaType)}</TableCell>
                       <TableCell>{statusBadge(item.status)}</TableCell>
                       <TableCell>{phaseBadge(item.searchPhase)}</TableCell>
                       <TableCell className="text-xs">

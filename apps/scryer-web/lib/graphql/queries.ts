@@ -31,6 +31,9 @@ const TITLE_CORE_FIELDS = `
     metadataLanguage
     metadataFetchedAt
     qualityProfileId
+    requiredAudioLanguagesOverride
+    effectiveRequiredAudioLanguages
+    inheritsRequiredAudioLanguages
     rootFolderPath
     monitorType
     useSeasonFolders
@@ -916,8 +919,6 @@ const qualityProfileCriteriaFields = `
       preferRemux
       allowBdDisk
       allowUpgrades
-      requiredAudioLanguages
-      scoringPersona
       scoringOverrides {
         allowX265Non4K
         blockDvWithoutFallback
@@ -926,14 +927,11 @@ const qualityProfileCriteriaFields = `
         blockUpscaled
       }
       cutoffTier
-      minScoreToGrab
-      facetPersonaOverrides {
-        scope
-        persona
-      }`;
+      minScoreToGrab`;
 
 const qualityProfileSettingsFieldSelection = `
     globalProfileId
+    globalScoringPersona
     profiles {
       id
       name
@@ -944,6 +942,12 @@ const qualityProfileSettingsFieldSelection = `
       scope
       overrideProfileId
       effectiveProfileId
+      inheritsGlobal
+    }
+    categoryPersonaSelections {
+      scope
+      overridePersona
+      effectivePersona
       inheritsGlobal
     }`;
 
@@ -969,6 +973,7 @@ const mediaSettingsFieldSelection = `
       path
       isDefault
     }
+    requiredAudioLanguages
     renameTemplate
     renameCollisionPolicy
     renameMissingMetadataPolicy
@@ -1271,6 +1276,8 @@ export const wantedItemsQuery = `query WantedItems($status: WantedStatusValue, $
       titleId
       titleName
       episodeId
+      collectionId
+      seasonNumber
       mediaType
       searchPhase
       nextSearchAt
@@ -1355,12 +1362,6 @@ export const ruleSetsQuery = `query RuleSets {
     managedKey
     createdAt
     updatedAt
-  }
-}`;
-
-export const convenienceSettingsQuery = `query ConvenienceSettings {
-  convenienceSettings {
-    requiredAudio { scope languages ruleSetId }
   }
 }`;
 

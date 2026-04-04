@@ -1,5 +1,7 @@
 use scryer_application::{
-    QualityProfile, default_quality_profile_1080p_for_search, default_quality_profile_for_search,
+    QualityProfile, REQUIRED_AUDIO_LANGUAGES_KEY, SCORING_PERSONA_KEY,
+    TITLE_REQUIRED_AUDIO_OVERRIDE_KEY, default_quality_profile_1080p_for_search,
+    default_quality_profile_for_search,
 };
 use scryer_infrastructure::{SettingsValueRecord, SqliteServices};
 use serde_json::{Value, json};
@@ -237,6 +239,30 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             key_name: QUALITY_PROFILE_CATALOG_KEY,
             data_type: "string",
             default_value_json: "[]",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: SCORING_PERSONA_KEY,
+            data_type: "string",
+            default_value_json: "\"Balanced\"",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: REQUIRED_AUDIO_LANGUAGES_KEY,
+            data_type: "json",
+            default_value_json: "[]",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: TITLE_REQUIRED_AUDIO_OVERRIDE_KEY,
+            data_type: "json",
+            default_value_json: "null",
             is_sensitive: false,
         },
         ServiceSettingSeed {

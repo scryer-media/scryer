@@ -67,6 +67,9 @@ export type TitleDetail = {
   aliases: string[];
   metadataLanguage: string | null;
   metadataFetchedAt: string | null;
+  requiredAudioLanguagesOverride?: string[] | null;
+  effectiveRequiredAudioLanguages?: string[];
+  inheritsRequiredAudioLanguages?: boolean;
   qualityProfileId?: string | null;
   rootFolderPath?: string | null;
   monitorType?: string | null;
@@ -886,6 +889,7 @@ export const MovieOverviewContainer = React.memo(function MovieOverviewContainer
         onQueue={queueRelease}
         onSearchMonitored={handleSearchMonitored}
         onRefreshAndScan={handleRefreshAndScan}
+        onTitleChanged={refreshTitleDetail}
         onPreviewRename={previewRename}
         onApplyRename={applyRename}
         onBackToList={onBackToList}

@@ -63,14 +63,11 @@ type QualityProfileCriteriaPayload = {
   dolby_vision_allowed: boolean;
   detected_hdr_allowed: boolean;
   prefer_remux: boolean;
-  required_audio_languages: string[];
   allow_bd_disk: boolean;
   allow_upgrades: boolean;
-  scoring_persona: ScoringPersonaId;
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string | null;
   min_score_to_grab: number | null;
-  facet_persona_overrides: Record<string, ScoringPersonaId>;
 };
 
 type QualityProfileDraft = {
@@ -88,14 +85,11 @@ type QualityProfileDraft = {
   dolby_vision_allowed: boolean;
   detected_hdr_allowed: boolean;
   prefer_remux: boolean;
-  required_audio_languages: string[];
   allow_bd_disk: boolean;
   allow_upgrades: boolean;
-  scoring_persona: ScoringPersonaId;
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string;
   min_score_to_grab: number | null;
-  facet_persona_overrides: Record<string, ScoringPersonaId>;
 };
 
 type QualityProfileListField =
@@ -153,9 +147,19 @@ type SettingsQualityProfilesSectionProps = {
   toProfileOptions: (profiles: ParsedQualityProfile[]) => Array<{ value: string; label: string }>;
   globalQualityProfileId: string;
   setGlobalQualityProfileId: (value: string) => void;
+  globalScoringPersona: ScoringPersonaId;
   categoryQualityProfileOverrides: Record<ViewCategoryId, string>;
   setCategoryQualityProfileOverrides: React.Dispatch<
     React.SetStateAction<Record<ViewCategoryId, string>>
+  >;
+  categoryPersonaSelections: Record<
+    ViewCategoryId,
+    {
+      scope: ViewCategoryId;
+      overridePersona: ScoringPersonaId | null;
+      effectivePersona: ScoringPersonaId;
+      inheritsGlobal: boolean;
+    }
   >;
   mediaSettingsLoading: boolean;
   initialLoadComplete: boolean;
@@ -164,6 +168,11 @@ type SettingsQualityProfilesSectionProps = {
   categoryQualityProfileSaving: Record<ViewCategoryId, boolean>;
   saveCategoryQualityProfile: (scopeId: ViewCategoryId, value: string) => Promise<void> | void;
   saveGlobalQualityProfile: (value: string) => Promise<void> | void;
+  saveGlobalScoringPersona: (value: ScoringPersonaId) => Promise<void> | void;
+  saveCategoryScoringPersona: (
+    scopeId: ViewCategoryId,
+    value: ScoringPersonaId | null,
+  ) => Promise<void> | void;
   archivalQualityOptions: Array<{ value: string; label: string }>;
   deleteQualityProfile: (profileId: string) => Promise<void>;
 };
@@ -428,8 +437,10 @@ export function SettingsQualityProfilesSection({
   toProfileOptions,
   globalQualityProfileId,
   setGlobalQualityProfileId,
+  globalScoringPersona,
   categoryQualityProfileOverrides,
   setCategoryQualityProfileOverrides,
+  categoryPersonaSelections,
   mediaSettingsLoading,
   initialLoadComplete,
   qualityProfilesSaving,
@@ -437,6 +448,8 @@ export function SettingsQualityProfilesSection({
   categoryQualityProfileSaving,
   saveCategoryQualityProfile,
   saveGlobalQualityProfile,
+  saveGlobalScoringPersona,
+  saveCategoryScoringPersona,
   archivalQualityOptions,
   deleteQualityProfile,
 }: SettingsQualityProfilesSectionProps) {
@@ -444,9 +457,18 @@ export function SettingsQualityProfilesSection({
   const [globalQualityProfileDraft, setGlobalQualityProfileDraft] = React.useState(
     globalQualityProfileId,
   );
+  const [globalScoringPersonaDraft, setGlobalScoringPersonaDraft] =
+    React.useState<ScoringPersonaId>(globalScoringPersona);
   const [categoryQualityProfileDrafts, setCategoryQualityProfileDrafts] = React.useState<
     Record<ViewCategoryId, string>
   >(categoryQualityProfileOverrides);
+  const [categoryPersonaDrafts, setCategoryPersonaDrafts] = React.useState<
+    Record<ViewCategoryId, string>
+  >({
+    movie: categoryPersonaSelections.movie.overridePersona ?? "__default__",
+    series: categoryPersonaSelections.series.overridePersona ?? "__default__",
+    anime: categoryPersonaSelections.anime.overridePersona ?? "__default__",
+  });
   const [pendingDeleteProfile, setPendingDeleteProfile] = React.useState<{ id: string; name: string } | null>(null);
 
   React.useEffect(() => {
@@ -454,8 +476,20 @@ export function SettingsQualityProfilesSection({
   }, [globalQualityProfileId]);
 
   React.useEffect(() => {
+    setGlobalScoringPersonaDraft(globalScoringPersona);
+  }, [globalScoringPersona]);
+
+  React.useEffect(() => {
     setCategoryQualityProfileDrafts(categoryQualityProfileOverrides);
   }, [categoryQualityProfileOverrides]);
+
+  React.useEffect(() => {
+    setCategoryPersonaDrafts({
+      movie: categoryPersonaSelections.movie.overridePersona ?? "__default__",
+      series: categoryPersonaSelections.series.overridePersona ?? "__default__",
+      anime: categoryPersonaSelections.anime.overridePersona ?? "__default__",
+    });
+  }, [categoryPersonaSelections]);
 
   const handleCategoryProfileOverrideChange = React.useCallback(
     (scopeId: ViewCategoryId, rawValue: string) => {
@@ -485,6 +519,41 @@ export function SettingsQualityProfilesSection({
       void saveGlobalQualityProfile(normalized);
     },
     [initialLoadComplete, globalQualityProfileId, saveGlobalQualityProfile, setGlobalQualityProfileId],
+  );
+
+  const handleGlobalScoringPersonaChange = React.useCallback(
+    (value: string) => {
+      if (!initialLoadComplete) return;
+      const normalized = value as ScoringPersonaId;
+      if (globalScoringPersona === normalized) return;
+      setGlobalScoringPersonaDraft(normalized);
+      void saveGlobalScoringPersona(normalized);
+    },
+    [
+      globalScoringPersona,
+      initialLoadComplete,
+      saveGlobalScoringPersona,
+    ],
+  );
+
+  const handleCategoryPersonaChange = React.useCallback(
+    (scopeId: ViewCategoryId, value: string) => {
+      if (!initialLoadComplete) return;
+      const normalizedValue = value.trim();
+      const previousValue = categoryPersonaDrafts[scopeId];
+      if (previousValue === normalizedValue) return;
+      setCategoryPersonaDrafts((previous) => ({
+        ...previous,
+        [scopeId]: normalizedValue,
+      }));
+      void saveCategoryScoringPersona(
+        scopeId,
+        normalizedValue === "__default__"
+          ? null
+          : (normalizedValue as ScoringPersonaId),
+      );
+    },
+    [categoryPersonaDrafts, initialLoadComplete, saveCategoryScoringPersona],
   );
 
   // Keep for backwards compat but these are now no-ops since we save on change
@@ -758,32 +827,9 @@ export function SettingsQualityProfilesSection({
               </span>
             </summary>
             <div className="mt-3 space-y-4">
-              {/* Persona */}
-              <label className="space-y-2">
-                <Label className="inline-flex items-center gap-2">
-                  {t("qualityProfile.scoringPersona")}
-                  <InfoHelp
-                    ariaLabel={t("qualityProfile.scoringPersona")}
-                    text={t("qualityProfile.scoringPersonaInfo")}
-                  />
-                </Label>
-                <Select
-                  value={qualityProfileDraft.scoring_persona}
-                  onValueChange={(v) =>
-                    updateQualityProfileDraft({ scoring_persona: v as ScoringPersonaId, scoring_overrides: {} })
-                  }
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Balanced">{t("qualityProfile.personaBalanced")}</SelectItem>
-                    <SelectItem value="Audiophile">{t("qualityProfile.personaAudiophile")}</SelectItem>
-                    <SelectItem value="Efficient">{t("qualityProfile.personaEfficient")}</SelectItem>
-                    <SelectItem value="Compatible">{t("qualityProfile.personaCompatible")}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </label>
+              <p className="text-sm text-muted-foreground">
+                {t("qualityProfile.scoringPersonaMovedInfo")}
+              </p>
 
               {/* Preferences */}
               <div className="space-y-3">
@@ -907,7 +953,7 @@ export function SettingsQualityProfilesSection({
                     ["block_upscaled", "qualityProfile.overrideBlockUpscaled", "qualityProfile.overrideBlockUpscaledInfo"],
                   ] as const).map(([key, labelKey, infoKey]) => {
                     const explicitValue = qualityProfileDraft.scoring_overrides[key as keyof ScoringOverridesPayload];
-                    const personaDefault = PERSONA_OVERRIDE_DEFAULTS[qualityProfileDraft.scoring_persona]?.[key] ?? false;
+                    const personaDefault = PERSONA_OVERRIDE_DEFAULTS[globalScoringPersonaDraft]?.[key] ?? false;
                     const effectiveValue = explicitValue ?? personaDefault;
                     return (
                       <div key={key} className="flex items-center gap-3">
@@ -1107,6 +1153,31 @@ export function SettingsQualityProfilesSection({
             </Select>
           </label>
 
+          <label>
+            <Label className="mb-2 inline-flex items-center gap-2">
+              {t("qualityProfile.scoringPersona")}
+              <InfoHelp
+                text={t("qualityProfile.scoringPersonaInfo")}
+                ariaLabel={t("qualityProfile.scoringPersona")}
+              />
+            </Label>
+            <Select
+              value={globalScoringPersonaDraft}
+              onValueChange={handleGlobalScoringPersonaChange}
+              disabled={mediaSettingsLoading || qualityProfilesSaving}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="Balanced">{t("qualityProfile.personaBalanced")}</SelectItem>
+                <SelectItem value="Audiophile">{t("qualityProfile.personaAudiophile")}</SelectItem>
+                <SelectItem value="Efficient">{t("qualityProfile.personaEfficient")}</SelectItem>
+                <SelectItem value="Compatible">{t("qualityProfile.personaCompatible")}</SelectItem>
+              </SelectContent>
+            </Select>
+          </label>
+
           <div className="space-y-5">
             <CardTitle className="inline-flex items-center gap-2 text-base">
               {t("settings.qualityProfileOverridesLabel")}
@@ -1121,7 +1192,7 @@ export function SettingsQualityProfilesSection({
             </div>
             {Object.keys(qualityCategoryLabels).map((scopeKey) => {
               const scopeId = scopeKey as ViewCategoryId;
-              const overridePersona = qualityProfileDraft.facet_persona_overrides[scopeId];
+              const overridePersona = categoryPersonaDrafts[scopeId];
               return (
                 <div key={scopeId} className="space-y-2">
                   <Label>{qualityCategoryLabels[scopeId]}</Label>
@@ -1155,18 +1226,12 @@ export function SettingsQualityProfilesSection({
                       </SelectContent>
                     </Select>
                     <Select
-                      value={overridePersona ?? "__default__"}
-                      onValueChange={(v) => {
-                        const next = { ...qualityProfileDraft.facet_persona_overrides };
-                        if (v === "__default__") {
-                          delete next[scopeId];
-                        } else {
-                          next[scopeId] = v as ScoringPersonaId;
-                        }
-                        updateQualityProfileDraft({ facet_persona_overrides: next });
-                        // Save immediately on selection
-                        setTimeout(() => void updateQualityProfilesGlobal(), 0);
-                      }}
+                      value={overridePersona}
+                      onValueChange={(v) => handleCategoryPersonaChange(scopeId, v)}
+                      disabled={
+                        mediaSettingsLoading ||
+                        categoryQualityProfileSaving[scopeId]
+                      }
                     >
                       <SelectTrigger className="w-full">
                         <SelectValue />
