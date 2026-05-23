@@ -34,7 +34,7 @@ pub use notification::{
     to_script_environment, to_webhook_json,
 };
 
-pub const SDK_VERSION: &str = "1.6.0";
+pub const SDK_VERSION: &str = "2.0.0";
 
 pub fn current_sdk_constraint() -> String {
     legacy_sdk_constraint(SDK_VERSION)
@@ -288,6 +288,7 @@ pub const EXPORT_NOTIFICATION_SEND: &str = "scryer_notification_send";
 pub const EXPORT_SUBTITLE_SEARCH: &str = "scryer_subtitle_search";
 pub const EXPORT_SUBTITLE_DOWNLOAD: &str = "scryer_subtitle_download";
 pub const EXPORT_SUBTITLE_GENERATE: &str = "scryer_subtitle_generate";
+pub const EXPORT_SUBSYNC_ALIGN: &str = "scryer_subsync_align";
 pub const EXPORT_AUDIO_TRANSCODE_DESCRIBE: &str = "scryer_audio_transcode_describe";
 pub const EXPORT_AUDIO_TRANSCODE: &str = "scryer_audio_transcode";
 
@@ -1459,6 +1460,58 @@ pub struct AudioTranscodeResponse {
     pub message: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SubtitleSyncAlignSkipReason {
+    AudioDecodeFailed,
+    NotEnoughReferenceSpans,
+    WeakAlignment,
+    LowAlignmentConsistency,
+    OffsetExceedsMaximum,
+    OffsetTooSmall,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SubtitleTimingSpan {
+    pub start_ms: i64,
+    pub end_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SubtitleSyncAlignInputRef {
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SubtitleSyncAlignRequest {
+    pub input: SubtitleSyncAlignInputRef,
+    pub subtitle_spans: Vec<SubtitleTimingSpan>,
+    pub max_offset_seconds: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<AudioStreamSelector>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_codec: Option<AudioTranscodeCodec>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SubtitleSyncAlignResponse {
+    pub applied: bool,
+    pub offset_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consistency_ratio: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nosplit_score: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split_score: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_reason: Option<SubtitleSyncAlignSkipReason>,
+    pub backend: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PluginDownloadClientAddRequest {
     pub source: PluginDownloadSource,
@@ -2250,7 +2303,7 @@ mod tests {
 
     #[test]
     fn current_sdk_constraint_uses_abi_major_line() {
-        assert_eq!(current_sdk_constraint(), ">=1.0.0, <2.0.0");
+        assert_eq!(current_sdk_constraint(), ">=2.0.0, <3.0.0");
     }
 
     #[test]
@@ -2275,8 +2328,12 @@ mod tests {
 
     #[test]
     fn validate_sdk_contract_accepts_legacy_minor_line_plugin_on_current_host() {
-        validate_sdk_contract("legacy-plugin", "1.5.0", ">=1.5.0, <1.6.0", SDK_VERSION)
-            .expect("legacy minor-line plugin should stay compatible on ABI 1");
+        let error = validate_sdk_contract("legacy-plugin", "1.5.0", ">=1.5.0, <1.6.0", SDK_VERSION)
+            .expect_err("ABI-1 plugin should not validate against ABI-2 host");
+        assert!(
+            error.contains("host sdk_version 2.0.0 does not satisfy sdk_constraint >=1.0.0, <2.0.0"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
