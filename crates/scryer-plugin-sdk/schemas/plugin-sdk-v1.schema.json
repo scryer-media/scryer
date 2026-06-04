@@ -1145,6 +1145,10 @@
         "post_processing_completed",
         "subtitle_downloaded",
         "subtitle_search_failed",
+        "media_request_submitted",
+        "media_request_approved",
+        "media_request_rejected",
+        "media_request_canceled",
         "health_issue",
         "health_restored",
         "application_update",
@@ -3920,6 +3924,16 @@
               "type": "null"
             }
           ]
+        },
+        "media_request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginNotificationMediaRequest"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -4677,6 +4691,71 @@
           ]
         },
         "link": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "PluginNotificationMediaRequest": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "library_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "facet": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requested_quality_profile_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requested_quality_profile_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requested_monitor_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "approved_quality_profile_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "approved_quality_profile_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_title_id": {
           "type": [
             "string",
             "null"

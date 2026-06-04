@@ -34,7 +34,7 @@ pub use notification::{
     to_script_environment, to_webhook_json,
 };
 
-pub const SDK_VERSION: &str = "2.2.0";
+pub const SDK_VERSION: &str = "2.3.0";
 
 pub fn current_sdk_constraint() -> String {
     legacy_sdk_constraint(SDK_VERSION)
@@ -1167,6 +1167,10 @@ pub enum NotificationEventType {
     PostProcessingCompleted,
     SubtitleDownloaded,
     SubtitleSearchFailed,
+    MediaRequestSubmitted,
+    MediaRequestApproved,
+    MediaRequestRejected,
+    MediaRequestCanceled,
     HealthIssue,
     HealthRestored,
     ApplicationUpdate,
@@ -1190,6 +1194,10 @@ impl NotificationEventType {
             Self::PostProcessingCompleted => "post_processing_completed",
             Self::SubtitleDownloaded => "subtitle_downloaded",
             Self::SubtitleSearchFailed => "subtitle_search_failed",
+            Self::MediaRequestSubmitted => "media_request_submitted",
+            Self::MediaRequestApproved => "media_request_approved",
+            Self::MediaRequestRejected => "media_request_rejected",
+            Self::MediaRequestCanceled => "media_request_canceled",
             Self::HealthIssue => "health_issue",
             Self::HealthRestored => "health_restored",
             Self::ApplicationUpdate => "application_update",
@@ -2066,6 +2074,30 @@ pub struct PluginNotificationManualInteraction {
     pub link: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct PluginNotificationMediaRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facet: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_quality_profile_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_quality_profile_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_monitor_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_quality_profile_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_quality_profile_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_title_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PluginNotificationRequest {
     #[serde(default = "default_notification_request_schema_version")]
@@ -2108,6 +2140,8 @@ pub struct PluginNotificationRequest {
     pub application_update: Option<PluginNotificationApplicationUpdate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manual_interaction: Option<PluginNotificationManualInteraction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_request: Option<PluginNotificationMediaRequest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -2302,7 +2336,7 @@ mod tests {
 
     #[test]
     fn current_sdk_constraint_uses_current_v2_minor_floor() {
-        assert_eq!(current_sdk_constraint(), ">=2.2.0, <3.0.0");
+        assert_eq!(current_sdk_constraint(), ">=2.3.0, <3.0.0");
     }
 
     #[test]
@@ -2722,6 +2756,35 @@ mod tests {
     }
 
     #[test]
+    fn notification_media_request_payload_round_trips() {
+        let request = PluginNotificationRequest {
+            event_type: NotificationEventType::MediaRequestApproved,
+            media_request: Some(PluginNotificationMediaRequest {
+                request_id: Some("request-1".to_string()),
+                library_id: Some("library-1".to_string()),
+                status: Some("approved".to_string()),
+                facet: Some("movie".to_string()),
+                requested_quality_profile_id: Some("quality-requested".to_string()),
+                requested_quality_profile_name: Some("Requested HD".to_string()),
+                requested_monitor_type: None,
+                approved_quality_profile_id: Some("quality-approved".to_string()),
+                approved_quality_profile_name: Some("Approved HD".to_string()),
+                created_title_id: Some("title-1".to_string()),
+            }),
+            ..sample_notification_request()
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"event_type\":\"media_request_approved\""));
+        assert!(json.contains("\"media_request\""));
+
+        let parsed: PluginNotificationRequest = serde_json::from_str(&json).unwrap();
+        let media_request = parsed.media_request.expect("media request payload");
+        assert_eq!(media_request.status.as_deref(), Some("approved"));
+        assert_eq!(media_request.created_title_id.as_deref(), Some("title-1"));
+    }
+
+    #[test]
     fn committed_schema_matches_generated_types() {
         let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("schemas/plugin-sdk-v1.schema.json");
@@ -2733,6 +2796,20 @@ mod tests {
     fn notification_schema_stays_provider_neutral() {
         let schema = plugin_sdk_schema_json();
         assert!(!schema.contains("Sonarr"));
+    }
+
+    #[test]
+    fn notification_schema_includes_media_request_events() {
+        let schema = plugin_sdk_schema_json();
+        for event_type in [
+            "media_request_submitted",
+            "media_request_approved",
+            "media_request_rejected",
+            "media_request_canceled",
+        ] {
+            assert!(schema.contains(event_type));
+        }
+        assert!(schema.contains("PluginNotificationMediaRequest"));
     }
 
     fn torrent_capability_fixtures() -> Vec<PluginDescriptor> {
@@ -3215,6 +3292,7 @@ mod tests {
             }],
             application_update: None,
             manual_interaction: None,
+            media_request: None,
         }
     }
 }
