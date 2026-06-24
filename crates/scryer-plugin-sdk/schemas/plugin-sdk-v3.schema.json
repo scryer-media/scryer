@@ -287,6 +287,12 @@
             "null"
           ]
         },
+        "supported_query_facets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "search": {
           "type": "boolean",
           "default": false

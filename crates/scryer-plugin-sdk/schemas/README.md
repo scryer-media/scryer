@@ -9,3 +9,6 @@ Wasm export shape while allowing source-breaking Rust SDK payload updates.
 
 The Rust SDK remains the source of truth for first-party plugins. These schemas are
 for registry validation, fixture tooling, and non-Rust plugin authors.
+
+SDK 3.1 adds `supported_query_facets` on indexer capabilities so providers can
+advertise facet-scoped title/freetext search separately from ID search support.

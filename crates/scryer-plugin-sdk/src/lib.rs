@@ -34,7 +34,7 @@ pub use notification::{
     to_script_environment, to_webhook_json,
 };
 
-pub const SDK_VERSION: &str = "3.0.0";
+pub const SDK_VERSION: &str = "3.1.0";
 
 pub fn current_sdk_constraint() -> String {
     legacy_sdk_constraint(SDK_VERSION)
@@ -772,6 +772,8 @@ pub struct IndexerCapabilities {
     pub episode_param: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query_param: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_query_facets: Vec<String>,
     #[serde(default)]
     pub search: bool,
     #[serde(default)]
@@ -807,6 +809,7 @@ impl Default for IndexerCapabilities {
             season_param: None,
             episode_param: None,
             query_param: None,
+            supported_query_facets: Vec::new(),
             search: false,
             imdb_search: false,
             tvdb_search: false,
@@ -2362,8 +2365,8 @@ mod tests {
     };
 
     #[test]
-    fn current_sdk_constraint_uses_current_v3_major_floor() {
-        assert_eq!(current_sdk_constraint(), ">=3.0.0, <4.0.0");
+    fn current_sdk_constraint_uses_current_v3_minor_floor() {
+        assert_eq!(current_sdk_constraint(), ">=3.1.0, <4.0.0");
     }
 
     #[test]
@@ -2390,14 +2393,14 @@ mod tests {
     fn validate_sdk_contract_rejects_legacy_minor_line_plugin_on_sdk3_host() {
         let err = validate_sdk_contract("legacy-plugin", "1.5.0", ">=1.5.0, <1.6.0", SDK_VERSION)
             .expect_err("legacy minor-line plugin should not load across SDK 3 boundary");
-        assert!(err.contains("host sdk_version 3.0.0"));
+        assert!(err.contains("host sdk_version 3.1.0"));
     }
 
     #[test]
     fn validate_sdk_contract_rejects_sdk2_plugin_on_sdk3_host() {
         let err = validate_sdk_contract("sdk2-plugin", "2.3.0", ">=2.3.0, <3.0.0", SDK_VERSION)
             .expect_err("SDK 2 plugin should not load on SDK 3 host");
-        assert!(err.contains("host sdk_version 3.0.0"));
+        assert!(err.contains("host sdk_version 3.1.0"));
     }
 
     #[test]
@@ -2835,6 +2838,24 @@ mod tests {
             assert!(!provider.capabilities.feed_modes.is_empty());
             assert!(!provider.capabilities.search_inputs.is_empty());
         }
+    }
+
+    #[test]
+    fn indexer_capabilities_round_trip_supported_query_facets() {
+        let capabilities = IndexerCapabilities {
+            query_param: Some("q".to_string()),
+            supported_query_facets: vec!["movie".to_string(), "anime".to_string()],
+            ..IndexerCapabilities::default()
+        };
+
+        let json = serde_json::to_string(&capabilities).unwrap();
+        assert!(json.contains("supported_query_facets"));
+
+        let parsed: IndexerCapabilities = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            parsed.supported_query_facets,
+            vec!["movie".to_string(), "anime".to_string()]
+        );
     }
 
     #[test]
