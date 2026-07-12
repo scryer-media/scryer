@@ -640,6 +640,11 @@ const en: LocaleDictionary = {
   "settings.folderValidationUnknownToken":
     "Folder templates support {title}, {year}, and external ID tokens. Invalid token: {{token}}",
   "settings.folderValidationEmpty": "Folder template cannot be empty",
+  "settings.seasonFolderTemplateLabel": "Season folder template",
+  "settings.seasonFolderTemplatePlaceholder": "Placeholder",
+  "settings.seasonFolderValidationUnknownToken":
+    "Season folder templates only support {season}. Invalid token: {{token}}",
+  "settings.seasonFolderValidationEmpty": "Season folder template cannot be empty",
   "settings.renameTemplateLabel": "Rename template",
   "settings.renameTemplatePlaceholder": "Placeholder",
   "settings.renameTemplateHelp":
@@ -658,6 +663,9 @@ const en: LocaleDictionary = {
   "settings.renameAvailableTokens": "Available tokens",
   "settings.renameLiteralBracesLabel": "Literal braces",
   "settings.renameSpaceFilterLabel": "Replace spaces",
+  "settings.renameAliasTokenLabel": "Sonarr/Radarr-style tokens",
+  "settings.renameAliasTokenHint":
+    "The separator between the words (., _, or space) replaces spaces in the value automatically.",
   "settings.renameTokenTitle": "Title name",
   "settings.renameTokenYear": "Release year",
   "settings.renameTokenQuality": "Quality (e.g. 1080p)",

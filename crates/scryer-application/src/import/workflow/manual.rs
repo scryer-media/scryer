@@ -1330,6 +1330,7 @@ pub async fn execute_manual_import(
         rename_enabled,
         rename_template,
         folder_template,
+        season_folder_template,
     } = resolve_import_paths(app, &title).await?;
     let full_folder_path = effective_title_folder_path(&media_root, &title, &folder_template, None);
     let quality_profile = resolve_import_quality_profile(app, &title).await;
@@ -1459,6 +1460,7 @@ pub async fn execute_manual_import(
             import_id,
             rename_enabled,
             &rename_template,
+            &season_folder_template,
             &full_folder_path,
             &source,
             &parsed,

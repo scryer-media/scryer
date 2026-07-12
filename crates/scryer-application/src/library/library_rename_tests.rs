@@ -233,6 +233,127 @@ fn title_folder_template_accepts_external_id_tokens_and_trims_missing_groups() {
 }
 
 #[test]
+fn folder_template_accepts_dotted_alias_tokens() {
+    validate_title_folder_template("{Movie.Title} ({Release.Year})")
+        .expect("dotted alias tokens resolve to supported folder-level tokens");
+    validate_title_folder_template("{Series.Title}")
+        .expect("dotted alias tokens resolve to supported folder-level tokens");
+}
+
+#[test]
+fn folder_template_rejects_alias_tokens_not_supported_at_folder_level() {
+    validate_title_folder_template("{Quality.Full}")
+        .expect_err("quality is not a folder-level token, alias or not");
+}
+
+#[test]
+fn folder_template_accepts_explicit_space_filter() {
+    validate_title_folder_template("{title|space:.} ({year})")
+        .expect("folder templates should support the explicit space filter");
+}
+
+// ── season_folder_template ────────────────────────────────────────────────
+
+#[test]
+fn season_folder_template_accepts_season_token() {
+    validate_season_folder_template("Season {season:00}")
+        .expect("season is the supported season-folder token");
+    validate_season_folder_template("Season.{season:00}")
+        .expect("dotted separator syntax should work for season folders too");
+}
+
+#[test]
+fn season_folder_template_rejects_unsupported_tokens() {
+    validate_season_folder_template("{title}")
+        .expect_err("title is not a season-folder token");
+    validate_season_folder_template("{Quality.Full}")
+        .expect_err("quality is not a season-folder token");
+}
+
+#[test]
+fn render_season_folder_template_with_dot_separator() {
+    let t = tokens(&[("season", "3")]);
+    let result = render_title_folder_template("Season.{season:00}", &t);
+    assert_eq!(result, "Season.03");
+}
+
+fn test_series_title_with_folder(folder_path: &str, tags: Vec<String>) -> Title {
+    Title {
+        folder_path: Some(folder_path.to_string()),
+        facet: MediaFacet::Series,
+        tags,
+        ..test_movie_title("Show")
+    }
+}
+
+#[test]
+fn season_aware_path_places_flat_file_into_new_season_folder() {
+    let title = test_series_title_with_folder("/data/series/Show", vec![]);
+    let current_file = PathBuf::from("/data/series/Show/Show - S03E01.mkv");
+    let t = tokens(&[("season", "3")]);
+    let result = season_aware_title_folder_path_for_renamed_file(
+        &title,
+        &current_file,
+        "/data/series",
+        "{title} ({year})",
+        "Season.{season:00}",
+        &t,
+    );
+    assert_eq!(result, PathBuf::from("/data/series/Show (2024)/Season.03"));
+}
+
+#[test]
+fn season_aware_path_heals_old_season_folder_name_to_new_template() {
+    let title = test_series_title_with_folder("/data/series/Show", vec![]);
+    let current_file = PathBuf::from("/data/series/Show/Season 03/Show - S03E01.mkv");
+    let t = tokens(&[("season", "3")]);
+    let result = season_aware_title_folder_path_for_renamed_file(
+        &title,
+        &current_file,
+        "/data/series",
+        "{title} ({year})",
+        "Season.{season:00}",
+        &t,
+    );
+    assert_eq!(result, PathBuf::from("/data/series/Show (2024)/Season.03"));
+}
+
+#[test]
+fn season_aware_path_moves_file_flat_when_season_folders_disabled() {
+    let title = test_series_title_with_folder(
+        "/data/series/Show",
+        vec!["scryer:season-folder:disabled".to_string()],
+    );
+    let current_file = PathBuf::from("/data/series/Show/Season 03/Show - S03E01.mkv");
+    let t = tokens(&[("season", "3")]);
+    let result = season_aware_title_folder_path_for_renamed_file(
+        &title,
+        &current_file,
+        "/data/series",
+        "{title} ({year})",
+        "Season.{season:00}",
+        &t,
+    );
+    assert_eq!(result, PathBuf::from("/data/series/Show (2024)"));
+}
+
+#[test]
+fn season_aware_path_preserves_custom_non_season_subfolder() {
+    let title = test_series_title_with_folder("/data/series/Show", vec![]);
+    let current_file = PathBuf::from("/data/series/Show/Extras/behind-the-scenes.mkv");
+    let t = tokens(&[("season", "3")]);
+    let result = season_aware_title_folder_path_for_renamed_file(
+        &title,
+        &current_file,
+        "/data/series",
+        "{title} ({year})",
+        "Season.{season:00}",
+        &t,
+    );
+    assert_eq!(result, PathBuf::from("/data/series/Show (2024)/Extras"));
+}
+
+#[test]
 fn render_no_tokens_passthrough() {
     let t = BTreeMap::new();
     let result = render_rename_template("plain text no tokens", &t);
@@ -251,6 +372,76 @@ fn render_token_case_insensitive() {
     let t = tokens(&[("title", "Movie")]);
     let result = render_rename_template("{Title}", &t);
     assert_eq!(result, "Movie");
+}
+
+// ── Sonarr/Radarr-style dotted alias tokens ───────────────────────────────
+
+#[test]
+fn render_series_template_with_dotted_alias_tokens() {
+    let t = tokens(&[
+        ("title", "Friends"),
+        ("season", "5"),
+        ("episode", "12"),
+        ("episode_title", "The One with the Embryos"),
+        ("quality", "1080p"),
+    ]);
+    let result = render_rename_template(
+        "{Series.Title}.S{season:00}E{episode:00}.{Episode.Title}.{Quality.Full}",
+        &t,
+    );
+    assert_eq!(result, "Friends.S05E12.The.One.with.the.Embryos.1080p");
+}
+
+#[test]
+fn render_movie_template_with_dotted_alias_tokens() {
+    let t = tokens(&[
+        ("title", "The Dark Knight"),
+        ("year", "2008"),
+        ("quality", "2160p"),
+    ]);
+    let result = render_rename_template("{Movie.Title}.{Release.Year}.{Quality.Full}", &t);
+    assert_eq!(result, "The.Dark.Knight.2008.2160p");
+}
+
+#[test]
+fn render_zero_padding_syntax() {
+    let t = tokens(&[("season", "2"), ("episode", "5")]);
+    let result = render_rename_template("S{season:00}E{episode:00}", &t);
+    assert_eq!(result, "S02E05");
+}
+
+#[test]
+fn render_zero_padding_syntax_wider() {
+    let t = tokens(&[("episode", "7")]);
+    let result = render_rename_template("{episode:000}", &t);
+    assert_eq!(result, "007");
+}
+
+#[test]
+fn render_dotted_alias_explicit_filter_overrides_implied_separator() {
+    let t = tokens(&[("title", "12 Years a Slave")]);
+    let result = render_rename_template("{Series.Title|space:_}", &t);
+    assert_eq!(result, "12_Years_a_Slave");
+}
+
+#[test]
+fn render_underscore_alias_token_implies_underscore_separator() {
+    let t = tokens(&[("title", "12 Years a Slave")]);
+    let result = render_rename_template("{Series_Title}", &t);
+    assert_eq!(result, "12_Years_a_Slave");
+}
+
+#[test]
+fn render_existing_lowercase_tokens_are_unaffected_by_alias_gate() {
+    let t = tokens(&[
+        ("episode_title", "The One with the Embryos"),
+        ("tmdb_id", "1668"),
+    ]);
+    assert_eq!(
+        render_rename_template("{episode_title}", &t),
+        "The One with the Embryos"
+    );
+    assert_eq!(resolve_template_token(&t, "tmdb_id:8"), "00001668");
 }
 
 // ── sanitize_filesystem_component ─────────────────────────────────────────

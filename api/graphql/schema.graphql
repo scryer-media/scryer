@@ -1942,6 +1942,7 @@ type MediaSettingsPayload {
 	rootFolders: [RootFolderPayload!]!
 	requiredAudioLanguages: [String!]!
 	folderTemplate: String!
+	seasonFolderTemplate: String
 	renameEnabled: Boolean!
 	renameTemplate: String!
 	renameCollisionPolicy: String!
@@ -3995,6 +3996,7 @@ input UpdateMediaSettingsInput {
 	rootFolders: [RootFolderInput!]
 	requiredAudioLanguages: [String!]
 	folderTemplate: String
+	seasonFolderTemplate: String
 	renameEnabled: Boolean
 	renameTemplate: String
 	renameCollisionPolicy: String

@@ -20,9 +20,10 @@ use crate::media::release_labels::resolve_release_labels_from_analysis;
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 use crate::{
     AppError, AppResult, AppUseCase, CollectionUpdate, DEFAULT_FOLDER_TEMPLATE_ANIME,
-    DEFAULT_FOLDER_TEMPLATE_MOVIE, DEFAULT_FOLDER_TEMPLATE_SERIES, DownloadSourceIdentity,
-    FOLDER_TEMPLATE_KEY, ParsedEpisodeMetadata, ParsedReleaseMetadata, TitleMediaFile,
-    parse_release_metadata, use_season_folders,
+    DEFAULT_FOLDER_TEMPLATE_MOVIE, DEFAULT_FOLDER_TEMPLATE_SERIES,
+    DEFAULT_SEASON_FOLDER_TEMPLATE_ANIME, DEFAULT_SEASON_FOLDER_TEMPLATE_SERIES,
+    DownloadSourceIdentity, FOLDER_TEMPLATE_KEY, ParsedEpisodeMetadata, ParsedReleaseMetadata,
+    SEASON_FOLDER_TEMPLATE_KEY, TitleMediaFile, parse_release_metadata,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -222,6 +223,7 @@ struct RenameRollbackOutcome {
 struct RenamePlanSettings {
     template: String,
     folder_template: String,
+    season_folder_template: String,
     collision_policy: RenameCollisionPolicy,
     missing_metadata_policy: RenameMissingMetadataPolicy,
 }
@@ -407,6 +409,7 @@ impl AppUseCase {
         Ok(RenamePlanSettings {
             template: self.read_rename_template(facet_settings).await?,
             folder_template: self.read_folder_template(facet_settings).await?,
+            season_folder_template: self.read_season_folder_template(facet_settings).await?,
             collision_policy: self.read_collision_policy(facet_settings).await?,
             missing_metadata_policy: self.read_missing_metadata_policy(facet_settings).await?,
         })
@@ -751,6 +754,7 @@ impl AppUseCase {
                     title,
                     &settings.template,
                     &settings.folder_template,
+                    &settings.season_folder_template,
                     &settings.collision_policy,
                     &settings.missing_metadata_policy,
                     &mut planned_targets,
@@ -769,11 +773,16 @@ impl AppUseCase {
         ))
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "rename plan settings are threaded through explicitly per facet"
+    )]
     async fn build_rename_plan_items_for_title(
         &self,
         title: &Title,
         template: &str,
         folder_template: &str,
+        season_folder_template: &str,
         collision_policy: &RenameCollisionPolicy,
         missing_metadata_policy: &RenameMissingMetadataPolicy,
         planned_targets: &mut HashSet<String>,
@@ -822,6 +831,7 @@ impl AppUseCase {
                     media_files,
                     &import_paths.media_root,
                     folder_template,
+                    season_folder_template,
                     template,
                     collision_policy,
                     missing_metadata_policy,
@@ -936,6 +946,26 @@ impl AppUseCase {
         Ok(normalize_title_folder_template_or_default(
             self.read_setting_string_value(FOLDER_TEMPLATE_KEY, Some(facet_settings.scope_id))
                 .await?,
+            default_template,
+            facet_settings.scope_id,
+        ))
+    }
+
+    async fn read_season_folder_template(
+        &self,
+        facet_settings: RenameFacetSettings,
+    ) -> AppResult<String> {
+        let default_template = match facet_settings.scope_id {
+            "series" => DEFAULT_SEASON_FOLDER_TEMPLATE_SERIES,
+            "anime" => DEFAULT_SEASON_FOLDER_TEMPLATE_ANIME,
+            _ => return Ok(String::new()),
+        };
+        Ok(normalize_season_folder_template_or_default(
+            self.read_setting_string_value(
+                SEASON_FOLDER_TEMPLATE_KEY,
+                Some(facet_settings.scope_id),
+            )
+            .await?,
             default_template,
             facet_settings.scope_id,
         ))
@@ -1182,12 +1212,14 @@ pub fn render_title_folder_template(template: &str, tokens: &BTreeMap<String, St
     truncate_generated_folder_component(&sanitize_filesystem_component(cleaned.trim()))
 }
 
-pub(crate) fn validate_title_folder_template(template: &str) -> AppResult<()> {
+fn validate_folder_template_tokens(
+    template: &str,
+    is_supported: impl Fn(&str) -> bool,
+    label: &str,
+) -> AppResult<()> {
     let trimmed = template.trim();
     if trimmed.is_empty() {
-        return Err(AppError::Validation(
-            "folder template is required".to_string(),
-        ));
+        return Err(AppError::Validation(format!("{label} template is required")));
     }
 
     let chars: Vec<char> = trimmed.chars().collect();
@@ -1197,9 +1229,9 @@ pub(crate) fn validate_title_folder_template(template: &str) -> AppResult<()> {
     while cursor < chars.len() {
         let ch = chars[cursor];
         if ch == '}' {
-            return Err(AppError::Validation(
-                "folder template contains an unmatched '}'".to_string(),
-            ));
+            return Err(AppError::Validation(format!(
+                "{label} template contains an unmatched '}}'"
+            )));
         }
         if ch != '{' {
             cursor += 1;
@@ -1207,24 +1239,22 @@ pub(crate) fn validate_title_folder_template(template: &str) -> AppResult<()> {
         }
 
         let Some(end) = chars[cursor + 1..].iter().position(|value| *value == '}') else {
-            return Err(AppError::Validation(
-                "folder template contains an unmatched '{'".to_string(),
-            ));
+            return Err(AppError::Validation(format!(
+                "{label} template contains an unmatched '{{'"
+            )));
         };
         let end_index = cursor + 1 + end;
         let token_spec: String = chars[cursor + 1..end_index].iter().collect();
         if token_spec.contains('{') {
-            return Err(AppError::Validation(
-                "folder template contains an unmatched '{'".to_string(),
-            ));
-        }
-        let token_name = token_spec
-            .split_once(':')
-            .map_or(token_spec.trim(), |(name, _)| name.trim())
-            .to_ascii_lowercase();
-        if !is_supported_title_folder_token(&token_name) {
             return Err(AppError::Validation(format!(
-                "unsupported folder template token: {{{}}}",
+                "{label} template contains an unmatched '{{'"
+            )));
+        }
+        let is_token_supported = parse_rename_template_token_spec(&token_spec)
+            .is_some_and(|spec| is_supported(&spec.name));
+        if !is_token_supported {
+            return Err(AppError::Validation(format!(
+                "unsupported {label} template token: {{{}}}",
                 token_spec.trim()
             )));
         }
@@ -1233,18 +1263,57 @@ pub(crate) fn validate_title_folder_template(template: &str) -> AppResult<()> {
     }
 
     if !saw_token {
-        return Err(AppError::Validation(
-            "folder template must include at least one supported token".to_string(),
-        ));
+        return Err(AppError::Validation(format!(
+            "{label} template must include at least one supported token"
+        )));
     }
 
     Ok(())
+}
+
+pub(crate) fn validate_title_folder_template(template: &str) -> AppResult<()> {
+    validate_folder_template_tokens(template, is_supported_title_folder_token, "folder")
+}
+
+pub(crate) fn validate_season_folder_template(template: &str) -> AppResult<()> {
+    validate_folder_template_tokens(
+        template,
+        is_supported_season_folder_token,
+        "season folder",
+    )
 }
 
 pub(crate) fn normalize_title_folder_template_or_default(
     raw: Option<String>,
     default_template: &str,
     scope: &str,
+) -> String {
+    normalize_folder_template_or_default(
+        raw,
+        default_template,
+        scope,
+        validate_title_folder_template,
+    )
+}
+
+pub(crate) fn normalize_season_folder_template_or_default(
+    raw: Option<String>,
+    default_template: &str,
+    scope: &str,
+) -> String {
+    normalize_folder_template_or_default(
+        raw,
+        default_template,
+        scope,
+        validate_season_folder_template,
+    )
+}
+
+fn normalize_folder_template_or_default(
+    raw: Option<String>,
+    default_template: &str,
+    scope: &str,
+    validate: impl Fn(&str) -> AppResult<()>,
 ) -> String {
     let Some(template) = raw
         .map(|value| value.trim().to_string())
@@ -1253,7 +1322,7 @@ pub(crate) fn normalize_title_folder_template_or_default(
         return default_template.to_string();
     };
 
-    match validate_title_folder_template(&template) {
+    match validate(&template) {
         Ok(()) => template,
         Err(error) => {
             warn!(
@@ -1364,6 +1433,69 @@ pub(crate) fn title_folder_path_for_renamed_file(
     }
 }
 
+/// Like `title_folder_path_for_renamed_file`, but additionally recomputes
+/// the season subfolder from `season_folder_template` instead of copying it
+/// verbatim, so a `season_folder_template`/`use_season_folders` change heals
+/// existing files. Only replaces the existing subpath when it's empty or is
+/// itself a recognized season folder; any other custom nested structure
+/// (extras, subs, ...) is preserved untouched, exactly like the plain
+/// `title_folder_path_for_renamed_file` behavior above.
+pub(crate) fn season_aware_title_folder_path_for_renamed_file(
+    title: &Title,
+    current_file: &Path,
+    media_root: &str,
+    folder_template: &str,
+    season_folder_template: &str,
+    tokens: &BTreeMap<String, String>,
+) -> PathBuf {
+    let desired_root = configured_title_folder_path(media_root, title, folder_template, title.year);
+    let current_parent = current_file
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let Some(existing_root) = title
+        .folder_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(stored_path_to_path_buf)
+    else {
+        return desired_root_with_season(&desired_root, title, season_folder_template, tokens);
+    };
+    let Ok(relative_parent) = current_parent.strip_prefix(&existing_root) else {
+        return desired_root_with_season(&desired_root, title, season_folder_template, tokens);
+    };
+
+    let is_bare_or_season_folder = relative_parent.as_os_str().is_empty()
+        || (relative_parent.components().count() == 1
+            && relative_parent.to_str().is_some_and(|name| {
+                crate::library::workflow::recognize_season_folder_name(name).is_some()
+            }));
+
+    if is_bare_or_season_folder {
+        desired_root_with_season(&desired_root, title, season_folder_template, tokens)
+    } else {
+        desired_root.join(relative_parent)
+    }
+}
+
+fn desired_root_with_season(
+    desired_root: &Path,
+    title: &Title,
+    season_folder_template: &str,
+    tokens: &BTreeMap<String, String>,
+) -> PathBuf {
+    if !use_season_folders(title) {
+        return desired_root.to_path_buf();
+    }
+    let season_component = render_title_folder_template(season_folder_template, tokens);
+    if season_component.is_empty() {
+        desired_root.to_path_buf()
+    } else {
+        desired_root.join(season_component)
+    }
+}
+
 fn infer_title_folder_path_after_rename(
     title: &Title,
     current_path: &str,
@@ -1398,7 +1530,7 @@ fn infer_title_folder_path_from_final_path(title: &Title, final_parent: &Path) -
         && final_parent
             .file_name()
             .and_then(|value| value.to_str())
-            .is_some_and(|value| value.starts_with("Season "))
+            .is_some_and(|value| crate::library::workflow::recognize_season_folder_name(value).is_some())
     {
         return final_parent.parent().map(Path::to_path_buf);
     }
@@ -1598,11 +1730,106 @@ const TITLE_EXTERNAL_ID_TOKENS: [(&str, &str); 6] = [
     ("anilist_id", "anilist"),
 ];
 
+const SEASON_FOLDER_TOKENS: &[&str] = &["season"];
+
+fn is_supported_season_folder_token(token: &str) -> bool {
+    SEASON_FOLDER_TOKENS.contains(&token)
+}
+
+/// Check whether the title's tags request season-folder organisation.
+/// Defaults to `true` (use season folders) when the tag is absent.
+pub(crate) fn use_season_folders(title: &Title) -> bool {
+    title
+        .tags
+        .iter()
+        .find(|t| t.starts_with("scryer:season-folder:"))
+        .map(|t| {
+            !t.trim_start_matches("scryer:season-folder:")
+                .eq_ignore_ascii_case("disabled")
+        })
+        .unwrap_or(true)
+}
+
 fn is_supported_title_folder_token(token: &str) -> bool {
     matches!(token, "title" | "year")
         || TITLE_EXTERNAL_ID_TOKENS
             .iter()
             .any(|(token_name, _)| *token_name == token)
+}
+
+const TOKEN_NAME_ALIASES: &[(&[&str], &str)] = &[
+    (&["movie", "title"], "title"),
+    (&["series", "title"], "title"),
+    (&["episode", "title"], "episode_title"),
+    (&["release", "year"], "year"),
+    (&["quality", "full"], "quality"),
+];
+
+struct ResolvedTokenName {
+    canonical: String,
+    implied_separator: Option<String>,
+}
+
+/// Resolves Sonarr/Radarr-style multi-word tokens (e.g. `Series.Title`,
+/// `Episode.Title`) to their canonical lowercase token name, and reports the
+/// separator used between the words so it can implicitly replace spaces in
+/// the rendered value, matching Sonarr/Radarr behavior.
+///
+/// Gated on the raw name containing an uppercase ASCII letter: every
+/// existing lowercase token (`episode_title`, `tmdb_id`, ...) already
+/// contains `_`, so without this gate they would be misidentified as
+/// two-word alias candidates and gain an unwanted implicit separator.
+fn resolve_template_token_name(raw_name: &str) -> ResolvedTokenName {
+    let trimmed = raw_name.trim();
+    if !trimmed.chars().any(|ch| ch.is_ascii_uppercase()) {
+        return ResolvedTokenName {
+            canonical: trimmed.to_ascii_lowercase(),
+            implied_separator: None,
+        };
+    }
+
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut separator: Option<char> = None;
+    for ch in trimmed.chars() {
+        if ch == '.' || ch == '_' || ch.is_whitespace() {
+            if !current.is_empty() {
+                words.push(std::mem::take(&mut current).to_ascii_lowercase());
+            }
+            separator.get_or_insert(if ch.is_whitespace() { ' ' } else { ch });
+        } else {
+            current.push(ch);
+        }
+    }
+    if !current.is_empty() {
+        words.push(current.to_ascii_lowercase());
+    }
+
+    if words.len() < 2 {
+        return ResolvedTokenName {
+            canonical: trimmed.to_ascii_lowercase(),
+            implied_separator: None,
+        };
+    }
+
+    let lookup = words.join(" ");
+    let Some((_, canonical)) = TOKEN_NAME_ALIASES
+        .iter()
+        .find(|(alias, _)| alias.join(" ") == lookup)
+    else {
+        return ResolvedTokenName {
+            canonical: trimmed.to_ascii_lowercase(),
+            implied_separator: None,
+        };
+    };
+
+    ResolvedTokenName {
+        canonical: canonical.to_string(),
+        implied_separator: match separator {
+            Some(' ') | None => None,
+            Some(sep) => Some(sep.to_string()),
+        },
+    }
 }
 
 fn insert_title_external_id_tokens(tokens: &mut BTreeMap<String, String>, title: &Title) {
@@ -1863,6 +2090,7 @@ pub(crate) fn build_series_rename_plan_items_from_media_files(
     media_files: Vec<TitleMediaFile>,
     media_root: &str,
     folder_template: &str,
+    season_folder_template: &str,
     template: &str,
     collision_policy: &RenameCollisionPolicy,
     missing_metadata_policy: &RenameMissingMetadataPolicy,
@@ -1899,6 +2127,7 @@ pub(crate) fn build_series_rename_plan_items_from_media_files(
                 source,
                 media_root,
                 folder_template,
+                season_folder_template,
                 template,
                 collision_policy,
                 missing_metadata_policy,
@@ -1952,6 +2181,7 @@ fn build_series_media_file_rename_plan_item(
     source: GroupedTitleMediaFile,
     media_root: &str,
     folder_template: &str,
+    season_folder_template: &str,
     template: &str,
     collision_policy: &RenameCollisionPolicy,
     missing_metadata_policy: &RenameMissingMetadataPolicy,
@@ -2028,11 +2258,13 @@ fn build_series_media_file_rename_plan_item(
         Ok(rendered) => rendered,
         Err(item) => return *item,
     };
-    let target_parent = title_folder_path_for_renamed_file(
+    let target_parent = season_aware_title_folder_path_for_renamed_file(
         title,
         &source_file.current_file,
         media_root,
         folder_template,
+        season_folder_template,
+        &tokens,
     );
 
     finalize_rename_plan_item(
@@ -2459,23 +2691,40 @@ fn parse_rename_template_token_spec(token_spec: &str) -> Option<RenameTemplateTo
     if token_core.is_empty() {
         return None;
     }
-    let (name, pad_width) = match token_core.split_once(':') {
-        Some((n, fmt)) => (n.trim().to_lowercase(), fmt.trim().parse::<usize>().ok()),
-        None => (token_core.trim().to_lowercase(), None),
+    let (raw_name, pad_width) = match token_core.split_once(':') {
+        Some((n, fmt)) => (n.trim(), parse_rename_template_pad_width(fmt)),
+        None => (token_core.trim(), None),
     };
-    if name.is_empty() {
+    if raw_name.is_empty() {
         return None;
     }
+
     let mut filters = Vec::new();
     for filter_spec in parts {
         filters.push(parse_rename_template_token_filter(filter_spec)?);
     }
 
+    let resolved = resolve_template_token_name(raw_name);
+    if filters.is_empty()
+        && let Some(separator) = resolved.implied_separator
+    {
+        filters.push(RenameTemplateTokenFilter::Space(separator));
+    }
+
     Some(RenameTemplateTokenSpec {
-        name,
+        name: resolved.canonical,
         pad_width,
         filters,
     })
+}
+
+fn parse_rename_template_pad_width(fmt: &str) -> Option<usize> {
+    let trimmed = fmt.trim();
+    if !trimmed.is_empty() && trimmed.chars().all(|ch| ch == '0') {
+        // Sonarr-style {season:00} pads to the width of the zero run.
+        return Some(trimmed.len());
+    }
+    trimmed.parse::<usize>().ok()
 }
 
 fn parse_rename_template_token_filter(filter_spec: &str) -> Option<RenameTemplateTokenFilter> {

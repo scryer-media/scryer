@@ -213,7 +213,7 @@ pub use events::activity::{ActivityChannel, ActivityEvent, ActivityKind, Activit
 pub use events::activity_api::{
     is_supported_title_history_event_type, supported_title_history_event_types,
 };
-pub(crate) use import::import::{resolve_import_paths, use_season_folders};
+pub(crate) use import::import::resolve_import_paths;
 pub(crate) use import_workflow::fail_active_manual_import_for_source;
 pub use import_workflow::{
     ManualImportExecutionResult, ManualImportFileMapping, ManualImportFilePreview,
@@ -233,8 +233,9 @@ pub use library::rename::{
     sanitize_filesystem_component,
 };
 pub(crate) use library::rename::{
-    effective_title_folder_path, normalize_title_folder_template_or_default,
-    validate_title_folder_template,
+    effective_title_folder_path, normalize_season_folder_template_or_default,
+    normalize_title_folder_template_or_default, render_title_folder_template,
+    use_season_folders, validate_season_folder_template, validate_title_folder_template,
 };
 pub use media::language::{
     normalize_detected_audio_language_code, normalize_detected_audio_languages,
@@ -391,6 +392,7 @@ pub use settings::keys::{
     DEFAULT_FOLDER_TEMPLATE_MOVIE, DEFAULT_FOLDER_TEMPLATE_SERIES, DEFAULT_MOVIE_LIBRARY_PATH,
     DEFAULT_RECAP_POLICY, DEFAULT_RENAME_COLLISION_POLICY, DEFAULT_RENAME_MISSING_METADATA_POLICY,
     DEFAULT_RENAME_TEMPLATE_ANIME, DEFAULT_RENAME_TEMPLATE_MOVIE, DEFAULT_RENAME_TEMPLATE_SERIES,
+    DEFAULT_SEASON_FOLDER_TEMPLATE_ANIME, DEFAULT_SEASON_FOLDER_TEMPLATE_SERIES,
     DEFAULT_SERIES_LIBRARY_PATH, DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY,
     DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY, FOLDER_TEMPLATE_KEY, FORM_LOGIN_ENABLED_KEY,
     FRUITLESS_WANTED_RESET_LAST_RUN_KEY, HISTORY_KEEP_FOREVER_KEY, HISTORY_RETENTION_DAYS_KEY,
@@ -412,7 +414,8 @@ pub use settings::keys::{
     RENAME_MISSING_METADATA_POLICY_MOVIE_GLOBAL_KEY,
     RENAME_MISSING_METADATA_POLICY_SERIES_GLOBAL_KEY, RENAME_TEMPLATE_ANIME_GLOBAL_KEY,
     RENAME_TEMPLATE_KEY, RENAME_TEMPLATE_MOVIE_GLOBAL_KEY, RENAME_TEMPLATE_SERIES_GLOBAL_KEY,
-    REQUIRED_AUDIO_LANGUAGES_KEY, SCORING_PERSONA_KEY, SERIES_PATH_KEY, SERIES_ROOT_FOLDERS_KEY,
+    REQUIRED_AUDIO_LANGUAGES_KEY, SCORING_PERSONA_KEY, SEASON_FOLDER_TEMPLATE_KEY,
+    SERIES_PATH_KEY, SERIES_ROOT_FOLDERS_KEY,
     SETTINGS_SCOPE_MEDIA, SETTINGS_SCOPE_SYSTEM, SETTINGS_SOURCE_TYPED_GRAPHQL, SETUP_COMPLETE_KEY,
     SKIP_LOGIN_FOR_LOCAL_IPS_KEY, TITLE_REQUIRED_AUDIO_OVERRIDE_KEY, TLS_CERT_PATH_KEY,
     TLS_KEY_PATH_KEY, TOTP_REQUIRE_JELLYFIN_LOGIN_KEY,

@@ -75,6 +75,7 @@ pub const RENAME_TEMPLATE_MOVIE_GLOBAL_KEY: &str = "rename.template.movie.global
 pub const RENAME_TEMPLATE_SERIES_GLOBAL_KEY: &str = "rename.template.series.global";
 pub const RENAME_TEMPLATE_ANIME_GLOBAL_KEY: &str = "rename.template.anime.global";
 pub const FOLDER_TEMPLATE_KEY: &str = "folder.template";
+pub const SEASON_FOLDER_TEMPLATE_KEY: &str = "season_folder.template";
 
 pub const RENAME_COLLISION_POLICY_KEY: &str = "rename.collision_policy";
 pub const RENAME_COLLISION_POLICY_GLOBAL_KEY: &str = "rename.collision_policy.global";
@@ -121,6 +122,8 @@ pub const DEFAULT_RENAME_TEMPLATE_ANIME: &str =
 pub const DEFAULT_FOLDER_TEMPLATE_MOVIE: &str = "{title} ({year})";
 pub const DEFAULT_FOLDER_TEMPLATE_SERIES: &str = "{title} ({year})";
 pub const DEFAULT_FOLDER_TEMPLATE_ANIME: &str = "{title} ({year})";
+pub const DEFAULT_SEASON_FOLDER_TEMPLATE_SERIES: &str = "Season {season:00}";
+pub const DEFAULT_SEASON_FOLDER_TEMPLATE_ANIME: &str = "Season {season:00}";
 pub const DEFAULT_RENAME_COLLISION_POLICY: &str = "skip";
 pub const DEFAULT_RENAME_MISSING_METADATA_POLICY: &str = "fallback_title";
 pub const DEFAULT_FILLER_POLICY: &str = "download_all";

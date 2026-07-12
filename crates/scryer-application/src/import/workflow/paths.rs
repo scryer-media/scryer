@@ -970,6 +970,7 @@ pub(crate) struct ImportPathSettings {
     pub(crate) rename_enabled: bool,
     pub(crate) rename_template: String,
     pub(crate) folder_template: String,
+    pub(crate) season_folder_template: String,
 }
 async fn persist_title_folder_path_if_missing(app: &AppUseCase, title: &Title, folder_path: &Path) {
     let has_folder_path = title

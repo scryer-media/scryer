@@ -2502,6 +2502,7 @@ async fn import_series_download_skipped_by_import_checks_keeps_episode_id_and_re
         &title_folder,
         path_settings.rename_enabled,
         &path_settings.rename_template,
+        &path_settings.season_folder_template,
         1,
         "1",
         None,

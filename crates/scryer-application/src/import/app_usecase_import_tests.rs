@@ -518,28 +518,28 @@ fn pick_largest_file_returns_biggest() {
 #[test]
 fn use_season_folders_true_when_tag_absent() {
     let title = test_title(MediaFacet::Series);
-    assert!(use_season_folders(&title));
+    assert!(crate::use_season_folders(&title));
 }
 
 #[test]
 fn use_season_folders_true_when_tag_enabled() {
     let mut title = test_title(MediaFacet::Series);
     title.tags = vec!["scryer:season-folder:enabled".to_string()];
-    assert!(use_season_folders(&title));
+    assert!(crate::use_season_folders(&title));
 }
 
 #[test]
 fn use_season_folders_false_when_tag_disabled() {
     let mut title = test_title(MediaFacet::Series);
     title.tags = vec!["scryer:season-folder:disabled".to_string()];
-    assert!(!use_season_folders(&title));
+    assert!(!crate::use_season_folders(&title));
 }
 
 #[test]
 fn use_season_folders_false_case_insensitive() {
     let mut title = test_title(MediaFacet::Series);
     title.tags = vec!["scryer:season-folder:DISABLED".to_string()];
-    assert!(!use_season_folders(&title));
+    assert!(!crate::use_season_folders(&title));
 }
 
 // ── build_rename_tokens ───────────────────────────────────────────────────────
@@ -859,6 +859,7 @@ fn episode_import_dest_path_uses_rescored_parsed_quality_without_override() {
         std::path::Path::new("/library/Test Show"),
         true,
         "{title} - S{season:2}E{episode:2} - {quality}.{ext}",
+        "Season {season:00}",
         8,
         "7",
         None,
@@ -886,6 +887,7 @@ fn episode_import_dest_path_preserves_source_filename_when_renamer_disabled() {
         std::path::Path::new("/library/Test Show"),
         false,
         "{title} - S{season:2}E{episode:2} - {quality}.{ext}",
+        "Season {season:00}",
         8,
         "7",
         None,

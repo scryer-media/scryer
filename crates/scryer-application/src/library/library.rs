@@ -78,6 +78,7 @@ use scan_refresh::{
 pub(crate) use scan_title_files::{
     FileSourceSnapshot, PlannedTitleScanFile, PlannedTitleScanRecord,
     file_source_signature_from_metadata, file_source_snapshot_from_library_file,
+    recognize_season_folder_name,
 };
 use scan_title_files::{
     TitleScanLayoutSummary, classify_title_scan_layout, merge_title_scan_option_tags,

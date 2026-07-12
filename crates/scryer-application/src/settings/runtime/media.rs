@@ -4,6 +4,7 @@ pub struct MediaSettings {
     pub root_folders: Vec<RootFolderEntry>,
     pub required_audio_languages: Vec<String>,
     pub folder_template: String,
+    pub season_folder_template: Option<String>,
     pub rename_enabled: bool,
     pub rename_template: String,
     pub rename_collision_policy: String,
@@ -23,6 +24,7 @@ pub struct UpdateMediaSettings {
     pub root_folders: Option<Vec<RootFolderEntry>>,
     pub required_audio_languages: Option<Vec<String>>,
     pub folder_template: Option<String>,
+    pub season_folder_template: Option<String>,
     pub rename_enabled: Option<bool>,
     pub rename_template: Option<String>,
     pub rename_collision_policy: Option<String>,
@@ -55,6 +57,13 @@ fn default_folder_template(facet: &MediaFacet) -> &'static str {
         MediaFacet::Movie => DEFAULT_FOLDER_TEMPLATE_MOVIE,
         MediaFacet::Series => DEFAULT_FOLDER_TEMPLATE_SERIES,
         MediaFacet::Anime => DEFAULT_FOLDER_TEMPLATE_ANIME,
+    }
+}
+fn default_season_folder_template(facet: &MediaFacet) -> Option<&'static str> {
+    match facet {
+        MediaFacet::Movie => None,
+        MediaFacet::Series => Some(DEFAULT_SEASON_FOLDER_TEMPLATE_SERIES),
+        MediaFacet::Anime => Some(DEFAULT_SEASON_FOLDER_TEMPLATE_ANIME),
     }
 }
 fn legacy_collision_policy_global_key(facet: &MediaFacet) -> &'static str {
@@ -362,6 +371,18 @@ impl AppUseCase {
                 .load_facet_required_audio_languages(facet.as_str())
                 .await?,
             folder_template,
+            season_folder_template: match default_season_folder_template(&facet) {
+                Some(default_template) => Some(crate::normalize_season_folder_template_or_default(
+                    self.read_setting_string_value(
+                        SEASON_FOLDER_TEMPLATE_KEY,
+                        Some(facet.as_str()),
+                    )
+                    .await?,
+                    default_template,
+                    facet.as_str(),
+                )),
+                None => None,
+            },
             rename_enabled,
             rename_template,
             rename_collision_policy,
@@ -492,6 +513,29 @@ impl AppUseCase {
                 )
                 .await?;
             changed_keys.push(FOLDER_TEMPLATE_KEY.to_string());
+        }
+
+        if let Some(season_folder_template) = normalize_optional_string(input.season_folder_template)
+        {
+            if facet == MediaFacet::Movie {
+                return Err(AppError::Validation(
+                    "season_folder_template is only valid for series and anime".to_string(),
+                ));
+            }
+            crate::validate_season_folder_template(&season_folder_template)?;
+            self.services
+                .config
+                .settings
+                .upsert_setting_json(
+                    SETTINGS_SCOPE_SYSTEM,
+                    SEASON_FOLDER_TEMPLATE_KEY,
+                    Some(facet.as_str().to_string()),
+                    encode_setting_json(&season_folder_template)?,
+                    SETTINGS_SOURCE_TYPED_GRAPHQL,
+                    Some(actor.id.clone()),
+                )
+                .await?;
+            changed_keys.push(SEASON_FOLDER_TEMPLATE_KEY.to_string());
         }
 
         if let Some(rename_enabled) = input.rename_enabled {

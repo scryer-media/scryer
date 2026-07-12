@@ -29,6 +29,75 @@ type RenameTokenParseResult =
 const SPACE_FILTER_PREFIX = "space:";
 const VALID_SPACE_REPLACEMENTS = new Set(["_", ".", "-", ""]);
 
+// Sonarr/Radarr-style multi-word aliases, e.g. {Series.Title}, {Episode.Title}.
+// Mirrors TOKEN_NAME_ALIASES in crates/scryer-application/src/library/rename.rs.
+const TOKEN_NAME_ALIASES: ReadonlyArray<readonly [string[], string]> = [
+  [["movie", "title"], "title"],
+  [["series", "title"], "title"],
+  [["episode", "title"], "episode_title"],
+  [["release", "year"], "year"],
+  [["quality", "full"], "quality"],
+];
+
+type ResolvedTokenName = {
+  canonical: string;
+  impliedSeparator: string | null;
+};
+
+// Gated on an uppercase letter so existing lowercase tokens (episode_title,
+// tmdb_id, ...) never enter alias resolution even though they contain "_".
+function resolveTemplateTokenName(rawName: string): ResolvedTokenName {
+  const trimmed = rawName.trim();
+  if (!/[A-Z]/.test(trimmed)) {
+    return { canonical: trimmed.toLowerCase(), impliedSeparator: null };
+  }
+
+  const words: string[] = [];
+  let current = "";
+  let separator: string | null = null;
+  for (const ch of trimmed) {
+    if (ch === "." || ch === "_" || /\s/.test(ch)) {
+      if (current) {
+        words.push(current.toLowerCase());
+        current = "";
+      }
+      if (separator === null) {
+        separator = /\s/.test(ch) ? " " : ch;
+      }
+    } else {
+      current += ch;
+    }
+  }
+  if (current) {
+    words.push(current.toLowerCase());
+  }
+
+  if (words.length < 2) {
+    return { canonical: trimmed.toLowerCase(), impliedSeparator: null };
+  }
+
+  const lookup = words.join(" ");
+  const match = TOKEN_NAME_ALIASES.find(([alias]) => alias.join(" ") === lookup);
+  if (!match) {
+    return { canonical: trimmed.toLowerCase(), impliedSeparator: null };
+  }
+
+  return {
+    canonical: match[1],
+    impliedSeparator: separator === " " || separator === null ? null : separator,
+  };
+}
+
+function parseRenameTemplatePadWidth(fmt: string): number {
+  const trimmed = fmt.trim();
+  if (trimmed.length > 0 && /^0+$/.test(trimmed)) {
+    // Sonarr-style {season:00} pads to the width of the zero run.
+    return trimmed.length;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
 export function validateRenameTemplateSyntax(
   template: string,
   validTokens: ReadonlySet<string>,
@@ -211,9 +280,7 @@ function parseRenameTemplateTokenSpec(inner: string): RenameTokenParseResult {
   }
 
   const padWidth =
-    colonIdx >= 0
-      ? Number.parseInt(tokenCore.slice(colonIdx + 1).trim(), 10)
-      : 0;
+    colonIdx >= 0 ? parseRenameTemplatePadWidth(tokenCore.slice(colonIdx + 1)) : 0;
   const filters: RenameTokenFilter[] = [];
 
   for (const rawFilter of parts) {
@@ -228,12 +295,17 @@ function parseRenameTemplateTokenSpec(inner: string): RenameTokenParseResult {
     filters.push({ kind: "space", replacement });
   }
 
+  const resolved = resolveTemplateTokenName(tokenName);
+  if (filters.length === 0 && resolved.impliedSeparator !== null) {
+    filters.push({ kind: "space", replacement: resolved.impliedSeparator });
+  }
+
   return {
     ok: true,
     spec: {
       tokenName,
-      lookupName: tokenName.toLowerCase(),
-      padWidth: Number.isNaN(padWidth) ? 0 : padWidth,
+      lookupName: resolved.canonical,
+      padWidth,
       filters,
     },
   };

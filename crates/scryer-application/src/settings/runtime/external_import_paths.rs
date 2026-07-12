@@ -54,6 +54,7 @@ impl AppUseCase {
                     root_folders: Some(root_folders),
                     required_audio_languages: None,
                     folder_template: None,
+                    season_folder_template: None,
                     rename_enabled: None,
                     rename_template: None,
                     rename_collision_policy: None,

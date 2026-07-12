@@ -331,7 +331,7 @@ fn normalize_layout_component(name: &str) -> String {
     normalized.trim().to_string()
 }
 
-pub(super) fn recognize_season_folder_name(name: &str) -> Option<u32> {
+pub(crate) fn recognize_season_folder_name(name: &str) -> Option<u32> {
     let normalized = normalize_layout_component(name);
     if normalized.is_empty() {
         return None;
