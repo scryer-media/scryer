@@ -228,6 +228,7 @@ export type MediaSettings = {
   rootFolders: { path: string; isDefault: boolean }[];
   requiredAudioLanguages: string[];
   folderTemplate: string;
+  seasonFolderTemplate: string | null;
   renameEnabled: boolean;
   renameTemplate: string;
   renameCollisionPolicy: string;

@@ -640,6 +640,12 @@ const en: LocaleDictionary = {
   "settings.folderValidationUnknownToken":
     "Folder templates support {title}, {year}, and external ID tokens. Invalid token: {{token}}",
   "settings.folderValidationEmpty": "Folder template cannot be empty",
+  "settings.seasonFolderRenameSectionTitle": "Season Folder Renaming",
+  "settings.seasonFolderTemplateLabel": "Season folder template",
+  "settings.seasonFolderTemplateRequired": "Season folder template is required.",
+  "settings.seasonFolderValidationUnknownToken":
+    "Season folder templates support {season} and {season_order}. Invalid token: {{token}}",
+  "settings.seasonFolderValidationEmpty": "Season folder template cannot be empty",
   "settings.renameTemplateLabel": "Rename template",
   "settings.renameTemplatePlaceholder": "Placeholder",
   "settings.renameTemplateHelp":

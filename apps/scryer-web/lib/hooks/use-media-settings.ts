@@ -86,6 +86,10 @@ export type UseMediaSettingsResult = {
   setCategoryFolderTemplates: React.Dispatch<
     React.SetStateAction<Record<ViewCategoryId, string>>
   >;
+  categorySeasonFolderTemplates: Record<ViewCategoryId, string>;
+  setCategorySeasonFolderTemplates: React.Dispatch<
+    React.SetStateAction<Record<ViewCategoryId, string>>
+  >;
   categoryRenameTemplates: Record<ViewCategoryId, string>;
   setCategoryRenameTemplates: React.Dispatch<
     React.SetStateAction<Record<ViewCategoryId, string>>
@@ -162,6 +166,8 @@ const ALLOWED_FILLER_POLICIES = new Set(["download_all", "skip_filler"]);
 const DEFAULT_RECAP_POLICY = "download_all";
 const ALLOWED_RECAP_POLICIES = new Set(["download_all", "skip_recap"]);
 const DEFAULT_FOLDER_TEMPLATE = "{title} ({year})";
+const DEFAULT_SEASON_FOLDER_TEMPLATE_SERIES = "Season {season:2}";
+const DEFAULT_SEASON_FOLDER_TEMPLATE_ANIME = "Season {season_order:2}";
 const DEFAULT_RENAME_TEMPLATE =
   "{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}";
 const DEFAULT_CATEGORY_REQUIRED_AUDIO_LANGUAGES: Record<ViewCategoryId, string[]> = {
@@ -227,6 +233,12 @@ export function useMediaSettings({
     series: DEFAULT_FOLDER_TEMPLATE,
     anime: DEFAULT_FOLDER_TEMPLATE,
   });
+  const [categorySeasonFolderTemplates, setCategorySeasonFolderTemplates] =
+    React.useState<Record<ViewCategoryId, string>>({
+      movie: DEFAULT_SEASON_FOLDER_TEMPLATE_SERIES,
+      series: DEFAULT_SEASON_FOLDER_TEMPLATE_SERIES,
+      anime: DEFAULT_SEASON_FOLDER_TEMPLATE_ANIME,
+    });
   const [categoryRenameTemplates, setCategoryRenameTemplates] = React.useState<
     Record<ViewCategoryId, string>
   >({
@@ -579,6 +591,21 @@ export function useMediaSettings({
             nextTemplate,
           );
         });
+        if (mediaSettingsScopeId !== "movie") {
+          setCategorySeasonFolderTemplates((previous) => {
+            const defaultSeasonFolderTemplate =
+              mediaSettingsScopeId === "anime"
+                ? DEFAULT_SEASON_FOLDER_TEMPLATE_ANIME
+                : DEFAULT_SEASON_FOLDER_TEMPLATE_SERIES;
+            const nextTemplate =
+              mediaSettings.seasonFolderTemplate || defaultSeasonFolderTemplate;
+            return updateFacetScopedStringRecord(
+              previous,
+              mediaSettingsScopeId,
+              nextTemplate,
+            );
+          });
+        }
         setCategoryRenameTemplates((previous) => {
           const nextTemplate = mediaSettings.renameTemplate || DEFAULT_RENAME_TEMPLATE;
           return updateFacetScopedStringRecord(
@@ -943,6 +970,8 @@ export function useMediaSettings({
       event.preventDefault();
       const folderTemplate =
         categoryFolderTemplates[activeQualityScopeId].trim();
+      const seasonFolderTemplate =
+        categorySeasonFolderTemplates[activeQualityScopeId].trim();
       const renameEnabled =
         categoryRenameEnabled[activeQualityScopeId] !== "false";
       const renameTemplate =
@@ -965,6 +994,10 @@ export function useMediaSettings({
         setGlobalStatus(t("settings.folderTemplateRequired"));
         return;
       }
+      if (activeQualityScopeId !== "movie" && !seasonFolderTemplate) {
+        setGlobalStatus(t("settings.seasonFolderTemplateRequired"));
+        return;
+      }
       if (renameEnabled && !renameTemplate) {
         setGlobalStatus(t("settings.renameTemplateRequired"));
         return;
@@ -980,6 +1013,7 @@ export function useMediaSettings({
               requiredAudioLanguages:
                 categoryRequiredAudioLanguages[activeQualityScopeId] ?? [],
               folderTemplate,
+              ...(activeQualityScopeId !== "movie" ? { seasonFolderTemplate } : {}),
               renameEnabled,
               ...renameConfigInput,
               nfoWriteOnImport: nfoWriteOnImport[activeQualityScopeId] === "true",
@@ -1028,6 +1062,7 @@ export function useMediaSettings({
       activeQualityScopeId,
       categoryFillerPolicies,
       categoryFolderTemplates,
+      categorySeasonFolderTemplates,
       categoryRequiredAudioLanguages,
       categoryRecapPolicies,
       categoryInterSeasonMovies,
@@ -1167,6 +1202,8 @@ export function useMediaSettings({
     categoryPersonaSelections,
     categoryFolderTemplates,
     setCategoryFolderTemplates,
+    categorySeasonFolderTemplates,
+    setCategorySeasonFolderTemplates,
     categoryRenameTemplates,
     setCategoryRenameTemplates,
     categoryRenameEnabled,

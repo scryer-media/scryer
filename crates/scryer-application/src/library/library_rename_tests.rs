@@ -233,6 +233,18 @@ fn title_folder_template_accepts_external_id_tokens_and_trims_missing_groups() {
 }
 
 #[test]
+fn title_folder_template_accepts_space_filter() {
+    validate_title_folder_template("{title|space:_}").expect("space filter is allowed on folders");
+    validate_title_folder_template("{title|space:bogus}")
+        .expect_err("unsupported filter replacement is rejected");
+
+    let title = test_movie_title("The Great Movie");
+    let tokens = build_title_folder_tokens(&title, None);
+    let rendered = render_title_folder_template("{title|space:_}", &tokens);
+    assert_eq!(rendered, "The_Great_Movie");
+}
+
+#[test]
 fn render_no_tokens_passthrough() {
     let t = BTreeMap::new();
     let result = render_rename_template("plain text no tokens", &t);

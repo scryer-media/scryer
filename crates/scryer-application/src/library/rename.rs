@@ -1183,11 +1183,23 @@ pub fn render_title_folder_template(template: &str, tokens: &BTreeMap<String, St
 }
 
 pub(crate) fn validate_title_folder_template(template: &str) -> AppResult<()> {
+    validate_folder_style_template(template, "folder", is_supported_title_folder_token)
+}
+
+pub(crate) fn validate_season_folder_template(template: &str) -> AppResult<()> {
+    validate_folder_style_template(template, "season folder", is_supported_season_folder_token)
+}
+
+fn validate_folder_style_template(
+    template: &str,
+    template_kind: &str,
+    is_supported_token: impl Fn(&str) -> bool,
+) -> AppResult<()> {
     let trimmed = template.trim();
     if trimmed.is_empty() {
-        return Err(AppError::Validation(
-            "folder template is required".to_string(),
-        ));
+        return Err(AppError::Validation(format!(
+            "{template_kind} template is required"
+        )));
     }
 
     let chars: Vec<char> = trimmed.chars().collect();
@@ -1197,9 +1209,9 @@ pub(crate) fn validate_title_folder_template(template: &str) -> AppResult<()> {
     while cursor < chars.len() {
         let ch = chars[cursor];
         if ch == '}' {
-            return Err(AppError::Validation(
-                "folder template contains an unmatched '}'".to_string(),
-            ));
+            return Err(AppError::Validation(format!(
+                "{template_kind} template contains an unmatched '}}'"
+            )));
         }
         if ch != '{' {
             cursor += 1;
@@ -1207,35 +1219,44 @@ pub(crate) fn validate_title_folder_template(template: &str) -> AppResult<()> {
         }
 
         let Some(end) = chars[cursor + 1..].iter().position(|value| *value == '}') else {
-            return Err(AppError::Validation(
-                "folder template contains an unmatched '{'".to_string(),
-            ));
+            return Err(AppError::Validation(format!(
+                "{template_kind} template contains an unmatched '{{'"
+            )));
         };
         let end_index = cursor + 1 + end;
         let token_spec: String = chars[cursor + 1..end_index].iter().collect();
         if token_spec.contains('{') {
-            return Err(AppError::Validation(
-                "folder template contains an unmatched '{'".to_string(),
-            ));
-        }
-        let token_name = token_spec
-            .split_once(':')
-            .map_or(token_spec.trim(), |(name, _)| name.trim())
-            .to_ascii_lowercase();
-        if !is_supported_title_folder_token(&token_name) {
             return Err(AppError::Validation(format!(
-                "unsupported folder template token: {{{}}}",
-                token_spec.trim()
+                "{template_kind} template contains an unmatched '{{'"
             )));
+        }
+        let token_spec_trimmed = token_spec.trim();
+        let mut spec_parts = token_spec_trimmed.split('|');
+        let token_core = spec_parts.next().unwrap_or("").trim();
+        let token_name = token_core
+            .split_once(':')
+            .map_or(token_core, |(name, _)| name.trim())
+            .to_ascii_lowercase();
+        if !is_supported_token(&token_name) {
+            return Err(AppError::Validation(format!(
+                "unsupported {template_kind} template token: {{{token_spec_trimmed}}}"
+            )));
+        }
+        for filter_spec in spec_parts {
+            if parse_rename_template_token_filter(filter_spec).is_none() {
+                return Err(AppError::Validation(format!(
+                    "unsupported {template_kind} template filter: {{{token_spec_trimmed}}}"
+                )));
+            }
         }
         saw_token = true;
         cursor = end_index + 1;
     }
 
     if !saw_token {
-        return Err(AppError::Validation(
-            "folder template must include at least one supported token".to_string(),
-        ));
+        return Err(AppError::Validation(format!(
+            "{template_kind} template must include at least one supported token"
+        )));
     }
 
     Ok(())
@@ -1246,6 +1267,33 @@ pub(crate) fn normalize_title_folder_template_or_default(
     default_template: &str,
     scope: &str,
 ) -> String {
+    normalize_folder_style_template_or_default(
+        raw,
+        default_template,
+        scope,
+        validate_title_folder_template,
+    )
+}
+
+pub(crate) fn normalize_season_folder_template_or_default(
+    raw: Option<String>,
+    default_template: &str,
+    scope: &str,
+) -> String {
+    normalize_folder_style_template_or_default(
+        raw,
+        default_template,
+        scope,
+        validate_season_folder_template,
+    )
+}
+
+fn normalize_folder_style_template_or_default(
+    raw: Option<String>,
+    default_template: &str,
+    scope: &str,
+    validate: impl Fn(&str) -> AppResult<()>,
+) -> String {
     let Some(template) = raw
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -1253,7 +1301,7 @@ pub(crate) fn normalize_title_folder_template_or_default(
         return default_template.to_string();
     };
 
-    match validate_title_folder_template(&template) {
+    match validate(&template) {
         Ok(()) => template,
         Err(error) => {
             warn!(
@@ -1603,6 +1651,10 @@ fn is_supported_title_folder_token(token: &str) -> bool {
         || TITLE_EXTERNAL_ID_TOKENS
             .iter()
             .any(|(token_name, _)| *token_name == token)
+}
+
+fn is_supported_season_folder_token(token: &str) -> bool {
+    matches!(token, "season" | "season_order")
 }
 
 fn insert_title_external_id_tokens(tokens: &mut BTreeMap<String, String>, title: &Title) {

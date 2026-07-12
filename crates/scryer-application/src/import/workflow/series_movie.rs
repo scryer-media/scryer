@@ -596,6 +596,7 @@ async fn import_movie_download(
         rename_enabled,
         rename_template,
         folder_template,
+        season_folder_template: _,
     } = resolve_import_paths(app, title).await?;
 
     let parsed = build_augmented_movie_import_metadata(&source_video, completed);
@@ -1237,6 +1238,7 @@ async fn import_series_movie_download(
         rename_enabled,
         rename_template,
         folder_template,
+        season_folder_template: _,
     } = resolve_import_paths(app, title).await?;
 
     let parsed = build_augmented_movie_import_metadata(&source_video, completed);

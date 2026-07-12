@@ -18,7 +18,7 @@ use crate::{
     nfo::{render_episode_nfo, render_movie_nfo, render_plexmatch, render_tvshow_nfo},
     parse_download_client_remote_path_mappings, parse_release_metadata,
     polling_worker::PollingWorker,
-    render_rename_template, sanitize_filesystem_component,
+    render_rename_template, render_title_folder_template, sanitize_filesystem_component,
 };
 use chrono::{DateTime, Utc};
 use scryer_domain::{
