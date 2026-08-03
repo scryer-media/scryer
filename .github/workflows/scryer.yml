@@ -572,8 +572,16 @@ jobs:
             ${{ matrix.artifact_name }}-sccache-stats.txt
             ${{ matrix.artifact_name }}-heartbeat.log
             ${{ matrix.artifact_name }}-build-status.json
-            ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.COLD_TARGET_NAME) }}
           if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload launcher Cargo timings
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}-cargo-timings-${{ github.run_id }}
+          path: ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.COLD_TARGET_NAME) }}
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Save sccache directory
@@ -768,8 +776,16 @@ jobs:
             ${{ matrix.artifact_name }}-sccache-stats.txt
             ${{ matrix.artifact_name }}-heartbeat.log
             ${{ matrix.artifact_name }}-build-status.json
-            ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.COLD_TARGET_NAME) }}
           if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Linux Cargo timings
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}-cargo-timings-${{ github.run_id }}
+          path: ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.COLD_TARGET_NAME) }}
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Save sccache directory
@@ -994,8 +1010,16 @@ jobs:
             ${{ matrix.artifact_name }}-sccache-stats.txt
             ${{ matrix.artifact_name }}-heartbeat.log
             ${{ matrix.artifact_name }}-build-status.json
-            ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.COLD_TARGET_NAME) }}
           if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload macOS Cargo timings
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}-cargo-timings-${{ github.run_id }}
+          path: ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.COLD_TARGET_NAME) }}
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Save sccache directory
@@ -1309,8 +1333,16 @@ jobs:
             ${{ matrix.artifact_name }}-sccache-stats.txt
             ${{ matrix.artifact_name }}-heartbeat.log
             ${{ matrix.artifact_name }}-build-status.json
-            ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.COLD_TARGET_NAME) }}
           if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Windows Cargo timings
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}-cargo-timings-${{ github.run_id }}
+          path: ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.COLD_TARGET_NAME) }}
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Save sccache directory
