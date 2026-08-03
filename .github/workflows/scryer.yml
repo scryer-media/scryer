@@ -1287,6 +1287,14 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path "$env:CARGO_TARGET_DIR\${{ matrix.target }}\$env:SCRYER_CARGO_PROFILE\scryer.exe",README.txt -DestinationPath "${{ matrix.artifact_name }}.zip"
 
+      - name: Validate packaged Windows artifact
+        shell: pwsh
+        run: |
+          .\.github\scripts\validate-windows-package.ps1 `
+            -Architecture ${{ matrix.arch }} `
+            -ZipPath "${{ matrix.artifact_name }}.zip" `
+            -BuiltExePath "$env:CARGO_TARGET_DIR\${{ matrix.target }}\$env:SCRYER_CARGO_PROFILE\scryer.exe"
+
       - name: Show sccache stats
         if: ${{ always() && github.event_name == 'pull_request' }}
         shell: pwsh
@@ -1306,6 +1314,10 @@ jobs:
           path: |
             ${{ matrix.artifact_name }}.zip
             ${{ matrix.artifact_name }}-build.log
+            ${{ matrix.artifact_name }}-defender-scan.log
+            ${{ matrix.artifact_name }}-attachment-services.log
+            ${{ matrix.artifact_name }}-noarg-startup.log
+            ${{ matrix.artifact_name }}-winget-install.log
             ${{ matrix.artifact_name }}-sccache-stats.txt
             ${{ matrix.artifact_name }}-heartbeat.log
             ${{ matrix.artifact_name }}-build-status.json
