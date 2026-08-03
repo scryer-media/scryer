@@ -1,6 +1,6 @@
 [package]
 name = "scryer-plugin-sdk"
-version = "3.6.0"
+version = "3.7.0"
 edition.workspace = true
 description = "SDK for building Scryer WebAssembly plugins"
 license = "GPL-3.0-only"

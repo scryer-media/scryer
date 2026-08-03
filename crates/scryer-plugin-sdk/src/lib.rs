@@ -5,6 +5,8 @@ use schemars::{JsonSchema, schema_for};
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize, Serializer};
 
+pub mod command;
+pub mod host;
 pub mod http;
 pub mod indexer;
 pub mod net;
@@ -31,7 +33,7 @@ pub use notification::{
     PluginNotificationTargetResult, coalesce_media_updates, rich_embed_from_request,
     to_script_environment, to_webhook_json,
 };
-pub const SDK_VERSION: &str = "3.6.0";
+pub const SDK_VERSION: &str = "3.7.0";
 
 pub fn current_sdk_constraint() -> String {
     legacy_sdk_constraint(SDK_VERSION)
@@ -2555,6 +2557,10 @@ pub struct TaggedAlias {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 struct PluginSdkSchemaDocument {
     descriptor: PluginDescriptor,
+    command_request: command::PluginCommandRequest,
+    command_response: command::PluginCommandResponse,
+    host_request: host::PluginHostRequest,
+    host_response: host::PluginHostResponse,
     indexer_search_request: PluginSearchRequest,
     indexer_search_response: PluginSearchResponse,
     subtitle_search_request: SubtitlePluginSearchRequest,
@@ -2575,6 +2581,7 @@ struct PluginSdkSchemaDocument {
     download_history_result: PluginResult<Vec<PluginCompletedDownload>>,
     download_completed_result: PluginResult<Vec<PluginCompletedDownload>>,
     download_recent_completed_request: PluginDownloadListRecentCompletedRequest,
+    download_get_completed_request: command::PluginDownloadGetCompletedRequest,
     download_control_request: PluginDownloadClientControlRequest,
     download_control_result: PluginResult<()>,
     download_mark_imported_request: PluginDownloadClientMarkImportedRequest,
@@ -2602,7 +2609,7 @@ mod tests {
 
     #[test]
     fn current_sdk_constraint_uses_current_v3_minor_floor() {
-        assert_eq!(current_sdk_constraint(), ">=3.6.0, <4.0.0");
+        assert_eq!(current_sdk_constraint(), ">=3.7.0, <4.0.0");
     }
 
     #[test]
