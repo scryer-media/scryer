@@ -45,6 +45,7 @@ type Props = {
   totalCount: number;
   loading: boolean;
   mutatingId: string | null;
+  pendingRestoreIds: ReadonlySet<string>;
   onEnabledChange: (enabled: boolean) => void;
   onSelectedLibraryIdsChange: (libraryIds: string[]) => void;
   onRestore: (item: RecycledItem) => void;
@@ -93,6 +94,7 @@ export function SettingsRecycleBinSection({
   totalCount,
   loading,
   mutatingId,
+  pendingRestoreIds,
   onEnabledChange,
   onSelectedLibraryIdsChange,
   onRestore,
@@ -196,7 +198,10 @@ export function SettingsRecycleBinSection({
               </TableHeader>
               <TableBody>
                 {items.map((item) => {
-                  const rowBusy = mutatingId === item.id || mutatingId === "__empty__";
+                  const rowBusy =
+                    pendingRestoreIds.has(item.id) ||
+                    mutatingId === item.id ||
+                    mutatingId === "__empty__";
                   return (
                     <TableRow
                       key={item.id}

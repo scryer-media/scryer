@@ -1368,6 +1368,15 @@ async fn bootstrap_application(
     if let Err(e) = app_use_case.normalize_routing_settings().await {
         tracing::warn!(error = %e, "failed to normalize routing settings on startup");
     }
+    if let Err(e) = app_use_case
+        .refresh_owned_download_client_categories()
+        .await
+    {
+        tracing::warn!(
+            error = %e,
+            "failed to build download-client category ownership snapshot on startup; foreign-download visibility will fail open"
+        );
+    }
     let restore_restart_controller = SelfRestartController::new(Duration::from_millis(250))
         .map_err(|error| format!("failed to prepare restore restart controller: {error}"))?;
 

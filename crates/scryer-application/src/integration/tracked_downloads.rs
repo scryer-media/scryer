@@ -59,8 +59,18 @@ pub struct TrackedDownload {
     pub path_missing_since: Option<DateTime<Utc>>,
     /// Runtime-only retry state for completed imports that temporarily contain no videos.
     pub no_video_import_retry: Option<NoVideoImportRetryState>,
+    /// Runtime-only classification for completed downloads owned by another app.
+    /// Never persisted as a tracked-download outcome.
+    pub foreign_import_classification: Option<ForeignDownloadClassification>,
     /// Manual failure actions can record the failure without reacquiring.
     pub skip_reacquire_on_failure: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForeignDownloadClassification {
+    ForeignCategory,
+    DroneParameter,
+    NoImportableVideo,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,6 +100,7 @@ pub struct TrackedDownloadQueueMetadata {
     pub status: TrackedDownloadStatus,
     pub status_messages: Vec<String>,
     pub match_type: TitleMatchType,
+    pub foreign_import_classification: Option<ForeignDownloadClassification>,
 }
 
 impl From<&TrackedDownload> for TrackedDownloadQueueMetadata {
@@ -105,6 +116,7 @@ impl From<&TrackedDownload> for TrackedDownloadQueueMetadata {
             status: value.status,
             status_messages: value.status_messages.clone(),
             match_type: value.match_type,
+            foreign_import_classification: value.foreign_import_classification,
         }
     }
 }
@@ -140,6 +152,7 @@ impl TrackedDownload {
         self.waiting_for_completed_history = finished.waiting_for_completed_history;
         self.path_missing_since = finished.path_missing_since;
         self.no_video_import_retry = finished.no_video_import_retry;
+        self.foreign_import_classification = finished.foreign_import_classification;
     }
 
     pub(crate) fn reset_for_import_retry(&mut self) {
@@ -150,6 +163,7 @@ impl TrackedDownload {
         self.waiting_for_completed_history = false;
         self.path_missing_since = None;
         self.no_video_import_retry = None;
+        self.foreign_import_classification = None;
         self.skip_reacquire_on_failure = false;
     }
 
@@ -261,6 +275,7 @@ impl TrackedDownloadService {
             waiting_for_completed_history: false,
             path_missing_since: None,
             no_video_import_retry: None,
+            foreign_import_classification: None,
             skip_reacquire_on_failure: false,
         };
 
@@ -2337,6 +2352,7 @@ mod tests {
             waiting_for_completed_history: false,
             path_missing_since: None,
             no_video_import_retry: None,
+            foreign_import_classification: None,
             skip_reacquire_on_failure: false,
         }
     }
@@ -3393,6 +3409,7 @@ mod tests {
                     waiting_for_completed_history: false,
                     path_missing_since: None,
                     no_video_import_retry: None,
+                    foreign_import_classification: None,
                     skip_reacquire_on_failure: false,
                 },
             );
@@ -3556,6 +3573,7 @@ mod tests {
             waiting_for_completed_history: false,
             path_missing_since: None,
             no_video_import_retry: None,
+            foreign_import_classification: None,
             skip_reacquire_on_failure: false,
         };
 
@@ -3591,6 +3609,7 @@ mod tests {
             waiting_for_completed_history: false,
             path_missing_since: None,
             no_video_import_retry: None,
+            foreign_import_classification: None,
             skip_reacquire_on_failure: false,
         };
 
@@ -3673,6 +3692,7 @@ mod tests {
                     status: TrackedDownloadStatus::Warning,
                     status_messages: Vec::new(),
                     match_type: TitleMatchType::Unmatched,
+                    foreign_import_classification: None,
                 },
             );
 
@@ -3829,6 +3849,7 @@ mod tests {
             waiting_for_completed_history: false,
             path_missing_since: None,
             no_video_import_retry: None,
+            foreign_import_classification: None,
             skip_reacquire_on_failure: false,
         };
 
@@ -4032,6 +4053,7 @@ mod tests {
             waiting_for_completed_history: false,
             path_missing_since: None,
             no_video_import_retry: None,
+            foreign_import_classification: None,
             skip_reacquire_on_failure: false,
         };
 

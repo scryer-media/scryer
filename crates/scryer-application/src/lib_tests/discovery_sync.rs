@@ -6580,6 +6580,8 @@ fn test_library_scan_completed_event(
 fn test_active_library_scan_run(started_at: chrono::DateTime<Utc>) -> JobRun {
     JobRun {
         id: "active-scan-run".to_string(),
+        operation_type: JobKey::LibraryScanMovies.as_str().to_string(),
+        actor_user_id: None,
         job_key: JobKey::LibraryScanMovies,
         display_name: "Scan Movies".to_string(),
         category: JobCategory::Library,

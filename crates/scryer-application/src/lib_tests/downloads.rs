@@ -355,12 +355,9 @@ async fn list_download_import_page_returns_only_import_rows_for_selected_filter(
         .await
         .expect("import page should load");
 
-    // Foreign (non-Scryer-origin) blocked downloads MUST be listed here. This
-    // is the surface used to assign a title to a download Scryer did not submit
-    // — filtering them out makes that flow unreachable. Keeping another app's
-    // downloads from being imported is completed_download_allows_automatic_import's
-    // job, not this query's; it parks them in ImportBlocked, which is exactly
-    // what this page is for.
+    // A non-Scryer-origin row is still eligible for manual assignment unless
+    // the runtime classifier or configured category ownership proves that it
+    // belongs to another app.
     assert!(!page.has_more);
     assert_eq!(page.total_count, 2);
     assert_eq!(page.items.len(), 2);
@@ -810,6 +807,7 @@ async fn tracked_title_assignment_fixture() -> TrackedTitleAssignmentFixture {
         waiting_for_completed_history: false,
         path_missing_since: None,
         no_video_import_retry: None,
+        foreign_import_classification: None,
         skip_reacquire_on_failure: false,
     });
     let submission = DownloadSubmission {
@@ -1055,6 +1053,7 @@ async fn list_download_import_page_uses_runtime_tracked_snapshot_cache() {
                 status: scryer_domain::TrackedDownloadStatus::Warning,
                 status_messages: vec!["moving files to nas".to_string()],
                 match_type: scryer_domain::TitleMatchType::Submission,
+                foreign_import_classification: None,
             },
         );
 
@@ -1080,6 +1079,88 @@ async fn list_download_import_page_uses_runtime_tracked_snapshot_cache() {
         vec!["moving files to nas".to_string()]
     );
     assert_eq!(page.items[0].title_id.as_deref(), Some("title-1"));
+}
+
+#[tokio::test]
+async fn foreign_runtime_classification_hides_queue_import_and_history_with_aligned_import_count() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        download_submissions,
+        pending_releases,
+    );
+
+    create_enabled_download_client_config(&app, &user, "NZBGet", "nzbget").await;
+
+    let mut foreign_item =
+        queue_history_fixture_item("foreign-classified-1", DownloadQueueState::Completed, 20);
+    foreign_item.client_id = "primary".to_string();
+    foreign_item.client_type = "nzbget".to_string();
+    foreign_item.category = Some("movie".to_string());
+    *download_client.queue_items.lock().await = vec![foreign_item.clone()];
+    *download_client.history_items.lock().await = vec![foreign_item.clone()];
+
+    let tracked_id = crate::tracked_downloads::tracked_download_id(
+        Some("primary"),
+        "nzbget",
+        "foreign-classified-1",
+    );
+    app.runtime
+        .acquisition
+        .tracked_download_snapshot
+        .write()
+        .await
+        .insert(
+            tracked_id,
+            crate::tracked_downloads::TrackedDownloadQueueMetadata {
+                client_item: foreign_item,
+                client_id: "primary".to_string(),
+                client_type: "nzbget".to_string(),
+                title_id: None,
+                facet: None,
+                source_title: None,
+                state: TrackedDownloadState::ImportBlocked,
+                status: scryer_domain::TrackedDownloadStatus::Ok,
+                status_messages: Vec::new(),
+                match_type: scryer_domain::TitleMatchType::Unmatched,
+                foreign_import_classification: Some(
+                    crate::tracked_downloads::ForeignDownloadClassification::DroneParameter,
+                ),
+            },
+        );
+
+    let import_page = app
+        .list_download_import_page(&user, 50, 0, DownloadImportFilter::All)
+        .await
+        .expect("import page should load");
+    let import_count = app
+        .count_download_import_items(&user, DownloadImportFilter::All)
+        .await
+        .expect("import count should load");
+    let queue = app
+        .list_download_queue(&user, true, false, true, DownloadActivityFilter::All)
+        .await
+        .expect("queue should load");
+    let history = app
+        .list_download_history_page(
+            &user,
+            50,
+            0,
+            Some(vec![DownloadHistoryFilter::All]),
+            None,
+            false,
+            None,
+        )
+        .await
+        .expect("history should load");
+
+    assert_eq!(import_page.total_count, 0);
+    assert_eq!(import_count, 0);
+    assert!(queue.is_empty());
+    assert_eq!(history.total_count, 0);
+    assert!(history.available_clients.is_empty());
 }
 
 #[tokio::test]
@@ -1185,6 +1266,7 @@ async fn download_import_page_renders_importing_state_from_runtime_snapshot() {
                 status: scryer_domain::TrackedDownloadStatus::Ok,
                 status_messages: vec!["Moving files to library.".to_string()],
                 match_type: scryer_domain::TitleMatchType::Submission,
+                foreign_import_classification: None,
             },
         );
 
@@ -2610,6 +2692,7 @@ async fn failed_tracked_cleanup_uses_facet_routing_and_exact_client_id() {
         waiting_for_completed_history: false,
         path_missing_since: None,
         no_video_import_retry: None,
+        foreign_import_classification: None,
         skip_reacquire_on_failure: false,
     };
 
@@ -4921,6 +5004,7 @@ async fn list_download_history_page_includes_tracked_terminal_rows_when_client_h
                 status: scryer_domain::TrackedDownloadStatus::Ok,
                 status_messages: Vec::new(),
                 match_type: scryer_domain::TitleMatchType::Submission,
+                foreign_import_classification: None,
             },
         );
 

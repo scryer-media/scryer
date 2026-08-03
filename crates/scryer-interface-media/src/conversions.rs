@@ -305,6 +305,8 @@ impl IntoApplication<AppJobKey> for JobKeyValue {
             Self::DiscoverySync => AppJobKey::DiscoverySync,
             Self::TitleImageCacheRefresh => AppJobKey::TitleImageCacheRefresh,
             Self::TitleDeletion => AppJobKey::TitleDeletion,
+            Self::MediaFileDeletion => AppJobKey::MediaFileDeletion,
+            Self::RecycleBinRestore => AppJobKey::RecycleBinRestore,
             Self::AcquisitionSearch => AppJobKey::AcquisitionSearch,
         }
     }
@@ -331,6 +333,8 @@ impl FromApplication<AppJobKey> for JobKeyValue {
             AppJobKey::DiscoverySync => Self::DiscoverySync,
             AppJobKey::TitleImageCacheRefresh => Self::TitleImageCacheRefresh,
             AppJobKey::TitleDeletion => Self::TitleDeletion,
+            AppJobKey::MediaFileDeletion => Self::MediaFileDeletion,
+            AppJobKey::RecycleBinRestore => Self::RecycleBinRestore,
             AppJobKey::AcquisitionSearch => Self::AcquisitionSearch,
         }
     }

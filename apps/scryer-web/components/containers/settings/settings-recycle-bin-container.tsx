@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import {
   SettingsRecycleBinSection,
@@ -15,7 +15,9 @@ import {
   updateRecycleBinSettingsMutation,
 } from "@/lib/graphql/mutations";
 import { useAuth } from "@/lib/hooks/use-auth";
+import { useJobRunToasts } from "@/components/root/job-run-provider";
 import type { LibraryRecord } from "@/lib/types";
+import { normalizeJobRun } from "@/lib/utils/job-runs";
 import {
   APP_PERMISSIONS,
   LIBRARY_PERMISSIONS,
@@ -77,7 +79,12 @@ export function SettingsRecycleBinContainer() {
   const [librariesLoading, setLibrariesLoading] = useState(false);
   const [selectedLibraryIds, setSelectedLibraryIds] = useState<string[]>([]);
   const [mutatingId, setMutatingId] = useState<string | null>(null);
+  const [pendingRestoreIds, setPendingRestoreIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const restoreUnregistersRef = useRef(new Set<() => void>());
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const { registerInteractiveJobRun } = useJobRunToasts();
 
   const fetchSettings = useCallback(async () => {
     setSettingsLoading(true);
@@ -205,21 +212,50 @@ export function SettingsRecycleBinContainer() {
   };
 
   const restoreItem = async (item: RecycledItem) => {
-    if (!canManageItems || !manageTitleLibraryIds.has(item.libraryId)) return;
+    if (
+      !canManageItems ||
+      !manageTitleLibraryIds.has(item.libraryId) ||
+      pendingRestoreIds.has(item.id)
+    ) return;
     setMutatingId(item.id);
     try {
-      const { error } = await client
-        .mutation(restoreRecycledItemMutation, { id: item.id })
+      const { data, error } = await client
+        .mutation<{
+          restoreRecycledItem?: { jobRun?: unknown };
+        }>(restoreRecycledItemMutation, { id: item.id })
         .toPromise();
       if (error) throw error;
-      setGlobalStatus(t("status.recycleBinRestored", { path: item.originalPath }));
-      await fetchItems();
+      const run = normalizeJobRun(data?.restoreRecycledItem?.jobRun);
+      if (!run) throw new Error(t("status.apiError"));
+      setPendingRestoreIds((current) => new Set(current).add(item.id));
+      const unregister = registerInteractiveJobRun(run, () => {
+        unregister();
+        restoreUnregistersRef.current.delete(unregister);
+        setPendingRestoreIds((current) => {
+          const next = new Set(current);
+          next.delete(item.id);
+          return next;
+        });
+        void fetchItems();
+      });
+      restoreUnregistersRef.current.add(unregister);
+      setGlobalStatus(`Queued restore for ${item.originalPath}.`);
     } catch (error) {
       setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
     } finally {
       setMutatingId(null);
     }
   };
+
+  useEffect(
+    () => () => {
+      for (const unregister of restoreUnregistersRef.current) {
+        unregister();
+      }
+      restoreUnregistersRef.current.clear();
+    },
+    [],
+  );
 
   const requestDelete = (item: RecycledItem) => {
     if (!canManageItems || !manageTitleLibraryIds.has(item.libraryId)) return;
@@ -304,6 +340,7 @@ export function SettingsRecycleBinContainer() {
         totalCount={totalCount}
         loading={itemsLoading}
         mutatingId={mutatingId}
+        pendingRestoreIds={pendingRestoreIds}
         onEnabledChange={updateEnabled}
         onSelectedLibraryIdsChange={setSelectedLibraryIds}
         onRestore={restoreItem}

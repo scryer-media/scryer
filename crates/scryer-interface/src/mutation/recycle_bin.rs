@@ -1,6 +1,7 @@
 use async_graphql::{Context, ID, Object, Result as GqlResult};
 
 use crate::context::{actor_from_ctx, app_from_ctx, to_gql_error};
+use crate::mappers::from_job_run;
 use crate::types::{DeleteRecycledItemPayload, EmptyRecycleBinPayload, RestoreRecycledItemPayload};
 
 #[derive(Default)]
@@ -16,12 +17,14 @@ impl RecycleBinMutations {
     ) -> GqlResult<RestoreRecycledItemPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let restored = app
-            .restore_recycled_item(&actor, id.as_str())
+        let accepted = app
+            .start_restore_recycled_item_job(&actor, id.as_str())
             .await
             .map_err(to_gql_error)?;
-        let _ = restored;
-        Ok(RestoreRecycledItemPayload { id })
+        Ok(RestoreRecycledItemPayload {
+            id,
+            job_run: from_job_run(accepted.job_run),
+        })
     }
 
     /// Permanently delete a single recycled item.

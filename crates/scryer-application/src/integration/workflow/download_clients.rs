@@ -336,6 +336,8 @@ impl AppUseCase {
             .download_client_configs
             .create(config)
             .await?;
+        self.refresh_owned_download_client_categories_best_effort()
+            .await;
         self.emit_configuration_changed_event(
             actor,
             "download_client",
@@ -399,6 +401,8 @@ impl AppUseCase {
                 is_enabled: update.is_enabled,
             })
             .await?;
+        self.refresh_owned_download_client_categories_best_effort()
+            .await;
         self.emit_configuration_changed_event(
             actor,
             "download_client",
@@ -428,6 +432,8 @@ impl AppUseCase {
             .download_client_configs
             .delete(client_id)
             .await?;
+        self.refresh_owned_download_client_categories_best_effort()
+            .await;
         self.emit_configuration_changed_event(
             actor,
             "download_client",

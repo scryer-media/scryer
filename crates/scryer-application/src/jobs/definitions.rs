@@ -156,6 +156,8 @@ pub enum JobKey {
     DiscoverySync,
     TitleImageCacheRefresh,
     TitleDeletion,
+    MediaFileDeletion,
+    RecycleBinRestore,
     AcquisitionSearch,
 }
 
@@ -180,6 +182,8 @@ impl JobKey {
             Self::DiscoverySync => "discovery_sync",
             Self::TitleImageCacheRefresh => "title_image_cache_refresh",
             Self::TitleDeletion => "title_deletion",
+            Self::MediaFileDeletion => "media_file_deletion",
+            Self::RecycleBinRestore => "recycle_bin_restore",
             Self::AcquisitionSearch => "acquisition_search",
         }
     }
@@ -204,6 +208,8 @@ impl JobKey {
             "discovery_sync" => Some(Self::DiscoverySync),
             "title_image_cache_refresh" => Some(Self::TitleImageCacheRefresh),
             "title_deletion" => Some(Self::TitleDeletion),
+            "media_file_deletion" => Some(Self::MediaFileDeletion),
+            "recycle_bin_restore" => Some(Self::RecycleBinRestore),
             "acquisition_search" => Some(Self::AcquisitionSearch),
             _ => None,
         }
@@ -229,6 +235,8 @@ impl JobKey {
             Self::DiscoverySync => "Discovery Sync",
             Self::TitleImageCacheRefresh => "Title Image Cache Refresh",
             Self::TitleDeletion => "Title Deletion",
+            Self::MediaFileDeletion => "Media File Deletion",
+            Self::RecycleBinRestore => "Recycle Bin Restore",
             Self::AcquisitionSearch => "Acquisition Search",
         }
     }
@@ -269,6 +277,8 @@ impl JobKey {
                 "Refresh remote artwork URLs from SMG and rebuild locally processed title images."
             }
             Self::TitleDeletion => "Delete selected titles from the catalog.",
+            Self::MediaFileDeletion => "Delete a media file from disk and the catalog.",
+            Self::RecycleBinRestore => "Restore a recycled file to its library.",
             Self::AcquisitionSearch => {
                 "Interactive acquisition search over the selected wanted/upgrade scopes."
             }
@@ -292,7 +302,9 @@ impl JobKey {
             | Self::AutoBackup
             | Self::DiscoverySync
             | Self::TitleImageCacheRefresh
-            | Self::TitleDeletion => JobCategory::System,
+            | Self::TitleDeletion
+            | Self::MediaFileDeletion
+            | Self::RecycleBinRestore => JobCategory::System,
             Self::Housekeeping | Self::PendingReleaseProcessing | Self::StagedNzbPrune => {
                 JobCategory::Maintenance
             }
@@ -326,6 +338,8 @@ impl JobKey {
             | Self::LibraryScanAnime
             | Self::TitleImageCacheRefresh
             | Self::TitleDeletion
+            | Self::MediaFileDeletion
+            | Self::RecycleBinRestore
             | Self::AcquisitionSearch => JobScheduleKind::Manual,
         }
     }
@@ -350,6 +364,8 @@ impl JobKey {
             | Self::LibraryScanAnime
             | Self::TitleImageCacheRefresh
             | Self::TitleDeletion
+            | Self::MediaFileDeletion
+            | Self::RecycleBinRestore
             | Self::AcquisitionSearch => "Manual only",
         }
     }
@@ -386,7 +402,11 @@ impl JobKey {
     pub fn manual_trigger_allowed(self) -> bool {
         !matches!(
             self,
-            Self::AutoBackup | Self::TitleDeletion | Self::AcquisitionSearch
+            Self::AutoBackup
+                | Self::TitleDeletion
+                | Self::MediaFileDeletion
+                | Self::RecycleBinRestore
+                | Self::AcquisitionSearch
         )
     }
 
@@ -493,6 +513,12 @@ pub struct JobRunRecord {
 #[derive(Clone, Debug)]
 pub struct JobRun {
     pub id: String,
+    /// Internal operation metadata used to recover an interactive run's library scope.
+    /// This is deliberately not exposed through the GraphQL payload.
+    pub operation_type: String,
+    /// Internal ownership metadata used to scope interactive job notifications.
+    /// This is deliberately not exposed through the GraphQL payload.
+    pub actor_user_id: Option<String>,
     pub job_key: JobKey,
     pub display_name: String,
     pub category: JobCategory,
@@ -528,6 +554,8 @@ impl JobRun {
 
         Self {
             id: record.id.clone(),
+            operation_type: record.operation_type.clone(),
+            actor_user_id: record.actor_user_id.clone(),
             job_key: record.job_key,
             display_name: record.job_key.display_name().to_string(),
             category: record.job_key.category(),
@@ -798,6 +826,8 @@ mod tests {
         let now = Utc::now();
         let run = JobRun {
             id: "run-1".to_string(),
+            operation_type: "background_library_refresh_series".to_string(),
+            actor_user_id: None,
             job_key: JobKey::BackgroundLibraryRefreshSeries,
             display_name: JobKey::BackgroundLibraryRefreshSeries
                 .display_name()

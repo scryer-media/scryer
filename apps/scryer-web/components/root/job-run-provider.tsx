@@ -18,10 +18,14 @@ import type { JobKey, JobRun } from "@/lib/types";
 
 const TERMINAL_TOAST_DURATION_MS = 6_000;
 const INTERACTIVE_JOB_RECONCILE_DELAYS_MS = [1_000, 5_000, 15_000] as const;
+const INTERACTIVE_JOB_RECONCILE_INTERVAL_MS = 30_000;
 const INTERACTIVE_JOB_RECONCILE_LIMIT = 25;
 
 type JobRunToastContextValue = {
-  registerInteractiveJobRun: (run: JobRun) => void;
+  registerInteractiveJobRun: (
+    run: JobRun,
+    onTerminal?: (run: JobRun) => void,
+  ) => () => void;
 };
 
 const JobRunToastContext = React.createContext<JobRunToastContextValue | null>(null);
@@ -49,7 +53,11 @@ export function JobRunProvider({
   const [runsById, setRunsById] = React.useState<Record<string, JobRun>>({});
   const dismissTimersRef = React.useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const reconcileTimersRef = React.useRef<Record<string, ReturnType<typeof setTimeout>[]>>({});
+  const reconcileIntervalsRef = React.useRef<Record<string, ReturnType<typeof setInterval>>>({});
   const interactiveRunIdsRef = React.useRef(new Set<string>());
+  const terminalCallbacksRef = React.useRef<
+    Record<string, Set<(run: JobRun) => void>>
+  >({});
 
   const upsertRun = React.useCallback((run: JobRun) => {
     setRunsById((current) => ({
@@ -60,14 +68,17 @@ export function JobRunProvider({
 
   const clearReconcileTimers = React.useCallback((runId: string) => {
     const timers = reconcileTimersRef.current[runId];
-    if (!timers) {
-      return;
+    if (timers) {
+      for (const timer of timers) {
+        clearTimeout(timer);
+      }
+      delete reconcileTimersRef.current[runId];
     }
-
-    for (const timer of timers) {
-      clearTimeout(timer);
+    const interval = reconcileIntervalsRef.current[runId];
+    if (interval) {
+      clearInterval(interval);
+      delete reconcileIntervalsRef.current[runId];
     }
-    delete reconcileTimersRef.current[runId];
   }, []);
 
   const reconcileInteractiveRun = React.useCallback(
@@ -119,15 +130,39 @@ export function JobRunProvider({
           void reconcileInteractiveRun(run);
         }, delayMs),
       );
+      reconcileIntervalsRef.current[run.id] = setInterval(() => {
+        void reconcileInteractiveRun(run);
+      }, INTERACTIVE_JOB_RECONCILE_INTERVAL_MS);
     },
     [clearReconcileTimers, reconcileInteractiveRun],
   );
 
-  const registerInteractiveJobRun = React.useCallback((run: JobRun) => {
-    interactiveRunIdsRef.current.add(run.id);
-    upsertRun(run);
-    scheduleInteractiveRunReconciliation(run);
-  }, [scheduleInteractiveRunReconciliation, upsertRun]);
+  const registerInteractiveJobRun = React.useCallback(
+    (run: JobRun, onTerminal?: (run: JobRun) => void) => {
+      interactiveRunIdsRef.current.add(run.id);
+      upsertRun(run);
+      scheduleInteractiveRunReconciliation(run);
+
+      if (!onTerminal) {
+        return () => {};
+      }
+      if (isTerminalJobRunStatus(run.status)) {
+        queueMicrotask(() => onTerminal(run));
+        return () => {};
+      }
+
+      const callbacks = (terminalCallbacksRef.current[run.id] ??= new Set());
+      callbacks.add(onTerminal);
+      return () => {
+        const current = terminalCallbacksRef.current[run.id];
+        current?.delete(onTerminal);
+        if (current?.size === 0) {
+          delete terminalCallbacksRef.current[run.id];
+        }
+      };
+    },
+    [scheduleInteractiveRunReconciliation, upsertRun],
+  );
 
   React.useEffect(() => {
     if (!enabled) {
@@ -184,6 +219,9 @@ export function JobRunProvider({
     for (const run of Object.values(runsById)) {
       if (isTerminalJobRunStatus(run.status)) {
         clearReconcileTimers(run.id);
+        const callbacks = terminalCallbacksRef.current[run.id];
+        delete terminalCallbacksRef.current[run.id];
+        callbacks?.forEach((callback) => callback(run));
       }
 
       const isInteractiveRun = interactiveRunIdsRef.current.has(run.id);
@@ -279,6 +317,11 @@ export function JobRunProvider({
         }
       }
       reconcileTimersRef.current = {};
+      for (const interval of Object.values(reconcileIntervalsRef.current)) {
+        clearInterval(interval);
+      }
+      reconcileIntervalsRef.current = {};
+      terminalCallbacksRef.current = {};
     },
     [],
   );

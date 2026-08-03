@@ -987,6 +987,7 @@ function TitleContextPanel({
   onRefreshTitles,
   onRefreshSubtitles,
   onDeleteMediaFile,
+  deletingMediaFileIds,
   onMakePrimaryMediaFile,
   primaryMediaFileUpdatingId,
   onPreviewRename,
@@ -1048,6 +1049,7 @@ function TitleContextPanel({
   onRefreshTitles: () => Promise<void> | void;
   onRefreshSubtitles: () => Promise<void> | void;
   onDeleteMediaFile: (title: TitleRecord, fileId: string) => void;
+  deletingMediaFileIds: ReadonlySet<string>;
   onMakePrimaryMediaFile: (
     title: TitleRecord,
     fileId: string,
@@ -1567,6 +1569,7 @@ function TitleContextPanel({
                 subtitleDownloads={externalSubtitles}
                 onRefreshSubtitles={onRefreshSubtitles}
                 onDeleteFile={(fileId) => onDeleteMediaFile(title, fileId)}
+                deletingFileIds={deletingMediaFileIds}
                 onMakePrimaryFile={
                   title.facet === "MOVIE"
                     ? (fileId) => onMakePrimaryMediaFile(title, fileId)
@@ -2022,6 +2025,7 @@ export function MediaContentView({
       title: TitleRecord,
       fileId: string,
     ) => void;
+    pendingMediaFileDeletionIds: ReadonlySet<string>;
     makeSelectedOverviewMovieFilePrimary: (
       title: TitleRecord,
       fileId: string,
@@ -2228,6 +2232,7 @@ export function MediaContentView({
     selectedOverviewExternalSubtitles,
     refreshSelectedOverviewExternalSubtitles,
     deleteSelectedOverviewMediaFile,
+    pendingMediaFileDeletionIds,
     makeSelectedOverviewMovieFilePrimary,
     selectedOverviewPrimaryMovieFileUpdatingId,
     previewTitleRename,
@@ -3960,6 +3965,7 @@ export function MediaContentView({
                       onRefreshTitles={handleRefreshTitles}
                       onRefreshSubtitles={refreshSelectedOverviewExternalSubtitles}
                       onDeleteMediaFile={deleteSelectedOverviewMediaFile}
+                      deletingMediaFileIds={pendingMediaFileDeletionIds}
                       onMakePrimaryMediaFile={
                         makeSelectedOverviewMovieFilePrimary
                       }

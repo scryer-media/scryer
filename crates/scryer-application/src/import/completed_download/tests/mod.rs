@@ -1144,9 +1144,17 @@ type TestSettingsValues = Arc<Mutex<HashMap<TestSettingsKey, String>>>;
 #[derive(Default)]
 struct TestSettingsRepo {
     values: TestSettingsValues,
+    failing_read_key: Option<String>,
 }
 
 impl TestSettingsRepo {
+    fn failing_reads_for(key_name: &str) -> Self {
+        Self {
+            values: Arc::new(Mutex::new(HashMap::new())),
+            failing_read_key: Some(key_name.to_string()),
+        }
+    }
+
     async fn set_scoped_json(&self, scope: &str, key_name: &str, scope_id: &str, value_json: &str) {
         self.values.lock().await.insert(
             (
@@ -1167,6 +1175,11 @@ impl SettingsRepository for TestSettingsRepo {
         key_name: &str,
         scope_id: Option<String>,
     ) -> AppResult<Option<String>> {
+        if self.failing_read_key.as_deref() == Some(key_name) {
+            return Err(AppError::Repository(format!(
+                "settings read deliberately failed for {key_name}"
+            )));
+        }
         Ok(self
             .values
             .lock()
@@ -1558,6 +1571,7 @@ fn build_tracked_download(title_id: &str, facet: &str, release_title: &str) -> T
         waiting_for_completed_history: false,
         path_missing_since: None,
         no_video_import_retry: None,
+        foreign_import_classification: None,
         skip_reacquire_on_failure: false,
     }
 }
@@ -1609,16 +1623,16 @@ async fn run_category_gate_check(
     match_type: TitleMatchType,
     is_scryer_origin: bool,
 ) -> TrackedDownload {
-    if settings
-        .get_setting_json(
-            SETTINGS_SCOPE_SYSTEM,
-            DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY,
-            Some("movie".to_string()),
-        )
-        .await
-        .expect("read default category")
-        .is_none()
-    {
+    if matches!(
+        settings
+            .get_setting_json(
+                SETTINGS_SCOPE_SYSTEM,
+                DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY,
+                Some("movie".to_string()),
+            )
+            .await,
+        Ok(None)
+    ) {
         set_scoped_default_category(&settings, "movie", "movie").await;
     }
 

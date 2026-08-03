@@ -1,4 +1,33 @@
 use super::*;
+use scryer_application::{JobKey, JobRunStatus};
+use tokio::time::{Duration, timeout};
+
+async fn wait_for_interactive_job(
+    ctx: &TestContext,
+    actor: &User,
+    job_key: JobKey,
+    run_id: &str,
+) -> scryer_application::JobRun {
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let run = ctx
+                .app
+                .list_job_runs(actor, job_key, 10)
+                .await
+                .expect("list interactive job runs")
+                .into_iter()
+                .find(|run| run.id == run_id);
+            if let Some(run) = run
+                && run.status.is_terminal()
+            {
+                return run;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("interactive job should complete")
+}
 
 #[tokio::test]
 async fn graphql_me_query() {
@@ -1988,6 +2017,33 @@ async fn delete_media_file_honors_custom_library_permissions_after_library_refac
         .as_str()
         .expect("preview fingerprint should be present");
 
+    let stale_delete_body = schema_exec(
+        &ctx,
+        &format!(
+            r#"
+            mutation {{
+              deleteMediaFile(input: {{
+                fileId: "{file_id}",
+                deleteFromDisk: true,
+                previewFingerprint: "stale"
+              }}) {{
+                id
+              }}
+            }}
+            "#
+        ),
+        Some(actor.clone()),
+    )
+    .await;
+    assert!(
+        stale_delete_body.get("errors").is_some(),
+        "stale previews must be rejected before a deletion job is queued: {stale_delete_body}"
+    );
+    assert!(
+        file_path.exists(),
+        "stale previews must not delete the file"
+    );
+
     let delete_body = schema_exec(
         &ctx,
         &format!(
@@ -1999,6 +2055,7 @@ async fn delete_media_file_honors_custom_library_permissions_after_library_refac
                 previewFingerprint: "{fingerprint}"
               }}) {{
                 id
+                jobRun {{ id jobKey status }}
               }}
             }}
             "#
@@ -2008,6 +2065,19 @@ async fn delete_media_file_honors_custom_library_permissions_after_library_refac
     .await;
     assert_no_errors(&delete_body);
     assert_eq!(delete_body["data"]["deleteMediaFile"]["id"], file_id);
+    assert_eq!(
+        delete_body["data"]["deleteMediaFile"]["jobRun"]["jobKey"],
+        "MEDIA_FILE_DELETION"
+    );
+    let delete_run_id = delete_body["data"]["deleteMediaFile"]["jobRun"]["id"]
+        .as_str()
+        .expect("delete job id");
+    assert_eq!(
+        wait_for_interactive_job(&ctx, &actor, JobKey::MediaFileDeletion, delete_run_id)
+            .await
+            .status,
+        JobRunStatus::Completed
+    );
 
     assert!(
         !file_path.exists(),
@@ -2077,6 +2147,7 @@ async fn delete_media_file_honors_custom_library_permissions_after_library_refac
                 previewFingerprint: "{catalog_only_fingerprint}"
               }}) {{
                 id
+                jobRun {{ id jobKey status }}
               }}
             }}
             "#
@@ -2088,6 +2159,21 @@ async fn delete_media_file_honors_custom_library_permissions_after_library_refac
     assert_eq!(
         catalog_only_delete_body["data"]["deleteMediaFile"]["id"],
         catalog_only_file_id
+    );
+    let catalog_only_delete_run_id = catalog_only_delete_body["data"]["deleteMediaFile"]["jobRun"]
+        ["id"]
+        .as_str()
+        .expect("catalog-only delete job id");
+    assert_eq!(
+        wait_for_interactive_job(
+            &ctx,
+            &actor,
+            JobKey::MediaFileDeletion,
+            catalog_only_delete_run_id,
+        )
+        .await
+        .status,
+        JobRunStatus::Completed
     );
     assert!(
         catalog_only_path.exists(),

@@ -6,7 +6,7 @@ use std::sync::{LazyLock, Mutex};
 
 use crate::context::{actor_from_ctx, app_from_ctx, require_config_app_permission, to_gql_error};
 use crate::mappers::{
-    from_cancel_library_scan_result, from_ignore_pending_import_result, from_library,
+    from_cancel_library_scan_result, from_ignore_pending_import_result, from_job_run, from_library,
     from_library_scan_session, from_library_scan_summary, from_media_rename_apply,
     from_resolve_pending_import_result,
 };
@@ -343,21 +343,23 @@ impl LibraryMutations {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let file_id = input.file_id.to_string();
-        app.delete_media_file(
-            &actor,
-            &file_id,
-            input.delete_from_disk.unwrap_or(false),
-            input
-                .preview_fingerprint
-                .map(|preview_fingerprint| DeleteExecutionConfirmation {
-                    preview_fingerprint,
-                    typed_confirmation: input.typed_confirmation,
-                }),
-        )
-        .await
-        .map_err(to_gql_error)?;
+        let accepted = app
+            .start_delete_media_file_job(
+                &actor,
+                &file_id,
+                input.delete_from_disk.unwrap_or(false),
+                input
+                    .preview_fingerprint
+                    .map(|preview_fingerprint| DeleteExecutionConfirmation {
+                        preview_fingerprint,
+                        typed_confirmation: input.typed_confirmation,
+                    }),
+            )
+            .await
+            .map_err(to_gql_error)?;
         Ok(DeleteMediaFilePayload {
             id: ID::from(file_id),
+            job_run: from_job_run(accepted.job_run),
         })
     }
 

@@ -1,23 +1,32 @@
 use super::*;
 
 #[tokio::test]
-async fn foreign_title_parse_requires_submission_origin_or_scryer_category() {
-    for (completed_category, queue_category) in [(None, None), (Some("other"), None)] {
-        let td = run_category_gate_check(
-            Arc::new(TestSettingsRepo::default()),
-            completed_category,
-            queue_category,
-            TitleMatchType::TitleParse,
-            false,
-        )
-        .await;
-        assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
-        assert!(
-            td.status_messages
-                .iter()
-                .any(|message| message == FOREIGN_CATEGORY_BLOCKED_MESSAGE)
-        );
-    }
+async fn foreign_category_is_runtime_classification_and_blank_category_remains_eligible() {
+    let td = run_category_gate_check(
+        Arc::new(TestSettingsRepo::default()),
+        None,
+        None,
+        TitleMatchType::TitleParse,
+        false,
+    )
+    .await;
+    assert_eq!(td.state, TrackedDownloadState::ImportPending);
+    assert_eq!(td.foreign_import_classification, None);
+
+    let td = run_category_gate_check(
+        Arc::new(TestSettingsRepo::default()),
+        Some("other"),
+        None,
+        TitleMatchType::TitleParse,
+        false,
+    )
+    .await;
+    assert_eq!(td.state, TrackedDownloadState::Downloading);
+    assert_eq!(
+        td.foreign_import_classification,
+        Some(crate::tracked_downloads::ForeignDownloadClassification::ForeignCategory)
+    );
+    assert!(td.status_messages.is_empty());
 
     let td = run_category_gate_check(
         Arc::new(TestSettingsRepo::default()),
@@ -43,7 +52,72 @@ async fn foreign_title_parse_requires_submission_origin_or_scryer_category() {
 }
 
 #[tokio::test]
-async fn foreign_title_parse_with_orphan_submission_still_requires_scryer_category() {
+async fn category_ownership_snapshot_is_reused_until_configuration_refresh() {
+    let settings = Arc::new(TestSettingsRepo::default());
+    set_scoped_default_category(&settings, "movie", "movie").await;
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let app = build_app_with_download_client_configs_submissions_and_settings(
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        TestAppRepositories {
+            download_client: test_download_client_with_completed(build_completed_download(
+                "Paper.Lantern.2012.1080p.WEB-DL",
+                temp_dir.path().to_string_lossy().as_ref(),
+                Some("movie"),
+            )),
+            download_client_configs: Arc::new(NullDownloadClientConfigRepository),
+            download_submissions: Arc::new(
+                crate::null_repositories::NullDownloadSubmissionRepository,
+            ),
+            settings: settings.clone(),
+        },
+    );
+
+    let initial = app
+        .owned_download_client_categories_snapshot()
+        .await
+        .expect("initial ownership snapshot");
+    assert!(initial.owns_category("client-1", "movie"));
+
+    set_scoped_default_category(&settings, "movie", "movies-v2").await;
+    let cached = app
+        .owned_download_client_categories_snapshot()
+        .await
+        .expect("cached ownership snapshot");
+    assert!(cached.owns_category("client-1", "movie"));
+    assert!(!cached.owns_category("client-1", "movies-v2"));
+
+    app.refresh_owned_download_client_categories()
+        .await
+        .expect("refresh ownership snapshot");
+    let refreshed = app
+        .owned_download_client_categories_snapshot()
+        .await
+        .expect("refreshed ownership snapshot");
+    assert!(!refreshed.owns_category("client-1", "movie"));
+    assert!(refreshed.owns_category("client-1", "movies-v2"));
+}
+
+#[tokio::test]
+async fn category_settings_read_failure_does_not_classify_or_hide_the_download() {
+    let td = run_category_gate_check(
+        Arc::new(TestSettingsRepo::failing_reads_for(
+            DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY,
+        )),
+        Some("custom-category"),
+        None,
+        TitleMatchType::TitleParse,
+        false,
+    )
+    .await;
+
+    assert_eq!(td.foreign_import_classification, None);
+}
+
+#[tokio::test]
+async fn orphan_submission_with_blank_category_remains_eligible() {
     let settings = Arc::new(TestSettingsRepo::default());
     set_scoped_default_category(&settings, "movie", "movie").await;
     let temp_dir = tempfile::tempdir().expect("temp dir");
@@ -89,12 +163,8 @@ async fn foreign_title_parse_with_orphan_submission_still_requires_scryer_catego
 
     check(&app, &mut td).await;
 
-    assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
-    assert!(
-        td.status_messages
-            .iter()
-            .any(|message| message == FOREIGN_CATEGORY_BLOCKED_MESSAGE)
-    );
+    assert_eq!(td.state, TrackedDownloadState::ImportPending);
+    assert_eq!(td.foreign_import_classification, None);
 }
 
 #[tokio::test]
@@ -291,7 +361,7 @@ async fn confirmed_completed_downloads_bypass_category_gate() {
 }
 
 #[tokio::test]
-async fn manual_assignment_allows_retry_after_category_block() {
+async fn blank_category_can_enter_normal_import_flow() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let completed = build_completed_download(
         "Paper.Lantern.2012.1080p.WEB-DL",
@@ -310,14 +380,154 @@ async fn manual_assignment_allows_retry_after_category_block() {
     let mut td = build_foreign_completed_tracked_download(None, TitleMatchType::TitleParse, false);
 
     check(&app, &mut td).await;
-    assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
+    assert_eq!(td.state, TrackedDownloadState::ImportPending);
+}
 
-    crate::tracked_downloads::assign_title_to_tracked_download(&app, &mut td, &title).await;
-    assert_eq!(td.match_type, TitleMatchType::Submission);
-    assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
+#[tokio::test]
+async fn drone_parameter_is_runtime_foreign_classification() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let mut completed = build_completed_download(
+        "Paper.Lantern.2012.1080p.WEB-DL",
+        temp_dir.path().to_string_lossy().as_ref(),
+        Some("movie"),
+    );
+    completed
+        .parameters
+        .push(("DrOnE".to_string(), "true".to_string()));
+    let title = build_title("title-1", "Paper Lantern", MediaFacet::Movie);
+    let app = build_app_with_download_client(
+        vec![title],
+        vec![],
+        vec![],
+        vec![],
+        test_download_client_with_completed(completed),
+    );
+    let mut td =
+        build_foreign_completed_tracked_download(Some("movie"), TitleMatchType::TitleParse, false);
 
-    td.state = TrackedDownloadState::Downloading;
     check(&app, &mut td).await;
+
+    assert_eq!(td.state, TrackedDownloadState::Downloading);
+    assert_eq!(
+        td.foreign_import_classification,
+        Some(crate::tracked_downloads::ForeignDownloadClassification::DroneParameter)
+    );
+    assert!(!td.import_attempted);
+}
+
+#[tokio::test]
+async fn unmatched_ready_nonvideo_is_runtime_foreign_classification() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let completed = build_completed_download(
+        "unrelated.release",
+        temp_dir.path().to_string_lossy().as_ref(),
+        Some("movie"),
+    );
+    let app = build_app_with_download_client(
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        test_download_client_with_completed(completed),
+    );
+    let mut td =
+        build_foreign_completed_tracked_download(Some("movie"), TitleMatchType::Unmatched, false);
+    td.title_id = None;
+
+    check(&app, &mut td).await;
+
+    assert_eq!(td.state, TrackedDownloadState::Downloading);
+    assert_eq!(
+        td.foreign_import_classification,
+        Some(crate::tracked_downloads::ForeignDownloadClassification::NoImportableVideo)
+    );
+    assert!(!td.import_attempted);
+}
+
+#[tokio::test]
+async fn title_parsed_ready_nonvideo_is_runtime_foreign_classification() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let completed = build_completed_download(
+        "Paper.Lantern.2012.1080p.WEB-DL",
+        temp_dir.path().to_string_lossy().as_ref(),
+        Some("movie"),
+    );
+    let title = build_title("title-1", "Paper Lantern", MediaFacet::Movie);
+    let app = build_app_with_download_client(
+        vec![title],
+        vec![],
+        vec![],
+        vec![],
+        test_download_client_with_completed(completed),
+    );
+    let mut td =
+        build_foreign_completed_tracked_download(Some("movie"), TitleMatchType::TitleParse, false);
+
+    check(&app, &mut td).await;
+
+    assert_eq!(td.state, TrackedDownloadState::Downloading);
+    assert_eq!(
+        td.foreign_import_classification,
+        Some(crate::tracked_downloads::ForeignDownloadClassification::NoImportableVideo)
+    );
+    assert!(!td.import_attempted);
+}
+
+#[tokio::test]
+async fn no_video_classification_is_reconsidered_when_archive_arrives() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let completed = build_completed_download(
+        "unrelated.release",
+        temp_dir.path().to_string_lossy().as_ref(),
+        Some("movie"),
+    );
+    let app = build_app_with_download_client(
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        test_download_client_with_completed(completed),
+    );
+    let mut td =
+        build_foreign_completed_tracked_download(Some("movie"), TitleMatchType::Unmatched, false);
+    td.title_id = None;
+
+    check(&app, &mut td).await;
+    assert_eq!(
+        td.foreign_import_classification,
+        Some(crate::tracked_downloads::ForeignDownloadClassification::NoImportableVideo)
+    );
+
+    std::fs::write(temp_dir.path().join("release.rar"), b"archive").expect("write archive marker");
+    check(&app, &mut td).await;
+
+    assert_eq!(td.foreign_import_classification, None);
+    assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
+}
+
+#[tokio::test]
+async fn archive_only_title_parse_remains_on_normal_import_path() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    std::fs::write(temp_dir.path().join("release.rar"), b"archive").expect("write archive marker");
+    let completed = build_completed_download(
+        "Paper.Lantern.2012.1080p.WEB-DL",
+        temp_dir.path().to_string_lossy().as_ref(),
+        Some("movie"),
+    );
+    let title = build_title("title-1", "Paper Lantern", MediaFacet::Movie);
+    let app = build_app_with_download_client(
+        vec![title],
+        vec![],
+        vec![],
+        vec![],
+        test_download_client_with_completed(completed),
+    );
+    let mut td =
+        build_foreign_completed_tracked_download(Some("movie"), TitleMatchType::TitleParse, false);
+
+    check(&app, &mut td).await;
+
+    assert_eq!(td.foreign_import_classification, None);
     assert_eq!(td.state, TrackedDownloadState::ImportPending);
 }
 

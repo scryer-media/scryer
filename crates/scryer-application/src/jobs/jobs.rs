@@ -653,10 +653,77 @@ impl AppUseCase {
         Ok(crate::jobs::all_job_definitions(&next_runs))
     }
 
+    async fn actor_can_view_interactive_job_run(
+        &self,
+        actor: &User,
+        run: &JobRun,
+    ) -> AppResult<bool> {
+        if run.actor_user_id.as_deref() != Some(actor.id.as_str()) {
+            return Ok(false);
+        }
+        match run.job_key {
+            JobKey::TitleDeletion => Ok(true),
+            JobKey::MediaFileDeletion | JobKey::RecycleBinRestore => {
+                let Some((prefix, remainder)) = run.operation_type.split_once(':') else {
+                    return Ok(false);
+                };
+                let expected_prefix = match run.job_key {
+                    JobKey::MediaFileDeletion => "media_file_deletion",
+                    JobKey::RecycleBinRestore => "recycle_bin_restore",
+                    _ => unreachable!("interactive job key already matched"),
+                };
+                if prefix != expected_prefix {
+                    return Ok(false);
+                }
+                let Some((library_id, _resource_id)) = remainder.split_once(':') else {
+                    // Legacy rows did not persist a library scope and must not
+                    // remain visible after the original grant is gone.
+                    return Ok(false);
+                };
+                if library_id.is_empty() {
+                    return Ok(false);
+                }
+                match self
+                    .require_library_permission(
+                        actor,
+                        library_id,
+                        scryer_domain::LibraryPermission::ManageTitles,
+                    )
+                    .await
+                {
+                    Ok(()) => Ok(true),
+                    Err(AppError::Unauthorized(_)) => Ok(false),
+                    Err(error) => Err(error),
+                }
+            }
+            _ => Ok(false),
+        }
+    }
+
+    async fn filter_interactive_job_runs_for_actor(
+        &self,
+        actor: &User,
+        runs: Vec<JobRun>,
+    ) -> AppResult<Vec<JobRun>> {
+        let mut visible = Vec::with_capacity(runs.len());
+        for run in runs {
+            if self.actor_can_view_interactive_job_run(actor, &run).await? {
+                visible.push(run);
+            }
+        }
+        Ok(visible)
+    }
+
     pub async fn active_job_runs(&self, actor: &User) -> AppResult<Vec<JobRun>> {
-        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
-            .await?;
-        self.load_active_job_runs_for_listing().await
+        let runs = self.load_active_job_runs_for_listing().await?;
+        if self
+            .has_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?
+        {
+            return Ok(runs);
+        }
+        self.filter_interactive_job_runs_for_actor(actor, runs)
+            .await
     }
 
     pub async fn list_job_runs(
@@ -668,7 +735,12 @@ impl AppUseCase {
         let can_manage_system = self
             .has_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
-        if !can_manage_system && job_key != JobKey::TitleDeletion {
+        if !can_manage_system
+            && !matches!(
+                job_key,
+                JobKey::TitleDeletion | JobKey::MediaFileDeletion | JobKey::RecycleBinRestore
+            )
+        {
             return Err(AppError::Unauthorized(
                 "You do not have permission to perform this action".to_string(),
             ));
@@ -693,7 +765,7 @@ impl AppUseCase {
                 .await?
         };
 
-        Ok(records
+        let runs = records
             .into_iter()
             .map(|record| {
                 active_runs_by_id
@@ -701,7 +773,13 @@ impl AppUseCase {
                     .cloned()
                     .unwrap_or_else(|| JobRun::from_record(&record, None))
             })
-            .collect())
+            .collect::<Vec<_>>();
+        if can_manage_system {
+            Ok(runs)
+        } else {
+            self.filter_interactive_job_runs_for_actor(actor, runs)
+                .await
+        }
     }
 
     pub async fn list_recent_job_runs(&self, actor: &User, limit: usize) -> AppResult<Vec<JobRun>> {
@@ -766,13 +844,15 @@ impl AppUseCase {
         &self,
         actor: &User,
     ) -> AppResult<broadcast::Receiver<JobRun>> {
-        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+        let can_manage_system = self
+            .has_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
         let (tx, rx) = broadcast::channel(128);
         let app = self.clone();
+        let actor = actor.clone();
         tokio::spawn(async move {
             let mut receiver = app.runtime.jobs.job_run_tracker.subscribe();
-            let initial_runs = match app.load_active_job_runs_for_listing().await {
+            let initial_runs = match app.active_job_runs(&actor).await {
                 Ok(runs) => runs,
                 Err(error) => {
                     tracing::warn!("job run subscription initial load failed: {error}");
@@ -788,6 +868,18 @@ impl AppUseCase {
             loop {
                 match receiver.recv().await {
                     Ok(run) => {
+                        if !can_manage_system {
+                            match app.actor_can_view_interactive_job_run(&actor, &run).await {
+                                Ok(true) => {}
+                                Ok(false) => continue,
+                                Err(error) => {
+                                    tracing::warn!(
+                                        "job run subscription authorization failed: {error}"
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
                         if tx.send(run).is_err() {
                             break;
                         }
@@ -1425,6 +1517,13 @@ impl AppUseCase {
             }
             JobKey::TitleDeletion => Err(AppError::Validation(
                 "title deletion jobs must be started from the title deletion mutation".into(),
+            )),
+            JobKey::MediaFileDeletion => Err(AppError::Validation(
+                "media file deletion jobs must be started from the media file deletion mutation"
+                    .into(),
+            )),
+            JobKey::RecycleBinRestore => Err(AppError::Validation(
+                "recycle restore jobs must be started from the recycle restore mutation".into(),
             )),
             JobKey::AcquisitionSearch => Err(AppError::Validation(
                 "acquisition search jobs must be started from the acquisition search mutation"

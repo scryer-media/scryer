@@ -377,6 +377,18 @@ impl AppUseCase {
             .await
     }
 
+    pub(crate) async fn validate_delete_media_file(
+        &self,
+        file_id: &str,
+        preview_fingerprint: &str,
+        typed_confirmation: Option<&str>,
+    ) -> AppResult<()> {
+        let context = self.resolve_media_file_delete_context(file_id).await?;
+        self.validate_delete_context(context, preview_fingerprint, typed_confirmation)
+            .await
+            .map(|_| ())
+    }
+
     pub async fn delete_external_subtitle(
         &self,
         actor: &User,
@@ -523,6 +535,28 @@ impl AppUseCase {
         preview_fingerprint: &str,
         typed_confirmation: Option<&str>,
     ) -> AppResult<()> {
+        let manifest = self
+            .validate_delete_context(context, preview_fingerprint, typed_confirmation)
+            .await?;
+
+        for entry in &manifest.entries {
+            delete_single_path(entry).await.map_err(|error| {
+                AppError::Repository(format!(
+                    "failed to delete {}: {error}",
+                    entry.path.display()
+                ))
+            })?;
+        }
+
+        Ok(())
+    }
+
+    async fn validate_delete_context(
+        &self,
+        context: UserDeleteContext,
+        preview_fingerprint: &str,
+        typed_confirmation: Option<&str>,
+    ) -> AppResult<UserDeleteManifest> {
         let manifest = self.build_delete_manifest(context.clone()).await?;
         if manifest.fingerprint != preview_fingerprint {
             return Err(AppError::Validation(
@@ -540,16 +574,7 @@ impl AppUseCase {
 
         ensure_delete_context_roots_available(&context)?;
 
-        for entry in &manifest.entries {
-            delete_single_path(entry).await.map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to delete {}: {error}",
-                    entry.path.display()
-                ))
-            })?;
-        }
-
-        Ok(())
+        Ok(manifest)
     }
 
     async fn require_delete_context_permission(

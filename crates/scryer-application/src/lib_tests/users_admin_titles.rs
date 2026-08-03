@@ -341,6 +341,24 @@ async fn title_deletion_job_runs_are_visible_to_actor_without_system_settings() 
             Some(manager.id.clone()),
         ))
         .await;
+    let mut current_library_media_run = make_run(
+        "own-media-file-delete-current-library",
+        JobKey::MediaFileDeletion,
+        Some(manager.id.clone()),
+    );
+    current_library_media_run.operation_type = format!(
+        "media_file_deletion:{}:file-current",
+        scryer_domain::default_library_id_for_facet(&MediaFacet::Movie)
+    );
+    job_runs.seed(current_library_media_run).await;
+    let mut revoked_library_media_run = make_run(
+        "own-media-file-delete-revoked-library",
+        JobKey::MediaFileDeletion,
+        Some(manager.id.clone()),
+    );
+    revoked_library_media_run.operation_type =
+        "media_file_deletion:revoked-library:file-revoked".to_string();
+    job_runs.seed(revoked_library_media_run).await;
 
     let manager_runs = app
         .list_job_runs(&manager, JobKey::TitleDeletion, 10)
@@ -348,6 +366,16 @@ async fn title_deletion_job_runs_are_visible_to_actor_without_system_settings() 
         .expect("manager can list own title deletion runs");
     assert_eq!(manager_runs.len(), 1);
     assert_eq!(manager_runs[0].id, "own-title-delete");
+
+    let media_file_runs = app
+        .list_job_runs(&manager, JobKey::MediaFileDeletion, 10)
+        .await
+        .expect("manager can list own scoped media file deletion runs");
+    assert_eq!(media_file_runs.len(), 1);
+    assert_eq!(
+        media_file_runs[0].id,
+        "own-media-file-delete-current-library"
+    );
 
     let denied = app.list_job_runs(&manager, JobKey::Housekeeping, 10).await;
     assert!(matches!(denied, Err(AppError::Unauthorized(_))));
@@ -362,6 +390,83 @@ async fn title_deletion_job_runs_are_visible_to_actor_without_system_settings() 
         .collect::<HashSet<_>>();
     assert!(admin_run_ids.contains("own-title-delete"));
     assert!(admin_run_ids.contains("other-title-delete"));
+}
+
+#[tokio::test]
+async fn library_managers_receive_only_their_scoped_interactive_job_events() {
+    let (app, admin) = bootstrap();
+    let manager = create_user_with_permissions(
+        &app,
+        &admin,
+        "interactive-job-manager",
+        "password123",
+        vec![TestPermissionPreset::TitleManagement],
+    )
+    .await
+    .expect("create manager");
+    let other_manager = create_user_with_permissions(
+        &app,
+        &admin,
+        "other-interactive-job-manager",
+        "password123",
+        vec![TestPermissionPreset::TitleManagement],
+    )
+    .await
+    .expect("create other manager");
+    let now = chrono::Utc::now();
+    let run = JobRunRecord {
+        id: "active-media-file-delete".to_string(),
+        job_key: JobKey::MediaFileDeletion,
+        operation_type: format!(
+            "media_file_deletion:{}:file-1",
+            scryer_domain::default_library_id_for_facet(&MediaFacet::Movie)
+        ),
+        status: JobRunStatus::Running,
+        trigger_source: JobTriggerSource::Manual,
+        actor_user_id: Some(manager.id.clone()),
+        progress_json: None,
+        summary_json: None,
+        summary_text: None,
+        error_text: None,
+        started_at: now,
+        completed_at: None,
+        created_at: now,
+        updated_at: now,
+    };
+    app.runtime
+        .jobs
+        .job_run_tracker
+        .upsert_active_run(JobRun::from_record(&run, None))
+        .await;
+
+    let active_runs = app
+        .active_job_runs(&manager)
+        .await
+        .expect("manager can list own active interactive job");
+    assert_eq!(active_runs.len(), 1);
+    assert_eq!(active_runs[0].id, run.id);
+
+    let mut manager_events = app
+        .subscribe_job_run_events(&manager)
+        .await
+        .expect("manager can subscribe to own interactive jobs");
+    let manager_event =
+        tokio::time::timeout(std::time::Duration::from_secs(5), manager_events.recv())
+            .await
+            .expect("manager should receive active interactive job")
+            .expect("job event should be delivered");
+    assert_eq!(manager_event.id, run.id);
+
+    let mut other_events = app
+        .subscribe_job_run_events(&other_manager)
+        .await
+        .expect("other manager subscription should initialize");
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), other_events.recv())
+            .await
+            .is_err(),
+        "an interactive job must not be broadcast to a different manager"
+    );
 }
 
 #[tokio::test]

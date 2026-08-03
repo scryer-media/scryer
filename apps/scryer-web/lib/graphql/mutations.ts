@@ -527,6 +527,21 @@ export const cancelMyMediaRequestMutation = `mutation CancelMyMediaRequest($requ
 export const deleteMediaFileMutation = `mutation DeleteMediaFile($input: DeleteMediaFileInput!) {
   deleteMediaFile(input: $input) {
     id
+    jobRun {
+      id
+      jobKey
+      displayName
+      category
+      section
+      status
+      triggerSource
+      startedAt
+      completedAt
+      summaryJson
+      summaryText
+      errorText
+      progressJson
+    }
   }
 }`;
 
@@ -1668,6 +1683,21 @@ export const installUploadedPluginMutation = `mutation InstallUploadedPlugin($in
 export const restoreRecycledItemMutation = `mutation RestoreRecycledItem($id: ID!) {
   restoreRecycledItem(id: $id) {
     id
+    jobRun {
+      id
+      jobKey
+      displayName
+      category
+      section
+      status
+      triggerSource
+      startedAt
+      completedAt
+      summaryJson
+      summaryText
+      errorText
+      progressJson
+    }
   }
 }`;
 

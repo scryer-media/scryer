@@ -704,6 +704,7 @@ input DeleteMediaFileInput {
 
 type DeleteMediaFilePayload {
 	id: ID!
+	jobRun: JobRunPayload!
 }
 
 type DeleteMediaServerConnectionPayload {
@@ -2055,6 +2056,8 @@ enum JobKeyValue {
 	DISCOVERY_SYNC
 	TITLE_IMAGE_CACHE_REFRESH
 	TITLE_DELETION
+	MEDIA_FILE_DELETION
+	RECYCLE_BIN_RESTORE
 	ACQUISITION_SEARCH
 }
 
@@ -3856,6 +3859,7 @@ type RestoreInspectPayload {
 
 type RestoreRecycledItemPayload {
 	id: ID!
+	jobRun: JobRunPayload!
 }
 
 type RestoreSummaryPayload {

@@ -1690,6 +1690,8 @@ pub enum JobKeyValue {
     DiscoverySync,
     TitleImageCacheRefresh,
     TitleDeletion,
+    MediaFileDeletion,
+    RecycleBinRestore,
     AcquisitionSearch,
 }
 
@@ -4057,6 +4059,7 @@ pub struct DeleteMediaFileInput {
 #[derive(SimpleObject, Clone)]
 pub struct DeleteMediaFilePayload {
     pub id: async_graphql::ID,
+    pub job_run: JobRunPayload,
 }
 
 #[derive(InputObject)]
@@ -4899,6 +4902,7 @@ pub struct RecycledItemsPayload {
 #[derive(SimpleObject, Clone)]
 pub struct RestoreRecycledItemPayload {
     pub id: async_graphql::ID,
+    pub job_run: JobRunPayload,
 }
 
 #[derive(SimpleObject, Clone)]

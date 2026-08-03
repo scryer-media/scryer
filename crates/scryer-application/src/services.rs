@@ -122,6 +122,8 @@ pub struct BackupExecutionGuardTable {
     locks: Arc<tokio::sync::Mutex<HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>>,
 }
 
+pub type InteractiveOperationGuardTable = BackupExecutionGuardTable;
+
 impl BackupExecutionGuardTable {
     async fn lock_for_key(&self, key: String) -> Arc<tokio::sync::Mutex<()>> {
         let mut locks = self.locks.lock().await;
@@ -989,6 +991,8 @@ pub struct AppRuntimeAcquisitionState {
     pub tracked_download_handle: Option<tracked_downloads::TrackedDownloadHandle>,
     pub tracked_download_snapshot:
         Arc<tokio::sync::RwLock<HashMap<String, tracked_downloads::TrackedDownloadQueueMetadata>>>,
+    pub(crate) download_client_category_ownership:
+        Arc<tokio::sync::RwLock<DownloadClientCategoryOwnershipCache>>,
     /// Cancellation tokens for in-flight interactive acquisition-search jobs
     ///, keyed by job-run id — mirrors the library-scan cancel map.
     pub acquisition_search_cancellation_tokens:
@@ -1004,6 +1008,29 @@ pub struct AppRuntimeAcquisitionState {
             >,
         >,
     >,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct DownloadClientCategoryOwnershipSnapshot {
+    pub(crate) default_categories: HashSet<String>,
+    pub(crate) categories_by_client: HashMap<String, HashSet<String>>,
+}
+
+impl DownloadClientCategoryOwnershipSnapshot {
+    pub(crate) fn owns_category(&self, client_id: &str, category: &str) -> bool {
+        self.categories_by_client
+            .get(client_id)
+            .unwrap_or(&self.default_categories)
+            .contains(category)
+    }
+}
+
+#[derive(Clone, Default)]
+pub(crate) enum DownloadClientCategoryOwnershipCache {
+    #[default]
+    Uninitialized,
+    Available(Arc<DownloadClientCategoryOwnershipSnapshot>),
+    Unavailable,
 }
 
 pub(crate) struct ReleaseCandidatePasswordTicket {
@@ -1039,6 +1066,7 @@ pub struct AppRuntimeJobState {
     pub job_run_tracker: JobRunTracker,
     pub discovery_sync_wake: Arc<tokio::sync::Notify>,
     pub backup_execution_guards: BackupExecutionGuardTable,
+    pub interactive_operation_guards: InteractiveOperationGuardTable,
     pub title_deletion_lock: Arc<tokio::sync::Mutex<()>>,
     /// Single-flight guard for the interactive acquisition-search job — mirrors `title_deletion_lock`.
     pub acquisition_search_lock: Arc<tokio::sync::Mutex<()>>,
@@ -1237,6 +1265,9 @@ impl AppRuntimeState {
                 rss_seen_guids: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
                 tracked_download_handle: None,
                 tracked_download_snapshot: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+                download_client_category_ownership: Arc::new(tokio::sync::RwLock::new(
+                    DownloadClientCategoryOwnershipCache::default(),
+                )),
                 acquisition_search_cancellation_tokens: Arc::new(Mutex::new(HashMap::new())),
                 interactive_release_searches: Arc::new(Mutex::new(HashMap::new())),
             },
@@ -1261,6 +1292,7 @@ impl AppRuntimeState {
                 job_run_tracker: JobRunTracker::new(),
                 discovery_sync_wake: Arc::new(tokio::sync::Notify::new()),
                 backup_execution_guards: BackupExecutionGuardTable::default(),
+                interactive_operation_guards: InteractiveOperationGuardTable::default(),
                 title_deletion_lock: Arc::new(tokio::sync::Mutex::new(())),
                 acquisition_search_lock: Arc::new(tokio::sync::Mutex::new(())),
             },
@@ -3886,6 +3918,35 @@ mod tests {
             guards.try_acquire("auto").await.is_some(),
             "automatic guard should be released after completion",
         );
+    }
+
+    #[tokio::test]
+    async fn interactive_operation_guards_allow_distinct_resources_but_block_duplicates() {
+        let guards = InteractiveOperationGuardTable::default();
+
+        let media_file_guard = guards
+            .try_acquire("media-file:file-1")
+            .await
+            .expect("media file guard should acquire");
+        let recycle_entry_guard = guards
+            .try_acquire("recycle-entry:entry-1")
+            .await
+            .expect("recycle entry guard should acquire independently");
+
+        assert!(
+            guards.try_acquire("media-file:file-1").await.is_none(),
+            "the same media file must not queue a duplicate operation",
+        );
+        assert!(
+            guards.try_acquire("recycle-entry:entry-1").await.is_none(),
+            "the same recycle entry must not queue a duplicate operation",
+        );
+
+        drop(media_file_guard);
+        drop(recycle_entry_guard);
+
+        assert!(guards.try_acquire("media-file:file-1").await.is_some());
+        assert!(guards.try_acquire("recycle-entry:entry-1").await.is_some());
     }
 
     #[tokio::test]

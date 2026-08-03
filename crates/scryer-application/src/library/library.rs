@@ -799,11 +799,18 @@ impl AppUseCase {
             .delete_values_for_scope_id(&library.id)
             .await?;
 
-        self.services
+        let deleted = self
+            .services
             .catalog
             .libraries
             .delete_library(&library.id)
-            .await
+            .await?;
+        if deleted {
+            self.refresh_owned_download_client_categories_best_effort()
+                .await;
+        }
+
+        Ok(deleted)
     }
 
     pub(crate) async fn ensure_library_scan_cancellation_token(

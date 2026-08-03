@@ -1444,6 +1444,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     selectedOverviewMediaFileDeleteLoading,
     setSelectedOverviewMediaFileDeleteLoading,
   ] = React.useState(false);
+  const [pendingMediaFileDeletionIds, setPendingMediaFileDeletionIds] =
+    React.useState<Set<string>>(() => new Set());
+  const mediaFileDeletionUnregistersRef = React.useRef(new Set<() => void>());
   const [
     selectedOverviewMediaFileDeleteTypedConfirmation,
     setSelectedOverviewMediaFileDeleteTypedConfirmation,
@@ -2841,7 +2844,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
 
       const merge = (title: TitleRecord): TitleRecord =>
         title.id === titleId ? { ...title, moreLikeThis } : title;
-      const sourceTitle = titleContextSourceTitles.find(
+      const sourceTitle = titleContextSourceTitlesRef.current.find(
         (title) => title.id === titleId,
       );
 
@@ -2855,7 +2858,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         return base ? merge(base) : current;
       });
     },
-    [titleContextSourceTitles],
+    [],
   );
 
   useTitleListReactiveRefresh({
@@ -3108,6 +3111,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
 
   const requestDeleteSelectedOverviewMediaFile = React.useCallback(
     (title: TitleRecord, fileId: string) => {
+      if (pendingMediaFileDeletionIds.has(fileId)) {
+        return;
+      }
       const file =
         title.mediaFiles?.find((candidate) => candidate.id === fileId) ?? null;
       if (!file) {
@@ -3118,6 +3124,16 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         file,
       });
       setSelectedOverviewMediaFileDeleteTypedConfirmation("");
+    },
+    [pendingMediaFileDeletionIds],
+  );
+
+  React.useEffect(
+    () => () => {
+      for (const unregister of mediaFileDeletionUnregistersRef.current) {
+        unregister();
+      }
+      mediaFileDeletionUnregistersRef.current.clear();
     },
     [],
   );
@@ -3294,11 +3310,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     const needsTitleDetails =
       selectedPanelNeedsPanelDetails || selectedPanelNeedsMovieMediaDetails;
     const requestEpoch = reactiveRefreshEpoch();
-    let cancelled = false;
-
-    // Start every selected-title request together. React batches the state
-    // commits in this completion handler, so the rail does not repaint once
-    // per response as its supporting data arrives.
+    // Start every selected-title request together. Keep recommendations
+    // independent, though: a slow supporting-panel request must not leave its
+    // own ready response loading indefinitely.
     const titleDetailsRequest = needsTitleDetails
       ? client
           .query<{ title?: TitleRecord | null }>(
@@ -3313,6 +3327,25 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       (error: unknown) => ({ status: "rejected" as const, error }),
     );
 
+    void recommendationsResult.then((result) => {
+      if (selectedPanelHydrationKeyRef.current !== requestKey) {
+        return;
+      }
+      if (result.status === "rejected") {
+        console.error(
+          "[selected-title-more-like-this-refresh] refresh failed:",
+          result.error,
+        );
+        return;
+      }
+      window.requestAnimationFrame(() => {
+        if (selectedPanelHydrationKeyRef.current !== requestKey) {
+          return;
+        }
+        applyTitleMoreLikeThis(titleId, result.items, requestEpoch);
+      });
+    });
+
     void Promise.allSettled([
       titleDetailsRequest,
       loadSelectedOverviewExternalSubtitles(titleId),
@@ -3324,10 +3357,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         .toPromise(),
     ] as const).then(
       ([titleDetailsResult, externalSubtitlesResult, blocklistResult]) => {
-        if (
-          cancelled ||
-          selectedPanelHydrationKeyRef.current !== requestKey
-        ) {
+        if (selectedPanelHydrationKeyRef.current !== requestKey) {
           return;
         }
 
@@ -3380,28 +3410,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           );
         }
         setSelectedOverviewBlocklistState({ titleId, entries: blocklistEntries });
-
-        void recommendationsResult.then((result) => {
-          window.requestAnimationFrame(() => {
-            if (selectedPanelHydrationKeyRef.current !== requestKey) {
-              return;
-            }
-            if (result.status === "rejected") {
-              console.error(
-                "[selected-title-more-like-this-refresh] refresh failed:",
-                result.error,
-              );
-              return;
-            }
-            applyTitleMoreLikeThis(titleId, result.items, requestEpoch);
-          });
-        });
       },
     );
-
-    return () => {
-      cancelled = true;
-    };
   }, [
     applySelectedOverviewDetail,
     applyTitleMoreLikeThis,
@@ -4266,11 +4276,13 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     }
     setSelectedOverviewMediaFileDeleteLoading(true);
     try {
-      recordCriticalCatalogMutation();
-      const { error } = await client
-        .mutation(deleteMediaFileMutation, {
+      const target = selectedOverviewMediaFileToDelete;
+      const { data, error } = await client
+        .mutation<{
+          deleteMediaFile?: { jobRun?: unknown };
+        }>(deleteMediaFileMutation, {
           input: {
-            fileId: selectedOverviewMediaFileToDelete.file.id,
+            fileId: target.file.id,
             deleteFromDisk: true,
             previewFingerprint: selectedOverviewMediaFileDeletePreview.fingerprint,
             typedConfirmation:
@@ -4282,7 +4294,24 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       if (error) {
         throw error;
       }
-      await refreshMovieSidePanelOverview(selectedOverviewMediaFileToDelete.titleId);
+      const run = normalizeJobRun(data?.deleteMediaFile?.jobRun);
+      if (!run) {
+        throw new Error(t("status.apiError"));
+      }
+      setPendingMediaFileDeletionIds((current) => new Set(current).add(target.file.id));
+      const unregister = registerInteractiveJobRun(run, () => {
+        unregister();
+        mediaFileDeletionUnregistersRef.current.delete(unregister);
+        setPendingMediaFileDeletionIds((current) => {
+          const next = new Set(current);
+          next.delete(target.file.id);
+          return next;
+        });
+        void refreshMovieSidePanelOverview(target.titleId);
+      });
+      mediaFileDeletionUnregistersRef.current.add(unregister);
+      recordCriticalCatalogMutation();
+      setGlobalStatus("Queued media file deletion.");
       setSelectedOverviewMediaFileToDelete(null);
       setSelectedOverviewMediaFileDeleteTypedConfirmation("");
     } catch (error) {
@@ -4295,6 +4324,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   }, [
     client,
     recordCriticalCatalogMutation,
+    registerInteractiveJobRun,
     refreshMovieSidePanelOverview,
     selectedOverviewMediaFileDeletePreview,
     selectedOverviewMediaFileDeleteTypedConfirmation,
@@ -5283,6 +5313,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           refreshSelectedOverviewExternalSubtitles,
           deleteSelectedOverviewMediaFile:
             requestDeleteSelectedOverviewMediaFile,
+          pendingMediaFileDeletionIds,
           makeSelectedOverviewMovieFilePrimary,
           selectedOverviewPrimaryMovieFileUpdatingId,
           previewTitleRename,

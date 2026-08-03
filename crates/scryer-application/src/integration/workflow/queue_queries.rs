@@ -809,6 +809,63 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
+    async fn filter_foreign_download_queue_items(
+        &self,
+        items: Vec<DownloadQueueItem>,
+    ) -> Vec<DownloadQueueItem> {
+        let classifications = match tokio::time::timeout(
+            TRACKED_DOWNLOAD_SNAPSHOT_READ_BUDGET,
+            self.runtime.acquisition.tracked_download_snapshot.read(),
+        )
+        .await
+        {
+            Ok(snapshot) => snapshot
+                .iter()
+                .filter_map(|(tracked_id, metadata)| {
+                    metadata
+                        .foreign_import_classification
+                        .map(|classification| (tracked_id.clone(), classification))
+                })
+                .collect::<HashMap<_, _>>(),
+            Err(_) => HashMap::new(),
+        };
+
+        let category_ownership = self.owned_download_client_categories_snapshot().await;
+
+        items
+            .into_iter()
+            .filter(|item| {
+                let tracked_id = tracked_download_id_for_item(item);
+                match classifications.get(&tracked_id) {
+                    Some(
+                        crate::tracked_downloads::ForeignDownloadClassification::DroneParameter
+                        | crate::tracked_downloads::ForeignDownloadClassification::NoImportableVideo,
+                    ) => return false,
+                    Some(crate::tracked_downloads::ForeignDownloadClassification::ForeignCategory)
+                    | None => {}
+                }
+
+                let Some(category) = item
+                    .category
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|category| !category.is_empty())
+                else {
+                    return true;
+                };
+                let client_id = item.client_id.trim();
+                if client_id.is_empty() {
+                    return true;
+                }
+
+                category_ownership
+                    .as_ref()
+                    .is_none_or(|ownership| ownership.owns_category(client_id, category))
+            })
+            .collect()
+    }
+}
+impl AppUseCase {
     async fn collect_download_snapshot_items(
         &self,
         include_queue: bool,
@@ -864,9 +921,10 @@ impl AppUseCase {
 
         let mut items: Vec<DownloadQueueItem> = queue_items;
         items.extend(history_items);
-        Ok(self
+        let items = self
             .enrich_download_queue_items(&enabled_clients, items, use_tracked_runtime_snapshot)
-            .await)
+            .await;
+        Ok(self.filter_foreign_download_queue_items(items).await)
     }
 }
 impl AppUseCase {
@@ -903,9 +961,11 @@ impl AppUseCase {
 
         let mut items: Vec<DownloadQueueItem> = queue_items;
         items.extend(history_items);
-
-        Ok(self
+        let items = self
             .enrich_download_queue_items(&enabled_clients, items, use_tracked_runtime_snapshot)
+            .await;
+        Ok(self
+            .filter_foreign_download_queue_items(items)
             .await
             .into_iter()
             .filter(|item| item.title_id.as_deref() == Some(title_id))
@@ -1114,18 +1174,10 @@ impl AppUseCase {
             )
             .await?
             .into_iter()
-            // Deliberately NOT filtered by `is_scryer_origin`. That flag means
-            // "Scryer submitted this", not "this belongs to another app", so it
-            // also excludes downloads the user added to the client by hand —
-            // exactly the items this surface exists to resolve. Filtering them
-            // out here makes the Assign Download Title flow unreachable.
-            //
-            // Keeping another app's downloads out of Scryer's import is the job
-            // of completed_download_allows_automatic_import (see
-            // import/completed_download/check.rs): a foreign item whose category
-            // does not match the title's effective category is refused automatic
-            // import and parked in ImportBlocked. This query only controls
-            // whether such already-blocked rows are visible for manual triage.
+            // `is_scryer_origin` is not an ownership filter: hand-added
+            // downloads remain eligible for manual assignment. The shared
+            // collector has already excluded only runtime-classified or
+            // non-owned-category sources.
             .filter(|item| matches_download_import_filter(item, filter))
             .collect::<Vec<_>>();
 
@@ -1212,9 +1264,10 @@ impl AppUseCase {
             .list_history()
             .await?;
 
-        Ok(self
+        let items = self
             .enrich_download_queue_items(&enabled_clients, items, use_tracked_runtime_snapshot)
-            .await)
+            .await;
+        Ok(self.filter_foreign_download_queue_items(items).await)
     }
 }
 impl AppUseCase {

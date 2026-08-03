@@ -1364,6 +1364,12 @@ async fn graphql_introspection_recycle_bin_uses_id_and_payload_results() {
         .find(|field| field["name"] == "id")
         .expect("restore payload id field should exist");
     assert_eq!(restore_id["type"]["ofType"]["name"], "ID");
+    let restore_job_run = restore_payload_fields
+        .iter()
+        .find(|field| field["name"] == "jobRun")
+        .expect("restore payload job run field should exist");
+    assert_eq!(restore_job_run["type"]["kind"], "NON_NULL");
+    assert_eq!(restore_job_run["type"]["ofType"]["name"], "JobRunPayload");
 
     let delete_payload_fields = body["data"]["deletePayload"]["fields"]
         .as_array()
@@ -2326,7 +2332,7 @@ async fn graphql_introspection_media_server_delete_uses_id_and_payload_result() 
         .iter()
         .filter_map(|field| field["name"].as_str())
         .collect();
-    assert_eq!(payload_fields, vec!["id"]);
+    assert_eq!(payload_fields, vec!["id", "jobRun"]);
 }
 
 #[tokio::test]

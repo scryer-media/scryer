@@ -31,6 +31,18 @@ struct RecycleRootLibrary {
     library: RecycleEntryLibrary,
 }
 
+struct RestoreRecycledItemContext {
+    entry_dir: PathBuf,
+    manifest: crate::recycle_bin::RecycleManifest,
+    library_id: String,
+    library_roots: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RestoreRecycledItemJobAccepted {
+    pub job_run: JobRun,
+}
+
 fn recycle_path_is_under_root(path: &str, root: &str) -> bool {
     let path = crate::stored_paths::stored_path_to_path_buf(path);
     let root = crate::stored_paths::stored_path_to_path_buf(root);
@@ -762,12 +774,109 @@ impl AppUseCase {
         Ok(all_entries)
     }
 
+    pub async fn start_restore_recycled_item_job(
+        &self,
+        actor: &scryer_domain::User,
+        entry_id: &str,
+    ) -> AppResult<RestoreRecycledItemJobAccepted> {
+        let guard_key = format!("recycle-entry:{entry_id}");
+        let restore_guard = self
+            .runtime
+            .jobs
+            .interactive_operation_guards
+            .try_acquire(&guard_key)
+            .await
+            .ok_or_else(|| {
+                AppError::Validation(format!(
+                    "a recycle restore is already running for {entry_id}"
+                ))
+            })?;
+        let library_id = self.validate_restore_recycled_item(actor, entry_id).await?;
+
+        let now = chrono::Utc::now();
+        let mut run = JobRunRecord {
+            id: Id::new().0,
+            job_key: JobKey::RecycleBinRestore,
+            operation_type: format!("recycle_bin_restore:{library_id}:{entry_id}"),
+            status: JobRunStatus::Running,
+            trigger_source: JobTriggerSource::Manual,
+            actor_user_id: Some(actor.id.clone()),
+            progress_json: Some(
+                serde_json::json!({
+                    "status": JobRunStatus::Running.as_str(),
+                    "phase": "queued",
+                    "entryId": entry_id,
+                })
+                .to_string(),
+            ),
+            summary_json: None,
+            summary_text: None,
+            error_text: None,
+            started_at: now,
+            completed_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        run = self.services.events.job_runs.create_job_run(&run).await?;
+        let job_run = JobRun::from_record(&run, None);
+        self.runtime
+            .jobs
+            .job_run_tracker
+            .upsert_active_run(job_run.clone())
+            .await;
+        let actor_event = DomainEventActor::from(actor);
+        let _ = self
+            .append_domain_event(crate::domain_events::new_job_run_domain_event(
+                actor_event.clone(),
+                run.id.clone(),
+                scryer_domain::DomainEventPayload::JobRunStarted(
+                    scryer_domain::JobRunStartedEventData {
+                        run_id: run.id.clone(),
+                        job_key: run.job_key.as_str().to_string(),
+                        operation_type: run.operation_type.clone(),
+                        trigger_source: run.trigger_source.as_str().to_string(),
+                    },
+                ),
+            ))
+            .await;
+
+        let app = self.clone();
+        let actor = actor.clone();
+        let entry_id = entry_id.to_string();
+        tokio::spawn(async move {
+            app.run_restore_recycled_item_job(run, actor_event, actor, entry_id, restore_guard)
+                .await;
+        });
+
+        Ok(RestoreRecycledItemJobAccepted { job_run })
+    }
+
     /// Restore a single recycled item back to its original path.
     pub async fn restore_recycled_item(
         &self,
         actor: &scryer_domain::User,
         entry_id: &str,
     ) -> AppResult<bool> {
+        let context = self.resolve_restore_recycled_item(actor, entry_id).await?;
+        self.restore_recycled_item_from_context(actor, context)
+            .await
+    }
+
+    async fn validate_restore_recycled_item(
+        &self,
+        actor: &scryer_domain::User,
+        entry_id: &str,
+    ) -> AppResult<String> {
+        self.resolve_restore_recycled_item(actor, entry_id)
+            .await
+            .map(|context| context.library_id)
+    }
+
+    async fn resolve_restore_recycled_item(
+        &self,
+        actor: &scryer_domain::User,
+        entry_id: &str,
+    ) -> AppResult<RestoreRecycledItemContext> {
         let roots = self.recycle_root_libraries().await?;
 
         for (media_root, config) in self.resolve_all_recycle_configs().await {
@@ -807,7 +916,6 @@ impl AppUseCase {
                     .file_name()
                     .unwrap_or_else(|| std::ffi::OsStr::new("unknown"));
                 let recycled_file = entry_dir.join(file_name);
-
                 if !recycled_file.exists() {
                     return Err(AppError::Repository(format!(
                         "recycled file not found in entry: {}",
@@ -815,82 +923,192 @@ impl AppUseCase {
                     )));
                 }
 
-                // User-facing restore must never overwrite a live file at the
-                // original path; restore_from_recycle diverts to a `-restored`
-                // sibling on conflict and returns where it actually landed.
-                let restored_to = crate::recycle_bin::restore_from_recycle_with_roots(
-                    &recycled_file,
-                    &original_path,
-                    false,
-                    &library_roots,
-                )
-                .await?;
-                if let Err(error) =
-                    crate::fs_safety::remove_dir_all_safely_if_exists(&entry_dir).await
-                {
-                    tracing::warn!(
-                        error = %error,
-                        entry_dir = %entry_dir.display(),
-                        restored_to = %restored_to.display(),
-                        "failed to remove recycle entry directory after restore"
-                    );
-                }
-                if let Some(title_id) = manifest.title_id.as_deref() {
-                    let restored_library_file = crate::LibraryFile {
-                        path: restored_to.to_string_lossy().to_string(),
-                        display_name: original_path
-                            .file_stem()
-                            .and_then(|value| value.to_str())
-                            .unwrap_or_default()
-                            .to_string(),
-                        nfo_path: None,
-                        size_bytes: tokio::fs::metadata(&restored_to)
-                            .await
-                            .ok()
-                            .and_then(|metadata| i64::try_from(metadata.len()).ok()),
-                        source_signature_scheme: None,
-                        source_signature_value: None,
-                    };
-                    match self.services.catalog.titles.get_by_id(title_id).await {
-                        Ok(Some(title)) => {
-                            if let Err(error) = self
-                                .scan_title_library_with_discovered_files(
-                                    actor,
-                                    title,
-                                    vec![restored_library_file],
-                                )
-                                .await
-                            {
-                                tracing::warn!(
-                                    error = %error,
-                                    title_id,
-                                    restored_to = %restored_to.display(),
-                                    "failed to scan title after restoring recycled file"
-                                );
-                            }
-                        }
-                        Ok(None) => {
-                            tracing::warn!(
-                                title_id,
-                                restored_to = %restored_to.display(),
-                                "skipping restored file scan because the title no longer exists"
-                            );
-                        }
-                        Err(error) => {
-                            tracing::warn!(
-                                error = %error,
-                                title_id,
-                                restored_to = %restored_to.display(),
-                                "failed to load title before restored file scan"
-                            );
-                        }
-                    }
-                }
-                return Ok(true);
+                return Ok(RestoreRecycledItemContext {
+                    entry_dir,
+                    manifest,
+                    library_id: library.id,
+                    library_roots,
+                });
             }
         }
 
         Err(AppError::NotFound(format!("recycle entry {}", entry_id)))
+    }
+
+    async fn restore_recycled_item_from_context(
+        &self,
+        actor: &scryer_domain::User,
+        context: RestoreRecycledItemContext,
+    ) -> AppResult<bool> {
+        let original_path = context.manifest.original_path_buf();
+        let file_name = original_path
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("unknown"));
+        let recycled_file = context.entry_dir.join(file_name);
+
+        // User-facing restore must never overwrite a live file at the
+        // original path; restore_from_recycle diverts to a `-restored`
+        // sibling on conflict and returns where it actually landed.
+        let restored_to = crate::recycle_bin::restore_from_recycle_with_roots(
+            &recycled_file,
+            &original_path,
+            false,
+            &context.library_roots,
+        )
+        .await?;
+        if let Err(error) =
+            crate::fs_safety::remove_dir_all_safely_if_exists(&context.entry_dir).await
+        {
+            tracing::warn!(
+                error = %error,
+                entry_dir = %context.entry_dir.display(),
+                restored_to = %restored_to.display(),
+                "failed to remove recycle entry directory after restore"
+            );
+        }
+        if let Some(title_id) = context.manifest.title_id.as_deref() {
+            let restored_library_file = crate::LibraryFile {
+                path: restored_to.to_string_lossy().to_string(),
+                display_name: original_path
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                nfo_path: None,
+                size_bytes: tokio::fs::metadata(&restored_to)
+                    .await
+                    .ok()
+                    .and_then(|metadata| i64::try_from(metadata.len()).ok()),
+                source_signature_scheme: None,
+                source_signature_value: None,
+            };
+            match self.services.catalog.titles.get_by_id(title_id).await {
+                Ok(Some(title)) => {
+                    if let Err(error) = self
+                        .scan_title_library_with_discovered_files(
+                            actor,
+                            title,
+                            vec![restored_library_file],
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            error = %error,
+                            title_id,
+                            restored_to = %restored_to.display(),
+                            "failed to scan title after restoring recycled file"
+                        );
+                    }
+                }
+                Ok(None) => {
+                    tracing::warn!(
+                        title_id,
+                        restored_to = %restored_to.display(),
+                        "skipping restored file scan because the title no longer exists"
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        title_id,
+                        restored_to = %restored_to.display(),
+                        "failed to load title before restored file scan"
+                    );
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    async fn run_restore_recycled_item_job(
+        &self,
+        run: JobRunRecord,
+        actor_event: DomainEventActor,
+        actor: scryer_domain::User,
+        entry_id: String,
+        _restore_guard: tokio::sync::OwnedMutexGuard<()>,
+    ) {
+        let result = self.restore_recycled_item(&actor, &entry_id).await;
+        let (status, summary_text, error_text) = match result {
+            Ok(_) => (
+                JobRunStatus::Completed,
+                "Restored recycled item".to_string(),
+                None,
+            ),
+            Err(error) => (
+                JobRunStatus::Failed,
+                "Failed to restore recycled item".to_string(),
+                Some(error.to_string()),
+            ),
+        };
+        if let Err(error) = self
+            .finish_restore_recycled_item_job(
+                run,
+                actor_event,
+                status,
+                &entry_id,
+                summary_text,
+                error_text,
+            )
+            .await
+        {
+            warn!(error = %error, entry_id = %entry_id, "failed to finish recycle restore job");
+        }
+    }
+
+    async fn finish_restore_recycled_item_job(
+        &self,
+        mut run: JobRunRecord,
+        actor: DomainEventActor,
+        status: JobRunStatus,
+        entry_id: &str,
+        summary_text: String,
+        error_text: Option<String>,
+    ) -> AppResult<()> {
+        let completed_at = chrono::Utc::now();
+        run.status = status;
+        run.progress_json = Some(
+            serde_json::json!({
+                "status": status.as_str(),
+                "phase": "completed",
+                "entryId": entry_id,
+            })
+            .to_string(),
+        );
+        run.summary_text = Some(summary_text);
+        run.summary_json = Some(serde_json::json!({ "entryId": entry_id }).to_string());
+        run.error_text = error_text;
+        run.completed_at = Some(completed_at);
+        run.updated_at = completed_at;
+        let updated = self.services.events.job_runs.update_job_run(&run).await?;
+        self.runtime
+            .jobs
+            .job_run_tracker
+            .upsert_active_run(JobRun::from_record(&updated, None))
+            .await;
+        let payload = if status == JobRunStatus::Failed {
+            scryer_domain::DomainEventPayload::JobRunFailed(scryer_domain::JobRunFailedEventData {
+                run_id: updated.id.clone(),
+                job_key: updated.job_key.as_str().to_string(),
+                error_text: updated.error_text.clone(),
+            })
+        } else {
+            scryer_domain::DomainEventPayload::JobRunCompleted(
+                scryer_domain::JobRunCompletedEventData {
+                    run_id: updated.id.clone(),
+                    job_key: updated.job_key.as_str().to_string(),
+                    summary_text: updated.summary_text.clone(),
+                },
+            )
+        };
+        let _ = self
+            .append_domain_event(crate::domain_events::new_job_run_domain_event(
+                actor,
+                updated.id.clone(),
+                payload,
+            ))
+            .await;
+        Ok(())
     }
 
     /// Permanently delete a single recycled item.

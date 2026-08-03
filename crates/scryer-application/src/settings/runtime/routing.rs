@@ -524,6 +524,9 @@ impl AppUseCase {
             )
             .await?;
 
+        self.refresh_owned_download_client_categories_best_effort()
+            .await;
+
         self.emit_settings_saved(
             actor,
             "download_client_routing",
@@ -544,6 +547,7 @@ impl AppUseCase {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
 
+        let mut changed = false;
         for scope_id in ["movie", "series", "anime"] {
             let current = self.load_download_client_routing_json(scope_id).await?;
             let mut payload = current
@@ -573,6 +577,12 @@ impl AppUseCase {
                     (!actor.is_system_execution_actor()).then(|| actor.id.clone()),
                 )
                 .await?;
+            changed = true;
+        }
+
+        if changed {
+            self.refresh_owned_download_client_categories_best_effort()
+                .await;
         }
 
         Ok(())

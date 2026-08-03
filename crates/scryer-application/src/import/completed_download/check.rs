@@ -5,6 +5,7 @@ use super::lookup::{
 };
 use super::path_state::{CompletedDownloadPathState, evaluate_completed_download_path};
 use super::*;
+use crate::tracked_downloads::ForeignDownloadClassification;
 
 pub async fn check(app: &AppUseCase, td: &mut TrackedDownload) {
     check_with_lookup(app, td, None).await;
@@ -54,6 +55,13 @@ pub(crate) async fn check_with_lookup(
         return;
     }
 
+    if matches!(
+        td.foreign_import_classification,
+        Some(ForeignDownloadClassification::DroneParameter)
+    ) {
+        return;
+    }
+
     let queue_identity = observed_queue_item_identity(&td.client_item);
     let queue_source_identity = queue_item_source_identity(&td.client_item);
     if let Some(state) =
@@ -96,8 +104,6 @@ pub(crate) async fn check_with_lookup(
         return;
     }
 
-    maybe_resolve_title_from_completed_download(app, td, &completed).await;
-
     match evaluate_completed_download_path(td, &completed, Utc::now()) {
         CompletedDownloadPathState::Ready => {}
         CompletedDownloadPathState::Retry => {
@@ -115,6 +121,13 @@ pub(crate) async fn check_with_lookup(
             return;
         }
     }
+
+    if let Some(classification) = classify_foreign_completed_download(app, td, &completed).await {
+        mark_foreign_download(td, classification);
+        return;
+    }
+
+    maybe_resolve_title_from_completed_download(app, td, &completed).await;
 
     match completed_download_proves_assigned_title(app, td, &completed).await {
         AssignedTitleProof::Proven => {}
@@ -231,6 +244,103 @@ pub(crate) async fn check_with_lookup(
     td.status_messages.clear();
 }
 
+async fn classify_foreign_completed_download(
+    app: &AppUseCase,
+    td: &mut TrackedDownload,
+    completed: &CompletedDownload,
+) -> Option<ForeignDownloadClassification> {
+    // Category ownership is configuration-derived, so a previous category
+    // classification must be reconsidered whenever this completed item is
+    // checked again.
+    if matches!(
+        td.foreign_import_classification,
+        Some(
+            ForeignDownloadClassification::ForeignCategory
+                | ForeignDownloadClassification::NoImportableVideo
+        )
+    ) {
+        td.foreign_import_classification = None;
+    }
+
+    if completed
+        .parameters
+        .iter()
+        .any(|(key, _)| key.trim().eq_ignore_ascii_case("drone"))
+    {
+        return Some(ForeignDownloadClassification::DroneParameter);
+    }
+
+    if let Some(observed_category) = normalized_download_category(
+        completed
+            .category
+            .as_deref()
+            .or(td.client_item.category.as_deref()),
+    ) && !td.client_id.trim().is_empty()
+    {
+        if app
+            .owned_download_client_categories_snapshot()
+            .await
+            .is_some_and(|snapshot| !snapshot.owns_category(&td.client_id, observed_category))
+        {
+            return Some(ForeignDownloadClassification::ForeignCategory);
+        }
+    }
+
+    if !td.client_item.is_scryer_origin {
+        let path = std::path::Path::new(&completed.dest_dir);
+        match crate::import_workflow::find_video_files(path, false) {
+            Ok(video_files) if video_files.is_empty() => {
+                // Do not extract here. The import workflow needs the resolved
+                // title to stage extraction safely; this shared planner only
+                // decides whether the source remains an archive candidate.
+                let archive_candidate =
+                    match crate::archive_extractor::archive_extraction_would_be_needed(path) {
+                        Ok(needed) => needed,
+                        Err(_) => return None,
+                    };
+                if !archive_candidate && matches!(contains_archive_file(path), Ok(false)) {
+                    return Some(ForeignDownloadClassification::NoImportableVideo);
+                }
+            }
+            Ok(_) | Err(_) => {}
+        }
+    }
+
+    None
+}
+
+fn contains_archive_file(path: &std::path::Path) -> std::io::Result<bool> {
+    if path.is_file() {
+        return Ok(scryer_domain::is_archive_file(path));
+    }
+
+    let mut directories = vec![path.to_path_buf()];
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(directory)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let entry_path = entry.path();
+            if file_type.is_dir() {
+                directories.push(entry_path);
+            } else if file_type.is_file() && scryer_domain::is_archive_file(&entry_path) {
+                return Ok(true);
+            }
+        }
+    }
+
+    Ok(false)
+}
+
+fn mark_foreign_download(td: &mut TrackedDownload, classification: ForeignDownloadClassification) {
+    td.foreign_import_classification = Some(classification);
+    td.state = TrackedDownloadState::Downloading;
+    td.waiting_for_completed_history = false;
+    td.status = TrackedDownloadStatus::Ok;
+    td.status_messages.clear();
+    td.path_missing_since = None;
+    td.no_video_import_retry = None;
+}
+
 fn mark_waiting_for_completed_history(
     td: &mut TrackedDownload,
     completed_lookup: Option<&CompletedDownloadLookup>,
@@ -299,7 +409,7 @@ async fn completed_download_allows_automatic_import(
             .as_deref()
             .or(td.client_item.category.as_deref()),
     ) else {
-        return false;
+        return true;
     };
 
     let Some(title_id) = td

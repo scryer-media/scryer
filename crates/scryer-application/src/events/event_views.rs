@@ -982,6 +982,8 @@ fn apply_job_run_event(
             let job_key = JobKey::parse(&data.job_key)?;
             let run = JobRun {
                 id: data.run_id.clone(),
+                operation_type: data.operation_type.clone(),
+                actor_user_id: event.actor_user_id.clone(),
                 job_key,
                 display_name: job_key.display_name().to_string(),
                 category: job_key.category(),

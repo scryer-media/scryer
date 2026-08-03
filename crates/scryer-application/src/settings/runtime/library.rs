@@ -1144,9 +1144,7 @@ impl AppUseCase {
             }
         }
 
-        if is_anime_library
-            && let Some(value) = settings.monitor_specials
-        {
+        if is_anime_library && let Some(value) = settings.monitor_specials {
             if self
                 .external_import_has_effective_explicit_setting(
                     ANIME_MONITOR_SPECIALS_KEY,
@@ -1702,6 +1700,9 @@ impl AppUseCase {
         if let Some(key_name) = plexmatch_write_on_import_key(&library.facet) {
             changed_keys.push(key_name.to_string());
         }
+
+        self.refresh_owned_download_client_categories_best_effort()
+            .await;
 
         self.emit_settings_saved(
             actor,

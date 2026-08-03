@@ -573,10 +573,7 @@ impl AppUseCase {
         requested_library_ids: Option<Vec<String>>,
         limit: usize,
         offset: usize,
-    ) -> AppResult<(
-        Vec<(CutoffUnmetItem, crate::WantedViewConvergence)>,
-        usize,
-    )> {
+    ) -> AppResult<(Vec<(CutoffUnmetItem, crate::WantedViewConvergence)>, usize)> {
         let page = self
             .list_cutoff_unmet_titles_page(actor, facet, requested_library_ids, limit, offset)
             .await?;
@@ -610,16 +607,14 @@ impl AppUseCase {
                     None,
                     None,
                 );
-                let convergence = crate::acquisition::convergence::convergence_scope_key(
-                    &scope,
-                    &item.title_id,
-                )
-                .and_then(|key| convergence.get(&key).copied())
-                .unwrap_or(crate::WantedViewConvergence {
-                    state: crate::WantedConvergenceState::Converged,
-                    indexers_covered: 0,
-                    indexers_routed: 0,
-                });
+                let convergence =
+                    crate::acquisition::convergence::convergence_scope_key(&scope, &item.title_id)
+                        .and_then(|key| convergence.get(&key).copied())
+                        .unwrap_or(crate::WantedViewConvergence {
+                            state: crate::WantedConvergenceState::Converged,
+                            indexers_covered: 0,
+                            indexers_routed: 0,
+                        });
                 (item, convergence)
             })
             .collect();
@@ -918,8 +913,22 @@ impl AppUseCase {
         title: &Title,
         client_id: &str,
     ) -> AppResult<Option<String>> {
+        self.effective_download_client_category_for_scope(
+            Some(&title.library_id),
+            &title.facet,
+            client_id,
+        )
+        .await
+    }
+
+    async fn effective_download_client_category_for_scope(
+        &self,
+        library_id: Option<&str>,
+        facet: &MediaFacet,
+        client_id: &str,
+    ) -> AppResult<Option<String>> {
         if let Some(entry) = self
-            .read_download_client_routing_entry(Some(&title.library_id), &title.facet, client_id)
+            .read_download_client_routing_entry(library_id, facet, client_id)
             .await?
         {
             if !entry.enabled {
@@ -936,7 +945,184 @@ impl AppUseCase {
             }
         }
 
-        Ok(Some(self.derive_download_category(&title.facet).await))
+        Ok(Some(self.derive_download_category(facet).await))
+    }
+
+    /// Ownership filtering must fail open when the fallback settings cannot be
+    /// read. Submission routing deliberately keeps its historical best-effort
+    /// fallback, but a visibility classifier must not hide an item based on an
+    /// invented fallback category.
+    async fn effective_owned_download_client_category_for_scope(
+        &self,
+        library_id: Option<&str>,
+        facet: &MediaFacet,
+        client_id: &str,
+    ) -> AppResult<Option<String>> {
+        if let Some(entry) = self
+            .read_download_client_routing_entry(library_id, facet, client_id)
+            .await?
+        {
+            if !entry.enabled {
+                return Ok(None);
+            }
+
+            if let Some(category) = entry
+                .category
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                return Ok(Some(category.to_string()));
+            }
+        }
+
+        Ok(Some(
+            self.derive_download_category_for_ownership(facet).await?,
+        ))
+    }
+
+    /// Return the cached category ownership snapshot. Production warms this at
+    /// startup; a first-use rebuild keeps isolated application tests and
+    /// alternate bootstraps correct without putting settings reads on the
+    /// recurring activity-query path.
+    pub(crate) async fn owned_download_client_categories_snapshot(
+        &self,
+    ) -> Option<std::sync::Arc<crate::services::DownloadClientCategoryOwnershipSnapshot>> {
+        let cache = self
+            .runtime
+            .acquisition
+            .download_client_category_ownership
+            .read()
+            .await
+            .clone();
+        match cache {
+            crate::services::DownloadClientCategoryOwnershipCache::Available(snapshot) => {
+                return Some(snapshot);
+            }
+            crate::services::DownloadClientCategoryOwnershipCache::Unavailable => return None,
+            crate::services::DownloadClientCategoryOwnershipCache::Uninitialized => {}
+        }
+
+        let _ = self.refresh_owned_download_client_categories().await;
+        match self
+            .runtime
+            .acquisition
+            .download_client_category_ownership
+            .read()
+            .await
+            .clone()
+        {
+            crate::services::DownloadClientCategoryOwnershipCache::Available(snapshot) => {
+                Some(snapshot)
+            }
+            crate::services::DownloadClientCategoryOwnershipCache::Uninitialized
+            | crate::services::DownloadClientCategoryOwnershipCache::Unavailable => None,
+        }
+    }
+
+    pub async fn refresh_owned_download_client_categories(&self) -> AppResult<()> {
+        let snapshot = self.load_owned_download_client_categories_snapshot().await;
+        let mut cache = self
+            .runtime
+            .acquisition
+            .download_client_category_ownership
+            .write()
+            .await;
+        match snapshot {
+            Ok(snapshot) => {
+                *cache = crate::services::DownloadClientCategoryOwnershipCache::Available(
+                    std::sync::Arc::new(snapshot),
+                );
+                Ok(())
+            }
+            Err(error) => {
+                *cache = crate::services::DownloadClientCategoryOwnershipCache::Unavailable;
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) async fn refresh_owned_download_client_categories_best_effort(&self) {
+        if let Err(error) = self.refresh_owned_download_client_categories().await {
+            tracing::warn!(
+                error = %error,
+                "failed to refresh download-client category ownership; visibility will fail open"
+            );
+        }
+    }
+
+    async fn load_owned_download_client_categories_snapshot(
+        &self,
+    ) -> AppResult<crate::services::DownloadClientCategoryOwnershipSnapshot> {
+        let mut default_categories = std::collections::HashSet::new();
+        for facet in [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime] {
+            default_categories.insert(self.derive_download_category_for_ownership(&facet).await?);
+        }
+
+        let clients = self
+            .services
+            .integrations
+            .download_client_configs
+            .list(None)
+            .await?;
+        let mut categories_by_client = std::collections::HashMap::new();
+        for client in clients {
+            let categories = if client.is_enabled {
+                self.load_owned_download_client_categories(&client.id)
+                    .await?
+            } else {
+                std::collections::HashSet::new()
+            };
+            categories_by_client.insert(client.id, categories);
+        }
+
+        Ok(crate::services::DownloadClientCategoryOwnershipSnapshot {
+            default_categories,
+            categories_by_client,
+        })
+    }
+
+    /// Categories that currently identify work owned by a configured client.
+    /// History rows are not title-scoped, so a category is retained when it is
+    /// enabled for any library/facet routing scope of that client.
+    async fn load_owned_download_client_categories(
+        &self,
+        client_id: &str,
+    ) -> AppResult<std::collections::HashSet<String>> {
+        let mut categories = std::collections::HashSet::new();
+
+        for facet in [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime] {
+            let libraries = self
+                .services
+                .catalog
+                .libraries
+                .list(Some(facet.clone()))
+                .await?;
+            if libraries.is_empty() {
+                if let Some(category) = self
+                    .effective_owned_download_client_category_for_scope(None, &facet, client_id)
+                    .await?
+                {
+                    categories.insert(category);
+                }
+                continue;
+            }
+
+            for library in libraries {
+                if let Some(category) = self
+                    .effective_owned_download_client_category_for_scope(
+                        Some(&library.id),
+                        &facet,
+                        client_id,
+                    )
+                    .await?
+                {
+                    categories.insert(category);
+                }
+            }
+        }
+
+        Ok(categories)
     }
 
     /// Resolve the per-facet fallback category used when the selected client
@@ -968,6 +1154,39 @@ impl AppUseCase {
             .get(facet)
             .map(|h| h.download_category().to_string())
             .unwrap_or_else(|| "other".to_string())
+    }
+
+    async fn derive_download_category_for_ownership(
+        &self,
+        facet: &MediaFacet,
+    ) -> AppResult<String> {
+        let scope_id = facet.as_str();
+
+        if let Some(configured) = self
+            .read_setting_string_value(DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY, Some(scope_id))
+            .await?
+        {
+            let trimmed = configured.trim().to_string();
+            if !trimmed.is_empty() {
+                return Ok(trimmed);
+            }
+        }
+
+        if let Some(configured) = self
+            .read_setting_string_value(LEGACY_NZBGET_CATEGORY_SETTING_KEY, Some(scope_id))
+            .await?
+        {
+            let trimmed = configured.trim().to_string();
+            if !trimmed.is_empty() {
+                return Ok(trimmed);
+            }
+        }
+
+        Ok(self
+            .facet_registry
+            .get(facet)
+            .map(|h| h.download_category().to_string())
+            .unwrap_or_else(|| "other".to_string()))
     }
 }
 impl AppUseCase {

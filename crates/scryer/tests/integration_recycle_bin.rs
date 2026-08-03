@@ -9,8 +9,8 @@ use chrono::Utc;
 use common::TestContext;
 use scryer_application::recycle_bin::{RecycleBinConfig, RecycleManifest, recycle_file};
 use scryer_application::{
-    InsertMediaFileInput, LibraryRootDraft, MediaFileRepository, MediaFileRole,
-    RECYCLE_BIN_ENABLED_KEY, RECYCLE_BIN_PATH_KEY, SETTINGS_SCOPE_MEDIA,
+    InsertMediaFileInput, JobKey, JobRunStatus, LibraryRootDraft, MediaFileRepository,
+    MediaFileRole, RECYCLE_BIN_ENABLED_KEY, RECYCLE_BIN_PATH_KEY, SETTINGS_SCOPE_MEDIA,
     SETTINGS_SOURCE_TYPED_GRAPHQL, ShowRepository, TitleRepository, UpdateRecycleBinSettings,
 };
 use scryer_domain::{
@@ -19,6 +19,7 @@ use scryer_domain::{
 };
 use scryer_infrastructure::SettingDefinitionSeed;
 use serde_json::{Value, json};
+use tokio::time::{Duration, timeout};
 
 async fn gql(ctx: &TestContext, query: &str, variables: Value) -> Value {
     let client = ctx.http_client();
@@ -350,6 +351,69 @@ async fn graphql_recycle_bin_settings_and_scoped_item_args_work() {
 }
 
 #[tokio::test]
+async fn graphql_restore_recycled_item_returns_accepted_job_run() {
+    let ctx = TestContext::new().await;
+    seed_recycle_bin_setting_definition(&ctx).await;
+    let root = tempfile::tempdir().expect("library root");
+    let library = seed_library(&ctx, "GraphQL Restore", root.path()).await;
+    seed_title(&ctx, "title-graphql-restore", &library).await;
+    let entry_id =
+        seed_recycled_file(root.path(), "title-graphql-restore", "graphql-restore").await;
+
+    let body = gql(
+        &ctx,
+        r#"mutation RestoreRecycledItem($id: ID!) {
+            restoreRecycledItem(id: $id) {
+                id
+                jobRun { id jobKey status }
+            }
+        }"#,
+        json!({ "id": entry_id }),
+    )
+    .await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["restoreRecycledItem"]["id"], entry_id);
+    assert_eq!(
+        body["data"]["restoreRecycledItem"]["jobRun"]["jobKey"],
+        "RECYCLE_BIN_RESTORE"
+    );
+    assert_eq!(
+        body["data"]["restoreRecycledItem"]["jobRun"]["status"],
+        "RUNNING"
+    );
+
+    let run_id = body["data"]["restoreRecycledItem"]["jobRun"]["id"]
+        .as_str()
+        .expect("accepted job id");
+    let admin = ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("default admin");
+    let terminal = timeout(Duration::from_secs(5), async {
+        loop {
+            let run = ctx
+                .app
+                .list_job_runs(&admin, JobKey::RecycleBinRestore, 10)
+                .await
+                .expect("list recycle restore jobs")
+                .into_iter()
+                .find(|run| run.id == run_id);
+            if let Some(run) = run
+                && run.status.is_terminal()
+            {
+                return run;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("restore job should complete");
+    assert_eq!(terminal.status, JobRunStatus::Completed);
+    assert!(root.path().join("graphql-restore.mkv").exists());
+}
+
+#[tokio::test]
 async fn recycled_items_are_filtered_to_manage_title_libraries() {
     let ctx = TestContext::new().await;
     seed_recycle_bin_setting_definition(&ctx).await;
@@ -665,12 +729,33 @@ async fn restoring_conflict_scans_title_and_tracks_restored_file_as_additional()
         .expect("create restore movie collection");
 
     let manager = manage_titles_actor("manager", std::slice::from_ref(&library.id));
-    assert!(
-        ctx.app
-            .restore_recycled_item(&manager, &entry_id)
-            .await
-            .expect("restore recycled item")
-    );
+    let accepted = ctx
+        .app
+        .start_restore_recycled_item_job(&manager, &entry_id)
+        .await
+        .expect("start recycle restore job");
+    assert_eq!(accepted.job_run.job_key, JobKey::RecycleBinRestore);
+    assert_eq!(accepted.job_run.status, JobRunStatus::Running);
+    let terminal = timeout(Duration::from_secs(5), async {
+        loop {
+            let run = ctx
+                .app
+                .list_job_runs(&manager, JobKey::RecycleBinRestore, 10)
+                .await
+                .expect("list recycle restore job runs")
+                .into_iter()
+                .find(|run| run.id == accepted.job_run.id);
+            if let Some(run) = run
+                && run.status.is_terminal()
+            {
+                return run;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("recycle restore job should complete");
+    assert_eq!(terminal.status, JobRunStatus::Completed);
 
     let restored_path = title_dir.join("Restore.Movie.Title.2024.720p.WEB-DL-restored.mkv");
     let restored_path_string = restored_path.to_string_lossy().to_string();
@@ -686,6 +771,89 @@ async fn restoring_conflict_scans_title_and_tracks_restored_file_as_additional()
                 && file.role == MediaFileRole::Additional
         }),
         "title scan should track the restored sibling as an additional file: {files:?}"
+    );
+}
+
+#[tokio::test]
+async fn failed_restore_job_keeps_recycle_entry_available() {
+    let ctx = TestContext::new().await;
+    seed_recycle_bin_setting_definition(&ctx).await;
+    let root = tempfile::tempdir().expect("library root");
+    let library = seed_library(&ctx, "Restore Failure", root.path()).await;
+    seed_title(&ctx, "title-restore-failure", &library).await;
+
+    let parent = root.path().join("blocked-parent");
+    std::fs::create_dir_all(&parent).expect("create source parent");
+    let source_path = parent.join("Restore.Failure.mkv");
+    std::fs::write(&source_path, b"recycled original").expect("write source file");
+    let recycle_result = recycle_file(
+        &RecycleBinConfig {
+            enabled: true,
+            base_path: root.path().join(".scryer-recycle"),
+            retention_days: 7,
+            cleanup_enabled: true,
+            validation_error: None,
+            source_roots: vec![root.path().to_path_buf()],
+        },
+        &source_path,
+        RecycleManifest {
+            schema: None,
+            entry_id: None,
+            source_operation_id: None,
+            recycled_at: Utc::now().to_rfc3339(),
+            original_path: source_path.to_string_lossy().to_string(),
+            original_file_id: None,
+            size_bytes: 17,
+            title_id: Some("title-restore-failure".to_string()),
+            media_root: None,
+            reason: "file_deleted".to_string(),
+            status: None,
+            replacement_file_id: None,
+            replacement_path: None,
+        },
+    )
+    .await
+    .expect("recycle source file")
+    .expect("file should be recycled");
+
+    if parent.exists() {
+        std::fs::remove_dir(&parent).expect("remove empty source parent");
+    }
+    std::fs::write(&parent, b"not a directory").expect("block restore parent");
+    let manager = manage_titles_actor("manager", std::slice::from_ref(&library.id));
+    let accepted = ctx
+        .app
+        .start_restore_recycled_item_job(&manager, &recycle_result.entry_id)
+        .await
+        .expect("accept restore job before runtime failure");
+
+    let terminal = timeout(Duration::from_secs(5), async {
+        loop {
+            let run = ctx
+                .app
+                .list_job_runs(&manager, JobKey::RecycleBinRestore, 10)
+                .await
+                .expect("list recycle restore job runs")
+                .into_iter()
+                .find(|run| run.id == accepted.job_run.id);
+            if let Some(run) = run
+                && run.status.is_terminal()
+            {
+                return run;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("restore job should fail");
+    assert_eq!(terminal.status, JobRunStatus::Failed);
+    assert!(
+        recycle_result.entry_dir.exists(),
+        "failed restore should retain the recycle entry"
+    );
+    assert!(
+        recycle_result.recycled_path.exists(),
+        "failed restore should retain the recycled file"
     );
 }
 

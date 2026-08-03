@@ -23,6 +23,11 @@ pub struct DeleteTitlesJobAccepted {
     pub accepted_title_ids: Vec<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct DeleteMediaFileJobAccepted {
+    pub job_run: JobRun,
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TitleDeletionProgress {
@@ -532,6 +537,248 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
+    pub async fn start_delete_media_file_job(
+        &self,
+        actor: &User,
+        file_id: &str,
+        delete_from_disk: bool,
+        delete_confirmation: Option<DeleteExecutionConfirmation>,
+    ) -> AppResult<DeleteMediaFileJobAccepted> {
+        let guard_key = format!("media-file:{file_id}");
+        let deletion_guard = self
+            .runtime
+            .jobs
+            .interactive_operation_guards
+            .try_acquire(&guard_key)
+            .await
+            .ok_or_else(|| {
+                AppError::Validation(format!(
+                    "a media file deletion is already running for {file_id}"
+                ))
+            })?;
+        let library_id = self
+            .validate_delete_media_file_job_request(
+                actor,
+                file_id,
+                delete_from_disk,
+                delete_confirmation.as_ref(),
+            )
+            .await?;
+
+        let now = chrono::Utc::now();
+        let mut run = JobRunRecord {
+            id: Id::new().0,
+            job_key: JobKey::MediaFileDeletion,
+            operation_type: format!("media_file_deletion:{library_id}:{file_id}"),
+            status: JobRunStatus::Running,
+            trigger_source: JobTriggerSource::Manual,
+            actor_user_id: Some(actor.id.clone()),
+            progress_json: serde_json::json!({
+                "status": JobRunStatus::Running.as_str(),
+                "phase": "queued",
+                "fileId": file_id,
+                "deleteFromDisk": delete_from_disk,
+            })
+            .to_string()
+            .into(),
+            summary_json: None,
+            summary_text: None,
+            error_text: None,
+            started_at: now,
+            completed_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        run = self.services.events.job_runs.create_job_run(&run).await?;
+        let job_run = JobRun::from_record(&run, None);
+        self.runtime
+            .jobs
+            .job_run_tracker
+            .upsert_active_run(job_run.clone())
+            .await;
+        let actor_event = DomainEventActor::from(actor);
+        let _ = self
+            .append_domain_event(crate::domain_events::new_job_run_domain_event(
+                actor_event.clone(),
+                run.id.clone(),
+                DomainEventPayload::JobRunStarted(JobRunStartedEventData {
+                    run_id: run.id.clone(),
+                    job_key: run.job_key.as_str().to_string(),
+                    operation_type: run.operation_type.clone(),
+                    trigger_source: run.trigger_source.as_str().to_string(),
+                }),
+            ))
+            .await;
+
+        let app = self.clone();
+        let actor = actor.clone();
+        let file_id = file_id.to_string();
+        tokio::spawn(async move {
+            app.run_delete_media_file_job(
+                run,
+                actor_event,
+                actor,
+                file_id,
+                delete_from_disk,
+                delete_confirmation,
+                deletion_guard,
+            )
+            .await;
+        });
+
+        Ok(DeleteMediaFileJobAccepted { job_run })
+    }
+
+    async fn validate_delete_media_file_job_request(
+        &self,
+        actor: &User,
+        file_id: &str,
+        delete_from_disk: bool,
+        delete_confirmation: Option<&DeleteExecutionConfirmation>,
+    ) -> AppResult<String> {
+        let media_file = self
+            .services
+            .library
+            .media_files
+            .get_media_file_by_id(file_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("media file {file_id}")))?;
+        let library_id = self
+            .services
+            .catalog
+            .libraries
+            .title_library_id(&media_file.title_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("title {}", media_file.title_id)))?;
+        self.require_library_permission(
+            actor,
+            &library_id,
+            scryer_domain::LibraryPermission::ManageTitles,
+        )
+        .await?;
+
+        if let Some(DeleteExecutionConfirmation {
+            preview_fingerprint,
+            typed_confirmation,
+        }) = delete_confirmation.filter(|_| delete_from_disk)
+        {
+            self.validate_delete_media_file(
+                file_id,
+                preview_fingerprint,
+                typed_confirmation.as_deref(),
+            )
+            .await?;
+        } else if delete_from_disk {
+            return Err(AppError::Validation(
+                "delete preview confirmation is required before deleting files on disk".into(),
+            ));
+        }
+
+        Ok(library_id)
+    }
+
+    async fn run_delete_media_file_job(
+        &self,
+        run: JobRunRecord,
+        actor_event: DomainEventActor,
+        actor: User,
+        file_id: String,
+        delete_from_disk: bool,
+        delete_confirmation: Option<DeleteExecutionConfirmation>,
+        _deletion_guard: tokio::sync::OwnedMutexGuard<()>,
+    ) {
+        let result = self
+            .delete_media_file(&actor, &file_id, delete_from_disk, delete_confirmation)
+            .await;
+        let (status, summary_text, error_text) = match result {
+            Ok(()) => (
+                JobRunStatus::Completed,
+                "Deleted media file".to_string(),
+                None,
+            ),
+            Err(error) => (
+                JobRunStatus::Failed,
+                "Failed to delete media file".to_string(),
+                Some(error.to_string()),
+            ),
+        };
+        if let Err(error) = self
+            .finish_media_file_deletion_job(
+                run,
+                actor_event,
+                status,
+                &file_id,
+                delete_from_disk,
+                summary_text,
+                error_text,
+            )
+            .await
+        {
+            warn!(error = %error, file_id = %file_id, "failed to finish media file deletion job");
+        }
+    }
+
+    async fn finish_media_file_deletion_job(
+        &self,
+        mut run: JobRunRecord,
+        actor: DomainEventActor,
+        status: JobRunStatus,
+        file_id: &str,
+        delete_from_disk: bool,
+        summary_text: String,
+        error_text: Option<String>,
+    ) -> AppResult<()> {
+        let completed_at = chrono::Utc::now();
+        run.status = status;
+        run.progress_json = Some(
+            serde_json::json!({
+                "status": status.as_str(),
+                "phase": "completed",
+                "fileId": file_id,
+                "deleteFromDisk": delete_from_disk,
+            })
+            .to_string(),
+        );
+        run.summary_text = Some(summary_text);
+        run.summary_json = Some(
+            serde_json::json!({
+                "fileId": file_id,
+                "deleteFromDisk": delete_from_disk,
+            })
+            .to_string(),
+        );
+        run.error_text = error_text;
+        run.completed_at = Some(completed_at);
+        run.updated_at = completed_at;
+        let updated = self.services.events.job_runs.update_job_run(&run).await?;
+        self.runtime
+            .jobs
+            .job_run_tracker
+            .upsert_active_run(JobRun::from_record(&updated, None))
+            .await;
+        let payload = if status == JobRunStatus::Failed {
+            DomainEventPayload::JobRunFailed(JobRunFailedEventData {
+                run_id: updated.id.clone(),
+                job_key: updated.job_key.as_str().to_string(),
+                error_text: updated.error_text.clone(),
+            })
+        } else {
+            DomainEventPayload::JobRunCompleted(JobRunCompletedEventData {
+                run_id: updated.id.clone(),
+                job_key: updated.job_key.as_str().to_string(),
+                summary_text: updated.summary_text.clone(),
+            })
+        };
+        let _ = self
+            .append_domain_event(crate::domain_events::new_job_run_domain_event(
+                actor,
+                updated.id.clone(),
+                payload,
+            ))
+            .await;
+        Ok(())
+    }
+
     pub async fn delete_media_file(
         &self,
         actor: &User,

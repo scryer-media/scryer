@@ -82,6 +82,7 @@ mod tests {
             waiting_for_completed_history: false,
             path_missing_since: None,
             no_video_import_retry: None,
+            foreign_import_classification: None,
             skip_reacquire_on_failure: false,
         }
     }
@@ -480,6 +481,7 @@ mod tests {
             waiting_for_completed_history: false,
             path_missing_since: None,
             no_video_import_retry: None,
+            foreign_import_classification: None,
             skip_reacquire_on_failure: false,
         };
         let metadata = tracked_download_queue_snapshot(&tracked);
@@ -519,6 +521,7 @@ mod tests {
             waiting_for_completed_history: false,
             path_missing_since: None,
             no_video_import_retry: None,
+            foreign_import_classification: None,
             skip_reacquire_on_failure: false,
         };
         let metadata = tracked_download_queue_snapshot(&tracked);
@@ -620,6 +623,7 @@ mod tests {
             waiting_for_completed_history: false,
             path_missing_since: None,
             no_video_import_retry: None,
+            foreign_import_classification: None,
             skip_reacquire_on_failure: false,
         };
         let metadata = tracked_download_queue_snapshot(&tracked);

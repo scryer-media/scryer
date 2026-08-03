@@ -2644,14 +2644,12 @@ impl ExternalImportMutations {
             let use_ssl = external_import::field_bool(&dc.fields, "useSsl").unwrap_or(false);
             let url_base = external_import::field_str(&dc.fields, "urlBase").unwrap_or_default();
 
-            let mut config_obj = serde_json::Map::new();
-            config_obj.insert("host".into(), serde_json::Value::String(host.clone()));
-            config_obj.insert("port".into(), serde_json::Value::String(port.clone()));
-            config_obj.insert("use_ssl".into(), serde_json::Value::Bool(use_ssl));
-            config_obj.insert("url_base".into(), serde_json::Value::String(url_base));
-            config_obj.insert(
-                "client_type".into(),
-                serde_json::Value::String(scryer_type.to_string()),
+            let mut config_obj = imported_download_client_connection_config(
+                scryer_type,
+                &host,
+                &port,
+                use_ssl,
+                &url_base,
             );
 
             if scryer_type == "sabnzbd" || scryer_type == "weaver" {
@@ -3486,6 +3484,31 @@ async fn run_external_import_prowlarr_warmup_job(
     }
 }
 
+/// Build the only configuration values copied from an Arr download client.
+/// Routing categories are Scryer-owned settings and deliberately stay out of
+/// this connection payload.
+fn imported_download_client_connection_config(
+    client_type: &str,
+    host: &str,
+    port: &str,
+    use_ssl: bool,
+    url_base: &str,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut config = serde_json::Map::new();
+    config.insert("host".into(), serde_json::Value::String(host.to_string()));
+    config.insert("port".into(), serde_json::Value::String(port.to_string()));
+    config.insert("use_ssl".into(), serde_json::Value::Bool(use_ssl));
+    config.insert(
+        "url_base".into(),
+        serde_json::Value::String(url_base.to_string()),
+    );
+    config.insert(
+        "client_type".into(),
+        serde_json::Value::String(client_type.to_string()),
+    );
+    config
+}
+
 fn map_download_client(
     dc: &ArrDownloadClient,
     source: &str,
@@ -3579,11 +3602,12 @@ mod tests {
         SONARR_EPISODE_FETCH_CONCURRENCY_PER_INSTANCE,
         build_external_import_library_setting_accumulators,
         derive_external_import_library_setting_applications,
-        detect_imported_prowlarr_proxy_indexer, imported_indexer_config_json,
-        is_external_import_library_auto_apply_setting, map_download_client, map_indexer,
-        merge_direct_prowlarr_group, merge_prowlarr_group, movie_scan_hint_from_arr,
-        prowlarr_dedup_key, push_sonarr_scan_hints_for_mapping, record_series_setting_sample,
-        remap_import_path, series_episode_scan_hint_from_arr, series_folder_scan_hint_from_arr,
+        detect_imported_prowlarr_proxy_indexer, imported_download_client_connection_config,
+        imported_indexer_config_json, is_external_import_library_auto_apply_setting,
+        map_download_client, map_indexer, merge_direct_prowlarr_group, merge_prowlarr_group,
+        movie_scan_hint_from_arr, prowlarr_dedup_key, push_sonarr_scan_hints_for_mapping,
+        record_series_setting_sample, remap_import_path, series_episode_scan_hint_from_arr,
+        series_folder_scan_hint_from_arr,
     };
 
     #[test]
@@ -4235,6 +4259,29 @@ mod tests {
         assert_eq!(payload.scryer_client_type.as_deref(), Some("qbittorrent"));
         assert_eq!(payload.dedup_key, "qbittorrent:qb.local:8080");
         assert_eq!(payload.source_keys, vec!["sonarr".to_string()]);
+    }
+
+    #[test]
+    fn imported_download_client_connection_config_excludes_arr_routing_categories() {
+        let config = imported_download_client_connection_config(
+            "nzbget",
+            "nzbget.local",
+            "6789",
+            true,
+            "/rpc",
+        );
+
+        assert_eq!(
+            config.get("host"),
+            Some(&Value::String("nzbget.local".into()))
+        );
+        assert_eq!(
+            config.get("client_type"),
+            Some(&Value::String("nzbget".into()))
+        );
+        assert!(!config.contains_key("category"));
+        assert!(!config.contains_key("tvCategory"));
+        assert!(!config.contains_key("movieCategory"));
     }
 
     #[test]

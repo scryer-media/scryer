@@ -64,6 +64,7 @@ type MediaFilesOnDiskPanelProps<TFile extends MediaFileOnDisk> = {
   subtitleDownloads?: ExternalSubtitleRecord[];
   onRefreshSubtitles?: () => Promise<void> | void;
   onDeleteFile?: (fileId: string) => void;
+  deletingFileIds?: ReadonlySet<string>;
   onMakePrimaryFile?: (fileId: string) => Promise<void> | void;
   primaryFileUpdatingId?: string | null;
   showPrimaryRoleBadge?: boolean;
@@ -86,6 +87,7 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
   subtitleDownloads = [],
   onRefreshSubtitles,
   onDeleteFile,
+  deletingFileIds,
   onMakePrimaryFile,
   primaryFileUpdatingId,
   showPrimaryRoleBadge = false,
@@ -143,6 +145,7 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
             const isAdditionalFile = role === "additional";
             const isPrimaryFile = role === "primary";
             const isPromotingFile = primaryFileUpdatingId === file.id;
+            const isDeletingFile = deletingFileIds?.has(file.id) ?? false;
             const fileDate = formatMediaFileDate(file.createdAt, dateTimeFormat);
             const PathIcon = selectedTitlePresentation ? FileIcon : HardDrive;
             const unknownLabel = t("label.unknown");
@@ -383,10 +386,15 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                             label={t("mediaFile.delete")}
                             tone="delete"
                             id={selectorId(deleteFileIdPrefix, file.id)}
+                            disabled={isDeletingFile}
                             onClick={() => onDeleteFile(file.id)}
                             className={selectedTitlePresentation ? "h-8 w-8" : undefined}
                           >
-                            <Trash2 className="h-4 w-4" />
+                            {isDeletingFile ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-4 w-4" />
+                            )}
                           </IconButton>
                         ) : null}
                       </div>

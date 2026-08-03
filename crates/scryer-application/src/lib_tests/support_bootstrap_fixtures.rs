@@ -1702,6 +1702,7 @@ pub(super) async fn insert_tracked_download_snapshot(
                 status: scryer_domain::TrackedDownloadStatus::Warning,
                 status_messages: vec![format!("tracked {}", state.as_str())],
                 match_type: scryer_domain::TitleMatchType::Submission,
+                foreign_import_classification: None,
             },
         );
 }
