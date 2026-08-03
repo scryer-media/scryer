@@ -109,6 +109,8 @@ fn test_manual_import_payload(files: Vec<ManualImportFileMapping>) -> ManualImpo
         client_id: Some("client-1".to_string()),
         client_type: "weaver".to_string(),
         files,
+        trusted_source_root: None,
+        selection_id: None,
         requested_at: chrono::Utc::now().to_rfc3339(),
     }
 }
@@ -172,7 +174,7 @@ fn extract_parameter_first_match() {
 }
 
 #[test]
-fn queued_mapped_manual_import_allows_missing_source() {
+fn queued_mapped_manual_import_rejects_missing_source() {
     let payload = test_manual_import_payload(vec![ManualImportFileMapping {
         file_path: "/downloads/episode.mkv".to_string(),
         episode_id: Some("ep-1".to_string()),
@@ -188,7 +190,7 @@ fn queued_mapped_manual_import_allows_missing_source() {
         },
     );
 
-    assert!(matches!(result, Ok(None)));
+    assert!(matches!(result, Err((ImportStatus::Failed, Some(message))) if message.contains("recreate manual import selection")));
 }
 
 #[test]

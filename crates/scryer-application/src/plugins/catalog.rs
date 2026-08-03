@@ -17,6 +17,8 @@ use rustls_pki_types::{CertificateDer, TrustAnchor, UnixTime};
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "runtime-plugin-trust")]
+use sha2::{Digest, Sha256};
+#[cfg(feature = "runtime-plugin-trust")]
 use sigstore::{
     cosign::{CosignCapabilities, bundle::SignedArtifactBundle},
     crypto::{CosignVerificationKey, SigningScheme},
@@ -1034,6 +1036,12 @@ fn verify_signed_blob_blocking(
             AppError::Validation(format!("Sigstore Rekor bundle verification failed: {e}"))
         })?;
     let cert_pem = normalize_bundle_cert(&bundle.cert)?;
+    verify_rekor_hashedrekord_binding(
+        raw,
+        &bundle.base64_signature,
+        &cert_pem,
+        &bundle.rekor_bundle.payload.body,
+    )?;
     <sigstore::cosign::Client as CosignCapabilities>::verify_blob(
         &cert_pem,
         &bundle.base64_signature,
@@ -1045,6 +1053,102 @@ fn verify_signed_blob_blocking(
     verify_fulcio_certificate_chain(&cert_pem, &bundle)?;
     verify_signer_identity(&cert_pem, required_signer)?;
     Ok(())
+}
+
+#[cfg(feature = "runtime-plugin-trust")]
+fn verify_rekor_hashedrekord_binding(
+    raw: &[u8],
+    base64_signature: &str,
+    cert_pem: &str,
+    base64_rekor_body: &str,
+) -> AppResult<()> {
+    let body = base64::engine::general_purpose::STANDARD
+        .decode(base64_rekor_body.as_bytes())
+        .map_err(|error| AppError::Validation(format!("invalid Rekor body encoding: {error}")))?;
+    let body: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|error| AppError::Validation(format!("invalid Rekor body JSON: {error}")))?;
+    let kind = sigstore_bundle_string_field(&body, &["kind"], "Rekor body kind")?;
+    let api_version =
+        sigstore_bundle_string_field(&body, &["apiVersion"], "Rekor body apiVersion")?;
+    if kind != "hashedrekord" || api_version != "0.0.1" {
+        return Err(AppError::Validation(
+            "unsupported Rekor body; expected hashedrekord v0.0.1".to_string(),
+        ));
+    }
+
+    let hash_algorithm = sigstore_bundle_string_field(
+        &body,
+        &["spec", "data", "hash", "algorithm"],
+        "Rekor hashedrekord SHA-256 algorithm",
+    )?;
+    if !hash_algorithm.eq_ignore_ascii_case("sha256") {
+        return Err(AppError::Validation(format!(
+            "unsupported Rekor hashedrekord digest algorithm: {hash_algorithm}"
+        )));
+    }
+    let recorded_digest = sigstore_bundle_string_field(
+        &body,
+        &["spec", "data", "hash", "value"],
+        "Rekor hashedrekord digest",
+    )?;
+    let digest = Sha256::digest(raw);
+    let expected_hex = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let expected_base64 = base64::engine::general_purpose::STANDARD.encode(digest);
+    if !recorded_digest.eq_ignore_ascii_case(&expected_hex) && recorded_digest != expected_base64 {
+        return Err(AppError::Validation(
+            "Rekor hashedrekord digest does not match the plugin artifact".to_string(),
+        ));
+    }
+
+    let recorded_signature = sigstore_bundle_string_field(
+        &body,
+        &["spec", "signature", "content"],
+        "Rekor hashedrekord signature",
+    )?;
+    let outer_signature = base64::engine::general_purpose::STANDARD
+        .decode(base64_signature.as_bytes())
+        .map_err(|error| {
+            AppError::Validation(format!("invalid bundle signature encoding: {error}"))
+        })?;
+    let rekor_signature = base64::engine::general_purpose::STANDARD
+        .decode(recorded_signature.as_bytes())
+        .map_err(|error| {
+            AppError::Validation(format!("invalid Rekor signature encoding: {error}"))
+        })?;
+    if rekor_signature != outer_signature {
+        return Err(AppError::Validation(
+            "Rekor hashedrekord signature does not match the bundle signature".to_string(),
+        ));
+    }
+
+    let recorded_certificate = sigstore_bundle_string_field(
+        &body,
+        &["spec", "signature", "publicKey", "content"],
+        "Rekor hashedrekord certificate",
+    )?;
+    if sigstore_certificate_der(cert_pem)?
+        != sigstore_certificate_der(&normalize_bundle_cert(recorded_certificate)?)?
+    {
+        return Err(AppError::Validation(
+            "Rekor hashedrekord certificate does not match the bundle certificate".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "runtime-plugin-trust")]
+fn sigstore_certificate_der(cert_pem: &str) -> AppResult<Vec<u8>> {
+    Certificate::from_pem(cert_pem.as_bytes())
+        .map_err(|error| {
+            AppError::Validation(format!("failed to parse Sigstore certificate: {error}"))
+        })?
+        .to_der()
+        .map_err(|error| {
+            AppError::Validation(format!("failed to encode Sigstore certificate: {error}"))
+        })
 }
 
 #[cfg(feature = "runtime-plugin-trust")]
@@ -1663,6 +1767,130 @@ mod tests {
         assert!(pem.starts_with("-----BEGIN CERTIFICATE-----\n"));
         assert!(pem.contains(&der_base64));
         assert!(pem.ends_with("-----END CERTIFICATE-----\n"));
+    }
+
+    #[cfg(feature = "runtime-plugin-trust")]
+    fn rekor_hashedrekord_body(raw: &[u8], signature: &str, cert_pem: &str) -> String {
+        let digest = Sha256::digest(raw);
+        let digest = digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        base64::engine::general_purpose::STANDARD.encode(
+            serde_json::to_vec(&serde_json::json!({
+                "kind": "hashedrekord",
+                "apiVersion": "0.0.1",
+                "spec": {
+                    "data": {"hash": {"algorithm": "sha256", "value": digest}},
+                    "signature": {
+                        "content": signature,
+                        "publicKey": {"content": cert_pem}
+                    }
+                }
+            }))
+            .expect("serialize Rekor body"),
+        )
+    }
+
+    #[cfg(feature = "runtime-plugin-trust")]
+    #[tokio::test]
+    async fn rekor_hashedrekord_binding_accepts_matching_artifact_signature_and_certificate() {
+        let trust_root = SigstoreTrustRoot::new(None)
+            .await
+            .expect("embedded Sigstore trust root should load");
+        let fulcio_certs = trust_root
+            .fulcio_certs()
+            .expect("trust root should provide Fulcio certificates");
+        let certificate = fulcio_certs
+            .first()
+            .expect("at least one Fulcio certificate");
+        let cert_pem = pem_encode_certificate(certificate);
+        let raw = b"plugin artifact";
+        let signature = base64::engine::general_purpose::STANDARD.encode(b"signature");
+        let body = rekor_hashedrekord_body(raw, &signature, &cert_pem);
+
+        verify_rekor_hashedrekord_binding(raw, &signature, &cert_pem, &body)
+            .expect("matching Rekor body should bind to the bundle");
+    }
+
+    #[cfg(feature = "runtime-plugin-trust")]
+    #[test]
+    fn rekor_hashedrekord_binding_rejects_signature_transplant() {
+        let raw = b"plugin artifact";
+        let signature = base64::engine::general_purpose::STANDARD.encode(b"signature");
+        let body = rekor_hashedrekord_body(
+            raw,
+            &base64::engine::general_purpose::STANDARD.encode(b"different signature"),
+            "-----BEGIN CERTIFICATE-----\nplaceholder\n-----END CERTIFICATE-----\n",
+        );
+
+        let error = verify_rekor_hashedrekord_binding(
+            raw,
+            &signature,
+            "-----BEGIN CERTIFICATE-----\nplaceholder\n-----END CERTIFICATE-----\n",
+            &body,
+        )
+        .expect_err("signature transplant must fail before certificate parsing");
+        assert!(error.to_string().contains("signature does not match"));
+    }
+
+    #[cfg(feature = "runtime-plugin-trust")]
+    #[tokio::test]
+    async fn rekor_hashedrekord_binding_rejects_altered_artifact_certificate_and_body() {
+        let trust_root = SigstoreTrustRoot::new(None)
+            .await
+            .expect("embedded Sigstore trust root should load");
+        let cert_pems = trust_root
+            .fulcio_certs()
+            .expect("trust root should provide Fulcio certificates")
+            .iter()
+            .map(|certificate| pem_encode_certificate(certificate.as_ref()))
+            .collect::<Vec<_>>();
+        let cert_pem = cert_pems.first().expect("at least one Fulcio certificate");
+        let raw = b"plugin artifact";
+        let signature = base64::engine::general_purpose::STANDARD.encode(b"signature");
+        let body = rekor_hashedrekord_body(raw, &signature, cert_pem);
+
+        let digest_error = verify_rekor_hashedrekord_binding(
+            b"altered plugin artifact",
+            &signature,
+            cert_pem,
+            &body,
+        )
+        .expect_err("Rekor digest must bind to the artifact");
+        assert!(digest_error.to_string().contains("digest"));
+
+        let malformed_error =
+            verify_rekor_hashedrekord_binding(raw, &signature, cert_pem, "not-base64")
+                .expect_err("malformed Rekor body must fail");
+        assert!(malformed_error.to_string().contains("encoding"));
+
+        let unsupported_body = base64::engine::general_purpose::STANDARD.encode(
+            serde_json::to_vec(&serde_json::json!({
+                "kind": "rekord",
+                "apiVersion": "0.0.1",
+                "spec": {}
+            }))
+            .expect("serialize unsupported Rekor body"),
+        );
+        let unsupported_error =
+            verify_rekor_hashedrekord_binding(raw, &signature, cert_pem, &unsupported_body)
+                .expect_err("unsupported Rekor body must fail");
+        assert!(
+            unsupported_error
+                .to_string()
+                .contains("unsupported Rekor body")
+        );
+
+        let alternate_cert = cert_pems
+            .iter()
+            .find(|candidate| candidate.as_bytes() != cert_pem.as_bytes())
+            .expect("embedded trust root should include distinct Fulcio certificates");
+        let certificate_body = rekor_hashedrekord_body(raw, &signature, alternate_cert);
+        let certificate_error =
+            verify_rekor_hashedrekord_binding(raw, &signature, cert_pem, &certificate_body)
+                .expect_err("Rekor certificate must bind to the bundle certificate");
+        assert!(certificate_error.to_string().contains("certificate"));
     }
 
     #[cfg(feature = "runtime-plugin-trust")]

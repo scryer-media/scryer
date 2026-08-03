@@ -7,7 +7,7 @@ mod tests {
         completed_import_status_for_result, resolve_completed_download_origin,
         resolved_episode_ids_are_within_expected, sanitized_title_folder_component,
         should_persist_import_transfer_heartbeat, skip_reason_for_import_check_code,
-        validate_manual_import_mapping_targets, validate_path_manual_import_mappings,
+        validate_manual_import_mapping_targets, validate_manual_import_source_under_trusted_root,
     };
     #[cfg(unix)]
     use super::is_sample_file;
@@ -17,7 +17,6 @@ mod tests {
         CompletedDownload, ImportDecision, ImportResult, ImportSkipReason, ImportStatus,
     };
     use std::collections::HashSet;
-    use std::fs;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -396,40 +395,28 @@ mod tests {
     }
 
     #[test]
-    fn path_manual_import_validation_rejects_files_outside_selected_source() {
+    fn manual_import_source_validation_rejects_files_outside_trusted_root() {
         let source = tempfile::tempdir().expect("source tempdir");
         let other = tempfile::tempdir().expect("other tempdir");
         let inside = source.path().join("episode.mkv");
         let outside = other.path().join("episode.mkv");
-        fs::write(&inside, b"video").expect("write inside file");
-        fs::write(&outside, b"video").expect("write outside file");
+        std::fs::write(&inside, b"video").expect("write inside file");
+        std::fs::write(&outside, b"video").expect("write outside file");
 
-        let inside_mapping = ManualImportFileMapping {
-            file_path: inside.to_string_lossy().into_owned(),
-            episode_id: Some("ep-1".to_string()),
-            series_movie_link_id: None,
-            quality: None,
-        };
         assert!(
-            validate_path_manual_import_mappings(
-                &source.path().to_string_lossy(),
-                &[inside_mapping]
+            validate_manual_import_source_under_trusted_root(
+                &inside,
+                &std::fs::canonicalize(source.path()).expect("canonical source root"),
             )
-            .is_ok()
+            .is_ok(),
         );
 
-        let outside_mapping = ManualImportFileMapping {
-            file_path: outside.to_string_lossy().into_owned(),
-            episode_id: Some("ep-1".to_string()),
-            series_movie_link_id: None,
-            quality: None,
-        };
-        let err = validate_path_manual_import_mappings(
-            &source.path().to_string_lossy(),
-            &[outside_mapping],
+        let err = validate_manual_import_source_under_trusted_root(
+            &outside,
+            &std::fs::canonicalize(source.path()).expect("canonical source root"),
         )
         .expect_err("outside file should be rejected");
-        assert!(err.to_string().contains("outside the selected source path"));
+        assert!(err.to_string().contains("outside the trusted source root"));
     }
 
     #[test]

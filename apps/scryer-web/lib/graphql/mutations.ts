@@ -1178,14 +1178,36 @@ export const queueManualImportMutation = `mutation QueueManualImport($input: Que
   }
 }`;
 
-export const queuePathManualImportMutation = `mutation QueuePathManualImport($input: QueuePathManualImportInput!) {
-  queuePathManualImport(input: $input) {
-    kind
-    downloadClientItemId
-    clientId
-    clientType
-    importId
-    removed
+export const beginManualImportSelectionMutation = `mutation BeginManualImportSelection($input: BeginManualImportSelectionInput!) {
+  beginManualImportSelection(input: $input) {
+    selectionId
+    files {
+      candidateId
+      fileName
+      sizeBytes
+      quality
+      parsedSeason
+      parsedEpisodes
+      suggestedEpisodeId
+      suggestedEpisodeLabel
+    }
+    availableEpisodes {
+      id
+      titleId
+      collectionId
+      episodeType
+      episodeNumber
+      seasonNumber
+      episodeLabel
+      title
+      monitored
+    }
+    availableSeriesMovies {
+      seriesMovieLinkId
+      movieTitle
+      year
+      runtimeMinutes
+    }
   }
 }`;
 

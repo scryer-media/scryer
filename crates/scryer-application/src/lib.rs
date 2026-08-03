@@ -266,12 +266,11 @@ pub use events::activity_api::{
 pub(crate) use import::import::{resolve_import_paths, use_season_folders};
 pub(crate) use import_workflow::fail_active_manual_import_for_source;
 pub use import_workflow::{
-    ManualImportExecutionResult, ManualImportFileMapping, ManualImportFilePreview,
-    ManualImportFileResult, ManualImportPreview, ManualImportRequestPayload, execute_manual_import,
-    execute_queued_manual_import, import_completed_download, preview_manual_import,
-    preview_manual_import_path, retry_failed_import, start_background_manual_import_poller,
-    try_import_completed_downloads, try_import_provided_completed_downloads,
-    try_import_recent_completed_downloads,
+    ManualImportCandidateMapping, ManualImportExecutionResult, ManualImportFileMapping,
+    ManualImportFileResult, ManualImportRequestPayload, begin_manual_import_selection,
+    execute_manual_import, execute_queued_manual_import, import_completed_download,
+    retry_failed_import, start_background_manual_import_poller, try_import_completed_downloads,
+    try_import_provided_completed_downloads, try_import_recent_completed_downloads,
 };
 pub use integration::download_queue_commands::start_background_download_delete_poller;
 pub(crate) use integration::integration::ManualImportSourceResolution;
@@ -521,6 +520,7 @@ pub use types::{
     FixTitleMatchResult, HealthCheckResult, HealthCheckStatus, HousekeepingReport,
     IgnorePendingImportResult, IndexerQueryStats, JwtAuthConfig, JwtSessionScope, LibraryRootDraft,
     LibraryScanUnmatchedItem, LibraryScanUnmatchedSearchAttempt, LoginFailureTimingClass,
+    ManualImportSelection, ManualImportSelectionCandidate, ManualImportSourceRegistration,
     MediaRequestCounts, MissingEpisodeCandidate, MissingScopeCandidates,
     MissingSeriesMovieLinkCandidate, MissingTitleCandidate, OAuthAuthorizationCodeRecord,
     OAuthAuthorizationSource, OAuthConnectedAppRecord, OAuthRefreshGrantRecord,

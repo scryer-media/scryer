@@ -1990,152 +1990,71 @@ async fn graphql_introspection_exposes_queue_action_payloads() {
 }
 
 #[tokio::test]
-async fn graphql_queue_manual_import_returns_without_post_write_feedback() {
+async fn graphql_manual_import_schema_exposes_candidate_only_contract() {
     let ctx = TestContext::new().await;
-    let title_id = add_test_title(&ctx, "Queued Manual Import Movie", "MOVIE").await;
-
-    Mock::given(method("POST"))
-        .and(path("/jsonrpc"))
-        .and(body_string_contains(r#""method":"listgroups""#))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_string(load_fixture("nzbget/listgroups.json")),
-        )
-        .expect(1)
-        .mount(&ctx.nzbget_server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/jsonrpc"))
-        .and(body_string_contains(r#""method":"history""#))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "version": "2.0",
-            "id": "scryer-rpc",
-            "result": [{
-                "NZBID": 999,
-                "Name": "Queued.Manual.Import.2024.1080p.WEB-DL-GROUP",
-                "NZBName": "Queued.Manual.Import.2024.1080p.WEB-DL-GROUP",
-                "NZBFilename": "Queued.Manual.Import.2024.1080p.WEB-DL-GROUP.nzb",
-                "DestDir": "/downloads/completed/movies/Queued.Manual.Import.2024.1080p.WEB-DL-GROUP",
-                "FinalDir": "/downloads/completed/movies/Queued.Manual.Import.2024.1080p.WEB-DL-GROUP",
-                "Category": "movies",
-                "FileSizeLo": 0,
-                "FileSizeHi": 1,
-                "FileSizeMB": 4096,
-                "DownloadedSizeLo": 0,
-                "DownloadedSizeHi": 1,
-                "DownloadedSizeMB": 4096,
-                "DownloadTimeSec": 600,
-                "PostTotalTimeSec": 120,
-                "ParTimeSec": 30,
-                "RepairTimeSec": 0,
-                "UnpackTimeSec": 90,
-                "Status": "SUCCESS/ALL",
-                "TotalArticles": 50000,
-                "SuccessArticles": 50000,
-                "FailedArticles": 0,
-                "Health": 1000,
-                "CriticalHealth": 986,
-                "MinPostTime": Utc::now().timestamp() - 600,
-                "MaxPostTime": Utc::now().timestamp() - 300,
-                "HistoryTime": Utc::now().timestamp(),
-                "MarkStatus": "NONE",
-                "Parameters": []
-            }]
-        })))
-        .mount(&ctx.nzbget_server)
-        .await;
-
-    let client = ctx.http_client();
-    let response = client
-        .post(ctx.graphql_url())
-        .json(&json!({
-            "query": r#"
-                mutation QueueManualImport($input: QueueManualImportInput!) {
-                  queueManualImport(input: $input) {
-                    kind
-                    importId
-                    queueItem { id }
-                  }
-                }
-            "#,
-            "variables": {
-                "input": {
-                    "titleId": title_id,
-                    "clientType": "nzbget",
-                    "downloadClientItemId": "999"
-                }
-            }
-        }))
-        .send()
-        .await
-        .expect("request should succeed");
-
-    assert_eq!(response.status(), 200);
-    let body: Value = response
-        .json()
-        .await
-        .expect("response should be valid json");
-    assert_no_errors(&body);
-
-    let import_id = body["data"]["queueManualImport"]["importId"]
-        .as_str()
-        .expect("queue manual import should return an import id");
-    assert_eq!(
-        body["data"]["queueManualImport"]["kind"],
-        json!("QUEUED_MANUAL_IMPORT")
-    );
-    assert_eq!(body["data"]["queueManualImport"]["queueItem"], Value::Null);
-
-    let history_body = gql(
+    let body = gql(
         &ctx,
         r#"
         {
-          importHistory {
-            id
-            importType
-            status
-            sourceRef
-          }
+          mutationRoot: __type(name: "MutationRoot") { fields { name } }
+          queryRoot: __type(name: "QueryRoot") { fields { name } }
+          queueInput: __type(name: "QueueManualImportInput") { inputFields { name } }
+          mappingInput: __type(name: "ManualImportCandidateMappingInput") { inputFields { name } }
+          selectionInput: __type(name: "BeginManualImportSelectionInput") { inputFields { name } }
+          selectionPayload: __type(name: "ManualImportSelectionPayload") { fields { name } }
+          filePayload: __type(name: "ManualImportFilePreviewPayload") { fields { name } }
         }
         "#,
         json!({}),
     )
     .await;
-    assert_no_errors(&history_body);
+    assert_no_errors(&body);
 
-    let queued = history_body["data"]["importHistory"]
-        .as_array()
-        .expect("import history should be an array")
-        .iter()
-        .filter(|entry| {
-            entry["sourceRef"] == json!("999") && entry["importType"] == json!("MANUAL_IMPORT")
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(queued.len(), 1, "manual import should be persisted once");
-    let queued = queued[0];
-    assert_eq!(queued["id"], json!(import_id));
-    assert_eq!(queued["sourceRef"], json!("999"));
-    assert_eq!(queued["importType"], json!("MANUAL_IMPORT"));
-    assert_eq!(queued["status"], json!("PENDING"));
+    let field_names = |key: &str| -> Vec<&str> {
+        body["data"][key]
+            .as_object()
+            .and_then(|value| value.get("fields").or_else(|| value.get("inputFields")))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|field| field["name"].as_str())
+            .collect()
+    };
+    let mutation_fields = field_names("mutationRoot");
+    assert!(mutation_fields.contains(&"beginManualImportSelection"));
+    assert!(mutation_fields.contains(&"queueManualImport"));
+    assert!(!mutation_fields.contains(&"queuePathManualImport"));
+
+    let query_fields = field_names("queryRoot");
+    assert!(!query_fields.contains(&"previewManualImport"));
+    assert!(!query_fields.contains(&"previewManualImportPath"));
+
+    assert_eq!(field_names("queueInput"), ["selectionId", "files"]);
+    assert_eq!(
+        field_names("mappingInput"),
+        ["candidateId", "episodeId", "seriesMovieLinkId"]
+    );
+    assert_eq!(
+        field_names("selectionInput"),
+        ["clientId", "clientType", "downloadClientItemId", "titleId"]
+    );
+    assert!(field_names("selectionPayload").contains(&"selectionId"));
+    let file_fields = field_names("filePayload");
+    assert!(file_fields.contains(&"candidateId"));
+    assert!(!file_fields.contains(&"filePath"));
 }
 
 #[tokio::test]
-async fn graphql_queue_manual_import_preserves_validation_and_authorization_errors() {
+async fn graphql_manual_import_rejects_the_removed_path_contract() {
     let ctx = TestContext::new().await;
-    let mutation = r#"
-        mutation QueueManualImport($input: QueueManualImportInput!) {
-          queueManualImport(input: $input) { importId }
-        }
-    "#;
-
-    let invalid = gql(
+    let invalid = schema_exec(
         &ctx,
-        mutation,
-        json!({
-            "input": {
-                "clientType": "nzbget",
-                "downloadClientItemId": " "
-            }
-        }),
+        r#"
+        mutation {
+          queueManualImport(input: { filePath: "/etc/passwd" files: [] }) { importId }
+        }
+        "#,
+        None,
     )
     .await;
     assert!(
@@ -2144,29 +2063,32 @@ async fn graphql_queue_manual_import_preserves_validation_and_authorization_erro
             .is_some_and(|errors| errors.iter().any(|error| {
                 error["message"]
                     .as_str()
-                    .is_some_and(|message| message.contains("download client item id is required"))
+                    .is_some_and(|message| message.contains("filePath"))
             })),
-        "expected manual import validation error: {invalid}"
+        "expected removed path field to be rejected: {invalid}"
     );
 
-    let unauthorized = schema_exec(
+    let preview = schema_exec(
         &ctx,
         r#"
-        mutation {
-          queueManualImport(input: {
-            clientType: "nzbget"
-            downloadClientItemId: "999"
-          }) { importId }
+        query {
+          previewManualImportPath(input: { filePath: "/etc/passwd", titleId: "title" }) {
+            files { filePath }
+          }
         }
         "#,
         None,
     )
     .await;
     assert!(
-        unauthorized["errors"]
+        preview["errors"]
             .as_array()
-            .is_some_and(|errors| !errors.is_empty()),
-        "expected manual import authorization error: {unauthorized}"
+            .is_some_and(|errors| errors.iter().any(|error| {
+                error["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("previewManualImportPath"))
+            })),
+        "expected removed path query to be rejected: {preview}"
     );
 }
 

@@ -218,6 +218,8 @@ impl AppUseCase {
             client_id: client_id.clone(),
             client_type: normalized_client_type.clone(),
             files,
+            trusted_source_root: None,
+            selection_id: None,
             requested_at: Utc::now().to_rfc3339(),
         })
         .map_err(|error| AppError::Repository(error.to_string()))?;
@@ -250,69 +252,117 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    pub async fn queue_path_manual_import(
+    pub async fn queue_manual_import_selection(
         &self,
         actor: &User,
-        title_id: String,
-        source_path: String,
-        files: Vec<crate::ManualImportFileMapping>,
+        selection_id: String,
+        mappings: Vec<crate::ManualImportCandidateMapping>,
     ) -> AppResult<String> {
-        let source_ref = source_path.trim().to_string();
-        if source_ref.is_empty() {
-            return Err(AppError::Validation(
-                "manual import path is required".to_string(),
-            ));
-        }
-        if files.is_empty() {
-            return Err(AppError::Validation(
-                "at least one mapped file is required for path manual import".to_string(),
-            ));
-        }
-
+        crate::import_workflow::validate_manual_import_candidate_mapping_targets(&mappings)?;
+        let selection = self
+            .services
+            .workflow
+            .imports
+            .get_manual_import_selection(&selection_id, &actor.id)
+            .await?
+            .ok_or_else(|| {
+                AppError::Validation(
+                    "manual import selection is unavailable; reopen the import dialog".to_string(),
+                )
+            })?;
         self.require_title_library_permission(
             actor,
-            &title_id,
+            &selection.title_id,
             scryer_domain::LibraryPermission::ResolveImports,
         )
         .await?;
-        crate::import_workflow::validate_path_manual_import_mappings(&source_ref, &files)?;
 
-        let client_type = "path".to_string();
-        let source_identity = DownloadSourceIdentity::new(None, &client_type, &source_ref);
+        let source = &selection.source.source_identity;
+        if let Some(existing) = crate::import_workflow::find_active_manual_import_for_source(
+            self,
+            source.client_id.as_deref(),
+            &source.client_type,
+            &source.item_id,
+        )
+        .await?
+        {
+            return Ok(existing.id);
+        }
+
+        let candidate_ids = mappings
+            .iter()
+            .map(|mapping| mapping.candidate_id.clone())
+            .collect::<Vec<_>>();
+        let selection = self
+            .services
+            .workflow
+            .imports
+            .consume_manual_import_selection(&selection_id, &actor.id, &candidate_ids)
+            .await?
+            .ok_or_else(|| {
+                AppError::Validation(
+                    "manual import selection changed; reopen the import dialog".to_string(),
+                )
+            })?;
+        let candidates = selection
+            .candidates
+            .iter()
+            .map(|candidate| (candidate.id.as_str(), candidate))
+            .collect::<HashMap<_, _>>();
+        let files = mappings
+            .into_iter()
+            .map(|mapping| {
+                let candidate = candidates.get(mapping.candidate_id.as_str()).ok_or_else(|| {
+                    AppError::Validation("manual import candidate is unavailable".to_string())
+                })?;
+                Ok(crate::ManualImportFileMapping {
+                    file_path: candidate.canonical_path.clone(),
+                    episode_id: mapping.episode_id,
+                    series_movie_link_id: mapping.series_movie_link_id,
+                    quality: candidate.quality.clone(),
+                })
+            })
+            .collect::<AppResult<Vec<_>>>()?;
+        let source_identity = selection.source.source_identity.clone();
         let payload_json = serde_json::to_string(&crate::ManualImportRequestPayload {
             requested_by_user_id: Some(actor.id.clone()),
-            title_id: Some(title_id.clone()),
-            download_client_item_id: source_ref.clone(),
-            client_id: None,
-            client_type: client_type.clone(),
+            title_id: Some(selection.title_id.clone()),
+            download_client_item_id: source_identity.item_id.clone(),
+            client_id: source_identity.client_id.clone(),
+            client_type: source_identity.client_type.clone(),
             files,
             requested_at: Utc::now().to_rfc3339(),
+            trusted_source_root: Some(selection.source.trusted_root.clone()),
+            selection_id: Some(selection.id),
         })
         .map_err(|error| AppError::Repository(error.to_string()))?;
-
         let import_id = self
             .services
             .workflow
             .imports
             .queue_import_request(
-                source_identity,
+                source_identity.clone(),
                 ImportType::ManualImport.as_str().to_string(),
                 payload_json,
             )
             .await?;
-
-        let title = self.services.catalog.titles.get_by_id(&title_id).await?;
+        let title = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(&selection.title_id)
+            .await?;
         self.emit_import_requested_event(
             actor,
             title.as_ref(),
-            client_type,
-            source_ref,
+            source_identity.client_type,
+            source_identity.item_id,
             scryer_domain::ImportRequestKind::Manual,
         )
         .await;
-
         Ok(import_id)
     }
+
 }
 impl AppUseCase {
     pub async fn trigger_manual_import(

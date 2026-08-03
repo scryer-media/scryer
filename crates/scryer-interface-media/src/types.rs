@@ -398,6 +398,14 @@ pub struct ManualImportPreviewPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+pub struct ManualImportSelectionPayload {
+    pub selection_id: ID,
+    pub files: Vec<ManualImportFilePreviewPayload>,
+    pub available_episodes: Vec<EpisodePayload>,
+    pub available_series_movies: Vec<ManualImportSeriesMovieTargetPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
 #[graphql(complex)]
 pub struct WantedItemPayload {
     /// Scope identity: the acquisition-state row id when a state row

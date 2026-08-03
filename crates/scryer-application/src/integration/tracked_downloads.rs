@@ -3091,6 +3091,8 @@ mod tests {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let completed_dir = tempdir.path().join("4f8e2c7a91b6d3e0");
         std::fs::create_dir_all(&completed_dir).expect("create completed download dir");
+        std::fs::write(completed_dir.join("Paper.Lantern.2020.1080p.mkv"), b"video")
+            .expect("write completed download video");
         let download_client = Arc::new(TestDownloadClient {
             completed_downloads: Arc::new(Mutex::new(vec![build_completed_download(
                 "weaver",
@@ -3750,45 +3752,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn preview_manual_import_rejects_failed_source_job() {
-        let mut failed_item = build_client_item();
-        failed_item.client_type = "weaver".to_string();
-        failed_item.client_name = "weaver".to_string();
-        failed_item.download_client_item_id = "job-failed-preview".to_string();
-        failed_item.state = DownloadQueueState::Failed;
-        failed_item.attention_reason = Some("health below critical".to_string());
-
-        let download_client = Arc::new(TestDownloadClient {
-            recent_activity: Arc::new(Mutex::new(vec![failed_item])),
-            ..Default::default()
-        });
-        let mut title = build_title("Manual Import", MediaFacet::Movie, &[]);
-        title.id = "title-1".to_string();
-        let app = build_app_with_title_repo_and_download_client(
-            Arc::new(TestTitleRepo {
-                titles: vec![title],
-            }),
-            download_client,
-            Arc::new(TestDownloadSubmissionRepo::default()),
-            Arc::new(TestImportRepo::default()),
-        );
-
-        let result = crate::preview_manual_import(
-            &app,
-            &trigger_user(),
-            Some("client-1"),
-            "job-failed-preview",
-            "title-1",
-        )
-        .await;
-
-        assert!(matches!(
-            result,
-            Err(AppError::Validation(message)) if message.contains("source_job_failed")
-        ));
-    }
-
-    #[tokio::test]
     async fn failed_source_invalidates_active_manual_import_request() {
         let payload = crate::ManualImportRequestPayload {
             requested_by_user_id: Some("user-1".to_string()),
@@ -3797,6 +3760,8 @@ mod tests {
             client_id: Some("client-1".to_string()),
             client_type: "weaver".to_string(),
             files: Vec::new(),
+            trusted_source_root: None,
+            selection_id: None,
             requested_at: Utc::now().to_rfc3339(),
         };
         let imports = Arc::new(TestImportRepo {
@@ -3875,6 +3840,8 @@ mod tests {
             client_id: Some("client-2".to_string()),
             client_type: "weaver".to_string(),
             files: Vec::new(),
+            trusted_source_root: None,
+            selection_id: None,
             requested_at: Utc::now().to_rfc3339(),
         };
         let payload_match = crate::ManualImportRequestPayload {
@@ -3970,6 +3937,8 @@ mod tests {
             client_id: Some("client-2".to_string()),
             client_type: "weaver".to_string(),
             files: Vec::new(),
+            trusted_source_root: None,
+            selection_id: None,
             requested_at: Utc::now().to_rfc3339(),
         };
         let payload_match = crate::ManualImportRequestPayload {

@@ -3810,7 +3810,6 @@ async fn manual_import_still_accepts_file_whose_name_matches_no_episode() {
         user,
         title,
         episode,
-        import_repo,
         ..
     } = fail_closed_pack_fixture().await;
 
@@ -3820,36 +3819,23 @@ async fn manual_import_still_accepts_file_whose_name_matches_no_episode() {
         "Fail.Closed.Pack.S02E09.1080p.WEB-DL.mkv",
     );
 
-    let import_id = app
-        .queue_path_manual_import(
-            &user,
-            title.id.clone(),
-            source_dir.path().to_string_lossy().into_owned(),
-            vec![ManualImportFileMapping {
-                file_path: source_file.to_string_lossy().into_owned(),
-                episode_id: Some(episode.id.clone()),
-                series_movie_link_id: None,
-                quality: Some("1080p".to_string()),
-            }],
-        )
-        .await
-        .expect("queue path manual import");
-    let record = import_repo
-        .records
-        .lock()
-        .await
-        .iter()
-        .find(|record| record.id == import_id)
-        .cloned()
-        .expect("queued import record");
-    let payload: ManualImportRequestPayload =
-        serde_json::from_str(&record.payload_json).expect("manual import payload");
-
-    let (status, result_json) =
-        crate::import_workflow::execute_queued_manual_import(&app, &import_id, &payload)
-            .await
-            .expect("execute queued manual import");
-    assert_eq!(status, ImportStatus::Completed, "result: {result_json:?}");
+    let results = crate::import_workflow::execute_manual_import(
+        &app,
+        &user,
+        "manual-import-no-episode-match",
+        &title.id,
+        None,
+        vec![ManualImportFileMapping {
+            file_path: source_file.to_string_lossy().into_owned(),
+            episode_id: Some(episode.id.clone()),
+            series_movie_link_id: None,
+            quality: Some("1080p".to_string()),
+        }],
+        Some(std::fs::canonicalize(source_dir.path()).expect("canonical source root")),
+    )
+    .await
+    .expect("execute manual import");
+    assert!(results.iter().all(|result| result.success), "{results:?}");
 
     let media_files = app
         .services
@@ -4290,11 +4276,9 @@ async fn path_manual_import_can_target_series_movie_link() {
     let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
     let (base_app, user) =
         bootstrap_with_cleanup_tracking(download_client, download_submissions, pending_releases);
-    let import_repo = Arc::new(TrackingImportRepo::default());
     let media_files = Arc::new(MockMediaFileRepo::default());
     let app = base_app.with_test_overrides(|services| {
         services
-            .with_imports(import_repo.clone())
             .with_file_importer(Arc::new(CopyingFileImporter))
             .with_media_files(media_files.clone())
     });
@@ -4352,61 +4336,23 @@ async fn path_manual_import_can_target_series_movie_link() {
         .set_len(51 * 1024 * 1024)
         .expect("size source video above sample threshold");
 
-    let preview = crate::import_workflow::preview_manual_import_path(
+    let results = crate::import_workflow::execute_manual_import(
         &app,
         &user,
-        &source_dir.path().to_string_lossy(),
+        "manual-import-series-movie",
         &title.id,
+        None,
+        vec![ManualImportFileMapping {
+            file_path: source_file.to_string_lossy().into_owned(),
+            episode_id: None,
+            series_movie_link_id: Some(link.id.clone()),
+            quality: Some("1080p".to_string()),
+        }],
+        Some(std::fs::canonicalize(source_dir.path()).expect("canonical source root")),
     )
     .await
-    .expect("preview manual import path");
-    assert!(
-        preview
-            .files
-            .iter()
-            .any(|file| file.file_path == source_file.to_string_lossy())
-    );
-    assert!(preview.available_series_movies.iter().any(|target| {
-        target.series_movie_link_id == link.id
-            && target.movie_title == "Manual Series Movie Import: Case 3"
-            && target.year == Some(2026)
-            && target.runtime_minutes == Some(110)
-    }));
-
-    let import_id = app
-        .queue_path_manual_import(
-            &user,
-            title.id.clone(),
-            source_dir.path().to_string_lossy().into_owned(),
-            vec![ManualImportFileMapping {
-                file_path: source_file.to_string_lossy().into_owned(),
-                episode_id: None,
-                series_movie_link_id: Some(link.id.clone()),
-                quality: Some("1080p".to_string()),
-            }],
-        )
-        .await
-        .expect("queue path manual import");
-    let record = import_repo
-        .records
-        .lock()
-        .await
-        .iter()
-        .find(|record| record.id == import_id)
-        .cloned()
-        .expect("queued import record");
-    let payload: ManualImportRequestPayload =
-        serde_json::from_str(&record.payload_json).expect("manual import payload");
-    assert_eq!(
-        payload.files[0].series_movie_link_id.as_deref(),
-        Some(link.id.as_str())
-    );
-
-    let (status, result_json) =
-        crate::import_workflow::execute_queued_manual_import(&app, &import_id, &payload)
-            .await
-            .expect("execute queued manual import");
-    assert_eq!(status, ImportStatus::Completed, "result: {result_json:?}");
+    .expect("execute manual import");
+    assert!(results.iter().all(|result| result.success), "{results:?}");
 
     let files = app
         .services

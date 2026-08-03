@@ -3281,31 +3281,16 @@ pub enum DownloadQueueActionKindValue {
 
 #[derive(InputObject)]
 pub struct QueueManualImportInput {
-    pub title_id: Option<ID>,
+    pub selection_id: ID,
+    pub files: Vec<ManualImportCandidateMappingInput>,
+}
+
+#[derive(InputObject)]
+pub struct BeginManualImportSelectionInput {
     pub client_id: Option<ID>,
     pub client_type: String,
     pub download_client_item_id: String,
-    pub files: Option<Vec<ManualImportFileMappingInput>>,
-}
-
-#[derive(InputObject)]
-pub struct PreviewManualImportInput {
-    pub client_id: Option<ID>,
-    pub download_client_item_id: String,
     pub title_id: ID,
-}
-
-#[derive(InputObject)]
-pub struct PreviewManualImportPathInput {
-    pub path: String,
-    pub title_id: ID,
-}
-
-#[derive(InputObject)]
-pub struct QueuePathManualImportInput {
-    pub title_id: ID,
-    pub path: String,
-    pub files: Vec<ManualImportFileMappingInput>,
 }
 
 #[derive(InputObject, Clone)]
@@ -4086,7 +4071,7 @@ pub struct DeleteDownloadInput {
 
 #[derive(SimpleObject, Clone)]
 pub struct ManualImportFilePreviewPayload {
-    pub file_path: String,
+    pub candidate_id: ID,
     pub file_name: String,
     pub size_bytes: Long,
     pub quality: Option<String>,
@@ -4105,11 +4090,10 @@ pub struct ManualImportSeriesMovieTargetPayload {
 }
 
 #[derive(InputObject)]
-pub struct ManualImportFileMappingInput {
-    pub file_path: String,
+pub struct ManualImportCandidateMappingInput {
+    pub candidate_id: ID,
     pub episode_id: Option<ID>,
     pub series_movie_link_id: Option<ID>,
-    pub quality: Option<String>,
 }
 
 // --- Wanted Items / Acquisition ---

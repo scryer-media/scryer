@@ -4,7 +4,8 @@ use async_trait::async_trait;
 use chrono::Utc;
 use scryer_application::{
     AppError, AppResult, DownloadSourceIdentity, DownloadSubmissionIdentity, ImportArtifact,
-    ImportArtifactRepository, ImportRepository,
+    ImportArtifactRepository, ImportRepository, ManualImportSelection,
+    ManualImportSelectionCandidate, ManualImportSourceRegistration,
 };
 use scryer_domain::{Id, ImportRecord, ImportStatus, ImportTransferPhase, ImportType};
 
@@ -292,6 +293,336 @@ impl ImportRepository for ImportStore {
         Ok(row.i64("count")? > 0)
     }
 
+    async fn upsert_manual_import_source(
+        &self,
+        source: ManualImportSourceRegistration,
+    ) -> AppResult<()> {
+        let identity = source.source_identity;
+        SqlRuntime::execute_write(
+            &self.datastore,
+            "upsert_manual_import_source",
+            "INSERT INTO manual_import_sources
+             (source_client_id, source_system, source_ref, trusted_root, created_at, updated_at)
+             VALUES ({}, {}, {}, {}, {}, {})
+             ON CONFLICT (source_client_id, source_system, source_ref) DO UPDATE SET
+               trusted_root = excluded.trusted_root,
+               updated_at = excluded.updated_at",
+            vec![
+                SqlArg::Text(normalize_download_client_id(identity.client_id.as_deref())),
+                SqlArg::Text(identity.client_type),
+                SqlArg::Text(identity.item_id),
+                SqlArg::Text(source.trusted_root),
+                SqlArg::Timestamp(Utc::now()),
+                SqlArg::Timestamp(Utc::now()),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn get_manual_import_source(
+        &self,
+        source_identity: &DownloadSourceIdentity,
+    ) -> AppResult<Option<ManualImportSourceRegistration>> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT source_client_id, source_system, source_ref, trusted_root
+             FROM manual_import_sources
+             WHERE source_client_id = {} AND source_system = {} AND source_ref = {}",
+            &[
+                SqlArg::Text(normalize_download_client_id(
+                    source_identity.client_id.as_deref(),
+                )),
+                SqlArg::Text(source_identity.client_type.clone()),
+                SqlArg::Text(source_identity.item_id.clone()),
+            ],
+        )
+        .await?;
+        row.map(manual_import_source_from_row).transpose()
+    }
+
+    async fn replace_manual_import_selection(
+        &self,
+        selection: ManualImportSelection,
+    ) -> AppResult<()> {
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "replace_manual_import_selection",
+            move |tx| {
+                let selection = selection.clone();
+                Box::pin(async move {
+                    let identity = &selection.source.source_identity;
+                    let identity_args = vec![
+                        SqlArg::Text(normalize_download_client_id(identity.client_id.as_deref())),
+                        SqlArg::Text(identity.client_type.clone()),
+                        SqlArg::Text(identity.item_id.clone()),
+                    ];
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "DELETE FROM manual_import_selection_candidates
+                         WHERE selection_id IN (
+                           SELECT id FROM manual_import_selections
+                           WHERE actor_user_id = {} AND title_id = {}
+                             AND source_client_id = {} AND source_system = {} AND source_ref = {}
+                         )",
+                        &[
+                            SqlArg::Text(selection.actor_user_id.clone()),
+                            SqlArg::Text(selection.title_id.clone()),
+                            identity_args[0].clone(),
+                            identity_args[1].clone(),
+                            identity_args[2].clone(),
+                        ],
+                    )
+                    .await?;
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "DELETE FROM manual_import_selections
+                         WHERE actor_user_id = {} AND title_id = {}
+                           AND source_client_id = {} AND source_system = {} AND source_ref = {}",
+                        &[
+                            SqlArg::Text(selection.actor_user_id.clone()),
+                            SqlArg::Text(selection.title_id.clone()),
+                            identity_args[0].clone(),
+                            identity_args[1].clone(),
+                            identity_args[2].clone(),
+                        ],
+                    )
+                    .await?;
+
+                    let now = Utc::now();
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "INSERT INTO manual_import_selections
+                         (id, actor_user_id, title_id, source_client_id, source_system, source_ref,
+                          trusted_root, consumed_at, created_at, updated_at)
+                         VALUES ({}, {}, {}, {}, {}, {}, {}, NULL, {}, {})",
+                        &[
+                            SqlArg::Text(selection.id.clone()),
+                            SqlArg::Text(selection.actor_user_id.clone()),
+                            SqlArg::Text(selection.title_id.clone()),
+                            identity_args[0].clone(),
+                            identity_args[1].clone(),
+                            identity_args[2].clone(),
+                            SqlArg::Text(selection.source.trusted_root.clone()),
+                            SqlArg::Timestamp(now),
+                            SqlArg::Timestamp(now),
+                        ],
+                    )
+                    .await?;
+                    for candidate in &selection.candidates {
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            "INSERT INTO manual_import_selection_candidates
+                             (id, selection_id, canonical_path, quality, created_at)
+                             VALUES ({}, {}, {}, {}, {})",
+                            &[
+                                SqlArg::Text(candidate.id.clone()),
+                                SqlArg::Text(selection.id.clone()),
+                                SqlArg::Text(candidate.canonical_path.clone()),
+                                SqlArg::OptText(candidate.quality.clone()),
+                                SqlArg::Timestamp(now),
+                            ],
+                        )
+                        .await?;
+                    }
+                    Ok(())
+                })
+            },
+        )
+        .await
+    }
+
+    async fn find_manual_import_selection(
+        &self,
+        actor_user_id: &str,
+        title_id: &str,
+        source_identity: &DownloadSourceIdentity,
+    ) -> AppResult<Option<ManualImportSelection>> {
+        let selection = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT id, actor_user_id, title_id, source_client_id, source_system, source_ref,
+                    trusted_root
+             FROM manual_import_selections
+             WHERE actor_user_id = {} AND title_id = {}
+               AND source_client_id = {} AND source_system = {} AND source_ref = {}
+               AND consumed_at IS NULL",
+            &[
+                SqlArg::Text(actor_user_id.to_string()),
+                SqlArg::Text(title_id.to_string()),
+                SqlArg::Text(normalize_download_client_id(
+                    source_identity.client_id.as_deref(),
+                )),
+                SqlArg::Text(source_identity.client_type.clone()),
+                SqlArg::Text(source_identity.item_id.clone()),
+            ],
+        )
+        .await?;
+        let Some(selection) = selection else {
+            return Ok(None);
+        };
+        let selection_id = selection.text("id")?;
+        let candidates = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT id, canonical_path, quality
+             FROM manual_import_selection_candidates
+             WHERE selection_id = {}",
+            &[SqlArg::Text(selection_id)],
+        )
+        .await?;
+        manual_import_selection_from_rows(selection, candidates).map(Some)
+    }
+
+    async fn get_manual_import_selection(
+        &self,
+        selection_id: &str,
+        actor_user_id: &str,
+    ) -> AppResult<Option<ManualImportSelection>> {
+        let selection = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT id, actor_user_id, title_id, source_client_id, source_system, source_ref,
+                    trusted_root
+             FROM manual_import_selections
+             WHERE id = {} AND actor_user_id = {} AND consumed_at IS NULL",
+            &[
+                SqlArg::Text(selection_id.to_string()),
+                SqlArg::Text(actor_user_id.to_string()),
+            ],
+        )
+        .await?;
+        let Some(selection) = selection else {
+            return Ok(None);
+        };
+        let candidates = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT id, canonical_path, quality
+             FROM manual_import_selection_candidates
+             WHERE selection_id = {}",
+            &[SqlArg::Text(selection_id.to_string())],
+        )
+        .await?;
+        manual_import_selection_from_rows(selection, candidates).map(Some)
+    }
+
+    async fn consume_manual_import_selection(
+        &self,
+        selection_id: &str,
+        actor_user_id: &str,
+        candidate_ids: &[String],
+    ) -> AppResult<Option<ManualImportSelection>> {
+        if candidate_ids.is_empty() {
+            return Ok(None);
+        }
+        let selection_id = selection_id.to_string();
+        let actor_user_id = actor_user_id.to_string();
+        let candidate_ids = candidate_ids.to_vec();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "consume_manual_import_selection",
+            move |tx| {
+                let selection_id = selection_id.clone();
+                let actor_user_id = actor_user_id.clone();
+                let candidate_ids = candidate_ids.clone();
+                Box::pin(async move {
+                    let selection = SqlRuntime::fetch_optional(
+                        SqlExec::Tx(tx),
+                        "SELECT id, actor_user_id, title_id, source_client_id, source_system, source_ref,
+                                trusted_root
+                         FROM manual_import_selections
+                         WHERE id = {} AND actor_user_id = {} AND consumed_at IS NULL",
+                        &[
+                            SqlArg::Text(selection_id.clone()),
+                            SqlArg::Text(actor_user_id),
+                        ],
+                    )
+                    .await?;
+                    let Some(selection) = selection else {
+                        return Ok(None);
+                    };
+                    let placeholders = (0..candidate_ids.len())
+                        .map(|_| "{}")
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let mut candidate_args = Vec::with_capacity(candidate_ids.len() + 1);
+                    candidate_args.push(SqlArg::Text(selection_id.clone()));
+                    candidate_args.extend(candidate_ids.iter().cloned().map(SqlArg::Text));
+                    let candidates = SqlRuntime::fetch_all(
+                        SqlExec::Tx(tx),
+                        &format!(
+                            "SELECT id, canonical_path, quality
+                             FROM manual_import_selection_candidates
+                             WHERE selection_id = {{}} AND id IN ({placeholders})"
+                        ),
+                        &candidate_args,
+                    )
+                    .await?;
+                    if candidates.len() != candidate_ids.len() {
+                        return Ok(None);
+                    }
+                    let consumed = SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "UPDATE manual_import_selections
+                         SET consumed_at = {}, updated_at = {}
+                         WHERE id = {} AND consumed_at IS NULL",
+                        &[
+                            SqlArg::Timestamp(Utc::now()),
+                            SqlArg::Timestamp(Utc::now()),
+                            SqlArg::Text(selection_id),
+                        ],
+                    )
+                    .await?;
+                    if consumed != 1 {
+                        return Ok(None);
+                    }
+                    manual_import_selection_from_rows(selection, candidates).map(Some)
+                })
+            },
+        )
+        .await
+    }
+
+    async fn delete_manual_import_source(
+        &self,
+        source_identity: &DownloadSourceIdentity,
+    ) -> AppResult<()> {
+        let identity = source_identity.clone();
+        SqlRuntime::run_in_transaction(&self.datastore, "delete_manual_import_source", move |tx| {
+            let identity = identity.clone();
+            Box::pin(async move {
+                let args = [
+                    SqlArg::Text(normalize_download_client_id(identity.client_id.as_deref())),
+                    SqlArg::Text(identity.client_type),
+                    SqlArg::Text(identity.item_id),
+                ];
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "DELETE FROM manual_import_selection_candidates
+                         WHERE selection_id IN (
+                           SELECT id FROM manual_import_selections
+                           WHERE source_client_id = {} AND source_system = {} AND source_ref = {}
+                         )",
+                    &args,
+                )
+                .await?;
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "DELETE FROM manual_import_selections
+                         WHERE source_client_id = {} AND source_system = {} AND source_ref = {}",
+                    &args,
+                )
+                .await?;
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "DELETE FROM manual_import_sources
+                         WHERE source_client_id = {} AND source_system = {} AND source_ref = {}",
+                    &args,
+                )
+                .await?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
     async fn list_imports(&self, limit: usize) -> AppResult<Vec<ImportRecord>> {
         fetch_imports(
             self.datastore.read_exec(),
@@ -300,6 +631,50 @@ impl ImportRepository for ImportStore {
         )
         .await
     }
+}
+
+fn manual_import_source_from_row(
+    row: crate::queries::sql_runtime::SqlRow,
+) -> AppResult<ManualImportSourceRegistration> {
+    Ok(ManualImportSourceRegistration {
+        source_identity: DownloadSourceIdentity::new(
+            row.opt_text("source_client_id")?.as_deref(),
+            row.text("source_system")?,
+            row.text("source_ref")?,
+        ),
+        trusted_root: row.text("trusted_root")?,
+    })
+}
+
+fn manual_import_selection_from_rows(
+    row: crate::queries::sql_runtime::SqlRow,
+    candidate_rows: Vec<crate::queries::sql_runtime::SqlRow>,
+) -> AppResult<ManualImportSelection> {
+    let source = ManualImportSourceRegistration {
+        source_identity: DownloadSourceIdentity::new(
+            row.opt_text("source_client_id")?.as_deref(),
+            row.text("source_system")?,
+            row.text("source_ref")?,
+        ),
+        trusted_root: row.text("trusted_root")?,
+    };
+    let candidates = candidate_rows
+        .into_iter()
+        .map(|candidate| {
+            Ok(ManualImportSelectionCandidate {
+                id: candidate.text("id")?,
+                canonical_path: candidate.text("canonical_path")?,
+                quality: candidate.opt_text("quality")?,
+            })
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+    Ok(ManualImportSelection {
+        id: row.text("id")?,
+        actor_user_id: row.text("actor_user_id")?,
+        title_id: row.text("title_id")?,
+        source,
+        candidates,
+    })
 }
 
 #[async_trait]

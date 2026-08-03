@@ -29,6 +29,7 @@ runtime-plugin-trust = [
     "dep:brotli",
     "dep:rustls-pki-types",
     "dep:rustls-webpki",
+    "dep:sha2",
     "dep:sigstore",
     "dep:x509-cert",
     "dep:zstd",
@@ -61,6 +62,7 @@ chrono = { workspace = true }
 semver = { workspace = true }
 metrics = { workspace = true }
 base64 = "0.23"
+sha2 = { version = "0.11", optional = true }
 brotli = { version = "8", optional = true }
 tar = { version = "0.4", optional = true }
 flate2 = { version = "1", optional = true }

@@ -1665,17 +1665,3 @@ fn build_augmented_episode_import_metadata(
     }
     parsed
 }
-fn build_augmented_path_episode_import_metadata(
-    source_video: &Path,
-    other_video_files: bool,
-) -> ParsedReleaseMetadata {
-    let mut parsed = parsed_release_from_file_stem(source_video);
-    let file_episode = parsed.episode.clone();
-    if let Some(source_parent_info) = parsed_usable_release_from_parent_folder(source_video) {
-        fill_missing_release_metadata(&mut parsed, &source_parent_info, true);
-    }
-    if other_video_files {
-        parsed.episode = file_episode;
-    }
-    parsed
-}

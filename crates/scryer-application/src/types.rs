@@ -2431,6 +2431,31 @@ impl UiSettings {
     }
 }
 
+/// A canonical, server-owned root for a completed download that may need manual import.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManualImportSourceRegistration {
+    pub source_identity: crate::DownloadSourceIdentity,
+    pub trusted_root: String,
+}
+
+/// A server-owned file candidate. `canonical_path` never crosses the public API boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManualImportSelectionCandidate {
+    pub id: String,
+    pub canonical_path: String,
+    pub quality: Option<String>,
+}
+
+/// A durable selection of files rooted in a tracked completed download.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManualImportSelection {
+    pub id: String,
+    pub actor_user_id: String,
+    pub title_id: String,
+    pub source: ManualImportSourceRegistration,
+    pub candidates: Vec<ManualImportSelectionCandidate>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

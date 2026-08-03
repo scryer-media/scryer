@@ -29,8 +29,10 @@ import {
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { hasGraphQlErrorCode } from "@/lib/graphql/error-message";
-import { previewManualImportQuery } from "@/lib/graphql/queries";
-import { queueManualImportMutation } from "@/lib/graphql/mutations";
+import {
+  beginManualImportSelectionMutation,
+  queueManualImportMutation,
+} from "@/lib/graphql/mutations";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { buildViewPath } from "@/lib/utils/routing";
 import { useNavigate } from "react-router";
@@ -43,7 +45,7 @@ const ARCHIVE_EXTRACTION_PLUGIN_REQUIRED_MESSAGE = [
 ].join(" ");
 
 type FilePreview = {
-  filePath: string;
+  candidateId: string;
   fileName: string;
   sizeBytes: number;
   quality: string | null;
@@ -73,7 +75,7 @@ type AvailableSeriesMovie = {
 };
 
 type ManualImportFileMapping = {
-  filePath: string;
+  candidateId: string;
   episodeId?: string;
   seriesMovieLinkId?: string;
 };
@@ -166,6 +168,7 @@ export function ManualImportDialog({
   const [episodes, setEpisodes] = React.useState<AvailableEpisode[]>([]);
   const [seriesMovies, setSeriesMovies] = React.useState<AvailableSeriesMovie[]>([]);
   const [mappings, setMappings] = React.useState<Record<string, string>>({});
+  const [selectionId, setSelectionId] = React.useState<string | null>(null);
   const [importing, setImporting] = React.useState(false);
 
   const setImportError = React.useCallback((err: unknown, fallback: string) => {
@@ -191,6 +194,7 @@ export function ManualImportDialog({
       setEpisodes([]);
       setSeriesMovies([]);
       setMappings({});
+      setSelectionId(null);
       setError(null);
       setArchivePluginRequired(false);
       return;
@@ -199,23 +203,25 @@ export function ManualImportDialog({
     setLoading(true);
     setError(null);
     setArchivePluginRequired(false);
-    client.query(previewManualImportQuery, {
+    client.mutation(beginManualImportSelectionMutation, {
       input: {
         clientId,
+        clientType,
         downloadClientItemId,
         titleId,
       },
     }).toPromise()
       .then(({ data, error: queryError }) => {
         if (queryError) throw queryError;
-        const preview = data.previewManualImport;
+        const preview = data.beginManualImportSelection;
+        setSelectionId(preview.selectionId);
         setFiles(preview.files);
         setEpisodes(preview.availableEpisodes);
         setSeriesMovies(preview.availableSeriesMovies ?? []);
         // Initialize mappings from suggested matches
         const initial: Record<string, string> = {};
         for (const file of preview.files) {
-          initial[file.filePath] = file.suggestedEpisodeId
+          initial[file.candidateId] = file.suggestedEpisodeId
             ? episodeTargetValue(file.suggestedEpisodeId)
             : UNASSIGNED;
         }
@@ -225,7 +231,7 @@ export function ManualImportDialog({
         setImportError(err, "Failed to load preview");
       })
       .finally(() => setLoading(false));
-  }, [open, clientId, downloadClientItemId, titleId, client, setImportError]);
+  }, [open, clientId, clientType, downloadClientItemId, titleId, client, setImportError]);
 
   const groupedEpisodes = React.useMemo(() => groupEpisodesBySeason(episodes), [episodes]);
 
@@ -237,33 +243,30 @@ export function ManualImportDialog({
   const handleImport = React.useCallback(async () => {
     const fileMappings = Object.entries(mappings)
       .filter(([, target]) => target !== UNASSIGNED)
-      .flatMap<ManualImportFileMapping>(([filePath, target]) => {
+      .flatMap<ManualImportFileMapping>(([candidateId, target]) => {
         if (target.startsWith(EPISODE_TARGET_PREFIX)) {
           return [{
-            filePath,
+            candidateId,
             episodeId: target.slice(EPISODE_TARGET_PREFIX.length),
           }];
         }
         if (target.startsWith(SERIES_MOVIE_TARGET_PREFIX)) {
           return [{
-            filePath,
+            candidateId,
             seriesMovieLinkId: target.slice(SERIES_MOVIE_TARGET_PREFIX.length),
           }];
         }
         return [];
       });
 
-    if (fileMappings.length === 0) return;
+    if (fileMappings.length === 0 || !selectionId) return;
 
     setImporting(true);
     setArchivePluginRequired(false);
     try {
       const { error: mutationError } = await client.mutation(queueManualImportMutation, {
         input: {
-          titleId,
-          clientId,
-          clientType,
-          downloadClientItemId,
+          selectionId,
           files: fileMappings,
         },
       }).toPromise();
@@ -278,16 +281,13 @@ export function ManualImportDialog({
     }
   }, [
     client,
-    clientId,
-    clientType,
-    downloadClientItemId,
     mappings,
     onImportComplete,
     onOpenChange,
     setImportError,
     setGlobalStatus,
     t,
-    titleId,
+    selectionId,
   ]);
 
   return (
@@ -350,8 +350,8 @@ export function ManualImportDialog({
                 <TableBody>
                   {files.map((file) => (
                     <TableRow
-                      key={file.filePath}
-                      id={selectorId("activity-manual-import-file-row", file.filePath)}
+                      key={file.candidateId}
+                      id={selectorId("activity-manual-import-file-row", file.candidateId)}
                     >
                       <TableCell>
                         <div className="flex items-center gap-2">
@@ -375,13 +375,13 @@ export function ManualImportDialog({
                       </TableCell>
                       <TableCell>
                         <Select
-                          value={mappings[file.filePath] ?? UNASSIGNED}
+                          value={mappings[file.candidateId] ?? UNASSIGNED}
                           onValueChange={(value) =>
-                            setMappings((prev) => ({ ...prev, [file.filePath]: value }))
+                            setMappings((prev) => ({ ...prev, [file.candidateId]: value }))
                           }
                         >
                           <SelectTrigger
-                            id={selectorId("activity-manual-import-assign", file.filePath)}
+                            id={selectorId("activity-manual-import-assign", file.candidateId)}
                             className="h-8 w-full text-xs"
                           >
                             <SelectValue placeholder="Select target..." />

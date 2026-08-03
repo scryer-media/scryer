@@ -272,6 +272,20 @@ pub(crate) async fn finalize_scryer_download_ignored(
     source_identity: DownloadSourceIdentity,
 ) -> AppResult<FinalizeIgnoredOutcome> {
     let ignored = scryer_domain::TrackedDownloadState::Ignored.as_str();
+    if let Err(error) = app
+        .services
+        .workflow
+        .imports
+        .delete_manual_import_source(&source_identity)
+        .await
+    {
+        tracing::warn!(
+            client_type = %source_identity.client_type,
+            download_client_item_id = %source_identity.item_id,
+            error = %error,
+            "failed to remove terminal manual import source"
+        );
+    }
     // A download that already reached a terminal outcome keeps it: a later
     // delete of the client entry is cleanup, not a change of outcome.
     let preserved_states = [

@@ -3052,6 +3052,69 @@ pub trait ImportRepository: Send + Sync {
         Ok(false)
     }
 
+    /// Registers a canonical, server-observed completed-download root. Implementations must not
+    /// derive this value from a client-provided path.
+    async fn upsert_manual_import_source(
+        &self,
+        _source: ManualImportSourceRegistration,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "manual import source persistence is not configured".to_string(),
+        ))
+    }
+
+    async fn get_manual_import_source(
+        &self,
+        _source_identity: &DownloadSourceIdentity,
+    ) -> AppResult<Option<ManualImportSourceRegistration>> {
+        Ok(None)
+    }
+
+    /// Replaces the caller's previous unconsumed selection for the same source and title.
+    async fn replace_manual_import_selection(
+        &self,
+        _selection: ManualImportSelection,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "manual import selection persistence is not configured".to_string(),
+        ))
+    }
+
+    /// Returns the caller's current unconsumed selection for a source and title, if any.
+    async fn find_manual_import_selection(
+        &self,
+        _actor_user_id: &str,
+        _title_id: &str,
+        _source_identity: &DownloadSourceIdentity,
+    ) -> AppResult<Option<ManualImportSelection>> {
+        Ok(None)
+    }
+
+    async fn get_manual_import_selection(
+        &self,
+        _selection_id: &str,
+        _actor_user_id: &str,
+    ) -> AppResult<Option<ManualImportSelection>> {
+        Ok(None)
+    }
+
+    /// Atomically consumes a selection and returns only the requested server-owned candidates.
+    async fn consume_manual_import_selection(
+        &self,
+        _selection_id: &str,
+        _actor_user_id: &str,
+        _candidate_ids: &[String],
+    ) -> AppResult<Option<ManualImportSelection>> {
+        Ok(None)
+    }
+
+    async fn delete_manual_import_source(
+        &self,
+        _source_identity: &DownloadSourceIdentity,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
     async fn list_imports(&self, limit: usize) -> AppResult<Vec<ImportRecord>>;
 }
 
