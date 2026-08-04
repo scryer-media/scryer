@@ -13,6 +13,7 @@ import {
   buildIgnoreTrackedDownloadBatchMutation,
   ignoreTrackedDownloadMutation,
   markTrackedDownloadFailedMutation,
+  beginManualImportSelectionMutation,
   queueManualImportMutation,
   pauseDownloadMutation,
   resumeDownloadMutation,
@@ -125,6 +126,9 @@ export const ActivityContainer = memo(function ActivityContainer({
   const t = useTranslate();
   const client = useClient();
   const [, executeQueueManualImport] = useMutation(queueManualImportMutation);
+  const [, executeBeginManualImportSelection] = useMutation(
+    beginManualImportSelectionMutation,
+  );
   const [, executeAssignTrackedDownloadTitle] = useMutation(assignTrackedDownloadTitleMutation);
   const [, executeIgnoreTrackedDownload] = useMutation(ignoreTrackedDownloadMutation);
   const [, executeMarkTrackedDownloadFailed] = useMutation(markTrackedDownloadFailedMutation);
@@ -430,12 +434,41 @@ export const ActivityContainer = memo(function ActivityContainer({
         return;
       }
 
+      // queueManualImport is selection-based: it takes a selectionId plus
+      // per-candidate mappings, not the raw client/title identity. Open a
+      // selection first and import every candidate it reports.
+      //
+      // Movies carry no episode or series-movie target, so each mapping is just
+      // its candidateId — both target fields on ManualImportCandidateMappingInput
+      // are optional. Series and anime never reach here; they open the dialog
+      // above so the user can map files to episodes.
+      const selection = await executeBeginManualImportSelection({
+        input: {
+          clientId: item.clientId,
+          clientType: item.clientType,
+          downloadClientItemId: item.downloadClientItemId,
+          titleId: item.titleId,
+        },
+      });
+      if (selection.error) {
+        const message = selection.error.message ?? t("queue.manualImportFailed");
+        setGlobalStatus(message);
+        throw selection.error;
+      }
+
+      const preview = selection.data?.beginManualImportSelection;
+      const files = (preview?.files ?? []).map((file: { candidateId: string }) => ({
+        candidateId: file.candidateId,
+      }));
+      if (!preview?.selectionId || files.length === 0) {
+        setGlobalStatus(t("queue.manualImportFailed"));
+        return;
+      }
+
       const result = await executeQueueManualImport({
         input: {
-          downloadClientItemId: item.downloadClientItemId,
-          clientId: item.clientId,
-          titleId: item.titleId,
-          clientType: item.clientType,
+          selectionId: preview.selectionId,
+          files,
         },
       });
       if (result.error) {
@@ -446,7 +479,13 @@ export const ActivityContainer = memo(function ActivityContainer({
       setGlobalStatus(t("queue.manualImportQueued"));
       await refreshVisibleTab();
     },
-    [executeQueueManualImport, refreshVisibleTab, setGlobalStatus, t],
+    [
+      executeBeginManualImportSelection,
+      executeQueueManualImport,
+      refreshVisibleTab,
+      setGlobalStatus,
+      t,
+    ],
   );
 
   const requestAssignTitle = useCallback(
