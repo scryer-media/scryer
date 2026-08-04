@@ -9,6 +9,18 @@ mod download_client_path_mappings;
 mod download_identity;
 
 pub(crate) const DOWNLOAD_QUEUE_RECENT_COMPLETED_LIMIT: usize = 100;
+
+/// Widened completed-history bound used when a stuck download misses the recent
+/// window.
+///
+/// Deliberately larger than [`DOWNLOAD_QUEUE_RECENT_COMPLETED_LIMIT`]: a
+/// download stranded for a while sinks below the recent cut-off, and this is
+/// the retry path whose whole job is to find it again. Clients that bound the
+/// fetch server-side (SABnzbd pages by limit) pay proportionally; clients that
+/// cannot (nzbget returns its whole history regardless) pay nothing extra,
+/// since the limit only decides how much of an already-fetched response is
+/// retained.
+pub(crate) const DOWNLOAD_QUEUE_STUCK_COMPLETED_LOOKUP_LIMIT: usize = 1_000;
 pub use download_identity::{
     AcceptedDownloadIdentityInput, DOWNLOAD_ID_PARAMETER, ObservedDownloadIdentityInput,
     accepted_download_submission_identity, download_id_from_info_hash,

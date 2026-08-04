@@ -27,11 +27,22 @@ impl CompletedDownloadLookup {
         find_completed_download_in_lookup(self, td).is_some()
     }
 
-    /// Add one completed download fetched outside the original listing (e.g.
-    /// a targeted per-item lookup). Coverage is unchanged: a targeted hit does
-    /// not make a recent-window lookup exhaustive.
-    pub(crate) fn insert(&mut self, completed: CompletedDownload) {
-        index_completed_download_into(self, completed);
+    /// Fold a second listing into this one, keeping the STRONGER coverage.
+    ///
+    /// Used when a widened re-read backfills rows a narrower one truncated
+    /// away. Coverage may only improve, never regress: a `Full` lookup merged
+    /// with a `Recent` one stays `Full`, so a later exhaustiveness check is not
+    /// weakened by having taken on extra rows.
+    pub(crate) fn merge(&mut self, other: Self) {
+        let coverage = if self.is_exhaustive() || other.is_exhaustive() {
+            CompletedDownloadLookupCoverage::Full
+        } else {
+            self.coverage
+        };
+        for completed in other.by_source.into_values() {
+            index_completed_download_into(self, completed);
+        }
+        self.coverage = coverage;
     }
 
     /// Completion timestamp for a client queue item, when this lookup holds a

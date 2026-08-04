@@ -1796,7 +1796,7 @@ async fn external_weaver_missing_history_retries_from_tracked_runtime() {
 }
 
 #[tokio::test]
-async fn external_weaver_aged_out_history_recovers_via_targeted_lookup() {
+async fn external_weaver_aged_out_history_recovers_via_widened_batch_lookup() {
     let download_client = Arc::new(StubDownloadClient::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
     let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
@@ -1898,11 +1898,20 @@ async fn external_weaver_aged_out_history_recovers_via_targeted_lookup() {
     completed.client_id = config.id.clone();
     completed.client_type = "weaver".to_string();
     completed.download_id = None;
-    download_client
-        .targeted_completed_downloads
-        .lock()
-        .await
-        .insert(item_id.to_string(), completed);
+    // Age the row out of the RECENT window: pad the client's completed list so
+    // the real entry sits past DOWNLOAD_QUEUE_RECENT_COMPLETED_LIMIT. Only a
+    // widened re-read can reach it.
+    {
+        let mut recent = Vec::new();
+        for index in 0..crate::DOWNLOAD_QUEUE_RECENT_COMPLETED_LIMIT {
+            let mut filler = completed.clone();
+            filler.download_client_item_id = format!("filler-{index}");
+            filler.download_id = None;
+            recent.push(filler);
+        }
+        recent.push(completed.clone());
+        *download_client.recent_completed_downloads.lock().await = Some(recent);
+    }
 
     timeout(Duration::from_secs(5), async {
         loop {
@@ -1919,18 +1928,91 @@ async fn external_weaver_aged_out_history_recovers_via_targeted_lookup() {
         }
     })
     .await
-    .expect("targeted lookup should recover an item missing from the recent window");
+    .expect("widened batch lookup should recover an item missing from the recent window");
 
+    // The recovery must cost ONE widened batch read, not one client call per
+    // stuck item: for clients whose API cannot address a single row (nzbget
+    // has no history id filter), the per-item form was a full history download
+    // each, scaling with exactly the population that grows while completions
+    // are being missed.
     assert!(
         download_client
             .targeted_completed_download_calls
             .lock()
             .await
-            .iter()
-            .any(|reference| reference == item_id),
-        "retry should issue a targeted per-item lookup"
+            .is_empty(),
+        "retry must not issue per-item targeted lookups"
     );
-    assert_eq!(*download_client.completed_download_calls.lock().await, 0);
+    assert!(
+        download_client
+            .recent_completed_download_calls
+            .lock()
+            .await
+            .contains(&crate::DOWNLOAD_QUEUE_STUCK_COMPLETED_LOOKUP_LIMIT),
+        "retry should widen the batch read once to reach aged-out rows"
+    );
+
+    token.cancel();
+    poller
+        .await
+        .expect("download queue poller should stop cleanly");
+}
+
+#[tokio::test]
+async fn every_poll_tick_reads_recent_history_alongside_the_queue() {
+    // A download client's queue only shows work IN FLIGHT, so a completion is a
+    // queue-ABSENCE event — unobservable on its own. History is where
+    // completions appear, and it used to be sampled on a separate, slower
+    // window (30s against a 1s queue tick), leaving 29 of every 30 ticks
+    // structurally unable to notice one. Anything finishing between two history
+    // reads was stranded; weaver finishes small jobs in ~200ms and nzbget in
+    // ~1s, so that was the common case, not the edge. Every tick must now carry
+    // both reads.
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        download_submissions,
+        pending_releases,
+    );
+    create_enabled_download_client_config(&app, &user, "Primary Weaver", "weaver").await;
+
+    let (_command_tx, tracked_download_rx) = tokio::sync::mpsc::channel(8);
+    let (_snapshot_tx, snapshot_rx) = tokio::sync::mpsc::channel(8);
+    let token = tokio_util::sync::CancellationToken::new();
+    let poller = tokio::spawn(
+        crate::integration::start_download_queue_poller_with_options(
+            app.clone(),
+            token.child_token(),
+            tracked_download_rx,
+            snapshot_rx,
+            crate::integration::DownloadQueuePollerOptions {
+                interval: Duration::from_millis(20),
+                ..Default::default()
+            },
+        ),
+    );
+
+    // Wait for several ticks, then require history reads to have kept pace with
+    // them rather than trailing on a slower cadence of their own.
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if download_client.recent_activity_calls.lock().await.len() >= 3 {
+                break;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("every tick should read recent history, not just the queue");
+
+    let history_reads = download_client.recent_activity_calls.lock().await.len();
+    let queue_reads = *download_client.queue_calls.lock().await;
+    assert!(
+        history_reads * 2 >= queue_reads,
+        "history must ride the queue tick (queue reads: {queue_reads}, history reads: {history_reads})"
+    );
 
     token.cancel();
     poller

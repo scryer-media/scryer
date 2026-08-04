@@ -1,9 +1,13 @@
 const TRACKED_DOWNLOAD_SNAPSHOT_READ_BUDGET: Duration = Duration::from_millis(25);
 const TRACKED_DOWNLOAD_BACKGROUND_WORKER_LIMIT: usize = 1;
 const DOWNLOAD_QUEUE_POLL_INTERVAL: Duration = Duration::from_secs(10);
-const DOWNLOAD_QUEUE_RECENT_HISTORY_POLL_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Poll cadence for download-queue snapshots.
+///
+/// Every tick collects queue AND recent history together, so this is also the
+/// worst-case detection latency for a completion. There is no longer a separate
+/// history cadence to tune — history is not a slower reconciliation pass, it is
+/// half of the primary read.
 ///
 /// Defaults to `DOWNLOAD_QUEUE_POLL_INTERVAL`. The
 /// `SCRYER_DOWNLOAD_QUEUE_POLL_INTERVAL_SECS` environment variable exists solely so
@@ -16,6 +20,20 @@ fn download_queue_poll_interval() -> Duration {
         let raw = std::env::var("SCRYER_DOWNLOAD_QUEUE_POLL_INTERVAL_SECS").ok();
         parse_poll_secs(raw.as_deref(), DOWNLOAD_QUEUE_POLL_INTERVAL)
     })
+}
+
+/// Parse a poll-interval override expressed in whole seconds.
+///
+/// Returns `default` when `raw` is unset, blank, unparsable, or zero so that a
+/// missing or malformed override never alters production timing; the minimum
+/// honored override is one second.
+fn parse_poll_secs(raw: Option<&str>, default: Duration) -> Duration {
+    raw.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|secs| *secs >= 1)
+        .map(Duration::from_secs)
+        .unwrap_or(default)
 }
 
 /// How far back the bridge-covered history reconciliation sweep will reach.
@@ -39,34 +57,6 @@ fn reconcile_history_max_age() -> chrono::Duration {
     })
 }
 
-/// Poll cadence for the recent-history reconciliation pass.
-///
-/// Defaults to `DOWNLOAD_QUEUE_RECENT_HISTORY_POLL_INTERVAL`. The
-/// `SCRYER_DOWNLOAD_QUEUE_RECENT_HISTORY_POLL_INTERVAL_SECS` environment variable
-/// exists solely so the e2e harness can shrink the interval; production leaves it
-/// unset and keeps the default, so production timing is unchanged. Resolved once
-/// and cached for the process lifetime rather than re-read on every poll tick.
-fn download_queue_recent_history_poll_interval() -> Duration {
-    static CACHED: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
-    *CACHED.get_or_init(|| {
-        let raw = std::env::var("SCRYER_DOWNLOAD_QUEUE_RECENT_HISTORY_POLL_INTERVAL_SECS").ok();
-        parse_poll_secs(raw.as_deref(), DOWNLOAD_QUEUE_RECENT_HISTORY_POLL_INTERVAL)
-    })
-}
-
-/// Parse a poll-interval override expressed in whole seconds.
-///
-/// Returns `default` when `raw` is unset, blank, unparsable, or zero so that a
-/// missing or malformed override never alters production timing; the minimum
-/// honored override is one second.
-fn parse_poll_secs(raw: Option<&str>, default: Duration) -> Duration {
-    raw.map(str::trim)
-        .filter(|value| !value.is_empty())
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|secs| *secs >= 1)
-        .map(Duration::from_secs)
-        .unwrap_or(default)
-}
 
 #[derive(Clone, Debug)]
 pub struct DownloadQueuePollerOptions {
@@ -891,7 +881,6 @@ pub async fn start_download_queue_poller_with_options(
     let mut runtime = TrackedDownloadRuntimeState::new();
     let (tracked_work_result_tx, mut tracked_work_result_rx) =
         tokio::sync::mpsc::unbounded_channel::<TrackedDownloadBackgroundWorkResult>();
-    let mut last_recent_history_poll: Option<Instant> = None;
 
     // Exclusions are re-derived at every use instead of once at startup: the
     // bridged set changes at runtime as the bridge supervisor starts and stops
@@ -987,30 +976,29 @@ pub async fn start_download_queue_poller_with_options(
                     .iter()
                     .map(String::as_str)
                     .collect::<Vec<_>>();
-                let include_recent_history = last_recent_history_poll
-                    .map(|last| last.elapsed() >= download_queue_recent_history_poll_interval())
-                    .unwrap_or(true);
+                // Queue AND recent history, every tick.
+                //
+                // A download client's queue only shows work IN FLIGHT, so a
+                // completion is a queue-ABSENCE event — and absence is not
+                // observable. Recent history is where completions actually
+                // appear. Sampling history on its own slower window meant most
+                // ticks were structurally incapable of seeing a completion:
+                // anything that finished between two history reads was
+                // stranded, and the faster the client (weaver finishes small
+                // jobs in ~200ms; nzbget in ~1s) the more likely that was.
+                // Reading both together on one cadence is what Sonarr does,
+                // and it makes the tick self-sufficient rather than a
+                // best-effort sighting that history occasionally repairs.
                 match app
                     .collect_download_snapshot_items_excluding_client_types(
                         true,
-                        include_recent_history,
+                        true,
                         false,
                         &excluded_client_type_refs,
                     )
                     .await
                 {
                     Ok(items) => {
-                        // Consume the recent-history window only on SUCCESS.
-                        // Stamping before the read meant a failed poll — a
-                        // feedback timeout is the canonical case — still
-                        // deferred the next history read by the full interval,
-                        // so exactly when a client was struggling, history (the
-                        // only recovery path for completions missed in the
-                        // queue) was polled least. Completed jobs lost during
-                        // such a window went unrecovered for many minutes.
-                        if include_recent_history {
-                            last_recent_history_poll = Some(Instant::now());
-                        }
                         let completed_download_lookup =
                             crate::completed_download_handler::load_completed_download_lookup_for_items_excluding_client_types(
                                 &app,
@@ -1041,16 +1029,14 @@ pub async fn start_download_queue_poller_with_options(
                         tracing::warn!(error = %error, "download queue poll failed");
                     }
                 }
-                if include_recent_history {
-                    reconcile_excluded_client_recent_history(
-                        &app,
-                        &actor,
-                        &mut runtime,
-                        &tracked_work_result_tx,
-                        &excluded_client_type_refs,
-                    )
-                    .await;
-                }
+                reconcile_excluded_client_recent_history(
+                    &app,
+                    &actor,
+                    &mut runtime,
+                    &tracked_work_result_tx,
+                    &excluded_client_type_refs,
+                )
+                .await;
                 try_dispatch_excluded_completed_history_retry(
                     &app,
                     &actor,
@@ -1479,42 +1465,48 @@ async fn build_excluded_completed_history_retry_drain(
     let mut retry_ids = Vec::new();
     let mut revalidated = false;
 
+    // A long-stuck item can age out of the recent window and would otherwise
+    // never match again. This used to be handled by asking the client for each
+    // missing row individually — but for nzbget that "targeted" lookup is a
+    // full history fetch (its API has no id filter), so a cycle cost one whole
+    // history download PER STUCK ITEM, sequentially. Worse, the rows were
+    // already in hand: the batch load above fetches the client's history in
+    // full and then TRUNCATES to the recent limit, so the per-item calls were
+    // re-downloading rows this function had just discarded.
+    //
+    // The population that triggers it is exactly the population that grows when
+    // completions are being missed, so it degraded precisely when it was most
+    // needed: slower fetches, feedback timeouts, client backoff, more stranded
+    // items. One widened batch refresh, at most once per cycle, replaces all of
+    // it — bounded work regardless of how many items are stuck.
+    if retry_items.iter().any(|(id, _)| {
+        !tracker
+            .find(id)
+            .is_some_and(|td| completed_lookup.matches_tracked_download(td))
+    }) {
+        let widened =
+            crate::completed_download_handler::load_completed_download_lookup_for_tracked_client_items_excluding_client_types(
+                app,
+                &lookup_items,
+                DOWNLOAD_QUEUE_STUCK_COMPLETED_LOOKUP_LIMIT,
+                &[],
+            )
+            .await;
+        if let Some(widened) = widened {
+            completed_lookup.merge(widened);
+        }
+    }
+
     for (id, item) in retry_items {
-        let mut has_completed_history = tracker
+        let has_completed_history = tracker
             .find(&id)
             .is_some_and(|td| completed_lookup.matches_tracked_download(td));
         if !has_completed_history {
-            // The recent window is bounded, so a long-stuck item can age out
-            // of it and would otherwise never match again. Ask the client for
-            // the exact row before giving up on this cycle.
-            match app
-                .services
-                .integrations
-                .download_client
-                .get_completed_download_for_source(
-                    &item.client_id,
-                    &item.client_type,
-                    &item.download_client_item_id,
-                )
-                .await
-            {
-                Ok(Some(completed)) => {
-                    completed_lookup.insert(completed);
-                    has_completed_history = tracker
-                        .find(&id)
-                        .is_some_and(|td| completed_lookup.matches_tracked_download(td));
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    tracing::debug!(
-                        id = %id,
-                        error = %error,
-                        "targeted completed download lookup failed; will retry next cycle"
-                    );
-                }
-            }
-        }
-        if !has_completed_history {
+            tracing::debug!(
+                id = %id,
+                client_type = %item.client_type,
+                "no completed history for stuck download; will retry next cycle"
+            );
             continue;
         }
 
@@ -2197,6 +2189,7 @@ mod bridged_exclusion_tests {
     }
 }
 
+
 #[cfg(test)]
 mod poll_interval_tests {
     use super::parse_poll_secs;
@@ -2228,7 +2221,7 @@ mod poll_interval_tests {
     }
 
     #[test]
-    fn positive_override_is_honored() {
+    fn valid_override_is_honored() {
         assert_eq!(parse_poll_secs(Some("1"), DEFAULT), Duration::from_secs(1));
         assert_eq!(parse_poll_secs(Some("5"), DEFAULT), Duration::from_secs(5));
     }

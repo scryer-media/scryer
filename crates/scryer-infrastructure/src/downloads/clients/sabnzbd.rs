@@ -386,11 +386,51 @@ impl SabnzbdDownloadClient {
         ))
     }
 
+    /// Look up one completed download by its SABnzbd job id.
+    ///
+    /// Tries SABnzbd's server-side `nzo_ids` history filter first: real SAB
+    /// answers with just that row, which replaces what used to be an unbounded
+    /// 50-at-a-time scan of the entire history for an id the server was willing
+    /// to select. This runs once per stuck item per poll tick, so the scan cost
+    /// grew with both retained history and the number of stranded downloads.
+    ///
+    /// The filter is an OPTIMIZATION, never a contract. SAB-compatible backends
+    /// (altmount, nzbdav, older SAB) may ignore an unrecognized query parameter
+    /// and return an ordinary unfiltered page — Sonarr, the de-facto
+    /// compatibility oracle here, only ever sends start/limit/category. So the
+    /// id is re-verified on the response and a miss falls back to the full
+    /// paged scan; a backend without the filter behaves exactly as it did
+    /// before, one cheap request later.
     async fn completed_download_for_source(
         &self,
         download_client_item_id: &str,
     ) -> AppResult<Option<CompletedDownload>> {
         const HISTORY_PAGE_SIZE: usize = 50;
+
+        let targeted = self
+            .api_get(&[
+                ("mode", "history"),
+                ("nzo_ids", download_client_item_id),
+                ("start", "0"),
+                ("limit", "1"),
+            ])
+            .await
+            .ok()
+            .map(|json| {
+                json.get("history")
+                    .and_then(slots_from_api_section)
+                    .or_else(|| json.get("slots").and_then(Value::as_array))
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .and_then(|slots| {
+                completed_downloads_from_sab_slots(&slots, None)
+                    .into_iter()
+                    .find(|download| download.download_client_item_id == download_client_item_id)
+            });
+        if targeted.is_some() {
+            return Ok(targeted);
+        }
 
         let mut start = 0;
         loop {
