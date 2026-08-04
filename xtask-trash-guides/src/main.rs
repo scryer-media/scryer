@@ -1,3 +1,5 @@
+#![warn(dead_code_pub_in_binary)]
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use xtask_support::TaskContext;

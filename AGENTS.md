@@ -24,6 +24,19 @@ If runtime interfaces change (GraphQL, subscription payloads, gateway contract),
 
 ## Release requests
 
+- External release authority is per action, never standing. Do not infer it from
+  earlier “approved” messages, signer unlocks, prior release requests, existing
+  credentials, or an API reporting that the current user *can* approve.
+- Before any irreversible external action—including pushing a release branch or
+  tag, approving a protected GitHub Actions deployment, publishing to a
+  registry, or triggering a catalog release—state the exact action and target
+  and obtain an explicit approval in the current turn. A reply only authorizes
+  the immediately described action; it does not authorize follow-up patches,
+  additional versions, retries that publish, or related releases.
+- Treat a source commit, a signed tag, a GitHub Actions deployment approval,
+  and registry publication as distinct actions. Approval to create or sign one
+  does not authorize any of the others. If a validation failure requires a new
+  patch or version, stop and obtain fresh approval before publishing it.
 - Release automation goes through `cargo xtask`.
 - The root `xtask` binary is intentionally thin: `cargo xtask release ...`,
   `cargo xtask builtins sync`, `cargo xtask sdk release ...`, and

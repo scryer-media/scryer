@@ -4,10 +4,11 @@ use super::*;
 async fn check_emits_manual_interaction_notification_once() {
     let existing_dir = std::env::temp_dir().join(format!("scryer-completed-path-{}", Id::new().0));
     std::fs::create_dir_all(&existing_dir).expect("create temp dir");
+    std::fs::write(existing_dir.join("episode.mkv"), b"video").expect("write video file");
     let completed = build_completed_download(
         "Unknown.Show.S01.Complete.1080p",
         existing_dir.to_string_lossy().as_ref(),
-        Some("series"),
+        None,
     );
     let download_client = Arc::new(TestDownloadClient {
         completed_downloads: Arc::new(Mutex::new(vec![CompletedDownload {

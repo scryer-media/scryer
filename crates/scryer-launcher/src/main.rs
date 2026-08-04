@@ -1,3 +1,5 @@
+#![warn(dead_code_pub_in_binary)]
+
 use std::env;
 use std::ffi::{CString, OsString};
 use std::fs;

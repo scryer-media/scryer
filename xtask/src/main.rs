@@ -1,3 +1,5 @@
+#![warn(dead_code_pub_in_binary)]
+
 use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
 use clap::{Args, Parser, Subcommand};

@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM rust:1.96.0-slim-bookworm
+FROM rust:1.97.1-slim-bookworm
 
 WORKDIR /workspace
 

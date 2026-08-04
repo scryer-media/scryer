@@ -576,18 +576,14 @@ fn execute_challenge_solver_request(
     if solver::solved_body_looks_rate_limited(&solved_body) {
         return Err(solver::target_rate_limit_message(&solution));
     }
-    if !(200..300).contains(&solution_status) {
-        return Err(format!(
-            "{provider_name} target request returned HTTP {solution_status}."
-        ));
-    }
-
-    // Cache the clearance session so follow-up requests to this origin skip
-    // the solver until the session expires or stops clearing challenges.
-    solver::SolvedSessionCache::shared().store_solution(&policy.config.id, &request.url, &solution);
-
-    let solved_headers = solver::safe_solution_response_headers(solution.headers.as_ref());
-    if !solved_body.is_empty() {
+    if (200..300).contains(&solution_status) && !solved_body.is_empty() {
+        // Cache the clearance session so follow-up requests to this origin skip
+        // the solver until the session expires or stops clearing challenges.
+        solver::SolvedSessionCache::shared().store_solution(
+            &policy.config.id,
+            &request.url,
+            &solution,
+        );
         tracing::debug!(
             indexer_id = policy.indexer_id.as_str(),
             proxy_config_id = policy.config.id.as_str(),
@@ -598,7 +594,7 @@ fn execute_challenge_solver_request(
         );
         return Ok(ProxiedHttpResponse {
             status_code: solution_status,
-            headers: solved_headers,
+            headers: solver::safe_solution_response_headers(solution.headers.as_ref()),
             body: solved_body,
         });
     }
@@ -633,11 +629,22 @@ fn execute_challenge_solver_request(
             .to_string());
         }
         let body = read_response_body(retry, max_http_response_bytes)?;
+        solver::SolvedSessionCache::shared().store_solution(
+            &policy.config.id,
+            &request.url,
+            &solution,
+        );
         return Ok(ProxiedHttpResponse {
             status_code: status.as_u16(),
             headers,
             body,
         });
+    }
+
+    if !(200..300).contains(&solution_status) {
+        return Err(format!(
+            "{provider_name} target request returned HTTP {solution_status}."
+        ));
     }
 
     Err(
@@ -853,6 +860,93 @@ mod tests {
         assert_eq!(solved.status_code, 200);
         assert_eq!(solved.body, b"<html>Trawl</html>");
         assert!(solved.headers.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn byparr_non_success_solution_refetches_with_clearance_session() {
+        use wiremock::matchers::{body_json, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let target_url = format!("{}/api", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .and(body_json(serde_json::json!({
+                "cmd": "request.get",
+                "url": target_url,
+                "maxTimeout": 60
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok",
+                "solution": {
+                    "url": target_url,
+                    "status": 503,
+                    "headers": { "content-type": "text/html" },
+                    "cookies": [{ "name": "cf_clearance", "value": "abc" }],
+                    "userAgent": "Byparr UA",
+                    "response": "<html>Just a moment</html>"
+                }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api"))
+            .and(header("cookie", "cf_clearance=abc"))
+            .and(header("user-agent", "Byparr UA"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/xml")
+                    .set_body_bytes(b"<rss></rss>"),
+            )
+            .mount(&server)
+            .await;
+
+        let now = chrono::Utc::now();
+        let policy = IndexerProxyPolicy {
+            indexer_id: "indexer-1".into(),
+            indexer_name: "Indexer".into(),
+            config: scryer_domain::IndexerProxyConfig {
+                id: "byparr-1".into(),
+                name: "Byparr".into(),
+                provider_type: scryer_domain::IndexerProxyProviderType::Byparr,
+                protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+                base_url: server.uri(),
+                request_timeout_seconds: 60,
+                is_enabled: true,
+                last_health_status: None,
+                last_error_message: None,
+                last_error_at: None,
+                created_at: now,
+                updated_at: now,
+            },
+        };
+        let request = PluginHttpRequest {
+            url: target_url,
+            method: Some("GET".into()),
+            headers: BTreeMap::new(),
+        };
+
+        let solved = tokio::task::spawn_blocking(move || {
+            let proxy_client =
+                scryer_outbound_http::blocking_plugin_host_client("").expect("proxy client");
+            let request_client =
+                scryer_outbound_http::blocking_plugin_host_client("").expect("request client");
+            execute_challenge_solver_request(
+                &proxy_client,
+                &request_client,
+                &policy,
+                &request,
+                None,
+                None,
+                Some(1024 * 1024),
+            )
+        })
+        .await
+        .expect("solver task should join")
+        .expect("Byparr session refetch should succeed");
+
+        assert_eq!(solved.status_code, 200);
+        assert_eq!(solved.body, b"<rss></rss>");
     }
 
     #[tokio::test(flavor = "multi_thread")]

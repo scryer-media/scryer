@@ -14,12 +14,13 @@ permissions:
   contents: read
 
 env:
+  CARGO_BUILD_WARNINGS: deny
   SCRYER_SCCACHE_PUBLISH_SHARED: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') && 'true' || 'false' }}
 
 jobs:
   web:
     name: web
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -63,7 +64,7 @@ jobs:
 
   winget-xtask-build:
     name: winget-xtask-build
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -73,7 +74,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
-          toolchain: "1.96.0"
+          toolchain: "1.97.1"
 
       - name: Build WinGet xtask binary
         run: cargo build --locked -p xtask-release
@@ -88,7 +89,7 @@ jobs:
 
   rust-clippy:
     name: rust-clippy
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 50
     needs: [web]
     env:
@@ -109,7 +110,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
-          toolchain: "1.96.0"
+          toolchain: "1.97.1"
           components: clippy
 
       - name: Install system dependencies
@@ -191,7 +192,7 @@ jobs:
           export SCRYER_SMG_REGISTRATION_SECRET="${{ secrets.SMG_REGISTRATION_SECRET }}"
           export SCRYER_SMG_GRAPHQL_URL="https://smg.scryer.media/graphql"
           export CC_x86_64_unknown_linux_musl="sccache musl-gcc"
-          export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -C link-arg=-fuse-ld=mold"
+          export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -C link-arg=-fuse-ld=mold -W linker-messages"
           cargo clippy --target x86_64-unknown-linux-musl --locked \
             -p scryer \
             -p scryer-application \
@@ -256,7 +257,7 @@ jobs:
 
   rust-nextest:
     name: rust-nextest
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 50
     needs: [web]
     env:
@@ -277,7 +278,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
-          toolchain: "1.96.0"
+          toolchain: "1.97.1"
 
       - name: Install system dependencies
         run: sudo apt-get install -y --no-install-recommends musl-tools mold nasm
@@ -348,7 +349,7 @@ jobs:
           export SCRYER_SMG_REGISTRATION_SECRET="${{ secrets.SMG_REGISTRATION_SECRET }}"
           export SCRYER_SMG_GRAPHQL_URL="https://smg.scryer.media/graphql"
           export CC_x86_64_unknown_linux_musl="sccache musl-gcc"
-          export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -C link-arg=-fuse-ld=mold"
+          export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -C link-arg=-fuse-ld=mold -W linker-messages"
           export RUST_MIN_STACK="4194304"
           cargo nextest run --target x86_64-unknown-linux-musl --locked \
             --workspace \
@@ -403,13 +404,13 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: ubuntu-24.04
+            runner: ubuntu-26.04
             target: x86_64-unknown-linux-musl
             sccache_lane: launcher-linux-x86_64-musl
             sccache_writer_id: launcher-linux-amd64
             artifact_name: launcher-linux-amd64
           - arch: arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
             target: aarch64-unknown-linux-musl
             sccache_lane: launcher-linux-arm64-musl
             sccache_writer_id: launcher-linux-arm64
@@ -433,7 +434,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
-          toolchain: "1.96.0"
+          toolchain: "1.97.1"
 
       - name: Install system dependencies
         run: sudo apt-get install -y --no-install-recommends musl-tools mold
@@ -523,7 +524,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -C link-arg=-fuse-ld=mold -D warnings"
+          export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -C link-arg=-fuse-ld=mold -W linker-messages"
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
             cargo build --timings -p scryer-launcher --profile release-launcher --locked --target "${{ matrix.target }}" 2>&1 | tee "${{ matrix.artifact_name }}-build.log"
           else
@@ -595,7 +596,7 @@ jobs:
           - arch: x86_64
             variant: portable
             build_lane: portable
-            runner: ubuntu-24.04
+            runner: ubuntu-26.04
             target: x86_64-unknown-linux-musl
             sccache_lane: pr-linux-x86_64-cpu
             artifact_name: scryer-linux-x86_64-portable
@@ -606,7 +607,7 @@ jobs:
           - arch: arm64
             variant: portable
             build_lane: portable
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
             target: aarch64-unknown-linux-musl
             sccache_lane: pr-linux-arm64-cpu
             artifact_name: scryer-linux-arm64-portable
@@ -634,7 +635,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
-          toolchain: "1.96.0"
+          toolchain: "1.97.1"
 
       - name: Install system dependencies
         shell: bash
@@ -717,7 +718,7 @@ jobs:
           else
             export "${target_cc_var}=musl-gcc"
           fi
-          export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -C link-arg=-fuse-ld=mold -D warnings"
+          export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -C link-arg=-fuse-ld=mold -W linker-messages"
           if [ -n "${{ matrix.extra_rustflags }}" ]; then
             export RUSTFLAGS="${RUSTFLAGS} ${{ matrix.extra_rustflags }}"
           fi
@@ -829,7 +830,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
-          toolchain: "1.96.0"
+          toolchain: "1.97.1"
           targets: ${{ matrix.target }}
 
       - name: Restore sccache directory
@@ -919,7 +920,7 @@ jobs:
             export CC="clang"
             export CXX="clang++"
           fi
-          export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -D warnings"
+          export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -W linker-messages"
           if [ -n "${{ matrix.extra_rustflags }}" ]; then
             export RUSTFLAGS="${RUSTFLAGS} ${{ matrix.extra_rustflags }}"
           fi
@@ -1016,7 +1017,7 @@ jobs:
         include:
           - arch: x86_64
             runner: windows-2025
-            toolchain: 1.96.0-x86_64-pc-windows-msvc
+            toolchain: 1.97.1-x86_64-pc-windows-msvc
             target: x86_64-pc-windows-msvc
             sccache_lane: scryer-windows-x86_64-msvc
             sccache_writer_id: scryer-windows-x86_64-portable
@@ -1027,7 +1028,7 @@ jobs:
             use_lld_link: true
           - arch: arm64
             runner: windows-11-arm
-            toolchain: 1.96.0-aarch64-pc-windows-msvc
+            toolchain: 1.97.1-aarch64-pc-windows-msvc
             target: aarch64-pc-windows-msvc
             sccache_lane: scryer-windows-arm64-msvc
             sccache_writer_id: scryer-windows-arm64-portable
@@ -1124,7 +1125,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $env:RUSTFLAGS = "--remap-path-prefix=$env:GITHUB_WORKSPACE=. -C target-feature=+crt-static -D warnings"
+          $env:RUSTFLAGS = "--remap-path-prefix=$env:GITHUB_WORKSPACE=. -C target-feature=+crt-static -W linker-messages"
           if ("${{ matrix.use_lld_link }}" -eq "true") {
             $env:RUSTFLAGS = "$env:RUSTFLAGS -Clinker=lld-link"
           }
@@ -1158,7 +1159,7 @@ jobs:
           $env:SCRYER_EMBED_UI_DIR = Join-Path $env:GITHUB_WORKSPACE 'scryer-web-out'
           $env:SCRYER_SMG_REGISTRATION_SECRET = "${{ secrets.SMG_REGISTRATION_SECRET }}"
           $env:SCRYER_SMG_GRAPHQL_URL = "https://smg.scryer.media/graphql"
-          $env:RUSTFLAGS = "--remap-path-prefix=$env:GITHUB_WORKSPACE=. -C target-feature=+crt-static -D warnings"
+          $env:RUSTFLAGS = "--remap-path-prefix=$env:GITHUB_WORKSPACE=. -C target-feature=+crt-static -W linker-messages"
           if ($env:USE_CLANG_CL -eq "true") {
             $env:CC = "clang-cl"
             $env:CXX = "clang-cl"
@@ -1345,12 +1346,12 @@ jobs:
       matrix:
         include:
           - platform_id: amd64
-            runs_on: ubuntu-24.04
+            runs_on: ubuntu-26.04
             platform: linux/amd64
             tar_name: scryer-linux-amd64-image.tar
             local_tag: scryer:test-amd64
           - platform_id: arm64
-            runs_on: ubuntu-24.04-arm
+            runs_on: ubuntu-26.04-arm
             platform: linux/arm64
             tar_name: scryer-linux-arm64-image.tar
             local_tag: scryer:test-arm64
@@ -1424,7 +1425,7 @@ jobs:
   docker-publish-pr-rc:
     name: docker-publish-pr-rc
     if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     needs: [rust-clippy, rust-nextest, launcher-build, linux-build]
     permissions:
@@ -1501,7 +1502,7 @@ jobs:
   release-trust:
     name: verify-release-trust
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -1543,7 +1544,7 @@ jobs:
   docker-publish:
     name: docker-publish
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     needs: [release-trust, rust-clippy, rust-nextest, launcher-build, linux-build]
     permissions:
@@ -1677,7 +1678,7 @@ jobs:
     name: verify-oci-release-trust
     needs: [docker-publish, container-provenance]
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -1720,7 +1721,7 @@ jobs:
 
   release:
     name: publish-release
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     needs: [release-trust, rust-clippy, rust-nextest, linux-build, macos-build, windows-build, oci-verify, archive-provenance]
     environment:
@@ -1970,7 +1971,7 @@ jobs:
 
   winget-prep:
     name: winget-prep
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     needs: [release-trust, windows-build, winget-xtask-build]
     permissions:
@@ -2031,7 +2032,7 @@ jobs:
     name: prepare-release-subjects
     needs: [release-trust, linux-build, macos-build, windows-build, winget-prep]
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read

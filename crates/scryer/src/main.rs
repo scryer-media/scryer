@@ -1,5 +1,6 @@
 // async-graphql schema expansion exceeded the default macro recursion depth.
 #![recursion_limit = "256"]
+#![warn(dead_code_pub_in_binary)]
 
 mod backup_routes;
 mod base_path;

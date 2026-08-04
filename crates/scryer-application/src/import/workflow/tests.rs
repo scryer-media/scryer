@@ -3,11 +3,12 @@ mod tests {
     use super::{
         COMPLETED_ORIGIN_SCOPE_CONFLICT, CompletedDownloadOriginResolution,
         CompletedDownloadSubmissionMatch, CompletedDownloadSubmissionResolution,
-        IMPORT_TRANSFER_HEARTBEAT_INTERVAL, ManualImportFileMapping,
+        IMPORT_TRANSFER_HEARTBEAT_INTERVAL, ManualImportCandidateMapping,
         completed_import_status_for_result, resolve_completed_download_origin,
         resolved_episode_ids_are_within_expected, sanitized_title_folder_component,
         should_persist_import_transfer_heartbeat, skip_reason_for_import_check_code,
-        validate_manual_import_mapping_targets, validate_manual_import_source_under_trusted_root,
+        validate_manual_import_candidate_mapping_targets,
+        validate_manual_import_source_under_trusted_root,
     };
     #[cfg(unix)]
     use super::is_sample_file;
@@ -420,35 +421,44 @@ mod tests {
     }
 
     #[test]
-    fn manual_import_mapping_validation_requires_exactly_one_target() {
-        let neither = ManualImportFileMapping {
-            file_path: "/downloads/case3.mkv".to_string(),
+    fn manual_import_candidate_mapping_validation_requires_unique_candidate_and_exactly_one_target() {
+        let neither = ManualImportCandidateMapping {
+            candidate_id: "candidate-1".to_string(),
             episode_id: None,
             series_movie_link_id: None,
-            quality: None,
         };
-        let err = validate_manual_import_mapping_targets(&[neither])
+        let err = validate_manual_import_candidate_mapping_targets(&[neither])
             .expect_err("missing target should be rejected");
         assert!(err.to_string().contains("requires episode_id"));
 
-        let both = ManualImportFileMapping {
-            file_path: "/downloads/case3.mkv".to_string(),
+        let both = ManualImportCandidateMapping {
+            candidate_id: "candidate-1".to_string(),
             episode_id: Some("episode-1".to_string()),
             series_movie_link_id: Some("series-movie-link-1".to_string()),
-            quality: None,
         };
-        let err = validate_manual_import_mapping_targets(&[both])
+        let err = validate_manual_import_candidate_mapping_targets(&[both])
             .expect_err("ambiguous target should be rejected");
         assert!(err.to_string().contains("cannot include both"));
 
-        let series_movie = ManualImportFileMapping {
-            file_path: "/downloads/case3.mkv".to_string(),
+        let series_movie = ManualImportCandidateMapping {
+            candidate_id: "candidate-1".to_string(),
             episode_id: None,
             series_movie_link_id: Some("series-movie-link-1".to_string()),
-            quality: None,
         };
-        validate_manual_import_mapping_targets(&[series_movie])
+        validate_manual_import_candidate_mapping_targets(&[series_movie])
             .expect("series movie target should be accepted");
+
+        let duplicate = ManualImportCandidateMapping {
+            candidate_id: "candidate-1".to_string(),
+            episode_id: Some("episode-1".to_string()),
+            series_movie_link_id: None,
+        };
+        let err = validate_manual_import_candidate_mapping_targets(&[
+            duplicate.clone(),
+            duplicate,
+        ])
+        .expect_err("duplicate candidates should be rejected");
+        assert!(err.to_string().contains("must be unique"));
     }
 
     #[cfg(unix)]

@@ -1130,11 +1130,6 @@ impl PrioritizedDownloadClientRouter {
         if solution_status == reqwest::StatusCode::TOO_MANY_REQUESTS.as_u16() {
             return Err(target_rate_limit_error(solution.headers.as_ref()));
         }
-        if !(200..300).contains(&solution_status) {
-            return Err(AppError::DownloadSubmitUnavailable(format!(
-                "{provider_name} target request returned HTTP {solution_status}."
-            )));
-        }
         let solution_body = solution.response.as_deref().unwrap_or_default();
         if solution_body.len() > PROXIED_TORRENT_FILE_MAX_BYTES {
             return Err(AppError::DownloadSubmitUnavailable(format!(
@@ -1145,12 +1140,39 @@ impl PrioritizedDownloadClientRouter {
         if solver::solved_body_looks_rate_limited(solution_body.as_bytes()) {
             return Err(target_rate_limit_error(solution.headers.as_ref()));
         }
+        let retry_headers = solver::solution_retry_headers(&solution);
+        if !(200..300).contains(&solution_status) {
+            if retry_headers.is_empty() {
+                return Err(AppError::DownloadSubmitUnavailable(format!(
+                    "{provider_name} target request returned HTTP {solution_status}."
+                )));
+            }
+            let fetched = self
+                .fetch_download_artifact_direct(
+                    provider_name,
+                    download_url,
+                    &retry_headers,
+                    proxy_config.request_timeout_seconds,
+                )
+                .await?;
+            solver::SolvedSessionCache::shared().store_solution(
+                &proxy_config.id,
+                download_url,
+                &solution,
+            );
+            return Self::classify_resolved_download_artifact(
+                provider_name,
+                fetched.final_url.as_deref(),
+                fetched.headers.as_ref(),
+                fetched.bytes,
+                info_hash_hint,
+            );
+        }
         solver::SolvedSessionCache::shared().store_solution(
             &proxy_config.id,
             download_url,
             &solution,
         );
-        let retry_headers = solver::solution_retry_headers(&solution);
         if Self::should_refetch_binary_download_artifact(
             download_url,
             solution.url.as_deref(),
@@ -3370,6 +3392,74 @@ mod tests {
             artifact,
             ResolvedDownloadArtifact::TorrentFile { bytes, .. }
                 if bytes == b"d4:infod4:name4:testee"
+        ));
+    }
+
+    #[tokio::test]
+    async fn byparr_non_success_solution_refetches_download_with_clearance_session() {
+        use wiremock::matchers::{body_json, header, method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let download_path = "/download";
+        let download_url = format!("{}{download_path}?id=release", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .and(body_json(serde_json::json!({
+                "cmd": "request.get",
+                "url": download_url,
+                "maxTimeout": 60
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok",
+                "solution": {
+                    "url": download_url,
+                    "status": 503,
+                    "headers": { "content-type": "text/html" },
+                    "cookies": [{ "name": "e2e_clearance", "value": "solved" }],
+                    "userAgent": "Byparr UA",
+                    "response": "<html>Just a moment</html>"
+                }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(download_path))
+            .and(query_param("id", "release"))
+            .and(header("cookie", "e2e_clearance=solved"))
+            .and(header("user-agent", "Byparr UA"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/x-nzb")
+                    .set_body_bytes(b"<nzb></nzb>"),
+            )
+            .mount(&server)
+            .await;
+
+        let now = Utc::now();
+        let proxy = IndexerProxyConfig {
+            id: "byparr-refetch".into(),
+            name: "Byparr".into(),
+            provider_type: scryer_domain::IndexerProxyProviderType::Byparr,
+            protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+            base_url: server.uri(),
+            request_timeout_seconds: 60,
+            is_enabled: true,
+            last_health_status: None,
+            last_error_message: None,
+            last_error_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let artifact = no_client_router()
+            .resolve_download_artifact_via_indexer_proxy(&proxy, &download_url, None)
+            .await
+            .expect("Byparr should refetch the NZB with its clearance session");
+
+        assert!(matches!(
+            artifact,
+            ResolvedDownloadArtifact::Nzb { bytes, .. } if bytes == b"<nzb></nzb>"
         ));
     }
 

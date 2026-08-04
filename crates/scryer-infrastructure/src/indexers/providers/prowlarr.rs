@@ -688,6 +688,18 @@ impl IndexerPluginProvider for NativeProwlarrIndexerProvider {
         self.delegate.client_for_provider(config)
     }
 
+    fn client_for_provider_with_proxy(
+        &self,
+        config: &IndexerConfig,
+        proxy_config: Option<&scryer_domain::IndexerProxyConfig>,
+    ) -> Option<Arc<dyn IndexerClient>> {
+        if is_prowlarr_provider(&config.provider_type) {
+            return Some(Arc::new(ProwlarrSearchStub));
+        }
+        self.delegate
+            .client_for_provider_with_proxy(config, proxy_config)
+    }
+
     fn management_client_for_provider(
         &self,
         config: &IndexerConfig,
@@ -1252,6 +1264,72 @@ mod tests {
     use serde_json::json;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[derive(Default)]
+    struct ProxyRecordingProvider {
+        observed_proxy_id: Arc<std::sync::Mutex<Option<String>>>,
+    }
+
+    impl IndexerPluginProvider for ProxyRecordingProvider {
+        fn client_for_provider(&self, _config: &IndexerConfig) -> Option<Arc<dyn IndexerClient>> {
+            None
+        }
+
+        fn client_for_provider_with_proxy(
+            &self,
+            _config: &IndexerConfig,
+            proxy_config: Option<&scryer_domain::IndexerProxyConfig>,
+        ) -> Option<Arc<dyn IndexerClient>> {
+            *self.observed_proxy_id.lock().expect("proxy observation") =
+                proxy_config.map(|config| config.id.clone());
+            None
+        }
+
+        fn available_provider_types(&self) -> Vec<String> {
+            vec!["newznab".to_string()]
+        }
+
+        fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn non_prowlarr_clients_preserve_indexer_proxy_configuration() {
+        let delegate = Arc::new(ProxyRecordingProvider::default());
+        let observed_proxy_id = Arc::clone(&delegate.observed_proxy_id);
+        let provider = NativeProwlarrIndexerProvider::new(delegate);
+        let mut config = test_indexer_config("http://newznab:8088");
+        config.provider_type = "newznab".to_string();
+        let now = Utc::now();
+        let proxy_config = scryer_domain::IndexerProxyConfig {
+            id: "proxy-1".to_string(),
+            name: "Byparr".to_string(),
+            provider_type: scryer_domain::IndexerProxyProviderType::Byparr,
+            protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+            base_url: "http://byparr:8191".to_string(),
+            request_timeout_seconds: 60,
+            is_enabled: true,
+            last_health_status: None,
+            last_error_message: None,
+            last_error_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        assert!(
+            provider
+                .client_for_provider_with_proxy(&config, Some(&proxy_config))
+                .is_none()
+        );
+        assert_eq!(
+            observed_proxy_id
+                .lock()
+                .expect("proxy observation")
+                .as_deref(),
+            Some("proxy-1")
+        );
+    }
 
     #[test]
     fn prowlarr_management_requests_use_importer_host_quota() {
