@@ -7,11 +7,16 @@ import {
 import { useClient } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
-import { librariesQuery, recycledItemsQuery, recycleBinSettingsQuery } from "@/lib/graphql/queries";
 import {
-  restoreRecycledItemMutation,
-  deleteRecycledItemMutation,
+  librariesQuery,
+  previewRestoreRecycledItemsQuery,
+  recycledItemsQuery,
+  recycleBinSettingsQuery,
+} from "@/lib/graphql/queries";
+import {
+  deleteRecycledItemsMutation,
   emptyRecycleBinMutation,
+  restoreRecycledItemsMutation,
   updateRecycleBinSettingsMutation,
 } from "@/lib/graphql/mutations";
 import { useAuth } from "@/lib/hooks/use-auth";
@@ -28,7 +33,19 @@ import {
   selectedLibraryIdsToQueryValue,
 } from "@/lib/utils/library-filter";
 
-type PendingAction = { type: "delete"; item: RecycledItem } | { type: "empty"; count: number };
+const RECYCLE_BATCH_MAX_ITEMS = 250;
+
+type RestoreConflictPolicy = "KEEP_BOTH" | "REPLACE_EXISTING";
+type PendingAction =
+  | {
+      type: "restore";
+      items: RecycledItem[];
+      fingerprint: string;
+      occupiedCount: number;
+      conflictPolicy: RestoreConflictPolicy;
+    }
+  | { type: "delete"; items: RecycledItem[] }
+  | { type: "empty"; count: number };
 
 type RecycleBinSettings = {
   enabled: boolean;
@@ -45,6 +62,13 @@ type RecycledItemsQueryResult = {
   } | null;
 };
 
+type RestorePreviewResult = {
+  previewRestoreRecycledItems?: {
+    fingerprint: string;
+    items: Array<{ id: string; destinationOccupied: boolean }>;
+  } | null;
+};
+
 type LibrariesQueryResult = {
   libraries?: LibraryRecord[] | null;
 };
@@ -52,6 +76,11 @@ type LibrariesQueryResult = {
 type UpdateRecycleBinSettingsResult = {
   updateRecycleBinSettings?: RecycleBinSettings | null;
 };
+
+function uniqueItems(items: RecycledItem[]): RecycledItem[] {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  return Array.from(byId.values());
+}
 
 export function SettingsRecycleBinContainer() {
   const setGlobalStatus = useGlobalStatus();
@@ -71,6 +100,7 @@ export function SettingsRecycleBinContainer() {
   const canManageItems = manageTitleLibraryIds.size > 0;
   const [items, setItems] = useState<RecycledItem[]>([]);
   const [totalCount, setTotalCount] = useState(0);
+  const [itemsRefreshRevision, setItemsRefreshRevision] = useState(0);
   const [settings, setSettings] = useState<RecycleBinSettings>({ enabled: true });
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsSaving, setSettingsSaving] = useState(false);
@@ -78,12 +108,11 @@ export function SettingsRecycleBinContainer() {
   const [libraries, setLibraries] = useState<LibraryRecord[]>([]);
   const [librariesLoading, setLibrariesLoading] = useState(false);
   const [selectedLibraryIds, setSelectedLibraryIds] = useState<string[]>([]);
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(() => new Set());
+  const [pendingItemIds, setPendingItemIds] = useState<Set<string>>(() => new Set());
   const [mutatingId, setMutatingId] = useState<string | null>(null);
-  const [pendingRestoreIds, setPendingRestoreIds] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const restoreUnregistersRef = useRef(new Set<() => void>());
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const jobUnregistersRef = useRef(new Set<() => void>());
   const { registerInteractiveJobRun } = useJobRunToasts();
 
   const fetchSettings = useCallback(async () => {
@@ -129,19 +158,13 @@ export function SettingsRecycleBinContainer() {
           manageTitleLibraryIds.has(library.id),
         );
         setLibraries(nextLibraries);
-        setSelectedLibraryIds((current) =>
-          normalizeLibraryFilterSelection(current, nextLibraries),
-        );
+        setSelectedLibraryIds((current) => normalizeLibraryFilterSelection(current, nextLibraries));
       })
       .catch((error) => {
-        if (!cancelled) {
-          setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
-        }
+        if (!cancelled) setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
       })
       .finally(() => {
-        if (!cancelled) {
-          setLibrariesLoading(false);
-        }
+        if (!cancelled) setLibrariesLoading(false);
       });
 
     return () => {
@@ -167,41 +190,35 @@ export function SettingsRecycleBinContainer() {
         )
         .toPromise();
       if (error) throw error;
-      setItems(data?.recycledItems?.items ?? []);
+      const nextItems = data?.recycledItems?.items ?? [];
+      const nextIds = new Set(nextItems.map((item) => item.id));
+      setItems(nextItems);
       setTotalCount(data?.recycledItems?.totalCount ?? 0);
+      setSelectedItemIds((current) => new Set(Array.from(current).filter((id) => nextIds.has(id))));
     } catch (error) {
       setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
     } finally {
       setItemsLoading(false);
     }
-  }, [
-    canManageItems,
-    client,
-    selectedLibraryIds,
-    setGlobalStatus,
-    settings.enabled,
-    settingsLoading,
-    t,
-  ]);
+  }, [canManageItems, client, selectedLibraryIds, setGlobalStatus, settings.enabled, settingsLoading, t]);
 
   useEffect(() => {
     void fetchItems();
-  }, [fetchItems]);
+  }, [fetchItems, itemsRefreshRevision]);
 
   const updateEnabled = async (enabled: boolean) => {
     if (!canManageConfig) return;
     setSettingsSaving(true);
     try {
       const { data, error } = await client
-        .mutation<UpdateRecycleBinSettingsResult>(updateRecycleBinSettingsMutation, {
-          input: { enabled },
-        })
+        .mutation<UpdateRecycleBinSettingsResult>(updateRecycleBinSettingsMutation, { input: { enabled } })
         .toPromise();
       if (error) throw error;
       setSettings(data?.updateRecycleBinSettings ?? { enabled });
       if (!enabled) {
         setItems([]);
         setTotalCount(0);
+        setSelectedItemIds(new Set());
       }
       setGlobalStatus(t("status.recycleBinSettingsSaved"));
     } catch (error) {
@@ -211,35 +228,70 @@ export function SettingsRecycleBinContainer() {
     }
   };
 
-  const restoreItem = async (item: RecycledItem) => {
-    if (
-      !canManageItems ||
-      !manageTitleLibraryIds.has(item.libraryId) ||
-      pendingRestoreIds.has(item.id)
-    ) return;
-    setMutatingId(item.id);
-    try {
-      const { data, error } = await client
-        .mutation<{
-          restoreRecycledItem?: { jobRun?: unknown };
-        }>(restoreRecycledItemMutation, { id: item.id })
-        .toPromise();
-      if (error) throw error;
-      const run = normalizeJobRun(data?.restoreRecycledItem?.jobRun);
+  const registerBatchJob = useCallback(
+    (runValue: unknown, entryIds: string[], message: string) => {
+      const run = normalizeJobRun(runValue);
       if (!run) throw new Error(t("status.apiError"));
-      setPendingRestoreIds((current) => new Set(current).add(item.id));
+      setPendingItemIds((current) => new Set([...current, ...entryIds]));
       const unregister = registerInteractiveJobRun(run, () => {
         unregister();
-        restoreUnregistersRef.current.delete(unregister);
-        setPendingRestoreIds((current) => {
+        jobUnregistersRef.current.delete(unregister);
+        setPendingItemIds((current) => {
           const next = new Set(current);
-          next.delete(item.id);
+          for (const entryId of entryIds) next.delete(entryId);
           return next;
         });
-        void fetchItems();
+        setItemsRefreshRevision((current) => current + 1);
       });
-      restoreUnregistersRef.current.add(unregister);
-      setGlobalStatus(`Queued restore for ${item.originalPath}.`);
+      jobUnregistersRef.current.add(unregister);
+      setGlobalStatus(message);
+    },
+    [registerInteractiveJobRun, setGlobalStatus, t],
+  );
+
+  useEffect(
+    () => () => {
+      for (const unregister of jobUnregistersRef.current) unregister();
+      jobUnregistersRef.current.clear();
+    },
+    [],
+  );
+
+  const validateBatchItems = (requested: RecycledItem[]): RecycledItem[] | null => {
+    const targets = uniqueItems(requested).filter(
+      (item) => manageTitleLibraryIds.has(item.libraryId) && !pendingItemIds.has(item.id),
+    );
+    if (targets.length === 0) return null;
+    if (targets.length > RECYCLE_BATCH_MAX_ITEMS) {
+      setGlobalStatus(t("settings.recycleBinBatchLimit", { count: RECYCLE_BATCH_MAX_ITEMS }));
+      return null;
+    }
+    return targets;
+  };
+
+  const requestRestore = async (requested: RecycledItem[]) => {
+    if (!canManageItems) return;
+    const targets = validateBatchItems(requested);
+    if (!targets) return;
+    setMutatingId("__batch__");
+    try {
+      const { data, error } = await client
+        .query<RestorePreviewResult>(
+          previewRestoreRecycledItemsQuery,
+          { ids: targets.map((item) => item.id) },
+          { requestPolicy: "network-only" },
+        )
+        .toPromise();
+      if (error) throw error;
+      const preview = data?.previewRestoreRecycledItems;
+      if (!preview) throw new Error(t("status.apiError"));
+      setPendingAction({
+        type: "restore",
+        items: targets,
+        fingerprint: preview.fingerprint,
+        occupiedCount: preview.items.filter((item) => item.destinationOccupied).length,
+        conflictPolicy: "KEEP_BOTH",
+      });
     } catch (error) {
       setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
     } finally {
@@ -247,83 +299,129 @@ export function SettingsRecycleBinContainer() {
     }
   };
 
-  useEffect(
-    () => () => {
-      for (const unregister of restoreUnregistersRef.current) {
-        unregister();
-      }
-      restoreUnregistersRef.current.clear();
-    },
-    [],
-  );
+  const requestDelete = (requested: RecycledItem[]) => {
+    if (!canManageItems) return;
+    const targets = validateBatchItems(requested);
+    if (targets) setPendingAction({ type: "delete", items: targets });
+  };
 
-  const requestDelete = (item: RecycledItem) => {
-    if (!canManageItems || !manageTitleLibraryIds.has(item.libraryId)) return;
-    setPendingAction({ type: "delete", item });
+  const confirmRestore = async () => {
+    if (!pendingAction || pendingAction.type !== "restore") return;
+    setMutatingId("__batch__");
+    try {
+      const { data, error } = await client
+        .mutation<{ restoreRecycledItems?: { ids?: string[]; jobRun?: unknown } }>(
+          restoreRecycledItemsMutation,
+          {
+            input: {
+              ids: pendingAction.items.map((item) => item.id),
+              conflictPolicy: pendingAction.conflictPolicy,
+              previewFingerprint: pendingAction.fingerprint,
+            },
+          },
+        )
+        .toPromise();
+      if (error) throw error;
+      const payload = data?.restoreRecycledItems;
+      registerBatchJob(
+        payload?.jobRun,
+        payload?.ids ?? pendingAction.items.map((item) => item.id),
+        t(
+          pendingAction.items.length === 1
+            ? "settings.recycleBinRestoreQueuedOne"
+            : "settings.recycleBinRestoreQueuedOther",
+          { count: pendingAction.items.length },
+        ),
+      );
+      setPendingAction(null);
+    } catch (error) {
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+    } finally {
+      setMutatingId(null);
+    }
   };
 
   const confirmDelete = async () => {
     if (!pendingAction || pendingAction.type !== "delete") return;
-    if (!canManageItems) {
-      setPendingAction(null);
-      return;
-    }
-    const item = pendingAction.item;
-    if (!manageTitleLibraryIds.has(item.libraryId)) {
-      setPendingAction(null);
-      return;
-    }
-    setMutatingId(item.id);
+    setMutatingId("__batch__");
     try {
       const { data, error } = await client
-        .mutation<{ deleteRecycledItem?: { deleted?: boolean } }>(
-          deleteRecycledItemMutation,
-          { id: item.id },
+        .mutation<{ deleteRecycledItems?: { ids?: string[]; jobRun?: unknown } }>(
+          deleteRecycledItemsMutation,
+          { input: { ids: pendingAction.items.map((item) => item.id) } },
         )
         .toPromise();
       if (error) throw error;
-      setGlobalStatus(
-        data?.deleteRecycledItem?.deleted === false
-          ? t("status.recycleBinQuarantined")
-          : t("status.recycleBinDeleted"),
+      const payload = data?.deleteRecycledItems;
+      registerBatchJob(
+        payload?.jobRun,
+        payload?.ids ?? pendingAction.items.map((item) => item.id),
+        t(
+          pendingAction.items.length === 1
+            ? "settings.recycleBinDeleteQueuedOne"
+            : "settings.recycleBinDeleteQueuedOther",
+          { count: pendingAction.items.length },
+        ),
       );
-      await fetchItems();
+      setPendingAction(null);
     } catch (error) {
       setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"));
     } finally {
       setMutatingId(null);
-      setPendingAction(null);
     }
   };
 
   const requestEmpty = () => {
-    if (!canManageItems) return;
-    setPendingAction({ type: "empty", count: totalCount });
+    if (canManageItems) setPendingAction({ type: "empty", count: totalCount });
   };
 
   const confirmEmpty = async () => {
-    if (!canManageItems) {
-      setPendingAction(null);
-      return;
-    }
+    if (!canManageItems) return;
     setMutatingId("__empty__");
     try {
       const { data, error } = await client
-        .mutation(emptyRecycleBinMutation, {
-          libraryIds: selectedLibraryIdsToQueryValue(selectedLibraryIds),
-        })
+        .mutation(emptyRecycleBinMutation, { libraryIds: selectedLibraryIdsToQueryValue(selectedLibraryIds) })
         .toPromise();
       if (error) throw error;
-      const count = data?.emptyRecycleBin?.purgedCount ?? 0;
-      setGlobalStatus(t("status.recycleBinEmptied", { count }));
+      setGlobalStatus(t("status.recycleBinEmptied", { count: data?.emptyRecycleBin?.purgedCount ?? 0 }));
       await fetchItems();
+      setPendingAction(null);
     } catch (error) {
       setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"));
     } finally {
       setMutatingId(null);
-      setPendingAction(null);
     }
   };
+
+  const actionTitle =
+    pendingAction?.type === "restore"
+      ? t("settings.recycleBinRestoreSelectedTitle")
+      : pendingAction?.type === "empty"
+        ? t("settings.recycleBinEmptyAll")
+        : t("settings.recycleBinDelete");
+  const actionDescription =
+    pendingAction?.type === "restore"
+      ? pendingAction.occupiedCount > 0
+        ? t(
+            pendingAction.occupiedCount === 1
+              ? "settings.recycleBinRestoreOccupiedOne"
+              : "settings.recycleBinRestoreOccupiedOther",
+            { count: pendingAction.occupiedCount },
+          )
+        : t(
+            pendingAction.items.length === 1
+              ? "settings.recycleBinRestoreDescriptionOne"
+              : "settings.recycleBinRestoreDescriptionOther",
+            { count: pendingAction.items.length },
+          )
+      : pendingAction?.type === "empty"
+        ? t("settings.recycleBinEmptyConfirm", { count: pendingAction.count })
+        : t(
+            pendingAction?.items.length === 1
+              ? "settings.recycleBinDeleteSelectedConfirmOne"
+              : "settings.recycleBinDeleteSelectedConfirmOther",
+            { count: pendingAction?.items.length ?? 0 },
+          );
 
   return (
     <>
@@ -340,42 +438,78 @@ export function SettingsRecycleBinContainer() {
         totalCount={totalCount}
         loading={itemsLoading}
         mutatingId={mutatingId}
-        pendingRestoreIds={pendingRestoreIds}
+        pendingItemIds={pendingItemIds}
+        selectedItemIds={selectedItemIds}
         onEnabledChange={updateEnabled}
         onSelectedLibraryIdsChange={setSelectedLibraryIds}
-        onRestore={restoreItem}
-        onDelete={requestDelete}
+        onSelectedItemIdsChange={(ids) => setSelectedItemIds(new Set(ids))}
+        onRestoreItems={requestRestore}
+        onDeleteItems={requestDelete}
         onEmptyAll={requestEmpty}
       />
       <ConfirmDialog
         open={pendingAction !== null}
-        title={
-          pendingAction?.type === "empty"
-            ? t("settings.recycleBinEmptyAll")
-            : t("settings.recycleBinDelete")
-        }
-        description={
-          pendingAction?.type === "empty"
-            ? t("settings.recycleBinEmptyConfirm", { count: pendingAction.count })
-            : t("settings.recycleBinDeleteConfirm")
-        }
+        title={actionTitle}
+        description={actionDescription}
         confirmLabel={
-          pendingAction?.type === "empty"
-            ? t("settings.recycleBinEmptyAll")
-            : t("settings.recycleBinDelete")
+          pendingAction?.type === "restore"
+            ? pendingAction.conflictPolicy === "REPLACE_EXISTING"
+              ? t("settings.recycleBinReplaceExistingAndRestore")
+              : t("settings.recycleBinKeepBothAndRestore")
+            : pendingAction?.type === "empty"
+              ? t("settings.recycleBinEmptyAll")
+              : t("settings.recycleBinDelete")
         }
         cancelLabel={t("label.cancel")}
         contentId="settings-recycle-bin-confirm-dialog"
-        confirmButtonId={
-          pendingAction?.type === "empty"
-            ? "settings-recycle-bin-empty-confirm"
-            : "settings-recycle-bin-delete-confirm"
-        }
+        confirmButtonId="settings-recycle-bin-confirm"
         cancelButtonId="settings-recycle-bin-confirm-cancel"
+        confirmButtonVariant={pendingAction?.type === "restore" && pendingAction.conflictPolicy === "KEEP_BOTH" ? "default" : "destructive"}
         isBusy={mutatingId !== null}
-        onConfirm={pendingAction?.type === "empty" ? confirmEmpty : confirmDelete}
+        onConfirm={
+          pendingAction?.type === "restore"
+            ? confirmRestore
+            : pendingAction?.type === "empty"
+              ? confirmEmpty
+              : confirmDelete
+        }
         onCancel={() => setPendingAction(null)}
-      />
+      >
+        {pendingAction?.type === "restore" && pendingAction.occupiedCount > 0 ? (
+          <div className="space-y-2 text-sm">
+            <label className="flex cursor-pointer items-start gap-2">
+              <input
+                type="radio"
+                name="settings-recycle-bin-conflict-policy"
+                checked={pendingAction.conflictPolicy === "KEEP_BOTH"}
+                onChange={() => setPendingAction({ ...pendingAction, conflictPolicy: "KEEP_BOTH" })}
+              />
+              <span>
+                <strong>{t("settings.recycleBinKeepBoth")}</strong>
+                <br />
+                <span className="text-xs text-muted-foreground">
+                  {t("settings.recycleBinKeepBothDescription")}
+                </span>
+              </span>
+            </label>
+            <label className="flex cursor-pointer items-start gap-2">
+              <input
+                type="radio"
+                name="settings-recycle-bin-conflict-policy"
+                checked={pendingAction.conflictPolicy === "REPLACE_EXISTING"}
+                onChange={() => setPendingAction({ ...pendingAction, conflictPolicy: "REPLACE_EXISTING" })}
+              />
+              <span>
+                <strong>{t("settings.recycleBinReplaceExisting")}</strong>
+                <br />
+                <span className="text-xs text-muted-foreground">
+                  {t("settings.recycleBinReplaceExistingDescription")}
+                </span>
+              </span>
+            </label>
+          </div>
+        ) : null}
+      </ConfirmDialog>
     </>
   );
 }

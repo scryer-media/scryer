@@ -307,6 +307,7 @@ impl IntoApplication<AppJobKey> for JobKeyValue {
             Self::TitleDeletion => AppJobKey::TitleDeletion,
             Self::MediaFileDeletion => AppJobKey::MediaFileDeletion,
             Self::RecycleBinRestore => AppJobKey::RecycleBinRestore,
+            Self::RecycleBinPurge => AppJobKey::RecycleBinPurge,
             Self::AcquisitionSearch => AppJobKey::AcquisitionSearch,
         }
     }
@@ -335,6 +336,7 @@ impl FromApplication<AppJobKey> for JobKeyValue {
             AppJobKey::TitleDeletion => Self::TitleDeletion,
             AppJobKey::MediaFileDeletion => Self::MediaFileDeletion,
             AppJobKey::RecycleBinRestore => Self::RecycleBinRestore,
+            AppJobKey::RecycleBinPurge => Self::RecycleBinPurge,
             AppJobKey::AcquisitionSearch => Self::AcquisitionSearch,
         }
     }

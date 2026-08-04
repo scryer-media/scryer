@@ -203,8 +203,7 @@ pub(super) async fn resolve_completed_download_for_import(
         .await
     {
         Ok(crate::ManualImportSourceResolution::Eligible { completed }) => completed,
-        Ok(crate::ManualImportSourceResolution::SourceFailed { message })
-        | Ok(crate::ManualImportSourceResolution::NotEligible { message }) => {
+        Ok(crate::ManualImportSourceResolution::NotEligible { message }) => {
             tracing::warn!(
                 id = %td.id,
                 item_id = %td.client_item.download_client_item_id,

@@ -15,6 +15,9 @@ use std::time::Duration;
 
 use scryer_plugin_sdk::{PluginDescriptor, PluginKind, SubtitleProviderMode};
 
+use crate::command_abi;
+use crate::wasmtime_host::command_host::CommandHost;
+
 /// One preopened directory mapping for a plugin instance.
 #[derive(Debug, Clone)]
 pub(crate) struct PreopenSpec {
@@ -51,6 +54,8 @@ pub(crate) struct PluginInstanceSpec {
     pub(crate) timeout: Duration,
     /// Hard memory cap; `None` = the runtime's default cap.
     pub(crate) memory_max_bytes: Option<usize>,
+    /// Descriptor-scoped native host services for command guests.
+    pub(crate) command_host: CommandHost,
 }
 
 /// Which runtime executes a `PluginInstanceSpec`.
@@ -62,6 +67,8 @@ pub(crate) enum PluginRuntimeBacking {
     WasmtimeArchive,
     /// Native wasmtime command host for SDK 3.5 subtitle-sync plugins.
     WasmtimeSubtitleSync,
+    /// Versioned native command ABI for all descriptor families.
+    WasmtimeCommand,
 }
 
 impl PluginRuntimeBacking {
@@ -86,6 +93,14 @@ impl PluginRuntimeBacking {
             }
             _ => Self::LegacyReactor,
         }
+    }
+
+    /// Select a runtime from the artifact marker before descriptor heuristics.
+    pub(crate) fn for_artifact(descriptor: &PluginDescriptor, wasm: &[u8]) -> Result<Self, String> {
+        if command_abi::command_abi_version(wasm)?.is_some() {
+            return Ok(Self::WasmtimeCommand);
+        }
+        Ok(Self::for_descriptor(descriptor))
     }
 }
 

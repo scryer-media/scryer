@@ -5,7 +5,7 @@ use chrono::Utc;
 use scryer_application::{
     AppError, AppResult, DownloadSourceIdentity, DownloadSubmissionIdentity, ImportArtifact,
     ImportArtifactRepository, ImportRepository, ManualImportSelection,
-    ManualImportSelectionCandidate, ManualImportSourceRegistration,
+    ManualImportSelectionCandidate,
 };
 use scryer_domain::{Id, ImportRecord, ImportStatus, ImportTransferPhase, ImportType};
 
@@ -293,54 +293,6 @@ impl ImportRepository for ImportStore {
         Ok(row.i64("count")? > 0)
     }
 
-    async fn upsert_manual_import_source(
-        &self,
-        source: ManualImportSourceRegistration,
-    ) -> AppResult<()> {
-        let identity = source.source_identity;
-        SqlRuntime::execute_write(
-            &self.datastore,
-            "upsert_manual_import_source",
-            "INSERT INTO manual_import_sources
-             (source_client_id, source_system, source_ref, trusted_root, created_at, updated_at)
-             VALUES ({}, {}, {}, {}, {}, {})
-             ON CONFLICT (source_client_id, source_system, source_ref) DO UPDATE SET
-               trusted_root = excluded.trusted_root,
-               updated_at = excluded.updated_at",
-            vec![
-                SqlArg::Text(normalize_download_client_id(identity.client_id.as_deref())),
-                SqlArg::Text(identity.client_type),
-                SqlArg::Text(identity.item_id),
-                SqlArg::Text(source.trusted_root),
-                SqlArg::Timestamp(Utc::now()),
-                SqlArg::Timestamp(Utc::now()),
-            ],
-        )
-        .await?;
-        Ok(())
-    }
-
-    async fn get_manual_import_source(
-        &self,
-        source_identity: &DownloadSourceIdentity,
-    ) -> AppResult<Option<ManualImportSourceRegistration>> {
-        let row = SqlRuntime::fetch_optional(
-            self.datastore.read_exec(),
-            "SELECT source_client_id, source_system, source_ref, trusted_root
-             FROM manual_import_sources
-             WHERE source_client_id = {} AND source_system = {} AND source_ref = {}",
-            &[
-                SqlArg::Text(normalize_download_client_id(
-                    source_identity.client_id.as_deref(),
-                )),
-                SqlArg::Text(source_identity.client_type.clone()),
-                SqlArg::Text(source_identity.item_id.clone()),
-            ],
-        )
-        .await?;
-        row.map(manual_import_source_from_row).transpose()
-    }
-
     async fn replace_manual_import_selection(
         &self,
         selection: ManualImportSelection,
@@ -351,7 +303,7 @@ impl ImportRepository for ImportStore {
             move |tx| {
                 let selection = selection.clone();
                 Box::pin(async move {
-                    let identity = &selection.source.source_identity;
+                    let identity = &selection.source_identity;
                     let identity_args = vec![
                         SqlArg::Text(normalize_download_client_id(identity.client_id.as_deref())),
                         SqlArg::Text(identity.client_type.clone()),
@@ -394,8 +346,8 @@ impl ImportRepository for ImportStore {
                         SqlExec::Tx(tx),
                         "INSERT INTO manual_import_selections
                          (id, actor_user_id, title_id, source_client_id, source_system, source_ref,
-                          trusted_root, consumed_at, created_at, updated_at)
-                         VALUES ({}, {}, {}, {}, {}, {}, {}, NULL, {}, {})",
+                          consumed_at, created_at, updated_at)
+                         VALUES ({}, {}, {}, {}, {}, {}, NULL, {}, {})",
                         &[
                             SqlArg::Text(selection.id.clone()),
                             SqlArg::Text(selection.actor_user_id.clone()),
@@ -403,7 +355,6 @@ impl ImportRepository for ImportStore {
                             identity_args[0].clone(),
                             identity_args[1].clone(),
                             identity_args[2].clone(),
-                            SqlArg::Text(selection.source.trusted_root.clone()),
                             SqlArg::Timestamp(now),
                             SqlArg::Timestamp(now),
                         ],
@@ -440,8 +391,7 @@ impl ImportRepository for ImportStore {
     ) -> AppResult<Option<ManualImportSelection>> {
         let selection = SqlRuntime::fetch_optional(
             self.datastore.read_exec(),
-            "SELECT id, actor_user_id, title_id, source_client_id, source_system, source_ref,
-                    trusted_root
+            "SELECT id, actor_user_id, title_id, source_client_id, source_system, source_ref
              FROM manual_import_selections
              WHERE actor_user_id = {} AND title_id = {}
                AND source_client_id = {} AND source_system = {} AND source_ref = {}
@@ -479,8 +429,7 @@ impl ImportRepository for ImportStore {
     ) -> AppResult<Option<ManualImportSelection>> {
         let selection = SqlRuntime::fetch_optional(
             self.datastore.read_exec(),
-            "SELECT id, actor_user_id, title_id, source_client_id, source_system, source_ref,
-                    trusted_root
+            "SELECT id, actor_user_id, title_id, source_client_id, source_system, source_ref
              FROM manual_import_selections
              WHERE id = {} AND actor_user_id = {} AND consumed_at IS NULL",
             &[
@@ -525,8 +474,7 @@ impl ImportRepository for ImportStore {
                 Box::pin(async move {
                     let selection = SqlRuntime::fetch_optional(
                         SqlExec::Tx(tx),
-                        "SELECT id, actor_user_id, title_id, source_client_id, source_system, source_ref,
-                                trusted_root
+                        "SELECT id, actor_user_id, title_id, source_client_id, source_system, source_ref
                          FROM manual_import_selections
                          WHERE id = {} AND actor_user_id = {} AND consumed_at IS NULL",
                         &[
@@ -580,46 +528,43 @@ impl ImportRepository for ImportStore {
         .await
     }
 
-    async fn delete_manual_import_source(
+    async fn delete_manual_import_selections_for_source(
         &self,
         source_identity: &DownloadSourceIdentity,
     ) -> AppResult<()> {
         let identity = source_identity.clone();
-        SqlRuntime::run_in_transaction(&self.datastore, "delete_manual_import_source", move |tx| {
-            let identity = identity.clone();
-            Box::pin(async move {
-                let args = [
-                    SqlArg::Text(normalize_download_client_id(identity.client_id.as_deref())),
-                    SqlArg::Text(identity.client_type),
-                    SqlArg::Text(identity.item_id),
-                ];
-                SqlRuntime::execute(
-                    SqlExec::Tx(tx),
-                    "DELETE FROM manual_import_selection_candidates
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "delete_manual_import_selections_for_source",
+            move |tx| {
+                let identity = identity.clone();
+                Box::pin(async move {
+                    let args = [
+                        SqlArg::Text(normalize_download_client_id(identity.client_id.as_deref())),
+                        SqlArg::Text(identity.client_type),
+                        SqlArg::Text(identity.item_id),
+                    ];
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "DELETE FROM manual_import_selection_candidates
                          WHERE selection_id IN (
                            SELECT id FROM manual_import_selections
                            WHERE source_client_id = {} AND source_system = {} AND source_ref = {}
                          )",
-                    &args,
-                )
-                .await?;
-                SqlRuntime::execute(
-                    SqlExec::Tx(tx),
-                    "DELETE FROM manual_import_selections
+                        &args,
+                    )
+                    .await?;
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "DELETE FROM manual_import_selections
                          WHERE source_client_id = {} AND source_system = {} AND source_ref = {}",
-                    &args,
-                )
-                .await?;
-                SqlRuntime::execute(
-                    SqlExec::Tx(tx),
-                    "DELETE FROM manual_import_sources
-                         WHERE source_client_id = {} AND source_system = {} AND source_ref = {}",
-                    &args,
-                )
-                .await?;
-                Ok(())
-            })
-        })
+                        &args,
+                    )
+                    .await?;
+                    Ok(())
+                })
+            },
+        )
         .await
     }
 
@@ -633,31 +578,10 @@ impl ImportRepository for ImportStore {
     }
 }
 
-fn manual_import_source_from_row(
-    row: crate::queries::sql_runtime::SqlRow,
-) -> AppResult<ManualImportSourceRegistration> {
-    Ok(ManualImportSourceRegistration {
-        source_identity: DownloadSourceIdentity::new(
-            row.opt_text("source_client_id")?.as_deref(),
-            row.text("source_system")?,
-            row.text("source_ref")?,
-        ),
-        trusted_root: row.text("trusted_root")?,
-    })
-}
-
 fn manual_import_selection_from_rows(
     row: crate::queries::sql_runtime::SqlRow,
     candidate_rows: Vec<crate::queries::sql_runtime::SqlRow>,
 ) -> AppResult<ManualImportSelection> {
-    let source = ManualImportSourceRegistration {
-        source_identity: DownloadSourceIdentity::new(
-            row.opt_text("source_client_id")?.as_deref(),
-            row.text("source_system")?,
-            row.text("source_ref")?,
-        ),
-        trusted_root: row.text("trusted_root")?,
-    };
     let candidates = candidate_rows
         .into_iter()
         .map(|candidate| {
@@ -672,7 +596,11 @@ fn manual_import_selection_from_rows(
         id: row.text("id")?,
         actor_user_id: row.text("actor_user_id")?,
         title_id: row.text("title_id")?,
-        source,
+        source_identity: DownloadSourceIdentity::new(
+            row.opt_text("source_client_id")?.as_deref(),
+            row.text("source_system")?,
+            row.text("source_ref")?,
+        ),
         candidates,
     })
 }

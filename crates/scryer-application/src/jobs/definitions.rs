@@ -158,6 +158,7 @@ pub enum JobKey {
     TitleDeletion,
     MediaFileDeletion,
     RecycleBinRestore,
+    RecycleBinPurge,
     AcquisitionSearch,
 }
 
@@ -184,6 +185,7 @@ impl JobKey {
             Self::TitleDeletion => "title_deletion",
             Self::MediaFileDeletion => "media_file_deletion",
             Self::RecycleBinRestore => "recycle_bin_restore",
+            Self::RecycleBinPurge => "recycle_bin_purge",
             Self::AcquisitionSearch => "acquisition_search",
         }
     }
@@ -210,6 +212,7 @@ impl JobKey {
             "title_deletion" => Some(Self::TitleDeletion),
             "media_file_deletion" => Some(Self::MediaFileDeletion),
             "recycle_bin_restore" => Some(Self::RecycleBinRestore),
+            "recycle_bin_purge" => Some(Self::RecycleBinPurge),
             "acquisition_search" => Some(Self::AcquisitionSearch),
             _ => None,
         }
@@ -237,6 +240,7 @@ impl JobKey {
             Self::TitleDeletion => "Title Deletion",
             Self::MediaFileDeletion => "Media File Deletion",
             Self::RecycleBinRestore => "Recycle Bin Restore",
+            Self::RecycleBinPurge => "Recycle Bin Purge",
             Self::AcquisitionSearch => "Acquisition Search",
         }
     }
@@ -279,6 +283,7 @@ impl JobKey {
             Self::TitleDeletion => "Delete selected titles from the catalog.",
             Self::MediaFileDeletion => "Delete a media file from disk and the catalog.",
             Self::RecycleBinRestore => "Restore a recycled file to its library.",
+            Self::RecycleBinPurge => "Permanently delete selected recycled files.",
             Self::AcquisitionSearch => {
                 "Interactive acquisition search over the selected wanted/upgrade scopes."
             }
@@ -304,7 +309,8 @@ impl JobKey {
             | Self::TitleImageCacheRefresh
             | Self::TitleDeletion
             | Self::MediaFileDeletion
-            | Self::RecycleBinRestore => JobCategory::System,
+            | Self::RecycleBinRestore
+            | Self::RecycleBinPurge => JobCategory::System,
             Self::Housekeeping | Self::PendingReleaseProcessing | Self::StagedNzbPrune => {
                 JobCategory::Maintenance
             }
@@ -340,6 +346,7 @@ impl JobKey {
             | Self::TitleDeletion
             | Self::MediaFileDeletion
             | Self::RecycleBinRestore
+            | Self::RecycleBinPurge
             | Self::AcquisitionSearch => JobScheduleKind::Manual,
         }
     }
@@ -366,6 +373,7 @@ impl JobKey {
             | Self::TitleDeletion
             | Self::MediaFileDeletion
             | Self::RecycleBinRestore
+            | Self::RecycleBinPurge
             | Self::AcquisitionSearch => "Manual only",
         }
     }
@@ -406,6 +414,7 @@ impl JobKey {
                 | Self::TitleDeletion
                 | Self::MediaFileDeletion
                 | Self::RecycleBinRestore
+                | Self::RecycleBinPurge
                 | Self::AcquisitionSearch
         )
     }

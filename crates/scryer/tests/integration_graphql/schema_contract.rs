@@ -1069,13 +1069,13 @@ async fn graphql_introspection_search_metadata_uses_media_facet_enum() {
 }
 
 #[tokio::test]
-async fn graphql_introspection_preview_manual_import_uses_input_object() {
+async fn graphql_introspection_begin_manual_import_selection_uses_input_object() {
     let ctx = TestContext::new().await;
     let body = gql(
         &ctx,
         r#"
         {
-	          queryRoot: __type(name: "QueryRoot") {
+	          mutationRoot: __type(name: "MutationRoot") {
 	            fields {
 	              name
 	              args {
@@ -1095,7 +1095,7 @@ async fn graphql_introspection_preview_manual_import_uses_input_object() {
 	              }
 	            }
 	          }
-          previewManualImportInput: __type(name: "PreviewManualImportInput") {
+          beginManualImportSelectionInput: __type(name: "BeginManualImportSelectionInput") {
             inputFields {
               name
               type {
@@ -1115,34 +1115,36 @@ async fn graphql_introspection_preview_manual_import_uses_input_object() {
     .await;
     assert_no_errors(&body);
 
-    let fields = body["data"]["queryRoot"]["fields"]
+    let fields = body["data"]["mutationRoot"]["fields"]
         .as_array()
-        .expect("QueryRoot should expose fields");
-    let preview_manual_import = fields
+        .expect("MutationRoot should expose fields");
+    let begin_manual_import_selection = fields
         .iter()
-        .find(|field| field["name"] == "previewManualImport")
-        .expect("previewManualImport should exist");
-    let args = preview_manual_import["args"]
+        .find(|field| field["name"] == "beginManualImportSelection")
+        .expect("beginManualImportSelection should exist");
+    let args = begin_manual_import_selection["args"]
         .as_array()
-        .expect("previewManualImport should expose args");
+        .expect("beginManualImportSelection should expose args");
     assert_eq!(args.len(), 1);
     assert_eq!(args[0]["name"], "input");
     assert_eq!(args[0]["type"]["kind"], "NON_NULL");
     assert_eq!(
         args[0]["type"]["ofType"]["name"],
-        "PreviewManualImportInput"
+        "BeginManualImportSelectionInput"
     );
 
-    let input_fields = body["data"]["previewManualImportInput"]["inputFields"]
+    let input_fields = body["data"]["beginManualImportSelectionInput"]["inputFields"]
         .as_array()
-        .expect("PreviewManualImportInput should expose input fields");
+        .expect("BeginManualImportSelectionInput should expose input fields");
     let input_field = |name: &str| {
         input_fields
             .iter()
             .find(|field| field["name"] == name)
             .expect("input field should exist")
     };
-    assert_eq!(input_field("clientId")["type"]["name"], "ID");
+    let client_id = input_field("clientId");
+    assert_eq!(client_id["type"]["kind"], "NON_NULL");
+    assert_eq!(client_id["type"]["ofType"]["name"], "ID");
 
     let download_client_item_id = input_field("downloadClientItemId");
     assert_eq!(download_client_item_id["type"]["kind"], "NON_NULL");
@@ -1287,7 +1289,33 @@ async fn graphql_introspection_recycle_bin_uses_id_and_payload_results() {
               }
             }
           }
+          restoreBatchPayload: __type(name: "RestoreRecycledItemsPayload") {
+            fields {
+              name
+              type {
+                kind
+                name
+                ofType {
+                  kind
+                  name
+                }
+              }
+            }
+          }
           deletePayload: __type(name: "DeleteRecycledItemPayload") {
+            fields {
+              name
+              type {
+                kind
+                name
+                ofType {
+                  kind
+                  name
+                }
+              }
+            }
+          }
+          deleteBatchPayload: __type(name: "DeleteRecycledItemsPayload") {
             fields {
               name
               type {
@@ -1324,6 +1352,7 @@ async fn graphql_introspection_recycle_bin_uses_id_and_payload_results() {
     assert_eq!(recycled_field("libraryId")["type"]["kind"], "NON_NULL");
     assert_eq!(recycled_field("libraryId")["type"]["ofType"]["name"], "ID");
     assert_eq!(recycled_field("titleId")["type"]["name"], "ID");
+    assert_eq!(recycled_field("titleName")["type"]["name"], "String");
 
     let mutation_fields = body["data"]["mutationRoot"]["fields"]
         .as_array()
@@ -1348,10 +1377,43 @@ async fn graphql_introspection_recycle_bin_uses_id_and_payload_results() {
     assert_eq!(restore_id_arg["type"]["kind"], "NON_NULL");
     assert_eq!(restore_id_arg["type"]["ofType"]["name"], "ID");
 
+    let restore_batch = mutation("restoreRecycledItems");
+    assert_eq!(
+        restore_batch["type"]["ofType"]["name"],
+        "RestoreRecycledItemsPayload"
+    );
+    let restore_batch_input = restore_batch["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|arg| arg["name"] == "input")
+        .expect("batch restore input should exist");
+    assert_eq!(restore_batch_input["type"]["kind"], "NON_NULL");
+    assert_eq!(
+        restore_batch_input["type"]["ofType"]["name"],
+        "RestoreRecycledItemsInput"
+    );
+
     let delete = mutation("deleteRecycledItem");
     assert_eq!(
         delete["type"]["ofType"]["name"],
         "DeleteRecycledItemPayload"
+    );
+    let delete_batch = mutation("deleteRecycledItems");
+    assert_eq!(
+        delete_batch["type"]["ofType"]["name"],
+        "DeleteRecycledItemsPayload"
+    );
+    let delete_batch_input = delete_batch["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|arg| arg["name"] == "input")
+        .expect("batch delete input should exist");
+    assert_eq!(delete_batch_input["type"]["kind"], "NON_NULL");
+    assert_eq!(
+        delete_batch_input["type"]["ofType"]["name"],
+        "DeleteRecycledItemsInput"
     );
     let empty = mutation("emptyRecycleBin");
     assert_eq!(empty["type"]["ofType"]["name"], "EmptyRecycleBinPayload");
@@ -1370,6 +1432,33 @@ async fn graphql_introspection_recycle_bin_uses_id_and_payload_results() {
         .expect("restore payload job run field should exist");
     assert_eq!(restore_job_run["type"]["kind"], "NON_NULL");
     assert_eq!(restore_job_run["type"]["ofType"]["name"], "JobRunPayload");
+
+    for (payload_name, payload) in [
+        (
+            "RestoreRecycledItemsPayload",
+            &body["data"]["restoreBatchPayload"],
+        ),
+        (
+            "DeleteRecycledItemsPayload",
+            &body["data"]["deleteBatchPayload"],
+        ),
+    ] {
+        let fields = payload["fields"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{payload_name} should expose fields"));
+        let ids = fields
+            .iter()
+            .find(|field| field["name"] == "ids")
+            .expect("batch payload ids should exist");
+        assert_eq!(ids["type"]["kind"], "NON_NULL");
+        assert_eq!(ids["type"]["ofType"]["kind"], "LIST");
+        let job_run = fields
+            .iter()
+            .find(|field| field["name"] == "jobRun")
+            .expect("batch payload job run should exist");
+        assert_eq!(job_run["type"]["kind"], "NON_NULL");
+        assert_eq!(job_run["type"]["ofType"]["name"], "JobRunPayload");
+    }
 
     let delete_payload_fields = body["data"]["deletePayload"]["fields"]
         .as_array()
@@ -3261,13 +3350,12 @@ async fn graphql_introspection_title_acquisition_inputs_use_id_fields() {
           setEpisodeMonitored: __type(name: "SetEpisodeMonitoredInput") { inputFields { name type { ...TypeRef } } }
           setSeriesMovieMonitored: __type(name: "SetSeriesMovieMonitoredInput") { inputFields { name type { ...TypeRef } } }
           deleteMediaFile: __type(name: "DeleteMediaFileInput") { inputFields { name type { ...TypeRef } } }
-          manualImportFileMapping: __type(name: "ManualImportFileMappingInput") { inputFields { name type { ...TypeRef } } }
+          manualImportCandidateMapping: __type(name: "ManualImportCandidateMappingInput") { inputFields { name type { ...TypeRef } } }
+          beginManualImportSelection: __type(name: "BeginManualImportSelectionInput") { inputFields { name type { ...TypeRef } } }
           queueManualImport: __type(name: "QueueManualImportInput") { inputFields { name type { ...TypeRef } } }
           pauseDownload: __type(name: "PauseDownloadInput") { inputFields { name type { ...TypeRef } } }
           resumeDownload: __type(name: "ResumeDownloadInput") { inputFields { name type { ...TypeRef } } }
           deleteDownload: __type(name: "DeleteDownloadInput") { inputFields { name type { ...TypeRef } } }
-          previewManualImportPath: __type(name: "PreviewManualImportPathInput") { inputFields { name type { ...TypeRef } } }
-          queuePathManualImport: __type(name: "QueuePathManualImportInput") { inputFields { name type { ...TypeRef } } }
           mediaRenamePreview: __type(name: "MediaRenamePreviewInput") { inputFields { name type { ...TypeRef } } }
           mediaRenameApply: __type(name: "MediaRenameApplyInput") { inputFields { name type { ...TypeRef } } }
         }
@@ -3373,8 +3461,9 @@ async fn graphql_introspection_title_acquisition_inputs_use_id_fields() {
         ("setEpisodeMonitored", "episodeId"),
         ("setSeriesMovieMonitored", "seriesMovieLinkId"),
         ("deleteMediaFile", "fileId"),
-        ("previewManualImportPath", "titleId"),
-        ("queuePathManualImport", "titleId"),
+        ("beginManualImportSelection", "clientId"),
+        ("beginManualImportSelection", "titleId"),
+        ("queueManualImport", "selectionId"),
         ("mediaRenameApply", "titleId"),
     ] {
         assert_non_null_id(input_alias, field_name);
@@ -3382,8 +3471,6 @@ async fn graphql_introspection_title_acquisition_inputs_use_id_fields() {
 
     for (input_alias, field_name) in [
         ("searchReleases", "seriesMovieLinkId"),
-        ("queueManualImport", "titleId"),
-        ("queueManualImport", "clientId"),
         ("pauseDownload", "clientId"),
         ("resumeDownload", "clientId"),
         ("deleteDownload", "clientId"),
@@ -3391,8 +3478,8 @@ async fn graphql_introspection_title_acquisition_inputs_use_id_fields() {
         ("markTrackedDownloadFailed", "clientId"),
         ("assignTrackedDownloadTitle", "clientId"),
         ("bindPendingImport", "collectionId"),
-        ("manualImportFileMapping", "episodeId"),
-        ("manualImportFileMapping", "seriesMovieLinkId"),
+        ("manualImportCandidateMapping", "episodeId"),
+        ("manualImportCandidateMapping", "seriesMovieLinkId"),
         ("mediaRenamePreview", "titleId"),
         ("queueDownloadScope", "episode"),
         ("queueDownloadScope", "seriesMovie"),

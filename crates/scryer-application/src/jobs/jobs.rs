@@ -663,38 +663,62 @@ impl AppUseCase {
         }
         match run.job_key {
             JobKey::TitleDeletion => Ok(true),
-            JobKey::MediaFileDeletion | JobKey::RecycleBinRestore => {
+            JobKey::MediaFileDeletion | JobKey::RecycleBinRestore | JobKey::RecycleBinPurge => {
                 let Some((prefix, remainder)) = run.operation_type.split_once(':') else {
                     return Ok(false);
                 };
-                let expected_prefix = match run.job_key {
-                    JobKey::MediaFileDeletion => "media_file_deletion",
-                    JobKey::RecycleBinRestore => "recycle_bin_restore",
-                    _ => unreachable!("interactive job key already matched"),
+                let library_ids = match (run.job_key, prefix) {
+                    (JobKey::MediaFileDeletion, "media_file_deletion")
+                    | (JobKey::RecycleBinRestore, "recycle_bin_restore") => {
+                        let Some((library_id, _resource_id)) = remainder.split_once(':') else {
+                            // Legacy rows did not persist a library scope and must not
+                            // remain visible after the original grant is gone.
+                            return Ok(false);
+                        };
+                        if library_id.is_empty() {
+                            return Ok(false);
+                        }
+                        vec![library_id]
+                    }
+                    (JobKey::RecycleBinRestore, "recycle_bin_restore_batch")
+                    | (JobKey::RecycleBinPurge, "recycle_bin_purge_batch") => {
+                        let Some((library_ids, batch_size)) = remainder.rsplit_once(':') else {
+                            return Ok(false);
+                        };
+                        if batch_size
+                            .parse::<usize>()
+                            .ok()
+                            .filter(|size| *size > 0)
+                            .is_none()
+                        {
+                            return Ok(false);
+                        }
+                        let library_ids = library_ids
+                            .split(',')
+                            .filter(|library_id| !library_id.is_empty())
+                            .collect::<Vec<_>>();
+                        if library_ids.is_empty() {
+                            return Ok(false);
+                        }
+                        library_ids
+                    }
+                    _ => return Ok(false),
                 };
-                if prefix != expected_prefix {
-                    return Ok(false);
+                for library_id in library_ids {
+                    match self
+                        .require_library_permission(
+                            actor,
+                            library_id,
+                            scryer_domain::LibraryPermission::ManageTitles,
+                        )
+                        .await
+                    {
+                        Ok(()) => {}
+                        Err(AppError::Unauthorized(_)) => return Ok(false),
+                        Err(error) => return Err(error),
+                    }
                 }
-                let Some((library_id, _resource_id)) = remainder.split_once(':') else {
-                    // Legacy rows did not persist a library scope and must not
-                    // remain visible after the original grant is gone.
-                    return Ok(false);
-                };
-                if library_id.is_empty() {
-                    return Ok(false);
-                }
-                match self
-                    .require_library_permission(
-                        actor,
-                        library_id,
-                        scryer_domain::LibraryPermission::ManageTitles,
-                    )
-                    .await
-                {
-                    Ok(()) => Ok(true),
-                    Err(AppError::Unauthorized(_)) => Ok(false),
-                    Err(error) => Err(error),
-                }
+                Ok(true)
             }
             _ => Ok(false),
         }
@@ -738,7 +762,10 @@ impl AppUseCase {
         if !can_manage_system
             && !matches!(
                 job_key,
-                JobKey::TitleDeletion | JobKey::MediaFileDeletion | JobKey::RecycleBinRestore
+                JobKey::TitleDeletion
+                    | JobKey::MediaFileDeletion
+                    | JobKey::RecycleBinRestore
+                    | JobKey::RecycleBinPurge
             )
         {
             return Err(AppError::Unauthorized(
@@ -1524,6 +1551,9 @@ impl AppUseCase {
             )),
             JobKey::RecycleBinRestore => Err(AppError::Validation(
                 "recycle restore jobs must be started from the recycle restore mutation".into(),
+            )),
+            JobKey::RecycleBinPurge => Err(AppError::Validation(
+                "recycle purge jobs must be started from the recycle bin mutation".into(),
             )),
             JobKey::AcquisitionSearch => Err(AppError::Validation(
                 "acquisition search jobs must be started from the acquisition search mutation"

@@ -754,7 +754,7 @@ scope = "all"
 
 [[migration]]
 version = 151
-description = "server owned manual import selections"
+description = "current-submission manual import selections"
 checksum_algo = "blake3"
 
 [[migration.steps]]

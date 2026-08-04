@@ -328,6 +328,24 @@ fn config_field_type_supports_multiline() {
 }
 
 #[test]
+fn indexer_proxy_provider_types_round_trip() {
+    for provider in [
+        IndexerProxyProviderType::Byparr,
+        IndexerProxyProviderType::Trawl,
+    ] {
+        assert_eq!(
+            IndexerProxyProviderType::parse(provider.as_str()),
+            Some(provider)
+        );
+    }
+    assert_eq!(
+        IndexerProxyProviderType::parse("TRAWL"),
+        Some(IndexerProxyProviderType::Trawl)
+    );
+    assert_eq!(IndexerProxyProviderType::parse("unknown"), None);
+}
+
+#[test]
 fn notification_channel_type_normalizes_provider_string() {
     let provider = ChannelType::parse("  Jellyfin  ").expect("provider");
     assert_eq!(provider.as_str(), "jellyfin");

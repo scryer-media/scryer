@@ -380,7 +380,34 @@ impl SabnzbdDownloadClient {
         }
 
         let slots = self.history_slots_page(0, limit).await?;
-        Ok(completed_downloads_from_sab_slots(&slots))
+        Ok(completed_downloads_from_sab_slots(
+            &slots,
+            Some(Utc::now().timestamp() - (7 * 24 * 60 * 60)),
+        ))
+    }
+
+    async fn completed_download_for_source(
+        &self,
+        download_client_item_id: &str,
+    ) -> AppResult<Option<CompletedDownload>> {
+        const HISTORY_PAGE_SIZE: usize = 50;
+
+        let mut start = 0;
+        loop {
+            let slots = self.history_slots_page(start, HISTORY_PAGE_SIZE).await?;
+            if let Some(download) = completed_downloads_from_sab_slots(&slots, None)
+                .into_iter()
+                .find(|download| download.download_client_item_id == download_client_item_id)
+            {
+                return Ok(Some(download));
+            }
+            if slots.len() < HISTORY_PAGE_SIZE {
+                return Ok(None);
+            }
+            start = start.checked_add(slots.len()).ok_or_else(|| {
+                AppError::Repository("SABnzbd history offset overflow".to_string())
+            })?;
+        }
     }
 
     async fn get_config(&self) -> AppResult<SabnzbdConfig> {
@@ -1083,6 +1110,20 @@ impl DownloadClient for SabnzbdDownloadClient {
         limit: usize,
     ) -> AppResult<Vec<CompletedDownload>> {
         self.completed_downloads_page(limit).await
+    }
+
+    async fn get_completed_download_for_source(
+        &self,
+        _client_id: &str,
+        _client_type: &str,
+        download_client_item_id: &str,
+    ) -> AppResult<Option<CompletedDownload>> {
+        let download_client_item_id = download_client_item_id.trim();
+        if download_client_item_id.is_empty() {
+            return Ok(None);
+        }
+        self.completed_download_for_source(download_client_item_id)
+            .await
     }
 
     async fn get_client_status(&self) -> AppResult<DownloadClientStatus> {
@@ -1879,9 +1920,10 @@ fn extract_sabnzbd_category(slot: &serde_json::Map<String, Value>) -> Option<Str
         .map(str::to_string)
 }
 
-fn completed_downloads_from_sab_slots(slots: &[Value]) -> Vec<CompletedDownload> {
-    let cutoff_ts = Utc::now().timestamp() - (7 * 24 * 60 * 60);
-
+fn completed_downloads_from_sab_slots(
+    slots: &[Value],
+    cutoff_ts: Option<i64>,
+) -> Vec<CompletedDownload> {
     slots
         .iter()
         .filter_map(|slot| {
@@ -1895,7 +1937,8 @@ fn completed_downloads_from_sab_slots(slots: &[Value]) -> Vec<CompletedDownload>
             let nzo_id = slot.get("nzo_id").and_then(Value::as_str)?.to_string();
 
             let completed_ts = extract_i64_value(slot.get("completed"));
-            if let Some(ts) = completed_ts
+            if let Some(cutoff_ts) = cutoff_ts
+                && let Some(ts) = completed_ts
                 && ts < cutoff_ts
             {
                 return None;
@@ -2044,11 +2087,12 @@ fn is_localhost_base_url(base_url: &str) -> Option<bool> {
 mod tests {
     use super::{
         SAB_ADDFILE_UPLOAD_FIELD, SabAddfileOutcome, SabApiAuth, SabApiResponseEvaluation,
-        build_sab_api_urls, evaluate_sab_addfile_response, evaluate_sab_api_response,
-        extract_sabnzbd_category, map_sabnzbd_outbound_error, normalize_sab_job_name,
-        redact_sab_secret_values, sab_addfile_query_params, sab_api_mode_matches_response,
-        sab_reconcile_slot_nzo_id,
+        build_sab_api_urls, completed_downloads_from_sab_slots, evaluate_sab_addfile_response,
+        evaluate_sab_api_response, extract_sabnzbd_category, map_sabnzbd_outbound_error,
+        normalize_sab_job_name, redact_sab_secret_values, sab_addfile_query_params,
+        sab_api_mode_matches_response, sab_reconcile_slot_nzo_id,
     };
+    use chrono::Utc;
     use reqwest::StatusCode;
     use scryer_application::AppError;
     use scryer_outbound_http::OutboundHttpError;
@@ -2077,6 +2121,29 @@ mod tests {
             }
             other => panic!("expected temporary unavailable error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn exact_completed_lookup_keeps_old_retained_history() {
+        let slots = vec![json!({
+            "status": "Completed",
+            "nzo_id": "old-nzo",
+            "completed": 0,
+            "storage": "/downloads/complete/retained",
+            "name": "Retained download",
+        })];
+
+        assert!(
+            completed_downloads_from_sab_slots(
+                &slots,
+                Some(Utc::now().timestamp() - (7 * 24 * 60 * 60)),
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            completed_downloads_from_sab_slots(&slots, None)[0].download_client_item_id,
+            "old-nzo"
+        );
     }
 
     #[test]

@@ -253,7 +253,7 @@ impl PluginHttpHost {
             // trusted client; the plugin URL retry inside stays on the guarded
             // pinned client.
             let proxy_client = runtime.client()?;
-            let solved = match execute_byparr_request(
+            let solved = match execute_challenge_solver_request(
                 &proxy_client,
                 &request_client,
                 policy,
@@ -373,6 +373,35 @@ fn enforce_allowed_hosts(allowed_hosts: Option<&[String]>, request_url: &str) ->
     ))
 }
 
+fn merge_cookie_headers(original: Option<&str>, solved: &str) -> Option<String> {
+    let mut cookies: Vec<(String, String)> = Vec::new();
+    for header in original.into_iter().chain(std::iter::once(solved)) {
+        for raw_pair in header.split(';') {
+            let pair = raw_pair.trim();
+            if !solver::safe_cookie_pair(pair) {
+                continue;
+            }
+            let Some((name, value)) = pair.split_once('=') else {
+                continue;
+            };
+            let name = name.trim().to_string();
+            let value = value.trim().to_string();
+            if let Some(existing) = cookies.iter_mut().find(|(existing, _)| existing == &name) {
+                existing.1 = value;
+            } else {
+                cookies.push((name, value));
+            }
+        }
+    }
+    (!cookies.is_empty()).then(|| {
+        cookies
+            .into_iter()
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect::<Vec<_>>()
+            .join("; ")
+    })
+}
+
 fn execute_request_with_extra_headers(
     client: &Client,
     request: &PluginHttpRequest,
@@ -390,10 +419,22 @@ fn execute_request_with_extra_headers(
     )
     .map_err(|error| format!("Invalid HTTP method: {error}"))?;
 
+    let solved_cookie = extra_headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("cookie"))
+        .map(|(_, value)| value.as_str());
+    let original_cookie = request
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("cookie"))
+        .map(|(_, value)| value.as_str());
+    let merged_cookie =
+        solved_cookie.and_then(|solved| merge_cookie_headers(original_cookie, solved));
+
     let mut builder = client.request(method, &request.url);
     for (name, value) in &request.headers {
-        // Solver-session headers must replace plugin-supplied ones: clearance
-        // cookies are only honoured together with the solver's user agent.
+        // Solver-session headers replace matching plugin headers, except Cookie:
+        // preserve unrelated indexer cookies and overlay solved cookie names.
         if extra_headers
             .iter()
             .any(|(extra, _)| extra.eq_ignore_ascii_case(name))
@@ -403,7 +444,13 @@ fn execute_request_with_extra_headers(
         builder = builder.header(name, value);
     }
     for (name, value) in extra_headers {
-        builder = builder.header(name, value);
+        if name.eq_ignore_ascii_case("cookie") {
+            if let Some(value) = merged_cookie.as_deref() {
+                builder = builder.header(name, value);
+            }
+        } else {
+            builder = builder.header(name, value);
+        }
     }
     if let Some(timeout) = timeout {
         builder = builder.timeout(timeout);
@@ -451,7 +498,7 @@ fn read_response_body(
     Ok(body)
 }
 
-fn execute_byparr_request(
+fn execute_challenge_solver_request(
     proxy_client: &Client,
     request_client: &Client,
     policy: &IndexerProxyPolicy,
@@ -460,63 +507,67 @@ fn execute_byparr_request(
     original_timeout: Option<Duration>,
     max_http_response_bytes: Option<u64>,
 ) -> HostResult<ProxiedHttpResponse> {
-    if policy.config.provider_type != scryer_domain::IndexerProxyProviderType::Byparr {
-        return Err("unsupported indexer proxy provider".to_string());
-    }
     if !policy.config.is_enabled {
         return Err("Indexer proxy is disabled for this indexer.".to_string());
     }
 
-    let endpoint = solver::byparr_solve_endpoint(&policy.config.base_url);
-    let byparr_timeout = Duration::from_secs(policy.config.request_timeout_seconds as u64 + 5);
+    let provider = policy.config.provider_type;
+    let provider_name = solver::solver_provider_name(provider);
+    let endpoint = solver::solver_solve_endpoint(&policy.config.base_url);
+    let solver_timeout = Duration::from_secs(policy.config.request_timeout_seconds as u64 + 5);
     tracing::debug!(
         indexer_id = policy.indexer_id.as_str(),
         indexer_name = policy.indexer_name.as_str(),
         proxy_config_id = policy.config.id.as_str(),
         proxy_provider = policy.config.provider_type.as_str(),
         request_url = solver::sanitized_url_for_log(&request.url).as_str(),
-        "Byparr request started"
+        "challenge solver request started"
     );
 
     let response = proxy_client
         .post(&endpoint)
-        .timeout(byparr_timeout)
-        .json(&solver::byparr_solve_request(
+        .timeout(solver_timeout)
+        .json(&solver::solver_solve_request(
+            provider,
             &request.url,
             policy.config.request_timeout_seconds,
         ))
         .send()
         .map_err(|error| {
             if error.is_timeout() {
-                solver::BYPARR_TIMEOUT_MESSAGE.to_string()
+                solver::solver_error_message(provider, solver::SolverErrorKind::Timeout).to_string()
             } else {
-                solver::BYPARR_UNREACHABLE_MESSAGE.to_string()
+                solver::solver_error_message(provider, solver::SolverErrorKind::Unreachable)
+                    .to_string()
             }
         })?;
 
-    let byparr_status = response.status();
-    if byparr_status == StatusCode::TOO_MANY_REQUESTS {
+    let solver_status = response.status();
+    if solver_status == StatusCode::TOO_MANY_REQUESTS || solver_status.is_server_error() {
         tracing::warn!(
             indexer_id = policy.indexer_id.as_str(),
             proxy_config_id = policy.config.id.as_str(),
-            status = byparr_status.as_u16(),
-            "Byparr service rate-limited indexer proxy request"
+            status = solver_status.as_u16(),
+            "challenge solver service unavailable for indexer proxy request"
         );
-        return Err(solver::BYPARR_UNAVAILABLE_MESSAGE.to_string());
+        return Err(
+            solver::solver_error_message(provider, solver::SolverErrorKind::Unavailable)
+                .to_string(),
+        );
     }
 
     let response_body = read_response_body(response, max_http_response_bytes)?;
-    let solution =
-        solver::parse_byparr_solution(&response_body).map_err(|error| error.message())?;
+    let solution = solver::parse_solver_solution(&response_body)
+        .map_err(|error| error.message(provider).to_string())?;
 
-    let solution_status = solution.status.unwrap_or_else(|| byparr_status.as_u16());
+    let solution_status = solution.status.unwrap_or_else(|| solver_status.as_u16());
     let solved_final_url = solution.url.as_deref().map(solver::sanitized_url_for_log);
     if solution_status == StatusCode::TOO_MANY_REQUESTS.as_u16() {
         tracing::warn!(
             indexer_id = policy.indexer_id.as_str(),
             proxy_config_id = policy.config.id.as_str(),
             status = solution_status,
-            "Byparr reported target indexer rate limit"
+            "challenge solver reported target indexer rate limit"
         );
         return Err(solver::target_rate_limit_message(&solution));
     }
@@ -527,7 +578,7 @@ fn execute_byparr_request(
     }
     if !(200..300).contains(&solution_status) {
         return Err(format!(
-            "Byparr target request returned HTTP {solution_status}."
+            "{provider_name} target request returned HTTP {solution_status}."
         ));
     }
 
@@ -543,7 +594,7 @@ fn execute_byparr_request(
             status = solution_status,
             response_bytes = solved_body.len(),
             final_url = solved_final_url.as_deref(),
-            "Byparr solved response used"
+            "challenge solver response used"
         );
         return Ok(ProxiedHttpResponse {
             status_code: solution_status,
@@ -557,7 +608,7 @@ fn execute_byparr_request(
         tracing::debug!(
             indexer_id = policy.indexer_id.as_str(),
             proxy_config_id = policy.config.id.as_str(),
-            "retrying original request with Byparr solver headers"
+            "retrying original request with challenge solver headers"
         );
         let retry = execute_request_with_extra_headers(
             request_client,
@@ -575,7 +626,11 @@ fn execute_byparr_request(
             return Err(solver::rate_limit_message_with_retry_after(retry_after));
         }
         if !status.is_success() {
-            return Err(solver::BYPARR_NO_SOLUTION_MESSAGE.to_string());
+            return Err(solver::solver_error_message(
+                provider,
+                solver::SolverErrorKind::MissingSolution,
+            )
+            .to_string());
         }
         let body = read_response_body(retry, max_http_response_bytes)?;
         return Ok(ProxiedHttpResponse {
@@ -585,7 +640,10 @@ fn execute_byparr_request(
         });
     }
 
-    Err(solver::BYPARR_NO_SOLUTION_MESSAGE.to_string())
+    Err(
+        solver::solver_error_message(provider, solver::SolverErrorKind::MissingSolution)
+            .to_string(),
+    )
 }
 
 #[cfg(test)]
@@ -634,6 +692,19 @@ mod tests {
         .expect_err("non-certificate bundle should be rejected");
 
         assert!(error.contains("uploaded trusted certificate bundle"));
+    }
+
+    #[test]
+    fn solved_cookies_overlay_matching_names_and_preserve_original_cookies() {
+        let merged = merge_cookie_headers(
+            Some("auth=secret; cf_clearance=stale; theme=dark"),
+            "cf_clearance=fresh; bot_session=ready",
+        );
+
+        assert_eq!(
+            merged.as_deref(),
+            Some("auth=secret; cf_clearance=fresh; theme=dark; bot_session=ready")
+        );
     }
 
     #[test]
@@ -705,5 +776,161 @@ mod tests {
             "plugin HTTP",
         )
         .expect("loopback companion must be allowed for self-hosted plugins");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn trawl_solver_response_is_used_for_plugin_indexer_request() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let target_url = "https://indexer.example/api?t=search";
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .and(body_json(serde_json::json!({
+                "cmd": "request.get",
+                "url": target_url,
+                "maxTimeout": 60_000
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok",
+                "solution": {
+                    "url": target_url,
+                    "status": 200,
+                    "headers": {},
+                    "cookies": [{ "name": "cf_clearance", "value": "abc" }],
+                    "userAgent": "Trawl UA",
+                    "response": "<html>Trawl</html>"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let now = chrono::Utc::now();
+        let policy = IndexerProxyPolicy {
+            indexer_id: "indexer-1".into(),
+            indexer_name: "Indexer".into(),
+            config: scryer_domain::IndexerProxyConfig {
+                id: "trawl-1".into(),
+                name: "Trawl".into(),
+                provider_type: scryer_domain::IndexerProxyProviderType::Trawl,
+                protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+                base_url: server.uri(),
+                request_timeout_seconds: 60,
+                is_enabled: true,
+                last_health_status: None,
+                last_error_message: None,
+                last_error_at: None,
+                created_at: now,
+                updated_at: now,
+            },
+        };
+        let request = PluginHttpRequest {
+            url: target_url.into(),
+            method: Some("GET".into()),
+            headers: BTreeMap::new(),
+        };
+
+        let solved = tokio::task::spawn_blocking(move || {
+            let proxy_client =
+                scryer_outbound_http::blocking_plugin_host_client("").expect("proxy client");
+            let request_client =
+                scryer_outbound_http::blocking_plugin_host_client("").expect("request client");
+            execute_challenge_solver_request(
+                &proxy_client,
+                &request_client,
+                &policy,
+                &request,
+                None,
+                None,
+                Some(1024 * 1024),
+            )
+        })
+        .await
+        .expect("solver task should join")
+        .expect("Trawl plugin solve should succeed");
+
+        assert_eq!(solved.status_code, 200);
+        assert_eq!(solved.body, b"<html>Trawl</html>");
+        assert!(solved.headers.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn trawl_server_error_is_classified_as_solver_unavailable() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let target_url = "https://indexer.example/api?t=search";
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .and(body_json(serde_json::json!({
+                "cmd": "request.get",
+                "url": target_url,
+                "maxTimeout": 60_000
+            })))
+            .respond_with(ResponseTemplate::new(503).set_body_json(serde_json::json!({
+                "status": "error",
+                "message": "Browser pool initializing, retry in a few seconds",
+                "solution": {
+                    "url": target_url,
+                    "status": 0,
+                    "headers": {},
+                    "response": "",
+                    "cookies": [],
+                    "userAgent": ""
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let now = chrono::Utc::now();
+        let policy = IndexerProxyPolicy {
+            indexer_id: "indexer-1".into(),
+            indexer_name: "Indexer".into(),
+            config: scryer_domain::IndexerProxyConfig {
+                id: "trawl-unavailable".into(),
+                name: "Trawl".into(),
+                provider_type: scryer_domain::IndexerProxyProviderType::Trawl,
+                protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+                base_url: server.uri(),
+                request_timeout_seconds: 60,
+                is_enabled: true,
+                last_health_status: None,
+                last_error_message: None,
+                last_error_at: None,
+                created_at: now,
+                updated_at: now,
+            },
+        };
+        let request = PluginHttpRequest {
+            url: target_url.into(),
+            method: Some("GET".into()),
+            headers: BTreeMap::new(),
+        };
+
+        let result = tokio::task::spawn_blocking(move || {
+            let proxy_client =
+                scryer_outbound_http::blocking_plugin_host_client("").expect("proxy client");
+            let request_client =
+                scryer_outbound_http::blocking_plugin_host_client("").expect("request client");
+            execute_challenge_solver_request(
+                &proxy_client,
+                &request_client,
+                &policy,
+                &request,
+                None,
+                None,
+                Some(1024 * 1024),
+            )
+        })
+        .await
+        .expect("solver task should join");
+        let error = match result {
+            Ok(_) => panic!("Trawl server errors must fail as solver unavailable"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, solver::TRAWL_UNAVAILABLE_MESSAGE);
     }
 }

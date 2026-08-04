@@ -144,11 +144,37 @@ pub struct RecycledItem {
     pub file_name: String,
     pub size_bytes: u64,
     pub title_id: Option<String>,
+    pub title_name: Option<String>,
     pub reason: String,
     pub recycled_at: String,
     pub media_root: String,
     pub library_id: String,
     pub library_name: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecycleRestoreConflictPolicy {
+    KeepBoth,
+    ReplaceExisting,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecycleRestorePreviewItem {
+    pub id: String,
+    pub original_path: String,
+    pub destination_occupied: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecycleRestorePreview {
+    pub fingerprint: String,
+    pub items: Vec<RecycleRestorePreviewItem>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RecycleBinBatchJobAccepted {
+    pub entry_ids: Vec<String>,
+    pub job_run: crate::JobRun,
 }
 
 #[derive(Clone, Debug)]
@@ -2431,13 +2457,6 @@ impl UiSettings {
     }
 }
 
-/// A canonical, server-owned root for a completed download that may need manual import.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ManualImportSourceRegistration {
-    pub source_identity: crate::DownloadSourceIdentity,
-    pub trusted_root: String,
-}
-
 /// A server-owned file candidate. `canonical_path` never crosses the public API boundary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ManualImportSelectionCandidate {
@@ -2452,7 +2471,7 @@ pub struct ManualImportSelection {
     pub id: String,
     pub actor_user_id: String,
     pub title_id: String,
-    pub source: ManualImportSourceRegistration,
+    pub source_identity: crate::DownloadSourceIdentity,
     pub candidates: Vec<ManualImportSelectionCandidate>,
 }
 

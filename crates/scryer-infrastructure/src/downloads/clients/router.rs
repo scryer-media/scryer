@@ -37,7 +37,7 @@ const DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY: &str = "download_client.routing";
 const LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY: &str = "nzbget.client_routing";
 const DOWNLOAD_CLIENT_FEEDBACK_TIMEOUT_SECS: u64 = 10;
 const PROXIED_TORRENT_FILE_MAX_BYTES: usize = 32 * 1024 * 1024;
-const BYPARR_RESPONSE_MAX_BYTES: usize = PROXIED_TORRENT_FILE_MAX_BYTES * 2;
+const SOLVER_RESPONSE_MAX_BYTES: usize = PROXIED_TORRENT_FILE_MAX_BYTES * 2;
 
 #[derive(Debug)]
 enum BoundedResponseBodyError {
@@ -949,7 +949,7 @@ impl PrioritizedDownloadClientRouter {
             ));
         }
         let artifact_result = self
-            .resolve_download_artifact_via_byparr(
+            .resolve_download_artifact_via_indexer_proxy(
                 &proxy_config,
                 download_url,
                 request.info_hash_hint.clone(),
@@ -984,19 +984,16 @@ impl PrioritizedDownloadClientRouter {
         Ok(prepared)
     }
 
-    async fn resolve_download_artifact_via_byparr(
+    async fn resolve_download_artifact_via_indexer_proxy(
         &self,
         proxy_config: &IndexerProxyConfig,
         download_url: &str,
         info_hash_hint: Option<String>,
     ) -> AppResult<ResolvedDownloadArtifact> {
-        if proxy_config.provider_type != scryer_domain::IndexerProxyProviderType::Byparr {
-            return Err(AppError::Validation(
-                "Unsupported indexer proxy provider for download resolution.".into(),
-            ));
-        }
+        let provider = proxy_config.provider_type;
+        let provider_name = solver::solver_provider_name(provider);
 
-        // Validate before delegating to Byparr as well as before any direct
+        // Validate before delegating to the solver as well as before any direct
         // retry. Otherwise the solver itself becomes a deputy for blocked
         // link-local or cloud-metadata destinations.
         drop(
@@ -1010,58 +1007,67 @@ impl PrioritizedDownloadClientRouter {
                 })?,
         );
 
-        // A previously solved clearance session lets the artifact fetch skip
-        // the solver entirely. Direct rate limits still propagate; every other
-        // failure invalidates the session and falls back to a full solve.
+        // Keep artifact resolution direct-first, just like indexer searches.
+        // A fresh solved session is applied when available; otherwise this is
+        // an ordinary guarded fetch. Direct rate limits still propagate and
+        // challenge/error responses fall back to a full solve.
         let session_headers =
             solver::SolvedSessionCache::shared().session_headers(&proxy_config.id, download_url);
-        if !session_headers.is_empty() {
-            match self
-                .fetch_download_artifact_direct(
-                    download_url,
-                    &session_headers,
-                    proxy_config.request_timeout_seconds,
-                )
-                .await
-            {
-                Ok(fetched) => {
-                    match Self::classify_resolved_download_artifact(
-                        fetched.final_url.as_deref(),
-                        fetched.headers.as_ref(),
-                        fetched.bytes,
-                        info_hash_hint.clone(),
-                    ) {
-                        Ok(artifact) => return Ok(artifact),
-                        Err(error) => {
-                            debug!(
-                                proxy_config_id = proxy_config.id.as_str(),
-                                error = %error,
-                                "solved session artifact fetch not usable; falling back to solver"
-                            );
+        let had_solved_session = !session_headers.is_empty();
+        match self
+            .fetch_download_artifact_direct(
+                provider_name,
+                download_url,
+                &session_headers,
+                proxy_config.request_timeout_seconds,
+            )
+            .await
+        {
+            Ok(fetched) => {
+                match Self::classify_resolved_download_artifact(
+                    provider_name,
+                    fetched.final_url.as_deref(),
+                    fetched.headers.as_ref(),
+                    fetched.bytes,
+                    info_hash_hint.clone(),
+                ) {
+                    Ok(artifact) => return Ok(artifact),
+                    Err(error) => {
+                        debug!(
+                            proxy_config_id = proxy_config.id.as_str(),
+                            error = %error,
+                            had_solved_session,
+                            "direct artifact fetch not usable; falling back to solver"
+                        );
+                        if had_solved_session {
                             solver::SolvedSessionCache::shared()
                                 .invalidate(&proxy_config.id, download_url);
                         }
                     }
                 }
-                Err(error @ AppError::TemporaryUnavailable { .. }) => return Err(error),
-                Err(error) => {
-                    debug!(
-                        proxy_config_id = proxy_config.id.as_str(),
-                        error = %error,
-                        "solved session artifact fetch failed; falling back to solver"
-                    );
+            }
+            Err(error @ AppError::TemporaryUnavailable { .. }) => return Err(error),
+            Err(error) => {
+                debug!(
+                    proxy_config_id = proxy_config.id.as_str(),
+                    error = %error,
+                    had_solved_session,
+                    "direct artifact fetch failed; falling back to solver"
+                );
+                if had_solved_session {
                     solver::SolvedSessionCache::shared().invalidate(&proxy_config.id, download_url);
                 }
             }
         }
 
-        let endpoint = solver::byparr_solve_endpoint(&proxy_config.base_url);
+        let endpoint = solver::solver_solve_endpoint(&proxy_config.base_url);
         let response = generic_reqwest_client()
             .post(endpoint)
             .timeout(Duration::from_secs(
                 proxy_config.request_timeout_seconds as u64 + 5,
             ))
-            .json(&solver::byparr_solve_request(
+            .json(&solver::solver_solve_request(
+                provider,
                 download_url,
                 proxy_config.request_timeout_seconds,
             ))
@@ -1069,22 +1075,23 @@ impl PrioritizedDownloadClientRouter {
             .await
             .map_err(|error| {
                 let message = if error.is_timeout() {
-                    solver::BYPARR_TIMEOUT_MESSAGE
+                    solver::solver_error_message(provider, solver::SolverErrorKind::Timeout)
                 } else {
-                    solver::BYPARR_UNREACHABLE_MESSAGE
+                    solver::solver_error_message(provider, solver::SolverErrorKind::Unreachable)
                 };
                 solver::SolverHealthLedger::shared().record_failure(&proxy_config.id, message);
                 AppError::DownloadSubmitUnavailable(message.into())
             })?;
-        let byparr_status = response.status();
-        if byparr_status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            solver::SolverHealthLedger::shared()
-                .record_failure(&proxy_config.id, solver::BYPARR_UNAVAILABLE_MESSAGE);
-            return Err(AppError::DownloadSubmitUnavailable(
-                solver::BYPARR_UNAVAILABLE_MESSAGE.into(),
-            ));
+        let solver_status = response.status();
+        if solver_status == reqwest::StatusCode::TOO_MANY_REQUESTS
+            || solver_status.is_server_error()
+        {
+            let message =
+                solver::solver_error_message(provider, solver::SolverErrorKind::Unavailable);
+            solver::SolverHealthLedger::shared().record_failure(&proxy_config.id, message);
+            return Err(AppError::DownloadSubmitUnavailable(message.into()));
         }
-        let body = match read_response_body_bounded(response, BYPARR_RESPONSE_MAX_BYTES).await {
+        let body = match read_response_body_bounded(response, SOLVER_RESPONSE_MAX_BYTES).await {
             Ok(body) => body,
             Err(BoundedResponseBodyError::Read(error)) => {
                 debug!(
@@ -1092,36 +1099,40 @@ impl PrioritizedDownloadClientRouter {
                     is_timeout = error.is_timeout(),
                     is_body = error.is_body(),
                     is_decode = error.is_decode(),
-                    "failed to read Byparr response body"
+                    "failed to read challenge solver response body"
                 );
-                solver::SolverHealthLedger::shared()
-                    .record_failure(&proxy_config.id, solver::BYPARR_UNREADABLE_MESSAGE);
-                return Err(AppError::DownloadSubmitUnavailable(
-                    solver::BYPARR_UNREADABLE_MESSAGE.into(),
-                ));
+                let message =
+                    solver::solver_error_message(provider, solver::SolverErrorKind::Unreadable);
+                solver::SolverHealthLedger::shared().record_failure(&proxy_config.id, message);
+                return Err(AppError::DownloadSubmitUnavailable(message.into()));
             }
             Err(BoundedResponseBodyError::TooLarge) => {
-                const MESSAGE: &str =
-                    "Byparr returned a response larger than Scryer's download artifact limit.";
-                solver::SolverHealthLedger::shared().record_failure(&proxy_config.id, MESSAGE);
-                return Err(AppError::DownloadSubmitUnavailable(MESSAGE.into()));
+                let message = format!(
+                    "{provider_name} returned a response larger than Scryer's download artifact limit."
+                );
+                solver::SolverHealthLedger::shared().record_failure(&proxy_config.id, &message);
+                return Err(AppError::DownloadSubmitUnavailable(message));
             }
         };
-        let solution = solver::parse_byparr_solution(&body).map_err(|error| {
-            if error == solver::ByparrParseError::Malformed {
+        let solution = solver::parse_solver_solution(&body).map_err(|error| {
+            if matches!(
+                error,
+                solver::ChallengeSolverParseError::Malformed
+                    | solver::ChallengeSolverParseError::ServiceError
+            ) {
                 solver::SolverHealthLedger::shared()
-                    .record_failure(&proxy_config.id, solver::BYPARR_MALFORMED_MESSAGE);
+                    .record_failure(&proxy_config.id, error.message(provider));
             }
-            AppError::DownloadSubmitUnavailable(error.message().into())
+            AppError::DownloadSubmitUnavailable(error.message(provider).into())
         })?;
         solver::SolverHealthLedger::shared().record_success(&proxy_config.id);
-        let solution_status = solution.status.unwrap_or_else(|| byparr_status.as_u16());
+        let solution_status = solution.status.unwrap_or_else(|| solver_status.as_u16());
         if solution_status == reqwest::StatusCode::TOO_MANY_REQUESTS.as_u16() {
             return Err(target_rate_limit_error(solution.headers.as_ref()));
         }
         if !(200..300).contains(&solution_status) {
             return Err(AppError::DownloadSubmitUnavailable(format!(
-                "Byparr target request returned HTTP {solution_status}."
+                "{provider_name} target request returned HTTP {solution_status}."
             )));
         }
         let solution_body = solution.response.as_deref().unwrap_or_default();
@@ -1139,35 +1150,63 @@ impl PrioritizedDownloadClientRouter {
             download_url,
             &solution,
         );
+        let retry_headers = solver::solution_retry_headers(&solution);
         if Self::should_refetch_binary_download_artifact(
             download_url,
             solution.url.as_deref(),
             solution.headers.as_ref(),
-        ) {
-            let retry_headers = solver::solution_retry_headers(&solution);
-            if !retry_headers.is_empty() {
+        ) && !retry_headers.is_empty()
+        {
+            let fetched = self
+                .fetch_download_artifact_direct(
+                    provider_name,
+                    download_url,
+                    &retry_headers,
+                    proxy_config.request_timeout_seconds,
+                )
+                .await?;
+            return Self::classify_resolved_download_artifact(
+                provider_name,
+                fetched.final_url.as_deref(),
+                fetched.headers.as_ref(),
+                fetched.bytes,
+                info_hash_hint,
+            );
+        }
+        let bytes = solution.response.unwrap_or_default().into_bytes();
+        let embedded_artifact = Self::classify_resolved_download_artifact(
+            provider_name,
+            solution.url.as_deref(),
+            solution.headers.as_ref(),
+            bytes,
+            info_hash_hint.clone(),
+        );
+        match embedded_artifact {
+            Ok(artifact) => Ok(artifact),
+            Err(error) if retry_headers.is_empty() => Err(error),
+            Err(error) => {
+                debug!(
+                    proxy_config_id = proxy_config.id.as_str(),
+                    error = %error,
+                    "embedded solver artifact was not usable; retrying original URL with solved session"
+                );
                 let fetched = self
                     .fetch_download_artifact_direct(
+                        provider_name,
                         download_url,
                         &retry_headers,
                         proxy_config.request_timeout_seconds,
                     )
                     .await?;
-                return Self::classify_resolved_download_artifact(
+                Self::classify_resolved_download_artifact(
+                    provider_name,
                     fetched.final_url.as_deref(),
                     fetched.headers.as_ref(),
                     fetched.bytes,
                     info_hash_hint,
-                );
+                )
             }
         }
-        let bytes = solution.response.unwrap_or_default().into_bytes();
-        Self::classify_resolved_download_artifact(
-            solution.url.as_deref(),
-            solution.headers.as_ref(),
-            bytes,
-            info_hash_hint,
-        )
     }
 
     fn should_refetch_binary_download_artifact(
@@ -1195,6 +1234,7 @@ impl PrioritizedDownloadClientRouter {
 
     async fn fetch_download_artifact_direct(
         &self,
+        provider_name: &str,
         download_url: &str,
         session_headers: &[(String, String)],
         request_timeout_seconds: u32,
@@ -1217,14 +1257,16 @@ impl PrioritizedDownloadClientRouter {
             builder = builder.header(name, value);
         }
         let response = send_reqwest_request(builder).await.map_err(|error| {
+            debug!(
+                proxy_provider = provider_name,
+                is_timeout = error.is_timeout(),
+                "download artifact fetch failed"
+            );
             if error.is_timeout() {
-                AppError::DownloadSubmitUnavailable(
-                    "Byparr resolved the challenge, but the artifact fetch timed out.".into(),
-                )
+                AppError::DownloadSubmitUnavailable("The download artifact fetch timed out.".into())
             } else {
                 AppError::DownloadSubmitUnavailable(
-                    "Byparr resolved the challenge, but Scryer could not fetch the download artifact."
-                        .into(),
+                    "Scryer could not fetch the download artifact.".into(),
                 )
             }
         })?;
@@ -1244,7 +1286,7 @@ impl PrioritizedDownloadClientRouter {
         }
         if !response.status().is_success() {
             return Err(AppError::DownloadSubmitUnavailable(format!(
-                "Byparr resolved the challenge, but the artifact fetch returned HTTP {}.",
+                "The download artifact fetch returned HTTP {}.",
                 response.status().as_u16()
             )));
         }
@@ -1271,8 +1313,7 @@ impl PrioritizedDownloadClientRouter {
                     "failed to read proxied download artifact body"
                 );
                 return Err(AppError::DownloadSubmitUnavailable(
-                    "Byparr resolved the challenge, but Scryer could not read the download artifact."
-                        .into(),
+                    "Scryer could not read the download artifact.".into(),
                 ));
             }
             Err(BoundedResponseBodyError::TooLarge) => {
@@ -1290,6 +1331,7 @@ impl PrioritizedDownloadClientRouter {
     }
 
     fn classify_resolved_download_artifact(
+        provider_name: &str,
         final_url: Option<&str>,
         headers: Option<&serde_json::Value>,
         bytes: Vec<u8>,
@@ -1320,9 +1362,9 @@ impl PrioritizedDownloadClientRouter {
             .map(|url| url.path().to_ascii_lowercase());
         let file_name_lower = file_name.as_ref().map(|value| value.to_ascii_lowercase());
         if looks_like_rejected_download_document(&bytes) {
-            return Err(AppError::Validation(
-                "Indexer proxy did not resolve download artifact.".into(),
-            ));
+            return Err(AppError::Validation(format!(
+                "{provider_name} did not resolve download artifact."
+            )));
         }
 
         if content_type.as_deref().is_some_and(|value| {
@@ -1337,14 +1379,14 @@ impl PrioritizedDownloadClientRouter {
                 .is_some_and(|name| name.ends_with(".torrent"))
         {
             if !looks_like_torrent_metainfo(&bytes) {
-                return Err(AppError::Validation(
-                    "Byparr resolved invalid torrent file bytes.".into(),
-                ));
+                return Err(AppError::Validation(format!(
+                    "{provider_name} resolved invalid torrent file bytes."
+                )));
             }
             if bytes.len() > PROXIED_TORRENT_FILE_MAX_BYTES {
-                return Err(AppError::Validation(
-                    "Byparr resolved torrent file is too large.".into(),
-                ));
+                return Err(AppError::Validation(format!(
+                    "{provider_name} resolved torrent file is too large."
+                )));
             }
             return Ok(ResolvedDownloadArtifact::TorrentFile {
                 bytes,
@@ -1362,9 +1404,9 @@ impl PrioritizedDownloadClientRouter {
         }) || looks_like_nzb(&bytes)
         {
             if !looks_like_nzb(&bytes) {
-                return Err(AppError::Validation(
-                    "Byparr resolved invalid NZB bytes.".into(),
-                ));
+                return Err(AppError::Validation(format!(
+                    "{provider_name} resolved invalid NZB bytes."
+                )));
             }
             return Ok(ResolvedDownloadArtifact::Nzb {
                 bytes,
@@ -1373,10 +1415,9 @@ impl PrioritizedDownloadClientRouter {
             });
         }
 
-        Err(AppError::Validation(
-            "Byparr resolved the download URL, but the result was not an NZB, magnet URI, or torrent file."
-                .into(),
-        ))
+        Err(AppError::Validation(format!(
+            "{provider_name} resolved the download URL, but the result was not an NZB, magnet URI, or torrent file."
+        )))
     }
 
     fn read_trimmed_string(raw_value: Option<&serde_json::Value>) -> Option<String> {
@@ -2865,18 +2906,19 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             return Ok(None);
         }
 
+        let client_id = client_id.trim();
+        if client_id.is_empty() {
+            return Ok(None);
+        }
+
         let clients = self.list_enabled_clients_by_priority_excluding(&[]).await?;
-        let config = clients
-            .iter()
-            .find(|config| config.id.trim() == client_id.trim() && !client_id.trim().is_empty())
-            .or_else(|| {
-                clients.iter().find(|config| {
-                    config
-                        .client_type
-                        .trim()
-                        .eq_ignore_ascii_case(client_type.trim())
-                })
-            });
+        let config = clients.iter().find(|config| {
+            config.id.trim() == client_id
+                && config
+                    .client_type
+                    .trim()
+                    .eq_ignore_ascii_case(client_type.trim())
+        });
         let Some(config) = config else {
             return Ok(None);
         };
@@ -3141,6 +3183,7 @@ mod tests {
         });
 
         let error = PrioritizedDownloadClientRouter::classify_resolved_download_artifact(
+            "Byparr",
             Some("https://indexer.example/download/thing.torrent"),
             Some(&headers),
             b"not a torrent".to_vec(),
@@ -3152,6 +3195,239 @@ mod tests {
             error.to_string(),
             "validation: Byparr resolved invalid torrent file bytes.",
         );
+    }
+
+    #[tokio::test]
+    async fn trawl_resolves_embedded_nzb_with_millisecond_timeout() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let download_url = format!("{}/download/release.nzb", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .and(body_json(serde_json::json!({
+                "cmd": "request.get",
+                "url": download_url,
+                "maxTimeout": 60_000
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok",
+                "solution": {
+                    "url": download_url,
+                    "status": 200,
+                    "headers": { "content-type": "application/x-nzb" },
+                    "cookies": [{ "name": "cf_clearance", "value": "abc" }],
+                    "userAgent": "Trawl",
+                    "response": "<nzb></nzb>"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let now = Utc::now();
+        let proxy = IndexerProxyConfig {
+            id: "trawl-1".into(),
+            name: "Trawl".into(),
+            provider_type: scryer_domain::IndexerProxyProviderType::Trawl,
+            protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+            base_url: server.uri(),
+            request_timeout_seconds: 60,
+            is_enabled: true,
+            last_health_status: None,
+            last_error_message: None,
+            last_error_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let artifact = no_client_router()
+            .resolve_download_artifact_via_indexer_proxy(&proxy, &download_url, None)
+            .await
+            .expect("Trawl should resolve embedded NZB content");
+
+        assert!(matches!(
+            artifact,
+            ResolvedDownloadArtifact::Nzb { bytes, .. } if bytes == b"<nzb></nzb>"
+        ));
+    }
+
+    #[tokio::test]
+    async fn trawl_artifact_resolution_uses_direct_response_before_solver() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let download_path = "/download";
+        let download_url = format!("{}{download_path}?id=direct", server.uri());
+        Mock::given(method("GET"))
+            .and(path(download_path))
+            .and(query_param("id", "direct"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/x-bittorrent")
+                    .set_body_bytes(b"d4:infod4:name6:directee"),
+            )
+            .mount(&server)
+            .await;
+
+        let now = Utc::now();
+        let proxy = IndexerProxyConfig {
+            id: "trawl-direct-first".into(),
+            name: "Trawl".into(),
+            provider_type: scryer_domain::IndexerProxyProviderType::Trawl,
+            protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+            base_url: server.uri(),
+            request_timeout_seconds: 60,
+            is_enabled: true,
+            last_health_status: None,
+            last_error_message: None,
+            last_error_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let artifact = no_client_router()
+            .resolve_download_artifact_via_indexer_proxy(&proxy, &download_url, None)
+            .await
+            .expect("direct artifact should bypass Trawl");
+
+        assert!(matches!(
+            artifact,
+            ResolvedDownloadArtifact::TorrentFile { bytes, .. }
+                if bytes == b"d4:infod4:name6:directee"
+        ));
+        let requests = server
+            .received_requests()
+            .await
+            .expect("direct request should be captured");
+        assert_eq!(requests.len(), 1, "the solver endpoint must not be called");
+        assert_eq!(requests[0].url.path(), download_path);
+    }
+
+    #[tokio::test]
+    async fn trawl_refetches_opaque_binary_artifact_when_solution_headers_are_empty() {
+        use wiremock::matchers::{body_json, header, method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let download_path = "/download";
+        let download_url = format!("{}{download_path}?id=release", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .and(body_json(serde_json::json!({
+                "cmd": "request.get",
+                "url": download_url,
+                "maxTimeout": 60_000
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok",
+                "solution": {
+                    "url": download_url,
+                    "status": 200,
+                    "headers": {},
+                    "cookies": [],
+                    "userAgent": "Trawl UA",
+                    "response": ""
+                }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(download_path))
+            .and(query_param("id", "release"))
+            .and(header("user-agent", "Trawl UA"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/x-bittorrent")
+                    .set_body_bytes(b"d4:infod4:name4:testee"),
+            )
+            .mount(&server)
+            .await;
+
+        let now = Utc::now();
+        let proxy = IndexerProxyConfig {
+            id: "trawl-1".into(),
+            name: "Trawl".into(),
+            provider_type: scryer_domain::IndexerProxyProviderType::Trawl,
+            protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+            base_url: server.uri(),
+            request_timeout_seconds: 60,
+            is_enabled: true,
+            last_health_status: None,
+            last_error_message: None,
+            last_error_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let artifact = no_client_router()
+            .resolve_download_artifact_via_indexer_proxy(&proxy, &download_url, None)
+            .await
+            .expect("Trawl should refetch binary torrent content");
+
+        assert!(matches!(
+            artifact,
+            ResolvedDownloadArtifact::TorrentFile { bytes, .. }
+                if bytes == b"d4:infod4:name4:testee"
+        ));
+    }
+
+    #[tokio::test]
+    async fn trawl_server_error_is_classified_as_solver_unavailable() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let download_url = format!("{}/download?id=release", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .and(body_json(serde_json::json!({
+                "cmd": "request.get",
+                "url": download_url,
+                "maxTimeout": 60_000
+            })))
+            .respond_with(ResponseTemplate::new(503).set_body_json(serde_json::json!({
+                "status": "error",
+                "message": "Browser pool initializing, retry in a few seconds",
+                "solution": {
+                    "url": download_url,
+                    "status": 0,
+                    "headers": {},
+                    "response": "",
+                    "cookies": [],
+                    "userAgent": ""
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let now = Utc::now();
+        let proxy = IndexerProxyConfig {
+            id: "trawl-unavailable".into(),
+            name: "Trawl".into(),
+            provider_type: scryer_domain::IndexerProxyProviderType::Trawl,
+            protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+            base_url: server.uri(),
+            request_timeout_seconds: 60,
+            is_enabled: true,
+            last_health_status: None,
+            last_error_message: None,
+            last_error_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let error = no_client_router()
+            .resolve_download_artifact_via_indexer_proxy(&proxy, &download_url, None)
+            .await
+            .expect_err("Trawl server errors must fail as solver unavailable");
+
+        assert!(matches!(
+            error,
+            AppError::DownloadSubmitUnavailable(message)
+                if message == solver::TRAWL_UNAVAILABLE_MESSAGE
+        ));
     }
 
     #[test]
@@ -3190,47 +3466,60 @@ mod tests {
     async fn artifact_resolution_blocks_metadata_destinations_before_network_or_solver() {
         let router = no_client_router();
         let now = Utc::now();
-        let proxy = IndexerProxyConfig {
-            id: "byparr-1".to_string(),
-            name: "Byparr".to_string(),
-            provider_type: scryer_domain::IndexerProxyProviderType::Byparr,
-            protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
-            base_url: "http://127.0.0.1:1".to_string(),
-            request_timeout_seconds: 1,
-            is_enabled: true,
-            last_health_status: None,
-            last_error_message: None,
-            last_error_at: None,
-            created_at: now,
-            updated_at: now,
-        };
-        for target in [
-            "http://169.254.169.254/latest/meta-data/",
-            "http://[::ffff:169.254.169.254]/latest/meta-data/",
-            "http://100.100.100.200/latest/meta-data/",
+        for provider_type in [
+            scryer_domain::IndexerProxyProviderType::Byparr,
+            scryer_domain::IndexerProxyProviderType::Trawl,
         ] {
-            let error = match router.fetch_download_artifact_direct(target, &[], 1).await {
-                Ok(_) => panic!("metadata destination must be rejected before fetch"),
-                Err(error) => error,
+            let proxy = IndexerProxyConfig {
+                id: format!("{}-1", provider_type.as_str()),
+                name: solver::solver_provider_name(provider_type).to_string(),
+                provider_type,
+                protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+                base_url: "http://127.0.0.1:1".to_string(),
+                request_timeout_seconds: 1,
+                is_enabled: true,
+                last_health_status: None,
+                last_error_message: None,
+                last_error_at: None,
+                created_at: now,
+                updated_at: now,
             };
-            assert!(
-                matches!(&error, AppError::DownloadSubmitUnavailable(message)
-                    if message.contains("unsafe download artifact destination")),
-                "unexpected error for {target}: {error}"
-            );
+            for target in [
+                "http://169.254.169.254/latest/meta-data/",
+                "http://[::ffff:169.254.169.254]/latest/meta-data/",
+                "http://100.100.100.200/latest/meta-data/",
+            ] {
+                let error = match router
+                    .fetch_download_artifact_direct(
+                        solver::solver_provider_name(provider_type),
+                        target,
+                        &[],
+                        1,
+                    )
+                    .await
+                {
+                    Ok(_) => panic!("metadata destination must be rejected before fetch"),
+                    Err(error) => error,
+                };
+                assert!(
+                    matches!(&error, AppError::DownloadSubmitUnavailable(message)
+                        if message.contains("unsafe download artifact destination")),
+                    "unexpected error for {target}: {error}"
+                );
 
-            let error = match router
-                .resolve_download_artifact_via_byparr(&proxy, target, None)
-                .await
-            {
-                Ok(_) => panic!("metadata destination must not be delegated to Byparr"),
-                Err(error) => error,
-            };
-            assert!(
-                matches!(&error, AppError::DownloadSubmitUnavailable(message)
-                    if message.contains("unsafe download artifact destination")),
-                "unexpected solver error for {target}: {error}"
-            );
+                let error = match router
+                    .resolve_download_artifact_via_indexer_proxy(&proxy, target, None)
+                    .await
+                {
+                    Ok(_) => panic!("metadata destination must not be delegated to the solver"),
+                    Err(error) => error,
+                };
+                assert!(
+                    matches!(&error, AppError::DownloadSubmitUnavailable(message)
+                        if message.contains("unsafe download artifact destination")),
+                    "unexpected solver error for {target}: {error}"
+                );
+            }
         }
     }
 

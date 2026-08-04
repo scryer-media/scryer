@@ -1,0 +1,3 @@
+# Trusted Scryer release tag signer. Fingerprint: SHA256:ceWh+l4B+GyQRDjMoir5qgYpUTeS5omk6D/STEqsL5g
+# Tags must be annotated SSH signatures from this identity and must point to release-X.Y.Z from current origin/main.
+133935777+NZBMan@users.noreply.github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMF3MPGc/hyrDrJGUxqOrpYlqtSS6VglWmmIEUq6FoVK

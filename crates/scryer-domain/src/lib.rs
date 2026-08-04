@@ -953,18 +953,21 @@ pub struct IndexerConfig {
 #[serde(rename_all = "snake_case")]
 pub enum IndexerProxyProviderType {
     Byparr,
+    Trawl,
 }
 
 impl IndexerProxyProviderType {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Byparr => "byparr",
+            Self::Trawl => "trawl",
         }
     }
 
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
             "byparr" => Some(Self::Byparr),
+            "trawl" => Some(Self::Trawl),
             _ => None,
         }
     }

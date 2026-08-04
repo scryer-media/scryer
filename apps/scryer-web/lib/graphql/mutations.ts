@@ -1723,10 +1723,52 @@ export const restoreRecycledItemMutation = `mutation RestoreRecycledItem($id: ID
   }
 }`;
 
+export const restoreRecycledItemsMutation = `mutation RestoreRecycledItems($input: RestoreRecycledItemsInput!) {
+  restoreRecycledItems(input: $input) {
+    ids
+    jobRun {
+      id
+      jobKey
+      displayName
+      category
+      section
+      status
+      triggerSource
+      startedAt
+      completedAt
+      summaryJson
+      summaryText
+      errorText
+      progressJson
+    }
+  }
+}`;
+
 export const deleteRecycledItemMutation = `mutation DeleteRecycledItem($id: ID!) {
   deleteRecycledItem(id: $id) {
     id
     deleted
+  }
+}`;
+
+export const deleteRecycledItemsMutation = `mutation DeleteRecycledItems($input: DeleteRecycledItemsInput!) {
+  deleteRecycledItems(input: $input) {
+    ids
+    jobRun {
+      id
+      jobKey
+      displayName
+      category
+      section
+      status
+      triggerSource
+      startedAt
+      completedAt
+      summaryJson
+      summaryText
+      errorText
+      progressJson
+    }
   }
 }`;
 

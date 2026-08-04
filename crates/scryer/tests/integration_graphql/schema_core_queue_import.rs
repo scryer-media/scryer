@@ -2042,6 +2042,31 @@ async fn graphql_manual_import_schema_exposes_candidate_only_contract() {
     let file_fields = field_names("filePayload");
     assert!(file_fields.contains(&"candidateId"));
     assert!(!file_fields.contains(&"filePath"));
+
+    let missing_client = schema_exec(
+        &ctx,
+        r#"
+        mutation {
+          beginManualImportSelection(input: {
+            clientType: "weaver"
+            downloadClientItemId: "missing-client"
+            titleId: "title"
+          }) { selectionId }
+        }
+        "#,
+        None,
+    )
+    .await;
+    assert!(
+        missing_client["errors"]
+            .as_array()
+            .is_some_and(|errors| errors.iter().any(|error| {
+                error["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("clientId"))
+            })),
+        "expected clientId to be required: {missing_client}"
+    );
 }
 
 #[tokio::test]

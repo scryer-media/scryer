@@ -224,7 +224,7 @@ impl DownloadMutations {
         let selection = scryer_application::begin_manual_import_selection(
             &app,
             &actor,
-            input.client_id.as_ref().map(|id| id.as_str()),
+            input.client_id.as_str(),
             &input.client_type,
             &input.download_client_item_id,
             input.title_id.as_str(),

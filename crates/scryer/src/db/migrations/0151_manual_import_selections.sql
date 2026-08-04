@@ -1,13 +1,3 @@
-CREATE TABLE IF NOT EXISTS manual_import_sources (
-    source_client_id TEXT NOT NULL DEFAULT '',
-    source_system TEXT NOT NULL,
-    source_ref TEXT NOT NULL,
-    trusted_root TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (source_client_id, source_system, source_ref)
-);
-
 CREATE TABLE IF NOT EXISTS manual_import_selections (
     id TEXT PRIMARY KEY,
     actor_user_id TEXT NOT NULL,
@@ -15,7 +5,6 @@ CREATE TABLE IF NOT EXISTS manual_import_selections (
     source_client_id TEXT NOT NULL DEFAULT '',
     source_system TEXT NOT NULL,
     source_ref TEXT NOT NULL,
-    trusted_root TEXT NOT NULL,
     consumed_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL

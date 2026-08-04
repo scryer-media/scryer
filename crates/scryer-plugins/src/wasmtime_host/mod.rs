@@ -8,6 +8,7 @@
 //! ([`error`]). Everything else in the archive pipeline (path sandboxing,
 //! native PAR2, providers, SDK shapes) is owned above this layer.
 
+pub(crate) mod command_host;
 mod crypto_host;
 mod describe;
 pub(crate) mod engine;
@@ -17,8 +18,10 @@ pub(crate) mod module_cache;
 mod sandbox;
 
 pub(crate) use describe::{
-    command_model_describe, validate_archive_module, validate_subtitle_sync_module,
+    command_model_describe, validate_archive_module, validate_command_module,
+    validate_subtitle_sync_module,
 };
 pub(crate) use invoke::{
-    ArchiveInvocation, SubtitleSyncInvocation, process_archive, process_subtitle_sync,
+    ArchiveInvocation, CommandInvocation, SubtitleSyncInvocation, process_archive, process_command,
+    process_subtitle_sync,
 };

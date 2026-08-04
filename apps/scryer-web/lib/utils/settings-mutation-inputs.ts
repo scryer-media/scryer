@@ -11,7 +11,7 @@ function buildIndexerProxyCommonInput(draft: IndexerProxyDraft) {
 
 export function buildCreateIndexerProxyInput(draft: IndexerProxyDraft) {
   return {
-    providerType: "byparr",
+    providerType: draft.providerType,
     ...buildIndexerProxyCommonInput(draft),
   };
 }

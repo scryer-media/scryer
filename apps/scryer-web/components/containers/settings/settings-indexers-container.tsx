@@ -65,6 +65,7 @@ const INDEXER_INITIAL_DRAFT = {
 };
 
 const INDEXER_PROXY_INITIAL_DRAFT: IndexerProxyDraft = {
+  providerType: "byparr",
   name: "",
   baseUrl: "http://localhost:8191",
   requestTimeoutSeconds: 60,
@@ -765,6 +766,7 @@ export function SettingsIndexersContainer({
     setEditingProxyId(proxy.id);
     setIsProxyEditorOpen(true);
     setIndexerProxyDraft({
+      providerType: proxy.providerType === "trawl" ? "trawl" : "byparr",
       name: proxy.name,
       baseUrl: proxy.baseUrl,
       requestTimeoutSeconds: proxy.requestTimeoutSeconds,

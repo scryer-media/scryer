@@ -1692,6 +1692,7 @@ pub enum JobKeyValue {
     TitleDeletion,
     MediaFileDeletion,
     RecycleBinRestore,
+    RecycleBinPurge,
     AcquisitionSearch,
 }
 
@@ -3287,7 +3288,7 @@ pub struct QueueManualImportInput {
 
 #[derive(InputObject)]
 pub struct BeginManualImportSelectionInput {
-    pub client_id: Option<ID>,
+    pub client_id: ID,
     pub client_type: String,
     pub download_client_item_id: String,
     pub title_id: ID,
@@ -4870,6 +4871,7 @@ pub struct RecycledItemPayload {
     pub file_name: String,
     pub size_bytes: Long,
     pub title_id: Option<async_graphql::ID>,
+    pub title_name: Option<String>,
     pub reason: String,
     pub recycled_at: DateTime<Utc>,
     pub media_root: String,
@@ -4886,6 +4888,50 @@ pub struct RecycledItemsPayload {
 #[derive(SimpleObject, Clone)]
 pub struct RestoreRecycledItemPayload {
     pub id: async_graphql::ID,
+    pub job_run: JobRunPayload,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum RecycleRestoreConflictPolicyValue {
+    KeepBoth,
+    ReplaceExisting,
+}
+
+#[derive(InputObject)]
+pub struct RestoreRecycledItemsInput {
+    pub ids: Vec<async_graphql::ID>,
+    pub conflict_policy: RecycleRestoreConflictPolicyValue,
+    pub preview_fingerprint: String,
+}
+
+#[derive(InputObject)]
+pub struct DeleteRecycledItemsInput {
+    pub ids: Vec<async_graphql::ID>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct RecycleRestorePreviewItemPayload {
+    pub id: async_graphql::ID,
+    pub original_path: String,
+    pub destination_occupied: bool,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct RecycleRestorePreviewPayload {
+    pub fingerprint: String,
+    pub items: Vec<RecycleRestorePreviewItemPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct RestoreRecycledItemsPayload {
+    pub ids: Vec<async_graphql::ID>,
+    pub job_run: JobRunPayload,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct DeleteRecycledItemsPayload {
+    pub ids: Vec<async_graphql::ID>,
     pub job_run: JobRunPayload,
 }
 

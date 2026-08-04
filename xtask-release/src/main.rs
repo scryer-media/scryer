@@ -414,6 +414,15 @@ fn git_tracked_files(ctx: &TaskContext) -> Result<Vec<PathBuf>> {
         .collect())
 }
 
+fn git_tracked_cargo_lockfiles(ctx: &TaskContext) -> Result<Vec<PathBuf>> {
+    let mut lockfiles = git_tracked_files(ctx)?
+        .into_iter()
+        .filter(|path| path.file_name().is_some_and(|name| name == "Cargo.lock"))
+        .collect::<Vec<_>>();
+    lockfiles.sort();
+    Ok(lockfiles)
+}
+
 fn scan_release_hygiene_content(path: &Path, content: &str) -> Vec<String> {
     let mut violations = Vec::new();
     let path_text = path.to_string_lossy();
@@ -518,6 +527,17 @@ fn latest_prefixed_tag(ctx: &TaskContext, prefix: &str) -> Result<Option<String>
 
 fn current_branch(ctx: &TaskContext) -> Result<String> {
     git_capture(ctx, &["rev-parse", "--abbrev-ref", "HEAD"]).map(|value| value.trim().to_string())
+}
+
+fn require_app_release_branch(branch: &str, version: &Version) -> Result<()> {
+    let expected = format!("release-{version}");
+    if branch != expected {
+        bail!(
+            "Scryer application releases must run from {expected}; current branch is {branch}. \
+             Create {expected} from the current main branch, run the release there, then merge it into main."
+        );
+    }
+    Ok(())
 }
 
 fn current_head_commit(ctx: &TaskContext) -> Result<String> {
@@ -2697,6 +2717,7 @@ fn run_release(ctx: &TaskContext, args: ReleaseArgs) -> Result<()> {
     let branch = current_branch(ctx)?;
     let git_commit = current_head_commit(ctx)?;
     println!("   Branch : {branch}");
+    require_app_release_branch(&branch, &next_version)?;
     let worktree_clean_at_start = git_status_porcelain(ctx)?.trim().is_empty();
     if !worktree_clean_at_start {
         prompt_continue_if_dirty(ctx)?;
@@ -3218,11 +3239,27 @@ fn run_scryer_rust_validation(ctx: &TaskContext, prefix: &'static str) -> Result
         run_streaming(&mut install, prefix)?;
     }
 
-    prefixed_step(prefix, "Updating Cargo.lock (cargo update)");
-    let mut update = ctx.release_command_in("cargo", &ctx.repo_root);
-    update.arg("update");
-    run_streaming(&mut update, prefix)?;
-    prefixed_ok(prefix, "Cargo.lock updated");
+    let cargo_lockfiles = git_tracked_cargo_lockfiles(ctx)?;
+    for cargo_lock in &cargo_lockfiles {
+        let cargo_dir = cargo_lock
+            .parent()
+            .context("tracked Cargo.lock did not have a parent directory")?;
+        if !cargo_dir.join("Cargo.toml").is_file() {
+            bail!(
+                "tracked Cargo.lock has no sibling Cargo.toml: {}",
+                cargo_lock.display()
+            );
+        }
+        let display_path = cargo_lock
+            .strip_prefix(&ctx.repo_root)
+            .unwrap_or(cargo_lock)
+            .display();
+        prefixed_step(prefix, format!("Updating {display_path} (cargo update)"));
+        let mut update = ctx.release_command_in("cargo", cargo_dir);
+        update.arg("update");
+        run_streaming(&mut update, prefix)?;
+        prefixed_ok(prefix, format!("{display_path} updated"));
+    }
 
     prefixed_step(
         prefix,
@@ -3237,7 +3274,6 @@ fn run_scryer_rust_validation(ctx: &TaskContext, prefix: &'static str) -> Result
 
     let mut failures = Vec::new();
     let release_checks_result: Result<()> = (|| {
-        prefixed_step(prefix, "Running cargo audit");
         if !command_available("cargo-audit")? {
             warn("cargo-audit not installed — installing");
             let mut install = ctx.release_command_in("cargo", &ctx.repo_root);
@@ -3268,13 +3304,21 @@ fn run_scryer_rust_validation(ctx: &TaskContext, prefix: &'static str) -> Result
             "Ignoring advisories pending upstream fixes: {}",
             ignores.join(" ")
         ));
-        let mut audit = ctx.release_command_in("cargo", &ctx.repo_root);
-        audit.arg("audit");
-        for advisory in ignores {
-            audit.args(["--ignore", advisory]);
+        for cargo_lock in &cargo_lockfiles {
+            let display_path = cargo_lock
+                .strip_prefix(&ctx.repo_root)
+                .unwrap_or(cargo_lock)
+                .display();
+            prefixed_step(prefix, format!("Running cargo audit ({display_path})"));
+            let mut audit = ctx.release_command_in("cargo", &ctx.repo_root);
+            audit.args(["audit", "--file"]);
+            audit.arg(cargo_lock);
+            for advisory in ignores {
+                audit.args(["--ignore", advisory]);
+            }
+            run_streaming(&mut audit, prefix)?;
+            prefixed_ok(prefix, format!("cargo audit passed ({display_path})"));
         }
-        run_streaming(&mut audit, prefix)?;
-        prefixed_ok(prefix, "cargo audit passed");
 
         run_scryer_ci_clippy_validation(ctx, "[rust-clippy] ")?;
         Ok(())
@@ -3491,6 +3535,32 @@ mod tests {
     const TIMED_COMMAND_CHILD_ENV: &str = "SCRYER_XTASK_TIMED_COMMAND_CHILD";
 
     #[test]
+    fn tracked_cargo_lockfiles_include_independent_projects() {
+        let ctx = TaskContext::new();
+        let lockfiles = git_tracked_cargo_lockfiles(&ctx)
+            .expect("list tracked Cargo lockfiles")
+            .into_iter()
+            .map(|path| {
+                path.strip_prefix(&ctx.repo_root)
+                    .expect("lockfile is inside repository")
+                    .to_path_buf()
+            })
+            .collect::<BTreeSet<_>>();
+
+        for expected in [
+            PathBuf::from("Cargo.lock"),
+            PathBuf::from("crates/scryer-release-parser/fuzz/Cargo.lock"),
+            PathBuf::from("test-plugins/test-indexer/Cargo.lock"),
+        ] {
+            assert!(
+                lockfiles.contains(&expected),
+                "missing {}",
+                expected.display()
+            );
+        }
+    }
+
+    #[test]
     fn release_version_bump_targets_include_split_interface_crates() {
         let ctx = TaskContext::new();
         let members = scryer_release_member_tomls(&ctx)
@@ -3512,6 +3582,15 @@ mod tests {
                 "release workspace members must include {expected}"
             );
         }
+    }
+
+    #[test]
+    fn app_release_branch_must_match_target_version() {
+        let version = Version::parse("0.17.4").unwrap();
+        assert!(require_app_release_branch("release-0.17.4", &version).is_ok());
+
+        let error = require_app_release_branch("main", &version).unwrap_err();
+        assert!(error.to_string().contains("release-0.17.4"));
     }
 
     #[test]

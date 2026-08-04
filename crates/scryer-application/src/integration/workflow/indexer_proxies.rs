@@ -5,7 +5,11 @@ impl AppUseCase {
     ) -> AppResult<Vec<scryer_domain::IndexerProxyConfig>> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
-        self.services.integrations.indexer_proxy_configs.list(None).await
+        self.services
+            .integrations
+            .indexer_proxy_configs
+            .list(None)
+            .await
     }
 
     pub async fn create_indexer_proxy_config(
@@ -51,7 +55,9 @@ impl AppUseCase {
             .await?;
         let id = update.id.trim();
         if id.is_empty() {
-            return Err(AppError::Validation("indexer proxy config id is required".into()));
+            return Err(AppError::Validation(
+                "indexer proxy config id is required".into(),
+            ));
         }
         if !update.has_changes() {
             return Err(AppError::Validation(
@@ -110,7 +116,9 @@ impl AppUseCase {
             .await?;
         let id = id.trim();
         if id.is_empty() {
-            return Err(AppError::Validation("indexer proxy config id is required".into()));
+            return Err(AppError::Validation(
+                "indexer proxy config id is required".into(),
+            ));
         }
         let assigned = self
             .services
@@ -141,7 +149,9 @@ impl AppUseCase {
             .await?;
         let id = id.trim();
         if id.is_empty() {
-            return Err(AppError::Validation("indexer proxy config id is required".into()));
+            return Err(AppError::Validation(
+                "indexer proxy config id is required".into(),
+            ));
         }
         let config = self
             .services
@@ -152,7 +162,7 @@ impl AppUseCase {
             .ok_or_else(|| AppError::NotFound(format!("indexer proxy config '{id}' not found")))?;
 
         let started = std::time::Instant::now();
-        let result = probe_byparr_health(&config).await;
+        let result = probe_solver_health(&config).await;
         let duration_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
         let test_result = match result {
             Ok(message) => IndexerProxyTestResult {
@@ -198,7 +208,9 @@ impl AppUseCase {
 fn normalize_indexer_proxy_name(raw: &str) -> AppResult<String> {
     let name = raw.trim().to_string();
     if name.is_empty() {
-        return Err(AppError::Validation("indexer proxy name is required".into()));
+        return Err(AppError::Validation(
+            "indexer proxy name is required".into(),
+        ));
     }
     Ok(name)
 }
@@ -206,10 +218,13 @@ fn normalize_indexer_proxy_name(raw: &str) -> AppResult<String> {
 fn normalize_indexer_proxy_base_url(raw: &str) -> AppResult<String> {
     let trimmed = raw.trim().trim_end_matches('/');
     if trimmed.is_empty() {
-        return Err(AppError::Validation("indexer proxy base URL is required".into()));
+        return Err(AppError::Validation(
+            "indexer proxy base URL is required".into(),
+        ));
     }
-    let parsed = url::Url::parse(trimmed)
-        .map_err(|error| AppError::Validation(format!("invalid indexer proxy base URL: {error}")))?;
+    let parsed = url::Url::parse(trimmed).map_err(|error| {
+        AppError::Validation(format!("invalid indexer proxy base URL: {error}"))
+    })?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(AppError::Validation(
             "indexer proxy base URL must use http or https".into(),
@@ -232,14 +247,40 @@ fn validate_indexer_proxy_timeout(timeout: u32) -> AppResult<u32> {
     Ok(timeout)
 }
 
-async fn probe_byparr_health(
-    config: &scryer_domain::IndexerProxyConfig,
-) -> AppResult<String> {
-    if config.provider_type != scryer_domain::IndexerProxyProviderType::Byparr {
-        return Err(AppError::Validation(
-            "unsupported indexer proxy provider type".into(),
-        ));
+const SOLVER_HEALTH_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
+
+async fn read_solver_health_body_bounded(
+    mut response: reqwest::Response,
+    provider: scryer_domain::IndexerProxyProviderType,
+) -> AppResult<Vec<u8>> {
+    let unreadable = || {
+        AppError::Repository(
+            crate::challenge_solver::solver_error_message(
+                provider,
+                crate::challenge_solver::SolverErrorKind::Unreadable,
+            )
+            .into(),
+        )
+    };
+    if response
+        .content_length()
+        .is_some_and(|length| length > SOLVER_HEALTH_RESPONSE_MAX_BYTES as u64)
+    {
+        return Err(unreadable());
     }
+
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| unreadable())? {
+        if body.len().saturating_add(chunk.len()) > SOLVER_HEALTH_RESPONSE_MAX_BYTES {
+            return Err(unreadable());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+async fn probe_solver_health(config: &scryer_domain::IndexerProxyConfig) -> AppResult<String> {
+    let provider_name = crate::challenge_solver::solver_provider_name(config.provider_type);
     let base_url = config.base_url.trim_end_matches('/');
     let health_url = format!("{base_url}/health");
     let client = reqwest::Client::builder()
@@ -247,45 +288,355 @@ async fn probe_byparr_health(
             config.request_timeout_seconds.saturating_add(5),
         )))
         .build()
-        .map_err(|error| AppError::Repository(format!("failed to build Byparr client: {error}")))?;
-    let health_response = client
-        .get(&health_url)
-        .send()
-        .await;
-    if let Ok(response) = health_response {
-        let status = response.status();
-        if status.is_success() {
-            return Ok(format!(
-                "Byparr health probe returned HTTP {}",
-                status.as_u16()
+        .map_err(|_| {
+            AppError::Repository(
+                crate::challenge_solver::solver_error_message(
+                    config.provider_type,
+                    crate::challenge_solver::SolverErrorKind::Unreachable,
+                )
+                .into(),
+            )
+        })?;
+    let response = client.get(&health_url).send().await.map_err(|error| {
+        let kind = if error.is_timeout() {
+            crate::challenge_solver::SolverErrorKind::Timeout
+        } else {
+            crate::challenge_solver::SolverErrorKind::Unreachable
+        };
+        AppError::Repository(
+            crate::challenge_solver::solver_error_message(config.provider_type, kind).into(),
+        )
+    })?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(format!(
+            "{provider_name} health probe returned HTTP {}",
+            status.as_u16()
+        ));
+    }
+    if status != reqwest::StatusCode::NOT_FOUND && status != reqwest::StatusCode::METHOD_NOT_ALLOWED
+    {
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
+            return Err(AppError::Repository(
+                crate::challenge_solver::solver_error_message(
+                    config.provider_type,
+                    crate::challenge_solver::SolverErrorKind::Unavailable,
+                )
+                .into(),
             ));
         }
-        if status != reqwest::StatusCode::NOT_FOUND
-            && status != reqwest::StatusCode::METHOD_NOT_ALLOWED
-        {
-            return Err(AppError::Repository(format!(
-                "Byparr health probe returned HTTP {}",
-                status.as_u16()
-            )));
-        }
+        return Err(AppError::Repository(format!(
+            "{provider_name} health probe returned HTTP {}",
+            status.as_u16()
+        )));
     }
 
-    let probe_url = crate::challenge_solver::byparr_solve_endpoint(base_url);
+    let probe_url = crate::challenge_solver::solver_solve_endpoint(base_url);
     let response = client
         .post(&probe_url)
-        .json(&crate::challenge_solver::byparr_solve_request(
+        .json(&crate::challenge_solver::solver_solve_request(
+            config.provider_type,
             "https://example.com/",
             config.request_timeout_seconds,
         ))
         .send()
         .await
-        .map_err(|error| AppError::Repository(format!("Byparr v1 probe failed: {error}")))?;
+        .map_err(|error| {
+            let kind = if error.is_timeout() {
+                crate::challenge_solver::SolverErrorKind::Timeout
+            } else {
+                crate::challenge_solver::SolverErrorKind::Unreachable
+            };
+            AppError::Repository(
+                crate::challenge_solver::solver_error_message(config.provider_type, kind).into(),
+            )
+        })?;
     let status = response.status();
     if !status.is_success() {
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
+            return Err(AppError::Repository(
+                crate::challenge_solver::solver_error_message(
+                    config.provider_type,
+                    crate::challenge_solver::SolverErrorKind::Unavailable,
+                )
+                .into(),
+            ));
+        }
         return Err(AppError::Repository(format!(
-            "Byparr v1 probe returned HTTP {}",
+            "{provider_name} v1 probe returned HTTP {}",
             status.as_u16()
         )));
     }
-    Ok(format!("Byparr v1 probe returned HTTP {}", status.as_u16()))
+    let body = read_solver_health_body_bounded(response, config.provider_type).await?;
+    crate::challenge_solver::parse_solver_solution(&body)
+        .map_err(|error| AppError::Repository(error.message(config.provider_type).into()))?;
+    Ok(format!(
+        "{provider_name} v1 probe returned HTTP {}",
+        status.as_u16()
+    ))
+}
+
+#[cfg(test)]
+mod indexer_proxy_tests {
+    use super::*;
+    use wiremock::matchers::{body_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn test_config(
+        server: &MockServer,
+        provider_type: scryer_domain::IndexerProxyProviderType,
+    ) -> scryer_domain::IndexerProxyConfig {
+        let now = Utc::now();
+        scryer_domain::IndexerProxyConfig {
+            id: "proxy-1".into(),
+            name: "Solver".into(),
+            provider_type,
+            protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+            base_url: server.uri(),
+            request_timeout_seconds: 60,
+            is_enabled: true,
+            last_health_status: None,
+            last_error_message: None,
+            last_error_at: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn trawl_health_endpoint_succeeds() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let result = probe_solver_health(&test_config(
+            &server,
+            scryer_domain::IndexerProxyProviderType::Trawl,
+        ))
+        .await
+        .expect("Trawl health probe should succeed");
+
+        assert_eq!(result, "Trawl health probe returned HTTP 200");
+    }
+
+    #[tokio::test]
+    async fn trawl_health_transport_failure_does_not_fallback_to_v1() {
+        use tokio::io::AsyncReadExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("test listener should have an address");
+        let server_task = tokio::spawn(async move {
+            let (mut first, _) = listener
+                .accept()
+                .await
+                .expect("health request should connect");
+            let mut request = [0_u8; 1024];
+            let _ = first.read(&mut request).await;
+            drop(first);
+
+            match tokio::time::timeout(std::time::Duration::from_millis(500), listener.accept())
+                .await
+            {
+                Ok(Ok((_second, _))) => 2,
+                _ => 1,
+            }
+        });
+        let now = Utc::now();
+        let config = scryer_domain::IndexerProxyConfig {
+            id: "trawl-transport-failure".into(),
+            name: "Trawl".into(),
+            provider_type: scryer_domain::IndexerProxyProviderType::Trawl,
+            protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+            base_url: format!("http://{address}"),
+            request_timeout_seconds: 60,
+            is_enabled: true,
+            last_health_status: None,
+            last_error_message: None,
+            last_error_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let error = probe_solver_health(&config)
+            .await
+            .expect_err("closed health connection should fail immediately");
+        let connection_count = server_task.await.expect("test server should join");
+
+        assert!(
+            error
+                .to_string()
+                .contains(crate::challenge_solver::TRAWL_UNREACHABLE_MESSAGE)
+        );
+        assert_eq!(
+            connection_count, 1,
+            "the /v1 fallback must not be attempted"
+        );
+    }
+
+    #[tokio::test]
+    async fn trawl_health_fallback_uses_millisecond_v1_timeout() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .and(body_json(serde_json::json!({
+                "cmd": "request.get",
+                "url": "https://example.com/",
+                "maxTimeout": 60_000
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok",
+                "solution": {
+                    "url": "https://example.com/",
+                    "status": 200,
+                    "response": "<html></html>",
+                    "cookies": [],
+                    "userAgent": "Trawl"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let result = probe_solver_health(&test_config(
+            &server,
+            scryer_domain::IndexerProxyProviderType::Trawl,
+        ))
+        .await
+        .expect("Trawl v1 fallback should succeed");
+
+        assert_eq!(result, "Trawl v1 probe returned HTTP 200");
+    }
+
+    #[tokio::test]
+    async fn trawl_health_fallback_rejects_malformed_solver_output() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(ResponseTemplate::new(405))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&server)
+            .await;
+
+        let error = probe_solver_health(&test_config(
+            &server,
+            scryer_domain::IndexerProxyProviderType::Trawl,
+        ))
+        .await
+        .expect_err("malformed Trawl output should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains(crate::challenge_solver::TRAWL_MALFORMED_MESSAGE)
+        );
+    }
+
+    #[tokio::test]
+    async fn trawl_health_fallback_rejects_error_envelope_with_solution() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "error",
+                "message": "Browser pool initializing, retry in a few seconds",
+                "solution": {
+                    "url": "https://example.com/",
+                    "status": 0,
+                    "headers": {},
+                    "response": "",
+                    "cookies": [],
+                    "userAgent": ""
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let error = probe_solver_health(&test_config(
+            &server,
+            scryer_domain::IndexerProxyProviderType::Trawl,
+        ))
+        .await
+        .expect_err("Trawl error envelopes must fail health checks");
+
+        assert!(
+            error
+                .to_string()
+                .contains(crate::challenge_solver::TRAWL_UNAVAILABLE_MESSAGE)
+        );
+    }
+
+    #[tokio::test]
+    async fn trawl_health_fallback_rejects_oversized_solver_output() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![
+                b'x';
+                SOLVER_HEALTH_RESPONSE_MAX_BYTES
+                    + 1
+            ]))
+            .mount(&server)
+            .await;
+
+        let error = probe_solver_health(&test_config(
+            &server,
+            scryer_domain::IndexerProxyProviderType::Trawl,
+        ))
+        .await
+        .expect_err("oversized Trawl output must fail health checks");
+
+        assert!(
+            error
+                .to_string()
+                .contains(crate::challenge_solver::TRAWL_UNREADABLE_MESSAGE)
+        );
+    }
+
+    #[tokio::test]
+    async fn trawl_health_rate_limit_is_classified_as_solver_unavailable() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(ResponseTemplate::new(429))
+            .mount(&server)
+            .await;
+
+        let error = probe_solver_health(&test_config(
+            &server,
+            scryer_domain::IndexerProxyProviderType::Trawl,
+        ))
+        .await
+        .expect_err("rate-limited Trawl health should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains(crate::challenge_solver::TRAWL_UNAVAILABLE_MESSAGE)
+        );
+    }
 }

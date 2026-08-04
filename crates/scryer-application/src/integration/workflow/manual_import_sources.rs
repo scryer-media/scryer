@@ -129,129 +129,6 @@ async fn enrich_queue_item_import_states(app: &AppUseCase, items: &mut [Download
     }
 }
 impl AppUseCase {
-    pub async fn queue_manual_import(
-        &self,
-        actor: &User,
-        title_id: Option<String>,
-        client_id: Option<String>,
-        client_type: String,
-        download_client_item_id: String,
-        files: Option<Vec<crate::ManualImportFileMapping>>,
-    ) -> AppResult<String> {
-        let source_ref = download_client_item_id.trim().to_string();
-        if source_ref.is_empty() {
-            return Err(AppError::Validation(
-                "download client item id is required".to_string(),
-            ));
-        }
-
-        let normalized_client_type = client_type.trim().to_lowercase();
-        if normalized_client_type.is_empty() {
-            return Err(AppError::Validation("client type is required".to_string()));
-        }
-
-        let files = files.unwrap_or_default();
-        if !files.is_empty() && title_id.is_none() {
-            return Err(AppError::Validation(
-                "title id is required for mapped manual import".to_string(),
-            ));
-        }
-        if !files.is_empty() {
-            crate::import_workflow::validate_manual_import_mapping_targets(&files)?;
-        }
-
-        if let Some(title_id) = title_id.as_deref() {
-            self.require_title_library_permission(
-                actor,
-                title_id,
-                scryer_domain::LibraryPermission::ResolveImports,
-            )
-            .await?;
-        } else {
-            self.require_any_library_permission(
-                actor,
-                scryer_domain::LibraryPermission::ResolveImports,
-            )
-            .await?;
-        }
-
-        match self
-            .resolve_manual_import_source_for_queue(
-                client_id.as_deref(),
-                Some(normalized_client_type.as_str()),
-                &source_ref,
-            )
-            .await?
-        {
-            ManualImportSourceResolution::Eligible { .. } => {}
-            ManualImportSourceResolution::SourceFailed { message } => {
-                return Err(AppError::Validation(format!(
-                    "source_job_failed: {message}"
-                )));
-            }
-            ManualImportSourceResolution::NotEligible { message } => {
-                return Err(AppError::Validation(message));
-            }
-        }
-
-        if let Some(existing) = crate::import_workflow::find_active_manual_import_for_source(
-            self,
-            client_id.as_deref(),
-            normalized_client_type.as_str(),
-            &source_ref,
-        )
-        .await?
-        {
-            return Ok(existing.id);
-        }
-
-        let source_identity = DownloadSourceIdentity::new(
-            client_id.as_deref(),
-            normalized_client_type.as_str(),
-            source_ref.as_str(),
-        );
-
-        let payload_json = serde_json::to_string(&crate::ManualImportRequestPayload {
-            requested_by_user_id: Some(actor.id.clone()),
-            title_id: title_id.clone(),
-            download_client_item_id: source_ref.clone(),
-            client_id: client_id.clone(),
-            client_type: normalized_client_type.clone(),
-            files,
-            trusted_source_root: None,
-            selection_id: None,
-            requested_at: Utc::now().to_rfc3339(),
-        })
-        .map_err(|error| AppError::Repository(error.to_string()))?;
-
-        let import_id = self
-            .services
-            .workflow
-            .imports
-            .queue_import_request(
-                source_identity,
-                ImportType::ManualImport.as_str().to_string(),
-                payload_json,
-            )
-            .await?;
-
-        let title = match title_id.as_deref() {
-            Some(id) => self.services.catalog.titles.get_by_id(id).await?,
-            None => None,
-        };
-        self.emit_import_requested_event(
-            actor,
-            title.as_ref(),
-            normalized_client_type,
-            source_ref,
-            scryer_domain::ImportRequestKind::Manual,
-        )
-        .await;
-
-        Ok(import_id)
-    }
-}
-impl AppUseCase {
     pub async fn queue_manual_import_selection(
         &self,
         actor: &User,
@@ -270,19 +147,51 @@ impl AppUseCase {
                     "manual import selection is unavailable; reopen the import dialog".to_string(),
                 )
             })?;
-        self.require_title_library_permission(
+        let source_identity = selection.source_identity.clone();
+        let client_id = source_identity
+            .client_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                AppError::Validation("download is no longer available for manual import".to_string())
+            })?;
+        let completed = crate::import_workflow::resolve_current_manual_import_source(
+            self,
             actor,
+            client_id,
+            &source_identity.client_type,
+            &source_identity.item_id,
             &selection.title_id,
-            scryer_domain::LibraryPermission::ResolveImports,
         )
-        .await?;
+        .await
+        .map_err(|_| {
+            AppError::Validation("download is no longer available for manual import".to_string())
+        })?;
+        let trusted_root = std::fs::canonicalize(&completed.dest_dir).map_err(|_| {
+            AppError::Validation("download is no longer available for manual import".to_string())
+        })?;
+        for candidate in selection.candidates.iter().filter(|candidate| {
+            mappings
+                .iter()
+                .any(|mapping| mapping.candidate_id == candidate.id)
+        }) {
+            crate::import_workflow::validate_manual_import_source_under_trusted_root(
+                &crate::stored_paths::stored_path_to_path_buf(&candidate.canonical_path),
+                &trusted_root,
+            )
+            .map_err(|_| {
+                AppError::Validation(
+                    "download is no longer available for manual import".to_string(),
+                )
+            })?;
+        }
 
-        let source = &selection.source.source_identity;
         if let Some(existing) = crate::import_workflow::find_active_manual_import_for_source(
             self,
-            source.client_id.as_deref(),
-            &source.client_type,
-            &source.item_id,
+            Some(client_id),
+            &source_identity.client_type,
+            &source_identity.item_id,
         )
         .await?
         {
@@ -323,7 +232,7 @@ impl AppUseCase {
                 })
             })
             .collect::<AppResult<Vec<_>>>()?;
-        let source_identity = selection.source.source_identity.clone();
+        let source_identity = selection.source_identity.clone();
         let payload_json = serde_json::to_string(&crate::ManualImportRequestPayload {
             requested_by_user_id: Some(actor.id.clone()),
             title_id: Some(selection.title_id.clone()),
@@ -332,7 +241,6 @@ impl AppUseCase {
             client_type: source_identity.client_type.clone(),
             files,
             requested_at: Utc::now().to_rfc3339(),
-            trusted_source_root: Some(selection.source.trusted_root.clone()),
             selection_id: Some(selection.id),
         })
         .map_err(|error| AppError::Repository(error.to_string()))?;

@@ -369,7 +369,7 @@ fn contains_expensive_field(query: &str) -> bool {
         "subtitleSearch",
         "subtitleDownload",
         "releaseDecisions",
-        "previewManualImport",
+        "beginManualImportSelection",
         "pendingImportBindingPreview",
         "titleAcquisitionDiagnostics",
     ]

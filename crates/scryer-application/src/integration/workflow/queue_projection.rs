@@ -288,14 +288,6 @@ fn annotate_download_queue_item(
     }
     item
 }
-fn source_failed_message(item: &DownloadQueueItem) -> String {
-    let message = build_download_queue_status_detail(item).trim().to_string();
-    if message.is_empty() {
-        "source download failed before import".to_string()
-    } else {
-        message
-    }
-}
 fn download_queue_projection_key(item: &DownloadQueueItem) -> String {
     if item.client_id.trim().is_empty() {
         return format!("{}::{}", item.client_type, item.download_client_item_id);

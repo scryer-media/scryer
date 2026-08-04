@@ -12,6 +12,7 @@ use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
 
 use crate::runtime_backing::PreopenSpec;
+use crate::wasmtime_host::command_host::CommandHost;
 
 /// Provisional default memory cap for an archive instance: 1 GiB.
 ///
@@ -50,6 +51,25 @@ const STDERR_CAPACITY_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) struct HostCtx {
     pub(crate) wasi: WasiP1Ctx,
     pub(crate) limits: HostLimits,
+    pub(crate) command_host: CommandHost,
+}
+
+impl HostCtx {
+    pub(crate) fn new(wasi: WasiP1Ctx, limits: HostLimits) -> Self {
+        Self::with_command_host(wasi, limits, CommandHost::disabled())
+    }
+
+    pub(crate) fn with_command_host(
+        wasi: WasiP1Ctx,
+        limits: HostLimits,
+        command_host: CommandHost,
+    ) -> Self {
+        Self {
+            wasi,
+            limits,
+            command_host,
+        }
+    }
 }
 
 /// Memory-cap limiter that also records the first denial, so the error mapper

@@ -3052,24 +3052,6 @@ pub trait ImportRepository: Send + Sync {
         Ok(false)
     }
 
-    /// Registers a canonical, server-observed completed-download root. Implementations must not
-    /// derive this value from a client-provided path.
-    async fn upsert_manual_import_source(
-        &self,
-        _source: ManualImportSourceRegistration,
-    ) -> AppResult<()> {
-        Err(AppError::Repository(
-            "manual import source persistence is not configured".to_string(),
-        ))
-    }
-
-    async fn get_manual_import_source(
-        &self,
-        _source_identity: &DownloadSourceIdentity,
-    ) -> AppResult<Option<ManualImportSourceRegistration>> {
-        Ok(None)
-    }
-
     /// Replaces the caller's previous unconsumed selection for the same source and title.
     async fn replace_manual_import_selection(
         &self,
@@ -3108,7 +3090,7 @@ pub trait ImportRepository: Send + Sync {
         Ok(None)
     }
 
-    async fn delete_manual_import_source(
+    async fn delete_manual_import_selections_for_source(
         &self,
         _source_identity: &DownloadSourceIdentity,
     ) -> AppResult<()> {

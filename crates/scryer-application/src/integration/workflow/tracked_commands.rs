@@ -276,7 +276,7 @@ pub(crate) async fn finalize_scryer_download_ignored(
         .services
         .workflow
         .imports
-        .delete_manual_import_source(&source_identity)
+        .delete_manual_import_selections_for_source(&source_identity)
         .await
     {
         tracing::warn!(
@@ -602,16 +602,33 @@ async fn process_tracked_download_snapshot(
         }
     }
 
-    match prune {
+    let unavailable_sources = match prune {
         TrackedDownloadSnapshotPrune::GlobalExcludingClientTypes => runtime
             .tracker
             .update_trackable_excluding_client_types(&seen_ids, excluded_client_type_refs),
         TrackedDownloadSnapshotPrune::Scope(scope) => {
             runtime
                 .tracker
-                .update_trackable_for_scope(&seen_ids, &scope);
+                .update_trackable_for_scope(&seen_ids, &scope)
         }
-        TrackedDownloadSnapshotPrune::None => {}
+        TrackedDownloadSnapshotPrune::None => Vec::new(),
+    };
+
+    for source_identity in unavailable_sources {
+        if let Err(error) = app
+            .services
+            .workflow
+            .imports
+            .delete_manual_import_selections_for_source(&source_identity)
+            .await
+        {
+            tracing::warn!(
+                error = %error,
+                client_type = %source_identity.client_type,
+                item_id = %source_identity.item_id,
+                "failed to clean up manual-import selections for unavailable download"
+            );
+        }
     }
 
     reconcile_terminal_tracked_downloads(app, &mut runtime.tracker).await;

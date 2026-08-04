@@ -1,0 +1,107 @@
+name: Validate release provenance plumbing
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  prepare-subject:
+    name: prepare-nonpublishing-subject
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      base64_subjects: ${{ steps.subjects.outputs.base64_subjects }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.0.0
+
+      - name: Create validation subject
+        id: subjects
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'Scryer release provenance validation for %s\n' "$GITHUB_SHA" > scryer-provenance-validation.txt
+          sha256sum scryer-provenance-validation.txt > scryer-provenance-validation.sha256
+          echo "base64_subjects=$(base64 < scryer-provenance-validation.sha256 | tr -d '\n')" >> "$GITHUB_OUTPUT"
+
+      - name: Upload validation subject
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: scryer-provenance-validation-${{ github.run_id }}
+          path: scryer-provenance-validation.txt
+          if-no-files-found: error
+          retention-days: 5
+
+  generate-provenance:
+    name: generate-nonpublishing-provenance
+    needs: [prepare-subject]
+    if: ${{ github.ref == 'refs/heads/main' }}
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.prepare-subject.outputs.base64_subjects }}
+      provenance-name: scryer-provenance-validation.intoto.jsonl
+
+  verify-provenance:
+    name: verify-nonpublishing-provenance
+    needs: [prepare-subject, generate-provenance]
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download validation subject
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        with:
+          name: scryer-provenance-validation-${{ github.run_id }}
+          path: validation
+
+      - name: Download validation provenance
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        with:
+          name: scryer-provenance-validation.intoto.jsonl
+          path: validation
+
+      - name: Install SLSA verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/slsa-framework/slsa-verifier/v2/cli/slsa-verifier@v2.7.1
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Verify generated SLSA provenance
+        working-directory: validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          slsa-verifier verify-artifact \
+            --provenance-path scryer-provenance-validation.intoto.jsonl \
+            --source-uri "github.com/${{ github.repository }}" \
+            --source-branch main \
+            scryer-provenance-validation.txt
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
+        with:
+          cosign-release: v2.2.3
+
+      - name: Verify keyless checksum signing
+        working-directory: validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum scryer-provenance-validation.txt > scryer-checksums.txt
+          cosign sign-blob --yes \
+            --bundle scryer-checksums.txt.sigstore.json \
+            scryer-checksums.txt
+          cosign verify-blob \
+            --bundle scryer-checksums.txt.sigstore.json \
+            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/release-provenance-validation.yml@refs/heads/main" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            scryer-checksums.txt

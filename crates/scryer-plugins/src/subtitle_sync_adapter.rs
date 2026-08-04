@@ -57,6 +57,9 @@ impl SubtitleSyncClient for WasmSubtitleSyncClient {
             PluginRuntimeBacking::WasmtimeArchive => Err(AppError::Repository(
                 "subtitle sync plugin cannot use the archive runtime backing".to_string(),
             )),
+            PluginRuntimeBacking::WasmtimeCommand => Err(AppError::Repository(
+                "subtitle sync plugin cannot use the generic command runtime backing".to_string(),
+            )),
         }
     }
 }
@@ -335,6 +338,7 @@ impl PreparedSubtitleSyncCommand {
             preopens,
             timeout: std::time::Duration::from_secs(SUBTITLE_SYNC_TIMEOUT_SECONDS),
             memory_max_bytes: None,
+            command_host: crate::wasmtime_host::command_host::CommandHost::disabled(),
         }
     }
 

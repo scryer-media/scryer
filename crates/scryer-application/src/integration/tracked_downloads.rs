@@ -329,13 +329,21 @@ impl TrackedDownloadService {
     }
 
     /// Mark downloads no longer visible in any client as untrackable.
-    pub fn update_trackable(&mut self, seen_ids: &HashSet<String>) {
+    pub fn update_trackable(&mut self, seen_ids: &HashSet<String>) -> Vec<DownloadSourceIdentity> {
+        let mut unavailable_sources = Vec::new();
         for td in self.cache.values_mut() {
-            if !seen_ids.contains(&td.id) && !should_preserve_tracking(td.state) {
+            if td.is_trackable && !seen_ids.contains(&td.id) && !should_preserve_tracking(td.state)
+            {
                 td.is_trackable = false;
+                unavailable_sources.push(DownloadSourceIdentity::new(
+                    Some(&td.client_id),
+                    &td.client_type,
+                    &td.client_item.download_client_item_id,
+                ));
             }
         }
         self.prune_cache();
+        unavailable_sources
     }
 
     /// Mark downloads no longer visible in non-excluded clients as untrackable.
@@ -343,16 +351,24 @@ impl TrackedDownloadService {
         &mut self,
         seen_ids: &HashSet<String>,
         excluded_client_types: &[&str],
-    ) {
+    ) -> Vec<DownloadSourceIdentity> {
+        let mut unavailable_sources = Vec::new();
         for td in self.cache.values_mut() {
             if tracked_client_type_is_excluded(&td.client_type, excluded_client_types) {
                 continue;
             }
-            if !seen_ids.contains(&td.id) && !should_preserve_tracking(td.state) {
+            if td.is_trackable && !seen_ids.contains(&td.id) && !should_preserve_tracking(td.state)
+            {
                 td.is_trackable = false;
+                unavailable_sources.push(DownloadSourceIdentity::new(
+                    Some(&td.client_id),
+                    &td.client_type,
+                    &td.client_item.download_client_item_id,
+                ));
             }
         }
         self.prune_cache();
+        unavailable_sources
     }
 
     /// Mark downloads absent from an authoritative client-scoped snapshot as untrackable.
@@ -360,24 +376,32 @@ impl TrackedDownloadService {
         &mut self,
         seen_ids: &HashSet<String>,
         scope: &TrackedDownloadSnapshotScope,
-    ) {
+    ) -> Vec<DownloadSourceIdentity> {
         let TrackedDownloadSnapshotScope::AuthoritativeForClient {
             client_id,
             client_type,
         } = scope
         else {
-            return;
+            return Vec::new();
         };
 
+        let mut unavailable_sources = Vec::new();
         for td in self.cache.values_mut() {
             if tracked_matches_snapshot_scope(td, client_id.as_deref(), client_type)
+                && td.is_trackable
                 && !seen_ids.contains(&td.id)
                 && !should_preserve_tracking(td.state)
             {
                 td.is_trackable = false;
+                unavailable_sources.push(DownloadSourceIdentity::new(
+                    Some(&td.client_id),
+                    &td.client_type,
+                    &td.client_item.download_client_item_id,
+                ));
             }
         }
         self.prune_cache();
+        unavailable_sources
     }
 
     /// Remove a download from the cache (after terminal state).
@@ -1115,7 +1139,6 @@ fn should_preserve_tracking(state: TrackedDownloadState) -> bool {
         state,
         TrackedDownloadState::ImportPending
             | TrackedDownloadState::Importing
-            | TrackedDownloadState::ImportBlocked
             | TrackedDownloadState::FailedPending
     )
 }
@@ -3380,13 +3403,12 @@ mod tests {
     }
 
     #[test]
-    fn update_trackable_preserves_in_flight_import_states() {
+    fn update_trackable_drops_import_blocked_sources_missing_from_client_snapshot() {
         let mut tracker = TrackedDownloadService::new();
 
         for (suffix, state) in [
             ("pending", TrackedDownloadState::ImportPending),
             ("importing", TrackedDownloadState::Importing),
-            ("blocked", TrackedDownloadState::ImportBlocked),
             ("failed", TrackedDownloadState::FailedPending),
         ] {
             tracker.cache.insert(
@@ -3417,7 +3439,7 @@ mod tests {
             );
         }
 
-        tracker.update_trackable(&HashSet::new());
+        let unavailable_sources = tracker.update_trackable(&HashSet::new());
 
         assert!(
             tracker
@@ -3431,14 +3453,19 @@ mod tests {
         );
         assert!(
             tracker
-                .find("client-1:blocked")
-                .is_some_and(|td| td.is_trackable)
-        );
-        assert!(
-            tracker
                 .find("client-1:failed")
                 .is_some_and(|td| td.is_trackable)
         );
+        assert!(unavailable_sources.is_empty());
+
+        let mut blocked = build_tracked_download("blocked");
+        blocked.state = TrackedDownloadState::ImportBlocked;
+        let blocked_id = blocked.id.clone();
+        tracker.cache.insert(blocked_id.clone(), blocked);
+
+        let unavailable_sources = tracker.update_trackable(&HashSet::new());
+        assert!(tracker.find(&blocked_id).is_some_and(|td| !td.is_trackable));
+        assert_eq!(unavailable_sources.len(), 1);
     }
 
     #[test]
@@ -3628,130 +3655,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn queue_manual_import_rejects_failed_source_job() {
-        let mut failed_item = build_client_item();
-        failed_item.client_type = "weaver".to_string();
-        failed_item.client_name = "weaver".to_string();
-        failed_item.download_client_item_id = "job-failed".to_string();
-        failed_item.state = DownloadQueueState::Failed;
-        failed_item.attention_reason = Some("health below critical".to_string());
-
-        let download_client = Arc::new(TestDownloadClient {
-            recent_activity: Arc::new(Mutex::new(vec![failed_item])),
-            ..Default::default()
-        });
-        let app = build_app_with_title_repo_and_download_client(
-            Arc::new(NullTitleRepository),
-            download_client,
-            Arc::new(TestDownloadSubmissionRepo::default()),
-            Arc::new(TestImportRepo::default()),
-        );
-
-        let result = app
-            .queue_manual_import(
-                &trigger_user(),
-                None,
-                Some("client-1".to_string()),
-                "weaver".to_string(),
-                "job-failed".to_string(),
-                None,
-            )
-            .await;
-
-        assert!(matches!(
-            result,
-            Err(AppError::Validation(message)) if message.contains("source_job_failed")
-        ));
-    }
-
-    #[tokio::test]
-    async fn queue_manual_import_uses_tracked_blocked_source_without_live_feedback() {
-        let mut blocked_item = build_client_item();
-        blocked_item.client_type = "weaver".to_string();
-        blocked_item.client_name = "weaver".to_string();
-        blocked_item.download_client_item_id = "job-tracked-blocked".to_string();
-        blocked_item.state = DownloadQueueState::Completed;
-
-        let app = build_app(
-            Arc::new(TestDownloadSubmissionRepo::default()),
-            Arc::new(TestImportRepo::default()),
-        );
-        app.runtime
-            .acquisition
-            .tracked_download_snapshot
-            .write()
-            .await
-            .insert(
-                "tracked-job-tracked-blocked".to_string(),
-                TrackedDownloadQueueMetadata {
-                    client_item: blocked_item,
-                    client_id: "client-1".to_string(),
-                    client_type: "weaver".to_string(),
-                    title_id: None,
-                    facet: None,
-                    source_title: None,
-                    state: TrackedDownloadState::ImportBlocked,
-                    status: TrackedDownloadStatus::Warning,
-                    status_messages: Vec::new(),
-                    match_type: TitleMatchType::Unmatched,
-                    foreign_import_classification: None,
-                },
-            );
-
-        let result = app
-            .queue_manual_import(
-                &trigger_user(),
-                None,
-                Some("client-1".to_string()),
-                "weaver".to_string(),
-                "job-tracked-blocked".to_string(),
-                None,
-            )
-            .await;
-
-        assert!(result.is_ok(), "tracked manual import failed: {result:?}");
-    }
-
-    #[tokio::test]
-    async fn queue_manual_import_propagates_persistence_failure() {
-        let mut completed_item = build_client_item();
-        completed_item.client_type = "weaver".to_string();
-        completed_item.client_name = "weaver".to_string();
-        completed_item.download_client_item_id = "job-persistence-failure".to_string();
-        completed_item.state = DownloadQueueState::Completed;
-
-        let download_client = Arc::new(TestDownloadClient {
-            recent_activity: Arc::new(Mutex::new(vec![completed_item])),
-            ..Default::default()
-        });
-        let app = build_app_with_title_repo_and_download_client(
-            Arc::new(NullTitleRepository),
-            download_client,
-            Arc::new(TestDownloadSubmissionRepo::default()),
-            Arc::new(TestImportRepo {
-                queue_error: Some("manual import persistence failed".to_string()),
-                ..Default::default()
-            }),
-        );
-
-        let result = app
-            .queue_manual_import(
-                &trigger_user(),
-                None,
-                Some("client-1".to_string()),
-                "weaver".to_string(),
-                "job-persistence-failure".to_string(),
-                None,
-            )
-            .await;
-
-        assert!(matches!(
-            result,
-            Err(AppError::Repository(message)) if message == "manual import persistence failed"
-        ));
-    }
-
-    #[tokio::test]
     async fn failed_source_invalidates_active_manual_import_request() {
         let payload = crate::ManualImportRequestPayload {
             requested_by_user_id: Some("user-1".to_string()),
@@ -3760,7 +3663,6 @@ mod tests {
             client_id: Some("client-1".to_string()),
             client_type: "weaver".to_string(),
             files: Vec::new(),
-            trusted_source_root: None,
             selection_id: None,
             requested_at: Utc::now().to_rfc3339(),
         };
@@ -3832,7 +3734,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn queue_manual_import_reuses_only_matching_client_request() {
+    async fn active_manual_import_lookup_matches_the_exact_client() {
         let payload_other = crate::ManualImportRequestPayload {
             requested_by_user_id: Some("user-1".to_string()),
             title_id: Some("title-1".to_string()),
@@ -3840,7 +3742,6 @@ mod tests {
             client_id: Some("client-2".to_string()),
             client_type: "weaver".to_string(),
             files: Vec::new(),
-            trusted_source_root: None,
             selection_id: None,
             requested_at: Utc::now().to_rfc3339(),
         };
@@ -3913,17 +3814,16 @@ mod tests {
             imports,
         );
 
-        let import_id = app
-            .queue_manual_import(
-                &trigger_user(),
-                None,
-                Some("client-1".to_string()),
-                "weaver".to_string(),
-                "job-shared".to_string(),
-                None,
-            )
-            .await
-            .expect("manual import should reuse matching request");
+        let import_id = crate::import_workflow::find_active_manual_import_for_source(
+            &app,
+            Some("client-1"),
+            "weaver",
+            "job-shared",
+        )
+        .await
+        .expect("lookup should succeed")
+        .expect("matching request should be found")
+        .id;
 
         assert_eq!(import_id, "import-match");
     }
@@ -3937,7 +3837,6 @@ mod tests {
             client_id: Some("client-2".to_string()),
             client_type: "weaver".to_string(),
             files: Vec::new(),
-            trusted_source_root: None,
             selection_id: None,
             requested_at: Utc::now().to_rfc3339(),
         };

@@ -518,6 +518,7 @@ export function SettingsIndexersSection({
             <TableHeader>
               <TableRow>
                 <TableHead>{t("label.name")}</TableHead>
+                <TableHead>Provider</TableHead>
                 <TableHead>{t("settings.baseUrl")}</TableHead>
                 <TableHead className="text-center">{t("label.enabled")}</TableHead>
                 <TableHead>Health</TableHead>
@@ -529,6 +530,9 @@ export function SettingsIndexersSection({
               {indexerProxyConfigs.map((proxy) => (
                 <TableRow key={proxy.id} id={selectorId("settings-indexer-proxy-row", proxy.name)}>
                   <TableCell className="font-medium">{proxy.name}</TableCell>
+                  <TableCell>
+                    {proxy.providerType === "trawl" ? "Trawl" : "Byparr"}
+                  </TableCell>
                   <TableCell className="max-w-[280px] truncate">{proxy.baseUrl}</TableCell>
                   <TableCell className="text-center">
                     <RenderBooleanIcon
@@ -586,7 +590,7 @@ export function SettingsIndexersSection({
               ))}
               {indexerProxyConfigs.length === 0 ? (
                 <TableRow id="settings-indexer-proxies-empty-row">
-                  <TableCell colSpan={6} className="text-muted-foreground">
+                  <TableCell colSpan={7} className="text-muted-foreground">
                     No indexer proxies configured.
                   </TableCell>
                 </TableRow>
@@ -605,9 +609,33 @@ export function SettingsIndexersSection({
           <CardContent>
         <form
           id="settings-indexer-proxy-form"
-          className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_10rem_auto_auto]"
+          className="grid gap-3 md:grid-cols-[10rem_minmax(0,1fr)_minmax(0,1.4fr)_10rem_auto_auto]"
           onSubmit={submitIndexerProxy}
         >
+          <label>
+            <Label className="mb-2 block" htmlFor="settings-indexer-proxy-provider-type">
+              Provider
+            </Label>
+            <Select
+              value={indexerProxyDraft.providerType}
+              disabled={editingProxyId !== null}
+              onValueChange={(value) => {
+                if (value !== "byparr" && value !== "trawl") return;
+                setIndexerProxyDraft((prev) => ({
+                  ...prev,
+                  providerType: value,
+                }));
+              }}
+            >
+              <SelectTrigger id="settings-indexer-proxy-provider-type" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="byparr">Byparr</SelectItem>
+                <SelectItem value="trawl">Trawl</SelectItem>
+              </SelectContent>
+            </Select>
+          </label>
           <label>
             <Label className="mb-2 block" htmlFor="settings-indexer-proxy-name">
               {t("label.name")}

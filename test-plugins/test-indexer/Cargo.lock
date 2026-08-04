@@ -4,9 +4,9 @@ version = 4
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "autocfg"
@@ -19,6 +19,12 @@ name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
+name = "base64"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b25655df2c3cdd83c5e5b293b88acd880332b2ddadd7c30ac43144fdc0033da9"
 
 [[package]]
 name = "bytemuck"
@@ -57,7 +63,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec1a8eac059a1730a21aa47f99a0c2075ba0ab88fd0c4e52e35027cf99cdf3e7"
 dependencies = [
  "anyhow",
- "base64",
+ "base64 0.22.1",
  "bytemuck",
  "extism-convert-macros",
  "prost",
@@ -85,7 +91,7 @@ version = "1.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "953a22ad322939ae4567ec73a34913a3a43dcbdfa648b8307d38fe56bb3a0acd"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "serde",
  "serde_json",
 ]
@@ -97,7 +103,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "352fcb5a66eb74145a1c4a01f2bd15d59c62c85be73aac8471880c65b26b798f"
 dependencies = [
  "anyhow",
- "base64",
+ "base64 0.22.1",
  "extism-convert",
  "extism-manifest",
  "extism-pdk-derive",
@@ -312,10 +318,9 @@ dependencies = [
 
 [[package]]
 name = "scryer-plugin-sdk"
-version = "3.0.0"
+version = "3.6.0"
 dependencies = [
- "base64",
- "extism-manifest",
+ "base64 0.23.0",
  "extism-pdk",
  "schemars",
  "semver",

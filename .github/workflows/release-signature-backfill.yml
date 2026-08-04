@@ -1,0 +1,110 @@
+name: Backfill historic release checksum signatures
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Historic release tag to sign
+        required: true
+        type: choice
+        options:
+          - scryer-v0.16.8
+          - scryer-v0.17.0
+          - scryer-v0.17.1
+          - scryer-v0.17.2
+          - scryer-v0.17.3
+
+permissions: {}
+
+jobs:
+  backfill:
+    name: sign-${{ inputs.tag }}-checksums
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Validate allowlisted historic tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          case "$RELEASE_TAG" in
+            scryer-v0.16.8|scryer-v0.17.0|scryer-v0.17.1|scryer-v0.17.2|scryer-v0.17.3) ;;
+            *) echo "tag is not approved for signature backfill: $RELEASE_TAG" >&2; exit 1 ;;
+          esac
+
+      - name: Download existing release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir release-artifacts
+          gh release download "$RELEASE_TAG" \
+            --dir release-artifacts \
+            --pattern 'scryer-*' \
+            --clobber
+
+      - name: Verify unchanged release archives
+        working-directory: release-artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum -c scryer-checksums.txt
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
+        with:
+          cosign-release: v2.2.3
+
+      - name: Keylessly sign and verify the existing checksum manifest
+        working-directory: release-artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --bundle scryer-checksums.txt.sigstore.json \
+            scryer-checksums.txt
+          cosign verify-blob \
+            --bundle scryer-checksums.txt.sigstore.json \
+            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/release-signature-backfill.yml@refs/heads/main" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            scryer-checksums.txt
+
+      - name: Upload only the signature bundle
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" \
+            release-artifacts/scryer-checksums.txt.sigstore.json \
+            --clobber
+
+      - name: Add transparent post-publication signature note
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          release_path="repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}"
+          release_id="$(gh api "$release_path" --jq .id)"
+          release_body="$(gh api "$release_path" --jq '.body // ""')"
+          marker='<!-- scryer-post-publication-checksum-signature -->'
+          if [[ "$release_body" == *"$marker"* ]]; then
+            exit 0
+          fi
+          note="${marker}
+
+          **Post-publication maintainer signature.** The unchanged scryer-checksums.txt asset was
+          keylessly signed by a maintainer workflow after this release was originally published. This
+          is not recreated SLSA build provenance."
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+            --raw-field body="${release_body}"$'\n\n'"${note}" > /dev/null

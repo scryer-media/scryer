@@ -141,7 +141,7 @@ type Props = {
   onOpenChange: (open: boolean) => void;
   titleId: string;
   titleName: string;
-  clientId?: string;
+  clientId: string;
   clientType: string;
   downloadClientItemId: string;
   onImportComplete?: () => void;

@@ -1,4 +1,4 @@
-//! Canonical Byparr (FlareSolverr-compatible) challenge-solver protocol support.
+//! Canonical FlareSolverr-compatible challenge-solver protocol support.
 //!
 //! This module is the single owner of the solver wire format, challenge
 //! detection, solved-session reuse, solver-vs-target error classification, and
@@ -17,7 +17,7 @@ use crate::IndexerProxyConfigRepository;
 use scryer_domain::IndexerProxyHealthStatus;
 
 /// Path of the FlareSolverr-compatible solve endpoint under the proxy base URL.
-pub const BYPARR_SOLVE_PATH: &str = "/v1";
+pub const SOLVER_SOLVE_PATH: &str = "/v1";
 
 /// Bytes of a response body inspected for challenge and rate-limit markers.
 pub const CHALLENGE_BODY_PREVIEW_BYTES: usize = 256 * 1024;
@@ -38,6 +38,52 @@ pub const BYPARR_UNREADABLE_MESSAGE: &str = "Byparr returned an unreadable respo
 /// and the challenge may simply be unsolvable.
 pub const BYPARR_NO_SOLUTION_MESSAGE: &str = "Byparr did not return a solved response.";
 
+pub const TRAWL_UNREACHABLE_MESSAGE: &str = "Trawl service could not be reached.";
+pub const TRAWL_TIMEOUT_MESSAGE: &str = "Trawl timed out while resolving the indexer request.";
+pub const TRAWL_UNAVAILABLE_MESSAGE: &str = "Trawl service is temporarily unavailable.";
+pub const TRAWL_MALFORMED_MESSAGE: &str = "Trawl returned malformed solver output.";
+pub const TRAWL_UNREADABLE_MESSAGE: &str = "Trawl returned an unreadable response.";
+pub const TRAWL_NO_SOLUTION_MESSAGE: &str = "Trawl did not return a solved response.";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SolverErrorKind {
+    Unreachable,
+    Timeout,
+    Unavailable,
+    Malformed,
+    Unreadable,
+    MissingSolution,
+}
+
+pub fn solver_provider_name(provider: scryer_domain::IndexerProxyProviderType) -> &'static str {
+    match provider {
+        scryer_domain::IndexerProxyProviderType::Byparr => "Byparr",
+        scryer_domain::IndexerProxyProviderType::Trawl => "Trawl",
+    }
+}
+
+pub fn solver_error_message(
+    provider: scryer_domain::IndexerProxyProviderType,
+    kind: SolverErrorKind,
+) -> &'static str {
+    use scryer_domain::IndexerProxyProviderType::{Byparr, Trawl};
+
+    match (provider, kind) {
+        (Byparr, SolverErrorKind::Unreachable) => BYPARR_UNREACHABLE_MESSAGE,
+        (Byparr, SolverErrorKind::Timeout) => BYPARR_TIMEOUT_MESSAGE,
+        (Byparr, SolverErrorKind::Unavailable) => BYPARR_UNAVAILABLE_MESSAGE,
+        (Byparr, SolverErrorKind::Malformed) => BYPARR_MALFORMED_MESSAGE,
+        (Byparr, SolverErrorKind::Unreadable) => BYPARR_UNREADABLE_MESSAGE,
+        (Byparr, SolverErrorKind::MissingSolution) => BYPARR_NO_SOLUTION_MESSAGE,
+        (Trawl, SolverErrorKind::Unreachable) => TRAWL_UNREACHABLE_MESSAGE,
+        (Trawl, SolverErrorKind::Timeout) => TRAWL_TIMEOUT_MESSAGE,
+        (Trawl, SolverErrorKind::Unavailable) => TRAWL_UNAVAILABLE_MESSAGE,
+        (Trawl, SolverErrorKind::Malformed) => TRAWL_MALFORMED_MESSAGE,
+        (Trawl, SolverErrorKind::Unreadable) => TRAWL_UNREADABLE_MESSAGE,
+        (Trawl, SolverErrorKind::MissingSolution) => TRAWL_NO_SOLUTION_MESSAGE,
+    }
+}
+
 /// True when an error message names a solver-service failure (Byparr itself
 /// unreachable, timing out, rate limited, or speaking garbage) rather than a
 /// failure of the target indexer. Matches by substring because callers wrap
@@ -49,41 +95,57 @@ pub fn is_solver_service_error_message(message: &str) -> bool {
         BYPARR_UNAVAILABLE_MESSAGE,
         BYPARR_MALFORMED_MESSAGE,
         BYPARR_UNREADABLE_MESSAGE,
+        TRAWL_UNREACHABLE_MESSAGE,
+        TRAWL_TIMEOUT_MESSAGE,
+        TRAWL_UNAVAILABLE_MESSAGE,
+        TRAWL_MALFORMED_MESSAGE,
+        TRAWL_UNREADABLE_MESSAGE,
     ]
     .iter()
     .any(|marker| message.contains(marker))
 }
 
-pub fn byparr_solve_endpoint(base_url: &str) -> String {
-    format!("{}{BYPARR_SOLVE_PATH}", base_url.trim_end_matches('/'))
+pub fn solver_solve_endpoint(base_url: &str) -> String {
+    format!("{}{SOLVER_SOLVE_PATH}", base_url.trim_end_matches('/'))
 }
 
 /// FlareSolverr-compatible solve request. Byparr interprets `maxTimeout` in
-/// seconds (pinned by tests); FlareSolverr-classic would expect milliseconds,
-/// so a future non-Byparr provider type must convert per provider.
+/// seconds, while Trawl follows the FlareSolverr contract and expects
+/// milliseconds.
 #[derive(Serialize)]
-pub struct ByparrSolveRequest<'a> {
+pub struct ChallengeSolverRequest<'a> {
     cmd: &'static str,
     url: &'a str,
     #[serde(rename = "maxTimeout")]
     max_timeout: u32,
 }
 
-pub fn byparr_solve_request(url: &str, request_timeout_seconds: u32) -> ByparrSolveRequest<'_> {
-    ByparrSolveRequest {
+pub fn solver_solve_request(
+    provider: scryer_domain::IndexerProxyProviderType,
+    url: &str,
+    request_timeout_seconds: u32,
+) -> ChallengeSolverRequest<'_> {
+    let max_timeout = match provider {
+        scryer_domain::IndexerProxyProviderType::Byparr => request_timeout_seconds,
+        scryer_domain::IndexerProxyProviderType::Trawl => {
+            request_timeout_seconds.saturating_mul(1_000)
+        }
+    };
+    ChallengeSolverRequest {
         cmd: "request.get",
         url,
-        max_timeout: request_timeout_seconds,
+        max_timeout,
     }
 }
 
 #[derive(Deserialize)]
-struct ByparrSolveResponse {
-    solution: Option<ByparrSolution>,
+struct ChallengeSolverResponse {
+    status: Option<String>,
+    solution: Option<ChallengeSolverSolution>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct ByparrSolution {
+pub struct ChallengeSolverSolution {
     pub url: Option<String>,
     pub status: Option<u16>,
     pub cookies: Option<Vec<serde_json::Value>>,
@@ -94,25 +156,40 @@ pub struct ByparrSolution {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ByparrParseError {
+pub enum ChallengeSolverParseError {
     Malformed,
+    ServiceError,
     MissingSolution,
 }
 
-impl ByparrParseError {
-    pub fn message(self) -> &'static str {
+impl ChallengeSolverParseError {
+    pub fn message(self, provider: scryer_domain::IndexerProxyProviderType) -> &'static str {
         match self {
-            Self::Malformed => BYPARR_MALFORMED_MESSAGE,
-            Self::MissingSolution => BYPARR_NO_SOLUTION_MESSAGE,
+            Self::Malformed => solver_error_message(provider, SolverErrorKind::Malformed),
+            Self::ServiceError => solver_error_message(provider, SolverErrorKind::Unavailable),
+            Self::MissingSolution => {
+                solver_error_message(provider, SolverErrorKind::MissingSolution)
+            }
         }
     }
 }
 
 /// Parse a raw solve-endpoint response body into its solution.
-pub fn parse_byparr_solution(body: &[u8]) -> Result<ByparrSolution, ByparrParseError> {
-    let parsed: ByparrSolveResponse =
-        serde_json::from_slice(body).map_err(|_| ByparrParseError::Malformed)?;
-    parsed.solution.ok_or(ByparrParseError::MissingSolution)
+pub fn parse_solver_solution(
+    body: &[u8],
+) -> Result<ChallengeSolverSolution, ChallengeSolverParseError> {
+    let parsed: ChallengeSolverResponse =
+        serde_json::from_slice(body).map_err(|_| ChallengeSolverParseError::Malformed)?;
+    if parsed
+        .status
+        .as_deref()
+        .is_some_and(|status| status.trim().eq_ignore_ascii_case("error"))
+    {
+        return Err(ChallengeSolverParseError::ServiceError);
+    }
+    parsed
+        .solution
+        .ok_or(ChallengeSolverParseError::MissingSolution)
 }
 
 /// Statuses that can carry a browser challenge instead of real content.
@@ -138,7 +215,25 @@ pub fn looks_like_challenge_response(
     if status == 503 && header_value(headers, "retry-after").is_some() && !has_marker {
         return false;
     }
+    if status == 200 && !successful_response_challenge_marker_present(body) {
+        return false;
+    }
     has_marker
+}
+
+fn successful_response_challenge_marker_present(body: &[u8]) -> bool {
+    let preview = &body[..body.len().min(CHALLENGE_BODY_PREVIEW_BYTES)];
+    let preview = String::from_utf8_lossy(preview).to_ascii_lowercase();
+    [
+        "cf-chl",
+        "challenge-platform",
+        "<title>just a moment",
+        "<title>checking your browser",
+        "<title>attention required! | cloudflare",
+        "<title>ddos-guard",
+    ]
+    .iter()
+    .any(|marker| preview.contains(marker))
 }
 
 pub fn challenge_marker_present(body: &[u8]) -> bool {
@@ -196,7 +291,7 @@ pub fn retry_after_from_solution_headers(headers: Option<&serde_json::Value>) ->
         .and_then(|value| scryer_outbound_http::parse_retry_after(&value).map(|(delay, _)| delay))
 }
 
-pub fn retry_after_from_solution(solution: &ByparrSolution) -> Option<Duration> {
+pub fn retry_after_from_solution(solution: &ChallengeSolverSolution) -> Option<Duration> {
     retry_after_from_solution_headers(solution.headers.as_ref())
 }
 
@@ -231,7 +326,7 @@ pub fn safe_solution_response_headers(
 
 /// Headers (user agent + clearance cookies) that let the original request be
 /// replayed directly against the origin after a solve.
-pub fn solution_retry_headers(solution: &ByparrSolution) -> Vec<(String, String)> {
+pub fn solution_retry_headers(solution: &ChallengeSolverSolution) -> Vec<(String, String)> {
     let mut headers = Vec::new();
     if let Some(user_agent) = solution.user_agent.as_deref()
         && !user_agent.trim().is_empty()
@@ -302,7 +397,7 @@ pub fn rate_limit_message_with_retry_after(retry_after: Option<Duration>) -> Str
     }
 }
 
-pub fn target_rate_limit_message(solution: &ByparrSolution) -> String {
+pub fn target_rate_limit_message(solution: &ChallengeSolverSolution) -> String {
     rate_limit_message_with_retry_after(retry_after_from_solution(solution))
 }
 
@@ -402,7 +497,12 @@ impl SolvedSessionCache {
 
     /// Store the reusable parts of a solution. Solutions without cookies or a
     /// user agent are not worth caching.
-    pub fn store_solution(&self, proxy_config_id: &str, url: &str, solution: &ByparrSolution) {
+    pub fn store_solution(
+        &self,
+        proxy_config_id: &str,
+        url: &str,
+        solution: &ChallengeSolverSolution,
+    ) {
         let headers = solution_retry_headers(solution);
         if headers.is_empty() {
             return;
@@ -543,36 +643,62 @@ pub async fn flush_solver_health(repo: &dyn IndexerProxyConfigRepository) {
 mod tests {
     use super::*;
 
-    fn solution_from_json(value: serde_json::Value) -> ByparrSolution {
+    fn solution_from_json(value: serde_json::Value) -> ChallengeSolverSolution {
         serde_json::from_value(value).expect("solution should deserialize")
     }
 
     #[test]
-    fn solve_request_serializes_flaresolverr_shape_with_seconds() {
-        let payload = serde_json::to_value(byparr_solve_request("https://example.com/", 60))
-            .expect("payload should serialize");
+    fn solve_requests_serialize_provider_timeout_units() {
+        let byparr = serde_json::to_value(solver_solve_request(
+            scryer_domain::IndexerProxyProviderType::Byparr,
+            "https://example.com/",
+            60,
+        ))
+        .expect("Byparr payload should serialize");
+        let trawl = serde_json::to_value(solver_solve_request(
+            scryer_domain::IndexerProxyProviderType::Trawl,
+            "https://example.com/",
+            60,
+        ))
+        .expect("Trawl payload should serialize");
 
-        assert_eq!(payload["cmd"], "request.get");
-        assert_eq!(payload["url"], "https://example.com/");
-        assert_eq!(payload["maxTimeout"], 60);
+        assert_eq!(byparr["cmd"], "request.get");
+        assert_eq!(byparr["url"], "https://example.com/");
+        assert_eq!(byparr["maxTimeout"], 60);
+        assert_eq!(trawl["cmd"], "request.get");
+        assert_eq!(trawl["url"], "https://example.com/");
+        assert_eq!(trawl["maxTimeout"], 60_000);
     }
 
     #[test]
-    fn parse_byparr_solution_classifies_malformed_and_missing() {
+    fn parse_solver_solution_classifies_malformed_errors_and_missing_solutions() {
         assert_eq!(
-            parse_byparr_solution(b"not json").unwrap_err(),
-            ByparrParseError::Malformed
+            parse_solver_solution(b"not json").unwrap_err(),
+            ChallengeSolverParseError::Malformed
         );
         assert_eq!(
-            parse_byparr_solution(br#"{"status":"error","message":"nope"}"#).unwrap_err(),
-            ByparrParseError::MissingSolution
+            parse_solver_solution(
+                br#"{"status":"error","message":"Browser pool initializing","solution":{"url":"https://example.com/","status":0,"headers":{},"response":"","cookies":[],"userAgent":""}}"#,
+            )
+            .unwrap_err(),
+            ChallengeSolverParseError::ServiceError
         );
-        let solution = parse_byparr_solution(
-            br#"{"solution":{"url":"https://example.com/","status":200,"userAgent":"UA","response":"<html></html>"}}"#,
+        assert_eq!(
+            parse_solver_solution(br#"{"status":"ok","message":""}"#).unwrap_err(),
+            ChallengeSolverParseError::MissingSolution
+        );
+        let solution = parse_solver_solution(
+            br#"{"status":"ok","message":"","version":"2.0.0","solution":{"url":"https://example.com/","status":200,"headers":{"content-type":"text/html"},"cookies":[{"name":"cf_clearance","value":"abc"}],"userAgent":"UA","response":"<html>Trawl</html>"}}"#,
         )
         .expect("solution should parse");
         assert_eq!(solution.status, Some(200));
         assert_eq!(solution.user_agent.as_deref(), Some("UA"));
+        assert_eq!(solution.response.as_deref(), Some("<html>Trawl</html>"));
+        assert_eq!(solution.cookies.as_deref().map(<[_]>::len), Some(1));
+        assert_eq!(
+            solution_header_string(solution.headers.as_ref(), "content-type").as_deref(),
+            Some("text/html")
+        );
     }
 
     #[test]
@@ -592,6 +718,16 @@ mod tests {
             200,
             &html_headers,
             challenge_body
+        ));
+        assert!(!looks_like_challenge_response(
+            200,
+            &html_headers,
+            b"<html><p>This form may use captcha or turnstile verification.</p></html>"
+        ));
+        assert!(looks_like_challenge_response(
+            403,
+            &html_headers,
+            b"<html><p>Complete the captcha or turnstile challenge.</p></html>"
         ));
         assert!(looks_like_challenge_response(
             503,
@@ -675,6 +811,12 @@ mod tests {
             BYPARR_MALFORMED_MESSAGE,
             BYPARR_UNREADABLE_MESSAGE,
             BYPARR_NO_SOLUTION_MESSAGE,
+            TRAWL_UNREACHABLE_MESSAGE,
+            TRAWL_TIMEOUT_MESSAGE,
+            TRAWL_UNAVAILABLE_MESSAGE,
+            TRAWL_MALFORMED_MESSAGE,
+            TRAWL_UNREADABLE_MESSAGE,
+            TRAWL_NO_SOLUTION_MESSAGE,
         ] {
             assert!(
                 crate::RateLimitSignal::from_text(message).is_none(),
@@ -689,7 +831,12 @@ mod tests {
             "repository: {BYPARR_TIMEOUT_MESSAGE}"
         )));
         assert!(is_solver_service_error_message(BYPARR_UNAVAILABLE_MESSAGE));
+        assert!(is_solver_service_error_message(&format!(
+            "repository: {TRAWL_TIMEOUT_MESSAGE}"
+        )));
+        assert!(is_solver_service_error_message(TRAWL_UNAVAILABLE_MESSAGE));
         assert!(!is_solver_service_error_message(BYPARR_NO_SOLUTION_MESSAGE));
+        assert!(!is_solver_service_error_message(TRAWL_NO_SOLUTION_MESSAGE));
         assert!(!is_solver_service_error_message("indexer search timed out"));
     }
 

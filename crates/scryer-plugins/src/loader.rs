@@ -103,9 +103,9 @@ pub fn schedule_plugin_rehydration(
 fn module_flavor_for_descriptor(descriptor: &PluginDescriptor) -> ModuleFlavor {
     match PluginRuntimeBacking::for_descriptor(descriptor) {
         PluginRuntimeBacking::LegacyReactor => ModuleFlavor::LegacyReactor,
-        PluginRuntimeBacking::WasmtimeArchive | PluginRuntimeBacking::WasmtimeSubtitleSync => {
-            ModuleFlavor::Command
-        }
+        PluginRuntimeBacking::WasmtimeArchive
+        | PluginRuntimeBacking::WasmtimeSubtitleSync
+        | PluginRuntimeBacking::WasmtimeCommand => ModuleFlavor::Command,
     }
 }
 
@@ -1227,6 +1227,61 @@ impl WasmDownloadClientPluginProvider {
         };
 
         let computed_base_url = compute_base_url_from_config_json(&config.config_json);
+        let backing = match PluginRuntimeBacking::for_artifact(&loaded.descriptor, &wasm_bytes) {
+            Ok(backing) => backing,
+            Err(error) => {
+                warn!(
+                    client = config.name.as_str(),
+                    provider_type = config.client_type.as_str(),
+                    error = %error,
+                    "download client has an invalid runtime marker"
+                );
+                return None;
+            }
+        };
+        if backing == PluginRuntimeBacking::WasmtimeCommand {
+            let mut command_config = std::collections::BTreeMap::new();
+            if let Some(base_url) = &computed_base_url {
+                command_config.insert("base_url".to_string(), base_url.to_string());
+            }
+            match parse_config_json_entries(&config.config_json) {
+                Ok(map) => command_config.extend(map),
+                Err(error) => {
+                    warn!(
+                        client = config.name.as_str(),
+                        error = %error,
+                        "failed to parse command download client config_json"
+                    );
+                    return None;
+                }
+            }
+            let allowed_hosts = allowed_hosts_for_descriptor(
+                &loaded.descriptor,
+                computed_base_url.as_deref(),
+                Some(&config.config_json),
+            );
+            return Some(Arc::new(WasmDownloadClient::new_command(
+                wasm_bytes,
+                loaded.descriptor.clone(),
+                config.id.clone(),
+                config.name.clone(),
+                crate::wasmtime_host::command_host::CommandHost::for_download_client(
+                    loaded.descriptor.id.clone(),
+                    command_config,
+                    allowed_hosts,
+                    std::time::Duration::from_secs(30),
+                    None,
+                ),
+            )));
+        }
+        if backing != PluginRuntimeBacking::LegacyReactor {
+            warn!(
+                client = config.name.as_str(),
+                provider_type = config.client_type.as_str(),
+                "download client selected a runtime that is not valid for this descriptor family"
+            );
+            return None;
+        }
         let mut spec = LegacyPluginSpec::new(wasm_bytes, loaded.descriptor.id.clone());
         spec.allowed_hosts = allowed_hosts_for_descriptor(
             &loaded.descriptor,
@@ -3039,7 +3094,7 @@ fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Vec<u8>), Str
     let bytes = wasm_bytes.to_vec();
 
     if let Some(embedded) = embedded_descriptor_from_wasm(&bytes)? {
-        match PluginRuntimeBacking::for_descriptor(&embedded.descriptor) {
+        match PluginRuntimeBacking::for_artifact(&embedded.descriptor, &bytes)? {
             PluginRuntimeBacking::LegacyReactor => {
                 validate_legacy_module(
                     &bytes,
@@ -3051,6 +3106,12 @@ fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Vec<u8>), Str
             }
             PluginRuntimeBacking::WasmtimeSubtitleSync => {
                 crate::wasmtime_host::validate_subtitle_sync_module(&bytes)?;
+            }
+            PluginRuntimeBacking::WasmtimeCommand => {
+                crate::wasmtime_host::validate_command_module(
+                    &bytes,
+                    embedded.descriptor.plugin_type(),
+                )?;
             }
         }
         let descriptor = embedded.descriptor;

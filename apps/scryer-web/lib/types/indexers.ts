@@ -53,6 +53,7 @@ export type IndexerDraft = {
 };
 
 export type IndexerProxyDraft = {
+  providerType: "byparr" | "trawl";
   name: string;
   baseUrl: string;
   requestTimeoutSeconds: number;

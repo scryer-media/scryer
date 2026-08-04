@@ -24,9 +24,6 @@ pub(crate) enum ManualImportSourceResolution {
     Eligible {
         completed: Option<CompletedDownload>,
     },
-    SourceFailed {
-        message: String,
-    },
     NotEligible {
         message: String,
     },

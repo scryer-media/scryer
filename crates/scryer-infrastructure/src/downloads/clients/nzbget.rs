@@ -1335,134 +1335,157 @@ impl DownloadClient for NzbgetDownloadClient {
         Ok(entries
             .into_iter()
             .filter_map(|entry| {
-                let entry = entry.as_object()?;
-                let nzb_id = extract_i64_value(entry.get("NZBID").or_else(|| entry.get("nzbId")))
-                    .filter(|value| *value > 0)?;
-                let name = history_entry_name(entry);
-                let status = entry
-                    .get("Status")
-                    .or_else(|| entry.get("status"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                let status_upper = status.to_ascii_uppercase();
-
-                if !status_upper.starts_with("SUCCESS") {
-                    debug!(
-                        nzb_id,
-                        name = name.as_str(),
-                        status,
-                        "nzbget: skipping non-SUCCESS history entry"
-                    );
-                    return None;
-                }
-
-                // Multi-field failure detection (mirrors Sonarr's cascade):
-                // Even when top-level Status is SUCCESS, individual stages may
-                // indicate problems that make the download unusable.
-                if let Some(reason) = check_history_stage_failure(entry) {
-                    warn!(
-                        nzb_id,
-                        name = name.as_str(),
-                        reason = reason.as_str(),
-                        "skipping completed download due to stage failure"
-                    );
-                    return None;
-                }
-
-                let history_ts =
-                    extract_i64_value(entry.get("HistoryTime").or_else(|| entry.get("time")));
-                if let Some(ts) = history_ts
-                    && ts < cutoff_ts
-                {
-                    trace!(
-                        nzb_id,
-                        name = name.as_str(),
-                        "nzbget: skipping history entry older than 7 days"
-                    );
-                    return None;
-                }
-
-                // Prefer FinalDir (post-move location) over DestDir, mirroring Sonarr.
-                let dest_dir = entry
-                    .get("FinalDir")
-                    .and_then(Value::as_str)
-                    .filter(|v| !v.is_empty())
-                    .or_else(|| {
-                        entry
-                            .get("DestDir")
-                            .and_then(Value::as_str)
-                            .filter(|v| !v.is_empty())
-                    })
-                    .unwrap_or("")
-                    .to_string();
-
-                if dest_dir.is_empty() {
-                    debug!(
-                        nzb_id,
-                        name = name.as_str(),
-                        "nzbget: skipping history entry with empty dest_dir"
-                    );
-                    return None;
-                }
-
-                let name = history_entry_name(entry);
-
-                let category = extract_nzbget_category(entry);
-
-                let size_mb =
-                    extract_f64_value(entry.get("FileSizeMB").or_else(|| entry.get("fileSizeMB")))
-                        .unwrap_or(0.0);
-
-                let parameters = entry
-                    .get("Parameters")
-                    .or_else(|| entry.get("parameters"))
-                    .and_then(Value::as_array)
-                    .map(|params| {
-                        params
-                            .iter()
-                            .filter_map(|p| {
-                                let obj = p.as_object()?;
-                                let key = obj
-                                    .get("Name")
-                                    .or_else(|| obj.get("name"))
-                                    .and_then(Value::as_str)?
-                                    .to_string();
-                                let value = obj
-                                    .get("Value")
-                                    .or_else(|| obj.get("value"))
-                                    .and_then(Value::as_str)?
-                                    .to_string();
-                                Some((key, value))
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-
-                let completed_at =
-                    history_ts.map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now));
-                let observed_identity = scryer_application::observed_download_identity(
-                    scryer_application::ObservedDownloadIdentityInput {
-                        download_id: None,
-                        parameters: &parameters,
-                        info_hash_hint: None,
-                    },
-                );
-
-                Some(scryer_domain::CompletedDownload {
-                    client_type: "nzbget".to_string(),
-                    client_id: String::new(),
-                    download_client_item_id: nzb_id.to_string(),
-                    download_id: observed_identity.download_id,
-                    name,
-                    dest_dir,
-                    category,
-                    size_bytes: size_to_bytes(size_mb),
-                    completed_at,
-                    parameters,
-                })
+                completed_download_from_nzbget_history_entry(&entry, Some(cutoff_ts))
             })
             .collect())
     }
+
+    async fn get_completed_download_for_source(
+        &self,
+        _client_id: &str,
+        _client_type: &str,
+        download_client_item_id: &str,
+    ) -> AppResult<Option<scryer_domain::CompletedDownload>> {
+        let Ok(nzb_id) = download_client_item_id.trim().parse::<i64>() else {
+            return Ok(None);
+        };
+        let result = self.rpc_call("history", vec![json!(false)]).await?;
+        let entry = extract_result_array(result, "History")
+            .unwrap_or_default()
+            .into_iter()
+            .find(|entry| {
+                entry.as_object().is_some_and(|entry| {
+                    extract_i64_value(entry.get("NZBID").or_else(|| entry.get("nzbId")))
+                        == Some(nzb_id)
+                })
+            });
+        Ok(entry.and_then(|entry| completed_download_from_nzbget_history_entry(&entry, None)))
+    }
+}
+
+fn completed_download_from_nzbget_history_entry(
+    entry: &Value,
+    cutoff_ts: Option<i64>,
+) -> Option<scryer_domain::CompletedDownload> {
+    let entry = entry.as_object()?;
+    let nzb_id = extract_i64_value(entry.get("NZBID").or_else(|| entry.get("nzbId")))
+        .filter(|value| *value > 0)?;
+    let name = history_entry_name(entry);
+    let status = entry
+        .get("Status")
+        .or_else(|| entry.get("status"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let status_upper = status.to_ascii_uppercase();
+
+    if !status_upper.starts_with("SUCCESS") {
+        debug!(
+            nzb_id,
+            name = name.as_str(),
+            status,
+            "nzbget: skipping non-SUCCESS history entry"
+        );
+        return None;
+    }
+
+    // Multi-field failure detection (mirrors Sonarr's cascade):
+    // Even when top-level Status is SUCCESS, individual stages may
+    // indicate problems that make the download unusable.
+    if let Some(reason) = check_history_stage_failure(entry) {
+        warn!(
+            nzb_id,
+            name = name.as_str(),
+            reason = reason.as_str(),
+            "skipping completed download due to stage failure"
+        );
+        return None;
+    }
+
+    let history_ts = extract_i64_value(entry.get("HistoryTime").or_else(|| entry.get("time")));
+    if let Some(cutoff_ts) = cutoff_ts
+        && let Some(ts) = history_ts
+        && ts < cutoff_ts
+    {
+        trace!(
+            nzb_id,
+            name = name.as_str(),
+            "nzbget: skipping history entry older than 7 days"
+        );
+        return None;
+    }
+
+    // Prefer FinalDir (post-move location) over DestDir, mirroring Sonarr.
+    let dest_dir = entry
+        .get("FinalDir")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            entry
+                .get("DestDir")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or("")
+        .to_string();
+
+    if dest_dir.is_empty() {
+        debug!(
+            nzb_id,
+            name = name.as_str(),
+            "nzbget: skipping history entry with empty dest_dir"
+        );
+        return None;
+    }
+
+    let category = extract_nzbget_category(entry);
+    let size_mb = extract_f64_value(entry.get("FileSizeMB").or_else(|| entry.get("fileSizeMB")))
+        .unwrap_or(0.0);
+    let parameters = entry
+        .get("Parameters")
+        .or_else(|| entry.get("parameters"))
+        .and_then(Value::as_array)
+        .map(|params| {
+            params
+                .iter()
+                .filter_map(|parameter| {
+                    let parameter = parameter.as_object()?;
+                    let key = parameter
+                        .get("Name")
+                        .or_else(|| parameter.get("name"))
+                        .and_then(Value::as_str)?
+                        .to_string();
+                    let value = parameter
+                        .get("Value")
+                        .or_else(|| parameter.get("value"))
+                        .and_then(Value::as_str)?
+                        .to_string();
+                    Some((key, value))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let completed_at =
+        history_ts.map(|timestamp| DateTime::from_timestamp(timestamp, 0).unwrap_or_else(Utc::now));
+    let observed_identity = scryer_application::observed_download_identity(
+        scryer_application::ObservedDownloadIdentityInput {
+            download_id: None,
+            parameters: &parameters,
+            info_hash_hint: None,
+        },
+    );
+
+    Some(scryer_domain::CompletedDownload {
+        client_type: "nzbget".to_string(),
+        client_id: String::new(),
+        download_client_item_id: nzb_id.to_string(),
+        download_id: observed_identity.download_id,
+        name,
+        dest_dir,
+        category,
+        size_bytes: size_to_bytes(size_mb),
+        completed_at,
+        parameters,
+    })
 }
 
 struct ExtractedNzbgetParameters {
@@ -2092,6 +2115,31 @@ mod tests {
             }
             other => panic!("expected temporary unavailable error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn exact_completed_lookup_keeps_old_retained_history() {
+        let entry = serde_json::json!({
+            "NZBID": 42,
+            "Status": "SUCCESS/ALL",
+            "HistoryTime": 0,
+            "FinalDir": "/downloads/complete/retained",
+            "FileSizeMB": 1,
+        });
+
+        assert!(
+            completed_download_from_nzbget_history_entry(
+                &entry,
+                Some(Utc::now().timestamp() - (7 * 24 * 60 * 60)),
+            )
+            .is_none()
+        );
+        assert_eq!(
+            completed_download_from_nzbget_history_entry(&entry, None)
+                .expect("exact lookup should retain the old history entry")
+                .download_client_item_id,
+            "42"
+        );
     }
 
     #[test]

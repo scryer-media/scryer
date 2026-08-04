@@ -1,24 +1,3 @@
-fn source_identity_matches(
-    item_client_id: &str,
-    item_client_type: &str,
-    item_id: &str,
-    client_id: Option<&str>,
-    client_type: Option<&str>,
-    download_client_item_id: &str,
-) -> bool {
-    if item_id != download_client_item_id {
-        return false;
-    }
-
-    let requested_client_id = client_id.map(str::trim).filter(|value| !value.is_empty());
-    if requested_client_id.is_some_and(|client_id| item_client_id != client_id) {
-        return false;
-    }
-
-    let requested_client_type = client_type.map(str::trim).filter(|value| !value.is_empty());
-    requested_client_type
-        .is_none_or(|client_type| item_client_type.eq_ignore_ascii_case(client_type))
-}
 fn normalized_download_client_id(value: Option<&str>) -> String {
     value
         .map(str::trim)
@@ -123,55 +102,6 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    pub(crate) async fn resolve_manual_import_source_for_queue(
-        &self,
-        client_id: Option<&str>,
-        client_type: Option<&str>,
-        download_client_item_id: &str,
-    ) -> AppResult<ManualImportSourceResolution> {
-        let source_ref = download_client_item_id.trim();
-        let tracked = self
-            .runtime
-            .acquisition
-            .tracked_download_snapshot
-            .read()
-            .await
-            .values()
-            .find(|tracked| {
-                source_identity_matches(
-                    &tracked.client_id,
-                    &tracked.client_type,
-                    &tracked.client_item.download_client_item_id,
-                    client_id,
-                    client_type,
-                    source_ref,
-                )
-            })
-            .cloned();
-
-        let Some(tracked) = tracked else {
-            return self
-                .resolve_manual_import_source(client_id, client_type, download_client_item_id)
-                .await;
-        };
-
-        match tracked.state {
-            TrackedDownloadState::ImportBlocked => {
-                Ok(ManualImportSourceResolution::Eligible { completed: None })
-            }
-            TrackedDownloadState::FailedPending | TrackedDownloadState::Failed => {
-                Ok(ManualImportSourceResolution::SourceFailed {
-                    message: source_failed_message(&tracked.client_item),
-                })
-            }
-            other => Ok(ManualImportSourceResolution::NotEligible {
-                message: format!(
-                    "download source {source_ref} is not ready for import; tracked state is {other:?}"
-                ),
-            }),
-        }
-    }
-
     pub(crate) async fn resolve_manual_import_source(
         &self,
         client_id: Option<&str>,
@@ -183,47 +113,6 @@ impl AppUseCase {
             return Ok(ManualImportSourceResolution::NotEligible {
                 message: "download client item id is required".to_string(),
             });
-        }
-
-        let mut items = self
-            .services
-            .integrations
-            .download_client
-            .list_queue()
-            .await?;
-        items.extend(
-            self.services
-                .integrations
-                .download_client
-                .list_recent_activity(DOWNLOAD_QUEUE_RECENT_ACTIVITY_LIMIT)
-                .await?,
-        );
-        if let Some(item) = items.iter().find(|item| {
-            source_identity_matches(
-                &item.client_id,
-                &item.client_type,
-                &item.download_client_item_id,
-                client_id,
-                client_type,
-                source_ref,
-            )
-        }) {
-            return match item.state {
-                DownloadQueueState::Failed => Ok(ManualImportSourceResolution::SourceFailed {
-                    message: source_failed_message(item),
-                }),
-                DownloadQueueState::Completed | DownloadQueueState::ImportPending => {
-                    let completed = self
-                        .find_completed_manual_import_source(client_id, client_type, source_ref)
-                        .await?;
-                    Ok(ManualImportSourceResolution::Eligible { completed })
-                }
-                other => Ok(ManualImportSourceResolution::NotEligible {
-                    message: format!(
-                        "download source {source_ref} is not ready for import; current state is {other:?}"
-                    ),
-                }),
-            };
         }
 
         let completed = self
@@ -245,22 +134,23 @@ impl AppUseCase {
         client_type: Option<&str>,
         download_client_item_id: &str,
     ) -> AppResult<Option<CompletedDownload>> {
-        let completed_downloads = self
+        let Some(client_id) = client_id.map(str::trim).filter(|value| !value.is_empty()) else {
+            return Ok(None);
+        };
+        let Some(client_type) = client_type.map(str::trim).filter(|value| !value.is_empty()) else {
+            return Ok(None);
+        };
+        let download_client_item_id = download_client_item_id.trim();
+        if download_client_item_id.is_empty() {
+            return Ok(None);
+        }
+
+        self
             .services
             .integrations
             .download_client
-            .list_completed_downloads()
-            .await?;
-        Ok(completed_downloads.into_iter().find(|download| {
-            source_identity_matches(
-                &download.client_id,
-                &download.client_type,
-                &download.download_client_item_id,
-                client_id,
-                client_type,
-                download_client_item_id,
-            )
-        }))
+            .get_completed_download_for_source(client_id, client_type, download_client_item_id)
+            .await
     }
 }
 impl AppUseCase {

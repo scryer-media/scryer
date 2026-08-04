@@ -8,7 +8,8 @@ import {
 } from "./settings-mutation-inputs.ts";
 
 const proxyDraft = {
-  name: "  FlareSolverr  ",
+  providerType: "trawl" as const,
+  name: "  Trawl  ",
   baseUrl: "  http://proxy:8191  ",
   requestTimeoutSeconds: 60,
   isEnabled: true,
@@ -19,7 +20,7 @@ test("indexer proxy updates omit immutable provider type", () => {
 
   assert.deepEqual(input, {
     id: "proxy-1",
-    name: "FlareSolverr",
+    name: "Trawl",
     baseUrl: "http://proxy:8191",
     requestTimeoutSeconds: 60,
     isEnabled: true,
@@ -28,7 +29,7 @@ test("indexer proxy updates omit immutable provider type", () => {
 });
 
 test("indexer proxy creates include provider type", () => {
-  assert.equal(buildCreateIndexerProxyInput(proxyDraft).providerType, "byparr");
+  assert.equal(buildCreateIndexerProxyInput(proxyDraft).providerType, "trawl");
 });
 
 test("time format values preserve GraphQL enum casing", () => {

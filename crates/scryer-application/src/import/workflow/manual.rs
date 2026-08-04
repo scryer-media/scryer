@@ -1,4 +1,5 @@
 const MANUAL_IMPORT_POLLER_INTERVAL_SECONDS: u64 = 2;
+const MANUAL_IMPORT_SOURCE_UNAVAILABLE: &str = "download is no longer available for manual import";
 pub async fn start_background_manual_import_poller(
     app: AppUseCase,
     token: tokio_util::sync::CancellationToken,
@@ -64,7 +65,6 @@ pub async fn start_background_manual_import_poller(
                                 client_id: None,
                                 client_type: record.source_system.clone(),
                                 files: Vec::new(),
-                                trusted_source_root: None,
                                 selection_id: None,
                                 requested_at: record.created_at.clone(),
                             },
@@ -267,6 +267,82 @@ async fn manual_import_preview_targets(
     Ok((all_episodes, series_movies))
 }
 
+fn manual_import_source_unavailable() -> AppError {
+    AppError::NotFound(MANUAL_IMPORT_SOURCE_UNAVAILABLE.to_string())
+}
+
+pub(crate) async fn resolve_current_manual_import_source(
+    app: &AppUseCase,
+    actor: &User,
+    client_id: &str,
+    client_type: &str,
+    download_client_item_id: &str,
+    title_id: &str,
+) -> AppResult<CompletedDownload> {
+    let client_id = client_id.trim();
+    let client_type = client_type.trim();
+    let download_client_item_id = download_client_item_id.trim();
+    if client_id.is_empty() || client_type.is_empty() || download_client_item_id.is_empty() {
+        return Err(manual_import_source_unavailable());
+    }
+
+    let source_identity = DownloadSourceIdentity::new(
+        Some(client_id),
+        client_type,
+        download_client_item_id,
+    );
+    let submission = app
+        .services
+        .workflow
+        .download_submissions
+        .find_by_client_item_id(&source_identity)
+        .await?
+        .filter(|submission| {
+            !submission.title_id.trim().is_empty()
+                && submission.title_id == title_id
+                && !matches!(&submission.scope, crate::SubmissionScope::Orphan)
+        })
+        .ok_or_else(manual_import_source_unavailable)?;
+
+    let title = app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&submission.title_id)
+        .await?
+        .ok_or_else(manual_import_source_unavailable)?;
+    app.require_library_permission(
+        actor,
+        &title.library_id,
+        scryer_domain::LibraryPermission::ResolveImports,
+    )
+    .await?;
+
+    let completed = match app
+        .resolve_manual_import_source(
+            Some(client_id),
+            Some(client_type),
+            download_client_item_id,
+        )
+        .await
+        .map_err(|_| manual_import_source_unavailable())?
+    {
+        crate::ManualImportSourceResolution::Eligible {
+            completed: Some(completed),
+        } => completed,
+        _ => return Err(manual_import_source_unavailable()),
+    };
+
+    if completed.client_id != client_id
+        || !completed.client_type.eq_ignore_ascii_case(client_type)
+        || completed.download_client_item_id != download_client_item_id
+    {
+        return Err(manual_import_source_unavailable());
+    }
+
+    Ok(completed)
+}
+
 fn source_path_canonical(source_path: &Path) -> AppResult<PathBuf> {
     std::fs::canonicalize(source_path).map_err(|err| {
         AppError::Validation(format!(
@@ -293,7 +369,7 @@ fn source_entry_location_under_parent(source_path: &Path) -> AppResult<PathBuf> 
     Ok(parent.join(file_name))
 }
 
-fn validate_manual_import_source_under_trusted_root(
+pub(crate) fn validate_manual_import_source_under_trusted_root(
     source_path: &Path,
     trusted_root: &Path,
 ) -> AppResult<()> {
@@ -333,49 +409,9 @@ fn validate_manual_import_source_under_trusted_root(
 /// Scan a completed download's directory and attempt to auto-match files to episodes.
 async fn preview_manual_import(
     app: &AppUseCase,
-    actor: &User,
-    client_id: Option<&str>,
-    client_type: &str,
-    download_client_item_id: &str,
+    completed: &CompletedDownload,
     title_id: &str,
 ) -> AppResult<ManualImportPreview> {
-    let title = app
-        .services
-        .catalog
-        .titles
-        .get_by_id(title_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
-    app.require_library_permission(
-        actor,
-        &title.library_id,
-        scryer_domain::LibraryPermission::ResolveImports,
-    )
-    .await?;
-
-    let completed = match app
-        .resolve_manual_import_source(client_id, Some(client_type), download_client_item_id)
-        .await?
-    {
-        crate::ManualImportSourceResolution::Eligible {
-            completed: Some(completed),
-        } => completed,
-        crate::ManualImportSourceResolution::Eligible { completed: None } => {
-            return Err(AppError::NotFound(format!(
-                "completed download not found: {}",
-                download_client_item_id
-            )));
-        }
-        crate::ManualImportSourceResolution::SourceFailed { message } => {
-            return Err(AppError::Validation(format!(
-                "source_job_failed: {message}"
-            )));
-        }
-        crate::ManualImportSourceResolution::NotEligible { message } => {
-            return Err(AppError::Validation(message));
-        }
-    };
-
     // Scan for video files (recursive, no sample filtering - let user see everything)
     let dest_dir = Path::new(&completed.dest_dir);
     let video_files = find_video_files(dest_dir, false)?;
@@ -477,97 +513,31 @@ async fn preview_manual_import(
 pub async fn begin_manual_import_selection(
     app: &AppUseCase,
     actor: &User,
-    client_id: Option<&str>,
+    client_id: &str,
     client_type: &str,
     download_client_item_id: &str,
     title_id: &str,
 ) -> AppResult<ManualImportSelectionPreview> {
-    let title = app
-        .services
-        .catalog
-        .titles
-        .get_by_id(title_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
-    app.require_library_permission(
-        actor,
-        &title.library_id,
-        scryer_domain::LibraryPermission::ResolveImports,
-    )
-    .await?;
-
+    let client_id = client_id.trim();
     let client_type = client_type.trim().to_ascii_lowercase();
     let source_ref = download_client_item_id.trim();
-    if client_type.is_empty() || source_ref.is_empty() {
-        return Err(AppError::Validation(
-            "client type and download client item id are required".to_string(),
-        ));
-    }
-
-    let source_resolution = app
-        .resolve_manual_import_source(client_id, Some(&client_type), source_ref)
-        .await?;
-    let fallback_identity = DownloadSourceIdentity::new(client_id, &client_type, source_ref);
-    let (source, completed) = match source_resolution {
-        crate::ManualImportSourceResolution::Eligible {
-            completed: Some(completed),
-        } => {
-            let trusted_root = std::fs::canonicalize(&completed.dest_dir).map_err(|error| {
-                AppError::Validation(format!(
-                    "completed download source is not accessible: {} ({error})",
-                    completed.dest_dir
-                ))
-            })?;
-            let source = crate::ManualImportSourceRegistration {
-                source_identity: DownloadSourceIdentity::new(
-                    Some(&completed.client_id),
-                    &completed.client_type,
-                    &completed.download_client_item_id,
-                ),
-                trusted_root: path_to_stored_string(&trusted_root),
-            };
-            app.services
-                .workflow
-                .imports
-                .upsert_manual_import_source(source.clone())
-                .await?;
-            (source, Some(completed))
-        }
-        crate::ManualImportSourceResolution::Eligible { completed: None } => {
-            let source = app
-                .services
-                .workflow
-                .imports
-                .get_manual_import_source(&fallback_identity)
-                .await?
-                .ok_or_else(|| {
-                    AppError::NotFound(format!(
-                        "tracked manual import source not found: {source_ref}"
-                    ))
-                })?;
-            (source, None)
-        }
-        crate::ManualImportSourceResolution::SourceFailed { message } => {
-            return Err(AppError::Validation(format!("source_job_failed: {message}")));
-        }
-        crate::ManualImportSourceResolution::NotEligible { message } => {
-            return Err(AppError::Validation(message));
-        }
-    };
-
-    let trusted_root = std::fs::canonicalize(stored_path_to_path_buf(&source.trusted_root))
-        .map_err(|error| {
-            AppError::Validation(format!(
-                "tracked manual import source is no longer accessible: {} ({error})",
-                source.trusted_root
-            ))
-        })?;
+    let completed = resolve_current_manual_import_source(
+        app, actor, client_id, &client_type, source_ref, title_id,
+    )
+    .await?;
+    let trusted_root = std::fs::canonicalize(&completed.dest_dir)
+        .map_err(|_| manual_import_source_unavailable())?;
+    let source_identity = DownloadSourceIdentity::new(
+        Some(&completed.client_id),
+        &completed.client_type,
+        &completed.download_client_item_id,
+    );
     let selection_id = scryer_domain::Id::new().0;
     let prior_candidate_ids = app
         .services
         .workflow
         .imports
-        .find_manual_import_selection(&actor.id, title_id, &source.source_identity)
+        .find_manual_import_selection(&actor.id, title_id, &source_identity)
         .await?
         .map(|selection| {
             selection
@@ -581,98 +551,37 @@ pub async fn begin_manual_import_selection(
 
     let mut candidates = Vec::new();
     let mut files = Vec::new();
-    if completed.is_some() {
-        let preview = preview_manual_import(
-            app,
-            actor,
-            source.source_identity.client_id.as_deref(),
-            &source.source_identity.client_type,
-            &source.source_identity.item_id,
-            title_id,
-        )
-        .await?;
-        for file in preview.files {
-            let source_path = stored_path_to_path_buf(&file.file_path);
-            validate_manual_import_source_under_trusted_root(&source_path, &trusted_root)?;
-            let canonical_path = path_to_stored_string(
-                &std::fs::canonicalize(&source_path).map_err(|error| {
-                    AppError::Validation(format!(
-                        "manual import file is no longer accessible: {} ({error})",
-                        source_path.display()
-                    ))
-                })?,
-            );
-            let candidate_id = prior_candidate_ids
-                .get(&canonical_path)
-                .cloned()
-                .unwrap_or_else(|| scryer_domain::Id::new().0);
-            candidates.push(crate::ManualImportSelectionCandidate {
-                id: candidate_id.clone(),
-                canonical_path: canonical_path.clone(),
-                quality: file.quality.clone(),
-            });
-            files.push(ManualImportSelectionFilePreview {
-                candidate_id,
-                file_name: file.file_name,
-                size_bytes: file.size_bytes,
-                quality: file.quality,
-                parsed_season: file.parsed_season,
-                parsed_episodes: file.parsed_episodes,
-                suggested_episode_id: file.suggested_episode_id,
-                suggested_episode_label: file.suggested_episode_label,
-            });
-        }
-    } else {
-        let video_files = if trusted_root.is_file() {
-            if is_video_file(&trusted_root) {
-                vec![trusted_root.clone()]
-            } else {
-                Vec::new()
-            }
-        } else {
-            find_video_files_without_symlinked_dirs(&trusted_root, false)?
-        };
-        for source_path in video_files {
-            validate_manual_import_source_under_trusted_root(&source_path, &trusted_root)?;
-            let canonical_path = std::fs::canonicalize(&source_path).map_err(|error| {
+    let preview = preview_manual_import(app, &completed, title_id).await?;
+    for file in preview.files {
+        let source_path = stored_path_to_path_buf(&file.file_path);
+        validate_manual_import_source_under_trusted_root(&source_path, &trusted_root)?;
+        let canonical_path = path_to_stored_string(
+            &std::fs::canonicalize(&source_path).map_err(|error| {
                 AppError::Validation(format!(
                     "manual import file is no longer accessible: {} ({error})",
                     source_path.display()
                 ))
-            })?;
-            let parsed = parsed_release_from_file_stem(&canonical_path);
-            let canonical_path = path_to_stored_string(&canonical_path);
-            let candidate_id = prior_candidate_ids
-                .get(&canonical_path)
-                .cloned()
-                .unwrap_or_else(|| scryer_domain::Id::new().0);
-            let file_name = stored_path_to_path_buf(&canonical_path)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-            candidates.push(crate::ManualImportSelectionCandidate {
-                id: candidate_id.clone(),
-                canonical_path: canonical_path.clone(),
-                quality: parsed.quality.clone(),
-            });
-            files.push(ManualImportSelectionFilePreview {
-                candidate_id,
-                file_name,
-                size_bytes: std::fs::metadata(&canonical_path)
-                    .map(|metadata| metadata.len() as i64)
-                    .unwrap_or(0),
-                quality: parsed.quality,
-                parsed_season: parsed.episode.as_ref().and_then(|episode| episode.season),
-                parsed_episodes: parsed
-                    .episode
-                    .as_ref()
-                    .map(|episode| episode.episode_numbers.clone())
-                    .unwrap_or_default(),
-                suggested_episode_id: None,
-                suggested_episode_label: None,
-            });
-        }
+            })?,
+        );
+        let candidate_id = prior_candidate_ids
+            .get(&canonical_path)
+            .cloned()
+            .unwrap_or_else(|| scryer_domain::Id::new().0);
+        candidates.push(crate::ManualImportSelectionCandidate {
+            id: candidate_id.clone(),
+            canonical_path: canonical_path.clone(),
+            quality: file.quality.clone(),
+        });
+        files.push(ManualImportSelectionFilePreview {
+            candidate_id,
+            file_name: file.file_name,
+            size_bytes: file.size_bytes,
+            quality: file.quality,
+            parsed_season: file.parsed_season,
+            parsed_episodes: file.parsed_episodes,
+            suggested_episode_id: file.suggested_episode_id,
+            suggested_episode_label: file.suggested_episode_label,
+        });
     }
 
     app.services
@@ -682,7 +591,7 @@ pub async fn begin_manual_import_selection(
             id: selection_id.clone(),
             actor_user_id: actor.id.clone(),
             title_id: title_id.to_string(),
-            source,
+            source_identity,
             candidates,
         })
         .await?;
@@ -735,15 +644,6 @@ fn manual_import_mapping_target(
                 .to_string(),
         )),
     }
-}
-
-pub(crate) fn validate_manual_import_mapping_targets(
-    files: &[ManualImportFileMapping],
-) -> AppResult<()> {
-    for mapping in files {
-        manual_import_mapping_target(mapping)?;
-    }
-    Ok(())
 }
 
 pub(crate) fn validate_manual_import_candidate_mapping_targets(
@@ -820,9 +720,6 @@ pub struct ManualImportRequestPayload {
     pub client_type: String,
     #[serde(default)]
     pub files: Vec<ManualImportFileMapping>,
-    /// Canonical root captured from a tracked download, never GraphQL input.
-    #[serde(default)]
-    pub trusted_source_root: Option<String>,
     #[serde(default)]
     pub selection_id: Option<String>,
     pub requested_at: String,
@@ -976,24 +873,6 @@ pub(crate) async fn find_active_manual_import_for_source(
                 })
     }))
 }
-fn resolve_queued_manual_import_completed_source(
-    import_id: &str,
-    payload: &ManualImportRequestPayload,
-    source_resolution: crate::ManualImportSourceResolution,
-) -> Result<Option<CompletedDownload>, (ImportStatus, Option<String>)> {
-    match source_resolution {
-        crate::ManualImportSourceResolution::Eligible { completed } => Ok(completed),
-        crate::ManualImportSourceResolution::SourceFailed { message }
-        | crate::ManualImportSourceResolution::NotEligible { message } => Err((
-            ImportStatus::Failed,
-            manual_import_source_failed_result_json(
-                import_id,
-                payload,
-                format!("{message}; recreate manual import selection"),
-            ),
-        )),
-    }
-}
 pub(crate) async fn fail_active_manual_import_for_source(
     app: &AppUseCase,
     tracked: &crate::tracked_downloads::TrackedDownload,
@@ -1027,7 +906,6 @@ pub(crate) async fn fail_active_manual_import_for_source(
             client_id: Some(tracked.client_id.clone()).filter(|value| !value.is_empty()),
             client_type: tracked.client_type.clone(),
             files: Vec::new(),
-            trusted_source_root: None,
             selection_id: None,
             requested_at: record.created_at.clone(),
         });
@@ -1372,6 +1250,9 @@ pub async fn execute_manual_import(
         scryer_domain::LibraryPermission::ResolveImports,
     )
     .await?;
+    let trusted_source_root = trusted_source_root.as_deref().ok_or_else(|| {
+        AppError::Validation("manual import source root is required".to_string())
+    })?;
 
     let ImportPathSettings {
         media_root,
@@ -1389,8 +1270,7 @@ pub async fn execute_manual_import(
 
     for mapping in &files {
         let source = stored_path_to_path_buf(&mapping.file_path);
-        if let Some(trusted_root) = trusted_source_root.as_deref()
-            && let Err(err) = validate_manual_import_source_under_trusted_root(&source, trusted_root)
+        if let Err(err) = validate_manual_import_source_under_trusted_root(&source, trusted_source_root)
         {
             results.push(manual_import_file_result(
                 mapping,
@@ -1629,21 +1509,6 @@ pub async fn execute_manual_import(
 
     Ok(results)
 }
-fn completed_download_matches_manual_import(
-    download: &CompletedDownload,
-    payload: &ManualImportRequestPayload,
-) -> bool {
-    if !download
-        .client_type
-        .eq_ignore_ascii_case(&payload.client_type)
-        || download.download_client_item_id != payload.download_client_item_id
-    {
-        return false;
-    }
-
-    let client_id = payload.client_id.as_deref().unwrap_or("").trim();
-    client_id.is_empty() || download.client_id == client_id
-}
 pub async fn execute_queued_manual_import(
     app: &AppUseCase,
     import_id: &str,
@@ -1666,113 +1531,70 @@ pub async fn execute_queued_manual_import(
     app.update_import_status_and_notify(import_id, ImportStatus::Processing, None)
         .await?;
 
-    if payload.client_type.eq_ignore_ascii_case("path") {
+    let Some(title_id) = payload.title_id.as_deref().map(str::trim).filter(|id| !id.is_empty()) else {
         return Ok((
             ImportStatus::Failed,
             manual_import_source_failed_result_json(
                 import_id,
                 payload,
-                "legacy direct-path manual imports are no longer supported; recreate manual import selection"
-                    .to_string(),
+                MANUAL_IMPORT_SOURCE_UNAVAILABLE.to_string(),
             ),
         ));
-    }
-    let source_identity = DownloadSourceIdentity::new(
-        payload.client_id.as_deref(),
+    };
+    let Some(client_id) = payload.client_id.as_deref().map(str::trim).filter(|id| !id.is_empty()) else {
+        return Ok((
+            ImportStatus::Failed,
+            manual_import_source_failed_result_json(
+                import_id,
+                payload,
+                MANUAL_IMPORT_SOURCE_UNAVAILABLE.to_string(),
+            ),
+        ));
+    };
+    let completed = match resolve_current_manual_import_source(
+        app,
+        &actor,
+        client_id,
         &payload.client_type,
         &payload.download_client_item_id,
-    );
-    let source_resolution = app
-        .resolve_manual_import_source(
-            payload.client_id.as_deref(),
-            Some(payload.client_type.as_str()),
-            &payload.download_client_item_id,
-        )
-        .await?;
-    let completed_source = match resolve_queued_manual_import_completed_source(
-        import_id,
-        payload,
-        source_resolution,
-    ) {
+        title_id,
+    )
+    .await
+    {
         Ok(completed) => completed,
-        Err(result) => return Ok(result),
-    };
-
-    let trusted_source_root = if payload.files.is_empty() {
-        None
-    } else if let Some(root) = payload.trusted_source_root.as_deref() {
-        match std::fs::canonicalize(stored_path_to_path_buf(root)) {
-            Ok(root) => Some(root),
-            Err(error) => {
-                return Ok((
-                    ImportStatus::Failed,
-                    manual_import_source_failed_result_json(
-                        import_id,
-                        payload,
-                        format!("trusted manual import source is unavailable: {error}"),
-                    ),
-                ));
-            }
-        }
-    } else if let Some(completed) = completed_source.as_ref() {
-        match std::fs::canonicalize(&completed.dest_dir) {
-            Ok(root) => Some(root),
-            Err(error) => {
-                return Ok((
-                    ImportStatus::Failed,
-                    manual_import_source_failed_result_json(
-                        import_id,
-                        payload,
-                        format!("completed manual import source is unavailable: {error}"),
-                    ),
-                ));
-            }
-        }
-    } else {
-        match app
-            .services
-            .workflow
-            .imports
-            .get_manual_import_source(&source_identity)
-            .await?
-        {
-            Some(source) => match std::fs::canonicalize(stored_path_to_path_buf(&source.trusted_root)) {
-                Ok(root) => Some(root),
-                Err(error) => {
-                    return Ok((
-                        ImportStatus::Failed,
-                        manual_import_source_failed_result_json(
-                            import_id,
-                            payload,
-                            format!("tracked manual import source is unavailable: {error}"),
-                        ),
-                    ));
-                }
-            },
-            None => {
-                return Ok((
-                    ImportStatus::Failed,
-                    manual_import_source_failed_result_json(
-                        import_id,
-                        payload,
-                        "manual import has no server-owned trusted source; reopen the import dialog"
-                            .to_string(),
-                    ),
-                ));
-            }
+        Err(_) => {
+            return Ok((
+                ImportStatus::Failed,
+                manual_import_source_failed_result_json(
+                    import_id,
+                    payload,
+                    MANUAL_IMPORT_SOURCE_UNAVAILABLE.to_string(),
+                ),
+            ));
         }
     };
+    let trusted_source_root = match std::fs::canonicalize(&completed.dest_dir) {
+        Ok(root) => root,
+        Err(_) => {
+            return Ok((
+                ImportStatus::Failed,
+                manual_import_source_failed_result_json(
+                    import_id,
+                    payload,
+                    MANUAL_IMPORT_SOURCE_UNAVAILABLE.to_string(),
+                ),
+            ));
+        }
+    };
+    let source_identity = DownloadSourceIdentity::new(
+        Some(&completed.client_id),
+        &completed.client_type,
+        &completed.download_client_item_id,
+    );
 
     if payload.files.is_empty() {
-        let completed = completed_source.ok_or_else(|| {
-            AppError::NotFound(format!(
-                "completed download {}",
-                payload.download_client_item_id
-            ))
-        })?;
-
         let result = app
-            .trigger_manual_import(&actor, &completed, payload.title_id.as_deref())
+            .trigger_manual_import(&actor, &completed, Some(title_id))
             .await?;
 
         let (status, error_code, error_message) =
@@ -1793,7 +1615,7 @@ pub async fn execute_queued_manual_import(
         maybe_remove_completed_manual_import_download(
             app,
             Some(&completed),
-            result.title_id.as_deref().or(payload.title_id.as_deref()),
+            result.title_id.as_deref().or(Some(title_id)),
             matches!(result.decision, ImportDecision::Imported),
         )
         .await;
@@ -1814,26 +1636,21 @@ pub async fn execute_queued_manual_import(
         return Ok((status, result_json));
     }
 
-    let title_id = payload.title_id.as_deref().ok_or_else(|| {
-        AppError::Validation("title id is required for mapped manual import".into())
-    })?;
-    let completed = completed_source
-        .filter(|download| completed_download_matches_manual_import(download, payload));
     let results = execute_manual_import(
         app,
         &actor,
         import_id,
         title_id,
-        completed.as_ref(),
+        Some(&completed),
         payload.files.clone(),
-        trusted_source_root,
+        Some(trusted_source_root),
     )
     .await?;
     let (status, error_code, error_message) = manual_import_terminal_status_and_error(&results);
 
     maybe_remove_completed_manual_import_download(
         app,
-        completed.as_ref(),
+        Some(&completed),
         Some(title_id),
         status == ImportStatus::Completed,
     )
@@ -1844,13 +1661,13 @@ pub async fn execute_queued_manual_import(
             .services
             .workflow
             .imports
-            .delete_manual_import_source(&source_identity)
+            .delete_manual_import_selections_for_source(&source_identity)
             .await
         {
             tracing::warn!(
                 error = %error,
                 item_id = %source_identity.item_id,
-                "failed to clean up terminal manual-import source"
+                "failed to clean up terminal manual-import selections"
             );
         }
     }

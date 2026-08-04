@@ -1,6 +1,7 @@
 mod archive_adapter;
 mod blocking;
 pub mod builtins;
+mod command_abi;
 mod download_client_adapter;
 mod embedded_descriptor;
 mod indexer_adapter;

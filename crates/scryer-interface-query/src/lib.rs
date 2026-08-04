@@ -1837,6 +1837,7 @@ impl SystemQueries {
                     file_name: item.file_name,
                     size_bytes: Long::from_u64_saturating(item.size_bytes),
                     title_id: item.title_id.map(ID::from),
+                    title_name: item.title_name,
                     reason: item.reason,
                     recycled_at: parse_required_datetime(
                         &item.recycled_at,
@@ -1850,6 +1851,34 @@ impl SystemQueries {
             })
             .collect::<GqlResult<Vec<_>>>()?;
         Ok(RecycledItemsPayload { items, total_count })
+    }
+
+    async fn preview_restore_recycled_items(
+        &self,
+        ctx: &Context<'_>,
+        ids: Vec<ID>,
+    ) -> GqlResult<RecycleRestorePreviewPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let preview = app
+            .preview_restore_recycled_items(
+                &actor,
+                ids.iter().map(|id| id.as_str().to_string()).collect(),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(RecycleRestorePreviewPayload {
+            fingerprint: preview.fingerprint,
+            items: preview
+                .items
+                .into_iter()
+                .map(|item| RecycleRestorePreviewItemPayload {
+                    id: ID::from(item.id),
+                    original_path: item.original_path,
+                    destination_occupied: item.destination_occupied,
+                })
+                .collect(),
+        })
     }
 
     async fn backups(&self, ctx: &Context<'_>) -> GqlResult<Vec<BackupInfoPayload>> {

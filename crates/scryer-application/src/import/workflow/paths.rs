@@ -1039,33 +1039,6 @@ pub(crate) fn find_video_files(dir: &Path, filter_samples: bool) -> AppResult<Ve
         .collect())
 }
 
-pub(crate) fn find_video_files_without_symlinked_dirs(
-    dir: &Path,
-    filter_samples: bool,
-) -> AppResult<Vec<PathBuf>> {
-    if std::fs::read_dir(dir).is_err() && is_video_file(dir) {
-        tracing::info!(
-            path = %dir.display(),
-            "download path is a video file, not a directory"
-        );
-        return Ok((!filter_samples || !is_sample_file(dir))
-            .then_some(dir.to_path_buf())
-            .into_iter()
-            .collect());
-    }
-
-    let walked = crate::filesystem_walk::FilesystemWalker::new()
-        .skip_unreadable_subdirectories()
-        .skip_symlinked_directories()
-        .walk(dir)?;
-
-    Ok(walked
-        .into_iter()
-        .flat_map(|entry| entry.files.into_iter())
-        .filter(|path| is_video_file(path))
-        .filter(|path| !filter_samples || !is_sample_file(path))
-        .collect())
-}
 pub(crate) fn pick_largest_file(files: &[PathBuf]) -> AppResult<PathBuf> {
     files
         .iter()

@@ -12,11 +12,17 @@ use scryer_application::{
     DownloadSourceKind, ResolvedDownloadArtifact, StagedNzbRef,
 };
 use scryer_domain::{CompletedDownload, DownloadQueueItem, DownloadQueueState};
+use scryer_plugin_sdk::command::{
+    PluginCommand, PluginCommandRequest, PluginCommandResult, PluginDownloadClientCommand,
+    PluginDownloadClientCommandResult, PluginDownloadGetCompletedRequest,
+};
 use scryer_plugin_sdk::torrent::normalize_info_hash_pair;
+use scryer_plugin_sdk::{PluginError, PluginResult};
 use tracing::debug;
 
 use crate::blocking::run_blocking_plugin_call;
 use crate::legacy_runtime::LegacyPlugin;
+use crate::runtime_backing::PluginInstanceSpec;
 use crate::types::{
     DownloadControlAction, DownloadInputKind, DownloadIsolationMode, DownloadItemState,
     EXPORT_DOWNLOAD_ADD, EXPORT_DOWNLOAD_CONTROL, EXPORT_DOWNLOAD_LIST_COMPLETED,
@@ -29,6 +35,8 @@ use crate::types::{
     PluginDownloadRouting, PluginDownloadSource, PluginDownloadTitle, PluginTorrentOptions,
     PluginTorrentQueuePlacement, decode_plugin_result,
 };
+use crate::wasmtime_host::command_host::CommandHost;
+use crate::wasmtime_host::{CommandInvocation, process_command};
 
 const DOWNLOAD_CLIENT_PLUGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const TORRENT_PREFETCH_MAX_BYTES: usize = 32 * 1024 * 1024;
@@ -71,10 +79,17 @@ async fn read_torrent_body_bounded(mut response: reqwest::Response) -> Result<Ve
 }
 
 pub struct WasmDownloadClient {
-    plugin: Arc<Mutex<LegacyPlugin>>,
+    plugin: Option<Arc<Mutex<LegacyPlugin>>>,
+    command: Option<Arc<CommandDownloadClient>>,
     descriptor: PluginDescriptor,
     client_name: String,
     client_id: String,
+}
+
+struct CommandDownloadClient {
+    wasm: Arc<Vec<u8>>,
+    command_host: CommandHost,
+    invocation_lock: tokio::sync::Mutex<()>,
 }
 
 impl WasmDownloadClient {
@@ -88,11 +103,86 @@ impl WasmDownloadClient {
         // is fetched through the guarded plugin egress facility, which builds a
         // per-request DNS-pinned client and re-validates every redirect hop.
         Self {
-            plugin: Arc::new(Mutex::new(plugin)),
+            plugin: Some(Arc::new(Mutex::new(plugin))),
+            command: None,
             descriptor,
             client_name,
             client_id,
         }
+    }
+
+    pub fn new_command(
+        wasm: Vec<u8>,
+        descriptor: PluginDescriptor,
+        client_id: String,
+        client_name: String,
+        command_host: CommandHost,
+    ) -> Self {
+        Self {
+            plugin: None,
+            command: Some(Arc::new(CommandDownloadClient {
+                wasm: Arc::new(wasm),
+                command_host,
+                invocation_lock: tokio::sync::Mutex::new(()),
+            })),
+            descriptor,
+            client_name,
+            client_id,
+        }
+    }
+
+    fn legacy_plugin(&self) -> AppResult<Arc<Mutex<LegacyPlugin>>> {
+        self.plugin.clone().ok_or_else(|| {
+            AppError::Repository("command download client cannot use a legacy export".to_string())
+        })
+    }
+
+    async fn invoke_command(
+        &self,
+        command: PluginDownloadClientCommand,
+        operation: &'static str,
+    ) -> AppResult<Option<PluginDownloadClientCommandResult>> {
+        let Some(client) = self.command.as_ref() else {
+            return Ok(None);
+        };
+        let _guard = client.invocation_lock.lock().await;
+        let spec = PluginInstanceSpec {
+            wasm: Arc::clone(&client.wasm),
+            preopens: Vec::new(),
+            timeout: DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
+            memory_max_bytes: None,
+            command_host: client.command_host.clone(),
+        };
+        let response = process_command(
+            &spec,
+            &PluginCommandRequest::new(PluginCommand::DownloadClient(command)),
+            CommandInvocation {
+                plugin_id: &self.descriptor.id,
+                plugin_version: &self.descriptor.version,
+                operation,
+            },
+        )
+        .await?;
+        match response.response {
+            PluginCommandResult::DownloadClient(result) => Ok(Some(result)),
+            _ => Err(AppError::Repository(format!(
+                "command plugin {} returned a response for another plugin family",
+                self.descriptor.id
+            ))),
+        }
+    }
+}
+
+fn decode_command_result<T>(result: PluginResult<T>, context: &str) -> AppResult<T> {
+    match result {
+        PluginResult::Ok(value) => Ok(value),
+        PluginResult::Err(PluginError {
+            code,
+            public_message,
+            ..
+        }) => Err(AppError::Repository(format!(
+            "{context}: plugin error {code:?}: {public_message}"
+        ))),
     }
 }
 
@@ -802,11 +892,32 @@ impl DownloadClient for WasmDownloadClient {
             },
         );
 
+        if let Some(result) = self
+            .invoke_command(
+                PluginDownloadClientCommand::Add(plugin_request.clone()),
+                "add",
+            )
+            .await?
+        {
+            let PluginDownloadClientCommandResult::Add(result) = result else {
+                return Err(AppError::Repository(
+                    "download-client command returned the wrong result for add".to_string(),
+                ));
+            };
+            let response = decode_command_result(result, "download add")
+                .map_err(AppError::into_download_submit_unavailable)?;
+            return Ok(map_add_response_to_grab_result(
+                response,
+                request,
+                self.descriptor.provider_type(),
+            ));
+        }
+
         let input = serde_json::to_string(&plugin_request).map_err(|e| {
             AppError::Repository(format!("failed to serialize plugin request: {e}"))
         })?;
 
-        let plugin = Arc::clone(&self.plugin);
+        let plugin = self.legacy_plugin()?;
         let output = run_blocking_plugin_call(
             DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
             "download client plugin",
@@ -833,7 +944,38 @@ impl DownloadClient for WasmDownloadClient {
     }
 
     async fn list_queue(&self) -> AppResult<Vec<DownloadQueueItem>> {
-        let plugin = Arc::clone(&self.plugin);
+        if let Some(result) = self
+            .invoke_command(PluginDownloadClientCommand::ListQueue, "list_queue")
+            .await?
+        {
+            let PluginDownloadClientCommandResult::ListQueue(result) = result else {
+                return Err(AppError::Repository(
+                    "download-client command returned the wrong result for list_queue".to_string(),
+                ));
+            };
+            let items = decode_command_result(result, "download list_queue")?;
+            return Ok(items
+                .into_iter()
+                .filter(|item| {
+                    !matches!(
+                        item.state,
+                        DownloadItemState::Completed
+                            | DownloadItemState::Seeding
+                            | DownloadItemState::Failed
+                            | DownloadItemState::Error
+                    )
+                })
+                .map(|item| {
+                    map_queue_item(
+                        item,
+                        &self.client_id,
+                        &self.client_name,
+                        self.descriptor.provider_type(),
+                    )
+                })
+                .collect());
+        }
+        let plugin = self.legacy_plugin()?;
         let output = run_blocking_plugin_call(
             DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
             "download client plugin",
@@ -874,7 +1016,29 @@ impl DownloadClient for WasmDownloadClient {
     }
 
     async fn list_history(&self) -> AppResult<Vec<DownloadQueueItem>> {
-        let plugin = Arc::clone(&self.plugin);
+        if let Some(result) = self
+            .invoke_command(PluginDownloadClientCommand::ListHistory, "list_history")
+            .await?
+        {
+            let PluginDownloadClientCommandResult::ListHistory(result) = result else {
+                return Err(AppError::Repository(
+                    "download-client command returned the wrong result for list_history"
+                        .to_string(),
+                ));
+            };
+            return Ok(decode_command_result(result, "download list_history")?
+                .into_iter()
+                .map(|item| {
+                    map_history_item_from_completed(
+                        item,
+                        &self.client_id,
+                        &self.client_name,
+                        self.descriptor.provider_type(),
+                    )
+                })
+                .collect());
+        }
+        let plugin = self.legacy_plugin()?;
         let output = run_blocking_plugin_call(
             DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
             "download client plugin",
@@ -942,7 +1106,24 @@ impl DownloadClient for WasmDownloadClient {
     }
 
     async fn list_completed_downloads(&self) -> AppResult<Vec<CompletedDownload>> {
-        let plugin = Arc::clone(&self.plugin);
+        if let Some(result) = self
+            .invoke_command(PluginDownloadClientCommand::ListCompleted, "list_completed")
+            .await?
+        {
+            let PluginDownloadClientCommandResult::ListCompleted(result) = result else {
+                return Err(AppError::Repository(
+                    "download-client command returned the wrong result for list_completed"
+                        .to_string(),
+                ));
+            };
+            return Ok(decode_command_result(result, "download list_completed")?
+                .into_iter()
+                .map(|item| {
+                    map_completed_download(item, &self.client_id, self.descriptor.provider_type())
+                })
+                .collect());
+        }
+        let plugin = self.legacy_plugin()?;
         let output = run_blocking_plugin_call(
             DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
             "download client plugin",
@@ -970,6 +1151,56 @@ impl DownloadClient for WasmDownloadClient {
             .collect())
     }
 
+    async fn get_completed_download_for_source(
+        &self,
+        client_id: &str,
+        client_type: &str,
+        download_client_item_id: &str,
+    ) -> AppResult<Option<CompletedDownload>> {
+        let download_client_item_id = download_client_item_id.trim();
+        if client_id.trim() != self.client_id
+            || !client_type.eq_ignore_ascii_case(self.descriptor.provider_type())
+        {
+            return Ok(None);
+        }
+        if let Some(result) = self
+            .invoke_command(
+                PluginDownloadClientCommand::GetCompleted(PluginDownloadGetCompletedRequest {
+                    client_item_id: download_client_item_id.to_string(),
+                }),
+                "get_completed",
+            )
+            .await?
+        {
+            let PluginDownloadClientCommandResult::GetCompleted(result) = result else {
+                return Err(AppError::Repository(
+                    "download-client command returned the wrong result for get_completed"
+                        .to_string(),
+                ));
+            };
+            let completed = decode_command_result(result, "download get_completed")?;
+            let Some(completed) = completed else {
+                return Ok(None);
+            };
+            if completed.client_item_id != download_client_item_id {
+                return Err(AppError::Repository(format!(
+                    "download-client command returned completed item '{}' for requested item '{}'",
+                    completed.client_item_id, download_client_item_id
+                )));
+            }
+            return Ok(Some(map_completed_download(
+                completed,
+                &self.client_id,
+                self.descriptor.provider_type(),
+            )));
+        }
+        Ok(self
+            .list_completed_downloads()
+            .await?
+            .into_iter()
+            .find(|download| download.download_client_item_id == download_client_item_id))
+    }
+
     async fn list_recent_completed_downloads(
         &self,
         limit: usize,
@@ -978,11 +1209,40 @@ impl DownloadClient for WasmDownloadClient {
             return Ok(Vec::new());
         }
 
+        if let Some(result) = self
+            .invoke_command(
+                PluginDownloadClientCommand::ListRecentCompleted(
+                    PluginDownloadListRecentCompletedRequest { limit },
+                ),
+                "list_recent_completed",
+            )
+            .await?
+        {
+            let PluginDownloadClientCommandResult::ListRecentCompleted(result) = result else {
+                return Err(AppError::Repository(
+                    "download-client command returned the wrong result for list_recent_completed"
+                        .to_string(),
+                ));
+            };
+            return Ok(
+                decode_command_result(result, "download list_recent_completed")?
+                    .into_iter()
+                    .map(|item| {
+                        map_completed_download(
+                            item,
+                            &self.client_id,
+                            self.descriptor.provider_type(),
+                        )
+                    })
+                    .collect(),
+            );
+        }
+
         let input = serde_json::to_string(&PluginDownloadListRecentCompletedRequest { limit })
             .map_err(|e| {
                 AppError::Repository(format!("failed to serialize plugin request: {e}"))
             })?;
-        let plugin = Arc::clone(&self.plugin);
+        let plugin = self.legacy_plugin()?;
         let (output, export_name) = run_blocking_plugin_call(
             DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
             "download client plugin",
@@ -1044,10 +1304,24 @@ impl DownloadClient for WasmDownloadClient {
             remove_data: false,
             is_history: false,
         };
+        if let Some(result) = self
+            .invoke_command(
+                PluginDownloadClientCommand::Control(request.clone()),
+                "control",
+            )
+            .await?
+        {
+            let PluginDownloadClientCommandResult::Control(result) = result else {
+                return Err(AppError::Repository(
+                    "download-client command returned the wrong result for control".to_string(),
+                ));
+            };
+            return decode_command_result(result, "download control");
+        }
         let input = serde_json::to_string(&request).map_err(|e| {
             AppError::Repository(format!("failed to serialize control request: {e}"))
         })?;
-        let plugin = Arc::clone(&self.plugin);
+        let plugin = self.legacy_plugin()?;
         run_blocking_plugin_call(
             DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
             "download client plugin",
@@ -1071,10 +1345,24 @@ impl DownloadClient for WasmDownloadClient {
             remove_data: false,
             is_history: false,
         };
+        if let Some(result) = self
+            .invoke_command(
+                PluginDownloadClientCommand::Control(request.clone()),
+                "control",
+            )
+            .await?
+        {
+            let PluginDownloadClientCommandResult::Control(result) = result else {
+                return Err(AppError::Repository(
+                    "download-client command returned the wrong result for control".to_string(),
+                ));
+            };
+            return decode_command_result(result, "download control");
+        }
         let input = serde_json::to_string(&request).map_err(|e| {
             AppError::Repository(format!("failed to serialize control request: {e}"))
         })?;
-        let plugin = Arc::clone(&self.plugin);
+        let plugin = self.legacy_plugin()?;
         run_blocking_plugin_call(
             DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
             "download client plugin",
@@ -1098,10 +1386,24 @@ impl DownloadClient for WasmDownloadClient {
             remove_data: false,
             is_history,
         };
+        if let Some(result) = self
+            .invoke_command(
+                PluginDownloadClientCommand::Control(request.clone()),
+                "control",
+            )
+            .await?
+        {
+            let PluginDownloadClientCommandResult::Control(result) = result else {
+                return Err(AppError::Repository(
+                    "download-client command returned the wrong result for control".to_string(),
+                ));
+            };
+            return decode_command_result(result, "download control");
+        }
         let input = serde_json::to_string(&request).map_err(|e| {
             AppError::Repository(format!("failed to serialize control request: {e}"))
         })?;
-        let plugin = Arc::clone(&self.plugin);
+        let plugin = self.legacy_plugin()?;
         run_blocking_plugin_call(
             DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
             "download client plugin",
@@ -1119,7 +1421,7 @@ impl DownloadClient for WasmDownloadClient {
     }
 
     async fn mark_imported(&self, request: &DownloadClientMarkImportedRequest) -> AppResult<()> {
-        let input = serde_json::to_string(&PluginDownloadClientMarkImportedRequest {
+        let command_request = PluginDownloadClientMarkImportedRequest {
             client_item_id: request.client_item_id.clone(),
             info_hash: request.info_hash.clone(),
             title_id: request.title_id.clone(),
@@ -1128,11 +1430,26 @@ impl DownloadClient for WasmDownloadClient {
             post_import_isolation: build_isolation_entries(request.category.as_deref()),
             imported_path: request.imported_path.clone(),
             download_path: request.download_path.clone(),
-        })
-        .map_err(|e| {
+        };
+        if let Some(result) = self
+            .invoke_command(
+                PluginDownloadClientCommand::MarkImported(command_request.clone()),
+                "mark_imported",
+            )
+            .await?
+        {
+            let PluginDownloadClientCommandResult::MarkImported(result) = result else {
+                return Err(AppError::Repository(
+                    "download-client command returned the wrong result for mark_imported"
+                        .to_string(),
+                ));
+            };
+            return decode_command_result(result, "download mark_imported");
+        }
+        let input = serde_json::to_string(&command_request).map_err(|e| {
             AppError::Repository(format!("failed to serialize mark_imported request: {e}"))
         })?;
-        let plugin = Arc::clone(&self.plugin);
+        let plugin = self.legacy_plugin()?;
         run_blocking_plugin_call(
             DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
             "download client plugin",
@@ -1152,7 +1469,26 @@ impl DownloadClient for WasmDownloadClient {
     }
 
     async fn get_client_status(&self) -> AppResult<DownloadClientStatus> {
-        let plugin = Arc::clone(&self.plugin);
+        if let Some(result) = self
+            .invoke_command(PluginDownloadClientCommand::Status, "status")
+            .await?
+        {
+            let PluginDownloadClientCommandResult::Status(result) = result else {
+                return Err(AppError::Repository(
+                    "download-client command returned the wrong result for status".to_string(),
+                ));
+            };
+            let status = decode_command_result(result, "download status")?;
+            return Ok(DownloadClientStatus {
+                version: status.version,
+                is_localhost: status.is_localhost,
+                remote_output_roots: status.remote_output_roots,
+                removes_completed_downloads: status.removes_completed_downloads,
+                sorting_mode: status.sorting_mode,
+                warnings: status.warnings,
+            });
+        }
+        let plugin = self.legacy_plugin()?;
         let output = run_blocking_plugin_call(
             DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
             "download client plugin",
@@ -1181,7 +1517,22 @@ impl DownloadClient for WasmDownloadClient {
     }
 
     async fn test_connection(&self) -> AppResult<String> {
-        let plugin = Arc::clone(&self.plugin);
+        if let Some(result) = self
+            .invoke_command(
+                PluginDownloadClientCommand::TestConnection,
+                "test_connection",
+            )
+            .await?
+        {
+            let PluginDownloadClientCommandResult::TestConnection(result) = result else {
+                return Err(AppError::Repository(
+                    "download-client command returned the wrong result for test_connection"
+                        .to_string(),
+                ));
+            };
+            return decode_command_result(result, "download test_connection");
+        }
+        let plugin = self.legacy_plugin()?;
         let output = run_blocking_plugin_call(
             DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
             "download client plugin",

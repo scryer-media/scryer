@@ -2981,6 +2981,7 @@ export const recycledItemsQuery = `query RecycledItems($libraryIds: [ID!]) {
       fileName
       sizeBytes
       titleId
+      titleName
       reason
       recycledAt
       mediaRoot
@@ -2988,6 +2989,17 @@ export const recycledItemsQuery = `query RecycledItems($libraryIds: [ID!]) {
       libraryName
     }
     totalCount
+  }
+}`;
+
+export const previewRestoreRecycledItemsQuery = `query PreviewRestoreRecycledItems($ids: [ID!]!) {
+  previewRestoreRecycledItems(ids: $ids) {
+    fingerprint
+    items {
+      id
+      originalPath
+      destinationOccupied
+    }
   }
 }`;
 

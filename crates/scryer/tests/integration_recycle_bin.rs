@@ -14,8 +14,8 @@ use scryer_application::{
     SETTINGS_SOURCE_TYPED_GRAPHQL, ShowRepository, TitleRepository, UpdateRecycleBinSettings,
 };
 use scryer_domain::{
-    AppPermission, AppPermissionMask, Collection, CollectionType, Id, Library, LibraryPermission,
-    LibraryPermissionMask, MediaFacet, Title, User, UserAuthorization,
+    AppPermission, AppPermissionMask, Collection, CollectionType, Id, Library, LibraryGrant,
+    LibraryPermission, LibraryPermissionMask, MediaFacet, Title, User, UserAuthorization,
 };
 use scryer_infrastructure::SettingDefinitionSeed;
 use serde_json::{Value, json};
@@ -83,6 +83,41 @@ fn manage_titles_actor(username: &str, library_ids: &[String]) -> User {
             )
         }),
     )
+}
+
+async fn persisted_manage_titles_actor(
+    ctx: &TestContext,
+    username: &str,
+    library_ids: &[String],
+) -> User {
+    let admin = ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("default admin");
+    let created = ctx
+        .app
+        .create_user(
+            &admin,
+            username.to_string(),
+            "password123".to_string(),
+            AppPermissionMask::NONE,
+            library_ids
+                .iter()
+                .map(|library_id| LibraryGrant {
+                    user_id: String::new(),
+                    library_id: library_id.clone(),
+                    permissions: LibraryPermissionMask::from_permissions([
+                        LibraryPermission::ManageTitles,
+                    ]),
+                })
+                .collect(),
+        )
+        .await
+        .expect("create persisted title manager");
+    let mut actor = manage_titles_actor(username, library_ids);
+    actor.id = created.id;
+    actor
 }
 
 fn no_permission_actor() -> User {
@@ -728,7 +763,12 @@ async fn restoring_conflict_scans_title_and_tracks_restored_file_as_additional()
         .await
         .expect("create restore movie collection");
 
-    let manager = manage_titles_actor("manager", std::slice::from_ref(&library.id));
+    let manager = persisted_manage_titles_actor(
+        &ctx,
+        "restore-conflict-manager",
+        std::slice::from_ref(&library.id),
+    )
+    .await;
     let accepted = ctx
         .app
         .start_restore_recycled_item_job(&manager, &entry_id)
@@ -820,7 +860,12 @@ async fn failed_restore_job_keeps_recycle_entry_available() {
         std::fs::remove_dir(&parent).expect("remove empty source parent");
     }
     std::fs::write(&parent, b"not a directory").expect("block restore parent");
-    let manager = manage_titles_actor("manager", std::slice::from_ref(&library.id));
+    let manager = persisted_manage_titles_actor(
+        &ctx,
+        "restore-failure-manager",
+        std::slice::from_ref(&library.id),
+    )
+    .await;
     let accepted = ctx
         .app
         .start_restore_recycled_item_job(&manager, &recycle_result.entry_id)
@@ -1063,4 +1108,453 @@ async fn disabled_recycle_bin_paths_are_inert_and_direct_delete_new_files() {
     .expect("direct delete succeeds");
     assert!(result.is_none());
     assert!(!new_source.exists());
+}
+
+async fn wait_for_terminal_job(
+    ctx: &TestContext,
+    actor: &User,
+    job_key: JobKey,
+    run_id: &str,
+) -> scryer_application::JobRun {
+    let run_id = run_id.to_string();
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let run = ctx
+                .app
+                .list_job_runs(actor, job_key, 20)
+                .await
+                .expect("list recycle-bin job runs")
+                .into_iter()
+                .find(|run| run.id == run_id);
+            if let Some(run) = run
+                && run.status.is_terminal()
+            {
+                return run;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("recycle-bin job should reach a terminal status")
+}
+
+#[tokio::test]
+async fn graphql_restore_recycled_items_returns_accepted_batch_job_run() {
+    let ctx = TestContext::new().await;
+    seed_recycle_bin_setting_definition(&ctx).await;
+    let root = tempfile::tempdir().expect("library root");
+    let library = seed_library(&ctx, "GraphQL Batch Restore", root.path()).await;
+    seed_title(&ctx, "title-graphql-batch-restore", &library).await;
+    let first_entry = seed_recycled_file(
+        root.path(),
+        "title-graphql-batch-restore",
+        "graphql-batch-first",
+    )
+    .await;
+    let second_entry = seed_recycled_file(
+        root.path(),
+        "title-graphql-batch-restore",
+        "graphql-batch-second",
+    )
+    .await;
+
+    let preview = gql(
+        &ctx,
+        r#"query PreviewRestoreRecycledItems($ids: [ID!]!) {
+            previewRestoreRecycledItems(ids: $ids) {
+                fingerprint
+                items { id destinationOccupied }
+            }
+            recycledItems { items { id titleName } }
+        }"#,
+        json!({ "ids": [first_entry, second_entry] }),
+    )
+    .await;
+    assert_no_errors(&preview);
+    assert_eq!(
+        preview["data"]["previewRestoreRecycledItems"]["items"]
+            .as_array()
+            .expect("preview items")
+            .len(),
+        2
+    );
+    assert!(
+        preview["data"]["recycledItems"]["items"]
+            .as_array()
+            .expect("recycled items")
+            .iter()
+            .all(|item| item["titleName"] == "GraphQL Batch Restore Title"),
+        "recycle items should expose their title name for UI grouping"
+    );
+    let fingerprint = preview["data"]["previewRestoreRecycledItems"]["fingerprint"]
+        .as_str()
+        .expect("preview fingerprint")
+        .to_string();
+
+    let body = gql(
+        &ctx,
+        r#"mutation RestoreRecycledItems($input: RestoreRecycledItemsInput!) {
+            restoreRecycledItems(input: $input) {
+                ids
+                jobRun { id jobKey status }
+            }
+        }"#,
+        json!({
+            "input": {
+                "ids": [first_entry, second_entry],
+                "conflictPolicy": "KEEP_BOTH",
+                "previewFingerprint": fingerprint,
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&body);
+    let accepted_ids = body["data"]["restoreRecycledItems"]["ids"]
+        .as_array()
+        .expect("accepted ids");
+    assert_eq!(accepted_ids.len(), 2);
+    assert!(accepted_ids.iter().any(|id| id == &first_entry));
+    assert!(accepted_ids.iter().any(|id| id == &second_entry));
+    assert_eq!(
+        body["data"]["restoreRecycledItems"]["jobRun"]["jobKey"],
+        "RECYCLE_BIN_RESTORE"
+    );
+    assert_eq!(
+        body["data"]["restoreRecycledItems"]["jobRun"]["status"],
+        "RUNNING"
+    );
+
+    let run_id = body["data"]["restoreRecycledItems"]["jobRun"]["id"]
+        .as_str()
+        .expect("accepted job id");
+    let admin = ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("default admin");
+    let terminal = wait_for_terminal_job(&ctx, &admin, JobKey::RecycleBinRestore, run_id).await;
+    assert_eq!(terminal.status, JobRunStatus::Completed);
+    assert!(root.path().join("graphql-batch-first.mkv").exists());
+    assert!(root.path().join("graphql-batch-second.mkv").exists());
+}
+
+#[tokio::test]
+async fn graphql_delete_recycled_items_returns_accepted_purge_job_run() {
+    let ctx = TestContext::new().await;
+    seed_recycle_bin_setting_definition(&ctx).await;
+    let root = tempfile::tempdir().expect("library root");
+    let library = seed_library(&ctx, "GraphQL Batch Purge", root.path()).await;
+    seed_title(&ctx, "title-graphql-batch-purge", &library).await;
+    let first_entry = seed_recycled_file(
+        root.path(),
+        "title-graphql-batch-purge",
+        "graphql-purge-first",
+    )
+    .await;
+    let second_entry = seed_recycled_file(
+        root.path(),
+        "title-graphql-batch-purge",
+        "graphql-purge-second",
+    )
+    .await;
+
+    let body = gql(
+        &ctx,
+        r#"mutation DeleteRecycledItems($input: DeleteRecycledItemsInput!) {
+            deleteRecycledItems(input: $input) {
+                ids
+                jobRun { id jobKey status }
+            }
+        }"#,
+        json!({ "input": { "ids": [first_entry, second_entry] } }),
+    )
+    .await;
+    assert_no_errors(&body);
+    let accepted_ids = body["data"]["deleteRecycledItems"]["ids"]
+        .as_array()
+        .expect("accepted ids");
+    assert_eq!(accepted_ids.len(), 2);
+    assert!(accepted_ids.iter().any(|id| id == &first_entry));
+    assert!(accepted_ids.iter().any(|id| id == &second_entry));
+    assert_eq!(
+        body["data"]["deleteRecycledItems"]["jobRun"]["jobKey"],
+        "RECYCLE_BIN_PURGE"
+    );
+    assert_eq!(
+        body["data"]["deleteRecycledItems"]["jobRun"]["status"],
+        "RUNNING"
+    );
+
+    let run_id = body["data"]["deleteRecycledItems"]["jobRun"]["id"]
+        .as_str()
+        .expect("accepted job id");
+    let admin = ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("default admin");
+    let terminal = wait_for_terminal_job(&ctx, &admin, JobKey::RecycleBinPurge, run_id).await;
+    assert_eq!(terminal.status, JobRunStatus::Completed);
+    assert!(
+        ctx.app
+            .list_recycled_items(&admin, None)
+            .await
+            .expect("list recycled items")
+            .is_empty(),
+        "terminal purge should remove all selected entries"
+    );
+}
+
+#[tokio::test]
+async fn batch_replace_existing_restores_in_place_and_recycles_the_incumbent() {
+    let ctx = TestContext::new().await;
+    seed_recycle_bin_setting_definition(&ctx).await;
+    let root = tempfile::tempdir().expect("library root");
+    let library = seed_library(&ctx, "Replace In Place", root.path()).await;
+    seed_title(&ctx, "title-replace-in-place", &library).await;
+    let entry_id =
+        seed_recycled_file(root.path(), "title-replace-in-place", "replace-in-place").await;
+    let original_path = root.path().join("replace-in-place.mkv");
+    std::fs::write(&original_path, b"current live file").expect("write incumbent file");
+    ctx.media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: "title-replace-in-place".to_string(),
+            file_path: original_path.to_string_lossy().to_string(),
+            size_bytes: 17,
+            role: MediaFileRole::Primary,
+            ..Default::default()
+        })
+        .await
+        .expect("insert incumbent media file");
+    let manager = persisted_manage_titles_actor(
+        &ctx,
+        "replace-in-place-manager",
+        std::slice::from_ref(&library.id),
+    )
+    .await;
+    let preview = ctx
+        .app
+        .preview_restore_recycled_items(&manager, vec![entry_id.clone()])
+        .await
+        .expect("preview replacement restore");
+    assert!(preview.items[0].destination_occupied);
+
+    let accepted = ctx
+        .app
+        .start_restore_recycled_items_job(
+            &manager,
+            vec![entry_id.clone()],
+            scryer_application::RecycleRestoreConflictPolicy::ReplaceExisting,
+            &preview.fingerprint,
+        )
+        .await
+        .expect("accept replacement restore job");
+    assert_eq!(accepted.job_run.status, JobRunStatus::Running);
+    let terminal = wait_for_terminal_job(
+        &ctx,
+        &manager,
+        JobKey::RecycleBinRestore,
+        &accepted.job_run.id,
+    )
+    .await;
+    assert_eq!(terminal.status, JobRunStatus::Completed);
+    assert_eq!(
+        std::fs::read(&original_path).expect("read restored file"),
+        b"replace-in-place content"
+    );
+    assert!(
+        !root.path().join("replace-in-place-restored.mkv").exists(),
+        "replace-in-place must not create a keep-both sibling"
+    );
+
+    let items = ctx
+        .app
+        .list_recycled_items(&manager, None)
+        .await
+        .expect("list displaced incumbent");
+    let displaced = items
+        .iter()
+        .find(|item| item.id != entry_id)
+        .expect("incumbent should be recycled as a new entry");
+    assert_eq!(displaced.reason, "restore_replaced");
+    assert_eq!(displaced.original_path, original_path.to_string_lossy());
+    let displaced_file = root
+        .path()
+        .join(".scryer-recycle")
+        .join(&displaced.id)
+        .join("replace-in-place.mkv");
+    assert_eq!(
+        std::fs::read(displaced_file).expect("read displaced incumbent"),
+        b"current live file"
+    );
+}
+
+#[tokio::test]
+async fn batch_restore_rejects_stale_preview_before_queueing() {
+    let ctx = TestContext::new().await;
+    seed_recycle_bin_setting_definition(&ctx).await;
+    let root = tempfile::tempdir().expect("library root");
+    let library = seed_library(&ctx, "Stale Restore Preview", root.path()).await;
+    seed_title(&ctx, "title-stale-restore-preview", &library).await;
+    let entry_id = seed_recycled_file(
+        root.path(),
+        "title-stale-restore-preview",
+        "stale-restore-preview",
+    )
+    .await;
+    let manager = persisted_manage_titles_actor(
+        &ctx,
+        "stale-restore-preview-manager",
+        std::slice::from_ref(&library.id),
+    )
+    .await;
+    let preview = ctx
+        .app
+        .preview_restore_recycled_items(&manager, vec![entry_id.clone()])
+        .await
+        .expect("preview restore");
+
+    std::fs::write(
+        root.path().join("stale-restore-preview.mkv"),
+        b"new live file",
+    )
+    .expect("change the restore destination after preview");
+    let error = ctx
+        .app
+        .start_restore_recycled_items_job(
+            &manager,
+            vec![entry_id.clone()],
+            scryer_application::RecycleRestoreConflictPolicy::KeepBoth,
+            &preview.fingerprint,
+        )
+        .await
+        .expect_err("stale preview should not queue a restore");
+    assert!(error.to_string().contains("preview is stale"));
+    assert!(
+        root.path()
+            .join(".scryer-recycle")
+            .join(&entry_id)
+            .join("stale-restore-preview.mkv")
+            .exists(),
+        "a rejected restore must retain its recycle entry"
+    );
+    assert!(
+        ctx.app
+            .list_job_runs(&manager, JobKey::RecycleBinRestore, 10)
+            .await
+            .expect("list restore jobs")
+            .is_empty(),
+        "stale validation must fail before persisting a job"
+    );
+}
+
+#[tokio::test]
+async fn batch_recycle_jobs_guard_duplicates_without_blocking_independent_entries() {
+    let ctx = TestContext::new().await;
+    seed_recycle_bin_setting_definition(&ctx).await;
+    let root = tempfile::tempdir().expect("library root");
+    let library = seed_library(&ctx, "Batch Guards", root.path()).await;
+    seed_title(&ctx, "title-batch-guards", &library).await;
+    let duplicate_entry =
+        seed_recycled_file(root.path(), "title-batch-guards", "duplicate-entry").await;
+    let first_entry = seed_recycled_file(root.path(), "title-batch-guards", "first-entry").await;
+    let second_entry = seed_recycled_file(root.path(), "title-batch-guards", "second-entry").await;
+    let manager = persisted_manage_titles_actor(
+        &ctx,
+        "batch-guard-manager",
+        std::slice::from_ref(&library.id),
+    )
+    .await;
+    let duplicate_input_error = ctx
+        .app
+        .preview_restore_recycled_items(
+            &manager,
+            vec![duplicate_entry.clone(), duplicate_entry.clone()],
+        )
+        .await
+        .expect_err("a batch must not accept duplicate entry IDs");
+    assert!(duplicate_input_error.to_string().contains("more than once"));
+    let duplicate_preview = ctx
+        .app
+        .preview_restore_recycled_items(&manager, vec![duplicate_entry.clone()])
+        .await
+        .expect("preview duplicate entry");
+
+    let (first_duplicate, second_duplicate) = tokio::join!(
+        ctx.app.start_restore_recycled_items_job(
+            &manager,
+            vec![duplicate_entry.clone()],
+            scryer_application::RecycleRestoreConflictPolicy::KeepBoth,
+            &duplicate_preview.fingerprint,
+        ),
+        ctx.app.start_restore_recycled_items_job(
+            &manager,
+            vec![duplicate_entry.clone()],
+            scryer_application::RecycleRestoreConflictPolicy::KeepBoth,
+            &duplicate_preview.fingerprint,
+        ),
+    );
+    assert!(
+        first_duplicate.is_ok() ^ second_duplicate.is_ok(),
+        "exactly one duplicate request should be accepted"
+    );
+    let duplicate_run = first_duplicate
+        .or(second_duplicate)
+        .expect("one duplicate request should be accepted");
+
+    let first_preview = ctx
+        .app
+        .preview_restore_recycled_items(&manager, vec![first_entry.clone()])
+        .await
+        .expect("preview first independent entry");
+    let second_preview = ctx
+        .app
+        .preview_restore_recycled_items(&manager, vec![second_entry.clone()])
+        .await
+        .expect("preview second independent entry");
+    let (first, second) = tokio::join!(
+        ctx.app.start_restore_recycled_items_job(
+            &manager,
+            vec![first_entry],
+            scryer_application::RecycleRestoreConflictPolicy::KeepBoth,
+            &first_preview.fingerprint,
+        ),
+        ctx.app.start_restore_recycled_items_job(
+            &manager,
+            vec![second_entry],
+            scryer_application::RecycleRestoreConflictPolicy::KeepBoth,
+            &second_preview.fingerprint,
+        ),
+    );
+    let first = first.expect("first independent entry should be accepted");
+    let second = second.expect("second independent entry should be accepted");
+
+    assert_eq!(
+        wait_for_terminal_job(
+            &ctx,
+            &manager,
+            JobKey::RecycleBinRestore,
+            &duplicate_run.job_run.id,
+        )
+        .await
+        .status,
+        JobRunStatus::Completed
+    );
+    assert_eq!(
+        wait_for_terminal_job(&ctx, &manager, JobKey::RecycleBinRestore, &first.job_run.id)
+            .await
+            .status,
+        JobRunStatus::Completed
+    );
+    assert_eq!(
+        wait_for_terminal_job(
+            &ctx,
+            &manager,
+            JobKey::RecycleBinRestore,
+            &second.job_run.id
+        )
+        .await
+        .status,
+        JobRunStatus::Completed
+    );
 }

@@ -22,10 +22,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 25
           cache: npm
@@ -54,7 +54,7 @@ jobs:
         run: test -f apps/scryer-web/dist/index.html
 
       - name: Upload web artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: scryer-web-out-${{ github.run_id }}
           path: apps/scryer-web/dist
@@ -69,9 +69,9 @@ jobs:
       contents: read
     if: ${{ github.ref_type == 'tag' && startsWith(github.ref_name, 'scryer-v') }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - uses: dtolnay/rust-toolchain@v1
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
           toolchain: "1.96.0"
 
@@ -79,7 +79,7 @@ jobs:
         run: cargo build --locked -p xtask-release
 
       - name: Upload WinGet xtask binary
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: winget-xtask-release-${{ github.run_id }}
           path: target/debug/xtask-release
@@ -105,9 +105,9 @@ jobs:
       SCCACHE_DIR: /home/runner/.cache/sccache
       SCCACHE_IDLE_TIMEOUT: "0"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - uses: dtolnay/rust-toolchain@v1
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
           toolchain: "1.96.0"
           components: clippy
@@ -139,7 +139,7 @@ jobs:
 
       - name: Restore sccache directory
         id: rust-clippy-sccache-restore
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: /home/runner/.cache/sccache
           key: gha-sccache-v3-rust-check-linux-x86_64-musl-${{ steps.rust-clippy-sccache-metadata.outputs.version_line }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml') }}-rust-clippy-${{ github.run_id }}
@@ -149,10 +149,10 @@ jobs:
             gha-sccache-v3-rust-check-linux-x86_64-musl-
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
       - name: Download embedded web artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: scryer-web-out-${{ github.run_id }}
           path: scryer-web-out
@@ -235,7 +235,7 @@ jobs:
 
       - name: Upload rust-clippy artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: rust-clippy-${{ github.run_id }}
           path: |
@@ -249,7 +249,7 @@ jobs:
 
       - name: Save sccache directory
         if: always() && (env.SCRYER_SCCACHE_PUBLISH_SHARED == 'true' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && steps.rust-clippy-sccache-restore.outcome == 'success'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: /home/runner/.cache/sccache
           key: ${{ steps.rust-clippy-sccache-restore.outputs.cache-primary-key }}
@@ -273,9 +273,9 @@ jobs:
       SCCACHE_DIR: /home/runner/.cache/sccache
       SCCACHE_IDLE_TIMEOUT: "0"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - uses: dtolnay/rust-toolchain@v1
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
           toolchain: "1.96.0"
 
@@ -306,7 +306,7 @@ jobs:
 
       - name: Restore sccache directory
         id: rust-nextest-sccache-restore
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: /home/runner/.cache/sccache
           key: gha-sccache-v3-rust-check-linux-x86_64-musl-${{ steps.rust-nextest-sccache-metadata.outputs.version_line }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml') }}-rust-nextest-${{ github.run_id }}
@@ -316,14 +316,14 @@ jobs:
             gha-sccache-v3-rust-check-linux-x86_64-musl-
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2
         with:
           tool: nextest
 
       - name: Download embedded web artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: scryer-web-out-${{ github.run_id }}
           path: scryer-web-out
@@ -376,7 +376,7 @@ jobs:
 
       - name: Upload rust-nextest artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: rust-nextest-${{ github.run_id }}
           path: |
@@ -389,7 +389,7 @@ jobs:
 
       - name: Save sccache directory
         if: always() && (env.SCRYER_SCCACHE_PUBLISH_SHARED == 'true' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && steps.rust-nextest-sccache-restore.outcome == 'success'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: /home/runner/.cache/sccache
           key: ${{ steps.rust-nextest-sccache-restore.outputs.cache-primary-key }}
@@ -420,7 +420,7 @@ jobs:
       CARGO_TERM_COLOR: always
       COLD_TARGET_NAME: scryer-launcher-${{ matrix.arch }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Configure build target
         shell: bash
@@ -431,7 +431,7 @@ jobs:
             echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/${COLD_TARGET_NAME}" >> "$GITHUB_ENV"
           fi
 
-      - uses: dtolnay/rust-toolchain@v1
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
           toolchain: "1.96.0"
 
@@ -464,7 +464,7 @@ jobs:
       - name: Restore sccache directory
         if: ${{ github.event_name == 'pull_request' }}
         id: launcher-sccache-restore
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: /home/runner/.cache/sccache
           key: gha-sccache-v3-${{ matrix.sccache_lane }}-release-launcher-${{ steps.launcher-sccache-metadata.outputs.version_line }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml') }}-${{ matrix.sccache_writer_id }}-${{ github.run_id }}
@@ -475,7 +475,7 @@ jobs:
 
       - name: Install sccache
         if: ${{ github.event_name == 'pull_request' }}
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
       - name: Configure sccache
         if: ${{ github.event_name == 'pull_request' }}
@@ -562,7 +562,7 @@ jobs:
 
       - name: Upload launcher artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.artifact_name }}-${{ github.run_id }}
           path: |
@@ -578,7 +578,7 @@ jobs:
 
       - name: Save sccache directory
         if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.launcher-sccache-restore.outcome == 'success'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: /home/runner/.cache/sccache
           key: ${{ steps.launcher-sccache-restore.outputs.cache-primary-key }}
@@ -621,7 +621,7 @@ jobs:
       COLD_TARGET_NAME: scryer-linux-${{ matrix.arch }}-${{ matrix.variant }}
       SCRYER_CARGO_PROFILE: ${{ github.event_name == 'pull_request' && 'rc' || matrix.release_profile }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Configure build target
         shell: bash
@@ -632,7 +632,7 @@ jobs:
             echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/${COLD_TARGET_NAME}" >> "$GITHUB_ENV"
           fi
 
-      - uses: dtolnay/rust-toolchain@v1
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
           toolchain: "1.96.0"
 
@@ -652,7 +652,7 @@ jobs:
       - name: Restore sccache directory
         if: ${{ github.event_name == 'pull_request' }}
         id: linux-sccache-restore
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: /home/runner/.cache/sccache
           key: gha-sccache-v5-${{ matrix.sccache_lane }}-rc-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml') }}-${{ github.run_id }}
@@ -662,7 +662,7 @@ jobs:
 
       - name: Install sccache
         if: ${{ github.event_name == 'pull_request' }}
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
       - name: Configure sccache
         if: ${{ github.event_name == 'pull_request' }}
@@ -677,7 +677,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Download embedded web artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: scryer-web-out-${{ github.run_id }}
           path: scryer-web-out
@@ -759,7 +759,7 @@ jobs:
 
       - name: Upload build artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.artifact_name }}-${{ github.run_id }}
           path: |
@@ -774,7 +774,7 @@ jobs:
 
       - name: Save sccache directory
         if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.linux-sccache-restore.outcome == 'success'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: /home/runner/.cache/sccache
           key: ${{ steps.linux-sccache-restore.outputs.cache-primary-key }}
@@ -816,7 +816,7 @@ jobs:
       COLD_TARGET_NAME: scryer-macos-${{ matrix.arch }}
       SCRYER_CARGO_PROFILE: ${{ github.event_name == 'pull_request' && 'rc' || matrix.release_profile }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Configure build target
         shell: bash
@@ -827,7 +827,7 @@ jobs:
             echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/${COLD_TARGET_NAME}" >> "$GITHUB_ENV"
           fi
 
-      - uses: dtolnay/rust-toolchain@v1
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
           toolchain: "1.96.0"
           targets: ${{ matrix.target }}
@@ -835,7 +835,7 @@ jobs:
       - name: Restore sccache directory
         if: ${{ github.event_name == 'pull_request' }}
         id: macos-sccache-restore
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ github.workspace }}/.sccache
           key: gha-sccache-v5-${{ matrix.sccache_lane }}-rc-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml') }}-${{ github.run_id }}
@@ -845,7 +845,7 @@ jobs:
 
       - name: Install sccache
         if: ${{ github.event_name == 'pull_request' }}
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
       - name: Configure sccache
         if: ${{ github.event_name == 'pull_request' }}
@@ -860,7 +860,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Download embedded web artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: scryer-web-out-${{ github.run_id }}
           path: scryer-web-out
@@ -985,7 +985,7 @@ jobs:
 
       - name: Upload build artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.artifact_name }}-${{ github.run_id }}
           path: |
@@ -1000,7 +1000,7 @@ jobs:
 
       - name: Save sccache directory
         if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.macos-sccache-restore.outcome == 'success'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ github.workspace }}/.sccache
           key: ${{ steps.macos-sccache-restore.outputs.cache-primary-key }}
@@ -1042,7 +1042,7 @@ jobs:
       COLD_TARGET_NAME: scryer-windows-${{ matrix.arch }}
       SCRYER_CARGO_PROFILE: ${{ github.event_name == 'pull_request' && 'rc' || matrix.release_profile }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Configure build target
         shell: pwsh
@@ -1054,14 +1054,14 @@ jobs:
           }
           "CARGO_TARGET_DIR=$targetDir" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
-      - uses: dtolnay/rust-toolchain@v1
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
           toolchain: ${{ matrix.toolchain }}
 
       - name: Restore sccache directory
         if: ${{ github.event_name == 'pull_request' }}
         id: windows-sccache-restore
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ github.workspace }}\.sccache
           key: gha-sccache-v5-${{ matrix.sccache_lane }}-rc-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml') }}-${{ github.run_id }}
@@ -1071,7 +1071,7 @@ jobs:
 
       - name: Install sccache
         if: ${{ github.event_name == 'pull_request' }}
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
       - name: Configure sccache
         if: ${{ github.event_name == 'pull_request' }}
@@ -1084,7 +1084,7 @@ jobs:
           "SCCACHE_IDLE_TIMEOUT=0" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
       - name: Download embedded web artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: scryer-web-out-${{ github.run_id }}
           path: scryer-web-out
@@ -1308,7 +1308,7 @@ jobs:
 
       - name: Upload build artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.artifact_name }}-${{ github.run_id }}
           path: |
@@ -1327,7 +1327,7 @@ jobs:
 
       - name: Save sccache directory
         if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.windows-sccache-restore.outcome == 'success'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ github.workspace }}\.sccache
           key: ${{ steps.windows-sccache-restore.outputs.cache-primary-key }}
@@ -1355,28 +1355,28 @@ jobs:
             tar_name: scryer-linux-arm64-image.tar
             local_tag: scryer:test-arm64
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Download linux amd64 portable artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: scryer-linux-x86_64-portable-${{ github.run_id }}
           path: artifacts
 
       - name: Download linux arm64 portable artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: scryer-linux-arm64-portable-${{ github.run_id }}
           path: artifacts
 
       - name: Download launcher amd64 artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: launcher-linux-amd64-${{ github.run_id }}
           path: artifacts
 
       - name: Download launcher arm64 artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: launcher-linux-arm64-${{ github.run_id }}
           path: artifacts
@@ -1384,11 +1384,11 @@ jobs:
       - name: Prepare build context
         run: sh docker/prepare-build-context.sh artifacts docker-ctx
 
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Build downloadable image tarball
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: docker-ctx
           file: docker/scryer.Dockerfile
@@ -1403,7 +1403,7 @@ jobs:
         run: sh docker/test_image_runtime.sh ${{ matrix.local_tag }} ${{ matrix.platform }}
 
       - name: Upload image tarball
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: scryer-image-linux-${{ matrix.platform_id }}-${{ github.run_id }}
           path: /tmp/${{ matrix.tar_name }}
@@ -1431,28 +1431,28 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Download linux amd64 portable artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: scryer-linux-x86_64-portable-${{ github.run_id }}
           path: artifacts
 
       - name: Download linux arm64 portable artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: scryer-linux-arm64-portable-${{ github.run_id }}
           path: artifacts
 
       - name: Download launcher amd64 artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: launcher-linux-amd64-${{ github.run_id }}
           path: artifacts
 
       - name: Download launcher arm64 artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: launcher-linux-arm64-${{ github.run_id }}
           path: artifacts
@@ -1460,9 +1460,9 @@ jobs:
       - name: Prepare build context
         run: sh docker/prepare-build-context.sh artifacts docker-ctx
 
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1481,7 +1481,7 @@ jobs:
 
       - name: Docker meta
         id: pr_meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
           images: ghcr.io/${{ github.repository_owner }}/scryer
           tags: |
@@ -1489,7 +1489,7 @@ jobs:
             type=raw,value=${{ steps.pr_rc_tags.outputs.commit_tag }}
 
       - name: Build and push
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: docker-ctx
           file: docker/scryer.Dockerfile
@@ -1498,38 +1498,81 @@ jobs:
           tags: ${{ steps.pr_meta.outputs.tags }}
           labels: ${{ steps.pr_meta.outputs.labels }}
 
+  release-trust:
+    name: verify-release-trust
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout signed release tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.0.0
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Verify trusted SSH tag signature and release branch ancestry
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "$RELEASE_TAG" in
+            scryer-v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "unexpected release tag: $RELEASE_TAG" >&2; exit 1 ;;
+          esac
+          release_branch="release-${RELEASE_TAG#scryer-v}"
+          git config gpg.format ssh
+          git config gpg.ssh.allowedSignersFile "$GITHUB_WORKSPACE/.github/release-signing/allowed_signers"
+          git verify-tag "$RELEASE_TAG"
+          git fetch origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/heads/$release_branch:refs/remotes/origin/$release_branch"
+          tag_target="$(git rev-list -n 1 "$RELEASE_TAG^{commit}")"
+          if ! git merge-base --is-ancestor "$tag_target" "origin/$release_branch"; then
+            echo "$RELEASE_TAG is not reachable from origin/$release_branch" >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor origin/main "$tag_target"; then
+            echo "$release_branch must be created from the current origin/main before release" >&2
+            exit 1
+          fi
+
   docker-publish:
     name: docker-publish
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    needs: [rust-clippy, rust-nextest, launcher-build, linux-build]
+    needs: [release-trust, rust-clippy, rust-nextest, launcher-build, linux-build]
     permissions:
       contents: read
+      id-token: write
       packages: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.0.0
 
       - name: Download linux amd64 portable artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
         with:
           name: scryer-linux-x86_64-portable-${{ github.run_id }}
           path: artifacts
 
       - name: Download linux arm64 portable artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
         with:
           name: scryer-linux-arm64-portable-${{ github.run_id }}
           path: artifacts
 
       - name: Download launcher amd64 artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
         with:
           name: launcher-linux-amd64-${{ github.run_id }}
           path: artifacts
 
       - name: Download launcher arm64 artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
         with:
           name: launcher-linux-arm64-${{ github.run_id }}
           path: artifacts
@@ -1537,9 +1580,9 @@ jobs:
       - name: Prepare build context
         run: sh docker/prepare-build-context.sh artifacts docker-ctx
 
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.0.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.0.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.0.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1560,7 +1603,7 @@ jobs:
 
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.0.0
         with:
           images: ghcr.io/${{ github.repository_owner }}/scryer
           tags: |
@@ -1570,22 +1613,121 @@ jobs:
             type=match,pattern=scryer-v(.*),group=1
 
       - name: Build and push
-        uses: docker/build-push-action@v7
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.0.0
         with:
           context: docker-ctx
           file: docker/scryer.Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          provenance: mode=max,version=1
+          sbom: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Resolve immutable image reference
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "name=ghcr.io/${{ github.repository_owner }}/scryer" >> "$GITHUB_OUTPUT"
+          echo "digest=${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
+        with:
+          cosign-release: v2.2.3
+
+      - name: Keylessly sign immutable OCI index
+        shell: bash
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${{ steps.image.outputs.name }}@${{ steps.image.outputs.digest }}"
+
+      - name: Verify keyless OCI signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          cosign verify \
+            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/scryer.yml@refs/tags/${{ github.ref_name }}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${{ steps.image.outputs.name }}@${{ steps.image.outputs.digest }}"
+
+    outputs:
+      image: ${{ steps.image.outputs.name }}
+      digest: ${{ steps.image.outputs.digest }}
+
+  container-provenance:
+    name: container-slsa-provenance
+    needs: [docker-publish]
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') }}
+    permissions:
+      actions: read
+      id-token: write
+      packages: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.1.0
+    with:
+      image: ${{ needs.docker-publish.outputs.image }}
+      digest: ${{ needs.docker-publish.outputs.digest }}
+      registry-username: ${{ github.actor }}
+    secrets:
+      registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  oci-verify:
+    name: verify-oci-release-trust
+    needs: [docker-publish, container-provenance]
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
+        with:
+          cosign-release: v2.2.3
+
+      - name: Install SLSA verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/slsa-framework/slsa-verifier/v2/cli/slsa-verifier@v2.7.1
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Verify OCI signature, provenance, and SBOM
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ needs.docker-publish.outputs.image }}
+          DIGEST: ${{ needs.docker-publish.outputs.digest }}
+        run: |
+          set -euo pipefail
+          immutable_image="${IMAGE}@${DIGEST}"
+          cosign verify \
+            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/scryer.yml@refs/tags/${{ github.ref_name }}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$immutable_image"
+          cosign verify-attestation \
+            --type slsaprovenance \
+            --certificate-identity "https://github.com/slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@refs/tags/v2.1.0" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$immutable_image"
+          slsa-verifier verify-image "$immutable_image" \
+            --source-uri "github.com/${{ github.repository }}" \
+            --source-tag "${{ github.ref_name }}"
+          cosign download sbom "$immutable_image" > /dev/null
 
   release:
     name: publish-release
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    needs: [rust-clippy, rust-nextest, linux-build, macos-build, windows-build, docker-publish]
+    needs: [release-trust, rust-clippy, rust-nextest, linux-build, macos-build, windows-build, oci-verify, archive-provenance]
+    environment:
+      name: release-credentials
     permissions:
       contents: write
+      id-token: write
     if: ${{ github.ref_type == 'tag' && startsWith(github.ref_name, 'scryer-v') }}
     steps:
       - name: Resolve release tag
@@ -1595,27 +1737,86 @@ jobs:
           echo "tag_name=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout release notes
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.0.0
         with:
           ref: ${{ steps.release_meta.outputs.tag_name }}
           fetch-depth: 1
 
       - name: Download release artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
         with:
           path: release-artifacts
           pattern: scryer-*-${{ github.run_id }}
           merge-multiple: true
 
-      - name: Generate checksums
+      - name: Download SLSA archive provenance
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        with:
+          name: scryer-provenance.intoto.jsonl
+          path: release-artifacts
+
+      - name: Install SLSA verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/slsa-framework/slsa-verifier/v2/cli/slsa-verifier@v2.7.1
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Verify every release subject with SLSA provenance
         working-directory: release-artifacts
-        run: shasum -a 256 scryer-*.tar.gz scryer-*.zip > scryer-checksums.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          slsa-verifier verify-artifact \
+            --provenance-path scryer-provenance.intoto.jsonl \
+            --source-uri "github.com/${{ github.repository }}" \
+            --source-tag "${{ github.ref_name }}" \
+            scryer-darwin-arm64-portable.tar.gz \
+            scryer-darwin-x86_64-portable.tar.gz \
+            scryer-linux-arm64-portable.tar.gz \
+            scryer-linux-x86_64-portable.tar.gz \
+            scryer-windows-arm64-portable.zip \
+            scryer-windows-x86_64-portable.zip \
+            scryer-winget-manifests.tar.gz
+
+      - name: Generate deterministic checksums
+        working-directory: release-artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum \
+            scryer-darwin-arm64-portable.tar.gz \
+            scryer-darwin-x86_64-portable.tar.gz \
+            scryer-linux-arm64-portable.tar.gz \
+            scryer-linux-x86_64-portable.tar.gz \
+            scryer-windows-arm64-portable.zip \
+            scryer-windows-x86_64-portable.zip \
+            scryer-winget-manifests.tar.gz > scryer-checksums.txt
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
+        with:
+          cosign-release: v2.2.3
+
+      - name: Sign and verify checksum manifest
+        working-directory: release-artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --bundle scryer-checksums.txt.sigstore.json \
+            scryer-checksums.txt
+          cosign verify-blob \
+            --bundle scryer-checksums.txt.sigstore.json \
+            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/scryer.yml@refs/tags/${{ github.ref_name }}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            scryer-checksums.txt
 
       - name: Verify release notes
         run: test -s "release-notes/${{ steps.release_meta.outputs.tag_name }}.md"
 
       - name: Publish release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.0
         with:
           tag_name: ${{ steps.release_meta.outputs.tag_name }}
           name: ${{ steps.release_meta.outputs.tag_name }}
@@ -1624,14 +1825,16 @@ jobs:
             release-artifacts/scryer-*.tar.gz
             release-artifacts/scryer-*.zip
             release-artifacts/scryer-checksums.txt
+            release-artifacts/scryer-checksums.txt.sigstore.json
+            release-artifacts/scryer-provenance.intoto.jsonl
           fail_on_unmatched_files: true
 
       - name: Update Homebrew tap
         env:
-          TAP_TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_PUSH_TOKEN }}
         run: |
           if [ -z "$TAP_TOKEN" ]; then
-            echo "TAP_PUSH_TOKEN not set; skipping tap update."
+            echo "HOMEBREW_TAP_PUSH_TOKEN not set; skipping tap update."
             exit 0
           fi
           VERSION="${{ github.ref_name }}"
@@ -1769,15 +1972,15 @@ jobs:
     name: winget-prep
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    needs: [release, winget-xtask-build]
+    needs: [release-trust, windows-build, winget-xtask-build]
     permissions:
       contents: read
     if: ${{ github.ref_type == 'tag' && startsWith(github.ref_name, 'scryer-v') }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.0.0
 
       - name: Download WinGet xtask binary
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
         with:
           name: winget-xtask-release-${{ github.run_id }}
           path: winget-tools
@@ -1786,7 +1989,7 @@ jobs:
         run: chmod +x winget-tools/xtask-release
 
       - name: Download Windows release artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
         with:
           path: release-artifacts
           pattern: scryer-windows-*-portable-${{ github.run_id }}
@@ -1814,9 +2017,59 @@ jobs:
             --output-dir winget-manifests
 
       - name: Upload WinGet manifest artifact
-        uses: actions/upload-artifact@v7
+        run: tar -C winget-manifests -czf scryer-winget-manifests.tar.gz .
+
+      - name: Upload packaged WinGet manifests
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
           name: scryer-winget-manifests-${{ github.run_id }}
-          path: winget-manifests
+          path: scryer-winget-manifests.tar.gz
           if-no-files-found: error
           retention-days: 30
+
+  release-subjects:
+    name: prepare-release-subjects
+    needs: [release-trust, linux-build, macos-build, windows-build, winget-prep]
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      base64_subjects: ${{ steps.subjects.outputs.base64_subjects }}
+    steps:
+      - name: Download release subjects
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        with:
+          path: release-artifacts
+          pattern: scryer-*-${{ github.run_id }}
+          merge-multiple: true
+
+      - name: Generate deterministic subject list
+        id: subjects
+        working-directory: release-artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum \
+            scryer-darwin-arm64-portable.tar.gz \
+            scryer-darwin-x86_64-portable.tar.gz \
+            scryer-linux-arm64-portable.tar.gz \
+            scryer-linux-x86_64-portable.tar.gz \
+            scryer-windows-arm64-portable.zip \
+            scryer-windows-x86_64-portable.zip \
+            scryer-winget-manifests.tar.gz > scryer-subjects.sha256
+          echo "base64_subjects=$(base64 < scryer-subjects.sha256 | tr -d '\n')" >> "$GITHUB_OUTPUT"
+
+  archive-provenance:
+    name: archive-slsa-provenance
+    needs: [release-subjects]
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') }}
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.release-subjects.outputs.base64_subjects }}
+      provenance-name: scryer-provenance.intoto.jsonl

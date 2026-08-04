@@ -12,20 +12,29 @@ use scryer_plugin_sdk::{EXPORT_DESCRIBE, PluginDescriptor};
 use wasmtime::{ExternType, Linker, Module, Store};
 
 use crate::wasmtime_host::sandbox::{self, BareSandbox, HostCtx, HostLimits};
-use crate::wasmtime_host::{crypto_host, engine, error, module_cache};
+use crate::wasmtime_host::{command_host, crypto_host, engine, error, module_cache};
 
 /// Describe runs reuse the 10s describe budget of the Extism path.
 const DESCRIBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 pub(crate) fn validate_archive_module(wasm: &[u8]) -> Result<(), String> {
-    validate_command_module(wasm, true, "archive extractor")
+    validate_command_module_with_crypto(wasm, true, "archive extractor")
 }
 
 pub(crate) fn validate_subtitle_sync_module(wasm: &[u8]) -> Result<(), String> {
-    validate_command_module(wasm, false, "subtitle sync")
+    validate_command_module_with_crypto(wasm, false, "subtitle sync")
 }
 
-fn validate_command_module(wasm: &[u8], with_crypto: bool, kind: &str) -> Result<(), String> {
+/// Validate the common wasip1 command shape used by marker-selected artifacts.
+pub(crate) fn validate_command_module(wasm: &[u8], kind: &str) -> Result<(), String> {
+    validate_command_module_with_crypto(wasm, false, kind)
+}
+
+fn validate_command_module_with_crypto(
+    wasm: &[u8],
+    with_crypto: bool,
+    kind: &str,
+) -> Result<(), String> {
     let engine = engine::shared_async_engine();
     let module = module_cache::command_module(wasm)
         .map_err(|error| format!("failed to compile {kind} plugin WASM: {error}"))?;
@@ -33,6 +42,8 @@ fn validate_command_module(wasm: &[u8], with_crypto: bool, kind: &str) -> Result
     let mut linker: Linker<crate::wasmtime_host::sandbox::HostCtx> = Linker::new(engine);
     wasmtime_wasi::p1::add_to_linker_async(&mut linker, |ctx| &mut ctx.wasi)
         .map_err(|error| format!("failed to wire WASI preview1 for {kind} plugin: {error:#}"))?;
+    command_host::add_to_linker(&mut linker)
+        .map_err(|error| format!("failed to register native command host functions: {error:#}"))?;
     if with_crypto {
         crypto_host::add_to_linker(&mut linker).map_err(|error| {
             format!("failed to register archive crypto host functions: {error:#}")
@@ -120,6 +131,11 @@ fn run_describe(module: &Module) -> AppResult<PluginDescriptor> {
             ))
         },
     )?;
+    command_host::add_to_linker(&mut linker).map_err(|error| {
+        AppError::Repository(format!(
+            "failed to register native command host functions for describe: {error:#}"
+        ))
+    })?;
     // The command binary imports the §5 crypto ABI even though describe does not
     // call it — the imports must be satisfied to instantiate at all.
     crypto_host::add_to_linker(&mut linker).map_err(|error| {
@@ -133,13 +149,7 @@ fn run_describe(module: &Module) -> AppResult<PluginDescriptor> {
         stderr,
     } = sandbox::build_describe_sandbox();
 
-    let mut store = Store::new(
-        engine,
-        HostCtx {
-            wasi,
-            limits: HostLimits::new(None),
-        },
-    );
+    let mut store = Store::new(engine, HostCtx::new(wasi, HostLimits::new(None)));
     store.limiter(|ctx: &mut HostCtx| &mut ctx.limits);
     store.set_epoch_deadline(engine::deadline_ticks(DESCRIBE_TIMEOUT));
 
@@ -208,6 +218,19 @@ mod tests {
         .unwrap();
         validate_archive_module(&valid).expect("valid archive command");
         validate_subtitle_sync_module(&valid).expect("valid subtitle command");
+
+        let native_host_imports = wat::parse_str(
+            r#"(module
+                (import "scryer:host/v1" "scryer_host_call" (func (param i32 i32) (result i32)))
+                (import "scryer:host/v1" "scryer_host_response_len" (func (param i32) (result i32)))
+                (import "scryer:host/v1" "scryer_host_response_read" (func (param i32 i32 i32) (result i32)))
+                (import "scryer:host/v1" "scryer_host_response_drop" (func (param i32)))
+                (memory (export "memory") 1)
+                (func (export "_start")))"#,
+        )
+        .unwrap();
+        validate_command_module(&native_host_imports, "native host imports")
+            .expect("native command host imports are supported");
 
         let unknown_import = wat::parse_str(
             r#"(module

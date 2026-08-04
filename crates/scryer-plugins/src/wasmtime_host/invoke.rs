@@ -12,13 +12,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use scryer_application::{AppError, AppResult};
+use scryer_plugin_sdk::command::{PluginCommandRequest, PluginCommandResponse};
 use scryer_plugin_sdk::{ArchivePluginProcessResponse, SubtitleSyncPluginProcessResponse};
 use wasmtime::{Linker, Module, Store};
 use wasmtime_wasi::p2::pipe::MemoryOutputPipe;
 
 use crate::runtime_backing::PluginInstanceSpec;
 use crate::wasmtime_host::sandbox::{self, HostCtx, HostLimits, PreparedSandbox};
-use crate::wasmtime_host::{crypto_host, engine, error, module_cache};
+use crate::wasmtime_host::{command_host, crypto_host, engine, error, module_cache};
 
 /// Amount of guest stderr forwarded to tracing / attached to error messages.
 const STDERR_TAIL_BYTES: usize = 8 * 1024;
@@ -32,6 +33,13 @@ pub(crate) struct ArchiveInvocation<'a> {
 
 /// Identifying context for one subtitle-sync command invocation.
 pub(crate) struct SubtitleSyncInvocation<'a> {
+    pub(crate) plugin_id: &'a str,
+    pub(crate) plugin_version: &'a str,
+    pub(crate) operation: &'a str,
+}
+
+/// Identifying context for one marker-selected command invocation.
+pub(crate) struct CommandInvocation<'a> {
     pub(crate) plugin_id: &'a str,
     pub(crate) plugin_version: &'a str,
     pub(crate) operation: &'a str,
@@ -102,10 +110,7 @@ pub(crate) async fn process_archive(
 
     let mut store = Store::new(
         engine,
-        HostCtx {
-            wasi,
-            limits: HostLimits::new(spec.memory_max_bytes),
-        },
+        HostCtx::new(wasi, HostLimits::new(spec.memory_max_bytes)),
     );
     store.limiter(|ctx: &mut HostCtx| &mut ctx.limits);
     store.set_epoch_deadline(engine::deadline_ticks(spec.timeout));
@@ -202,6 +207,136 @@ pub(crate) async fn process_archive(
     Ok(response)
 }
 
+/// Instantiate a marker-selected native command and run one typed exchange.
+///
+/// The command runner is shared by every descriptor adapter.  It deliberately
+/// has no legacy export fallback: a marked artifact either speaks the command
+/// protocol or fails as a protocol error.
+pub(crate) async fn process_command(
+    spec: &PluginInstanceSpec,
+    request: &PluginCommandRequest,
+    invocation: CommandInvocation<'_>,
+) -> AppResult<PluginCommandResponse> {
+    let started = Instant::now();
+    let request_bytes = serde_json::to_vec(request).map_err(|error| {
+        AppError::Repository(format!(
+            "failed to serialize native plugin command: {error}"
+        ))
+    })?;
+    let request_len = request_bytes.len();
+    let engine = engine::shared_async_engine();
+    let module = prepare_command_module(Arc::clone(&spec.wasm), spec.timeout)
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "command plugin {}@{} failed to prepare: {error}",
+                invocation.plugin_id, invocation.plugin_version
+            ))
+        })?;
+
+    let mut linker: Linker<HostCtx> = Linker::new(engine);
+    wasmtime_wasi::p1::add_to_linker_async(&mut linker, |ctx: &mut HostCtx| &mut ctx.wasi)
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to wire WASI preview1 for command plugin: {error:#}"
+            ))
+        })?;
+    command_host::add_to_linker(&mut linker).map_err(|error| {
+        AppError::Repository(format!(
+            "failed to register native command host functions: {error:#}"
+        ))
+    })?;
+    let PreparedSandbox {
+        wasi,
+        stdout,
+        stderr,
+        _scratch,
+    } = sandbox::build_sandbox(&spec.preopens, request_bytes)?;
+    let mut store = Store::new(
+        engine,
+        HostCtx::with_command_host(
+            wasi,
+            HostLimits::new(spec.memory_max_bytes),
+            spec.command_host.clone(),
+        ),
+    );
+    store.limiter(|ctx: &mut HostCtx| &mut ctx.limits);
+    store.set_epoch_deadline(engine::deadline_ticks(spec.timeout));
+
+    let instance = linker
+        .instantiate_async(&mut store, &module)
+        .await
+        .map_err(|error| {
+            let failure = error::classify_error(&error, store.data().limits.memory_denied);
+            finish_command_error(
+                &invocation,
+                spec.timeout,
+                &tail_of(&stderr),
+                &failure,
+                started,
+                request_len,
+            )
+        })?;
+    let start = instance
+        .get_typed_func::<(), ()>(&mut store, "_start")
+        .map_err(|error| {
+            let failure = error::protocol_failure(format!(
+                "guest is not a wasip1 command (missing _start): {error:#}"
+            ));
+            finish_command_error(
+                &invocation,
+                spec.timeout,
+                &tail_of(&stderr),
+                &failure,
+                started,
+                request_len,
+            )
+        })?;
+    let call_result = start.call_async(&mut store, ()).await;
+    let denied = store.data().limits.memory_denied;
+    let stdout_bytes = stdout.contents();
+    let stderr_tail = tail_of(&stderr);
+    if let Err(failure) = error::interpret_start_result(call_result, denied) {
+        return Err(finish_command_error(
+            &invocation,
+            spec.timeout,
+            &stderr_tail,
+            &failure,
+            started,
+            request_len,
+        ));
+    }
+    let response: PluginCommandResponse =
+        serde_json::from_slice(&stdout_bytes).map_err(|error| {
+            let failure = error::protocol_failure(format!(
+                "stdout was not valid PluginCommandResponse JSON: {error}"
+            ));
+            finish_command_error(
+                &invocation,
+                spec.timeout,
+                &stderr_tail,
+                &failure,
+                started,
+                request_len,
+            )
+        })?;
+    if response.abi_version != scryer_plugin_sdk::command::COMMAND_ABI_VERSION {
+        let failure = error::protocol_failure(format!(
+            "command response used unsupported ABI version {}",
+            response.abi_version
+        ));
+        return Err(finish_command_error(
+            &invocation,
+            spec.timeout,
+            &stderr_tail,
+            &failure,
+            started,
+            request_len,
+        ));
+    }
+    Ok(response)
+}
+
 /// Instantiate the subtitle-sync guest and run one request→response exchange.
 pub(crate) async fn process_subtitle_sync(
     spec: &PluginInstanceSpec,
@@ -247,10 +382,7 @@ pub(crate) async fn process_subtitle_sync(
 
     let mut store = Store::new(
         engine,
-        HostCtx {
-            wasi,
-            limits: HostLimits::new(spec.memory_max_bytes),
-        },
+        HostCtx::new(wasi, HostLimits::new(spec.memory_max_bytes)),
     );
     store.limiter(|ctx: &mut HostCtx| &mut ctx.limits);
     store.set_epoch_deadline(engine::deadline_ticks(spec.timeout));
@@ -378,6 +510,36 @@ fn finish_error(
     error::to_app_error(failure, &ctx)
 }
 
+fn finish_command_error(
+    invocation: &CommandInvocation<'_>,
+    budget: Duration,
+    stderr_tail: &str,
+    failure: &error::RunFailure,
+    started: Instant,
+    request_len: usize,
+) -> AppError {
+    tracing::debug!(
+        target: "scryer_plugins::command",
+        plugin_id = invocation.plugin_id,
+        plugin_version = invocation.plugin_version,
+        operation = invocation.operation,
+        duration_ms = started.elapsed().as_millis() as u64,
+        request_bytes = request_len,
+        disposition = ?failure.kind,
+        "native command plugin invocation failed",
+    );
+    error::to_app_error(
+        failure,
+        &error::InvocationContext {
+            plugin_id: invocation.plugin_id,
+            plugin_version: invocation.plugin_version,
+            operation: invocation.operation,
+            budget,
+            stderr_tail,
+        },
+    )
+}
+
 /// Log the failing subtitle-sync disposition and build the operator-facing `AppError`.
 fn finish_subtitle_sync_error(
     invocation: &SubtitleSyncInvocation<'_>,
@@ -494,13 +656,7 @@ mod tests {
             _scratch,
         } = sandbox::build_sandbox(&[], request.clone()).expect("build sandbox");
 
-        let mut store = Store::new(
-            &engine,
-            HostCtx {
-                wasi,
-                limits: HostLimits::new(None),
-            },
-        );
+        let mut store = Store::new(&engine, HostCtx::new(wasi, HostLimits::new(None)));
         let instance = linker.instantiate(&mut store, &module).unwrap();
         let start = instance
             .get_typed_func::<(), ()>(&mut store, "_start")
@@ -552,6 +708,7 @@ mod tests {
                 preopens: Vec::new(),
                 timeout: Duration::from_secs(30),
                 memory_max_bytes: None,
+                command_host: crate::wasmtime_host::command_host::CommandHost::disabled(),
             };
             let invocation = ArchiveInvocation {
                 plugin_id: "sleepy",

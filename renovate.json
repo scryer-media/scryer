@@ -1,0 +1,33 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    "docker:pinDigests",
+    ":maintainLockFilesWeekly"
+  ],
+  "dependencyDashboard": true,
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "packageRules": [
+    {
+      "matchManagers": ["cargo"],
+      "groupName": "Rust dependencies"
+    },
+    {
+      "matchManagers": ["npm"],
+      "groupName": "npm dependencies"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions",
+      "separateMajorMinor": true
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "matchPackageNames": ["slsa-framework/slsa-github-generator"],
+      "enabled": false,
+      "description": "SLSA reusable-workflow versions are verifier trust anchors and advance only with an explicit compatibility review."
+    }
+  ]
+}

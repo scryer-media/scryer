@@ -184,39 +184,6 @@ pub(super) async fn apply_import_result_with_completed(
         return false;
     }
 
-    if let Some(completed) = completed {
-        match std::fs::canonicalize(&completed.dest_dir) {
-            Ok(trusted_root) => {
-                let source = crate::ManualImportSourceRegistration {
-                    source_identity: crate::DownloadSourceIdentity::new(
-                        Some(&completed.client_id),
-                        &completed.client_type,
-                        &completed.download_client_item_id,
-                    ),
-                    trusted_root: crate::stored_paths::path_to_stored_string(&trusted_root),
-                };
-                if let Err(error) = app
-                    .services
-                    .workflow
-                    .imports
-                    .upsert_manual_import_source(source)
-                    .await
-                {
-                    tracing::warn!(
-                        error = %error,
-                        item_id = %completed.download_client_item_id,
-                        "failed to persist trusted manual-import source"
-                    );
-                }
-            }
-            Err(error) => tracing::warn!(
-                error = %error,
-                item_id = %completed.download_client_item_id,
-                "cannot persist unavailable manual-import source"
-            ),
-        }
-    }
-
     match result.decision {
         ImportDecision::Failed => {
             td.state = TrackedDownloadState::ImportBlocked;
