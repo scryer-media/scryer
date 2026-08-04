@@ -3,7 +3,6 @@ import babel from "@rolldown/plugin-babel";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { constants as zlibConstants } from "node:zlib";
 import { compression, defineAlgorithm } from "vite-plugin-compression2";
-import path from "path";
 
 const DEV_PROXY_TARGET =
   process.env.SCRYER_DEV_PROXY_TARGET?.trim() || "http://127.0.0.1:8080";
@@ -77,7 +76,7 @@ export default defineConfig(({ command, mode }) => ({
   ],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "."),
+      "@": import.meta.dirname,
     },
   },
   envPrefix: "SCRYER_",
