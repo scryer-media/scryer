@@ -1007,7 +1007,7 @@ jobs:
           key: ${{ steps.macos-sccache-restore.outputs.cache-primary-key }}
 
   windows-build:
-    name: windows-${{ matrix.arch }}-portable
+    name: windows-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     needs: [web]
@@ -1020,8 +1020,8 @@ jobs:
             toolchain: 1.97.1-x86_64-pc-windows-msvc
             target: x86_64-pc-windows-msvc
             sccache_lane: scryer-windows-x86_64-msvc
-            sccache_writer_id: scryer-windows-x86_64-portable
-            artifact_name: scryer-windows-x86_64-portable
+            sccache_writer_id: scryer-windows-x86_64
+            artifact_name: scryer-windows-x86_64
             release_profile: release
             install_nasm: true
             use_clang_cl: false
@@ -1031,8 +1031,8 @@ jobs:
             toolchain: 1.97.1-aarch64-pc-windows-msvc
             target: aarch64-pc-windows-msvc
             sccache_lane: scryer-windows-arm64-msvc
-            sccache_writer_id: scryer-windows-arm64-portable
-            artifact_name: scryer-windows-arm64-portable
+            sccache_writer_id: scryer-windows-arm64
+            artifact_name: scryer-windows-arm64
             release_profile: release
             install_nasm: false
             use_clang_cl: true
@@ -1168,7 +1168,7 @@ jobs:
             $env:RUSTFLAGS = "$env:RUSTFLAGS -Clinker=lld-link"
           }
           if ($env:GITHUB_EVENT_NAME -eq "pull_request") {
-            cargo build --timings -p scryer --profile $env:SCRYER_CARGO_PROFILE --locked --target ${{ matrix.target }} 2>&1 | Tee-Object -FilePath "${{ matrix.artifact_name }}-build.log"
+            cargo build --timings -p scryer --bin scryer --bin scryer-tray --profile $env:SCRYER_CARGO_PROFILE --locked --target ${{ matrix.target }} 2>&1 | Tee-Object -FilePath "${{ matrix.artifact_name }}-build.log"
             $cargoExitCode = $LASTEXITCODE
           } else {
             & python .github/scripts/build_heartbeat.py `
@@ -1176,7 +1176,7 @@ jobs:
               --build-log "${{ matrix.artifact_name }}-build.log" `
               --status-file "${{ matrix.artifact_name }}-build-status.json" `
               --timeout-seconds 3300 `
-              -- cargo build --timings -p scryer --profile $env:SCRYER_CARGO_PROFILE --locked --target ${{ matrix.target }}
+              -- cargo build --timings -p scryer --bin scryer --bin scryer-tray --profile $env:SCRYER_CARGO_PROFILE --locked --target ${{ matrix.target }}
             $cargoExitCode = $LASTEXITCODE
           }
           if ($cargoExitCode -ne 0) {
@@ -1231,15 +1231,32 @@ jobs:
           scryer for Windows
           ==================
 
-          Quick Start
-          -----------
-          1. Double-click scryer.exe (or run it from a terminal).
-          2. Open http://localhost:8080 in your browser.
+          Desktop Quick Start
+          -------------------
+          1. Double-click scryer-tray.exe.
+          2. Scryer starts locally and opens http://localhost:8080.
+          3. The tray menu can open, stop, restart, or exit Scryer.
 
-          Data is stored in %LOCALAPPDATA%\scryer by default. To use a
-          different location, pass --data-dir:
+          The tray keeps desktop data, logs, and runtime state in:
+
+              %LOCALAPPDATA%\ScryerMedia\Scryer
+
+          It uses the ScryerMedia.Scryer.Desktop.v1 Credential Manager namespace.
+          It never reads or changes legacy portable Scryer data.
+
+          Command-Line Use
+          ----------------
+          scryer.exe remains available for terminals and automation. It uses its
+          existing default data directory unless you pass --data-dir:
 
               scryer.exe --data-dir C:\scryer-data
+
+          Unsigned Windows Build
+          ----------------------
+          These files are deliberately unsigned. Windows may show a browser download
+          warning, a SmartScreen "More info" prompt, and an "Unknown publisher" UAC
+          prompt for the MSI. Verify the SHA-256 checksum and GitHub build provenance
+          published with the release before proceeding.
 
           Encryption Key
           --------------
@@ -1256,25 +1273,6 @@ jobs:
           enabled system-wide (LongPathsEnabled=1) for paths beyond the
           legacy 260-character limit to work reliably.
 
-          Running as a Windows Service (NSSM)
-          ------------------------------------
-          NSSM (https://nssm.cc) lets you run scryer as a background
-          service that starts automatically with Windows.
-
-          1. Download nssm and extract it somewhere on your PATH.
-          2. Open an elevated (Administrator) terminal and run:
-
-              nssm install scryer "C:\path\to\scryer.exe"
-              nssm set scryer AppDirectory "C:\path\to"
-              nssm set scryer AppParameters "--data-dir C:\scryer-data"
-              nssm set scryer Start SERVICE_AUTO_START
-              nssm start scryer
-
-          To remove the service later:
-
-              nssm stop scryer
-              nssm remove scryer confirm
-
           Environment Variables
           ---------------------
           SCRYER_MOVIES_PATH      Movies directory
@@ -1286,7 +1284,36 @@ jobs:
 
       - name: Package zip
         shell: pwsh
-        run: Compress-Archive -Path "$env:CARGO_TARGET_DIR\${{ matrix.target }}\$env:SCRYER_CARGO_PROFILE\scryer.exe",README.txt -DestinationPath "${{ matrix.artifact_name }}.zip"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = "${{ matrix.artifact_name }}-stage"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item `
+            "$env:CARGO_TARGET_DIR\${{ matrix.target }}\$env:SCRYER_CARGO_PROFILE\scryer.exe", `
+            "$env:CARGO_TARGET_DIR\${{ matrix.target }}\$env:SCRYER_CARGO_PROFILE\scryer-tray.exe", `
+            LICENSE, README.txt `
+            -Destination $stage -Force
+          Compress-Archive -Path "$stage\*" -DestinationPath "${{ matrix.artifact_name }}.zip"
+
+      - name: Install WiX v4
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $toolPath = Join-Path $env:RUNNER_TEMP "wix"
+          dotnet tool install --tool-path $toolPath wix --version 4.0.5
+          $toolPath | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: Package unsigned MSI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $metadata = cargo metadata --format-version 1 --no-deps | ConvertFrom-Json
+          $version = ($metadata.packages | Where-Object { $_.name -eq "scryer" } | Select-Object -First 1).version
+          .\packaging\windows\build-msi.ps1 `
+            -Architecture ${{ matrix.arch }} `
+            -StageDir "${{ matrix.artifact_name }}-stage" `
+            -Version $version `
+            -OutputPath "${{ matrix.artifact_name }}.msi"
 
       - name: Validate packaged Windows artifact
         shell: pwsh
@@ -1294,7 +1321,10 @@ jobs:
           .\.github\scripts\validate-windows-package.ps1 `
             -Architecture ${{ matrix.arch }} `
             -ZipPath "${{ matrix.artifact_name }}.zip" `
-            -BuiltExePath "$env:CARGO_TARGET_DIR\${{ matrix.target }}\$env:SCRYER_CARGO_PROFILE\scryer.exe"
+            -MsiPath "${{ matrix.artifact_name }}.msi" `
+            -MsiMetadataPath "${{ matrix.artifact_name }}.msi.json" `
+            -BuiltExePath "$env:CARGO_TARGET_DIR\${{ matrix.target }}\$env:SCRYER_CARGO_PROFILE\scryer.exe" `
+            -BuiltTrayPath "$env:CARGO_TARGET_DIR\${{ matrix.target }}\$env:SCRYER_CARGO_PROFILE\scryer-tray.exe"
 
       - name: Show sccache stats
         if: ${{ always() && github.event_name == 'pull_request' }}
@@ -1314,11 +1344,14 @@ jobs:
           name: ${{ matrix.artifact_name }}-${{ github.run_id }}
           path: |
             ${{ matrix.artifact_name }}.zip
+            ${{ matrix.artifact_name }}.msi
+            ${{ matrix.artifact_name }}.msi.json
             ${{ matrix.artifact_name }}-build.log
             ${{ matrix.artifact_name }}-defender-scan.log
             ${{ matrix.artifact_name }}-attachment-services.log
             ${{ matrix.artifact_name }}-noarg-startup.log
             ${{ matrix.artifact_name }}-winget-install.log
+            ${{ matrix.artifact_name }}-msi-install.log
             ${{ matrix.artifact_name }}-sccache-stats.txt
             ${{ matrix.artifact_name }}-heartbeat.log
             ${{ matrix.artifact_name }}-build-status.json
@@ -1776,8 +1809,10 @@ jobs:
             scryer-darwin-x86_64-portable.tar.gz \
             scryer-linux-arm64-portable.tar.gz \
             scryer-linux-x86_64-portable.tar.gz \
-            scryer-windows-arm64-portable.zip \
-            scryer-windows-x86_64-portable.zip \
+            scryer-windows-arm64.zip \
+            scryer-windows-x86_64.zip \
+            scryer-windows-arm64.msi \
+            scryer-windows-x86_64.msi \
             scryer-winget-manifests.tar.gz
 
       - name: Generate deterministic checksums
@@ -1790,8 +1825,10 @@ jobs:
             scryer-darwin-x86_64-portable.tar.gz \
             scryer-linux-arm64-portable.tar.gz \
             scryer-linux-x86_64-portable.tar.gz \
-            scryer-windows-arm64-portable.zip \
-            scryer-windows-x86_64-portable.zip \
+            scryer-windows-arm64.zip \
+            scryer-windows-x86_64.zip \
+            scryer-windows-arm64.msi \
+            scryer-windows-x86_64.msi \
             scryer-winget-manifests.tar.gz > scryer-checksums.txt
 
       - name: Install Cosign
@@ -1825,6 +1862,7 @@ jobs:
           files: |
             release-artifacts/scryer-*.tar.gz
             release-artifacts/scryer-*.zip
+            release-artifacts/scryer-*.msi
             release-artifacts/scryer-checksums.txt
             release-artifacts/scryer-checksums.txt.sigstore.json
             release-artifacts/scryer-provenance.intoto.jsonl
@@ -1993,7 +2031,7 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
         with:
           path: release-artifacts
-          pattern: scryer-windows-*-portable-${{ github.run_id }}
+          pattern: scryer-windows-*-${{ github.run_id }}
           merge-multiple: true
 
       - name: Resolve WinGet metadata
@@ -2057,8 +2095,10 @@ jobs:
             scryer-darwin-x86_64-portable.tar.gz \
             scryer-linux-arm64-portable.tar.gz \
             scryer-linux-x86_64-portable.tar.gz \
-            scryer-windows-arm64-portable.zip \
-            scryer-windows-x86_64-portable.zip \
+            scryer-windows-arm64.zip \
+            scryer-windows-x86_64.zip \
+            scryer-windows-arm64.msi \
+            scryer-windows-x86_64.msi \
             scryer-winget-manifests.tar.gz > scryer-subjects.sha256
           echo "base64_subjects=$(base64 < scryer-subjects.sha256 | tr -d '\n')" >> "$GITHUB_OUTPUT"
 
@@ -2074,3 +2114,125 @@ jobs:
     with:
       base64-subjects: ${{ needs.release-subjects.outputs.base64_subjects }}
       provenance-name: scryer-provenance.intoto.jsonl
+
+  winget-published-install:
+    name: winget-published-install
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') }}
+    needs: [release, winget-prep]
+    runs-on: windows-2025
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Download generated WinGet manifests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: scryer-winget-manifests-${{ github.run_id }}
+          path: winget-submission
+
+      - name: Install the published x64 MSI through WinGet
+        shell: pwsh
+        run: |
+          tar -xzf winget-submission/scryer-winget-manifests.tar.gz -C winget-submission
+          $version = "${{ github.ref_name }}".Replace("scryer-v", "")
+          .\.github\scripts\validate-published-winget-install.ps1 `
+            -ManifestRoot .\winget-submission `
+            -ExpectedVersion $version
+
+  winget-submit:
+    name: winget-submit
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') }}
+    needs: [winget-published-install]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    environment: release-credentials
+    steps:
+      - name: Download verified WinGet manifests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: scryer-winget-manifests-${{ github.run_id }}
+          path: winget-submission
+
+      - name: Submit WinGet manifest pull request
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "WINGET_TOKEN is required to submit the WinGet manifest pull request." >&2
+            exit 1
+          fi
+
+          VERSION="${GITHUB_REF_NAME#scryer-v}"
+          BRANCH="scryer-media-scryer-${VERSION}"
+          ARCHIVE="${GITHUB_WORKSPACE}/winget-submission/scryer-winget-manifests.tar.gz"
+          STAGING_DIR="$(mktemp -d)"
+          trap 'rm -rf "$STAGING_DIR"' EXIT
+
+          test -s "$ARCHIVE"
+          tar -xzf "$ARCHIVE" -C "$STAGING_DIR"
+          MANIFEST_SOURCE="$STAGING_DIR/ScryerMedia.Scryer/$VERSION"
+          test -f "$MANIFEST_SOURCE/ScryerMedia.Scryer.yaml"
+          test -f "$MANIFEST_SOURCE/ScryerMedia.Scryer.locale.en-US.yaml"
+          test -f "$MANIFEST_SOURCE/ScryerMedia.Scryer.installer.yaml"
+
+          FORK_OWNER="$(gh api user --jq .login)"
+          TARGET_PATH="manifests/s/ScryerMedia/Scryer/${VERSION}"
+          if gh api "repos/microsoft/winget-pkgs/contents/${TARGET_PATH}" > /dev/null 2>&1; then
+            echo "ScryerMedia.Scryer ${VERSION} is already published in winget-pkgs."
+            exit 0
+          fi
+
+          EXISTING_PR="$(gh pr list --repo microsoft/winget-pkgs --state open --head "${FORK_OWNER}:${BRANCH}" --json url --jq '.[0].url // empty')"
+          if ! gh api "repos/${FORK_OWNER}/winget-pkgs" > /dev/null 2>&1; then
+            gh repo fork microsoft/winget-pkgs --clone=false
+          fi
+          for _ in {1..12}; do
+            if gh api "repos/${FORK_OWNER}/winget-pkgs" > /dev/null 2>&1; then
+              break
+            fi
+            sleep 5
+          done
+          gh api "repos/${FORK_OWNER}/winget-pkgs" > /dev/null
+
+          git clone --depth 1 --filter=blob:none --no-checkout --branch master \
+            "https://x-access-token:${GH_TOKEN}@github.com/${FORK_OWNER}/winget-pkgs.git" winget-pkgs
+          cd winget-pkgs
+          git sparse-checkout init --cone
+          git sparse-checkout set manifests/s/ScryerMedia/Scryer
+          git checkout master
+          if git ls-remote --exit-code origin "refs/heads/${BRANCH}" > /dev/null 2>&1; then
+            git fetch origin "$BRANCH"
+            git checkout -B "$BRANCH" "origin/$BRANCH"
+          else
+            git checkout -b "$BRANCH"
+          fi
+          MANIFEST_DESTINATION="$TARGET_PATH"
+          if [[ -d "$MANIFEST_DESTINATION" ]]; then
+            rm -rf "$MANIFEST_DESTINATION"
+          fi
+          mkdir -p "$MANIFEST_DESTINATION"
+          cp "$MANIFEST_SOURCE"/* "$MANIFEST_DESTINATION/"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$MANIFEST_DESTINATION"
+          if ! git diff --cached --quiet; then
+            git commit -m "Add ScryerMedia.Scryer version ${VERSION}"
+            git push origin "$BRANCH"
+          fi
+          if [[ -z "$EXISTING_PR" ]]; then
+            gh pr create \
+              --repo microsoft/winget-pkgs \
+              --base master \
+              --head "${FORK_OWNER}:${BRANCH}" \
+              --title "New version: ScryerMedia.Scryer version ${VERSION}" \
+              --body "Automated manifest submission for [ScryerMedia.Scryer ${VERSION}](https://github.com/scryer-media/scryer/releases/tag/scryer-v${VERSION})."
+          else
+            echo "Updated WinGet submission awaiting review: $EXISTING_PR"
+          fi

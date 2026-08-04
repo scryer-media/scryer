@@ -262,6 +262,27 @@ async fn classify_foreign_completed_download(
         td.foreign_import_classification = None;
     }
 
+    // A download Scryer submitted is definitionally not another app's, so none
+    // of the foreign signals below may be applied to it.
+    //
+    // Without this guard the category branch runs for Scryer's own grabs: if the
+    // observed category does not survive the owned-categories round-trip the item
+    // is classified ForeignCategory, short-circuited before title resolution, and
+    // silently never imported — no import row, no identity row, no status
+    // message. That is how a whole class of auto-grabbed series imports
+    // disappeared while their releases logged `decision="eligible"`.
+    //
+    // The trusted set mirrors completed_download_allows_automatic_import so the
+    // two gates cannot disagree about what counts as Scryer's own work.
+    if td.client_item.is_scryer_origin
+        || matches!(
+            td.match_type,
+            TitleMatchType::Submission | TitleMatchType::ClientParameter
+        )
+    {
+        return None;
+    }
+
     if completed
         .parameters
         .iter()
@@ -332,6 +353,22 @@ fn contains_archive_file(path: &std::path::Path) -> std::io::Result<bool> {
 }
 
 fn mark_foreign_download(td: &mut TrackedDownload, classification: ForeignDownloadClassification) {
+    // Foreign classification is runtime-only: nothing is persisted, no status
+    // message is set, and the row vanishes from every user-facing surface. That
+    // makes a misclassification observable ONLY as an absence, which is
+    // effectively undiagnosable in the field and cost a full triage cycle here.
+    // This line is the single breadcrumb that distinguishes "hidden on purpose"
+    // from "silently lost".
+    tracing::info!(
+        id = %td.id,
+        classification = ?classification,
+        client_id = %td.client_id,
+        client_type = %td.client_type,
+        category = ?td.client_item.category,
+        is_scryer_origin = td.client_item.is_scryer_origin,
+        match_type = ?td.match_type,
+        "download classified as foreign; hidden from user-facing download activity"
+    );
     td.foreign_import_classification = Some(classification);
     td.state = TrackedDownloadState::Downloading;
     td.waiting_for_completed_history = false;

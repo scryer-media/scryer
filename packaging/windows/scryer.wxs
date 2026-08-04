@@ -1,0 +1,86 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="Scryer"
+      Manufacturer="Scryer Media"
+      Version="$(var.ProductVersion)"
+      UpgradeCode="$(var.UpgradeCode)"
+      Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Scryer is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="ScryerMediaFolder" Name="Scryer Media">
+        <Directory Id="INSTALLFOLDER" Name="Scryer">
+          <Component Id="ApplicationFiles" Guid="$(var.ApplicationFilesComponentGuid)" Bitness="always64">
+            <File Id="ScryerExe" Source="$(var.StageDir)\scryer.exe" KeyPath="yes" />
+            <File Id="ScryerTrayExe" Source="$(var.StageDir)\scryer-tray.exe" />
+            <File Id="LicenseFile" Source="$(var.StageDir)\LICENSE" />
+            <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ScryerStartMenuFolder" Name="Scryer">
+        <Component Id="StartMenuShortcuts" Guid="$(var.StartMenuShortcutsComponentGuid)" Bitness="always64">
+          <Shortcut
+              Id="ScryerTrayShortcut"
+              Name="Scryer"
+              Description="Open Scryer"
+              Target="[#ScryerTrayExe]"
+              WorkingDirectory="INSTALLFOLDER" />
+          <RemoveFolder Id="RemoveScryerStartMenuFolder" On="uninstall" />
+          <RegistryValue
+              Root="HKLM"
+              Key="Software\Scryer Media\Scryer"
+              Name="StartMenuShortcut"
+              Type="integer"
+              Value="1"
+              KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="MainFeature" Title="Scryer" Level="1">
+      <ComponentRef Id="ApplicationFiles" />
+      <ComponentRef Id="StartMenuShortcuts" />
+    </Feature>
+
+    <!-- Interactive installs launch the tray in the original user session. Silent MSI and
+         winget installs have UILevel < 4, so they never start a process or a browser. -->
+    <CustomAction
+        Id="LaunchTrayAfterInteractiveInstall"
+        FileRef="ScryerTrayExe"
+        ExeCommand=""
+        Execute="immediate"
+        Return="asyncNoWait"
+        Impersonate="yes" />
+    <InstallExecuteSequence>
+      <Custom Action="LaunchTrayAfterInteractiveInstall"
+              After="InstallFinalize"
+              Condition="NOT Installed AND UILevel &gt;= 4" />
+    </InstallExecuteSequence>
+
+    <!-- The tray owns only a per-user Run value and its child server. User profile data and
+         Credential Manager entries intentionally remain after uninstall. -->
+    <CustomAction
+        Id="StopTrayBeforeRemoval"
+        FileRef="ScryerTrayExe"
+        ExeCommand="--shutdown"
+        Execute="immediate"
+        Return="check"
+        Impersonate="yes" />
+    <CustomAction
+        Id="RemoveTrayStartupBeforeRemoval"
+        FileRef="ScryerTrayExe"
+        ExeCommand="--unregister-startup"
+        Execute="immediate"
+        Return="ignore"
+        Impersonate="yes" />
+    <InstallExecuteSequence>
+      <Custom Action="StopTrayBeforeRemoval" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="RemoveTrayStartupBeforeRemoval" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot;" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

@@ -50,13 +50,17 @@ pub fn disable_platform_keystore_for_tests() {
 
 /// Returns platform-native keystores in priority order.
 ///
-/// `data_dir` is the application data directory (resolved by the binary crate)
-/// and is used by the Linux `KeyFile` backend.
+/// `data_dir` is the application data directory (resolved by the binary crate).
+/// Linux uses it for the `KeyFile` backend; Windows uses the dedicated desktop
+/// profile path to select its isolated Credential Manager namespace.
 #[allow(clippy::vec_init_then_push)] // conditional cfg pushes can't use vec![]
-pub fn platform_keystores(_data_dir: Option<PathBuf>) -> Vec<Box<dyn KeyStore>> {
+pub fn platform_keystores(data_dir: Option<PathBuf>) -> Vec<Box<dyn KeyStore>> {
     if platform_keystore_disabled() {
         return Vec::new();
     }
+
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    let _ = &data_dir;
 
     let mut stores: Vec<Box<dyn KeyStore>> = Vec::new();
 
@@ -64,12 +68,14 @@ pub fn platform_keystores(_data_dir: Option<PathBuf>) -> Vec<Box<dyn KeyStore>> 
     stores.push(Box::new(macos::MacOSKeychain));
 
     #[cfg(target_os = "windows")]
-    stores.push(Box::new(windows::WindowsCredentialManager));
+    stores.push(Box::new(windows::WindowsCredentialManager::for_data_dir(
+        data_dir.as_deref(),
+    )));
 
     #[cfg(target_os = "linux")]
     {
         stores.push(Box::new(linux::DockerSecret));
-        if let Some(dir) = _data_dir {
+        if let Some(dir) = data_dir {
             stores.push(Box::new(linux::KeyFile::new(dir)));
         }
     }

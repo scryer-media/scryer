@@ -1,5 +1,3 @@
-#![warn(dead_code_pub_in_binary)]
-
 use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
 use chrono::{NaiveDate, Utc};
@@ -133,8 +131,10 @@ const WINGET_PACKAGE_IDENTIFIER: &str = "ScryerMedia.Scryer";
 const WINGET_PACKAGE_NAME: &str = "Scryer";
 const WINGET_MONIKER: &str = "scryer";
 const WINGET_MANIFEST_VERSION: &str = "1.12.0";
-const WINGET_WINDOWS_X64_ASSET: &str = "scryer-windows-x86_64-portable.zip";
-const WINGET_WINDOWS_ARM64_ASSET: &str = "scryer-windows-arm64-portable.zip";
+const WINGET_WINDOWS_X64_ASSET: &str = "scryer-windows-x86_64.msi";
+const WINGET_WINDOWS_ARM64_ASSET: &str = "scryer-windows-arm64.msi";
+const WINGET_WINDOWS_X64_METADATA: &str = "scryer-windows-x86_64.msi.json";
+const WINGET_WINDOWS_ARM64_METADATA: &str = "scryer-windows-arm64.msi.json";
 const REQUIRED_SCRYER_DRY_RUN_STEPS: &[&str] = &[
     "builtin_refresh",
     "web_validation",
@@ -1034,7 +1034,7 @@ fn generate_release_notes(
 }
 
 fn run_ci_winget(ctx: &TaskContext, args: WingetArgs) -> Result<()> {
-    step("Preparing WinGet portable manifests");
+    step("Preparing WinGet MSI manifests");
     let version = normalize_winget_version(&args.version)?;
     let tag_name = args
         .tag
@@ -1061,7 +1061,7 @@ fn run_ci_winget(ctx: &TaskContext, args: WingetArgs) -> Result<()> {
     } else {
         ctx.repo_root.join(args.output_dir)
     };
-    let artifacts = collect_winget_artifacts(&repository, &tag_name, &artifacts_dir)?;
+    let artifacts = collect_winget_artifacts(&repository, &tag_name, &version, &artifacts_dir)?;
     let manifest_dir = write_winget_manifests(&output_dir, &version, &release_date, &artifacts)?;
 
     ok(format!(
@@ -1077,6 +1077,14 @@ struct WingetArtifact {
     asset_name: &'static str,
     installer_url: String,
     installer_sha256: String,
+    product_code: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WingetMsiMetadata {
+    architecture: String,
+    product_code: String,
+    version: String,
 }
 
 fn normalize_winget_version(raw: &str) -> Result<Version> {
@@ -1108,18 +1116,50 @@ fn validate_winget_release_date(release_date: &str) -> Result<()> {
 fn collect_winget_artifacts(
     repository: &str,
     tag_name: &str,
+    version: &Version,
     artifacts_dir: &Path,
 ) -> Result<Vec<WingetArtifact>> {
     let artifacts = [
-        ("x64", WINGET_WINDOWS_X64_ASSET),
-        ("arm64", WINGET_WINDOWS_ARM64_ASSET),
+        ("x64", WINGET_WINDOWS_X64_ASSET, WINGET_WINDOWS_X64_METADATA),
+        (
+            "arm64",
+            WINGET_WINDOWS_ARM64_ASSET,
+            WINGET_WINDOWS_ARM64_METADATA,
+        ),
     ];
 
     artifacts
         .into_iter()
-        .map(|(architecture, asset_name)| {
+        .map(|(architecture, asset_name, metadata_name)| {
             let path = artifacts_dir.join(asset_name);
-            validate_winget_portable_zip(&path)?;
+            validate_winget_msi(&path)?;
+            let metadata_path = artifacts_dir.join(metadata_name);
+            let metadata: WingetMsiMetadata = serde_json::from_slice(
+                &fs::read(&metadata_path)
+                    .with_context(|| format!("failed to read {}", metadata_path.display()))?,
+            )
+            .with_context(|| format!("failed to parse {}", metadata_path.display()))?;
+            if metadata.architecture != architecture {
+                bail!(
+                    "{} architecture must be {architecture}, got {}",
+                    metadata_path.display(),
+                    metadata.architecture
+                );
+            }
+            if metadata.version != version.to_string() {
+                bail!(
+                    "{} version must be {version}, got {}",
+                    metadata_path.display(),
+                    metadata.version
+                );
+            }
+            if !is_msi_product_code(&metadata.product_code) {
+                bail!(
+                    "{} does not contain a valid MSI ProductCode: {}",
+                    metadata_path.display(),
+                    metadata.product_code
+                );
+            }
             let bytes =
                 fs::read(&path).with_context(|| format!("failed to read {}", path.display()))?;
             let installer_sha256 = sha256_hex(&bytes).to_ascii_uppercase();
@@ -1131,92 +1171,32 @@ fn collect_winget_artifacts(
                 asset_name,
                 installer_url,
                 installer_sha256,
+                product_code: metadata.product_code,
             })
         })
         .collect()
 }
 
-fn validate_winget_portable_zip(path: &Path) -> Result<()> {
+fn validate_winget_msi(path: &Path) -> Result<()> {
     let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let entries = zip_central_directory_entries(&bytes)
-        .with_context(|| format!("failed to inspect {}", path.display()))?;
-    if entries.iter().any(|entry| entry == "scryer.exe") {
-        Ok(())
-    } else {
-        bail!(
-            "{} must contain scryer.exe at the zip root for WinGet portable install",
-            path.display()
-        )
+    if bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
+        return Ok(());
     }
+    bail!("{} is not an MSI compound document", path.display())
 }
 
-fn zip_central_directory_entries(bytes: &[u8]) -> Result<Vec<String>> {
-    const EOCD_SIGNATURE: &[u8; 4] = b"PK\x05\x06";
-    const CENTRAL_DIRECTORY_SIGNATURE: u32 = 0x0201_4b50;
-
-    if bytes.len() < 22 {
-        bail!("zip is too short to contain an end-of-central-directory record");
-    }
-
-    let search_start = bytes.len().saturating_sub(22 + u16::MAX as usize);
-    let eocd_offset = (search_start..=bytes.len() - 22)
-        .rev()
-        .find(|offset| bytes.get(*offset..*offset + 4) == Some(EOCD_SIGNATURE.as_slice()))
-        .context("missing zip end-of-central-directory record")?;
-    let central_directory_size = read_le_u32(bytes, eocd_offset + 12)? as usize;
-    let central_directory_offset = read_le_u32(bytes, eocd_offset + 16)? as usize;
-    let central_directory_end = central_directory_offset
-        .checked_add(central_directory_size)
-        .context("zip central directory overflows usize")?;
-    if central_directory_end > bytes.len() {
-        bail!("zip central directory points beyond file length");
-    }
-
-    let mut offset = central_directory_offset;
-    let mut entries = Vec::new();
-    while offset < central_directory_end {
-        let signature = read_le_u32(bytes, offset)?;
-        if signature != CENTRAL_DIRECTORY_SIGNATURE {
-            bail!("invalid zip central directory header at byte {offset}");
-        }
-        let file_name_len = read_le_u16(bytes, offset + 28)? as usize;
-        let extra_len = read_le_u16(bytes, offset + 30)? as usize;
-        let comment_len = read_le_u16(bytes, offset + 32)? as usize;
-        let name_start = offset + 46;
-        let name_end = name_start
-            .checked_add(file_name_len)
-            .context("zip file name length overflows usize")?;
-        let record_end = name_end
-            .checked_add(extra_len)
-            .and_then(|end| end.checked_add(comment_len))
-            .context("zip central directory record length overflows usize")?;
-        if record_end > central_directory_end {
-            bail!("zip central directory record extends beyond declared directory");
-        }
-        let name = std::str::from_utf8(&bytes[name_start..name_end])
-            .context("zip entry name is not utf-8")?;
-        entries.push(name.to_string());
-        offset = record_end;
-    }
-    Ok(entries)
-}
-
-fn read_le_u16(bytes: &[u8], offset: usize) -> Result<u16> {
-    let raw = bytes
-        .get(offset..offset + 2)
-        .ok_or_else(|| anyhow!("unexpected end of zip while reading u16 at byte {offset}"))?;
-    Ok(u16::from_le_bytes(
-        raw.try_into().expect("slice length checked"),
-    ))
-}
-
-fn read_le_u32(bytes: &[u8], offset: usize) -> Result<u32> {
-    let raw = bytes
-        .get(offset..offset + 4)
-        .ok_or_else(|| anyhow!("unexpected end of zip while reading u32 at byte {offset}"))?;
-    Ok(u32::from_le_bytes(
-        raw.try_into().expect("slice length checked"),
-    ))
+fn is_msi_product_code(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 38
+        && bytes.first() == Some(&b'{')
+        && bytes.last() == Some(&b'}')
+        && bytes[1..37].iter().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                *byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        })
 }
 
 fn write_winget_manifests(
@@ -1307,8 +1287,11 @@ fn winget_installer_manifest(
         .iter()
         .map(|artifact| {
             format!(
-                "- Architecture: {}\n  InstallerUrl: {}\n  InstallerSha256: {}",
-                artifact.architecture, artifact.installer_url, artifact.installer_sha256
+                "- Architecture: {}\n  InstallerUrl: {}\n  InstallerSha256: {}\n  ProductCode: '{}'",
+                artifact.architecture,
+                artifact.installer_url,
+                artifact.installer_sha256,
+                artifact.product_code,
             )
         })
         .collect::<Vec<_>>()
@@ -1317,12 +1300,8 @@ fn winget_installer_manifest(
         "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.{WINGET_MANIFEST_VERSION}.schema.json\n\n\
 PackageIdentifier: {WINGET_PACKAGE_IDENTIFIER}\n\
 PackageVersion: {version}\n\
-InstallerType: zip\n\
-NestedInstallerType: portable\n\
-NestedInstallerFiles:\n- RelativeFilePath: scryer.exe\n  PortableCommandAlias: {WINGET_MONIKER}\n\
-InstallModes:\n\
-- silent\n\
-UpgradeBehavior: install\n\
+InstallerType: msi\n\
+UpgradeBehavior: uninstallPrevious\n\
 ReleaseDate: {release_date}\n\
 Installers:\n\
 {installers}\n\
@@ -4017,6 +3996,7 @@ mod tests {
                     "https://github.com/scryer-media/scryer/releases/download/scryer-v0.16.5/{WINGET_WINDOWS_X64_ASSET}"
                 ),
                 installer_sha256: "A".repeat(64),
+                product_code: "{12345678-1234-1234-1234-1234567890AB}".to_string(),
             },
             WingetArtifact {
                 architecture: "arm64",
@@ -4025,27 +4005,41 @@ mod tests {
                     "https://github.com/scryer-media/scryer/releases/download/scryer-v0.16.5/{WINGET_WINDOWS_ARM64_ASSET}"
                 ),
                 installer_sha256: "B".repeat(64),
+                product_code: "{87654321-4321-4321-4321-BA0987654321}".to_string(),
             },
         ]
     }
 
     #[test]
-    fn winget_installer_manifest_uses_portable_zip_contract() {
+    fn winget_installer_manifest_uses_msi_contract() {
         let version = Version::parse("0.16.5").unwrap();
         let manifest =
             winget_installer_manifest(&version, "2026-06-24", &sample_winget_artifacts());
 
         assert!(manifest.contains("PackageIdentifier: ScryerMedia.Scryer"));
         assert!(manifest.contains("PackageVersion: 0.16.5"));
-        assert!(manifest.contains("InstallerType: zip"));
-        assert!(manifest.contains("NestedInstallerType: portable"));
-        assert!(manifest.contains("RelativeFilePath: scryer.exe"));
-        assert!(manifest.contains("  PortableCommandAlias: scryer"));
+        assert!(manifest.contains("InstallerType: msi"));
+        assert!(manifest.contains("UpgradeBehavior: uninstallPrevious"));
+        assert!(manifest.contains("ProductCode: '{12345678-1234-1234-1234-1234567890AB}'"));
         assert!(manifest.contains("Architecture: x64"));
         assert!(manifest.contains("Architecture: arm64"));
         assert!(manifest.contains(WINGET_WINDOWS_X64_ASSET));
         assert!(manifest.contains(WINGET_WINDOWS_ARM64_ASSET));
         assert!(manifest.contains("ReleaseDate: 2026-06-24"));
+    }
+
+    #[test]
+    fn msi_product_code_validation_rejects_malformed_values() {
+        assert!(is_msi_product_code(
+            "{12345678-1234-1234-1234-1234567890AB}"
+        ));
+        assert!(!is_msi_product_code("12345678-1234-1234-1234-1234567890AB"));
+        assert!(!is_msi_product_code(
+            "{12345678-1234-1234-1234-1234567890AG}"
+        ));
+        assert!(!is_msi_product_code(
+            "{12345678_1234_1234_1234_1234567890AB}"
+        ));
     }
 
     #[test]

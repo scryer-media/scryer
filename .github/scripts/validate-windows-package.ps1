@@ -6,7 +6,16 @@ param(
   [string]$ZipPath,
 
   [Parameter(Mandatory = $true)]
-  [string]$BuiltExePath
+  [string]$MsiPath,
+
+  [Parameter(Mandatory = $true)]
+  [string]$MsiMetadataPath,
+
+  [Parameter(Mandatory = $true)]
+  [string]$BuiltExePath,
+
+  [Parameter(Mandatory = $true)]
+  [string]$BuiltTrayPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,6 +25,7 @@ $defenderLog = "$prefix-defender-scan.log"
 $attachmentLog = "$prefix-attachment-services.log"
 $startupLog = "$prefix-noarg-startup.log"
 $wingetLog = "$prefix-winget-install.log"
+$msiLog = "$prefix-msi-install.log"
 $validationRoot = Join-Path $env:RUNNER_TEMP "scryer-package-validation-$Architecture"
 
 function Write-Log {
@@ -263,28 +273,52 @@ function Invoke-ScryerStartupSmoke {
   }
 }
 
-function Invoke-WinGetLocalInstallSmoke {
+function Get-ProgramFiles64 {
+  if ($env:ProgramW6432) {
+    return $env:ProgramW6432
+  }
+
+  return ${env:ProgramFiles}
+}
+
+function Invoke-MsiExec {
   param(
     [Parameter(Mandatory = $true)]
-    [string]$PackageZip
+    [string[]]$Arguments
+  )
+
+  # Scryer has no 32-bit package. Sysnative ensures a mistakenly launched
+  # 32-bit PowerShell host still invokes the native Windows Installer.
+  $directory = if ([Environment]::Is64BitProcess) { "System32" } else { "Sysnative" }
+  $msiExec = Join-Path $env:WINDIR "$directory\msiexec.exe"
+  return (Start-Process -FilePath $msiExec -ArgumentList $Arguments -PassThru -Wait).ExitCode
+}
+
+function Invoke-WinGetManifestValidation {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$PackageMsi,
+
+    [Parameter(Mandatory = $true)]
+    [string]$ProductCode,
+
+    [Parameter(Mandatory = $true)]
+    [string]$PackageVersion
   )
 
   $winget = (Get-Command winget.exe -ErrorAction SilentlyContinue).Source
   if (-not $winget) {
-    Write-Log $wingetLog "winget.exe was not found; local manifest install smoke skipped."
-    return
+    throw "winget.exe was not found; MSI manifest validation is required."
   }
 
   $manifestRoot = Join-Path $validationRoot "winget-manifest"
   New-Item -ItemType Directory -Force -Path $manifestRoot | Out-Null
-  $zipHash = (Get-FileHash $PackageZip -Algorithm SHA256).Hash.ToUpperInvariant()
-  $zipUri = ([System.Uri](Resolve-Path $PackageZip).Path).AbsoluteUri
+  $msiHash = (Get-FileHash $PackageMsi -Algorithm SHA256).Hash.ToUpperInvariant()
   $wingetArchitecture = if ($Architecture -eq "x86_64") { "x64" } else { "arm64" }
-  $aliasName = "scryer-ci-$Architecture"
 
   @"
 PackageIdentifier: ScryerMedia.Scryer
-PackageVersion: 0.0.0
+PackageVersion: $PackageVersion
 DefaultLocale: en-US
 ManifestType: version
 ManifestVersion: 1.12.0
@@ -292,7 +326,7 @@ ManifestVersion: 1.12.0
 
   @"
 PackageIdentifier: ScryerMedia.Scryer
-PackageVersion: 0.0.0
+PackageVersion: $PackageVersion
 PackageLocale: en-US
 Publisher: Scryer Media
 PackageName: Scryer
@@ -304,63 +338,22 @@ ManifestVersion: 1.12.0
 
   @"
 PackageIdentifier: ScryerMedia.Scryer
-PackageVersion: 0.0.0
-InstallerType: zip
-NestedInstallerType: portable
-NestedInstallerFiles:
-- RelativeFilePath: scryer.exe
-  PortableCommandAlias: $aliasName
+PackageVersion: $PackageVersion
+InstallerType: msi
+UpgradeBehavior: uninstallPrevious
 Installers:
 - Architecture: $wingetArchitecture
-  InstallerUrl: $zipUri
-  InstallerSha256: $zipHash
+  InstallerUrl: https://github.com/scryer-media/scryer/releases/download/scryer-local-ci/$(Split-Path $PackageMsi -Leaf)
+  InstallerSha256: $msiHash
+  ProductCode: '$ProductCode'
 ManifestType: installer
 ManifestVersion: 1.12.0
 "@ | Set-Content -Path (Join-Path $manifestRoot "ScryerMedia.Scryer.installer.yaml") -Encoding utf8
 
-  Write-Log $wingetLog "Running winget local manifest install smoke from $manifestRoot"
-  $installSucceeded = $false
-  try {
-    & $winget settings --enable LocalManifestFiles *>> $wingetLog
-    & $winget install --manifest $manifestRoot --accept-package-agreements --accept-source-agreements --disable-interactivity *>> $wingetLog
-    if ($LASTEXITCODE -ne 0) {
-      throw "winget install exited with code $LASTEXITCODE"
-    }
-    $installSucceeded = $true
-    Write-Log $wingetLog "winget local manifest install smoke succeeded."
-
-    $installedExe = (Get-Command $aliasName -ErrorAction SilentlyContinue).Source
-    if (-not $installedExe) {
-      $installedExe = Get-ChildItem (Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links") -Filter "$aliasName*" -ErrorAction SilentlyContinue |
-        Select-Object -First 1 -ExpandProperty FullName
-    }
-    if (-not $installedExe -or -not (Test-Path $installedExe)) {
-      throw "winget installed the package but did not create the $aliasName command alias"
-    }
-
-    & $installedExe --version *>> $wingetLog
-    if ($LASTEXITCODE -ne 0) {
-      throw "winget-installed Scryer --version exited with code $LASTEXITCODE"
-    }
-    Write-Log $wingetLog "winget-installed command alias executed successfully from $installedExe."
-    Invoke-ScryerStartupSmoke -ExePath $installedExe -Label "winget-installed"
-  } catch {
-    if ($installSucceeded) {
-      Write-Log $wingetLog "winget-installed Scryer validation failed: $($_.Exception.Message)"
-      throw
-    }
-    Write-Log $wingetLog "winget local manifest install smoke was inconclusive: $($_.Exception.Message)"
-    Write-Warning "winget local manifest install smoke was inconclusive; see $wingetLog."
-  } finally {
-    try {
-      & $winget uninstall --id ScryerMedia.Scryer --accept-source-agreements --disable-interactivity *>> $wingetLog
-    } catch {
-      Write-Log $wingetLog "winget cleanup failed or package was not installed: $($_.Exception.Message)"
-    } finally {
-      # This smoke is evidence-only: the package archive, Defender, Attachment
-      # Services, and startup checks above remain release-blocking.
-      Reset-NativeExitCode
-    }
+  Write-Log $wingetLog "Validating generated MSI winget manifest from $manifestRoot"
+  & $winget validate --manifest $manifestRoot --disable-interactivity *>> $wingetLog
+  if ($LASTEXITCODE -ne 0) {
+    throw "winget manifest validation exited with code $LASTEXITCODE"
   }
 }
 
@@ -370,14 +363,21 @@ New-Item -ItemType Directory -Force -Path $validationRoot | Out-Null
 "" | Set-Content $attachmentLog
 "" | Set-Content $startupLog
 "" | Set-Content $wingetLog
+"" | Set-Content $msiLog
 
 $zipCopy = Join-Path $validationRoot (Split-Path $ZipPath -Leaf)
+$msiCopy = Join-Path $validationRoot (Split-Path $MsiPath -Leaf)
 $extractRoot = Join-Path $validationRoot "extracted"
 Copy-Item $ZipPath $zipCopy -Force
+Copy-Item $MsiPath $msiCopy -Force
 Expand-Archive -Path $zipCopy -DestinationPath $extractRoot -Force
 $packagedExe = Join-Path $extractRoot "scryer.exe"
+$packagedTray = Join-Path $extractRoot "scryer-tray.exe"
 if (-not (Test-Path $packagedExe)) {
   throw "Packaged zip did not contain scryer.exe at the zip root."
+}
+if (-not (Test-Path $packagedTray)) {
+  throw "Packaged zip did not contain scryer-tray.exe at the zip root."
 }
 
 $builtHash = (Get-FileHash $BuiltExePath -Algorithm SHA256).Hash
@@ -385,12 +385,95 @@ $packagedHash = (Get-FileHash $packagedExe -Algorithm SHA256).Hash
 if ($builtHash -ne $packagedHash) {
   throw "Packaged scryer.exe hash differs from built executable."
 }
+$builtTrayHash = (Get-FileHash $BuiltTrayPath -Algorithm SHA256).Hash
+$packagedTrayHash = (Get-FileHash $packagedTray -Algorithm SHA256).Hash
+if ($builtTrayHash -ne $packagedTrayHash) {
+  throw "Packaged scryer-tray.exe hash differs from built executable."
+}
+
+$msiMetadata = Get-Content $MsiMetadataPath -Raw | ConvertFrom-Json
+if ($msiMetadata.product_code -notmatch '^\{[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\}$') {
+  throw "MSI metadata did not contain a valid ProductCode: $($msiMetadata.product_code)"
+}
+if ($msiMetadata.version -notmatch '^\d+\.\d+\.\d+$') {
+  throw "MSI metadata did not contain a valid release version: $($msiMetadata.version)"
+}
 
 Invoke-DefenderScan -Path $zipCopy
 Invoke-DefenderScan -Path $packagedExe
+Invoke-DefenderScan -Path $packagedTray
+Invoke-DefenderScan -Path $msiCopy
 
 $sourceUrl = "https://github.com/scryer-media/scryer/releases/download/scryer-local-ci/$(Split-Path $zipCopy -Leaf)"
 Invoke-AttachmentServicesSave -Path $zipCopy -Source $sourceUrl
+Invoke-AttachmentServicesSave -Path $msiCopy -Source ($sourceUrl -replace 'zip$', 'msi')
 
 Invoke-ScryerStartupSmoke -ExePath $packagedExe -Label "packaged"
-Invoke-WinGetLocalInstallSmoke -PackageZip $zipCopy
+
+foreach ($unsignedArtifact in @($packagedExe, $packagedTray, $msiCopy)) {
+  $signature = Get-AuthenticodeSignature -FilePath $unsignedArtifact
+  if ($signature.Status -ne "NotSigned") {
+    throw "Expected intentionally unsigned artifact $unsignedArtifact, got Authenticode status $($signature.Status)."
+  }
+}
+
+$desktopProfile = Join-Path $env:LOCALAPPDATA "ScryerMedia\Scryer"
+$profileMarker = Join-Path $desktopProfile "preserve-on-uninstall.txt"
+New-Item -ItemType Directory -Force -Path $desktopProfile | Out-Null
+"preserve me" | Set-Content $profileMarker
+
+$msiExitCode = Invoke-MsiExec -Arguments @("/i", $msiCopy, "/qn", "/norestart", "/l*v", $msiLog)
+if ($msiExitCode -ne 0) {
+  throw "MSI install failed with exit code $msiExitCode. See $msiLog."
+}
+
+$installDir = Join-Path (Get-ProgramFiles64) "Scryer Media\Scryer"
+$installedExe = Join-Path $installDir "scryer.exe"
+$installedTray = Join-Path $installDir "scryer-tray.exe"
+foreach ($required in @($installedExe, $installedTray, (Join-Path $installDir "LICENSE"))) {
+  if (-not (Test-Path $required)) {
+    throw "MSI did not install expected payload file $required"
+  }
+}
+if ((Get-FileHash $installedExe -Algorithm SHA256).Hash -ne $builtHash) {
+  throw "MSI-installed scryer.exe hash differs from the built executable."
+}
+if ((Get-FileHash $installedTray -Algorithm SHA256).Hash -ne $builtTrayHash) {
+  throw "MSI-installed scryer-tray.exe hash differs from the built executable."
+}
+if (-not (Test-Path (Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\Scryer\Scryer.lnk"))) {
+  throw "MSI did not create the Scryer Start Menu shortcut."
+}
+if (Get-Process scryer-tray -ErrorAction SilentlyContinue) {
+  throw "Silent MSI install started scryer-tray.exe; silent installs must stay quiet."
+}
+if (([Environment]::GetEnvironmentVariable("Path", "Machine")) -match [regex]::Escape($installDir)) {
+  throw "MSI added its install directory to the machine PATH."
+}
+if (Get-CimInstance Win32_Service | Where-Object { $_.PathName -match [regex]::Escape($installDir) }) {
+  throw "MSI registered a Windows service for Scryer."
+}
+& $installedExe --version *>> $msiLog
+if ($LASTEXITCODE -ne 0) {
+  throw "MSI-installed scryer.exe --version failed with exit code $LASTEXITCODE."
+}
+
+$msiExitCode = Invoke-MsiExec -Arguments @("/fa", $msiCopy, "/qn", "/norestart", "/l*v", $msiLog)
+if ($msiExitCode -ne 0) {
+  throw "MSI repair failed with exit code $msiExitCode. See $msiLog."
+}
+$msiExitCode = Invoke-MsiExec -Arguments @("/x", $msiMetadata.product_code, "/qn", "/norestart", "/l*v", $msiLog)
+if ($msiExitCode -ne 0) {
+  throw "MSI uninstall failed with exit code $msiExitCode. See $msiLog."
+}
+if (Test-Path $installDir) {
+  throw "MSI uninstall retained the Program Files payload directory $installDir."
+}
+if (-not (Test-Path $profileMarker)) {
+  throw "MSI uninstall removed desktop user data at $profileMarker."
+}
+
+Invoke-WinGetManifestValidation `
+  -PackageMsi $msiCopy `
+  -ProductCode $msiMetadata.product_code `
+  -PackageVersion $msiMetadata.version

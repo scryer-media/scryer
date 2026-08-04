@@ -52,6 +52,47 @@ async fn foreign_category_is_runtime_classification_and_blank_category_remains_e
 }
 
 #[tokio::test]
+async fn scryer_origin_downloads_are_never_classified_foreign_by_category() {
+    // Regression: the category branch used to run for Scryer's OWN grabs. When
+    // the observed category did not survive the owned-categories round-trip the
+    // item was classified ForeignCategory and short-circuited before title
+    // resolution — never imported, nothing persisted, nothing logged. Whole
+    // series imports vanished after logging `decision="eligible"`.
+    //
+    // "other" is deliberately a category the owned set does not contain: the
+    // same input that classifies a genuinely foreign item must leave a
+    // Scryer-origin one fully eligible.
+    let td = run_category_gate_check(
+        Arc::new(TestSettingsRepo::default()),
+        Some("other"),
+        None,
+        TitleMatchType::TitleParse,
+        true,
+    )
+    .await;
+    assert_eq!(td.foreign_import_classification, None);
+    assert_eq!(td.state, TrackedDownloadState::ImportPending);
+
+    // Submission/ClientParameter matches are Scryer's work too, even when the
+    // origin flag has not been stamped onto the queue item yet.
+    for match_type in [TitleMatchType::Submission, TitleMatchType::ClientParameter] {
+        let td = run_category_gate_check(
+            Arc::new(TestSettingsRepo::default()),
+            Some("other"),
+            None,
+            match_type,
+            false,
+        )
+        .await;
+        assert_eq!(
+            td.foreign_import_classification, None,
+            "{match_type:?} must not be classified foreign"
+        );
+        assert_eq!(td.state, TrackedDownloadState::ImportPending);
+    }
+}
+
+#[tokio::test]
 async fn category_ownership_snapshot_is_reused_until_configuration_refresh() {
     let settings = Arc::new(TestSettingsRepo::default());
     set_scoped_default_category(&settings, "movie", "movie").await;

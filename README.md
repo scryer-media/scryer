@@ -72,6 +72,19 @@ Scryer ships as a single Rust binary with:
     └──────────┘         └────────────┘
 ```
 
+## Windows desktop
+
+Windows releases provide x64 and ARM64 MSI installers plus matching ZIPs. The MSI installs
+`scryer.exe` for command-line use and `scryer-tray.exe` for the desktop experience. The tray
+starts Scryer at sign-in without opening a browser, and its menu opens or manages the local UI.
+Its independent desktop profile is `%LOCALAPPDATA%\ScryerMedia\Scryer`; it does not migrate or
+modify legacy portable data.
+
+The first Windows release line is intentionally unsigned. Windows may show a browser download
+warning, SmartScreen’s **More info → Run anyway** prompt, and an **Unknown publisher** UAC prompt
+for the machine-wide MSI. Verify the release SHA-256 checksum and GitHub build provenance before
+installing. WinGet uses the same MSI once its `ScryerMedia.Scryer` manifest has been accepted.
+
 ## Docker
 
 Scryer publishes a first-party container image:

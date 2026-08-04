@@ -777,6 +777,22 @@ impl AppUseCase {
             }
         }
 
+        // 5. Commit stale pending recycle entries orphaned by interrupted move
+        // transactions (per media root). This deliberately runs after the
+        // expiry purge: an entry committed here stays restorable for at least
+        // one housekeeping interval before any sweep can expire it.
+        let mut recycled_pending_reconciled = 0u32;
+        for (media_root, config) in self.resolve_all_recycle_configs().await {
+            match crate::recycle_bin::reconcile_stale_pending_entries(&config).await {
+                Ok(n) => recycled_pending_reconciled += n,
+                Err(e) => info!(
+                    error = %e,
+                    media_root = %media_root,
+                    "recycle bin pending reconciliation failed"
+                ),
+            }
+        }
+
         // 6. Discovery history retention.
         let discovery_pruned_runs = match self
             .services
@@ -833,6 +849,7 @@ impl AppUseCase {
             stale_history_records,
             staged_nzb_artifacts_pruned,
             recycled_purged,
+            recycled_pending_reconciled,
             discovery_pruned_runs,
             ran_at: self.runtime.environment.now().to_rfc3339(),
         };
@@ -851,6 +868,7 @@ impl AppUseCase {
             stale_history_records,
             staged_nzb_artifacts_pruned,
             recycled_purged,
+            recycled_pending_reconciled,
             discovery_pruned_runs,
             "housekeeping completed"
         );

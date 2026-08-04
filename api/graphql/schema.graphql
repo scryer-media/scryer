@@ -210,6 +210,13 @@ type BackupSettingsPayload {
 	effectiveBackupPath: String!
 }
 
+input BeginManualImportSelectionInput {
+	clientId: ID!
+	clientType: String!
+	downloadClientItemId: String!
+	titleId: ID!
+}
+
 input BindPendingImportInput {
 	pendingImportId: ID!
 	collectionId: ID
@@ -748,6 +755,15 @@ type DeleteRecycledItemPayload {
 	delete) — the file remains on disk.
 	"""
 	deleted: Boolean!
+}
+
+input DeleteRecycledItemsInput {
+	ids: [ID!]!
+}
+
+type DeleteRecycledItemsPayload {
+	ids: [ID!]!
+	jobRun: JobRunPayload!
 }
 
 type DeleteRuleSetPayload {
@@ -2058,6 +2074,7 @@ enum JobKeyValue {
 	TITLE_DELETION
 	MEDIA_FILE_DELETION
 	RECYCLE_BIN_RESTORE
+	RECYCLE_BIN_PURGE
 	ACQUISITION_SEARCH
 }
 
@@ -2323,15 +2340,14 @@ input LoginWithPlexInput {
 
 scalar Long
 
-input ManualImportFileMappingInput {
-	filePath: String!
+input ManualImportCandidateMappingInput {
+	candidateId: ID!
 	episodeId: ID
 	seriesMovieLinkId: ID
-	quality: String
 }
 
 type ManualImportFilePreviewPayload {
-	filePath: String!
+	candidateId: ID!
 	fileName: String!
 	sizeBytes: Long!
 	quality: String
@@ -2341,7 +2357,8 @@ type ManualImportFilePreviewPayload {
 	suggestedEpisodeLabel: String
 }
 
-type ManualImportPreviewPayload {
+type ManualImportSelectionPayload {
+	selectionId: ID!
 	files: [ManualImportFilePreviewPayload!]!
 	availableEpisodes: [EpisodePayload!]!
 	availableSeriesMovies: [ManualImportSeriesMovieTargetPayload!]!
@@ -2732,7 +2749,7 @@ type MutationRoot {
 	queueExistingTitleDownload(input: QueueDownloadInput!): QueueDownloadPayload!
 	queueBestRelease(input: QueueBestReleaseInput!): QueueDownloadPayload!
 	queueManualImport(input: QueueManualImportInput!): DownloadQueueActionPayload!
-	queuePathManualImport(input: QueuePathManualImportInput!): DownloadQueueActionPayload!
+	beginManualImportSelection(input: BeginManualImportSelectionInput!): ManualImportSelectionPayload!
 	"""
 	Retry a previously failed import, optionally with an archive password.
 	"""
@@ -2938,9 +2955,17 @@ type MutationRoot {
 	"""
 	restoreRecycledItem(id: ID!): RestoreRecycledItemPayload!
 	"""
+	Restore selected recycled items using one background job.
+	"""
+	restoreRecycledItems(input: RestoreRecycledItemsInput!): RestoreRecycledItemsPayload!
+	"""
 	Permanently delete a single recycled item.
 	"""
 	deleteRecycledItem(id: ID!): DeleteRecycledItemPayload!
+	"""
+	Permanently delete selected recycled items using one background job.
+	"""
+	deleteRecycledItems(input: DeleteRecycledItemsInput!): DeleteRecycledItemsPayload!
 	"""
 	Empty recycle bins for the selected libraries. Returns the number of items purged.
 	"""
@@ -3317,17 +3342,6 @@ input PreviewExternalImportInput {
 	prowlarr: ExternalImportConnectionInput @deprecated(reason: "use prowlarrWarmupSessionId")
 }
 
-input PreviewManualImportInput {
-	clientId: ID
-	downloadClientItemId: String!
-	titleId: ID!
-}
-
-input PreviewManualImportPathInput {
-	path: String!
-	titleId: ID!
-}
-
 enum ProviderCatalogFamilyValue {
 	SUBTITLE
 	NOTIFICATION
@@ -3565,11 +3579,10 @@ type QueryRoot {
 	smgVersionCompatibilityNotice: SmgVersionCompatibilityNoticePayload
 	smgScryerUpdateNotice: SmgScryerUpdateNoticePayload
 	recycledItems(limit: Int! = 500, offset: Int! = 0, libraryIds: [ID!]): RecycledItemsPayload!
+	previewRestoreRecycledItems(ids: [ID!]!): RecycleRestorePreviewPayload!
 	backups: [BackupInfoPayload!]!
 	pendingReleases(filter: PendingReleaseFilterInput, limit: Int! = 50, offset: Int! = 0): PendingReleasesPayload!
 	importHistory(limit: Int): [ImportRecordPayload!]!
-	previewManualImport(input: PreviewManualImportInput!): ManualImportPreviewPayload!
-	previewManualImportPath(input: PreviewManualImportPathInput!): ManualImportPreviewPayload!
 	me: UserPayload
 	"""
 	The derived Missing / Upgrades view. `wantedKind` selects the
@@ -3707,17 +3720,8 @@ branch on `__typename` instead of a string discriminator.
 union QueueDownloadScopePayload = EpisodeScopePayload | EpisodeSetScopePayload | SeriesMovieScopePayload | CollectionScopePayload | TitleScopePayload | OrphanScopePayload
 
 input QueueManualImportInput {
-	titleId: ID
-	clientId: ID
-	clientType: String!
-	downloadClientItemId: String!
-	files: [ManualImportFileMappingInput!]
-}
-
-input QueuePathManualImportInput {
-	titleId: ID!
-	path: String!
-	files: [ManualImportFileMappingInput!]!
+	selectionId: ID!
+	files: [ManualImportCandidateMappingInput!]!
 }
 
 enum RecapPolicyValue {
@@ -3739,12 +3743,29 @@ type RecycleBinSettingsPayload {
 	enabled: Boolean!
 }
 
+enum RecycleRestoreConflictPolicyValue {
+	KEEP_BOTH
+	REPLACE_EXISTING
+}
+
+type RecycleRestorePreviewItemPayload {
+	id: ID!
+	originalPath: String!
+	destinationOccupied: Boolean!
+}
+
+type RecycleRestorePreviewPayload {
+	fingerprint: String!
+	items: [RecycleRestorePreviewItemPayload!]!
+}
+
 type RecycledItemPayload {
 	id: ID!
 	originalPath: String!
 	fileName: String!
 	sizeBytes: Long!
 	titleId: ID
+	titleName: String
 	reason: String!
 	recycledAt: DateTime!
 	mediaRoot: String!
@@ -3859,6 +3880,17 @@ type RestoreInspectPayload {
 
 type RestoreRecycledItemPayload {
 	id: ID!
+	jobRun: JobRunPayload!
+}
+
+input RestoreRecycledItemsInput {
+	ids: [ID!]!
+	conflictPolicy: RecycleRestoreConflictPolicyValue!
+	previewFingerprint: String!
+}
+
+type RestoreRecycledItemsPayload {
+	ids: [ID!]!
 	jobRun: JobRunPayload!
 }
 

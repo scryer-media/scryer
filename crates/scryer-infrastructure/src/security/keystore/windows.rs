@@ -1,20 +1,31 @@
 use super::KeyStore;
-use std::sync::OnceLock;
+use std::{path::Path, sync::OnceLock};
 
 use keyring_core::{Entry, Error as KeyringError};
 use windows_native_keyring_store::Store;
 
-const SERVICE: &str = "scryer";
+const DEFAULT_SERVICE: &str = "scryer";
+const DESKTOP_SERVICE: &str = "ScryerMedia.Scryer.Desktop.v1";
 const ACCOUNT: &str = "encryption-master-key";
 
 /// Stores the encryption key in Windows Credential Manager via the keyring core/store crates.
 ///
 /// The credential is tied to the current user account and persists across reboots.
 /// Works under NSSM service accounts (Credential Manager is per-user).
-pub struct WindowsCredentialManager;
+pub struct WindowsCredentialManager {
+    service: &'static str,
+}
 
 impl WindowsCredentialManager {
-    fn entry() -> Result<Entry, String> {
+    pub fn for_data_dir(data_dir: Option<&Path>) -> Self {
+        let service = data_dir
+            .filter(|path| is_desktop_profile(path))
+            .map(|_| DESKTOP_SERVICE)
+            .unwrap_or(DEFAULT_SERVICE);
+        Self { service }
+    }
+
+    fn entry(&self) -> Result<Entry, String> {
         static STORE_INIT: OnceLock<Result<(), String>> = OnceLock::new();
 
         STORE_INIT
@@ -28,13 +39,33 @@ impl WindowsCredentialManager {
             .as_ref()
             .map_err(Clone::clone)?;
 
-        Entry::new(SERVICE, ACCOUNT).map_err(|e| format!("failed to create credential entry: {e}"))
+        Entry::new(self.service, ACCOUNT)
+            .map_err(|e| format!("failed to create credential entry: {e}"))
     }
+}
+
+fn is_desktop_profile(path: &Path) -> bool {
+    let mut components = path.components().rev();
+    let Some(profile_name) = components
+        .next()
+        .and_then(|component| component.as_os_str().to_str())
+    else {
+        return false;
+    };
+    let Some(publisher_name) = components
+        .next()
+        .and_then(|component| component.as_os_str().to_str())
+    else {
+        return false;
+    };
+
+    profile_name.eq_ignore_ascii_case("Scryer")
+        && publisher_name.eq_ignore_ascii_case("ScryerMedia")
 }
 
 impl KeyStore for WindowsCredentialManager {
     fn get_key(&self) -> Result<Option<String>, String> {
-        let entry = Self::entry()?;
+        let entry = self.entry()?;
         match entry.get_password() {
             Ok(password) => {
                 let trimmed = password.trim().to_string();
@@ -50,14 +81,14 @@ impl KeyStore for WindowsCredentialManager {
     }
 
     fn set_key(&self, key_base64: &str) -> Result<(), String> {
-        let entry = Self::entry()?;
+        let entry = self.entry()?;
         entry
             .set_password(key_base64)
             .map_err(|e| format!("failed to store key in Windows Credential Manager: {e}"))
     }
 
     fn delete_key(&self) -> Result<(), String> {
-        let entry = Self::entry()?;
+        let entry = self.entry()?;
         match entry.delete_credential() {
             Ok(()) => Ok(()),
             Err(KeyringError::NoEntry) => Ok(()),
@@ -82,7 +113,7 @@ mod tests {
     #[test]
     #[ignore = "requires Windows user session — run manually"]
     fn credential_manager_round_trip() {
-        let store = WindowsCredentialManager;
+        let store = WindowsCredentialManager::for_data_dir(None);
         let test_key = "dGVzdC1rZXktZm9yLWNyZWRtZ3I=";
         let original = store.get_key().unwrap();
 
@@ -99,5 +130,17 @@ mod tests {
                 assert!(matches!(store.get_key(), Ok(None)));
             }
         }
+    }
+
+    #[test]
+    fn desktop_profile_uses_dedicated_credential_namespace() {
+        let profile = Path::new(r"C:\Users\example\AppData\Local\ScryerMedia\Scryer");
+        let desktop_store = WindowsCredentialManager::for_data_dir(Some(profile));
+        let legacy_store = WindowsCredentialManager::for_data_dir(Some(Path::new(
+            r"C:\Users\example\AppData\Roaming\scryer",
+        )));
+
+        assert_eq!(desktop_store.service, DESKTOP_SERVICE);
+        assert_eq!(legacy_store.service, DEFAULT_SERVICE);
     }
 }

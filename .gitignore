@@ -30,3 +30,4 @@ scryer/apps/scryer-web/.ds-sync/node_modules/**/*
 
 design_handoff*
 peer-review-0.16.6-to-0.17.0.md
+.worktrees/

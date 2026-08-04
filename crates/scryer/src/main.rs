@@ -1,6 +1,5 @@
 // async-graphql schema expansion exceeded the default macro recursion depth.
 #![recursion_limit = "256"]
-#![warn(dead_code_pub_in_binary)]
 
 mod backup_routes;
 mod base_path;
@@ -796,7 +795,16 @@ async fn bootstrap_application(
     let encryption_bootstrap = datastore
         .bootstrap_encryption()
         .await
-        .map_err(|e| format!("failed to bootstrap datastore encryption: {e}"))?;
+        .map_err(|e| {
+            let credential_context = desktop_credential_namespace(&data_dir).map_or_else(
+                String::new,
+                |namespace| format!("; Windows Credential Manager namespace: {namespace}"),
+            );
+            format!(
+                "failed to bootstrap datastore encryption for data directory {}{credential_context}: {e}",
+                data_dir.display()
+            )
+        })?;
     if encryption_bootstrap.migrated_indexer_configs > 0 {
         tracing::info!(
             migrated = encryption_bootstrap.migrated_indexer_configs,
@@ -1948,6 +1956,24 @@ fn resolve_data_dir(cli_override: Option<&Path>) -> PathBuf {
     directories::ProjectDirs::from("", "", "scryer")
         .map(|p| p.data_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn desktop_credential_namespace(data_dir: &Path) -> Option<&'static str> {
+    #[cfg(windows)]
+    {
+        let profile_name = data_dir.file_name()?.to_string_lossy();
+        let vendor_name = data_dir.parent()?.file_name()?.to_string_lossy();
+        if profile_name.eq_ignore_ascii_case("Scryer")
+            && vendor_name.eq_ignore_ascii_case("ScryerMedia")
+        {
+            return Some("ScryerMedia.Scryer.Desktop.v1");
+        }
+    }
+
+    #[cfg(not(windows))]
+    let _ = data_dir;
+
+    None
 }
 
 /// Resolve the private native-code cache independently from the persistent

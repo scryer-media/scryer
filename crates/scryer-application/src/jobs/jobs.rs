@@ -392,6 +392,7 @@ struct HousekeepingRunSummary {
     stale_history_records: u32,
     staged_nzb_artifacts_pruned: u32,
     recycled_purged: u32,
+    recycled_pending_reconciled: u32,
     discovery_pruned_runs: u32,
 }
 
@@ -1444,6 +1445,7 @@ impl AppUseCase {
                         stale_history_records: report.stale_history_records,
                         staged_nzb_artifacts_pruned: report.staged_nzb_artifacts_pruned,
                         recycled_purged: report.recycled_purged,
+                        recycled_pending_reconciled: report.recycled_pending_reconciled,
                         discovery_pruned_runs: report.discovery_pruned_runs,
                     })
                     .ok(),
