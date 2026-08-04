@@ -54,6 +54,11 @@ import type {
 import ruleInputContract from "@/lib/contracts/rule-input-contract.json";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { isUserOwnedRuleSet } from "@/lib/utils/rule-sets";
+import {
+  formatTagFilter,
+  parseTagFilterInput,
+  trashLocalePacks,
+} from "@/lib/utils/trash-packs";
 
 type SettingsRulesSectionProps = {
   isEditorOpen: boolean;
@@ -71,6 +76,10 @@ type SettingsRulesSectionProps = {
   copyRuleSet: (record: RuleSetRecord) => void;
   editRuleSet: (record: RuleSetRecord) => void;
   toggleRuleSetEnabled: (record: RuleSetRecord) => Promise<void> | void;
+  saveManagedTagFilter: (
+    record: RuleSetRecord,
+    raw: string,
+  ) => Promise<void> | void;
   deleteRuleSet: (record: RuleSetRecord) => Promise<void> | void;
   validateDraft: () => Promise<void> | void;
   validating: boolean;
@@ -449,6 +458,142 @@ function ManagedBadge({ managedKey }: { managedKey: string }) {
   );
 }
 
+function TrashPackTagFilterField({
+  record,
+  disabled,
+  onSave,
+}: {
+  record: RuleSetRecord;
+  disabled: boolean;
+  onSave: (record: RuleSetRecord, raw: string) => Promise<void> | void;
+}) {
+  const t = useTranslate();
+  const persisted = formatTagFilter(record.managedTagFilter);
+  const [value, setValue] = React.useState(persisted);
+  React.useEffect(() => {
+    setValue(persisted);
+  }, [persisted]);
+  const isDirty =
+    parseTagFilterInput(value).join(",") !==
+    parseTagFilterInput(persisted).join(",");
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Label
+        htmlFor={selectorId("settings-trash-pack-filter", record.id)}
+        className="shrink-0 text-xs text-muted-foreground"
+      >
+        {t("settings.trashPackFilterLabel")}
+      </Label>
+      <Input
+        id={selectorId("settings-trash-pack-filter", record.id)}
+        value={value}
+        placeholder={t("settings.trashPackFilterPlaceholder")}
+        onChange={(event) => setValue(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && isDirty && !disabled) {
+            event.preventDefault();
+            void onSave(record, value);
+          }
+        }}
+        disabled={disabled}
+        className="h-8 w-56 text-xs"
+      />
+      {isDirty ? (
+        <Button
+          id={selectorId("settings-trash-pack-filter-save", record.id)}
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={disabled}
+          onClick={() => void onSave(record, value)}
+        >
+          {t("label.save")}
+        </Button>
+      ) : (
+        <span className="text-[11px] text-muted-foreground">
+          {t("settings.trashPackFilterHelp")}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function TrashLocalePacksCard({
+  ruleSetRecords,
+  mutatingRuleSetId,
+  toggleRuleSetEnabled,
+  saveManagedTagFilter,
+}: {
+  ruleSetRecords: RuleSetRecord[];
+  mutatingRuleSetId: string | null;
+  toggleRuleSetEnabled: (record: RuleSetRecord) => Promise<void> | void;
+  saveManagedTagFilter: (
+    record: RuleSetRecord,
+    raw: string,
+  ) => Promise<void> | void;
+}) {
+  const t = useTranslate();
+  const packs = trashLocalePacks(ruleSetRecords);
+  if (packs.length === 0) return null;
+
+  return (
+    <div id="settings-trash-packs" className="rounded border border-border">
+      <div className="border-b border-border px-3 py-2">
+        <CardTitle className="text-base">
+          {t("settings.trashPacksTitle")}
+        </CardTitle>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {t("settings.trashPacksHelp")}
+        </p>
+      </div>
+      <div className="divide-y divide-border">
+        {packs.map((record) => (
+          <div
+            key={record.id}
+            id={selectorId("settings-trash-pack-row", record.managedKey ?? record.id)}
+            className="space-y-2 px-3 py-2.5"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <span className="font-medium">{record.name}</span>
+                <p className="truncate text-xs text-muted-foreground">
+                  {record.description}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <RenderBooleanIcon
+                  value={record.enabled}
+                  label={`${t("label.enabled")}: ${record.name}`}
+                />
+                <IconButton
+                  id={selectorId(
+                    "settings-trash-pack-toggle",
+                    record.managedKey ?? record.id,
+                  )}
+                  label={
+                    record.enabled ? t("label.disable") : t("label.enable")
+                  }
+                  tone={record.enabled ? "disabled" : "enabled"}
+                  onClick={() => void toggleRuleSetEnabled(record)}
+                  disabled={mutatingRuleSetId === record.id}
+                >
+                  <Power className="h-4 w-4" />
+                </IconButton>
+              </div>
+            </div>
+            <TrashPackTagFilterField
+              record={record}
+              disabled={mutatingRuleSetId === record.id}
+              onSave={saveManagedTagFilter}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function FacetBadges({ facets }: { facets: string[] }) {
   if (facets.length === 0) {
     return (
@@ -767,6 +912,7 @@ export function SettingsRulesSection({
   copyRuleSet,
   editRuleSet,
   toggleRuleSetEnabled,
+  saveManagedTagFilter,
   deleteRuleSet,
   validateDraft,
   validating,
@@ -784,6 +930,12 @@ export function SettingsRulesSection({
       <div className="mx-auto flex w-full max-w-[2176px] flex-col gap-4 xl:flex-row xl:items-start">
         <div className="min-w-0 flex-1">
           <div className="mx-auto w-full max-w-[1280px] space-y-4">
+      <TrashLocalePacksCard
+        ruleSetRecords={ruleSetRecords}
+        mutatingRuleSetId={mutatingRuleSetId}
+        toggleRuleSetEnabled={toggleRuleSetEnabled}
+        saveManagedTagFilter={saveManagedTagFilter}
+      />
       <div className="rounded border border-border">
         <div className="flex items-center justify-between border-b border-border px-3 py-2">
           <CardTitle className="text-base">

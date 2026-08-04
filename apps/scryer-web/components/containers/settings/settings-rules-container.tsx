@@ -6,6 +6,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import type { RuleSetRecord, RuleSetDraft, RuleValidationResult } from "@/lib/types/rule-sets";
 import { copyRuleSetDraft, createRuleSetInput } from "@/lib/utils/rule-sets";
+import { conflictingFrenchPack, parseTagFilterInput } from "@/lib/utils/trash-packs";
 import { ruleSetsQuery } from "@/lib/graphql/queries";
 import {
   createRuleSetMutation,
@@ -259,6 +260,17 @@ export function SettingsRulesContainer() {
 
   const toggleRuleSetEnabled = useCallback(
     async (record: RuleSetRecord) => {
+      // The French locale packs read contradictory score sets, so the backend
+      // refuses to enable a second one; catch it here for a translated message.
+      if (!record.enabled) {
+        const conflict = conflictingFrenchPack(ruleSetRecords, record);
+        if (conflict) {
+          setGlobalStatus(
+            t("settings.trashPackFrenchConflict", { name: conflict.name }),
+          );
+          return;
+        }
+      }
       setMutatingRuleSetId(record.id);
       try {
         const { error } = await client
@@ -272,6 +284,31 @@ export function SettingsRulesContainer() {
             name: record.name,
             state: record.enabled ? t("label.disabled") : t("label.enabled"),
           }),
+        );
+        await refreshRuleSets();
+      } catch (error) {
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      } finally {
+        setMutatingRuleSetId(null);
+      }
+    },
+    [client, refreshRuleSets, ruleSetRecords, setGlobalStatus, t],
+  );
+
+  // Managed packs reject authored-field edits, so the filter update sends only
+  // the id and the normalized tag list.
+  const saveManagedTagFilter = useCallback(
+    async (record: RuleSetRecord, raw: string) => {
+      setMutatingRuleSetId(record.id);
+      try {
+        const { error } = await client
+          .mutation(updateRuleSetMutation, {
+            input: { id: record.id, managedTagFilter: parseTagFilterInput(raw) },
+          })
+          .toPromise();
+        if (error) throw error;
+        setGlobalStatus(
+          t("settings.trashPackFilterSaved", { name: record.name }),
         );
         await refreshRuleSets();
       } catch (error) {
@@ -369,6 +406,7 @@ export function SettingsRulesContainer() {
         copyRuleSet={requestCopyRuleSet}
         editRuleSet={requestEditRuleSet}
         toggleRuleSetEnabled={toggleRuleSetEnabled}
+        saveManagedTagFilter={saveManagedTagFilter}
         deleteRuleSet={deleteRuleSet}
         validateDraft={validateDraft}
         validating={validating}

@@ -3014,6 +3014,7 @@ export const ruleSetsQuery = `query RuleSets {
     appliedFacets
     isManaged
     managedKey
+    managedTagFilter
     createdAt
     updatedAt
   }

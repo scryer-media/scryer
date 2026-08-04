@@ -13,6 +13,7 @@ const managedRule: RuleSetRecord = {
   id: "managed-1",
   name: "Built-in quality guard",
   description: "Prefer reliable releases.",
+  managedTagFilter: null,
   regoSource: "package scryer.rules.managed.quality_guard",
   enabled: false,
   priority: 42,

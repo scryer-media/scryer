@@ -8,6 +8,7 @@ export type RuleSetRecord = {
   appliedFacets: string[];
   isManaged: boolean;
   managedKey: string | null;
+  managedTagFilter: string[] | null;
   createdAt: string;
   updatedAt: string;
 };
