@@ -44,15 +44,17 @@ use scryer_application::{
     start_background_subtitle_poller, start_background_title_hydration_loop,
     start_background_title_image_loop, start_download_queue_poller_with_options,
     start_notification_dispatcher,
-    tracked_downloads::{TrackedDownloadHandle, TrackedDownloadSnapshotIngestHandle},
+    tracked_downloads::{
+        BridgedClientTypesHandle, TrackedDownloadHandle, TrackedDownloadSnapshotIngestHandle,
+    },
 };
 use scryer_infrastructure::{
     BuiltinDownloadClientConnectionTester, DatastoreAssembly, DatastoreConfig,
     DatastoreCustomizationStore, DatastoreEngine, FileSystemLibraryRenamer,
     FileSystemLibraryScanner, FileSystemStagedNzbStore, ImageProxyRuntime, MetadataGatewayClient,
     MigrationMode, MultiIndexerSearchClient, PrioritizedDownloadClientRouter, SettingsStore,
-    SmgEnrollmentConfig, WeaverSubscriptionBridgeClient, resolve_datastore_config_from_env,
-    restore_backup_bundle_to_datastore_path, start_weaver_subscription_bridge, validate_datastore,
+    SmgEnrollmentConfig, resolve_datastore_config_from_env,
+    restore_backup_bundle_to_datastore_path, start_weaver_bridge_supervisor, validate_datastore,
 };
 use scryer_interface::context::{
     AuthRuntimeStateHandle, AuthRuntimeStateSnapshot, RestoreContext, RestoreDatastoreConfig,
@@ -1503,17 +1505,22 @@ async fn bootstrap_application(
             );
         }
     }
-    let weaver_bridge_client = resolve_weaver_subscription_bridge_client(&app_use_case).await;
+    // Bridge coverage is decided at runtime, not at boot. Resolving the
+    // weaver subscription bridge once at startup meant a weaver client added
+    // or promoted after boot (every fresh install) never got realtime
+    // coverage until the next restart — it silently ran on interval polling,
+    // which cannot see weaver's sub-second job lifetimes in the active-only
+    // queue facade. The supervisor starts/stops the bridge as weaver
+    // becomes/stops being the primary enabled client, and the poller reads
+    // this shared handle every tick to stand down (or resume) in lockstep.
+    let bridged_client_types = BridgedClientTypesHandle::new();
     let poller_options = DownloadQueuePollerOptions {
-        excluded_client_types: weaver_bridge_client
-            .as_ref()
-            .map(|_| vec!["weaver".to_string()])
-            .unwrap_or_default(),
+        bridged_client_types: bridged_client_types.clone(),
         ..DownloadQueuePollerOptions::default()
     };
 
     // Run the generic download queue poller for polling-based clients. Weaver
-    // is excluded when its self-contained subscription bridge is active.
+    // is excluded while its self-contained subscription bridge is active.
     tokio::spawn(start_download_queue_poller_with_options(
         app_use_case.clone(),
         shutdown_token.child_token(),
@@ -1521,19 +1528,12 @@ async fn bootstrap_application(
         tracked_download_snapshot_rx,
         poller_options,
     ));
-    // Start the Weaver WebSocket subscription bridge when Weaver is primary.
-    // The bridge feeds realtime Weaver observations into the tracked runtime.
-    if let Some(bridge_client) = weaver_bridge_client {
-        tracing::info!(
-            client_type = "weaver",
-            "using weaver subscription bridge for real-time download queue updates"
-        );
-        tokio::spawn(start_weaver_subscription_bridge(
-            shutdown_token.child_token(),
-            bridge_client,
-            tracked_download_snapshot_ingest,
-        ));
-    }
+    tokio::spawn(start_weaver_bridge_supervisor(
+        shutdown_token.child_token(),
+        app_use_case.clone(),
+        tracked_download_snapshot_ingest,
+        bridged_client_types,
+    ));
     tokio::spawn(start_background_acquisition_poller(
         app_use_case.clone(),
         shutdown_token.child_token(),
@@ -2505,19 +2505,6 @@ pub(crate) fn normalize_env_option_with_legacy<'a>(
     }
 
     None
-}
-
-/// Check if the primary download client is Weaver and build its bridge client.
-async fn resolve_weaver_subscription_bridge_client(
-    app: &AppUseCase,
-) -> Option<WeaverSubscriptionBridgeClient> {
-    let primary = app.primary_enabled_download_client_config().await.ok()??;
-
-    if primary.client_type != "weaver" {
-        return None;
-    }
-
-    WeaverSubscriptionBridgeClient::from_config(&primary).ok()
 }
 
 fn runtime_normalized_constraint(raw: Option<&str>) -> Option<String> {

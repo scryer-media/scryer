@@ -71,7 +71,14 @@ fn parse_poll_secs(raw: Option<&str>, default: Duration) -> Duration {
 #[derive(Clone, Debug)]
 pub struct DownloadQueuePollerOptions {
     pub interval: Duration,
+    /// Client types excluded for the poller's whole lifetime.
     pub excluded_client_types: Vec<String>,
+    /// Client types excluded only while a realtime bridge covers them.
+    ///
+    /// Read fresh on every tick so the bridge supervisor can flip coverage at
+    /// runtime — the fix for bridge eligibility being frozen at boot. An
+    /// unwired handle is empty and changes nothing.
+    pub bridged_client_types: crate::tracked_downloads::BridgedClientTypesHandle,
 }
 
 impl Default for DownloadQueuePollerOptions {
@@ -79,8 +86,23 @@ impl Default for DownloadQueuePollerOptions {
         Self {
             interval: download_queue_poll_interval(),
             excluded_client_types: Vec::new(),
+            bridged_client_types: crate::tracked_downloads::BridgedClientTypesHandle::new(),
         }
     }
+}
+
+/// The static and bridge-covered exclusions, merged and deduplicated.
+fn effective_excluded_client_types(
+    static_excluded: &[String],
+    bridged: &crate::tracked_downloads::BridgedClientTypesHandle,
+) -> Vec<String> {
+    let mut merged = static_excluded.to_vec();
+    for client_type in bridged.snapshot() {
+        if !merged.contains(&client_type) {
+            merged.push(client_type);
+        }
+    }
+    merged
 }
 
 struct TrackedDownloadWorkDrain {
@@ -871,14 +893,15 @@ pub async fn start_download_queue_poller_with_options(
         tokio::sync::mpsc::unbounded_channel::<TrackedDownloadBackgroundWorkResult>();
     let mut last_recent_history_poll: Option<Instant> = None;
 
-    let excluded_client_type_refs = options
-        .excluded_client_types
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>();
+    // Exclusions are re-derived at every use instead of once at startup: the
+    // bridged set changes at runtime as the bridge supervisor starts and stops
+    // realtime coverage for clients.
+    let static_excluded_client_types = options.excluded_client_types.clone();
+    let bridged_client_types = options.bridged_client_types.clone();
     tracing::info!(
         interval_secs = options.interval.as_secs(),
-        excluded_client_types = ?options.excluded_client_types,
+        excluded_client_types = ?static_excluded_client_types,
+        bridged_client_types = ?bridged_client_types.snapshot(),
         "download queue poller started (tracked downloads enabled)"
     );
     let mut interval = tokio::time::interval(options.interval);
@@ -911,6 +934,14 @@ pub async fn start_download_queue_poller_with_options(
             maybe_snapshot = snapshot_rx.recv(), if snapshots_open => {
                 match maybe_snapshot {
                     Some(update) => {
+                        let effective_excluded = effective_excluded_client_types(
+                            &static_excluded_client_types,
+                            &bridged_client_types,
+                        );
+                        let excluded_client_type_refs = effective_excluded
+                            .iter()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>();
                         process_external_tracked_download_snapshot_update(
                             &app,
                             &actor,
@@ -948,12 +979,17 @@ pub async fn start_download_queue_poller_with_options(
                 }
             }
             _ = interval.tick() => {
+                let effective_excluded = effective_excluded_client_types(
+                    &static_excluded_client_types,
+                    &bridged_client_types,
+                );
+                let excluded_client_type_refs = effective_excluded
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>();
                 let include_recent_history = last_recent_history_poll
                     .map(|last| last.elapsed() >= download_queue_recent_history_poll_interval())
                     .unwrap_or(true);
-                if include_recent_history {
-                    last_recent_history_poll = Some(Instant::now());
-                }
                 match app
                     .collect_download_snapshot_items_excluding_client_types(
                         true,
@@ -964,6 +1000,17 @@ pub async fn start_download_queue_poller_with_options(
                     .await
                 {
                     Ok(items) => {
+                        // Consume the recent-history window only on SUCCESS.
+                        // Stamping before the read meant a failed poll — a
+                        // feedback timeout is the canonical case — still
+                        // deferred the next history read by the full interval,
+                        // so exactly when a client was struggling, history (the
+                        // only recovery path for completions missed in the
+                        // queue) was polled least. Completed jobs lost during
+                        // such a window went unrecovered for many minutes.
+                        if include_recent_history {
+                            last_recent_history_poll = Some(Instant::now());
+                        }
                         let completed_download_lookup =
                             crate::completed_download_handler::load_completed_download_lookup_for_items_excluding_client_types(
                                 &app,
@@ -2084,6 +2131,69 @@ fn apply_reconciled_terminal_state(tracked: &mut TrackedDownload, state: Tracked
             tracked.status = TrackedDownloadStatus::Error;
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod bridged_exclusion_tests {
+    use super::effective_excluded_client_types;
+    use crate::tracked_downloads::BridgedClientTypesHandle;
+
+    #[test]
+    fn an_unwired_handle_changes_nothing() {
+        let handle = BridgedClientTypesHandle::new();
+        let static_excluded = vec!["sabnzbd".to_string()];
+        assert_eq!(
+            effective_excluded_client_types(&static_excluded, &handle),
+            vec!["sabnzbd".to_string()]
+        );
+        assert_eq!(
+            effective_excluded_client_types(&[], &handle),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn bridge_coverage_is_visible_on_the_next_read() {
+        // The whole point of the handle: coverage set AFTER the poller starts
+        // must still take effect — the old Vec was frozen at construction.
+        let handle = BridgedClientTypesHandle::new();
+        assert_eq!(
+            effective_excluded_client_types(&[], &handle),
+            Vec::<String>::new()
+        );
+
+        handle.set(vec!["weaver".to_string()]);
+        assert_eq!(
+            effective_excluded_client_types(&[], &handle),
+            vec!["weaver".to_string()]
+        );
+
+        handle.clear();
+        assert_eq!(
+            effective_excluded_client_types(&[], &handle),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn static_and_bridged_exclusions_merge_without_duplicates() {
+        let handle = BridgedClientTypesHandle::new();
+        handle.set(vec!["weaver".to_string(), "sabnzbd".to_string()]);
+        let static_excluded = vec!["sabnzbd".to_string()];
+        assert_eq!(
+            effective_excluded_client_types(&static_excluded, &handle),
+            vec!["sabnzbd".to_string(), "weaver".to_string()]
+        );
+    }
+
+    #[test]
+    fn clones_of_the_handle_share_one_underlying_set() {
+        // The supervisor writes through its clone; the poller reads its own.
+        let writer = BridgedClientTypesHandle::new();
+        let reader = writer.clone();
+        writer.set(vec!["weaver".to_string()]);
+        assert_eq!(reader.snapshot(), vec!["weaver".to_string()]);
     }
 }
 

@@ -809,6 +809,7 @@ async fn tracked_title_assignment_fixture() -> TrackedTitleAssignmentFixture {
         no_video_import_retry: None,
         foreign_import_classification: None,
         skip_reacquire_on_failure: false,
+        snapshot_missing_since: None,
     });
     let submission = DownloadSubmission {
         title_id: title.id.clone(),
@@ -869,6 +870,45 @@ async fn assign_tracked_download_title_serializes_submission_and_runtime_assignm
         .expect("tracked download remains available");
     assert_eq!(tracked.title_id.as_deref(), Some(fixture.title.id.as_str()));
     assert_eq!(tracked.facet.as_deref(), Some("movie"));
+    assert_eq!(
+        tracked.match_type,
+        scryer_domain::TitleMatchType::Submission
+    );
+    // A MOVIE must not stay parked for manual intervention. Manual import can
+    // only target an episode or a series-movie link, so a movie left in
+    // ImportBlocked has no action that can complete it — the user assigns the
+    // title and nothing further is possible. Assignment therefore releases it
+    // back to Downloading so the completed-download check re-runs and
+    // auto-imports it (Submission is high-confidence).
+    assert_eq!(tracked.state, TrackedDownloadState::Downloading);
+}
+
+#[tokio::test]
+async fn assign_tracked_download_title_keeps_series_blocked_for_manual_mapping() {
+    // The counterpart to the movie case above: for a series the mapping
+    // decision (which episode is this file?) is real and still owed by the
+    // user, so assignment must NOT push it back into auto-import.
+    let mut fixture = tracked_title_assignment_fixture().await;
+    fixture.title.facet = scryer_domain::MediaFacet::Series;
+    let actor_snapshot = crate::domain_events::DomainEventActor::from(&fixture.user)
+        .into_download_submission_actor_snapshot();
+
+    crate::integration::workflow::assign_tracked_download_title_command(
+        &fixture.app,
+        &mut fixture.tracker,
+        &HashSet::new(),
+        fixture.tracked_id.clone(),
+        fixture.title.clone(),
+        fixture.submission.clone(),
+        actor_snapshot,
+    )
+    .await
+    .expect("assignment command should succeed");
+
+    let tracked = fixture
+        .tracker
+        .find(&fixture.tracked_id)
+        .expect("tracked download remains available");
     assert_eq!(
         tracked.match_type,
         scryer_domain::TitleMatchType::Submission
@@ -1501,6 +1541,7 @@ async fn external_weaver_snapshot_uses_tracked_runtime_and_provided_completed_ro
             crate::integration::DownloadQueuePollerOptions {
                 interval: Duration::from_secs(60),
                 excluded_client_types: vec!["weaver".to_string()],
+                ..Default::default()
             },
         ),
     );
@@ -1635,6 +1676,7 @@ async fn external_weaver_missing_history_retries_from_tracked_runtime() {
             crate::integration::DownloadQueuePollerOptions {
                 interval: Duration::from_millis(50),
                 excluded_client_types: vec!["weaver".to_string()],
+                ..Default::default()
             },
         ),
     );
@@ -1797,6 +1839,7 @@ async fn external_weaver_aged_out_history_recovers_via_targeted_lookup() {
             crate::integration::DownloadQueuePollerOptions {
                 interval: Duration::from_millis(50),
                 excluded_client_types: vec!["weaver".to_string()],
+                ..Default::default()
             },
         ),
     );
@@ -1965,6 +2008,7 @@ async fn excluded_client_history_reconciliation_imports_missed_completion() {
             crate::integration::DownloadQueuePollerOptions {
                 interval: Duration::from_millis(50),
                 excluded_client_types: vec!["weaver".to_string()],
+                ..Default::default()
             },
         ),
     );
@@ -2070,6 +2114,7 @@ async fn excluded_client_history_reconciliation_skips_stale_completions() {
             crate::integration::DownloadQueuePollerOptions {
                 interval: Duration::from_millis(50),
                 excluded_client_types: vec!["weaver".to_string()],
+                ..Default::default()
             },
         ),
     );
@@ -2133,6 +2178,7 @@ async fn blocked_import_outcome_is_persisted_durably() {
             crate::integration::DownloadQueuePollerOptions {
                 interval: Duration::from_secs(60),
                 excluded_client_types: vec!["weaver".to_string()],
+                ..Default::default()
             },
         ),
     );
@@ -2264,6 +2310,7 @@ async fn external_weaver_idless_missing_history_retries_and_dispatches_without_s
             crate::integration::DownloadQueuePollerOptions {
                 interval: Duration::from_millis(50),
                 excluded_client_types: vec!["weaver".to_string()],
+                ..Default::default()
             },
         ),
     );
@@ -2401,6 +2448,7 @@ async fn external_weaver_path_wait_retries_from_tracked_runtime_without_second_d
             crate::integration::DownloadQueuePollerOptions {
                 interval: Duration::from_millis(50),
                 excluded_client_types: vec!["weaver".to_string()],
+                ..Default::default()
             },
         ),
     );
@@ -2531,6 +2579,7 @@ async fn external_weaver_idless_bad_foreign_item_blocks_after_history_retry() {
             crate::integration::DownloadQueuePollerOptions {
                 interval: Duration::from_millis(50),
                 excluded_client_types: vec!["weaver".to_string()],
+                ..Default::default()
             },
         ),
     );
@@ -2694,6 +2743,7 @@ async fn failed_tracked_cleanup_uses_facet_routing_and_exact_client_id() {
         no_video_import_retry: None,
         foreign_import_classification: None,
         skip_reacquire_on_failure: false,
+        snapshot_missing_since: None,
     };
 
     let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(

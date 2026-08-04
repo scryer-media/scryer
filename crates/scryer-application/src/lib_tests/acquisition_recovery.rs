@@ -446,6 +446,7 @@ async fn tracked_download_failure_reuses_standby_recovery_policy() {
         no_video_import_retry: None,
         foreign_import_classification: None,
         skip_reacquire_on_failure: false,
+        snapshot_missing_since: None,
     };
 
     crate::failed_download_handler::process_failed(&app, &mut tracked_download).await;
@@ -1171,6 +1172,7 @@ async fn tracked_download_failure_prefers_tracked_source_title_for_blocklist_ide
         no_video_import_retry: None,
         foreign_import_classification: None,
         skip_reacquire_on_failure: false,
+        snapshot_missing_since: None,
     };
 
     crate::failed_download_handler::process_failed(&app, &mut tracked_download).await;
@@ -1299,6 +1301,7 @@ async fn parse_matched_foreign_failed_download_does_not_blocklist_or_requeue() {
         no_video_import_retry: None,
         foreign_import_classification: None,
         skip_reacquire_on_failure: true,
+        snapshot_missing_since: None,
     };
 
     crate::failed_download_handler::process_failed(&app, &mut tracked_download).await;
@@ -1533,6 +1536,7 @@ async fn season_pack_failure_processed_twice_only_requeues_once_and_blocklists_o
         no_video_import_retry: None,
         foreign_import_classification: None,
         skip_reacquire_on_failure: false,
+        snapshot_missing_since: None,
     };
 
     crate::failed_download_handler::process_failed(&app, &mut tracked_download).await;

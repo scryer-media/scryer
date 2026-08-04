@@ -113,6 +113,40 @@ const POLL_FALLBACK_THRESHOLD: u32 = 3;
 const POLL_FALLBACK_INTERVAL_SECS: u64 = 2;
 const POLL_FALLBACK_RECENT_ACTIVITY_LIMIT: usize = 100;
 
+/// Interval for the always-on reconciliation poll that runs alongside the
+/// WebSocket subscription (seconds).
+///
+/// The subscription is the bridge's ONLY realtime source, and when it is
+/// active the generic download queue poller excludes Weaver entirely (the
+/// bridge supervisor marks it bridge-covered). A dropped
+/// `ITEM_COMPLETED` — Weaver's replay evict/consume race, or any gap while the
+/// socket looked healthy — therefore used to be unrecoverable: the tracked
+/// download sat at Downloading forever, the import never ran, the wanted item
+/// stayed unfilled, and the acquisition sweep re-grabbed the same release only
+/// for Weaver to reject the re-submission as DUPLICATE_BLOCKED. The 2s HTTP
+/// fallback never engaged because it only starts after consecutive CONNECT
+/// failures — a lossy-but-connected socket kept it off.
+///
+/// This reconcile loop runs for the bridge's whole lifetime and republishes
+/// queue + recent history as a DELTA snapshot (upsert-only, never prunes), so
+/// it cannot fight the live event stream — it only backfills whatever the
+/// stream lost. Override via `SCRYER_WEAVER_BRIDGE_RECONCILE_INTERVAL_SECS`;
+/// `0` disables it.
+const BRIDGE_RECONCILE_INTERVAL_SECS: u64 = 30;
+const BRIDGE_RECONCILE_INTERVAL_ENV: &str = "SCRYER_WEAVER_BRIDGE_RECONCILE_INTERVAL_SECS";
+
+fn bridge_reconcile_interval() -> Option<std::time::Duration> {
+    let secs = std::env::var(BRIDGE_RECONCILE_INTERVAL_ENV)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .unwrap_or(BRIDGE_RECONCILE_INTERVAL_SECS);
+    if secs == 0 {
+        None
+    } else {
+        Some(std::time::Duration::from_secs(secs))
+    }
+}
+
 #[derive(Clone)]
 pub struct WeaverSubscriptionBridgeClient {
     client_id: String,
@@ -196,6 +230,21 @@ pub async fn start_weaver_subscription_bridge(
     let mut last_cursor: Option<String> = None;
     // Token used to stop fallback polling when WS reconnects.
     let mut poll_cancel: Option<CancellationToken> = None;
+
+    // Loss-tolerance reconcile: runs for the bridge's whole lifetime,
+    // independent of WebSocket health, and dies with the bridge token.
+    if let Some(interval_duration) = bridge_reconcile_interval() {
+        info!(
+            interval_secs = interval_duration.as_secs(),
+            "starting weaver reconcile loop (subscription loss tolerance)"
+        );
+        tokio::spawn(run_reconcile_loop(
+            bridge_client.clone(),
+            ingest.clone(),
+            token.child_token(),
+            interval_duration,
+        ));
+    }
 
     loop {
         if token.is_cancelled() {
@@ -298,6 +347,64 @@ async fn run_fallback_poller(
                 }
             }
         }
+    }
+}
+
+/// Always-on loss-tolerance loop: periodically republish Weaver's queue and
+/// recent history as a Delta snapshot so completions whose subscription events
+/// were dropped still reach the tracked runtime. See
+/// [`BRIDGE_RECONCILE_INTERVAL_SECS`] for why this exists.
+async fn run_reconcile_loop(
+    bridge_client: WeaverSubscriptionBridgeClient,
+    ingest: TrackedDownloadSnapshotIngestHandle,
+    token: CancellationToken,
+    interval_duration: std::time::Duration,
+) {
+    let mut interval = tokio::time::interval(interval_duration);
+    // The immediate first tick is welcome here: it closes the boot window in
+    // which jobs submitted before the WebSocket finished its handshake could
+    // complete unobserved.
+    loop {
+        tokio::select! {
+            _ = token.cancelled() => {
+                info!("weaver reconcile loop stopped");
+                return;
+            }
+            _ = interval.tick() => {
+                match collect_weaver_fallback_items(&bridge_client).await {
+                    Ok(items) => {
+                        publish_weaver_reconcile_delta(&bridge_client, &ingest, items).await;
+                    }
+                    Err(error) => {
+                        warn!(error = %error, "weaver reconcile poll failed");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Publish reconcile results as a DELTA: upsert-only, so a poll racing the live
+/// WebSocket stream can only add missed observations, never prune items the
+/// stream just delivered. The authoritative scope stays reserved for the
+/// connect-failure fallback poller, where the stream is known dead.
+async fn publish_weaver_reconcile_delta(
+    bridge_client: &WeaverSubscriptionBridgeClient,
+    ingest: &TrackedDownloadSnapshotIngestHandle,
+    items: Vec<DownloadQueueItem>,
+) {
+    if items.is_empty() {
+        return;
+    }
+    let completed_downloads = load_completed_downloads_for_import(bridge_client, &items).await;
+    let update = TrackedDownloadSnapshotUpdate {
+        scope: TrackedDownloadSnapshotScope::Delta,
+        items,
+        completed_downloads,
+        actor_id: None,
+    };
+    if let Err(error) = ingest.publish(update).await {
+        warn!(error = %error, "weaver: failed to publish reconcile delta snapshot");
     }
 }
 

@@ -4,7 +4,9 @@ import type { Client } from "urql";
 import {
   createDownloadClientMutation,
   testDownloadClientConnectionMutation,
+  updateDownloadClientMutation,
 } from "@/lib/graphql/mutations";
+import { libraryDownloadClientsQuery } from "@/lib/graphql/queries";
 import {
   DEFAULT_DOWNLOAD_CLIENT_DRAFT,
   DEFAULT_PORT_FOR_CLIENT_TYPE,
@@ -167,21 +169,56 @@ export function useDownloadClientSetup({ client }: UseDownloadClientSetupArgs) {
   const saveDownloadClient = useCallback(async () => {
     setDcSaving(true);
     setDcError(null);
+    const name = dcDraft.name.trim();
+    const config = buildDownloadClientConfigValues(
+      dcDraft,
+      selectedDcConfigFields,
+    );
     try {
       const { error } = await client
         .mutation(createDownloadClientMutation, {
           input: {
-            name: dcDraft.name.trim(),
+            name,
             clientType: dcDraft.clientType,
-            config: buildDownloadClientConfigValues(
-              dcDraft,
-              selectedDcConfigFields,
-            ),
+            config,
             isEnabled: true,
           },
         })
         .toPromise();
-      if (error) throw error;
+      if (!error) {
+        setDcSaved(true);
+        return;
+      }
+
+      // download_clients.name carries a UNIQUE index, so re-running this step
+      // — a retry, a double click, or a first attempt whose response was lost
+      // after the row landed — fails with a constraint violation forever after.
+      // The wizard's intent is "a client named X exists with this config", not
+      // "insert a row", so adopt the existing client and update it in place.
+      const existing = await client
+        .query(libraryDownloadClientsQuery, {}, { requestPolicy: "network-only" })
+        .toPromise();
+      const match = (
+        existing.data?.downloadClientConfigs as
+          | Array<{ id: string; name: string }>
+          | undefined
+      )?.find((candidate) => candidate.name?.trim() === name);
+      if (!match) {
+        throw error;
+      }
+
+      const { error: updateError } = await client
+        .mutation(updateDownloadClientMutation, {
+          input: {
+            id: match.id,
+            name,
+            clientType: dcDraft.clientType,
+            config,
+            isEnabled: true,
+          },
+        })
+        .toPromise();
+      if (updateError) throw updateError;
       setDcSaved(true);
     } catch (err) {
       setDcError(err instanceof Error ? err.message : "Failed to save");
@@ -215,8 +252,13 @@ export function useDownloadClientSetup({ client }: UseDownloadClientSetupArgs) {
         setDcTestResult("failed");
         setDcTesting(false);
       }
-    } catch {
+    } catch (err) {
+      // Surface the reason. This catch used to discard the error entirely, so
+      // a failed connection test was indistinguishable from "not clicked yet":
+      // the Next button simply never enabled and the only diagnosis available
+      // was reading the server's container log.
       setDcTestResult("failed");
+      setDcError(err instanceof Error ? err.message : "Connection test failed");
       setDcTesting(false);
     }
   }, [client, dcDraft, saveDownloadClient, selectedDcConfigFields]);

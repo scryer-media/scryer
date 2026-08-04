@@ -4,6 +4,7 @@ mod sabnzbd;
 pub(crate) mod weaver;
 pub(crate) mod weaver_graphql;
 pub mod weaver_subscription;
+pub mod weaver_supervisor;
 
 use std::io::{BufRead, BufReader as StdBufReader, Cursor, Read, Write};
 use std::path::Path;
@@ -27,6 +28,7 @@ pub use router::PrioritizedDownloadClientRouter;
 pub use sabnzbd::SabnzbdDownloadClient;
 pub use weaver::WeaverDownloadClient;
 pub use weaver_subscription::{WeaverSubscriptionBridgeClient, start_weaver_subscription_bridge};
+pub use weaver_supervisor::start_weaver_bridge_supervisor;
 
 const MAX_NZB_BYTES: u64 = 32 * 1024 * 1024;
 const STAGED_NZB_ZSTD_LEVEL: i32 = 3;

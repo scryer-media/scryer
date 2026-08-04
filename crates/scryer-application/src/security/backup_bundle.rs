@@ -424,6 +424,12 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "_sqlx_migrations",
         classification: BackupTableClassification::Ignore,
     },
+    // Legacy: no current migration creates this table, but installs that
+    // upgraded through the pre-0122 schema may still carry it. The entry is
+    // deliberately retained — an `Ignore` entry for an absent table costs
+    // nothing, whereas removing it would make validate_backup_catalog reject
+    // the schema of any install that still has the table, failing every backup
+    // they take. Keep until a migration explicitly DROPs it everywhere.
     BackupTableCatalogEntry {
         table: "subtitle_providers",
         classification: BackupTableClassification::Ignore,
@@ -704,6 +710,22 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     },
     BackupTableCatalogEntry {
         table: "library_scan_unmatched_items",
+        classification: BackupTableClassification::Export,
+    },
+    // A manual-import selection is deliberate user intent — the files a user
+    // picked and the targets they mapped them to — held until the import
+    // executes, so it is backed up like every other download/import lifecycle
+    // table (download_submissions, download_identity_states, imports). Rows
+    // reference a download-client item that may not exist after a restore, but
+    // that is already self-healing: the tracked-download prune calls
+    // delete_manual_import_selections_for_source once the download is observed
+    // to be gone.
+    BackupTableCatalogEntry {
+        table: "manual_import_selection_candidates",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "manual_import_selections",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
@@ -1795,6 +1817,42 @@ mod tests {
                 classification,
                 Some(expected),
                 "{table} should have the intended backup classification"
+            );
+        }
+    }
+
+    #[test]
+    fn backup_table_catalog_exports_manual_import_selection_tables() {
+        // Migration 0151 shipped these tables without catalog entries, which
+        // failed EVERY backup at the catalog-completeness check — the feature
+        // was entirely broken, not merely missing this data.
+        for table in [
+            "manual_import_selections",
+            "manual_import_selection_candidates",
+        ] {
+            let classification = BACKUP_TABLE_CATALOG
+                .iter()
+                .find(|entry| entry.table == table)
+                .map(|entry| entry.classification);
+
+            assert_eq!(
+                classification,
+                Some(BackupTableClassification::Export),
+                "{table} should be exported in logical backups"
+            );
+        }
+    }
+
+    #[test]
+    fn backup_table_catalog_has_no_duplicate_entries() {
+        // A duplicate would let two classifications disagree for one table,
+        // with the winner decided by iteration order.
+        let mut seen = std::collections::BTreeSet::new();
+        for entry in BACKUP_TABLE_CATALOG {
+            assert!(
+                seen.insert(entry.table),
+                "{} appears twice in BACKUP_TABLE_CATALOG",
+                entry.table
             );
         }
     }

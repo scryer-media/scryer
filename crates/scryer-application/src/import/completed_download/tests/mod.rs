@@ -1573,6 +1573,7 @@ fn build_tracked_download(title_id: &str, facet: &str, release_title: &str) -> T
         no_video_import_retry: None,
         foreign_import_classification: None,
         skip_reacquire_on_failure: false,
+        snapshot_missing_since: None,
     }
 }
 

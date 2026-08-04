@@ -226,11 +226,24 @@ const WEAVER_STATUS_IDEMPOTENT_REPLAY: &str = "IDEMPOTENT_REPLAY";
 /// alone turned this into a hard error too; `jobId` is always populated.
 const WEAVER_STATUS_PARKED: &str = "PARKED";
 
+/// Duplicate detection refused the submission outright: an equivalent job
+/// (same article layout) already exists on the Weaver side. Terminal for this
+/// release — retrying or failing over to another client only duplicates the
+/// download.
+const WEAVER_STATUS_BLOCKED: &str = "BLOCKED";
+const WEAVER_ERROR_DUPLICATE_BLOCKED: &str = "DUPLICATE_BLOCKED";
+
 impl SubmissionResultPayload {
     fn status_is(&self, expected: &str) -> bool {
         self.status
             .as_deref()
             .is_some_and(|status| status.trim().eq_ignore_ascii_case(expected))
+    }
+
+    fn error_code_is(&self, expected: &str) -> bool {
+        self.error_code
+            .as_deref()
+            .is_some_and(|code| code.trim().eq_ignore_ascii_case(expected))
     }
 
     /// The queue item id, falling back to `jobId` for statuses that carry a job
@@ -1214,6 +1227,24 @@ impl DownloadClient for WeaverDownloadClient {
                     // job already exists and is returned to us.
                     let replayed = submission.status_is(WEAVER_STATUS_IDEMPOTENT_REPLAY);
                     if !submission.accepted && !replayed {
+                        // A duplicate block is a VERDICT about this release —
+                        // Weaver already holds an equivalent job — not a client
+                        // outage. Mapping it to DownloadSubmitUnavailable made
+                        // the router treat it as retryable-with-failover, which
+                        // in practice meant every acquisition sweep re-submitted
+                        // the same release and got re-blocked: one lost
+                        // completion event turned into a submission storm
+                        // (7 DUPLICATE_BLOCKED rejections from 3 grabs in one
+                        // e2e run). DownloadSubmitRejected stops failover and
+                        // records the attempt as a rejection instead.
+                        if submission.status_is(WEAVER_STATUS_BLOCKED)
+                            || submission.error_code_is(WEAVER_ERROR_DUPLICATE_BLOCKED)
+                        {
+                            return Err(AppError::DownloadSubmitRejected(format!(
+                                "weaver submitNzb blocked the submission as a duplicate ({})",
+                                submission.rejection_detail()
+                            )));
+                        }
                         return Err(AppError::download_submit_unavailable(format!(
                             "weaver submitNzb did not accept the submission ({})",
                             submission.rejection_detail()
@@ -1730,6 +1761,27 @@ mod tests {
         let detail = submission.rejection_detail();
         assert!(detail.contains("PARKED"));
         assert!(detail.contains("semantic duplicate candidate parked"));
+    }
+
+    #[test]
+    fn duplicate_blocked_submission_parses_as_a_rejection_verdict() {
+        // status=BLOCKED / errorCode=DUPLICATE_BLOCKED means Weaver already
+        // holds an equivalent job. The client maps this to
+        // DownloadSubmitRejected (no failover, no per-sweep retry); this pins
+        // the payload shape and the helpers that branch decision rides on.
+        let payload: SubmissionPayload = WeaverDownloadClient::parse_graphql_response(
+            reqwest::StatusCode::OK,
+            r#"{"data":{"submitNzb":{"accepted":false,"status":"BLOCKED","errorCode":"DUPLICATE_BLOCKED","message":"duplicate submission blocked","item":null}}}"#,
+        )
+        .expect("blocked submission should remain valid GraphQL JSON");
+
+        let submission = payload.submit_nzb;
+        assert!(!submission.accepted);
+        assert!(submission.status_is(super::WEAVER_STATUS_BLOCKED));
+        assert!(submission.error_code_is(super::WEAVER_ERROR_DUPLICATE_BLOCKED));
+        let detail = submission.rejection_detail();
+        assert!(detail.contains("BLOCKED"));
+        assert!(detail.contains("duplicate submission blocked"));
     }
 
     #[test]

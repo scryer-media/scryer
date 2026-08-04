@@ -64,6 +64,18 @@ pub struct TrackedDownload {
     pub foreign_import_classification: Option<ForeignDownloadClassification>,
     /// Manual failure actions can record the failure without reacquiring.
     pub skip_reacquire_on_failure: bool,
+    /// When this download first went missing from a pruning snapshot.
+    ///
+    /// A snapshot can be PARTIAL without saying so: the router degrades
+    /// per-client — a feedback read that times out puts that client on an
+    /// exponential backoff (15s doubling to a 120s cap) during which its reads
+    /// are silently skipped — yet the poller still treated every snapshot as
+    /// authoritative and pruned whatever was absent. One transient timeout at
+    /// the wrong moment therefore erased live tracked downloads, and any that
+    /// completed during the blackout were never imported. Absence only counts
+    /// once it has persisted beyond the grace window, which must outlast the
+    /// router's maximum backoff.
+    pub snapshot_missing_since: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -277,6 +289,7 @@ impl TrackedDownloadService {
             no_video_import_retry: None,
             foreign_import_classification: None,
             skip_reacquire_on_failure: false,
+            snapshot_missing_since: None,
         };
 
         Self::resolve_title(app, &mut td).await;
@@ -347,17 +360,34 @@ impl TrackedDownloadService {
     }
 
     /// Mark downloads no longer visible in non-excluded clients as untrackable.
+    /// How long a download may stay missing from pruning snapshots before it is
+    /// actually pruned.
+    ///
+    /// Must OUTLAST the router's maximum feedback backoff (120s): while a
+    /// client is backing off, its reads are skipped and its items are absent
+    /// from every snapshot, so any smaller grace re-creates the erase-on-blip
+    /// bug this exists to fix. The cost of the debounce is that a download
+    /// removed in the client's own UI lingers in Activity for up to this long.
+    pub(crate) const SNAPSHOT_ABSENCE_PRUNE_GRACE_SECS: i64 = 150;
+
     pub fn update_trackable_excluding_client_types(
         &mut self,
         seen_ids: &HashSet<String>,
         excluded_client_types: &[&str],
     ) -> Vec<DownloadSourceIdentity> {
+        let now = Utc::now();
         let mut unavailable_sources = Vec::new();
         for td in self.cache.values_mut() {
             if tracked_client_type_is_excluded(&td.client_type, excluded_client_types) {
                 continue;
             }
-            if td.is_trackable && !seen_ids.contains(&td.id) && !should_preserve_tracking(td.state)
+            if seen_ids.contains(&td.id) {
+                td.snapshot_missing_since = None;
+                continue;
+            }
+            if td.is_trackable
+                && !should_preserve_tracking(td.state)
+                && snapshot_absence_exceeds_grace(td, now)
             {
                 td.is_trackable = false;
                 unavailable_sources.push(DownloadSourceIdentity::new(
@@ -385,12 +415,19 @@ impl TrackedDownloadService {
             return Vec::new();
         };
 
+        let now = Utc::now();
         let mut unavailable_sources = Vec::new();
         for td in self.cache.values_mut() {
-            if tracked_matches_snapshot_scope(td, client_id.as_deref(), client_type)
-                && td.is_trackable
-                && !seen_ids.contains(&td.id)
+            if !tracked_matches_snapshot_scope(td, client_id.as_deref(), client_type) {
+                continue;
+            }
+            if seen_ids.contains(&td.id) {
+                td.snapshot_missing_since = None;
+                continue;
+            }
+            if td.is_trackable
                 && !should_preserve_tracking(td.state)
+                && snapshot_absence_exceeds_grace(td, now)
             {
                 td.is_trackable = false;
                 unavailable_sources.push(DownloadSourceIdentity::new(
@@ -836,6 +873,34 @@ fn should_retry_late_submission_resolution(
         && !download_submission_identity_is_empty(&observed_queue_item_identity(incoming))
 }
 
+/// Whether a manual import could express a target for this title.
+///
+/// Manual import can only map a file to an episode or a series-movie link, and
+/// both belong to series-shaped titles. A movie has neither, so leaving a movie
+/// download parked "for manual intervention" offers the user no action that can
+/// actually complete it.
+fn title_has_mappable_import_targets(title: &Title) -> bool {
+    match title.facet {
+        scryer_domain::MediaFacet::Series | scryer_domain::MediaFacet::Anime => true,
+        scryer_domain::MediaFacet::Movie => false,
+    }
+}
+
+/// Absence debounce for pruning: stamps the first tick an item goes missing
+/// and only reports true once the absence has outlived the grace window. A
+/// sighting (`seen_ids` hit) clears the stamp at the call sites.
+fn snapshot_absence_exceeds_grace(td: &mut TrackedDownload, now: DateTime<Utc>) -> bool {
+    match td.snapshot_missing_since {
+        None => {
+            td.snapshot_missing_since = Some(now);
+            false
+        }
+        Some(since) => {
+            (now - since).num_seconds() >= TrackedDownloadService::SNAPSHOT_ABSENCE_PRUNE_GRACE_SECS
+        }
+    }
+}
+
 pub(crate) async fn assign_title_to_tracked_download(
     app: &AppUseCase,
     td: &mut TrackedDownload,
@@ -851,7 +916,22 @@ pub(crate) async fn assign_title_to_tracked_download(
     // A download that is already blocked for manual intervention should stay
     // manually actionable after title assignment instead of being pushed
     // straight back into auto-import.
-    if td.state == TrackedDownloadState::ImportBlocked {
+    //
+    // EXCEPT when the assigned title has no mappable import targets. Manual
+    // import exists to answer one question — which episode does this file
+    // belong to — and it can only express two targets: an episode, or a
+    // series-movie link (see ManualImportMappingTarget and
+    // manual_import_preview_targets, which returns exactly those two lists).
+    // A plain movie has neither, so "stay manually actionable" strands it:
+    // the user assigns the title and the only remaining action is a manual
+    // import that cannot represent a movie at all.
+    //
+    // Movies were always meant to resolve via assignment instead — Submission
+    // is in the high-confidence set that completed_download_allows_automatic_import
+    // waves through — so fall through to the re-check for them. Series and
+    // anime keep the early return, because for those the mapping decision is
+    // real and still waiting on the user.
+    if td.state == TrackedDownloadState::ImportBlocked && title_has_mappable_import_targets(title) {
         return;
     }
 
@@ -926,6 +1006,50 @@ impl TrackedDownloadSnapshotIngestHandle {
         self.tx.send(update).await.map_err(|_| {
             crate::AppError::Repository("tracked download snapshot ingest unavailable".into())
         })
+    }
+}
+
+/// Client types currently covered by a realtime bridge, shared between the
+/// bridge supervisor (writer) and the download queue poller (reader).
+///
+/// Bridge eligibility used to be resolved once at process startup, so a weaver
+/// client added or promoted after boot never got its subscription bridge and
+/// silently fell back to interval polling until the next restart. The
+/// supervisor now flips coverage at runtime, and the poller consults this
+/// handle every tick instead of a list fixed at construction.
+///
+/// The poller treats these types exactly like its static
+/// `excluded_client_types`: it neither polls nor prunes them (the bridge is
+/// authoritative), but still runs the periodic excluded-client history
+/// reconciliation as a loss-tolerance backstop.
+#[derive(Clone, Debug, Default)]
+pub struct BridgedClientTypesHandle {
+    types: std::sync::Arc<std::sync::RwLock<Vec<String>>>,
+}
+
+impl BridgedClientTypesHandle {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Replace the covered set. The writer is the bridge supervisor.
+    pub fn set(&self, types: Vec<String>) {
+        *self
+            .types
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = types;
+    }
+
+    /// Drop all coverage — generic polling resumes for every client type.
+    pub fn clear(&self) {
+        self.set(Vec::new());
+    }
+
+    pub fn snapshot(&self) -> Vec<String> {
+        self.types
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 }
 
@@ -2377,6 +2501,7 @@ mod tests {
             no_video_import_retry: None,
             foreign_import_classification: None,
             skip_reacquire_on_failure: false,
+            snapshot_missing_since: None,
         }
     }
 
@@ -3155,13 +3280,18 @@ mod tests {
             .expect("tracked download mut");
         assign_title_to_tracked_download(&app, tracked, &title).await;
 
-        assert_eq!(tracked.state, TrackedDownloadState::ImportBlocked);
+        // A MOVIE has no manual-import target (manual import maps files to
+        // episodes or series-movie links only), so keeping it ImportBlocked
+        // after assignment stranded it with no completable action. Assignment
+        // now releases movies back into auto-import: the embedded re-check runs
+        // against the completed download and, with the high-confidence
+        // Submission match, moves it to ImportPending.
+        assert_eq!(tracked.state, TrackedDownloadState::ImportPending);
         assert_eq!(tracked.title_id.as_deref(), Some(title.id.as_str()));
         assert_eq!(tracked.match_type, TitleMatchType::Submission);
-        assert!(!tracked.import_attempted);
 
         crate::completed_download_handler::check(&app, tracked).await;
-        assert_eq!(tracked.state, TrackedDownloadState::ImportBlocked);
+        assert_eq!(tracked.state, TrackedDownloadState::ImportPending);
     }
 
     #[tokio::test]
@@ -3306,13 +3436,17 @@ mod tests {
 
         assign_title_to_tracked_download(&app, tracked, &title).await;
 
-        assert_eq!(tracked.state, TrackedDownloadState::ImportBlocked);
+        // Movie: released from the manual-intervention park (see the
+        // completed-blocked variant above). The client is still Downloading, so
+        // the re-check is a no-op and the download simply resumes normal
+        // tracking until the client reports completion.
+        assert_eq!(tracked.state, TrackedDownloadState::Downloading);
         assert_eq!(tracked.title_id.as_deref(), Some(title.id.as_str()));
         assert_eq!(tracked.match_type, TitleMatchType::Submission);
         assert!(!tracked.import_attempted);
 
         crate::completed_download_handler::check(&app, tracked).await;
-        assert_eq!(tracked.state, TrackedDownloadState::ImportBlocked);
+        assert_eq!(tracked.state, TrackedDownloadState::Downloading);
     }
 
     #[tokio::test]
@@ -3435,6 +3569,7 @@ mod tests {
                     no_video_import_retry: None,
                     foreign_import_classification: None,
                     skip_reacquire_on_failure: false,
+                    snapshot_missing_since: None,
                 },
             );
         }
@@ -3487,17 +3622,83 @@ mod tests {
         tracker.cache.insert(weaver_id.clone(), weaver);
         tracker.cache.insert(nzb_id.clone(), nzb);
 
+        // First absence only STAMPS (absence debounce); prune happens once the
+        // absence outlives the grace window.
         tracker.update_trackable_excluding_client_types(&HashSet::new(), &["weaver"]);
+        assert!(tracker.find(&weaver_id).is_some_and(|td| td.is_trackable));
+        assert!(tracker.find(&nzb_id).is_some_and(|td| td.is_trackable));
 
+        expire_snapshot_absence(&mut tracker, &nzb_id);
+        tracker.update_trackable_excluding_client_types(&HashSet::new(), &["weaver"]);
         assert!(tracker.find(&weaver_id).is_some_and(|td| td.is_trackable));
         if let Some(td) = tracker.find(&nzb_id) {
             assert!(!td.is_trackable);
         }
 
         tracker.update_trackable_excluding_client_types(&HashSet::new(), &[]);
-
+        expire_snapshot_absence(&mut tracker, &weaver_id);
+        tracker.update_trackable_excluding_client_types(&HashSet::new(), &[]);
         if let Some(td) = tracker.find(&weaver_id) {
             assert!(!td.is_trackable);
+        }
+    }
+
+    /// Backdate a tracked download's absence stamp past the prune grace window.
+    fn expire_snapshot_absence(tracker: &mut TrackedDownloadService, id: &str) {
+        if let Some(td) = tracker.cache.get_mut(id) {
+            td.snapshot_missing_since = Some(
+                Utc::now()
+                    - chrono::Duration::seconds(
+                        TrackedDownloadService::SNAPSHOT_ABSENCE_PRUNE_GRACE_SECS + 1,
+                    ),
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_absence_debounce_survives_transient_client_blackouts() {
+        // The router degrades per client: a feedback timeout starts an
+        // exponential backoff during which that client's reads are silently
+        // skipped, so its items are absent from otherwise-successful
+        // snapshots. Pruning on first absence erased live downloads during
+        // such blackouts — anything that completed inside one was never
+        // imported. Absence must persist beyond the grace window to prune,
+        // and one sighting must fully reset the clock.
+        let mut tracker = TrackedDownloadService::new();
+        let td = build_tracked_download("blip-item");
+        let id = td.id.clone();
+        tracker.cache.insert(id.clone(), td);
+
+        // Several consecutive absent snapshots inside the grace window: the
+        // item survives every one of them.
+        for _ in 0..3 {
+            tracker.update_trackable_excluding_client_types(&HashSet::new(), &[]);
+            assert!(tracker.find(&id).is_some_and(|t| t.is_trackable));
+        }
+        assert!(
+            tracker
+                .find(&id)
+                .is_some_and(|t| t.snapshot_missing_since.is_some()),
+            "absence must be stamped"
+        );
+
+        // A sighting clears the stamp entirely.
+        let mut seen = HashSet::new();
+        seen.insert(id.clone());
+        tracker.update_trackable_excluding_client_types(&seen, &[]);
+        assert!(
+            tracker
+                .find(&id)
+                .is_some_and(|t| t.snapshot_missing_since.is_none()),
+            "a sighting must reset the absence clock"
+        );
+
+        // Absence that outlives the grace window prunes.
+        tracker.update_trackable_excluding_client_types(&HashSet::new(), &[]);
+        expire_snapshot_absence(&mut tracker, &id);
+        tracker.update_trackable_excluding_client_types(&HashSet::new(), &[]);
+        if let Some(t) = tracker.find(&id) {
+            assert!(!t.is_trackable);
         }
     }
 
@@ -3513,6 +3714,10 @@ mod tests {
         tracker.cache.insert(weaver_id.clone(), weaver);
         tracker.cache.insert(nzb_id.clone(), nzb);
 
+        // First absence stamps; expiry past the grace window prunes. The
+        // trimmed exclusion must hold across both passes.
+        tracker.update_trackable_excluding_client_types(&HashSet::new(), &[" weaver "]);
+        expire_snapshot_absence(&mut tracker, &nzb_id);
         tracker.update_trackable_excluding_client_types(&HashSet::new(), &[" weaver "]);
 
         assert!(tracker.find(&weaver_id).is_some_and(|td| td.is_trackable));
@@ -3604,6 +3809,7 @@ mod tests {
             no_video_import_retry: None,
             foreign_import_classification: None,
             skip_reacquire_on_failure: false,
+            snapshot_missing_since: None,
         };
 
         crate::failed_download_handler::check(&mut tracked);
@@ -3640,6 +3846,7 @@ mod tests {
             no_video_import_retry: None,
             foreign_import_classification: None,
             skip_reacquire_on_failure: false,
+            snapshot_missing_since: None,
         };
 
         crate::failed_download_handler::check(&mut tracked);
@@ -3718,6 +3925,7 @@ mod tests {
             no_video_import_retry: None,
             foreign_import_classification: None,
             skip_reacquire_on_failure: false,
+            snapshot_missing_since: None,
         };
 
         crate::fail_active_manual_import_for_source(&app, &tracked, "health below critical").await;
@@ -3923,6 +4131,7 @@ mod tests {
             no_video_import_retry: None,
             foreign_import_classification: None,
             skip_reacquire_on_failure: false,
+            snapshot_missing_since: None,
         };
 
         crate::fail_active_manual_import_for_source(&app, &tracked, "health below critical").await;

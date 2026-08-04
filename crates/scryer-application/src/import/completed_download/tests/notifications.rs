@@ -91,6 +91,7 @@ async fn check_emits_manual_interaction_notification_once() {
         no_video_import_retry: None,
         foreign_import_classification: None,
         skip_reacquire_on_failure: false,
+        snapshot_missing_since: None,
     };
 
     check(&app, &mut td).await;

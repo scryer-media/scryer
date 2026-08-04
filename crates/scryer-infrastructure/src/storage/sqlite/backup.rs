@@ -815,10 +815,127 @@ fn quote_identifier(value: &str) -> String {
 mod tests {
     use serde_json::{Map as JsonMap, Value as JsonValue};
 
-    use super::{SqliteForeignKeyViolation, format_foreign_key_violations};
+    use std::collections::BTreeSet;
+
+    use scryer_application::BACKUP_TABLE_CATALOG;
+
+    use super::{
+        SqliteForeignKeyViolation, application_tables, format_foreign_key_violations,
+        validate_backup_catalog,
+    };
     use crate::backup_import_normalization::{
         ImportColumnKind, ImportColumnRule, normalize_import_object_for_target,
     };
+
+    /// Migrate a throwaway SQLite database to head and hand back its pool.
+    ///
+    /// The tempdir must outlive the pool, so it is returned alongside it.
+    async fn migrated_sqlite_pool() -> (sqlx::SqlitePool, tempfile::TempDir) {
+        let temp = tempfile::tempdir().expect("create migration tempdir");
+        let db_path = temp.path().join("catalog-check.db");
+        let services = crate::storage::sqlite::services::SqliteServices::new_with_mode(
+            format!("sqlite://{}", db_path.display()),
+            crate::MigrationMode::Apply,
+        )
+        .await
+        .expect("migrate sqlite schema to head");
+        (services.pool().clone(), temp)
+    }
+
+    /// Every table the migrations create must be classified in the backup
+    /// catalog.
+    ///
+    /// This is the guard that was missing. `validate_backup_catalog` runs only
+    /// when a backup is actually taken, so a migration that adds a table
+    /// without a catalog entry ships green and then fails EVERY backup at
+    /// runtime — the whole feature, not just the new table's data. Migration
+    /// 0151 (`manual_import_selections`,
+    /// `manual_import_selection_candidates`) did exactly that, and it was not
+    /// the first time.
+    ///
+    /// Asserting through the production function rather than reimplementing
+    /// the comparison keeps the test honest: if the runtime rule changes, this
+    /// changes with it. A failure here means the new table needs an entry in
+    /// `BACKUP_TABLE_CATALOG` — see the classification guidance there
+    /// (`Export` for user data, `ResetOnRestore` for regenerable local state,
+    /// `Ignore` for short-lived secrets).
+    #[tokio::test]
+    async fn backup_catalog_classifies_every_migrated_table() {
+        let (pool, _temp) = migrated_sqlite_pool().await;
+
+        if let Err(error) = validate_backup_catalog(&pool).await {
+            panic!(
+                "migrated schema has tables with no BACKUP_TABLE_CATALOG entry, so every backup \
+                 would fail at runtime: {error}"
+            );
+        }
+    }
+
+    /// Catalog entries a fresh migration run legitimately does not produce.
+    ///
+    /// `_sqlx_migrations` is created by the migrator itself rather than by a
+    /// migration. The rest are legacy tables that no current migration creates
+    /// but that upgraded installs may still carry: their entries are retained
+    /// on purpose, because dropping an entry while any deployment still has
+    /// the table would make `validate_backup_catalog` reject that schema and
+    /// fail every backup it takes. Each must be classified `Ignore` — a
+    /// retained entry may not claim to back anything up.
+    const CATALOG_ENTRIES_ABSENT_FROM_A_FRESH_SCHEMA: &[&str] =
+        &["_sqlx_migrations", "subtitle_providers"];
+
+    /// The catalog must not accumulate entries for tables nothing creates.
+    ///
+    /// A stale entry is quieter than a missing one — backups still run — but it
+    /// silently claims coverage that no longer exists and hides the fact that a
+    /// table's data stopped being backed up. Genuinely legacy entries are
+    /// allowed, but only deliberately, via the list above.
+    #[tokio::test]
+    async fn backup_catalog_has_no_undeclared_entries_for_absent_tables() {
+        let (pool, _temp) = migrated_sqlite_pool().await;
+        let actual = application_tables(&pool)
+            .await
+            .expect("read migrated schema tables")
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+
+        let undeclared = BACKUP_TABLE_CATALOG
+            .iter()
+            .map(|entry| entry.table)
+            .filter(|table| !CATALOG_ENTRIES_ABSENT_FROM_A_FRESH_SCHEMA.contains(table))
+            .filter(|table| !actual.contains(*table))
+            .collect::<Vec<_>>();
+
+        assert!(
+            undeclared.is_empty(),
+            "BACKUP_TABLE_CATALOG names tables no migration creates: {}. If a table was dropped, \
+             keep its entry as `Ignore` (upgraded installs may still have it) and add it to \
+             CATALOG_ENTRIES_ABSENT_FROM_A_FRESH_SCHEMA with the reason.",
+            undeclared.join(", ")
+        );
+    }
+
+    /// A retained legacy entry must never claim to back its table up.
+    ///
+    /// `Export` would tell the exporter to read a table that does not exist on
+    /// a fresh install; `ResetOnRestore` would tell the restorer to clear one.
+    /// Only `Ignore` is inert enough to be safe for a table whose presence
+    /// varies by install age.
+    #[tokio::test]
+    async fn retained_legacy_catalog_entries_are_ignored_not_exported() {
+        for table in CATALOG_ENTRIES_ABSENT_FROM_A_FRESH_SCHEMA {
+            let Some(entry) = BACKUP_TABLE_CATALOG
+                .iter()
+                .find(|entry| entry.table == *table)
+            else {
+                panic!("{table} is declared absent-from-fresh-schema but is not in the catalog");
+            };
+            assert_eq!(
+                entry.classification,
+                scryer_application::BackupTableClassification::Ignore,
+                "{table} may exist only on some installs, so it must be Ignore"
+            );
+        }
+    }
 
     #[test]
     fn nullable_foreign_keys_convert_blank_strings_to_null() {
