@@ -291,24 +291,11 @@ pub(crate) async fn resolve_current_manual_import_source(
         client_type,
         download_client_item_id,
     );
-    let submission = app
-        .services
-        .workflow
-        .download_submissions
-        .find_by_client_item_id(&source_identity)
-        .await?
-        .filter(|submission| {
-            !submission.title_id.trim().is_empty()
-                && submission.title_id == title_id
-                && !matches!(&submission.scope, crate::SubmissionScope::Orphan)
-        })
-        .ok_or_else(manual_import_source_unavailable)?;
-
     let title = app
         .services
         .catalog
         .titles
-        .get_by_id(&submission.title_id)
+        .get_by_id(title_id)
         .await?
         .ok_or_else(manual_import_source_unavailable)?;
     app.require_library_permission(
@@ -317,6 +304,19 @@ pub(crate) async fn resolve_current_manual_import_source(
         scryer_domain::LibraryPermission::ResolveImports,
     )
     .await?;
+
+    let submission = app
+        .services
+        .workflow
+        .download_submissions
+        .find_by_client_item_id(&source_identity)
+        .await?
+        .ok_or_else(manual_import_source_unavailable)?;
+    if !matches!(&submission.scope, crate::SubmissionScope::Orphan)
+        && (submission.title_id.trim().is_empty() || submission.title_id != title.id)
+    {
+        return Err(manual_import_source_unavailable());
+    }
 
     let completed = match app
         .resolve_manual_import_source(
@@ -618,15 +618,28 @@ pub struct ManualImportFileMapping {
 enum ManualImportMappingTarget<'a> {
     Episode(&'a str),
     SeriesMovie(&'a str),
+    /// The title itself. A standalone movie has exactly one destination, so
+    /// there is no sub-target to name.
+    Movie,
 }
 
 fn normalize_manual_import_target(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
-fn manual_import_mapping_target(
-    mapping: &ManualImportFileMapping,
-) -> AppResult<ManualImportMappingTarget<'_>> {
+/// Resolve which target a mapping addresses, given the facet of the title the
+/// selection belongs to.
+///
+/// The facet matters because a MOVIE has no sub-target to name: its file maps
+/// to the title. Requiring an `episode_id` or `series_movie_link_id`
+/// unconditionally made movies unimportable through this path — the UI's
+/// one-click action sends neither (there is nothing it could send) and the
+/// request was rejected as invalid, so a completed movie awaiting manual
+/// import had no action that could complete it.
+fn manual_import_mapping_target<'a>(
+    mapping: &'a ManualImportFileMapping,
+    facet: &MediaFacet,
+) -> AppResult<ManualImportMappingTarget<'a>> {
     let episode_id = normalize_manual_import_target(mapping.episode_id.as_deref());
     let series_movie_link_id =
         normalize_manual_import_target(mapping.series_movie_link_id.as_deref());
@@ -636,6 +649,7 @@ fn manual_import_mapping_target(
         (None, Some(series_movie_link_id)) => {
             Ok(ManualImportMappingTarget::SeriesMovie(series_movie_link_id))
         }
+        (None, None) if matches!(facet, MediaFacet::Movie) => Ok(ManualImportMappingTarget::Movie),
         (None, None) => Err(AppError::Validation(
             "manual import mapping requires episode_id or series_movie_link_id".to_string(),
         )),
@@ -648,6 +662,7 @@ fn manual_import_mapping_target(
 
 pub(crate) fn validate_manual_import_candidate_mapping_targets(
     files: &[ManualImportCandidateMapping],
+    facet: &MediaFacet,
 ) -> AppResult<()> {
     if files.is_empty() {
         return Err(AppError::Validation(
@@ -673,7 +688,7 @@ pub(crate) fn validate_manual_import_candidate_mapping_targets(
             series_movie_link_id: mapping.series_movie_link_id.clone(),
             quality: None,
         };
-        manual_import_mapping_target(&target)?;
+        manual_import_mapping_target(&target, facet)?;
     }
     Ok(())
 }
@@ -1294,7 +1309,7 @@ pub async fn execute_manual_import(
             continue;
         }
 
-        let target = match manual_import_mapping_target(mapping) {
+        let target = match manual_import_mapping_target(mapping, &title.facet) {
             Ok(target) => target,
             Err(err) => {
                 results.push(manual_import_file_result(
@@ -1310,6 +1325,67 @@ pub async fn execute_manual_import(
 
         let episode_id = match target {
             ManualImportMappingTarget::Episode(episode_id) => episode_id,
+            ManualImportMappingTarget::Movie => {
+                // Reuse the canonical movie import rather than re-deriving
+                // destination and naming here: a manually chosen file must land
+                // exactly where the automatic path would have put it, or the
+                // same movie ends up named two different ways depending on how
+                // it was imported.
+                // The canonical movie import derives naming and metadata from
+                // the completed download, so it needs one. Every path that can
+                // produce a Movie target today resolves the source download
+                // first; report rather than unwrap, so a future caller without
+                // one gets a message instead of a panic.
+                let Some(completed) = completed else {
+                    results.push(manual_import_file_result(
+                        mapping,
+                        false,
+                        None,
+                        Some(ImportErrorCode::Unknown),
+                        Some(
+                            "manual movie import requires the completed download context"
+                                .to_string(),
+                        ),
+                    ));
+                    continue;
+                };
+                let result = import_movie_download(
+                    app,
+                    actor,
+                    &title,
+                    import_id,
+                    completed,
+                    std::slice::from_ref(&source),
+                    Utc::now(),
+                )
+                .await;
+                let file_result = match result {
+                    Ok(import_result) => {
+                        let success = import_result.dest_path.is_some()
+                            && import_result.error_message.is_none();
+                        imported_any |= success;
+                        manual_import_file_result(
+                            mapping,
+                            success,
+                            import_result.dest_path,
+                            (!success).then_some(ImportErrorCode::Unknown),
+                            import_result.error_message,
+                        )
+                    }
+                    Err(error) => {
+                        let message = error.to_string();
+                        manual_import_file_result(
+                            mapping,
+                            false,
+                            None,
+                            Some(classify_manual_import_error_message(&message)),
+                            Some(message),
+                        )
+                    }
+                };
+                results.push(file_result);
+                continue;
+            }
             ManualImportMappingTarget::SeriesMovie(series_movie_link_id) => {
                 let result = execute_manual_series_movie_import(
                     app,

@@ -745,6 +745,183 @@ async fn find_download_queue_scope_returns_orphan_without_title_lookup() {
     assert!(matches!(scope, Some(SubmissionScope::Orphan)));
 }
 
+#[tokio::test]
+async fn manual_import_source_allows_orphan_submission_but_rejects_managed_reassignment() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let selected_title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Foreign Manual Import Target".to_string(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create selected title");
+    let managed_title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Managed Manual Import Target".to_string(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create managed title");
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+
+    download_submissions
+        .record_submission(DownloadSubmission {
+            title_id: String::new(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "movie".to_string(),
+            download_client_id: Some("weaver-primary".to_string()),
+            download_client_type: "weaver".to_string(),
+            download_client_item_id: "foreign-manual-import".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            source_title: Some("Foreign.Manual.Import.2026.1080p.WEB-DL".to_string()),
+            request_signature: None,
+            scope: SubmissionScope::Orphan,
+        })
+        .await
+        .expect("record foreign submission");
+    download_submissions
+        .record_submission(DownloadSubmission {
+            title_id: managed_title.id.clone(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "movie".to_string(),
+            download_client_id: Some("weaver-primary".to_string()),
+            download_client_type: "weaver".to_string(),
+            download_client_item_id: "managed-manual-import".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            source_title: Some("Managed.Manual.Import.2026.1080p.WEB-DL".to_string()),
+            request_signature: None,
+            scope: SubmissionScope::Title,
+        })
+        .await
+        .expect("record managed submission");
+
+    let mut foreign_completed = completed_download_fixture_item(
+        "foreign-manual-import",
+        &selected_title.id,
+        "Foreign.Manual.Import.2026.1080p.WEB-DL",
+        source_dir.path().to_string_lossy().as_ref(),
+    );
+    foreign_completed.client_id = "weaver-primary".to_string();
+    foreign_completed.client_type = "weaver".to_string();
+    let mut managed_completed = completed_download_fixture_item(
+        "managed-manual-import",
+        &managed_title.id,
+        "Managed.Manual.Import.2026.1080p.WEB-DL",
+        source_dir.path().to_string_lossy().as_ref(),
+    );
+    managed_completed.client_id = "weaver-primary".to_string();
+    managed_completed.client_type = "weaver".to_string();
+    *download_client.completed_downloads.lock().await = vec![foreign_completed, managed_completed];
+
+    let foreign = crate::import::workflow::resolve_current_manual_import_source(
+        &app,
+        &user,
+        "weaver-primary",
+        "weaver",
+        "foreign-manual-import",
+        &selected_title.id,
+    )
+    .await
+    .expect("an authorized target title may resolve a foreign submission");
+    assert_eq!(foreign.download_client_item_id, "foreign-manual-import");
+
+    let catalog_viewer = app
+        .create_user(
+            &user,
+            "foreign_manual_import_catalog_viewer".to_string(),
+            "password123".to_string(),
+            scryer_domain::AppPermissionMask::NONE,
+            vec![scryer_domain::LibraryGrant {
+                user_id: String::new(),
+                library_id: selected_title.library_id.clone(),
+                permissions: scryer_domain::LibraryPermissionMask::VIEW,
+            }],
+        )
+        .await
+        .expect("create view-only user");
+    let catalog_viewer_token = app
+        .issue_access_token(&catalog_viewer)
+        .await
+        .expect("issue view-only user token");
+    let catalog_viewer = app
+        .authenticate_token(&catalog_viewer_token)
+        .await
+        .expect("authenticate view-only user");
+    let permission_error = crate::import::workflow::resolve_current_manual_import_source(
+        &app,
+        &catalog_viewer,
+        "weaver-primary",
+        "weaver",
+        "foreign-manual-import",
+        &selected_title.id,
+    )
+    .await
+    .expect_err("users without ResolveImports cannot select a target title");
+    assert!(
+        permission_error
+            .to_string()
+            .contains("do not have access to this library"),
+        "unexpected permission error: {permission_error}"
+    );
+
+    let reassignment_error = crate::import::workflow::resolve_current_manual_import_source(
+        &app,
+        &user,
+        "weaver-primary",
+        "weaver",
+        "managed-manual-import",
+        &selected_title.id,
+    )
+    .await
+    .expect_err("managed submission must remain title-bound");
+    assert!(
+        reassignment_error
+            .to_string()
+            .contains("download is no longer available for manual import"),
+        "unexpected reassignment error: {reassignment_error}"
+    );
+
+    let unavailable_error = crate::import::workflow::resolve_current_manual_import_source(
+        &app,
+        &user,
+        "weaver-primary",
+        "weaver",
+        "missing-manual-import",
+        &selected_title.id,
+    )
+    .await
+    .expect_err("missing completed source must remain unavailable");
+    assert!(
+        unavailable_error
+            .to_string()
+            .contains("download is no longer available for manual import"),
+        "unexpected unavailable-source error: {unavailable_error}"
+    );
+}
+
 struct TrackedTitleAssignmentFixture {
     app: AppUseCase,
     user: User,
@@ -2279,6 +2456,10 @@ async fn blocked_import_outcome_is_persisted_durably() {
     let tracked_id = crate::tracked_downloads::tracked_download_id_for_item(&item);
 
     let source_dir = tempfile::tempdir().expect("source tempdir");
+    // A non-Scryer-origin download whose directory holds no video is
+    // classified NoImportableVideo and parked at Downloading, so it never
+    // reaches the manual-review block this test waits for.
+    std::fs::write(source_dir.path().join("fixture.mkv"), b"video").expect("write fixture video");
     let mut completed = completed_download_fixture_item(
         item_id,
         "",
@@ -2715,6 +2896,10 @@ async fn external_weaver_idless_bad_foreign_item_blocks_after_history_retry() {
     .expect("unsafe idless item should wait for history first");
 
     let source_dir = tempfile::tempdir().expect("source tempdir");
+    // A non-Scryer-origin download whose directory holds no video is
+    // classified NoImportableVideo and parked at Downloading, so it never
+    // reaches the manual-review block this test waits for.
+    std::fs::write(source_dir.path().join("fixture.mkv"), b"video").expect("write fixture video");
     let mut completed = completed_download_fixture_item(
         item_id,
         "",
@@ -2724,7 +2909,15 @@ async fn external_weaver_idless_bad_foreign_item_blocks_after_history_retry() {
     completed.client_id = config.id.clone();
     completed.client_type = "weaver".to_string();
     completed.download_id = None;
-    completed.category = Some("foreign".to_string());
+    // No category, deliberately. This test is about the ID-LESS safety path
+    // ("unsafe idless item should revalidate to manual block"), and the item is
+    // still external — is_scryer_origin is false and no DownloadId links it to
+    // a Scryer submission. A literal "foreign" category would instead trip the
+    // category gate, which hides the download as another app's work and returns
+    // before the ID-less revalidation ever runs, so the assertion below could
+    // never be reached. Blank stays eligible by contract, leaving the safety
+    // check as the thing under test.
+    completed.category = None;
     completed.parameters.clear();
     *download_client.recent_completed_downloads.lock().await = Some(vec![completed]);
 

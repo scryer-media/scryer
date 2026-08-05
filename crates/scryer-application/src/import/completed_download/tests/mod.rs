@@ -1355,8 +1355,24 @@ fn build_app_with_download_client_configs_submissions_and_settings(
             access_ttl_seconds: 3600,
             jwt_signing_salt: "test-salt".to_string(),
         },
-        Arc::new(FacetRegistry::new()),
+        Arc::new(test_facet_registry()),
     )
+}
+
+/// A facet registry populated the way production populates it.
+///
+/// An EMPTY registry makes `derive_download_category_for_ownership` fall through
+/// to its `"other"` fallback for every facet, so the owned-category snapshot
+/// ends up as `{"other"}` — and a download carrying a perfectly ordinary
+/// `movie` category looks like a category Scryer never configured, is
+/// classified ForeignCategory, and never reaches the checks these tests are
+/// actually about.
+fn test_facet_registry() -> FacetRegistry {
+    let mut registry = FacetRegistry::new();
+    registry.register(Arc::new(crate::MovieFacetHandler));
+    registry.register(Arc::new(crate::SeriesFacetHandler::new(MediaFacet::Series)));
+    registry.register(Arc::new(crate::SeriesFacetHandler::new(MediaFacet::Anime)));
+    registry
 }
 
 fn build_title(id: &str, name: &str, facet: MediaFacet) -> Title {
@@ -1638,6 +1654,16 @@ async fn run_category_gate_check(
     }
 
     let temp_dir = tempfile::tempdir().expect("temp dir");
+    // These cases exercise the CATEGORY gate, so the download must otherwise be
+    // importable. An empty directory is not: a non-Scryer-origin download with
+    // no video is classified NoImportableVideo and parked, which masked the
+    // category outcome under an unrelated one. Tests that mean to exercise the
+    // no-video path build their own fixture without this file.
+    std::fs::write(
+        temp_dir.path().join("Paper.Lantern.2012.1080p.WEB-DL.mkv"),
+        b"video",
+    )
+    .expect("write fixture video");
     let completed = build_completed_download(
         "Paper.Lantern.2012.1080p.WEB-DL",
         temp_dir.path().to_string_lossy().as_ref(),
@@ -1652,7 +1678,25 @@ async fn run_category_gate_check(
         vec![],
         TestAppRepositories {
             download_client,
-            download_client_configs: Arc::new(NullDownloadClientConfigRepository),
+            // The category gate reads ownership from CONFIGURED clients; with a
+            // null config repo the ownership snapshot never exists and the gate
+            // silently never runs, so these cases were asserting against a gate
+            // that was switched off.
+            download_client_configs: Arc::new(TestDownloadClientConfigRepo {
+                configs: vec![DownloadClientConfig {
+                    id: "client-1".to_string(),
+                    name: "Test NZBGet".to_string(),
+                    client_type: "nzbget".to_string(),
+                    config_json: "{}".to_string(),
+                    is_enabled: true,
+                    status: scryer_domain::DownloadClientStatus::Healthy,
+                    last_error: None,
+                    last_seen_at: None,
+                    client_priority: 0,
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                }],
+            }),
             download_submissions: Arc::new(
                 crate::null_repositories::NullDownloadSubmissionRepository,
             ),

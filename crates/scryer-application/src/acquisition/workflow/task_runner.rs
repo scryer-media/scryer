@@ -1039,14 +1039,39 @@ async fn process_single_target(
     let mut had_quality_allowed_candidate = false;
     let mut skipped_for_failed = false;
     let mut skipped_for_title_mismatch = false;
-    // Candidates iterate best-first, so the first `ambiguous_identity` rejection
-    // is the scope's best ambiguous candidate — the only one worth parking for
-    // review this cycle (Pillar A3).
-    let mut parked_ambiguous_identity = false;
-    let mut grab_attempts: usize = 0;
     // Track source kinds where ALL download clients failed.  Avoids hammering
     // dead clients with more candidates of the same protocol.
     let mut failed_source_kinds: Vec<DownloadSourceKind> = Vec::new();
+    // Park the best ambiguous candidate before a higher-ranked eligible release
+    // can return from the loop. Otherwise the pending-review side effect depends
+    // on incidental candidate ordering.
+    let mut parked_ambiguous_identity = false;
+    if let Some(candidate) = results.iter().find(|candidate| {
+        candidate
+            .quality_profile_decision
+            .as_ref()
+            .is_some_and(|decision| decision.allowed)
+            && matches!(
+                effective_auto_decision_code(candidate, &failed_source_kinds, &db_blocklist),
+                ReleaseAutoDecisionCode::AmbiguousIdentity
+            )
+    }) {
+        parked_ambiguous_identity = true;
+        let candidate_score = candidate
+            .quality_profile_decision
+            .as_ref()
+            .map(|decision| decision.preference_score)
+            .unwrap_or_default();
+        app.park_pending_release_for_review(
+            item,
+            &title,
+            candidate,
+            candidate_score,
+            serialize_decision_explanation(candidate),
+        )
+        .await;
+    }
+    let mut grab_attempts: usize = 0;
 
     for (candidate_index, candidate) in results.iter().enumerate() {
         let is_allowed = candidate

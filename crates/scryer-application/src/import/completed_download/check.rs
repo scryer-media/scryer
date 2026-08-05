@@ -298,10 +298,18 @@ async fn classify_foreign_completed_download(
             .or(td.client_item.category.as_deref()),
     ) && !td.client_id.trim().is_empty()
     {
+        // Only a category Scryer has never configured ANYWHERE marks a download
+        // as someone else's. A category that merely fails to match this
+        // particular client — the user moved the download, or two clients share
+        // a category set — is still Scryer's own work, and hiding it from
+        // activity because of a per-client mismatch made the user's download
+        // disappear with no trace. A blank category never reaches here at all
+        // (`normalized_download_category` filters it), so blank stays eligible
+        // too.
         if app
             .owned_download_client_categories_snapshot()
             .await
-            .is_some_and(|snapshot| !snapshot.owns_category(&td.client_id, observed_category))
+            .is_some_and(|snapshot| !snapshot.knows_category(observed_category))
         {
             return Some(ForeignDownloadClassification::ForeignCategory);
         }
@@ -475,7 +483,16 @@ async fn completed_download_allows_automatic_import(
         .effective_download_client_category_for_title(&title, &td.client_id)
         .await
     {
-        Ok(Some(expected_category)) => observed_category == expected_category.trim(),
+        // Case-insensitive for the same reason as the ownership snapshot: a
+        // download client canonicalizes category names to ITS spelling and
+        // echoes that back, so `movies` configured here comes back as NZBGet's
+        // `Movies`. This gate and `knows_category` are documented as having to
+        // agree about what counts as Scryer's own work, so they must normalize
+        // identically — fixing only one would silently split them.
+        Ok(Some(expected_category)) => {
+            crate::services::normalize_owned_download_category(observed_category)
+                == crate::services::normalize_owned_download_category(&expected_category)
+        }
         Ok(None) => false,
         Err(error) => {
             tracing::warn!(

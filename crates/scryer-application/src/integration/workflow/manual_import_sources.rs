@@ -135,7 +135,6 @@ impl AppUseCase {
         selection_id: String,
         mappings: Vec<crate::ManualImportCandidateMapping>,
     ) -> AppResult<String> {
-        crate::import_workflow::validate_manual_import_candidate_mapping_targets(&mappings)?;
         let selection = self
             .services
             .workflow
@@ -147,6 +146,23 @@ impl AppUseCase {
                     "manual import selection is unavailable; reopen the import dialog".to_string(),
                 )
             })?;
+        // Validate AFTER loading the selection: whether a mapping needs an
+        // explicit target depends on the title's facet (a movie has no
+        // sub-target to name), and the facet is only knowable once the
+        // selection identifies the title.
+        let selection_title = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(&selection.title_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::Validation("manual import selection title is unavailable".to_string())
+            })?;
+        crate::import_workflow::validate_manual_import_candidate_mapping_targets(
+            &mappings,
+            &selection_title.facet,
+        )?;
         let source_identity = selection.source_identity.clone();
         let client_id = source_identity
             .client_id

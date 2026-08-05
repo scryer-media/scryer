@@ -1056,7 +1056,9 @@ impl AppUseCase {
     ) -> AppResult<crate::services::DownloadClientCategoryOwnershipSnapshot> {
         let mut default_categories = std::collections::HashSet::new();
         for facet in [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime] {
-            default_categories.insert(self.derive_download_category_for_ownership(&facet).await?);
+            default_categories.insert(crate::services::normalize_owned_download_category(
+                &self.derive_download_category_for_ownership(&facet).await?,
+            ));
         }
 
         let clients = self
@@ -1098,14 +1100,20 @@ impl AppUseCase {
                 .libraries
                 .list(Some(facet.clone()))
                 .await?;
-            if libraries.is_empty() {
-                if let Some(category) = self
-                    .effective_owned_download_client_category_for_scope(None, &facet, client_id)
-                    .await?
-                {
-                    categories.insert(category);
-                }
-                continue;
+
+            // Always take the facet-scope category, libraries or not. A
+            // library-scoped category SHADOWS the facet one for deciding where
+            // new grabs go, but both are categories the user configured, and
+            // this set answers the broader question "is this Scryer's work at
+            // all". Collecting only the winning scope meant a download tagged
+            // with the shadowed facet category looked foreign and was hidden
+            // outright, instead of reaching the auto-import gate that can
+            // correctly block it as not-the-effective-category.
+            if let Some(category) = self
+                .effective_owned_download_client_category_for_scope(None, &facet, client_id)
+                .await?
+            {
+                categories.insert(crate::services::normalize_owned_download_category(&category));
             }
 
             for library in libraries {
@@ -1117,7 +1125,7 @@ impl AppUseCase {
                     )
                     .await?
                 {
-                    categories.insert(category);
+                    categories.insert(crate::services::normalize_owned_download_category(&category));
                 }
             }
         }

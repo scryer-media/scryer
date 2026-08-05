@@ -162,6 +162,14 @@ async fn orphan_submission_with_blank_category_remains_eligible() {
     let settings = Arc::new(TestSettingsRepo::default());
     set_scoped_default_category(&settings, "movie", "movie").await;
     let temp_dir = tempfile::tempdir().expect("temp dir");
+    // Must be importable: a non-Scryer-origin download whose directory holds no
+    // video is classified NoImportableVideo and parked, which masks the
+    // category outcome this test is about.
+    std::fs::write(
+        temp_dir.path().join("Paper.Lantern.2012.1080p.WEB-DL.mkv"),
+        b"video",
+    )
+    .expect("write fixture video");
     let completed = build_completed_download(
         "Paper.Lantern.2012.1080p.WEB-DL",
         temp_dir.path().to_string_lossy().as_ref(),
@@ -404,6 +412,14 @@ async fn confirmed_completed_downloads_bypass_category_gate() {
 #[tokio::test]
 async fn blank_category_can_enter_normal_import_flow() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
+    // Must be importable: a non-Scryer-origin download whose directory holds no
+    // video is classified NoImportableVideo and parked, which masks the
+    // category outcome this test is about.
+    std::fs::write(
+        temp_dir.path().join("Paper.Lantern.2012.1080p.WEB-DL.mkv"),
+        b"video",
+    )
+    .expect("write fixture video");
     let completed = build_completed_download(
         "Paper.Lantern.2012.1080p.WEB-DL",
         temp_dir.path().to_string_lossy().as_ref(),

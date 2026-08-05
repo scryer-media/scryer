@@ -3159,6 +3159,14 @@ mod tests {
             .path()
             .join("RAVENCOURT.The.Last.Regent.S01E18.1080p.WEB-DL");
         std::fs::create_dir_all(&completed_dir).expect("create completed download dir");
+        // The directory alone is not importable: a non-Scryer-origin download
+        // with no video is classified NoImportableVideo and parked at
+        // Downloading, which masks the title-parse outcome under test.
+        std::fs::write(
+            completed_dir.join("RAVENCOURT.The.Last.Regent.S01E18.1080p.WEB-DL.mkv"),
+            b"video",
+        )
+        .expect("write fixture video");
         let download_client = Arc::new(TestDownloadClient {
             completed_downloads: Arc::new(Mutex::new(vec![build_completed_download(
                 "weaver",

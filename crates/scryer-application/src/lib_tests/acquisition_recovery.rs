@@ -6211,10 +6211,11 @@ async fn list_release_decisions_offset_paginates_within_title() {
 
 // ── Pillar A3: ambiguous-identity parking (NeedsReview) ──────────────────────
 
-/// Returns one bare, quality-allowed release for every search — the incident
-/// shape: a name that fits both colliding library titles equally well.
+/// Returns quality-allowed releases for every search. The fixture can place an
+/// unambiguous release ahead of the bare ambiguous release to cover the ordering
+/// regression without changing the indexer's configured score.
 struct AmbiguousIdentityIndexerClient {
-    release_title: String,
+    release_titles: Vec<String>,
 }
 
 #[async_trait]
@@ -6236,45 +6237,53 @@ impl IndexerClient for AmbiguousIdentityIndexerClient {
         _learning_context: Option<crate::IndexerSearchLearningContext>,
         _cancel_token: tokio_util::sync::CancellationToken,
     ) -> AppResult<IndexerSearchResponse> {
-        let release_slug = self.release_title.replace(' ', ".");
         Ok(IndexerSearchResponse {
             indexer_outcomes: Vec::new(),
-            results: vec![IndexerSearchResult {
-                indexer_id: None,
-                source: "nzbgeek".into(),
-                title: self.release_title.clone(),
-                link: Some(format!("https://example.invalid/info/{release_slug}")),
-                download_url: Some(format!(
-                    "https://example.invalid/download/{release_slug}.nzb"
-                )),
-                source_kind: Some(DownloadSourceKind::NzbUrl),
-                size_bytes: Some(1_000),
-                published_at: Some("1970-01-01T00:00:00Z".into()),
-                thumbs_up: None,
-                thumbs_down: None,
-                indexer_languages: None,
-                indexer_subtitles: None,
-                indexer_grabs: None,
-                password_hint: None,
-                parsed_release_metadata: Some(crate::parse_release_metadata(&self.release_title)),
-                quality_profile_decision: Some(crate::quality::profile::QualityProfileDecision {
-                    release_score: 100,
-                    scoring_log: Vec::new(),
-                    allowed: true,
-                    block_codes: Vec::new(),
-                    preference_score: 100,
-                }),
-                extra: Default::default(),
-                response_attributes: Default::default(),
-                guid: Some(format!("guid-{release_slug}")),
-                info_url: Some(format!("https://example.invalid/info/{release_slug}")),
-                provenance: None,
-                auto_eligible: None,
-                auto_decision_code: None,
-                auto_decision_summary: None,
-                candidate_token: None,
-                queue_scope: None,
-            }],
+            results: self
+                .release_titles
+                .iter()
+                .map(|release_title| {
+                    let release_slug = release_title.replace(' ', ".");
+                    IndexerSearchResult {
+                        indexer_id: None,
+                        source: "nzbgeek".into(),
+                        title: release_title.clone(),
+                        link: Some(format!("https://example.invalid/info/{release_slug}")),
+                        download_url: Some(format!(
+                            "https://example.invalid/download/{release_slug}.nzb"
+                        )),
+                        source_kind: Some(DownloadSourceKind::NzbUrl),
+                        size_bytes: Some(1_000_000_000),
+                        published_at: Some("1970-01-01T00:00:00Z".into()),
+                        thumbs_up: None,
+                        thumbs_down: None,
+                        indexer_languages: None,
+                        indexer_subtitles: None,
+                        indexer_grabs: None,
+                        password_hint: None,
+                        parsed_release_metadata: Some(crate::parse_release_metadata(release_title)),
+                        quality_profile_decision: Some(
+                            crate::quality::profile::QualityProfileDecision {
+                                release_score: 100,
+                                scoring_log: Vec::new(),
+                                allowed: true,
+                                block_codes: Vec::new(),
+                                preference_score: 100,
+                            },
+                        ),
+                        extra: Default::default(),
+                        response_attributes: Default::default(),
+                        guid: Some(format!("guid-{release_slug}")),
+                        info_url: Some(format!("https://example.invalid/info/{release_slug}")),
+                        provenance: None,
+                        auto_eligible: None,
+                        auto_decision_code: None,
+                        auto_decision_summary: None,
+                        candidate_token: None,
+                        queue_scope: None,
+                    }
+                })
+                .collect(),
             api_current: None,
             api_max: None,
             grab_current: None,
@@ -6295,12 +6304,40 @@ async fn ambiguous_identity_fixture() -> (
     Arc<MockReleaseAttemptRepo>,
     Arc<StubDownloadClient>,
 ) {
+    let (app, user, title, wanted_id, pending_releases, release_attempts, download_client, _) =
+        ambiguous_identity_fixture_with_releases(&["One.Piece.1080p.WEB-DL.x264-GRP"]).await;
+    (
+        app,
+        user,
+        title,
+        wanted_id,
+        pending_releases,
+        release_attempts,
+        download_client,
+    )
+}
+
+async fn ambiguous_identity_fixture_with_releases(
+    release_titles: &[&str],
+) -> (
+    AppUseCase,
+    User,
+    scryer_domain::Title,
+    String,
+    Arc<TrackingPendingReleaseRepo>,
+    Arc<MockReleaseAttemptRepo>,
+    Arc<StubDownloadClient>,
+    Arc<TrackingAcquisitionScopeStateRepo>,
+) {
     let download_client = Arc::new(StubDownloadClient::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
     let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
     let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
     let indexer_client: Arc<dyn IndexerClient> = Arc::new(AmbiguousIdentityIndexerClient {
-        release_title: "One.Piece.1080p.WEB-DL.x264-GRP".to_string(),
+        release_titles: release_titles
+            .iter()
+            .map(|title| (*title).to_string())
+            .collect(),
     });
     let (app, user, release_attempts) =
         bootstrap_with_acquisition_tracking_and_indexer_and_release_attempts(
@@ -6339,6 +6376,7 @@ async fn ambiguous_identity_fixture() -> (
         pending_releases,
         release_attempts,
         download_client,
+        wanted_items,
     )
 }
 
@@ -6380,6 +6418,111 @@ async fn convergence_cycle_parks_ambiguous_best_candidate_for_review() {
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn convergence_cycle_parks_ambiguous_candidate_without_skipping_eligible_release() {
+    let eligible = "One.Piece.2023.720p.WEB-DL.AV1.AAC2.0-NTb";
+    let ambiguous = "One.Piece.1080p.WEB-DL.x264-GRP";
+
+    for release_titles in [[eligible, ambiguous], [ambiguous, eligible]] {
+        let (
+            app,
+            user,
+            title,
+            wanted_id,
+            pending_releases,
+            _release_attempts,
+            download_client,
+            wanted_items,
+        ) = ambiguous_identity_fixture_with_releases(&release_titles).await;
+        app.create_download_client_config(
+            &user,
+            NewDownloadClientConfig {
+                name: "NZBGet".to_string(),
+                client_type: "nzbget".to_string(),
+                config_json: "{}".to_string(),
+                client_priority: 1,
+                is_enabled: true,
+            },
+        )
+        .await
+        .expect("create download client config");
+
+        app.run_convergence_cycle_once().await;
+
+        let parked = pending_releases
+            .list_pending_releases_for_title(&title.id)
+            .await
+            .expect("list pending releases for title");
+        assert_eq!(parked.len(), 1, "the bare release is still reviewable");
+        assert_eq!(parked[0].status, PendingReleaseStatus::NeedsReview);
+        assert_eq!(parked[0].wanted_item_id, wanted_id);
+        assert_eq!(parked[0].release_title, ambiguous);
+        let decisions = wanted_items.release_decisions.lock().await;
+        let decision_codes = decisions
+            .iter()
+            .map(|decision| format!("{}:{}", decision.release_title, decision.decision_code))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            decision_codes,
+            [format!("{eligible}:eligible")],
+            "the eligible candidate must remain eligible"
+        );
+        drop(decisions);
+        assert_eq!(
+            download_client
+                .submitted_release_titles
+                .lock()
+                .await
+                .as_slice(),
+            [eligible],
+            "the eligible release still queues"
+        );
+    }
+}
+
+#[tokio::test]
+async fn queue_best_release_parks_ambiguous_candidate_while_queuing_eligible_release() {
+    let eligible = "One.Piece.2023.720p.WEB-DL.AV1.AAC2.0-NTb";
+    let ambiguous = "One.Piece.1080p.WEB-DL.x264-GRP";
+
+    for release_titles in [[eligible, ambiguous], [ambiguous, eligible]] {
+        let (app, user, title, wanted_id, pending_releases, _release_attempts, download_client, _) =
+            ambiguous_identity_fixture_with_releases(&release_titles).await;
+
+        let outcome = app
+            .queue_best_release(
+                &user,
+                &title.id,
+                SubmissionScope::Title,
+                SubmissionConflictPolicy::Abort,
+            )
+            .await
+            .expect("queue best release");
+        let QueueDownloadOutcome::Queued(queued) = outcome else {
+            panic!("eligible release should queue without a conflict");
+        };
+        assert_eq!(queued.job_id, format!("job-for-{}", title.id));
+
+        let parked = pending_releases
+            .list_pending_releases_for_title(&title.id)
+            .await
+            .expect("list pending releases for title");
+        assert_eq!(parked.len(), 1, "the ambiguous release is parked once");
+        assert_eq!(parked[0].status, PendingReleaseStatus::NeedsReview);
+        assert_eq!(parked[0].wanted_item_id, wanted_id);
+        assert_eq!(parked[0].release_title, ambiguous);
+        assert_eq!(
+            download_client
+                .submitted_release_titles
+                .lock()
+                .await
+                .as_slice(),
+            ["One Piece"],
+            "the eligible candidate remains the queued release"
+        );
+    }
 }
 
 #[tokio::test]

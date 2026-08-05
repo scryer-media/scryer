@@ -1016,12 +1016,46 @@ pub(crate) struct DownloadClientCategoryOwnershipSnapshot {
     pub(crate) categories_by_client: HashMap<String, HashSet<String>>,
 }
 
+/// Fold a download-client category to its comparison form.
+///
+/// Download clients treat category names case-insensitively and echo back their
+/// OWN canonical spelling: configure Scryer with `movies` and NZBGet — whose
+/// `Category1.Name` is `Movies` — accepts the grab, files it under `Movies`,
+/// and reports `Movies` in its history. Comparing those raw made Scryer's own
+/// download look like it carried a category Scryer had never configured, so it
+/// was classified foreign and filtered out of the tracked snapshot entirely:
+/// never imported, never shown, and re-grabbed minutes later by the RSS sweep
+/// because the wanted item was still unfilled.
+pub(crate) fn normalize_owned_download_category(category: &str) -> String {
+    category.trim().to_ascii_lowercase()
+}
+
 impl DownloadClientCategoryOwnershipSnapshot {
     pub(crate) fn owns_category(&self, client_id: &str, category: &str) -> bool {
+        let category = normalize_owned_download_category(category);
         self.categories_by_client
             .get(client_id)
             .unwrap_or(&self.default_categories)
-            .contains(category)
+            .contains(&category)
+    }
+
+    /// Whether Scryer configured this category ANYWHERE — for any client, or as
+    /// a default.
+    ///
+    /// Distinct from [`Self::owns_category`], which asks the narrower question
+    /// "is this category assigned to THIS client". Both questions are useful,
+    /// but only this one answers "did this download come from something Scryer
+    /// set up". Users routinely move a download between clients, or point two
+    /// clients at one category set, so a category that fails the per-client
+    /// test is very often still Scryer's own work — treating that as foreign
+    /// hides the user's download from their own activity view.
+    pub(crate) fn knows_category(&self, category: &str) -> bool {
+        let category = normalize_owned_download_category(category);
+        self.default_categories.contains(&category)
+            || self
+                .categories_by_client
+                .values()
+                .any(|categories| categories.contains(&category))
     }
 }
 
@@ -3489,6 +3523,99 @@ fn probe_config_io_performance(config_dir: &Path) -> (RuntimePerformanceClass, O
     let elapsed = start.elapsed();
     let elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
     (classify_config_io_elapsed(elapsed), Some(elapsed_ms))
+}
+
+#[cfg(test)]
+mod category_ownership_tests {
+    use super::{DownloadClientCategoryOwnershipSnapshot, normalize_owned_download_category};
+    use std::collections::{HashMap, HashSet};
+
+    fn snapshot(
+        defaults: &[&str],
+        per_client: &[(&str, &[&str])],
+    ) -> DownloadClientCategoryOwnershipSnapshot {
+        DownloadClientCategoryOwnershipSnapshot {
+            default_categories: defaults
+                .iter()
+                .map(|value| normalize_owned_download_category(value))
+                .collect::<HashSet<_>>(),
+            categories_by_client: per_client
+                .iter()
+                .map(|(client, categories)| {
+                    (
+                        (*client).to_string(),
+                        categories
+                            .iter()
+                            .map(|value| normalize_owned_download_category(value))
+                            .collect::<HashSet<_>>(),
+                    )
+                })
+                .collect::<HashMap<_, _>>(),
+        }
+    }
+
+    #[test]
+    fn category_ownership_ignores_the_client_canonical_casing() {
+        // The real failure: Scryer is configured with `movies`, NZBGet's own
+        // Category1.Name is `Movies`, and NZBGet reports ITS spelling back in
+        // history. Comparing raw made Scryer's own completed download look
+        // foreign, so it was filtered out of the tracked snapshot, never
+        // imported, and re-grabbed by the RSS sweep minutes later.
+        let snapshot = snapshot(&["movies"], &[("client-1", &["movies"])]);
+
+        assert!(snapshot.owns_category("client-1", "Movies"));
+        assert!(snapshot.knows_category("Movies"));
+        assert!(snapshot.owns_category("client-1", "MOVIES"));
+        assert!(snapshot.knows_category("  Movies  "));
+    }
+
+    #[test]
+    fn normalization_is_the_shared_contract_between_both_category_gates() {
+        // `completed_download_allows_automatic_import` and `knows_category` are
+        // documented as having to agree about what counts as Scryer's own work.
+        // They compare in different places, so they must fold identically —
+        // normalizing only one silently splits them, and a download would be
+        // eligible by one gate and foreign by the other.
+        for (configured, reported) in [
+            ("movies", "Movies"),
+            ("Series", "series"),
+            ("anime", "ANIME"),
+            ("movies", "  movies  "),
+        ] {
+            assert_eq!(
+                normalize_owned_download_category(configured),
+                normalize_owned_download_category(reported),
+                "{configured} vs {reported}"
+            );
+        }
+
+        // Different categories must stay different after folding.
+        assert_ne!(
+            normalize_owned_download_category("movies"),
+            normalize_owned_download_category("radarr")
+        );
+    }
+
+    #[test]
+    fn a_genuinely_unconfigured_category_is_still_unknown() {
+        // Case-folding must not turn the gate off: a category Scryer never
+        // configured still marks the download as another app's work.
+        let snapshot = snapshot(&["movies"], &[("client-1", &["movies"])]);
+
+        assert!(!snapshot.knows_category("radarr"));
+        assert!(!snapshot.owns_category("client-1", "radarr"));
+    }
+
+    #[test]
+    fn a_category_owned_by_another_client_is_known_but_not_owned() {
+        // Per-client mismatch stays eligible (knows_category), while the
+        // narrower ownership question still answers honestly.
+        let snapshot = snapshot(&[], &[("client-1", &["movies"]), ("client-2", &["Series"])]);
+
+        assert!(snapshot.knows_category("SERIES"));
+        assert!(!snapshot.owns_category("client-1", "series"));
+        assert!(snapshot.owns_category("client-2", "series"));
+    }
 }
 
 #[cfg(test)]

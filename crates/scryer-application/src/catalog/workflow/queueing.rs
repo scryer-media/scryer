@@ -1129,6 +1129,43 @@ impl AppUseCase {
                 tokio_util::sync::CancellationToken::new(),
             )
             .await?;
+        if let Some(candidate) = results.iter().find(|candidate| {
+            candidate.auto_decision_code.as_deref() == Some("ambiguous_identity")
+        }) {
+            let wanted = match &scope {
+                SubmissionScope::Title => self
+                    .services
+                    .workflow
+                    .acquisition_scope_states
+                    .get_acquisition_scope_state_for_title(&title.id, None)
+                    .await?,
+                SubmissionScope::Episode { episode_id } => self
+                    .services
+                    .workflow
+                    .acquisition_scope_states
+                    .get_acquisition_scope_state_for_title(&title.id, Some(episode_id))
+                    .await?,
+                SubmissionScope::Orphan
+                | SubmissionScope::EpisodeSet { .. }
+                | SubmissionScope::Collection { .. }
+                | SubmissionScope::SeriesMovie { .. } => None,
+            };
+            if let Some(wanted) = wanted {
+                let candidate_score = candidate
+                    .quality_profile_decision
+                    .as_ref()
+                    .map(|decision| decision.preference_score)
+                    .unwrap_or_default();
+                self.park_pending_release_for_review(
+                    &wanted,
+                    &title,
+                    candidate,
+                    candidate_score,
+                    None,
+                )
+                .await;
+            }
+        }
         let best = results
             .into_iter()
             .find(|candidate| candidate.auto_eligible == Some(true))

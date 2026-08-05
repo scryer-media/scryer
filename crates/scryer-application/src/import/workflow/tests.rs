@@ -13,6 +13,7 @@ mod tests {
     #[cfg(unix)]
     use super::is_sample_file;
     use crate::{DownloadSubmission, DownloadSubmissionPurpose, SubmissionScope};
+    use scryer_domain::MediaFacet;
     use chrono::Utc;
     use scryer_domain::{
         CompletedDownload, ImportDecision, ImportResult, ImportSkipReason, ImportStatus,
@@ -427,7 +428,7 @@ mod tests {
             episode_id: None,
             series_movie_link_id: None,
         };
-        let err = validate_manual_import_candidate_mapping_targets(&[neither])
+        let err = validate_manual_import_candidate_mapping_targets(&[neither], &MediaFacet::Series)
             .expect_err("missing target should be rejected");
         assert!(err.to_string().contains("requires episode_id"));
 
@@ -436,7 +437,7 @@ mod tests {
             episode_id: Some("episode-1".to_string()),
             series_movie_link_id: Some("series-movie-link-1".to_string()),
         };
-        let err = validate_manual_import_candidate_mapping_targets(&[both])
+        let err = validate_manual_import_candidate_mapping_targets(&[both], &MediaFacet::Series)
             .expect_err("ambiguous target should be rejected");
         assert!(err.to_string().contains("cannot include both"));
 
@@ -445,18 +446,42 @@ mod tests {
             episode_id: None,
             series_movie_link_id: Some("series-movie-link-1".to_string()),
         };
-        validate_manual_import_candidate_mapping_targets(&[series_movie])
+        validate_manual_import_candidate_mapping_targets(&[series_movie], &MediaFacet::Series)
             .expect("series movie target should be accepted");
+
+        // A MOVIE has no sub-target to name, so "neither id" is the only shape
+        // its mapping can take. Rejecting it left completed movies awaiting
+        // manual import with no action that could ever succeed: the UI sends
+        // exactly this and the server refused it.
+        let movie = ManualImportCandidateMapping {
+            candidate_id: "candidate-1".to_string(),
+            episode_id: None,
+            series_movie_link_id: None,
+        };
+        validate_manual_import_candidate_mapping_targets(&[movie], &MediaFacet::Movie)
+            .expect("a movie maps to its title, so it needs no explicit target");
+
+        // The facet only relaxes the missing-target rule; a contradictory
+        // mapping is still rejected.
+        let movie_with_both = ManualImportCandidateMapping {
+            candidate_id: "candidate-1".to_string(),
+            episode_id: Some("episode-1".to_string()),
+            series_movie_link_id: Some("series-movie-link-1".to_string()),
+        };
+        let err =
+            validate_manual_import_candidate_mapping_targets(&[movie_with_both], &MediaFacet::Movie)
+                .expect_err("ambiguous target should still be rejected for movies");
+        assert!(err.to_string().contains("cannot include both"));
 
         let duplicate = ManualImportCandidateMapping {
             candidate_id: "candidate-1".to_string(),
             episode_id: Some("episode-1".to_string()),
             series_movie_link_id: None,
         };
-        let err = validate_manual_import_candidate_mapping_targets(&[
-            duplicate.clone(),
-            duplicate,
-        ])
+        let err = validate_manual_import_candidate_mapping_targets(
+            &[duplicate.clone(), duplicate],
+            &MediaFacet::Series,
+        )
         .expect_err("duplicate candidates should be rejected");
         assert!(err.to_string().contains("must be unique"));
     }
